@@ -103,7 +103,10 @@ def search_patients(tenant: dict, query: str) -> dict[str, Any]:
         # Weitere Varianten sind nur der phonetische Rettungsanker bei null Treffern.
         if seen:
             break
-    return {"ok": True, "patients": list(seen.values())[:8], "error": last_err}
+    hits = list(seen.values())
+    # Echte Patienten zuerst, Seed-/Testdatensaetze ans Ende (stabile Sortierung).
+    hits.sort(key=ist_testakte)
+    return {"ok": True, "patients": hits[:8], "error": last_err}
 
 
 def _termine_aus_patient(p: dict) -> dict[str, list]:
@@ -219,6 +222,36 @@ def ist_testname(first: str, last: str, name: str = "") -> bool:
     return last_l in {"test", "demo", "mustermann"}
 
 
+# Seed-/Fixture-Datensaetze, die in der echten Kartei liegen (CampaignR-Test,
+# Demo-Seeds). Vorfall 27.08.2026: Lisa buchte auf "campaignr-test-dr-petsas"
+# (firstName "Dr.", lastName "Petsas") — der Termin stand mit Muell-Daten im
+# Terminbuch. Solche Saetze nie stillschweigend waehlen, in Listen nach hinten.
+_TEST_ID_PREFIXES = ("campaignr-test", "campaignr_", "demo-cr", "demo_cr", "testtrain")
+_TITEL_VORNAMEN = {"dr", "dr med", "prof", "prof dr", "prof dr med", "herr", "frau"}
+
+
+def _nur_titel(first: str) -> bool:
+    fn = " ".join(_s(first).lower().replace(".", " ").split())
+    return fn in _TITEL_VORNAMEN
+
+
+def ohne_titel(name: str) -> str:
+    """Fuehrende Titel-Tokens ("Dr.", "Prof.", "Herr", …) abwerfen."""
+    teile = _s(name).split()
+    while teile and teile[0].lower().rstrip(".") in {"dr", "prof", "med", "herr", "frau"}:
+        teile = teile[1:]
+    return " ".join(teile)
+
+
+def ist_testakte(p: dict) -> bool:
+    pid = _s(p.get("id")).lower()
+    if pid.startswith(_TEST_ID_PREFIXES):
+        return True
+    if _nur_titel(p.get("firstName")):
+        return True
+    return ist_testname(p.get("firstName"), p.get("lastName"))
+
+
 def ist_dev_handy(raw: str) -> bool:
     d = _digits(raw)
     if not d:
@@ -253,7 +286,10 @@ def _suche_eindeutig(tenant: dict, first: str, last: str) -> dict[str, Any] | No
     q = f"{first} {last}".strip()
     if not q:
         return None
-    treffer = (search_patients(tenant, q).get("patients") or [])
+    treffer = [
+        p for p in (search_patients(tenant, q).get("patients") or [])
+        if not ist_testakte(p)
+    ]
     if not treffer:
         return None
     if len(treffer) == 1:
@@ -277,11 +313,16 @@ def akte_anlegen(
 ) -> dict[str, Any]:
     """Sucht zuerst. Neue Akte nur mit echtem Namen und Handy. Keine Testnamen."""
     first, last = _s(first), _s(last)
+    if _nur_titel(first):
+        # "Dr."/"Herr" ist kein Vorname — nie als Akten-Vorname eintragen.
+        first = ""
     if not last and name:
-        teile = _s(name).split()
+        teile = ohne_titel(name).split()
         if len(teile) >= 2:
             first = first or teile[0]
             last = teile[-1]
+        elif len(teile) == 1:
+            last = teile[0]
     if ist_testname(first, last, name):
         return {
             "ok": False,
@@ -375,7 +416,9 @@ def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
     if not q:
         return pat
     found = search_patients(tenant, q)
-    treffer = found.get("patients") or []
+    # Stille Aufloesung waehlt NIE einen Seed-/Testdatensatz — lieber keine ID
+    # (dann fragt Lisa nach Name + Handy und legt sauber an).
+    treffer = [p for p in (found.get("patients") or []) if not ist_testakte(p)]
     if not treffer:
         return pat
     gewaehlt = None
@@ -410,4 +453,5 @@ def karten_patient(p: dict) -> dict[str, Any]:
         "phoneDisplay": format_de_phone(phone) if phone else "",
         "devPhone": format_de_phone(DEV_PHONE),
         "devPhoneRaw": DEV_PHONE,
+        "test": ist_testakte(p),
     }

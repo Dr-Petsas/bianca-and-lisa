@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from lisa.config import CF_BASE, MAS_URL, WRITE_LIVE
+from lisa.config import CF_BASE, WRITE_LIVE
 from lisa import notes, patients
 from lisa.slots import REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
 from lisa.sprech import slot_wort
@@ -239,10 +239,17 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     }
     status, data = _cf_post("masBookAppointment", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
+        # Termin-ID behalten: daran haengt spaeter die Gespraechsnotiz
+        # (masAppointmentNote) und ein evtl. Verschieben im selben Anruf.
+        aid = _s(data.get("appointmentId"))
+        if aid:
+            ctx["appointmentId"] = aid
+        ctx["appointmentDate"] = iso[:10]
         return {
             "ok": True,
             "booked": True,
             "slotIso": iso,
+            "appointmentId": aid,
             "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
         }
     if status == 200 and isinstance(data, dict) and data.get("status") == "needs_phone":
@@ -346,14 +353,52 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
         })
         if auf.get("id"):
             _bind_akte(ctx, auf)
+        # createAppointment liefert keine Termin-ID — fuer die Gespraechsnotiz
+        # read-only nachschlagen (kein zweiter Buchungsversuch!).
+        aid = _termin_id_suchen(tenant, ctx, iso)
+        if aid:
+            ctx["appointmentId"] = aid
+        ctx["appointmentDate"] = iso[:10]
         return {
             "ok": True,
             "booked": True,
             "createdPatient": True,
             "slotIso": iso,
+            "appointmentId": aid,
             "spoken": f"Akte und Termin {spoken_slot(iso)} sind fest eingetragen.",
         }
     return {"ok": False}
+
+
+def _termin_id_suchen(tenant: dict, ctx: dict, iso: str) -> str:
+    """Read-only: Termin-ID zum gebuchten Slot ueber agentFindPatientAppointments."""
+    first, last = _name_teile(ctx)
+    if not last or len(_s(iso)) < 10:
+        return ""
+    body = {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "lastName": last,
+        "source": "telefonki-lisa",
+    }
+    if first:
+        body["firstName"] = first
+    phone = _s(ctx.get("phone"))
+    if phone:
+        body["callerPhone"] = phone
+    status, data = _cf_post("agentFindPatientAppointments", body)
+    if status != 200 or not isinstance(data, dict):
+        return ""
+    tag, minute = iso[:10], (iso[11:16] if len(iso) >= 16 else "")
+    for a in data.get("appointments") or []:
+        if not isinstance(a, dict):
+            continue
+        if _s(a.get("appointmentDate")) != tag:
+            continue
+        if minute and _s(a.get("appointmentTime")) and _s(a.get("appointmentTime")) != minute:
+            continue
+        return _s(a.get("appointmentId"))
+    return ""
 
 
 def _name_teile(ctx: dict) -> tuple[str, str]:
@@ -554,34 +599,64 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
     return {"ok": False, "spoken": "Verschieben hat gerade nicht geklappt."}
 
 
+def _notiz_ziel(tenant: dict, ctx: dict, sit: dict | None) -> str:
+    """An welchen Termin gehoert die Notiz? Frisch gebucht > bestehender Termin."""
+    aid = _s(ctx.get("appointmentId"))
+    if aid:
+        return aid
+    if sit:
+        for a in sit.get("upcoming") or []:
+            if isinstance(a, dict) and _s(a.get("id")):
+                return _s(a.get("id"))
+    iso = _s(ctx.get("slotIso"))
+    if iso:
+        return _termin_id_suchen(tenant, ctx, iso)
+    return ""
+
+
 def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: str = "") -> dict[str, Any]:
-    text = _s(note)
+    # Mehrzeilige Notizen (Telefonprotokoll) NICHT plattdruecken — nur
+    # einzeilige Notizen bekommen den "(Lisa)"-Herkunftsstempel.
+    text = str(note or "").strip()
     if not text and sit:
         text = notes.zusammenfassung(sit)
     if not text:
         return {"ok": False, "spoken": "Es gab nichts Besonderes für die Terminnotiz."}
-    zeile = notes.notiz_anhaengen("", text, herkunft="Lisa")
+    zeile = text if "\n" in text else notes.notiz_anhaengen("", text, herkunft="Lisa")
+    kurz = _s(text.splitlines()[0])
     if not WRITE_LIVE:
         return {
             "ok": True,
             "noted": False,
             "dryRun": True,
             "note": zeile,
-            "spoken": f"In die Terminnotiz hätte ich geschrieben: {text}",
+            "spoken": f"In die Terminnotiz hätte ich geschrieben: {kurz}",
         }
-    name = _s(ctx.get("patientName"))
-    if not name or not MAS_URL:
-        return {"ok": False, "spoken": "Die Notiz kann ich gerade nicht in den Termin legen."}
-    try:
-        r = httpx.post(
-            f"{MAS_URL}/tools/remember-note",
-            headers={"X-Client-Id": _s(tenant.get("clientId"))},
-            json={"name": name, "note": text, "clientId": _s(tenant.get("clientId"))},
-            timeout=6.0,
-        )
-        data = r.json() if r.status_code == 200 else {}
-    except httpx.HTTPError as e:
-        return {"ok": False, "spoken": f"Notiz nicht gespeichert ({e})."}
-    if data.get("ok"):
-        return {"ok": True, "noted": True, "note": text, "spoken": "Die Notiz steht im Termin."}
-    return {"ok": False, "spoken": _s(data.get("message")) or "Die Notiz ist nicht im Termin gelandet."}
+    aid = _notiz_ziel(tenant, ctx, sit)
+    if not aid:
+        return {
+            "ok": False,
+            "spoken": "Ich habe gerade keinen Termin, an den ich die Notiz hängen kann.",
+            "regie": "Kein Termin in der Sitzung. Erst buchen oder list_appointments, dann note_appointment.",
+        }
+    body = {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "appointmentId": aid,
+        "note": zeile,
+    }
+    status, data = _cf_post("masAppointmentNote", body)
+    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
+        return {
+            "ok": True,
+            "noted": True,
+            "note": zeile,
+            "appointmentId": aid,
+            "spoken": "Die Notiz steht im Termin.",
+        }
+    msg = (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"
+    return {
+        "ok": False,
+        "spoken": "Die Notiz ist nicht im Termin gelandet.",
+        "regie": f"masAppointmentNote fehlgeschlagen: {msg}",
+    }

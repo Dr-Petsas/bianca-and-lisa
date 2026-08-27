@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 BESONDERS = re.compile(
     r"\b("
@@ -90,3 +92,50 @@ def braucht_notiz(sit: dict[str, Any]) -> bool:
     if sit.get("lastBook") or sit.get("lastMove") or sit.get("lastCancel"):
         return True
     return bool(besonderes(" ".join(nutzer_saetze(sit))))
+
+
+def protokoll(sit: dict[str, Any], *, limit: int = 2400) -> str:
+    """Gesprächsverlauf als lesbare Zeilen (Patient:/Lisa:), fürs Notizfeld."""
+    zeilen: list[str] = []
+    for z in sit.get("zuege") or []:
+        gesagt = _s(z.get("textIn"))
+        antwort = _s(z.get("text"))
+        if gesagt:
+            zeilen.append(f"Patient: {gesagt}")
+        if antwort:
+            zeilen.append(f"Lisa: {antwort}")
+    text = "\n".join(zeilen)
+    if len(text) > limit:
+        # Ende behalten (dort stehen Buchung/Bestätigung), sauber an Zeile schneiden.
+        rest = text[-limit:]
+        text = "…\n" + (rest.split("\n", 1)[-1] if "\n" in rest else rest)
+    return text
+
+
+def _stempel(sit: dict[str, Any]) -> str:
+    raw = _s(sit.get("startedAt"))
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    try:
+        dt = dt.astimezone(ZoneInfo("Europe/Berlin"))
+    except Exception:
+        pass
+    return dt.strftime("%d.%m.%Y %H:%M")
+
+
+def termin_notiz(sit: dict[str, Any]) -> str:
+    """Volle Notiz fürs Terminpopup: Kopfzeile + Telefonprotokoll."""
+    teile: list[str] = []
+    kopf = zusammenfassung(sit)
+    if kopf:
+        teile.append(notiz_anhaengen("", kopf))
+    verlauf = protokoll(sit)
+    if verlauf:
+        stamp = _stempel(sit)
+        teile.append(f"— Telefonprotokoll Lisa{(' ' + stamp) if stamp else ''} —")
+        teile.append(verlauf)
+    return "\n".join(teile)

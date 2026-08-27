@@ -137,16 +137,14 @@ def _auto_notiz(session_doc: dict, *, force: bool = False) -> dict[str, Any]:
         return session_doc.get("lastNote") or {}
     if not notes.braucht_notiz(session_doc):
         return {}
-    if session_doc.get("noteWritten") and force:
-        extra = notes.zusammenfassung(session_doc)
-        schon = _s((session_doc.get("lastNote") or {}).get("note"))
-        if extra and extra.lower() in schon.lower():
-            return session_doc.get("lastNote") or {}
+    # Beim Auflegen (force) kommt das volle Telefonprotokoll in die Terminnotiz;
+    # doppelte Zeilen filtert masAppointmentNote serverseitig (zeilen-idempotent).
+    text = notes.termin_notiz(session_doc) if force else notes.zusammenfassung(session_doc)
     result = calendar.note_appointment(
         session_doc["tenant"],
         session_doc.get("booking") or {},
         session_doc,
-        note=notes.zusammenfassung(session_doc),
+        note=text,
     )
     if result.get("ok"):
         session.merke_tool(session_doc, "note_appointment", result)

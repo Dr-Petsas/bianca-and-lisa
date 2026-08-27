@@ -46,7 +46,7 @@ function liste(ul, items) {
 function zeigePatient(p) {
   patient = p;
   $("person").hidden = false;
-  $("personName").textContent = p.name || "—";
+  $("personName").textContent = (p.test ? "⚠ " : "") + (p.name || "—");
   const echt = p.phoneDisplay || "";
   const dev = p.devPhone || "0177 6004600";
   $("phones").innerHTML = echt
@@ -556,7 +556,8 @@ $("suchen").onclick = async () => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "hit";
-    b.textContent = `${p.name}${p.birthDate ? " · " + p.birthDate : ""}${p.phoneDisplay ? " · " + p.phoneDisplay : ""}`;
+    b.textContent = `${p.name}${p.birthDate ? " · " + p.birthDate : ""}${p.phoneDisplay ? " · " + p.phoneDisplay : ""}${p.test ? " · ⚠ Testdatensatz" : ""}`;
+    if (p.test) b.style.opacity = "0.55";
     b.onclick = () => {
       for (const x of $("hits").children) x.classList.remove("sel");
       b.classList.add("sel");

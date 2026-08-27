@@ -122,6 +122,7 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any]) -> None:
         "booked": bool(result.get("booked")),
         "dryRun": bool(result.get("dryRun")),
         "slotIso": result.get("slotIso") or "",
+        "appointmentId": result.get("appointmentId") or "",
         "spoken": result.get("spoken") or "",
         "note": result.get("note") or "",
     }
@@ -133,6 +134,8 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any]) -> None:
             sit["patient"] = {**(sit.get("patient") or {}), **result["patient"]}
     if name == "book_slot":
         sit["lastBook"] = ein
+        if result.get("appointmentId"):
+            sit.setdefault("booking", {})["appointmentId"] = result["appointmentId"]
     elif name == "cancel_appointment":
         sit["lastCancel"] = ein
     elif name == "move_appointment":
