@@ -1,0 +1,13 @@
+---
+description: Isolation Lisa Telefon-KI
+alwaysApply: true
+---
+
+Arbeite nur in diesem Ordner (Bianca & Lisa Telefon-KI).
+
+Nicht anfassen, nicht neu starten: Clara live (8091), Clara-dev (8093), DemoClara (8094), MAS-2, Lena-Voice, pickadoc-live-base.
+
+Lisa nur auf Port 8095. WRITE_LIVE ist an (Chef 26.08.2026: echter Kalender).
+Nicht wieder auf 0 setzen, solange der Chef das Schreiben nicht ausdrücklich stoppt.
+
+Kein Workspace-Wechsel (move_agent_to_root). Fernsteuerung hier ist nur Grok, nur dieses Projekt.

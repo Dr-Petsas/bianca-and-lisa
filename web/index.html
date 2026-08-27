@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Lisa — Telefon-KI</title>
+  <link rel="stylesheet" href="/styles.css?v=call12" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Lisa</h1>
+        <div class="sub">Echtes Gespräch: sie spricht, du redest, sie hört zu.</div>
+      </div>
+      <div>
+        <div class="sub" id="health">prüfe Gehirn…</div>
+        <div class="sub last-call" id="lastCall"></div>
+        <a class="link" id="fern" href="/fernsteuerung.html">Fernsteuerung (Grok, nur Lisa)</a>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Auftrag</h2>
+        <label for="tenant">Mandant</label>
+        <select id="tenant"></select>
+        <label for="prompt">Was Lisa ausrichten soll</label>
+        <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="btn ghost mic" id="micPrompt" type="button">Prompt diktieren</button>
+          <span class="sub" id="promptLive"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Patient</h2>
+        <label for="who">Wen ruft Lisa an?</label>
+        <div class="row">
+          <input id="who" type="text" placeholder="Name eingeben…" autocomplete="off" />
+          <button class="btn ghost" id="suchen" type="button">Suchen</button>
+        </div>
+        <div class="hits" id="hits"></div>
+        <div id="person" hidden>
+          <div class="who" id="personName"></div>
+          <div class="phone-line" id="phones"></div>
+          <div class="devhint">Dev: es klingelt bei dir, nicht beim Patienten.</div>
+          <div class="appts">
+            <div>
+              <strong>Letzte Termine</strong>
+              <ul id="past"></ul>
+            </div>
+            <div>
+              <strong>Nächste Termine</strong>
+              <ul id="upcoming"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+
+  <div id="call" class="call">
+    <div class="call-top">
+      <div class="call-name" id="callName">Lisa</div>
+      <div class="call-phase" id="phase">verbindet…</div>
+    </div>
+    <div class="call-pulse" id="pulse"></div>
+    <div class="live call-live" id="live"></div>
+    <button class="btn hang" id="hang" type="button">Auflegen</button>
+  </div>
+
+  <div class="dock" id="dock">
+    <button class="btn ghost" id="schnell" type="button">Schnelltest</button>
+    <button class="btn" id="start" type="button">Anruf starten</button>
+  </div>
+  <audio id="speaker" playsinline webkit-playsinline hidden></audio>
+  <script src="/app.js?v=call12"></script>
+</body>
+</html>

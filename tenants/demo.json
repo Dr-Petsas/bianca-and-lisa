@@ -1,0 +1,14 @@
+{
+  "clientId": "demo",
+  "praxisName": "Demo-Praxis",
+  "behandler": "Dr. Beispiel",
+  "locationId": "demo_location",
+  "locationName": "Demo-Praxis",
+  "telefon": "",
+  "sprache": "de",
+  "defaultCalendarId": "",
+  "calendars": [],
+  "visitMotives": [
+    { "id": "demo-kontrolle", "name": "Kontrolluntersuchung", "duration": 15 }
+  ]
+}

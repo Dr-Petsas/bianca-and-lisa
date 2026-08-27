@@ -1,0 +1,9 @@
+services:
+  lisa:
+    build: .
+    ports:
+      - "8095:8095"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Eigenes Image. Kein Clara-/MAS-Netz noetig.

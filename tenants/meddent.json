@@ -1,0 +1,28 @@
+{
+  "clientId": "MEe4ZQHEzOPzLcexyhdT",
+  "praxisName": "med dent Zahnklinik",
+  "behandler": "Dr. Petsas",
+  "locationId": "VjdvbRQHH8oTId4f0GiX",
+  "locationName": "med dent Zahnklinik (Düsseldorf)",
+  "telefon": "",
+  "sprache": "de",
+  "defaultCalendarId": "zex5bmv5jfIHWVW6zHbg",
+  "calendars": [
+    { "id": "GVyoyXqCYof1QrGaNNnG", "name": "Dr. Nikolaou" },
+    { "id": "RHYdoQFD7oAhqIepLzC2", "name": "Dr. Patrikis" },
+    { "id": "zex5bmv5jfIHWVW6zHbg", "name": "Dr. Petsas" }
+  ],
+  "visitMotives": [
+    { "id": "F4EAa6O5qPo4n01AWD4Z", "name": "IMP Besprechung", "duration": 30 },
+    { "id": "RcgGY82C3sBIxsXY3kbv", "name": "KB Besprechung", "duration": 15 },
+    { "id": "6QHfsWALBRSyzBBbVCto", "name": "KCH akute Beschwerden/Notfall", "duration": 30 },
+    { "id": "Cyy90WyFR1TcUzp8W7ED", "name": "KCH Erstuntersuchung/Neupatient", "duration": 30 },
+    { "id": "qOQCI4vV2EhQVmKmRqdu", "name": "KCH Kontrolluntersuchung", "duration": 15 },
+    { "id": "eYBEmjfzEExWpzBFkR1q", "name": "KFO Besprechung", "duration": 30 },
+    { "id": "bFOA3k5EEGoMNMNvsflz", "name": "PAR 1 Besprechung, Planerstellung", "duration": 15 },
+    { "id": "ltzsbKhy03hLvuF4yOWX", "name": "PRO professionelle Zahnreinigung", "duration": 30 },
+    { "id": "iZvtXtkhlt4llWZiv7T1", "name": "PRO Zahnaufhellung", "duration": 45 },
+    { "id": "SfSgpj8SeCSmwnAotqv4", "name": "SLM Besprechung", "duration": 15 },
+    { "id": "8QCwEyR3Jyao63PmJ7vo", "name": "ZE Besprechung", "duration": 25 }
+  ]
+}
