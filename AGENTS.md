@@ -27,29 +27,6 @@ Dev-Default: `tenants/meddent.json`. Schreiben: `WRITE_LIVE=1`
 Bianca-Ordner bleibt leer, bis der Lisa-Kernel Anrufe hält.
 Zaluma/SIP hängt ein Kollege später an denselben Sitzungs-Umschlag.
 
-## Zwei Schichten: Job + Talk (27.08.2026 — nicht rückbauen)
-
-`kern/gespraech.py` — abgeschrieben von Demo-Claras COS, gilt für BEIDE Stimmen:
-
-- **Job** = die deterministische Maschine (`bianca/flow`, `bianca/verwalten`,
-  `lisa/identitaet`). Sie spricht zuerst und bleibt alleinige Autorität für
-  Termine, Namen, Nummern. Nummern-Rückbestätigung (`telefon_check`) bleibt
-  IMMER deterministisch.
-- **Talk** = Nebenthemen mit Gravity. Wer erzählt oder nachfragt, bekommt den
-  Floor: das LLM redet frei mit (mehr Tokens/Temperatur, Plan im Prompt),
-  der Frage-Anker (`bianca/agent._nachbessern`) schweigt, eine vom Modell
-  trotzdem angehängte Job-Frage wird abgeschnitten. Erzählte Sätze zählen
-  NIE als Leerlauf (keine Eskalation mitten in der Geschichte).
-- **Rückweg:** Lässt der Anrufer los ("na gut", "alles klar") oder verhungert
-  das Thema, gibt es GENAU EINE Brücke zurück zur offenen Frage — nie
-  dieselbe Frage zweimal wortgleich in Folge.
-- Namens-Wache: Zustände/Prosa ("ich bin ganz aufgeregt", Erzählsätze auf
-  die Namensfrage) sind KEINE Namen (`gehirn._KEIN_NAME_RE`, Token-Deckel).
-- Tests: `tests/test_gespraech.py` (offline); Sprech-Probe am echten LLM:
-  `tests/talk_probe.py` (schreibt nie, bucht nie).
-- **Notaus:** `TALK_SCHICHT=0` (Umgebungsvariable) => Verhalten wie vor dem
-  27.08.2026 — jeder Zug job, Anker feuert wie früher.
-
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).

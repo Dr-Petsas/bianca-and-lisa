@@ -190,25 +190,15 @@ _KORREKTUR_KONTEXT_RE = re.compile(
 _TEL_FALSCH_RE = re.compile(
     r"(?:nummer|handy|telefon)[^.!?]{0,40}(?:falsch|stimmt\s+nicht|nicht\s+richtig|verkehrt)|"
     r"falsche\s+(?:nummer|handynummer|telefonnummer)", re.I)
-# Neupatient-/Schonmal-Floskeln und ZUSTAENDE sind KEINE Namen: "Ich bin neu
-# bei Ihnen" wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026),
-# "ich bin ganz aufgeregt" als "Ganz Aufgeregt" (Talk-Probe 27.08.2026). Der
-# ganze Floskel-Teilsatz fliegt VOR der Namens-Ernte raus; ein echter Name im
+# Neupatient-/Schonmal-Floskeln sind KEINE Namen: "Ich bin neu bei Ihnen"
+# wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026). Der ganze
+# Floskel-Teilsatz fliegt VOR der Namens-Ernte raus; ein echter Name im
 # selben Satz ("..., mein Name ist Paul Neumann") bleibt erhalten, ebenso
 # "Ich bin Paul Neumann" und der Nachname "Neu" (Wortgrenze nach "neu").
-# Zustandswoerter, die auch Nachnamen sein koennen (Sauer, Krank, Froh),
-# stehen BEWUSST nicht in der Liste.
 _KEIN_NAME_RE = re.compile(
-    r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+"
-    r"(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+|ja\s+|gerade\s+|heute\s+)*"
-    r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+|sehr\s+|so\s+|total\s+|"
-    r"richtig\s+|echt\s+|etwas\s+|schon\s+|wirklich\s+)*"
-    r"(?:neu\b|noch\s+nie\b|zum\s+ersten\s+mal\b|das\s+erste\s+mal\b|"
-    r"aufgeregt|nervös|nervoes|gespannt|begeistert|erleichtert|verzweifelt|"
-    r"durcheinander|erkältet|erkaeltet|müde|muede|erschöpft|erschoepft|"
-    r"gestresst|genervt|verwirrt|unterwegs|beschäftigt|beschaeftigt|"
-    r"spät\b|spaet\b|zufrieden|unzufrieden|glücklich|gluecklich|traurig|"
-    r"wütend|wuetend|verheiratet|geschieden|schwanger|aufgeschmissen)[^,.!?]*",
+    r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+)?"
+    r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+)*"
+    r"(?:neu\b|noch\s+nie\b|zum\s+ersten\s+mal\b|das\s+erste\s+mal\b)[^,.!?]*",
     re.I,
 )
 _AKTE_NUMMER_RE = re.compile(
@@ -454,12 +444,6 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     kandidat = m.group(1) if m else (text if erzwungen else "")
     toks = _name_tokens(kandidat)
     if not toks:
-        return False
-    if m is None and erzwungen and len(toks) > 3:
-        # Ganze-Satz-Rueckfall NUR fuer namensartige Antworten: Wer auf die
-        # Namensfrage eine Geschichte erzaehlt ("Ach, wissen Sie — meine
-        # Tochter heiratet naemlich!"), nennt keinen Namen — das gehoert der
-        # Talk-Schicht, nicht der Kartei (Talk-Probe 27.08.2026).
         return False
     if s["frage"] == "vorname" and erzwungen:
         s["vorname"] = toks[0].capitalize()
