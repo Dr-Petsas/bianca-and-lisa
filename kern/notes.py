@@ -94,8 +94,14 @@ def braucht_notiz(sit: dict[str, Any]) -> bool:
     return bool(besonderes(" ".join(nutzer_saetze(sit))))
 
 
+def stimme_von(sit: dict[str, Any]) -> str:
+    """Welche Stimme führt diese Sitzung? Lisa (Default) oder Bianca."""
+    return _s(sit.get("stimme")) or "Lisa"
+
+
 def protokoll(sit: dict[str, Any], *, limit: int = 2400) -> str:
-    """Gesprächsverlauf als lesbare Zeilen (Patient:/Lisa:), fürs Notizfeld."""
+    """Gesprächsverlauf als lesbare Zeilen (Patient:/Stimme:), fürs Notizfeld."""
+    wer = stimme_von(sit)
     zeilen: list[str] = []
     for z in sit.get("zuege") or []:
         gesagt = _s(z.get("textIn"))
@@ -103,7 +109,7 @@ def protokoll(sit: dict[str, Any], *, limit: int = 2400) -> str:
         if gesagt:
             zeilen.append(f"Patient: {gesagt}")
         if antwort:
-            zeilen.append(f"Lisa: {antwort}")
+            zeilen.append(f"{wer}: {antwort}")
     text = "\n".join(zeilen)
     if len(text) > limit:
         # Ende behalten (dort stehen Buchung/Bestätigung), sauber an Zeile schneiden.
@@ -129,13 +135,14 @@ def _stempel(sit: dict[str, Any]) -> str:
 
 def termin_notiz(sit: dict[str, Any]) -> str:
     """Volle Notiz fürs Terminpopup: Kopfzeile + Telefonprotokoll."""
+    wer = stimme_von(sit)
     teile: list[str] = []
     kopf = zusammenfassung(sit)
     if kopf:
-        teile.append(notiz_anhaengen("", kopf))
+        teile.append(notiz_anhaengen("", kopf, herkunft=wer))
     verlauf = protokoll(sit)
     if verlauf:
         stamp = _stempel(sit)
-        teile.append(f"— Telefonprotokoll Lisa{(' ' + stamp) if stamp else ''} —")
+        teile.append(f"— Telefonprotokoll {wer}{(' ' + stamp) if stamp else ''} —")
         teile.append(verlauf)
     return "\n".join(teile)

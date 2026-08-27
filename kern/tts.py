@@ -18,6 +18,17 @@ _CACHE: dict[str, bytes] = {}
 _CACHE_ORD: list[str] = []
 _CLIENT: httpx.Client | None = None
 
+# Stimme pro PROZESS: Lisa und Bianca laufen als getrennte Dienste — Bianca
+# setzt beim Start ihre eigene Voice-ID (kern.config.BIANCA_VOICE_ID).
+_VOICE_ID = ELEVENLABS_VOICE_ID
+
+
+def set_voice(voice_id: str) -> None:
+    global _VOICE_ID
+    sauber = " ".join(str(voice_id or "").split()).strip()
+    if sauber:
+        _VOICE_ID = sauber
+
 
 def _client() -> httpx.Client:
     global _CLIENT
@@ -82,10 +93,11 @@ class ElevenLabsTts:
         sauber = " ".join(str(text or "").split()).strip()
         if not sauber or not ELEVENLABS_API_KEY:
             return b""
-        hit = _CACHE.get(sauber)
+        schluessel = f"{_VOICE_ID}|{sauber}"
+        hit = _CACHE.get(schluessel)
         if hit:
             return hit
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream"
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{_VOICE_ID}/stream"
         r = _client().post(
             url,
             params={
@@ -112,8 +124,8 @@ class ElevenLabsTts:
             blob = raw
         else:
             blob = pcm16_wav(raw)
-        _CACHE[sauber] = blob
-        _CACHE_ORD.append(sauber)
+        _CACHE[schluessel] = blob
+        _CACHE_ORD.append(schluessel)
         if len(_CACHE_ORD) > 48:
             _CACHE.pop(_CACHE_ORD.pop(0), None)
         return blob

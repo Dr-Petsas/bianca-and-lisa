@@ -8,7 +8,7 @@ TENANT = {"clientId": "c1", "locationId": "l1"}
 def _mit_cf(antworten: dict, calls: list):
     """_cf_post-Ersatz: zeichnet Aufrufe auf, liefert vorgegebene Antworten."""
 
-    def fake(route: str, body: dict):
+    def fake(route: str, body: dict, **kw):
         calls.append((route, body))
         return antworten.get(route, (500, {"status": "error", "message": "unbekannte route"}))
 

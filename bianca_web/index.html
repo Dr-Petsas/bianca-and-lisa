@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Bianca — Patiententelefon</title>
+  <link rel="stylesheet" href="/styles.css?v=b1" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Bianca</h1>
+        <div class="sub">Eingehender Anruf: Sie sind der Patient — Bianca nimmt ab.</div>
+      </div>
+      <div>
+        <div class="sub" id="health">prüfe Gehirn…</div>
+        <div class="sub last-call" id="lastCall"></div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <h2>Praxis</h2>
+        <label for="tenant">Mandant</label>
+        <select id="tenant"></select>
+        <p class="sub" style="margin-top:12px">
+          Bianca meldet sich, dann reden Sie einfach: Terminwunsch, Grund,
+          Name (sie fragt nach Buchstabierung), Handynummer. Sie sucht
+          währenddessen schon freie Termine und bucht fest in den Kalender.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Stand</h2>
+        <div class="sub" id="stand">noch kein Anruf</div>
+      </section>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+
+  <div id="call" class="call">
+    <div class="call-top">
+      <div class="call-name" id="callName">Bianca</div>
+      <div class="call-phase" id="phase">verbindet…</div>
+    </div>
+    <div class="call-pulse" id="pulse"></div>
+    <div class="live call-live" id="live"></div>
+    <button class="btn hang" id="hang" type="button">Auflegen</button>
+  </div>
+
+  <div class="dock" id="dock">
+    <button class="btn" id="start" type="button">Bei Bianca anrufen</button>
+  </div>
+  <audio id="speaker" playsinline webkit-playsinline hidden></audio>
+  <script src="/app.js?v=b1"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -99,7 +99,13 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
         if wish.get("weekday") is not None:
             out = [p for p in out if _weekday_of(p["date"]) == wish["weekday"]]
         if wish.get("minDaysAhead"):
-            out = [p for p in out if p["ms"] >= now + wish["minDaysAhead"] * 86400000]
+            # "Nächste Woche" meint den TAG in einer Woche ab Mitternacht —
+            # nicht "mindestens 168 Stunden ab jetzt". Sonst fehlen am Zieltag
+            # alle Zeiten VOR der aktuellen Uhrzeit (live 27.08.2026: Angebot
+            # begann um 10:55 statt 09:55, weil der Anruf um 10:41 lief).
+            ziel = datetime.fromtimestamp(now / 1000, TZ) + timedelta(days=wish["minDaysAhead"])
+            mitternacht = ziel.replace(hour=0, minute=0, second=0, microsecond=0)
+            out = [p for p in out if p["ms"] >= int(mitternacht.timestamp() * 1000)]
         if wish.get("hour") is not None:
             out = [p for p in out if abs(p["hour"] - wish["hour"]) <= 1]
         elif wish.get("hourMin") is not None:

@@ -2,25 +2,33 @@
 
 from __future__ import annotations
 
-import queue
-import secrets
 import threading
-import time
-from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import json
 
-from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, sprech, stt, tenants, tts
+from kern.dienst import Dienst, ndjson
+from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, ELEVENLABS_TTS_MODEL, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
 app = FastAPI(title="Lisa Telefon-KI", version="0.1")
-_AUDIO: dict[str, bytes] = {}
 remote.token()
+
+# Die komplette Latenz-Maschinerie (Audio-Ablage, Füller, NDJSON-Strom) liegt
+# in kern.dienst und wird mit Bianca geteilt. Lisas Eigenheiten stecken nur in
+# den vier Funktionszeigern.
+DIENST = Dienst(
+    name="lisa",
+    start_fn=agent.start_reply,
+    turn_fn=agent.user_turn,
+    # Solange die Identitätsprüfung läuft, antwortet die Zustandsmaschine
+    # sofort — Vorab-Füller wären dort falsch.
+    schnell_fn=lambda sit: sit.get("idCheck") not in (None, "", "fertig"),
+    merke_zug=session.merke_zug,
+)
 
 
 class SucheIn(BaseModel):
@@ -91,15 +99,6 @@ def _remote_guard(request: Request, token: str = "") -> None:
         raise HTTPException(401, "token")
 
 
-def _audio_legen(blob: bytes) -> str:
-    if not blob:
-        return ""
-    aid = secrets.token_hex(6)
-    _AUDIO[aid] = blob
-    ext = "wav" if blob[:4] == b"RIFF" else "mp3"
-    return f"/api/audio/{aid}.{ext}"
-
-
 def _anreichern(sit: dict) -> None:
     """Kartei, Termine, Slots — nie auf dem Mund-Pfad."""
     try:
@@ -129,178 +128,16 @@ def _anreichern(sit: dict) -> None:
         print(f"lisa-enrich fail {e}", flush=True)
 
 
-def _stimme(text: str) -> tuple[str, float]:
-    if not text or not tts.bereit():
-        return "", 0.0
-    t0 = time.perf_counter()
-    try:
-        url = _audio_legen(tts.engine().speak(text))
-    except RuntimeError:
-        return "", round(time.perf_counter() - t0, 2)
-    return url, round(time.perf_counter() - t0, 2)
-
-
-def _zeile(obj: dict) -> str:
-    return json.dumps(obj, ensure_ascii=False) + "\n"
-
-
-# Füller gegen die Totzeit. Die Audios werden beim Start einmal gerendert und
-# bleiben liegen — abspielen kostet danach null Zeit.
-_FILLER_URLS: dict[str, str] = {}
-# Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
-# blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
-_FILLER_VORAB_S = 0.3
-# Not-Füller: nur wenn ein Zug OHNE erkannte Absicht UND ohne Werkzeug wirklich
-# haengt. Normale Plauder-Antworten kommen nach 1,4 bis 2,6 s — eine kuerzere
-# Frist wuerde den Fueller in die Antwort hineinsprechen (gemessen 27.08.2026).
-_FILLER_SPAET_S = 3.2
-
-
-def _filler_vorbereiten() -> None:
-    if not tts.bereit():
-        return
-    for text in filler.alle_saetze():
-        try:
-            url = _audio_legen(tts.engine().speak(text))
-            if url:
-                _FILLER_URLS[text] = url
-        except Exception as e:
-            print(f"lisa-filler fail {text!r} {e}", flush=True)
-    print(f"lisa-filler bereit: {len(_FILLER_URLS)} Saetze", flush=True)
-
-
-def _filler_url(sit, gruppe: str) -> str:
-    nr = int(sit.get("fillerNr") or 0)
-    sit["fillerNr"] = nr + 1
-    url = _FILLER_URLS.get(filler.satz(gruppe, nr))
-    if url:
-        return url
-    return _FILLER_URLS.get(filler.satz("allgemein", nr)) or ""
-
-
-def _angebot_offen(sit) -> bool:
-    return bool(sit.get("offered"))
-
-
-def _zug_stream(sit, *, art: str, text_in: str = "", extra: dict | None = None,
-                stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = ""):
-    """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
-    q: queue.Queue = queue.Queue()
-    # JETZT ablesen, nicht spaeter: der Arbeitsfaden unten setzt idCheck auf
-    # "fertig", sobald die Identitaet geklaert ist — er ist schneller als die
-    # Fristberechnung im Hauptfaden und wuerde sie sonst in die Irre fuehren.
-    id_phase = sit.get("idCheck") not in (None, "", "fertig")
-
-    def melde(tool: str) -> None:
-        q.put(("tool", tool))
-
-    def arbeit() -> None:
-        try:
-            gesagt = text_in
-            stt_s = None
-            if stt_blob is not None:
-                t0 = time.perf_counter()
-                try:
-                    gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name)
-                except RuntimeError as e:
-                    print(f"lisa-listen fail bytes={len(stt_blob)} {e}", flush=True)
-                    q.put(("leer", str(e)))
-                    return
-                stt_s = round(time.perf_counter() - t0, 2)
-                if not gesagt:
-                    print(f"lisa-listen empty bytes={len(stt_blob)} mime={stt_mime}", flush=True)
-                    q.put(("leer", ""))
-                    return
-                print(f"lisa-listen ok text={gesagt!r}", flush=True)
-                q.put(("gehoert", gesagt))
-            out = _json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde)
-            if stt_s is not None:
-                tt = {"stt": stt_s, **(out.get("timings") or {})}
-                tt["total"] = round(stt_s + float(tt.get("llm") or 0) + float(tt.get("tts") or 0), 2)
-                out["timings"] = tt
-            q.put(("fertig", out))
-        except Exception as e:
-            q.put(("fehler", str(e)))
-
-    threading.Thread(target=arbeit, daemon=True).start()
-    filler_raus = False
-
-    def frist_setzen(gehoert: str) -> tuple[float, str]:
-        """Aus dem Gehörten raten, ob ein Kalender-Zugriff kommt."""
-        # In der Identitaetsphase antwortet die Zustandsmaschine sofort — ein
-        # Kalender-Füller ("ich schaue kurz nach") waere dort schlicht falsch.
-        if id_phase:
-            return time.monotonic() + _FILLER_SPAET_S, "allgemein"
-        gruppe = filler.vermutet(gehoert, angebot_offen=_angebot_offen(sit))
-        if gruppe:
-            return time.monotonic() + _FILLER_VORAB_S, gruppe
-        return time.monotonic() + _FILLER_SPAET_S, "allgemein"
-
-    frist, vorab_gruppe = frist_setzen(text_in)
-    while True:
-        try:
-            wartezeit = None if filler_raus else max(0.02, frist - time.monotonic())
-            typ, wert = q.get(timeout=wartezeit)
-        except queue.Empty:
-            url = _filler_url(sit, vorab_gruppe)
-            if url:
-                yield _zeile({"type": "filler", "audioUrl": url})
-            filler_raus = True
-            continue
-        if typ == "gehoert":
-            frist, vorab_gruppe = frist_setzen(wert)
-            yield _zeile({"type": "transcript", "textIn": wert})
-        elif typ == "tool":
-            if not filler_raus:
-                url = _filler_url(sit, filler.fuer_tool(wert))
-                if url:
-                    yield _zeile({"type": "filler", "audioUrl": url})
-                filler_raus = True
-        elif typ == "leer":
-            yield _zeile({"type": "empty", "error": wert})
-            return
-        elif typ == "fehler":
-            yield _zeile({"type": "empty", "error": wert})
-            return
-        else:  # fertig
-            yield _zeile({"type": "reply", **wert})
-            return
-
-
 def _ndjson(gen):
-    return StreamingResponse(
-        gen,
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-    )
+    return ndjson(gen)
 
 
 def _json_antwort(sit, *, art: str, text_in: str = "", extra: dict | None = None, melde=None):
-    extra = extra or {}
-    t0 = time.perf_counter()
-    if art == "start":
-        reply = agent.start_reply(sit)
-    else:
-        reply = agent.user_turn(sit, text_in, melde=melde)
-    llm_s = round(time.perf_counter() - t0, 2)
-    # Sprech-Filter: Uhrzeiten/Daten als Worte, Fachbegriffe und Regie raus.
-    text = sprech.sanitize(reply.get("text") or "")
-    url, tts_s = _stimme(text)
-    timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
-    session.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"), timings=timings)
-    return {
-        "ok": True,
-        "empty": False,
-        "sessionId": extra.get("sessionId") or sit.get("id") or "",
-        "praxis": extra.get("praxis") or "",
-        "textIn": text_in,
-        "text": text,
-        "audioUrl": url,
-        "book": reply.get("book"),
-        "writeLive": WRITE_LIVE,
-        "error": reply.get("error") or "",
-        "timings": timings,
-    }
+    return DIENST.json_antwort(sit, art=art, text_in=text_in, extra=extra, melde=melde)
+
+
+def _zug_stream(sit, **kw):
+    return DIENST.zug_stream(sit, **kw)
 
 
 @app.get("/health")
@@ -316,7 +153,7 @@ def health():
         "llm": h,
         "tts": tts.engine().name if tts.bereit() else "fehlt",
         "ttsModel": ELEVENLABS_TTS_MODEL if tts.bereit() else "",
-        "filler": f"{len(_FILLER_URLS)}/{len(filler.alle_saetze())}",
+        "filler": f"{len(DIENST.filler_urls)}/{len(filler.alle_saetze())}",
         "stt": "live+elevenlabs" if stt.bereit() else "live",
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
@@ -385,7 +222,7 @@ def api_turn(body: TurnIn):
 def _warm_start():
     def _run():
         # Füller zuerst: ohne sie entsteht genau die Stille, die weg soll.
-        _filler_vorbereiten()
+        DIENST.filler_vorbereiten()
         t = tenants.laden(DEFAULT_TENANT)
         tts.warm(begruessung(
             t.get("praxisName") or "",
@@ -500,8 +337,7 @@ def remote_upload(request: Request, body: RemoteUpload):
 
 @app.get("/api/audio/{name}")
 def api_audio(name: str):
-    aid = name.rsplit(".", 1)[0]
-    blob = _AUDIO.get(aid)
+    blob = DIENST.audio_holen(name)
     if not blob:
         raise HTTPException(404)
     mime = "audio/wav" if blob[:4] == b"RIFF" else "audio/mpeg"

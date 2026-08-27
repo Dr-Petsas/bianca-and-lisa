@@ -23,11 +23,17 @@ def _s(v: Any) -> str:
 
 _CF_CLIENT = httpx.Client(timeout=10.0)
 
+# Schreibende Cloud Functions (buchen/absagen/verschieben) duerfen laenger
+# brauchen (SMS-Versand, Reminder). Vorfall 27.08.2026: masBookAppointment
+# brauchte >10 s, der Client brach ab, die Buchung LANDETE trotzdem — und die
+# Ansage behauptete "Termin ist weg". Timeout-Budget: CF-Limit ist 30 s.
+_SCHREIB_TIMEOUT = 25.0
 
-def _cf_post(route: str, body: dict) -> tuple[int, Any]:
+
+def _cf_post(route: str, body: dict, *, timeout: float | None = None) -> tuple[int, Any]:
     url = f"{CF_BASE}/{route.lstrip('/')}"
     try:
-        r = _CF_CLIENT.post(url, json=body)
+        r = _CF_CLIENT.post(url, json=body, timeout=timeout or 10.0)
         try:
             data = r.json()
         except Exception:
@@ -37,14 +43,21 @@ def _cf_post(route: str, body: dict) -> tuple[int, Any]:
         return 0, {"message": str(e)}
 
 
-def find_slots(tenant: dict, ctx: dict, *, start_date: str = "") -> dict[str, Any]:
+def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
+               source: str = "") -> dict[str, Any]:
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
-        "source": "telefonki-lisa",
+        "source": _s(source) or "telefonki-lisa",
     }
     cal = None
-    if _s(ctx.get("calendarId")):
+    if egal:
+        # "Arzt egal": KEINEN Kalender mitschicken — die Cloud Function probt
+        # dann alle zulaessigen Kalender und nimmt den global fruehesten
+        # (anyDoctorPreference). Welcher Arzt gewonnen hat, steht in der
+        # Antwort als doctor_name.
+        cal = None
+    elif _s(ctx.get("calendarId")):
         cal = {"id": ctx["calendarId"], "name": ctx.get("calendarName")}
     else:
         cal = kalender_von(tenant, _s(ctx.get("calendarName") or ctx.get("doctorName")))
@@ -65,12 +78,18 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "") -> dict[str, An
         body["startDate"] = start_date
     status, data = _cf_post("getFreeTimeSlots", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
-        raw = (data.get("data") or {}).get("free_time_slots")
+        nutz = data.get("data") or {}
+        raw = nutz.get("free_time_slots")
         try:
             slots = json.loads(raw) if isinstance(raw, str) else (raw or [])
         except json.JSONDecodeError:
             slots = []
-        return {"ok": True, "slots": slots, "calendar": cal, "motive": vm}
+        return {
+            "ok": True, "slots": slots, "calendar": cal, "motive": vm,
+            # Bei "egal" waehlt der Server den Kalender — der Name des
+            # Gewinner-Arztes kommt hier zurueck (fuers Buchen + Ansagen).
+            "doctorName": _s(nutz.get("doctor_name")),
+        }
     return {"ok": False, "error": (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"}
 
 
@@ -237,7 +256,29 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "visitMotiveId": _s(ctx.get("visitMotiveId") or (vm or {}).get("id")),
         "appointmentStartDate": iso,
     }
-    status, data = _cf_post("masBookAppointment", body)
+    status, data = _cf_post("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
+    if status == 0:
+        # Netzfehler/Timeout: die Buchung kann trotzdem gelandet sein —
+        # NACHSCHAUEN statt raten (sonst bucht der Anrufer doppelt).
+        landung = _buchung_pruefen(tenant, patient_id, iso)
+        if landung:
+            ctx["appointmentId"] = landung
+            ctx["appointmentDate"] = iso[:10]
+            return {
+                "ok": True,
+                "booked": True,
+                "slotIso": iso,
+                "appointmentId": landung,
+                "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
+            }
+        return {
+            "ok": False,
+            "spoken": (
+                "Der Kalender antwortet gerade nicht — ich möchte nichts doppelt "
+                "eintragen. Die Praxis bestätigt Ihnen den Termin kurzfristig."
+            ),
+            "regie": "Netzfehler beim Buchen. Keinen anderen Slot anbieten, Rückruf zusagen.",
+        }
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         # Termin-ID behalten: daran haengt spaeter die Gespraechsnotiz
         # (masAppointmentNote) und ein evtl. Verschieben im selben Anruf.
@@ -258,14 +299,42 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "spoken": "In Ihrer Akte fehlt noch eine Handynummer. Wie lautet sie?",
             "regie": "Nummer erfragen, dann erneut buchen.",
         }
-    alt = offer_slots(tenant, ctx, exclude_iso=iso)
+    meldung = _s((data or {}).get("message")) if isinstance(data, dict) else ""
+    if "not available" in meldung.lower():
+        # Der Kalender sagt WIRKLICH "belegt": Alternativen anbieten.
+        alt = offer_slots(tenant, ctx, exclude_iso=iso)
+        return {
+            "ok": False,
+            "slotTaken": True,
+            "spoken": "Der Termin ist gerade weg. " + (alt.get("spoken") or ""),
+            "regie": REGIE_ANGEBOT,
+            "slots": alt.get("slots") or [],
+        }
+    # Alles andere (Validierung, Patient/Kalender nicht gefunden, 500):
+    # ehrlich bleiben statt "Termin ist weg" zu behaupten.
+    print(f"book_slot fail status={status} message={meldung!r}", flush=True)
     return {
         "ok": False,
-        "slotTaken": True,
-        "spoken": "Der Termin ist gerade weg. " + (alt.get("spoken") or ""),
-        "regie": REGIE_ANGEBOT,
-        "slots": alt.get("slots") or [],
+        "spoken": "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.",
+        "regie": f"Buchung fehlgeschlagen ({meldung or status}). Keinen Erfolg behaupten.",
     }
+
+
+def _buchung_pruefen(tenant: dict, patient_id: str, iso: str) -> str:
+    """Nach einem Netzfehler: Ist die Buchung doch gelandet? -> appointmentId."""
+    try:
+        status, data = _cf_post("masPatientLastDoctor", {
+            "clientId": _s(tenant.get("clientId")),
+            "locationId": _s(tenant.get("locationId")),
+            "patientId": patient_id,
+        })
+        if status == 200 and isinstance(data, dict):
+            nxt = data.get("nextAppointment") or {}
+            if _s(nxt.get("startIso"))[:16] == _s(iso)[:16]:
+                return _s(nxt.get("appointmentId"))
+    except Exception as e:
+        print(f"buchung_pruefen fail {e}", flush=True)
+    return ""
 
 
 def _bind_akte(ctx: dict, karte: dict) -> None:
@@ -421,7 +490,7 @@ def _termin_datum(ctx: dict, date: str = "") -> str:
 
 def _cf_update(action: str, body: dict) -> tuple[int, Any]:
     payload = {**body, "action": action}
-    return _cf_post("updateOrCancelAppointment", payload)
+    return _cf_post("updateOrCancelAppointment", payload, timeout=_SCHREIB_TIMEOUT)
 
 
 def list_appointments(tenant: dict, ctx: dict, upcoming: list | None = None, sit: dict | None = None) -> dict[str, Any]:
@@ -616,13 +685,14 @@ def _notiz_ziel(tenant: dict, ctx: dict, sit: dict | None) -> str:
 
 def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: str = "") -> dict[str, Any]:
     # Mehrzeilige Notizen (Telefonprotokoll) NICHT plattdruecken — nur
-    # einzeilige Notizen bekommen den "(Lisa)"-Herkunftsstempel.
+    # einzeilige Notizen bekommen den Herkunftsstempel (Lisa/Bianca).
     text = str(note or "").strip()
     if not text and sit:
         text = notes.zusammenfassung(sit)
     if not text:
         return {"ok": False, "spoken": "Es gab nichts Besonderes für die Terminnotiz."}
-    zeile = text if "\n" in text else notes.notiz_anhaengen("", text, herkunft="Lisa")
+    wer = notes.stimme_von(sit or {})
+    zeile = text if "\n" in text else notes.notiz_anhaengen("", text, herkunft=wer)
     kurz = _s(text.splitlines()[0])
     if not WRITE_LIVE:
         return {
