@@ -83,8 +83,9 @@ def ready() -> tuple[bool, str]:
         return False, "vLLM offline"
     if h.get("tts") != "elevenlabs":
         return False, "TTS fehlt"
-    if h.get("writeLive"):
-        return False, "WRITE_LIVE steht an — das ist kein Testmodus"
+    # WRITE_LIVE ist seit 26.08.2026 der gewollte Betriebszustand (echter
+    # Kalender) — kein Versand-Blocker mehr, nur noch sichtbar im Log.
+    print("writeLive:", "an (echter Kalender)" if h.get("writeLive") else "aus (Testmodus)")
     try:
         fs, fb = get("/fernsteuerung.html")
         if fs != 200 or b"Lisa-Draht" not in fb:
