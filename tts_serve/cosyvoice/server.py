@@ -38,6 +38,7 @@ _LOCK = threading.Lock()
 _MODEL = None
 _VOICES: dict[str, Path] = {}
 _TRANSKRIPT: dict[str, str] = {}
+_ALIASE: dict[str, str] = {}
 _REGISTRIERT: set[str] = set()
 _WARM = False
 
@@ -63,6 +64,30 @@ def _stimmen_scannen() -> None:
         _TRANSKRIPT[name] = " ".join(txt.read_text(encoding="utf-8").split()).strip()
 
 
+def _aliase_lesen() -> None:
+    """stimmen/aliase.json: {"clara": "bianca"} — mehrere Rufnamen, EIN Klon.
+
+    Ein Alias zeigt auf eine vorhandene Referenz; so teilen sich z. B.
+    Clara V7, Demo-Clara und Bianca dieselbe Registrierung.
+    """
+    _ALIASE.clear()
+    datei = STIMMEN_DIR / "aliase.json"
+    if not datei.is_file():
+        return
+    import json
+    try:
+        roh = json.loads(datei.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"aliase.json unlesbar: {e}", flush=True)
+        return
+    for alias, ziel in dict(roh).items():
+        a, z = str(alias).strip().lower(), str(ziel).strip().lower()
+        if z in _VOICES and a not in _VOICES:
+            _ALIASE[a] = z
+        else:
+            print(f"alias ignoriert: {a} -> {z} (ziel fehlt oder name belegt)", flush=True)
+
+
 def _modell_holen() -> None:
     if Path(MODEL_DIR, "cosyvoice3.yaml").is_file() or Path(MODEL_DIR, "cosyvoice2.yaml").is_file():
         return
@@ -80,7 +105,9 @@ def _laden() -> None:
     _modell_holen()
     _MODEL = AutoModel(model_dir=MODEL_DIR)
     _stimmen_scannen()
-    print(f"cosyvoice geladen in {time.time() - t0:.0f}s, stimmen={list(_VOICES)}", flush=True)
+    _aliase_lesen()
+    print(f"cosyvoice geladen in {time.time() - t0:.0f}s, "
+          f"stimmen={list(_VOICES)}, aliase={_ALIASE}", flush=True)
     for name in _VOICES:
         try:
             _MODEL.add_zero_shot_spk(
@@ -136,6 +163,7 @@ def health():
         "engine": "cosyvoice",
         "model": MODEL_HF,
         "voices": sorted(_VOICES),
+        "aliase": _ALIASE,
         "device": "cuda",
         "warm": _WARM,
     }
@@ -152,6 +180,7 @@ def speak(body: SpeakIn):
     if not text:
         raise HTTPException(400, "text fehlt")
     voice = (body.voice or "").strip().lower() or (sorted(_VOICES)[0] if _VOICES else "")
+    voice = _ALIASE.get(voice, voice)
     if voice not in _VOICES:
         raise HTTPException(400, f"stimme unbekannt: {voice}")
     t0 = time.perf_counter()

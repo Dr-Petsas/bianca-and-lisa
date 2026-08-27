@@ -32,6 +32,7 @@ app = FastAPI(title="tts-chatterbox")
 _LOCK = threading.Lock()
 _MODEL = None
 _VOICES: dict[str, Path] = {}
+_ALIASE: dict[str, str] = {}
 _WARM = False
 _AKTIVE_STIMME = ""       # fuer prepare_conditionals-Wiederverwendung
 _KANN_PREPARE = True      # bis das Gegenteil bewiesen ist
@@ -50,15 +51,42 @@ def _stimmen_scannen() -> dict[str, Path]:
     return out
 
 
+def _aliase_lesen(voices: dict[str, Path]) -> dict[str, str]:
+    """stimmen/aliase.json: {"clara": "bianca"} — mehrere Rufnamen, EIN Klon.
+
+    Ein Alias zeigt auf eine vorhandene Referenz; so teilen sich z. B.
+    Clara V7, Demo-Clara und Bianca denselben Warmlauf und Speicher.
+    """
+    datei = STIMMEN_DIR / "aliase.json"
+    if not datei.is_file():
+        return {}
+    import json
+    try:
+        roh = json.loads(datei.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"aliase.json unlesbar: {e}", flush=True)
+        return {}
+    out: dict[str, str] = {}
+    for alias, ziel in dict(roh).items():
+        a, z = str(alias).strip().lower(), str(ziel).strip().lower()
+        if z in voices and a not in voices:
+            out[a] = z
+        else:
+            print(f"alias ignoriert: {a} -> {z} (ziel fehlt oder name belegt)", flush=True)
+    return out
+
+
 def _laden() -> None:
     """Modell + Stimmen laden, dann je Stimme einen Warmlauf-Satz rendern."""
-    global _MODEL, _VOICES, _WARM
+    global _MODEL, _VOICES, _ALIASE, _WARM
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
     t0 = time.time()
     _MODEL = ChatterboxMultilingualTTS.from_pretrained(device="cuda", t3_model="v3")
     _VOICES = _stimmen_scannen()
-    print(f"chatterbox geladen in {time.time() - t0:.0f}s, stimmen={list(_VOICES)}", flush=True)
+    _ALIASE = _aliase_lesen(_VOICES)
+    print(f"chatterbox geladen in {time.time() - t0:.0f}s, "
+          f"stimmen={list(_VOICES)}, aliase={_ALIASE}", flush=True)
     for name in _VOICES:
         try:
             t1 = time.time()
@@ -120,6 +148,7 @@ def health():
         "engine": "chatterbox",
         "model": "Chatterbox-Multilingual-V3",
         "voices": sorted(_VOICES) if ok else sorted(_stimmen_scannen()),
+        "aliase": _ALIASE,
         "device": "cuda",
         "warm": _WARM,
     }
@@ -139,6 +168,7 @@ def speak(body: SpeakIn):
     if not text:
         raise HTTPException(400, "text fehlt")
     voice = (body.voice or "").strip().lower() or (sorted(_VOICES)[0] if _VOICES else "")
+    voice = _ALIASE.get(voice, voice)
     if voice not in _VOICES:
         raise HTTPException(400, f"stimme unbekannt: {voice}")
     t0 = time.perf_counter()

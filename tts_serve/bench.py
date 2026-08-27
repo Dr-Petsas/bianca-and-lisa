@@ -41,7 +41,15 @@ from kern.config import (  # noqa: E402
 from kern.tts import pcm16_wav  # noqa: E402
 
 RATE = 24000
-VOICE_IDS = {"bianca": BIANCA_VOICE_ID, "lisa": ELEVENLABS_VOICE_ID}
+# Zentrale Stimmen-Landkarte (Chef 28.08.2026): bianca traegt auch Clara V7 +
+# Demo-Clara (aliase.json: clara -> bianca). mann = Demo-Maennerstimme
+# (Chef 24.08.2026), quizmaster = Demo-Quiz — IDs aus dem Pickadoc-Demo-Repo.
+VOICE_IDS = {
+    "bianca": BIANCA_VOICE_ID,
+    "lisa": ELEVENLABS_VOICE_ID,
+    "mann": "isKDUCXg28Ua3lIGHC0k",
+    "quizmaster": "pNInz6obpgDQGcFmaJgB",
+}
 
 # Klon-Referenz: ~17 s natuerlicher Praxiston mit Fragen, Zahlen, Ausrufen.
 # WORTGETREU — die .txt daneben ist CosyVoices Prompt-Transkript.
@@ -52,6 +60,18 @@ REF_TEXT = (
     "Freitagnachmittag. Passt Ihnen das? Wunderbar, dann trage ich Sie "
     "gleich ein. Bis dahin, und einen schoenen Tag noch!"
 )
+
+# Der Quizmaster klingt nach Show, nicht nach Praxis — Klone uebernehmen den
+# Duktus der Referenz, darum ein eigener Text.
+REF_TEXT_QUIZ = (
+    "Herzlich willkommen zur grossen Quizrunde! Ich bin Ihr Quizmaster und "
+    "heute geht es um alles. Erste Frage, aufgepasst: Wie viele Zaehne hat "
+    "ein erwachsener Mensch? Achtundzwanzig? Zweiunddreissig? Die Spannung "
+    "steigt, die Uhr laeuft, drei, zwei, eins. Richtig, zweiunddreissig! "
+    "Fantastisch, weiter geht die wilde Fahrt!"
+)
+
+REF_TEXTE = {"quizmaster": REF_TEXT_QUIZ}
 
 
 def _wav_roh(pcm: bytes, rate: int = RATE) -> bytes:
@@ -94,10 +114,11 @@ def ref_erzeugen() -> None:
     ziel = HIER / "stimmen"
     ziel.mkdir(exist_ok=True)
     for name, vid in VOICE_IDS.items():
+        text = REF_TEXTE.get(name, REF_TEXT)
         print(f"rendere Referenz {name} (Voice {vid}) ...", flush=True)
-        pcm = _eleven_pcm(REF_TEXT, vid)
+        pcm = _eleven_pcm(text, vid)
         (ziel / f"{name}.wav").write_bytes(_wav_roh(pcm))
-        (ziel / f"{name}.txt").write_text(REF_TEXT, encoding="utf-8")
+        (ziel / f"{name}.txt").write_text(text, encoding="utf-8")
         print(f"  {name}.wav ({len(pcm) / 2 / RATE:.1f} s) + {name}.txt", flush=True)
     print("Fertig. Ordner tts_serve/ jetzt auf die 5090 kopieren.")
 
