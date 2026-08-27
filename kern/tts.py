@@ -21,13 +21,16 @@ _AUSSPRACHE = (
     (re.compile(r"\bDavid\b"), "Dah-vid"),
 )
 
-# Lautheit (Chef 27.08.2026: "Lautstärke schwankt, wie ein Kompressor"):
-# Der alte feste Faktor 3,2 mit hartem Kappen übersteuerte normale Sprachpegel
-# permanent — das klang wie ein einsetzender Limiter. Jetzt wird JEDE Äußerung
-# auf denselben Spitzenpegel normalisiert: leise ElevenLabs-Ausgaben werden
-# angehoben (max. Faktor 6), laute bleiben — nichts wird mehr gekappt.
-ZIEL_PEGEL = 0.92          # Spitze relativ zur Vollaussteuerung
-MAX_ANHEBUNG = 6.0
+# Lautheit — exakt das Demo-Clara-Rezept (Chef 27.08.2026 zweite Runde:
+# "mach die audios genau so laut wie demo clara"). Demo Clara
+# (worker_speech_out._demo_pcm_pegel) hebt NUR leise Sätze an: Ziel 0,82
+# der Vollaussteuerung, Faktor höchstens 1,8, nie absenken, Stille bleibt
+# Stille. Unser erster Wurf (Ziel 0,92, Faktor bis 6) riss leise Füller um
+# bis zu +15 dB hoch, während normale Sätze unverändert blieben — DAS waren
+# die verbliebenen Lautstärke-Schwankungen zwischen den Äußerungen.
+ZIEL_PEGEL = 0.82          # Spitze relativ zur Vollaussteuerung (Demo-Parität)
+MAX_ANHEBUNG = 1.8         # Demo Clara: "Nie übersteuern — klang wie runtergesampelt"
+STILLE_SPITZE = 80         # int16-Spitzen darunter sind Atmen/Rauschen: nicht anfassen
 PCM_RATE = 24000
 
 _CACHE: dict[str, bytes] = {}
@@ -57,7 +60,8 @@ def _client() -> httpx.Client:
 
 
 def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
-    """s16le mono → WAV, auf einheitlichen Spitzenpegel normalisiert (kein Clipping)."""
+    """s16le mono → WAV. Pegel wie Demo Clara: nur leise Sätze anheben
+    (Ziel 0,82 FS, Faktor max. 1,8), nie absenken, nie kappen."""
     n = len(pcm) // 2
     if n <= 0:
         return b""
@@ -65,8 +69,8 @@ def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
     samples.frombytes(pcm[: n * 2])
     spitze = max(1, max(abs(s) for s in samples))
     gain = min(MAX_ANHEBUNG, (ZIEL_PEGEL * 32767.0) / spitze)
-    if gain <= 1.02:
-        # Schon laut genug — Originalbytes durchreichen, kein Umrechnen.
+    if spitze < STILLE_SPITZE or gain <= 1.02:
+        # Stille/Atmen nie hochziehen; Lautes unverändert durchreichen.
         data = samples.tobytes()
     else:
         boosted = array.array("h", bytes(len(samples) * 2))

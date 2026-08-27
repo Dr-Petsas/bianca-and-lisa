@@ -246,10 +246,11 @@ async function playUrl(url) {
       const decoded = await ctx.decodeAudioData(raw.slice(0));
       const src = ctx.createBufferSource();
       const g = ctx.createGain();
-      // WAV wird serverseitig auf einheitlichen Spitzenpegel normalisiert —
-      // JEDER Zusatz-Gain würde wieder übersteuern (das "Kompressor"-Pumpen
-      // vom 27.08.2026). MP3-Fallback bleibt leiser und braucht Anhebung.
-      g.gain.value = wav ? 1.0 : 3.2;
+      // Demo-Clara-Parität (Chef 27.08.2026): KEIN Browser-Gain. WAVs sind
+      // serverseitig auf den Demo-Pegel gebracht, und der Jingle (MP3) ist
+      // fertig gemastert — der alte Faktor 3,2 hat ihn übersteuert und war
+      // die letzte Quelle für Lautstärke-Sprünge.
+      g.gain.value = 1.0;
       src.buffer = decoded;
       src.connect(g).connect(ctx.destination);
       playUrl._src = src;

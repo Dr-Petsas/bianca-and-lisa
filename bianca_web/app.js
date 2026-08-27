@@ -187,7 +187,9 @@ async function playUrl(url) {
       const g = ctx.createGain();
       // WAV wird serverseitig auf einheitlichen Spitzenpegel normalisiert —
       // Zusatz-Gain würde wieder übersteuern ("Kompressor"-Pumpen 27.08.2026).
-      g.gain.value = wav ? 1.0 : 3.2;
+      // Demo-Clara-Parität (Chef 27.08.2026): KEIN Browser-Gain — WAVs kommen
+      // serverseitig auf Demo-Pegel, der Jingle (MP3) ist fertig gemastert.
+      g.gain.value = 1.0;
       src.buffer = decoded;
       src.connect(g).connect(ctx.destination);
       playUrl._src = src;
