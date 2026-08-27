@@ -1,4 +1,11 @@
 const $ = (id) => document.getElementById(id);
+
+// Alle Server-Pfade RELATIV aufloesen: die Seite laeuft direkt (Port 8096,
+// Basis "/") UND hinter Lisas Durchreiche (Basis "/bianca/"). Absolute
+// Pfade wie "/api/audio/..." aus Server-Antworten werden hier umgebogen.
+function apiUrl(p) {
+  return p && p.startsWith("/") ? p.slice(1) : p;
+}
 let sessionId = "";
 let callOn = false;
 let micStream = null;
@@ -101,6 +108,7 @@ function bargeOderCap(dauerMs) {
 
 async function playUrl(url) {
   if (!url || !callOn) return;
+  url = apiUrl(url);
   await unlockAudio();
   kiSpricht = true;
   const ctx = unlockAudio.ctx;
@@ -353,7 +361,7 @@ async function sendeZug({ text, blob, nr }) {
   try {
     let data;
     if (hatLive) {
-      const r = await fetch("/api/turn", {
+      const r = await fetch("api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, text }),
@@ -363,7 +371,7 @@ async function sendeZug({ text, blob, nr }) {
       const fd = new FormData();
       fd.append("sessionId", sessionId);
       fd.append("audio", blob, blob.type.includes("mp4") ? "turn.m4a" : "turn.webm");
-      const r = await fetch("/api/listen", { method: "POST", body: fd });
+      const r = await fetch("api/listen", { method: "POST", body: fd });
       data = await leseZug(r, spielFiller);
     }
     if (fillerLauf) { try { await fillerLauf; } catch { /* */ } }
@@ -432,7 +440,7 @@ function auflegen() {
   hoerNr += 1;
   zugBusy = false;
   if (sid) {
-    fetch("/api/hangup", {
+    fetch("api/hangup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId: sid }),
@@ -457,7 +465,7 @@ function auflegen() {
 
 async function boot() {
   try {
-    const h = await (await fetch("/health")).json();
+    const h = await (await fetch("health")).json();
     const llm = h.llm && h.llm.ok ? "vLLM da" : "vLLM offline";
     const live = h.writeLive ? "schreibt Kalender" : "Test: Kalender bleibt leer";
     $("health").textContent = `${llm} · hört ${h.stt || "?"} · spricht ${h.tts} · ${live}`;
@@ -467,7 +475,7 @@ async function boot() {
   } catch {
     $("health").textContent = "Dienst antwortet nicht";
   }
-  const t = await (await fetch("/api/tenants")).json();
+  const t = await (await fetch("api/tenants")).json();
   $("tenant").innerHTML = (t.tenants || []).map((x) =>
     `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`
   ).join("");
@@ -506,7 +514,7 @@ async function weiterNachMic(micBitte) {
   startLiveSttPersistent();
   phase("warte", "verbindet …");
   try {
-    const r = await fetch("/api/start", {
+    const r = await fetch("api/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tenant: $("tenant").value }),

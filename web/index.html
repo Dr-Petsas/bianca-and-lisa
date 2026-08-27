@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Lisa &amp; Bianca — Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call16" />
+  <link rel="stylesheet" href="/styles.css?v=call17" />
 </head>
 <body>
   <nav class="tabs" id="tabs">
@@ -104,10 +104,6 @@
       var hinweis = document.getElementById("biancaHinweis");
       var geladen = false;
 
-      function biancaBase() {
-        return location.protocol + "//" + location.hostname + ":8096";
-      }
-
       function zeige(tab) {
         document.getElementById("tab-lisa").hidden = tab !== "lisa";
         document.getElementById("tab-bianca").hidden = tab !== "bianca";
@@ -118,8 +114,14 @@
         }
         if (tab === "bianca" && !geladen) {
           geladen = true;
-          fetch(biancaBase() + "/health", { mode: "no-cors" })
-            .then(function () { frame.src = biancaBase() + "/"; })
+          // Bianca laeuft hinter Lisas Durchreiche (/bianca/ -> Port 8096) —
+          // so funktioniert sie auch durch den Cloudflare-Tunnel, wo :8096
+          // von aussen nicht erreichbar ist.
+          fetch("/bianca/health")
+            .then(function (r) {
+              if (!r.ok) throw new Error("bianca down");
+              frame.src = "/bianca/";
+            })
             .catch(function () { hinweis.hidden = false; });
         }
         try { localStorage.setItem("tab", tab); } catch (e) {}
@@ -147,6 +149,6 @@
       if (start !== "lisa") zeige(start);
     })();
   </script>
-  <script src="/app.js?v=call16"></script>
+  <script src="/app.js?v=call17"></script>
 </body>
 </html>

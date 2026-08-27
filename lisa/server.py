@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import threading
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
@@ -342,6 +344,48 @@ def api_audio(name: str):
         raise HTTPException(404)
     mime = "audio/wav" if blob[:4] == b"RIFF" else "audio/mpeg"
     return Response(blob, media_type=mime)
+
+
+# --- Bianca-Durchreiche -----------------------------------------------------
+# Der Cloudflare-Tunnel zeigt nur auf DIESEN Dienst (8095). Biancas Dienst
+# (8096) ist von aussen nicht erreichbar — darum reicht Lisa alles unter
+# /bianca/... an ihn durch. Lokal funktioniert weiterhin auch Port 8096 direkt.
+_BIANCA_ZIEL = "http://127.0.0.1:8096"
+# read=None: die NDJSON-Stroeme (Fueller waehrend Werkzeug-Laeufen) duerfen
+# beliebig lange offen bleiben.
+_BIANCA_KANAL = httpx.AsyncClient(base_url=_BIANCA_ZIEL, timeout=httpx.Timeout(10.0, read=None))
+
+
+@app.get("/bianca")
+def bianca_umleiten():
+    # Ohne Schraegstrich am Ende wuerden Biancas relative Pfade ("api/...")
+    # auf Lisas Wurzel zeigen.
+    return RedirectResponse("/bianca/")
+
+
+@app.api_route("/bianca/{pfad:path}", methods=["GET", "POST"])
+async def bianca_durchreichen(pfad: str, request: Request):
+    kopf = {}
+    ct = request.headers.get("content-type")
+    if ct:
+        kopf["content-type"] = ct
+    try:
+        weiter = _BIANCA_KANAL.build_request(
+            request.method,
+            httpx.URL(path="/" + pfad, query=request.url.query.encode()),
+            headers=kopf,
+            content=request.stream() if request.method != "GET" else None,
+        )
+        antwort = await _BIANCA_KANAL.send(weiter, stream=True)
+    except httpx.HTTPError:
+        raise HTTPException(502, "Bianca-Dienst (Port 8096) antwortet nicht")
+    raus = {k: v for k, v in antwort.headers.items() if k.lower() in {"content-type", "cache-control"}}
+    return StreamingResponse(
+        antwort.aiter_raw(),
+        status_code=antwort.status_code,
+        headers=raus,
+        background=BackgroundTask(antwort.aclose),
+    )
 
 
 if WEB_DIR.is_dir():
