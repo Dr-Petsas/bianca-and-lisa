@@ -70,6 +70,17 @@ def main() -> int:
     z5 = sag(c, sid, "P wie Paula, E wie Emil, T wie Theodor, E wie Emil, R wie Richard, S wie Samuel.")
     assert "handynummer" in z5.get("text", "").lower(), "Erwartet Telefon-Frage"
 
+    # Abschweifung mitten in der Aufnahme (Chef 27.08.: "Abschweifungen
+    # müssen erlaubt sein"): LLM antwortet, danach zurück zur offenen Frage.
+    za = sag(c, sid, "Ähm, ganz kurz — was kostet denn so eine Kontrolle bei Ihnen?")
+    ta = za.get("text", "").lower()
+    assert "uhr" not in ta or "nummer" in ta, f"Abschweifung darf kein Terminangebot erfinden: {ta}"
+    assert "nummer" in ta or "handy" in ta, f"Nach Abschweifung muss die offene Telefon-Frage zurückkommen: {ta}"
+    zb = sag(c, sid, "Und haben Sie Parkplätze vor der Tür?")
+    tb = zb.get("text", "").lower()
+    assert "nummer" in tb or "handy" in tb, f"Auch nach zweiter Abschweifung zurück zur Telefon-Frage: {tb}"
+    assert "kontrolluntersuchung" not in tb or "eintragen" not in tb, "FEHLER: Eskalation nach Abschweifungen (darf nicht zählen)"
+
     z6 = sag(c, sid, "Null eins sieben sieben six hundred vier six hundred.")
     t6 = z6.get("text", "").lower()
     assert "wiederhole" in t6, "Erwartet Rückbestätigung der Nummer"

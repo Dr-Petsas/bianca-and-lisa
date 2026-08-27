@@ -338,6 +338,10 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 if s["wunsch"]:
                     return _verschieb_angebot(sit, melde)
                 return _verschieb_wunsch_frage(sit, termin)
+        if gehirn.ist_zwischenfrage(t):
+            # Abschweifung: LLM antwortet; Erledigt-Wache + Stand im Prompt
+            # verhindern erfundene Absagen und fuehren zur Wahl zurueck.
+            return None
         return {"text": (
             f"Da will ich nichts Falsches erwischen. Zur Auswahl: {_liste_sprechbar(sit['gefunden'])}. "
             "Sagen Sie einfach 'den ersten' oder 'den zweiten' — oder nennen Sie die Uhrzeit."

@@ -625,6 +625,65 @@ def test_terminwahl_gibt_nie_ans_llm_ab():
     assert z2 is not None and "wirklich absagen" in (z2.get("text") or "").lower()
 
 
+def test_zwischenfrage_erkennung():
+    """Fragen des Anrufers werden als Abschweifung erkannt — Verweigerungen
+    und Meta-Kommentare nicht (die dürfen weiter eskalieren)."""
+    for satz in ["Was kostet denn eine Kontrolle?", "Wo kann ich bei Ihnen parken",
+                 "Muss ich nüchtern kommen", "Äh, wie lange dauert das denn",
+                 "Haben Sie einen Aufzug?", "Und wieviel kostet das"]:
+        assert gehirn.ist_zwischenfrage(satz), satz
+    for satz in ["Das müssen Sie doch wissen.", "Das weißt du doch alles.",
+                 "Hm.", "Na gut, von mir aus.", "Ich sag dazu nichts."]:
+        assert not gehirn.ist_zwischenfrage(satz), satz
+
+
+def test_abschweifung_zaehlt_nicht_als_leerlauf():
+    """Zwei Zwischenfragen hintereinander: beide gehen ans LLM, KEINE
+    Eskalation — erst echte Nicht-Antworten schalten weiter (Chef 27.08.:
+    'Abschweifungen müssen erlaubt sein')."""
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": True, "frage": "arzt"})
+        assert flow.zug(sit, "Was kostet denn so eine Kontrolle?") is None
+        assert flow.zug(sit, "Und wo kann ich bei Ihnen parken?") is None
+        assert not (sit.get("frageLeer") or {})  # Abschweifungen zählen nicht
+        assert s["frage"] == "arzt" and s["arzt"] is None  # offene Frage bleibt
+        assert flow.zug(sit, "Das müssen Sie doch wissen.") is None  # 1. Leerlauf
+        z = flow.zug(sit, "Sag ich nicht.")  # 2. Leerlauf -> Eskalation
+        assert z is not None and (s["arzt"] or {}).get("typ") == "egal"
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_kurz_zustimmung_stark_super():
+    """'Stark.' / 'Super!' als ganze Äußerung ist ein Ja — 'Gut, aber ...'
+    nicht (das ist eine Rückfrage und bleibt beim LLM)."""
+    for satz in ["Stark.", "Super!", "Perfekt", "Äh, sehr gut.", "In Ordnung."]:
+        assert gehirn.ist_ja(satz), satz
+    assert not gehirn.ist_ja("Gut, aber was kostet das?")
+    assert gehirn.ist_zwischenfrage("Gut, aber was kostet das?")
+
+
+def test_terminwahl_abschweifung_geht_ans_llm():
+    """Zwischenfrage während der Terminwahl: LLM darf antworten (None),
+    eine klare Wahl danach läuft deterministisch weiter."""
+    from bianca import verwalten
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "phase": "wahl", "frage": "terminwahl",
+              "vorname": "Michael", "nachname": "Peters"})
+    sit["gefunden"] = [
+        {"id": "a1", "iso": "2026-08-28T10:30:00+02:00", "spoken": "morgen um zehn Uhr dreißig"},
+        {"id": "a2", "iso": "2026-08-28T10:45:00+02:00", "spoken": "morgen um zehn Uhr fünfundvierzig"},
+    ]
+    assert verwalten.zug(sit, "Warum wollen Sie das denn wissen?", set()) is None
+    z = verwalten.zug(sit, "Den zweiten bitte.", set())
+    assert z is not None and "wirklich absagen" in (z.get("text") or "").lower()
+
+
 def test_erledigt_wache_blockt_falsche_absage_behauptung():
     """LLM behauptet 'ich sage den Termin ab', obwohl kein Werkzeug lief:
     Wache ersetzt das durch die letzte offene Fluss-Frage (live 27.08.:

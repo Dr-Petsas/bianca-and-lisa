@@ -446,12 +446,19 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     fid, frage = gehirn.naechste_frage(sit)
     if fid:
+        if gehirn.ist_zwischenfrage(t):
+            # Echte Zwischenfrage/Abschweifung ("Was kostet das?"): das LLM
+            # antwortet natürlich, die Ernte aus diesem Satz ist gesichert,
+            # der Frage-Anker stellt danach die offene Frage — zählt NIE als
+            # Leerlauf (Chef 27.08.: "Abschweifungen müssen erlaubt sein").
+            s["frage"] = fid
+            return None
         if not neu and s["frage"] == fid:
             # Dieselbe Frage ist schon offen und der Satz brachte nichts Neues.
             zaehler = sit.setdefault("frageLeer", {})
             zaehler[fid] = int(zaehler.get(fid) or 0) + 1
             if zaehler[fid] <= 1:
-                # Vermutlich eine Zwischenfrage: das LLM antwortet kurz,
+                # Erster Leerlauf: das LLM antwortet kurz,
                 # der Stand im Prompt führt zur offenen Frage zurück.
                 return None
             # Zweiter Leerlauf: Standard setzen und WEITERGEHEN — nie wieder

@@ -30,6 +30,35 @@ _JA_RE = re.compile(
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
+# Kurz-Zustimmungen als GANZE Aeusserung ("Stark.", "Super!", "Sehr gut") —
+# bewusst nur als Voll-Treffer: "Gut, aber ..." ist KEINE glatte Zustimmung.
+_JA_KURZ_RE = re.compile(
+    r"^\s*(stark|super|perfekt|prima|top|klasse|wunderbar|bestens|schön|schoen|"
+    r"sehr\s+gut|gut|in\s+ordnung|einverstanden|von\s+mir\s+aus|meinetwegen|gebongt)\s*[.!…]*\s*$",
+    re.I,
+)
+# Zwischenfrage/Abschweifung des Anrufers ("Was kostet das?", "Wo parke ich?"):
+# geht ans LLM und zaehlt NIE als Leerlauf Richtung Eskalation (Chef 27.08.:
+# "Abschweifungen muessen erlaubt sein"). Nackte Fragewoerter zaehlen NUR am
+# Satzanfang — "B wie Berta" (Buchstabieren) und "wie gesagt" sind KEINE Fragen.
+_ZWISCHENFRAGE_START_RE = re.compile(
+    r"^\s*(?:(?:und|aber|ach|ja|sag(?:en)?\s+(?:sie\s+)?mal|mal\s+(?:eine|ne)\s+frage|"
+    r"eine\s+frage|kurze\s+frage|noch\s+(?:eine|ne)\s+frage)\b[\s,:—-]*)*"
+    r"(?:was|wie(?!\s+(?:gesagt|besprochen|immer|vorhin|üblich|ueblich|abgemacht))|"
+    r"wann(?!\s+(?:sie|es|ihr|du)\b)|wo|wohin|woher|wer|warum|wieso|weshalb|wozu|"
+    r"welche[rsnm]?|wieviel|wie\s+viele?)\b",
+    re.I,
+)
+_ZWISCHENFRAGE_KERN_RE = re.compile(
+    r"\?|"
+    r"\b(kostet|kosten|preis|preise|gebühr|gebuehr|gibt\s+es|gibts|"
+    r"haben\s+sie|habt\s+ihr|kann\s+ich|könnte\s+ich|koennte\s+ich|darf\s+ich|"
+    r"muss\s+ich|müsste\s+ich|muesste\s+ich|sollte?\s+ich|wie\s+lange|dauert|"
+    r"parken|parkplatz|parkplätze|parkplaetze|barrierefrei|rollstuhl|aufzug|"
+    r"versicherung|krankenkasse|privatpatient|selbstzahler|"
+    r"betäubung|betaeubung|nüchtern|nuechtern|mitbringen|unterlagen)\b",
+    re.I,
+)
 # "Äh, nein." / "Also ja" / "Hm, nee" — Füllwörter vor dem Ja/Nein abstreifen
 # (live 27.08.2026: "Äh, nein" wurde NICHT als Nein erkannt, die Zustands-
 # maschine blieb auf der Frage hängen und das LLM übernahm mit Fantasie).
@@ -155,11 +184,18 @@ def _ohne_anlauf(text: str) -> str:
 
 
 def ist_ja(text: str) -> bool:
-    return bool(_JA_RE.search(_ohne_anlauf(text)))
+    k = _ohne_anlauf(text)
+    return bool(_JA_RE.search(k) or _JA_KURZ_RE.match(k))
 
 
 def ist_nein(text: str) -> bool:
     return bool(_NEIN_RE.search(_ohne_anlauf(text)))
+
+
+def ist_zwischenfrage(text: str) -> bool:
+    """Stellt der Anrufer selbst eine Frage / schweift er ab?"""
+    k = _ohne_anlauf(text)
+    return bool(_ZWISCHENFRAGE_KERN_RE.search(k) or _ZWISCHENFRAGE_START_RE.match(k))
 
 
 def _relatives_datum(t: str) -> str:
