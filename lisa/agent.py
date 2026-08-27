@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from lisa import calendar, llm, notes, session
+from lisa import calendar, identitaet, llm, notes, session
 from lisa.greeting import begruessung
 from lisa.prompt import TOOLS, system_prompt
 
@@ -51,6 +51,10 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
         {"role": "assistant", "content": text},
     ]
     session_doc["messages"] = msgs
+    # Identitaetscheck laeuft deterministisch, bevor das Modell dran ist.
+    session_doc["idCheck"] = (
+        identitaet.FRAGE if identitaet.moeglich(patient) else identitaet.FERTIG
+    )
     return {"text": text, "book": None}
 
 
@@ -62,6 +66,13 @@ def user_turn(session_doc: dict, spoken: str, melde=None) -> dict[str, Any]:
     if not msgs:
         return start_reply(session_doc)
     msgs.append({"role": "user", "content": text_in})
+    # Solange nicht geklaert ist, WER am Telefon sitzt, antwortet die
+    # Zustandsmaschine — ohne Modell, also ohne Wartezeit und ohne Abweichen.
+    id_zug = identitaet.naechster_zug(session_doc, text_in)
+    if id_zug:
+        msgs.append({"role": "assistant", "content": id_zug["text"]})
+        session_doc["messages"] = msgs
+        return {"text": id_zug["text"], "book": None}
     out = llm.chat(msgs, TOOLS)
     if not out.get("ok"):
         return {

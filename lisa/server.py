@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import json
 
-from lisa import agent, calendar, filler, llm, patients, remote, session, sprech, stt, tenants, tts
+from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, sprech, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, ELEVENLABS_TTS_MODEL, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
@@ -186,6 +186,10 @@ def _zug_stream(sit, *, art: str, text_in: str = "", extra: dict | None = None,
                 stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = ""):
     """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
     q: queue.Queue = queue.Queue()
+    # JETZT ablesen, nicht spaeter: der Arbeitsfaden unten setzt idCheck auf
+    # "fertig", sobald die Identitaet geklaert ist — er ist schneller als die
+    # Fristberechnung im Hauptfaden und wuerde sie sonst in die Irre fuehren.
+    id_phase = sit.get("idCheck") not in (None, "", "fertig")
 
     def melde(tool: str) -> None:
         q.put(("tool", tool))
@@ -223,6 +227,10 @@ def _zug_stream(sit, *, art: str, text_in: str = "", extra: dict | None = None,
 
     def frist_setzen(gehoert: str) -> tuple[float, str]:
         """Aus dem Gehörten raten, ob ein Kalender-Zugriff kommt."""
+        # In der Identitaetsphase antwortet die Zustandsmaschine sofort — ein
+        # Kalender-Füller ("ich schaue kurz nach") waere dort schlicht falsch.
+        if id_phase:
+            return time.monotonic() + _FILLER_SPAET_S, "allgemein"
         gruppe = filler.vermutet(gehoert, angebot_offen=_angebot_offen(sit))
         if gruppe:
             return time.monotonic() + _FILLER_VORAB_S, gruppe
@@ -358,6 +366,9 @@ def api_start(body: StartIn):
         upcoming=[],
     )
     threading.Thread(target=_anreichern, args=(sit,), daemon=True).start()
+    # Eigener Faden: der Anliegen-Satz soll fertig sein, wenn der Angerufene
+    # die Identitaetsfrage bestaetigt — nicht hinter den Kalender-Umlaeufen warten.
+    threading.Thread(target=anliegen.vorbereiten, args=(sit,), daemon=True).start()
     return _json_antwort(sit, art="start", extra={"sessionId": sit["id"], "praxis": t.get("praxisName")})
 
 

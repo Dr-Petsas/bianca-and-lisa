@@ -56,6 +56,20 @@ def vorstellung(praxis: str, behandler: str = "") -> str:
 
 def begruessung(praxis: str, auftrag: str = "", *, patient: dict | None = None,
                 behandler: str = "") -> str:
+    """Erster Zug. Mit bekanntem Namen: Vorstellung + Identitaetsfrage.
+
+    Chef 27.08.2026: Lisa vergewissert sich zuerst, WER am Telefon ist. Anrede,
+    Behandler und Anliegen kommen erst nach der Bestaetigung (lisa/identitaet.py)
+    — sonst erzaehlt sie einem Fremden das Anliegen.
+    """
+    from lisa.identitaet import frage_satz, moeglich
+
+    haus = _s(praxis)
+    kopf = f"Guten Tag, hier ist Lisa von der {haus}." if haus else "Guten Tag, hier ist Lisa."
+    if moeglich(patient):
+        return f"{kopf} {frage_satz(patient)}"
+
+    # Ohne vollstaendigen Namen gibt es nichts zu bestaetigen: alter Ablauf.
     wen = anrede(patient)
     gruss = f"Guten Tag, {wen}," if wen else "Guten Tag,"
     kopf = f"{gruss} {vorstellung(praxis, behandler)}."

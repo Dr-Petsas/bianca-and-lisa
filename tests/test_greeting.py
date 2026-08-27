@@ -27,17 +27,18 @@ def test_vorstellung_ohne_behandler():
     assert v == "hier ist Lisa von der med dent Zahnklinik"
 
 
-def test_termin_begruessung_nennt_namen_und_behandler():
+def test_termin_begruessung_prueft_zuerst_die_person():
+    # Chef 27.08.2026: Erst klaeren, WER dran ist. Anrede, Behandler und
+    # Anliegen folgen erst nach der Bestaetigung (lisa/identitaet.py).
     t = begruessung(
         "med dent Zahnklinik",
         "Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei.",
         patient=FRAU,
         behandler="Dr. Petsas",
     )
-    assert t.startswith("Guten Tag, Frau Möllenberg, hier ist Lisa von der med dent Zahnklinik")
-    assert "im Auftrag von Dr. Petsas" in t
-    assert "vormittags oder nachmittags" in t
-    # Der Auftrag darf nicht woertlich vorgelesen werden:
+    assert t == ("Guten Tag, hier ist Lisa von der med dent Zahnklinik. "
+                 "Spreche ich mit Anna Möllenberg?")
+    assert "im Auftrag" not in t
     assert "nächste Woche" not in t
 
 
