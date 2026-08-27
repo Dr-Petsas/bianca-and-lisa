@@ -62,7 +62,10 @@ body.bianca-aktiv #tab-bianca { height: auto; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 h1 { font-size: 22px; font-weight: 650; margin: 0; }
 .sub { color: var(--muted); font-size: 13px; }
-.last-call { margin-top: 4px; color: var(--warn); }.grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 12px; }
+.last-call { margin-top: 4px; color: var(--warn); }
+/* Gleiche Spaltenbreiten wie auf der Bianca-Seite — der Tab-Wechsel soll
+   wie ein und dieselbe Seite wirken (Chef 27.08.). */
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 16px; }
 .card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Bianca — Patiententelefon</title>
-  <link rel="stylesheet" href="styles.css?v=b5" />
+  <link rel="stylesheet" href="styles.css?v=b6" />
 </head>
 <body>
   <div class="wrap">
@@ -20,26 +20,16 @@
       </div>
     </header>
 
-    <!-- Anruf-Knopf IM Seitenfluss (Chef 27.08.2026: der schwebende Knopf
-         hing mitten ueber den Karten und verdeckte alles). -->
-    <section class="dock" id="dock">
-      <button class="btn" id="start" type="button">Bei Bianca anrufen</button>
-      <div class="sub dock-sub">Mikrofon erlauben und einfach reden — Bianca meldet sich.</div>
-    </section>
-
     <div class="grid">
       <section class="card">
         <h2>Praxis</h2>
         <label for="tenant">Mandant</label>
         <select id="tenant"></select>
-      </section>
-
-      <section class="card">
-        <h2>So läuft der Anruf</h2>
-        <p class="sub" style="margin:0">
-          Terminwunsch, Grund, Name (Bianca fragt nach Buchstabierung),
-          Handynummer — sie sucht währenddessen schon freie Termine und
-          bucht fest in den Kalender. Auch Absagen und Verschieben gehen.
+        <p class="sub" style="margin:12px 0 0">
+          Mikrofon erlauben und einfach reden: Terminwunsch, Grund, Name
+          (Bianca fragt nach Buchstabierung), Handynummer. Sie sucht
+          währenddessen schon freie Termine und bucht fest in den
+          Kalender — auch Absagen und Verschieben gehen.
         </p>
       </section>
 
@@ -62,7 +52,13 @@
     <button class="btn hang" id="hang" type="button">Auflegen</button>
   </div>
 
+  <!-- Anruf-Knopf FIX am unteren Rand (Chef 27.08.: auf beiden Tabs an
+       derselben Stelle) — der Inhalt bekommt per body-Padding Platz,
+       nichts verschwindet hinter der Leiste. -->
+  <div class="dock" id="dock">
+    <button class="btn" id="start" type="button">Bei Bianca anrufen</button>
+  </div>
   <audio id="speaker" playsinline webkit-playsinline hidden></audio>
-  <script src="app.js?v=b5"></script>
+  <script src="app.js?v=b6"></script>
 </body>
 </html>

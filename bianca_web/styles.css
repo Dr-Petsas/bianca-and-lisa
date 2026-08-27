@@ -13,14 +13,16 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
-body { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom); }
+/* Unten bleibt Platz fuer die fixe Anruf-Leiste — Inhalt verschwindet NIE
+   dahinter (Chef 27.08.: Button darf nichts verdecken, iOS safe-area). */
+body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .header-status { text-align: right; min-width: 0; }
 h1 { font-size: 22px; font-weight: 650; margin: 0; }
 .sub { color: var(--muted); font-size: 13px; }
 .last-call { margin-top: 4px; color: var(--warn); }
-.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 16px; }
 .card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
@@ -41,24 +43,21 @@ select {
 .status { font-size: 13px; color: var(--muted); margin-top: 8px; }
 .status.bad { color: var(--strike); }
 .toast {
-  position: fixed; left: 12px; right: 12px; bottom: calc(16px + env(safe-area-inset-bottom));
+  position: fixed; left: 12px; right: 12px; bottom: calc(88px + env(safe-area-inset-bottom));
   z-index: 50; background: #3a2018; color: #f0c4b8; border: 1px solid #c45c26;
   border-radius: 12px; padding: 12px 14px; font-size: 15px;
 }
 .toast[hidden] { display: none !important; }
-/* Anrufen-Knopf GROSS, aber IM Seitenfluss (Chef 27.08.2026: der fixe,
-   mittig schwebende Knopf hing ueber den Karten und verdeckte alles). */
+/* Anruf-Leiste FIX am unteren Rand — GLEICHE Geometrie wie Lisas Leiste
+   (Chef 27.08.: beide Tabs, exakt dieselbe Stelle). Der Inhalt hat per
+   body-Padding immer Platz, nichts haengt mehr UEBER den Karten. */
 .dock {
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-  margin: 10px 0 18px; padding: 22px 16px;
-  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: #1a1216; border-top: 1px solid var(--line);
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  display: flex; gap: 8px; align-items: center;
 }
-.dock .btn {
-  width: min(520px, 100%);
-  min-height: 72px; font-size: 22px; border-radius: 999px;
-  box-shadow: 0 10px 32px rgba(186, 61, 120, .4);
-}
-.dock-sub { text-align: center; }
+.dock .btn { flex: 1; min-height: 46px; }
 .call {
   position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column;
   background: #100b0e; padding: calc(18px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
@@ -80,15 +79,11 @@ select {
 @keyframes pulse { 50% { transform: scale(1.08); } }
 body.incall { overflow: hidden; }
 body.incall .wrap, body.incall .dock { display: none; }
-@media (max-width: 980px) {
-  .grid { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 700px) {
+@media (max-width: 860px) {
   .grid { grid-template-columns: 1fr; }
   header { flex-direction: column; }
   .header-status { text-align: left; }
   .wrap { padding: 12px 12px 20px; }
   .live { min-height: 140px; max-height: 36vh; }
-  .dock { padding: 16px 12px; }
-  .dock .btn { min-height: 64px; font-size: 19px; }
+  .dock .btn { min-height: 52px; font-size: 17px; }
 }
