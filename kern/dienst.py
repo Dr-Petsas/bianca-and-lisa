@@ -29,6 +29,10 @@ FILLER_VORAB_S = 0.3
 FILLER_SPAET_S = 3.2
 
 
+def _s(v) -> str:
+    return " ".join(str(v or "").split()).strip()
+
+
 def zeile(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=False) + "\n"
 
@@ -118,17 +122,29 @@ class Dienst:
     # ---- Antwort-Bau -------------------------------------------------------
 
     def json_antwort(self, sit: dict, *, art: str, text_in: str = "",
-                     extra: dict | None = None, melde=None) -> dict[str, Any]:
+                     extra: dict | None = None, melde=None, vorab=None) -> dict[str, Any]:
         extra = extra or {}
+        sit.pop("_vorabText", None)
         t0 = time.perf_counter()
         if art == "start":
             reply = self.start_fn(sit)
         else:
-            reply = self.turn_fn(sit, text_in, melde=melde)
+            try:
+                reply = self.turn_fn(sit, text_in, melde=melde, vorab=vorab)
+            except TypeError:
+                reply = self.turn_fn(sit, text_in, melde=melde)
         llm_s = round(time.perf_counter() - t0, 2)
         # Sprech-Filter: Uhrzeiten/Daten als Worte, Fachbegriffe und Regie raus.
         text = sprech.sanitize(reply.get("text") or "")
-        url, tts_s = self.stimme(text)
+        # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
+        gesprochen = _s(sit.pop("_vorabText", ""))
+        if gesprochen and text.startswith(gesprochen):
+            rest = text[len(gesprochen):].strip()
+            url, tts_s = self.stimme(rest) if rest else ("", 0.0)
+        else:
+            if gesprochen:
+                print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
+            url, tts_s = self.stimme(text)
         timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
         self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"), timings=timings)
         return {
@@ -159,6 +175,18 @@ class Dienst:
         def melde(tool: str) -> None:
             q.put(("tool", tool))
 
+        def vorab(satz: str) -> None:
+            # Erster Satz aus dem LLM-Stream: sofort vertonen und rausgeben,
+            # während das Modell den Rest schreibt — DAS drückt die gefühlte
+            # Antwortzeit unter die reine Modell-Laufzeit.
+            san = sprech.sanitize(satz)
+            if not san:
+                return
+            url, _ = self.stimme(san)
+            if url:
+                sit["_vorabText"] = san
+                q.put(("vorab", url))
+
         def arbeit() -> None:
             try:
                 gesagt = text_in
@@ -178,7 +206,7 @@ class Dienst:
                         return
                     print(f"{self.name}-listen ok text={gesagt!r}", flush=True)
                     q.put(("gehoert", gesagt))
-                out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde)
+                out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
                 if stt_s is not None:
                     tt = {"stt": stt_s, **(out.get("timings") or {})}
                     tt["total"] = round(stt_s + float(tt.get("llm") or 0) + float(tt.get("tts") or 0), 2)
@@ -217,6 +245,11 @@ class Dienst:
             if typ == "gehoert":
                 frist, vorab_gruppe = frist_setzen(wert)
                 yield zeile({"type": "transcript", "textIn": wert})
+            elif typ == "vorab":
+                # Erster Antwortsatz — läuft über den Füller-Kanal des Clients
+                # (sofort abspielen), der Rest folgt im reply-Audio.
+                yield zeile({"type": "filler", "audioUrl": wert})
+                filler_raus = True
             elif typ == "tool":
                 if not filler_raus:
                     url = self._filler_url(sit, filler.fuer_tool(wert))

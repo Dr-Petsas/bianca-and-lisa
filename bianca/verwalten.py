@@ -324,7 +324,8 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             return {"text": "Kein Problem. Wann passt es Ihnen denn besser?"}
         return None
 
-    # 2) Auswahl des Bestandstermins ("den am Donnerstag")
+    # 2) Auswahl des Bestandstermins ("den am Donnerstag"). Hier NIE ans LLM
+    #    abgeben: ein frei erfundenes "dann sage ich den ab" waere fatal.
     if s["phase"] == "wahl" and sit.get("gefunden"):
         angebote = [{"iso": a.get("iso"), "spoken": a.get("spoken")} for a in sit["gefunden"] if a.get("iso")]
         iso = _slot_wahl(t, angebote)
@@ -337,9 +338,10 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 if s["wunsch"]:
                     return _verschieb_angebot(sit, melde)
                 return _verschieb_wunsch_frage(sit, termin)
-        if not neu:
-            return None
-        return {"text": f"Welchen meinen Sie: {_liste_sprechbar(sit['gefunden'])}?"}
+        return {"text": (
+            f"Da will ich nichts Falsches erwischen. Zur Auswahl: {_liste_sprechbar(sit['gefunden'])}. "
+            "Sagen Sie einfach 'den ersten' oder 'den zweiten' — oder nennen Sie die Uhrzeit."
+        )}
 
     # 3) Neuer Zeitpunkt beim Verschieben
     if s["phase"] == "verschieb_angebot" and sit.get("offered"):

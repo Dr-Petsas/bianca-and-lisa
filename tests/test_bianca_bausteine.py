@@ -489,3 +489,155 @@ def test_verwaltung_status_zeile():
     s.update({"modus": "absagen", "nachname": "Berger", "frage": "absage_ok", "phase": "absage_bestaetigen"})
     zeile = flow.status_zeile(sit)
     assert "absagen" in zeile and "Berger" in zeile
+
+
+# --- Live-Vorfaelle 27.08.2026 (nachmittags): Schleifen, Hoerfehler, Glitches
+
+
+def test_arzt_hoerfehler_petzers():
+    """STT hoerte 'Dr. Petzers' statt 'Dr. Petsas' — muss trotzdem matchen."""
+    from bianca import arzt as arztmod
+    tenant = laden("meddent")
+    d = arztmod.deute("Ich hätte gerne einen Termin bei Dr. Petzers morgen.", tenant)
+    assert d and d["typ"] == "genannt" and "Petsas" in d["calendarName"]
+
+
+def test_arzt_kein_treffer_bei_vornamen():
+    """'Peter' (Patienten-Vorname, kein Arzt-Kontext) darf NICHT auf Petsas springen."""
+    from bianca import arzt as arztmod
+    tenant = laden("meddent")
+    d = arztmod.deute("Mein Name ist Peter Müller.", tenant)
+    assert not (d and d.get("typ") == "genannt")
+
+
+def test_aeh_nein_ist_nein():
+    """'Äh, nein.' wurde live NICHT als Nein erkannt -> Zustands-Desync."""
+    assert gehirn.ist_nein("Äh, nein.")
+    assert gehirn.ist_ja("Also ja, gerne.")
+    assert gehirn.ist_nein("Hm, nee.")
+    assert not gehirn.ist_ja("Ähm, nein danke.")
+
+
+def test_auch_paul_wird_paul():
+    """'Auch Paul' auf die Vornamens-Frage ergab Vorname 'Auch' (live)."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "nachname": "Hacke", "frage": "vorname"})
+    gehirn.einsammeln(sit, "Auch Paul")
+    assert s["vorname"] == "Paul"
+
+
+def test_englische_ziffern():
+    """Web-Speech rutschte ins Englische: 'six hundred' = 600 (live)."""
+    assert telefon.ziffern("Null eins sieben sieben six hundred vier six hundred") == "01776004600"
+    assert telefon.aus_satz("null eins sieben sieben sechshundert vier sechshundert") == "01776004600"
+
+
+def test_telefon_stueckweise_diktiert():
+    """Nummer in Etappen: Fragmente sammeln, bis die Kette plausibel ist."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "arzt": {"typ": "genannt", "calendarId": "x", "calendarName": "Dr. Petsas"},
+              "vorname": "Martin", "nachname": "Berger", "buchstabiert": True,
+              "grund": "Kontrolluntersuchung", "wunsch": {}, "frage": "telefon"})
+    gehirn.einsammeln(sit, "null eins sieben sieben")
+    assert s["telefonTeil"] == "0177" and not s["telefonOffen"]
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "telefon" and "fehlt" in frage.lower()
+    gehirn.einsammeln(sit, "sechs null null vier sechs null null")
+    assert s["telefonOffen"] == "01776004600" and not s["telefonTeil"]
+    fid2, _ = gehirn.naechste_frage(sit)
+    assert fid2 == "telefon_check"
+
+
+def test_frage_eskalation_statt_schleife():
+    """Zweimal nichts Verwertbares auf dieselbe Pflichtfrage: Standard setzen
+    und weitergehen — die Live-Schleife ('Handynummer?' im Kreis) ist tabu."""
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": True, "frage": "arzt"})
+        z1 = flow.zug(sit, "Das müssen Sie doch wissen.")
+        assert z1 is None  # erster Leerlauf -> LLM darf kurz antworten
+        z2 = flow.zug(sit, "Das weißt du doch alles.")
+        assert z2 is not None  # zweiter Leerlauf -> Eskalation, KEIN None mehr
+        assert (s["arzt"] or {}).get("typ") == "egal"
+        assert s["frage"] != "arzt"
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_angebots_wache_faengt_fantasie_termine():
+    """LLM erfand 'Mittwoch, den 24. Juli, um 09:30 Uhr' ohne echte Slots —
+    die Wache ersetzt das durch die offene Sammler-Frage."""
+    from bianca import agent as agentmod
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "frage": "arzt"})
+    text = "Ich biete Ihnen einen Termin am Mittwoch, den 24. Juli, um 09:30 Uhr an. Passt Ihnen diese Uhrzeit?"
+    raus = agentmod._nachbessern(sit, text)
+    assert "24. Juli" not in raus and "09:30" not in raus
+    assert "behandler" in raus.lower() or "arzt" in raus.lower()
+
+
+def test_frage_anker_haengt_offene_frage_an():
+    """Antwortet das LLM am Thema vorbei, wird die offene Frage angehängt,
+    fremde Schlussfragen ('Möchten Sie buchen?') fliegen raus."""
+    from bianca import agent as agentmod
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "arzt": {"typ": "genannt", "calendarId": "x", "calendarName": "Dr. Petsas"},
+              "vorname": "Paul", "nachname": "Hacke", "bekannt": True, "buchstabiert": True,
+              "grund": "Kontrolluntersuchung", "wunsch": {}, "frage": "telefon"})
+    text = "Alles klar, ich habe Ihre Daten notiert. Möchten Sie einen Termin buchen?"
+    raus = agentmod._nachbessern(sit, text)
+    assert "handynummer" in raus.lower()
+    assert "möchten sie einen termin buchen" not in raus.lower()
+
+
+def test_absage_trennverb_mit_doch_wieder():
+    """'Sagen Sie den Termin doch wieder ab' muss den Absage-Modus setzen —
+    live 27.08. fiel der Satz durch und das LLM übernahm."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "phase": "gebucht"})
+    gehirn.einsammeln(sit, "Ach warten Sie — bitte sagen Sie den Termin doch wieder ab.")
+    assert s["modus"] == "absagen"
+
+
+def test_terminwahl_gibt_nie_ans_llm_ab():
+    """Unklare Antwort ('Ja.') bei mehreren Bestandsterminen: deterministische
+    Rückfrage statt None — sonst erfindet das LLM eine Absage."""
+    from bianca import verwalten
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "phase": "wahl", "frage": "terminwahl",
+              "vorname": "Michael", "nachname": "Peters"})
+    sit["gefunden"] = [
+        {"id": "a1", "iso": "2026-08-28T10:30:00+02:00", "spoken": "morgen um zehn Uhr dreißig bei Dr. Petsas"},
+        {"id": "a2", "iso": "2026-08-28T10:45:00+02:00", "spoken": "morgen um zehn Uhr fünfundvierzig bei Dr. Petsas"},
+    ]
+    z = verwalten.zug(sit, "Ja.", set())
+    assert z is not None and "ersten" in (z.get("text") or "").lower()
+    z2 = verwalten.zug(sit, "Den ersten bitte.", set())
+    assert z2 is not None and "wirklich absagen" in (z2.get("text") or "").lower()
+
+
+def test_erledigt_wache_blockt_falsche_absage_behauptung():
+    """LLM behauptet 'ich sage den Termin ab', obwohl kein Werkzeug lief:
+    Wache ersetzt das durch die letzte offene Fluss-Frage (live 27.08.:
+    beide Termine standen noch im Kalender)."""
+    from bianca import agent as agentmod
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "phase": "wahl", "frage": "terminwahl"})
+    sit["flussFrage"] = "Welchen möchten Sie absagen?"
+    text = "Alles klar, ich sage den Termin morgen um zehn Uhr dreißig bei Doktor Petsas für Sie ab."
+    raus = agentmod._nachbessern(sit, text, werkzeug_lief=False)
+    assert "sage" not in raus.lower() or "welchen" in raus.lower()
+    assert "Welchen möchten Sie absagen?" in raus
+    # Lief das Werkzeug wirklich, bleibt der Text unangetastet.
+    gleich = agentmod._nachbessern(sit, text, werkzeug_lief=True)
+    assert gleich == text

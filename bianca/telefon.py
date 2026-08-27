@@ -30,6 +30,15 @@ _ZEHNER = {
 _WORT_ZIFFER = {"null": "0", "eins": "1", "ein": "1", "zwo": "2", "zwei": "2",
                 "drei": "3", "vier": "4", "fünf": "5", "fuenf": "5", "sechs": "6",
                 "sieben": "7", "acht": "8", "neun": "9"}
+
+# Die Browser-Spracherkennung rutscht bei Ziffernfolgen ins Englische
+# ("sechshundert" kommt als "six hundred" an — live 27.08.2026).
+_EN_ZIFFER = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
 _ZIFFER_WORT = ["null", "eins", "zwei", "drei", "vier", "fünf", "sechs",
                 "sieben", "acht", "neun"]
 
@@ -48,6 +57,8 @@ def _token_ziffern(tok: str) -> str:
         return str(_ZEHN_BIS[tok])
     if tok in _ZEHNER:
         return str(_ZEHNER[tok])
+    if tok in _EN_ZIFFER:
+        return str(_EN_ZIFFER[tok])
     m = _UND_RE.match(tok)
     if m and m.group(1) in _EINER and m.group(2) in _ZEHNER:
         return str(_ZEHNER[m.group(2)] + _EINER[m.group(1)])
@@ -67,14 +78,29 @@ def ziffern(text: str) -> str:
             out.append("+")
             i += 1
             continue
-        if tok.startswith("doppel"):
-            rest = tok[len("doppel"):].lstrip("te").lstrip("s")
+        if tok.startswith("doppel") or tok == "double":
+            praefix = "doppel" if tok.startswith("doppel") else "double"
+            rest = tok[len(praefix):].lstrip("te").lstrip("s")
             ziel = _token_ziffern(rest) if rest else (
                 _token_ziffern(toks[i + 1]) if i + 1 < len(toks) else "")
             if ziel and len(ziel) == 1:
                 out.append(ziel * 2)
                 i += 1 if rest else 2
                 continue
+        if tok in {"hundred", "hundert"} and out and out[-1].isdigit() and len(out[-1]) == 1:
+            # "six hundred" / "sechs hundert" = Ziffer + zwei Nullen (600).
+            out[-1] = out[-1] + "00"
+            i += 1
+            continue
+        if tok in {"thousand", "tausend"} and out and out[-1].isdigit() and len(out[-1]) == 1:
+            out[-1] = out[-1] + "000"
+            i += 1
+            continue
+        if tok.endswith("hundert") and tok[: -len("hundert")] in _EINER:
+            # "sechshundert" als EIN Wort.
+            out.append(str(_EINER[tok[: -len("hundert")]]) + "00")
+            i += 1
+            continue
         d = "".join(c for c in tok if c.isdigit() or c == "+")
         if d:
             out.append(d)

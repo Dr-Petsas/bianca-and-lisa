@@ -152,15 +152,52 @@ function stopLisaVoice() {
   lisaSpricht = false;
 }
 
+// Mikro-Pegelwächter: erkennt echtes Reinsprechen auch OHNE Spracherkennung
+// (iOS/Safari) — die Echo-Unterdrückung filtert Lisas eigene Stimme heraus.
+let micWache = null;
+function micWacheStarten() {
+  if (!micStream || !unlockAudio.ctx) return;
+  try {
+    const src = unlockAudio.ctx.createMediaStreamSource(micStream);
+    const an = unlockAudio.ctx.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    micWache = {
+      rms() {
+        an.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        return Math.sqrt(sum / buf.length);
+      },
+      stop() { try { src.disconnect(); } catch { /* */ } },
+    };
+  } catch { micWache = null; }
+}
+
 function bargeOderCap(dauerMs) {
   return new Promise((done) => {
     const start = performance.now();
+    let laut = 0;
     const tick = () => {
       if (!lisaSpricht || !callOn) return done("stop");
-      if (performance.now() - start > dauerMs) return done("cap");
+      const jetzt = performance.now();
+      if (jetzt - start > dauerMs) return done("cap");
       if (liveOhr && liveOhr.ok && liveOhr.text().length >= 2) {
         stopLisaVoice();
         return done("barge");
+      }
+      // Pegel-Barge-in: ~150 ms anhaltende Stimme unterbricht Lisa.
+      // Kurze Anfangs-Schonfrist gegen Echo-Reste beim Wiedergabestart.
+      if (micWache && jetzt - start > 350) {
+        laut = micWache.rms() > 0.06 ? laut + 1 : 0;
+        if (laut >= 3) {
+          stopLisaVoice();
+          return done("barge");
+        }
       }
       setTimeout(tick, 50);
     };
@@ -181,8 +218,10 @@ async function playUrl(url) {
       const decoded = await ctx.decodeAudioData(raw.slice(0));
       const src = ctx.createBufferSource();
       const g = ctx.createGain();
-      // WAV kommt schon auf Clara-Pegel. MP3-Fallback braucht Extra-Gain.
-      g.gain.value = wav ? 1.25 : 3.2;
+      // WAV wird serverseitig auf einheitlichen Spitzenpegel normalisiert —
+      // JEDER Zusatz-Gain würde wieder übersteuern (das "Kompressor"-Pumpen
+      // vom 27.08.2026). MP3-Fallback bleibt leiser und braucht Anhebung.
+      g.gain.value = wav ? 1.0 : 3.2;
       src.buffer = decoded;
       src.connect(g).connect(ctx.destination);
       playUrl._src = src;
@@ -372,7 +411,9 @@ function recordUntilSilence(stream) {
       last = now;
       if (rms > 0.02) { heard = true; quiet = 0; }
       else if (heard) quiet += dt;
-      if ((heard && quiet > 300 && now - t0 > 450) || now - t0 > 8000) {
+      // 500 ms Ruhe statt 300: Lisa plapperte in Denkpausen hinein
+      // ("sie quatschen rein", Chef 27.08.2026).
+      if ((heard && quiet > 500 && now - t0 > 450) || now - t0 > 8000) {
         recLocal.stop();
         try { src.disconnect(); } catch { /* */ }
         return;
@@ -400,7 +441,8 @@ async function warteAufWorte(maxMs) {
         quiet = 0;
         phase("du", t);
       } else if (t.length >= 2) quiet += dt;
-      if (t.length >= 2 && quiet > 260) return resolve(liveOhr.take());
+      // 500 ms statt 260: nicht mitten in die Denkpause hineinreden.
+      if (t.length >= 2 && quiet > 500) return resolve(liveOhr.take());
       if (now - t0 > maxMs) return resolve((liveOhr && liveOhr.take()) || "");
       requestAnimationFrame(tick);
     };
@@ -415,9 +457,13 @@ async function sendeZug({ text, blob, nr }) {
   phase("warte", hatLive ? "Lisa antwortet …" : "Lisa hört zu …");
   let fillerLauf = null;
   const spielFiller = (url) => {
-    if (fillerLauf || !callOn || nr !== hoerNr) return;
+    if (!callOn || nr !== hoerNr) return;
     phase("lisa", "Lisa spricht …");
-    fillerLauf = playUrl(url).catch(() => {});
+    // Mehrere Häppchen (Füller, dann Vorab-Satz aus dem LLM-Stream) laufen
+    // als Kette nacheinander — nichts überlappt, nichts geht verloren.
+    fillerLauf = fillerLauf
+      ? fillerLauf.then(() => playUrl(url)).catch(() => {})
+      : playUrl(url).catch(() => {});
   };
   try {
     let data;
@@ -505,6 +551,7 @@ function auflegen() {
     }).then((r) => r.json()).then((d) => maleProtokoll(d.call, d.writeLive)).catch(() => {});
   }
   stopLisaVoice();
+  if (micWache) { try { micWache.stop(); } catch { /* */ } micWache = null; }
   try { const a = lautsprecher(); a.removeAttribute("src"); a.load(); } catch { /* */ }
   if (liveOhr) { try { liveOhr.stop(); } catch { /* */ } liveOhr = null; }
   if (rec && rec.state === "recording") try { rec.stop(); } catch { /* */ }
@@ -608,7 +655,8 @@ async function weiterNachMic(auftrag, wer, micBitte) {
     meld("Mikrofon wurde nicht erlaubt. Nochmal Anruf starten und im Dialog zustimmen.", true);
     return;
   }
-  unlockAudio();
+  await unlockAudio();
+  micWacheStarten();
   if (!patient) zeigePatient(wer);
   $("start").disabled = true;
   $("schnell").disabled = true;

@@ -57,7 +57,7 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
-def user_turn(session_doc: dict, spoken: str, melde=None) -> dict[str, Any]:
+def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
@@ -72,7 +72,12 @@ def user_turn(session_doc: dict, spoken: str, melde=None) -> dict[str, Any]:
         msgs.append({"role": "assistant", "content": id_zug["text"]})
         session_doc["messages"] = msgs
         return {"text": id_zug["text"], "book": None}
-    out = llm.chat(msgs, TOOLS)
+    # Stream: der erste fertige Satz geht sofort an die Stimme (vorab),
+    # waehrend das Modell den Rest schreibt — halbiert die gefuehlte Latenz.
+    if vorab is not None:
+        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab)
+    else:
+        out = llm.chat(msgs, TOOLS)
     if not out.get("ok"):
         return {
             "text": "Einen Moment, ich komme gerade nicht an den Kalender. Darf ich später noch einmal anrufen?",

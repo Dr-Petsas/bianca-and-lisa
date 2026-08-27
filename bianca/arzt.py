@@ -48,24 +48,54 @@ def _nachname(cal_name: str) -> str:
     return toks[-1] if toks else ""
 
 
+def _klang(wort: str) -> str:
+    """Grobe deutsche Klang-Faltung für Nachnamen: STT-Hörfehler wie
+    "Petzers"/"Petsas" oder "Patrikis"/"Patrickis" sollen zusammenfallen."""
+    w = wort.lower()
+    for a, b in (
+        ("sch", "s"), ("tz", "z"), ("ts", "z"), ("ck", "k"), ("dt", "t"),
+        ("th", "t"), ("ph", "f"), ("ie", "i"), ("ei", "ai"), ("ä", "e"),
+        ("ö", "o"), ("ü", "u"), ("ß", "s"), ("y", "i"), ("v", "f"),
+    ):
+        w = w.replace(a, b)
+    # Doppelbuchstaben eindampfen
+    out = []
+    for c in w:
+        if not out or out[-1] != c:
+            out.append(c)
+    return "".join(out)
+
+
+_DOKTOR_RE = re.compile(r"\b(dr\.?|doktor|arzt|ärztin|aerztin|behandler(?:in)?|prof\.?|professor)\b", re.I)
+
+
 def deute(text: str, tenant: dict) -> dict[str, Any] | None:
     """Was sagt der Satz über den Wunsch-Behandler? None = nichts erkennbar."""
     raw = _s(text)
     if not raw:
         return None
     t = raw.lower()
+    doktor_kontext = bool(_DOKTOR_RE.search(t))
     # Ein konkreter Name schlägt "egal"-Floskeln im selben Satz.
     tokens = [w for w in re.sub(r"[^\wäöüß]+", " ", t).split() if w not in _STOP and len(w) >= 3]
-    best, score = None, 0.0
+    best, roh_best, score = None, 0.0, 0.0
     for cal in tenant.get("calendars") or []:
         ziel = _nachname(cal.get("name"))
         if not ziel:
             continue
         for tok in tokens:
-            r = SequenceMatcher(None, tok, ziel).ratio()
+            roh = SequenceMatcher(None, tok, ziel).ratio()
+            # Klang-Faltung: "Petzers" ~ "Petsas" liegt roh bei 0,62 — nach
+            # Faltung darüber. Gleicher Wortanfang gibt einen Namens-Bonus.
+            r = max(roh, SequenceMatcher(None, _klang(tok), _klang(ziel)).ratio())
+            if len(tok) >= 4 and tok[:3] == ziel[:3]:
+                r += 0.1
             if r > score:
-                best, score = cal, r
-    if best and score >= 0.72:
+                best, roh_best, score = cal, roh, r
+    # Sicherer Treffer: roh eindeutig. Toleranter Treffer (Klang/Anfang) nur,
+    # wenn der Satz erkennbar von einem Arzt spricht — sonst würde ein
+    # Patienten-Vorname wie "Peter" auf "Petsas" springen.
+    if best and (roh_best >= 0.72 or (score >= 0.72 and doktor_kontext)):
         return {"typ": "genannt", "calendarId": _s(best.get("id")), "calendarName": _s(best.get("name"))}
     if _UNBEKANNT_RE.search(t):
         return {"typ": "unbekannt"}

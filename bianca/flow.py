@@ -15,6 +15,7 @@ from bianca import gehirn, hintergrund, telefon, verwalten
 from kern import calendar as kal
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
+from kern.tenants import motiv_von
 
 Melde = Callable[[str], None] | None
 
@@ -345,6 +346,38 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     return {"text": gesagt or "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.", "book": book}
 
 
+def _eskalieren(sit: dict, fid: str) -> str:
+    """Zweimal keine verwertbare Antwort auf dieselbe Pflichtfrage: Standard
+    setzen und weitergehen statt im Kreis zu fragen (Chef 27.08.2026:
+    'bianca hängt in Schleifen fest')."""
+    s = gehirn.sammler(sit)
+    if fid == "schonmal":
+        s["warSchonMal"] = False
+        return "Kein Problem — dann nehme ich Sie einfach neu auf. "
+    if fid == "arzt":
+        s["arzt"] = {"typ": "egal"}
+        return "Machen wir es einfach: Ich schaue, wo es am schnellsten geht. "
+    if fid == "grund":
+        s["grund"] = "Kontrolluntersuchung"
+        vm = motiv_von(sit.get("tenant") or {}, "Kontrolluntersuchung")
+        if vm:
+            s["motivId"] = _s(vm.get("id"))
+            s["motivName"] = _s(vm.get("name"))
+        return "Ich trage es erst einmal als Kontrolle ein — die Praxis passt das bei Bedarf an. "
+    if fid == "wunsch":
+        s["wunsch"] = {}
+        return "Dann schaue ich einfach nach den nächsten freien Terminen. "
+    if fid == "buchstabieren":
+        s["buchstabiert"] = True
+        return ""
+    if fid in {"telefon", "telefon_check"}:
+        s["telefonAkte"] = True
+        s["telefonOffen"] = ""
+        s["telefonTeil"] = ""
+        return "Die Nummer gleichen wir später in Ruhe ab. "
+    return "Entschuldigung, das habe ich nicht mitbekommen. "
+
+
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     """Ein Anrufer-Satz durch den Buchungsfluss. None => LLM übernimmt."""
     s = gehirn.sammler(sit)
@@ -414,11 +447,29 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     fid, frage = gehirn.naechste_frage(sit)
     if fid:
         if not neu and s["frage"] == fid:
-            # Dieselbe Frage ist schon offen und der Satz brachte nichts
-            # Neues: NICHT wortgleich wiederholen (Live-Schleife 27.08.2026),
-            # sondern das LLM kurz antworten lassen — der Stand im Prompt
-            # führt zur offenen Frage zurück.
-            return None
+            # Dieselbe Frage ist schon offen und der Satz brachte nichts Neues.
+            zaehler = sit.setdefault("frageLeer", {})
+            zaehler[fid] = int(zaehler.get(fid) or 0) + 1
+            if zaehler[fid] <= 1:
+                # Vermutlich eine Zwischenfrage: das LLM antwortet kurz,
+                # der Stand im Prompt führt zur offenen Frage zurück.
+                return None
+            # Zweiter Leerlauf: Standard setzen und WEITERGEHEN — nie wieder
+            # dieselbe Frage im Kreis (Live-Schleife 27.08.2026).
+            uebergang = _eskalieren(sit, fid)
+            fid2, frage2 = gehirn.naechste_frage(sit)
+            if not fid2:
+                s["frage"] = ""
+                ang = _angebot(sit, melde)
+                if uebergang and ang and _s(ang.get("text")):
+                    ang["text"] = uebergang + ang["text"]
+                return ang
+            s["frage"] = fid2
+            if fid2 == fid:
+                uebergang = uebergang or "Entschuldigung, das habe ich nicht mitbekommen. "
+            return {"text": (uebergang + frage2).strip()}
+        if s["frage"] != fid:
+            (sit.get("frageLeer") or {}).pop(fid, None)
         s["frage"] = fid
         return {"text": (_quittung(s, neu) + frage).strip()}
 

@@ -10,8 +10,13 @@ import httpx
 
 from kern.config import ELEVENLABS_API_KEY, ELEVENLABS_TTS_MODEL, ELEVENLABS_VOICE_ID
 
-# Demo-Clara spricht PCM nahe Vollaussteuerung. Lisa lag deutlich darunter.
-GAIN = 3.2
+# Lautheit (Chef 27.08.2026: "Lautstärke schwankt, wie ein Kompressor"):
+# Der alte feste Faktor 3,2 mit hartem Kappen übersteuerte normale Sprachpegel
+# permanent — das klang wie ein einsetzender Limiter. Jetzt wird JEDE Äußerung
+# auf denselben Spitzenpegel normalisiert: leise ElevenLabs-Ausgaben werden
+# angehoben (max. Faktor 6), laute bleiben — nichts wird mehr gekappt.
+ZIEL_PEGEL = 0.92          # Spitze relativ zur Vollaussteuerung
+MAX_ANHEBUNG = 6.0
 PCM_RATE = 24000
 
 _CACHE: dict[str, bytes] = {}
@@ -40,23 +45,23 @@ def _client() -> httpx.Client:
     return _CLIENT
 
 
-def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE, gain: float = GAIN) -> bytes:
-    """s16le mono → WAV, laut wie Demo-Clara (Gain + Soft-Clip)."""
+def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
+    """s16le mono → WAV, auf einheitlichen Spitzenpegel normalisiert (kein Clipping)."""
     n = len(pcm) // 2
     if n <= 0:
         return b""
     samples = array.array("h")
     samples.frombytes(pcm[: n * 2])
-    boosted = array.array("h")
-    lim = 32767
-    for s in samples:
-        v = int(s * gain)
-        if v > lim:
-            v = lim
-        elif v < -lim:
-            v = -lim
-        boosted.append(v)
-    data = boosted.tobytes()
+    spitze = max(1, max(abs(s) for s in samples))
+    gain = min(MAX_ANHEBUNG, (ZIEL_PEGEL * 32767.0) / spitze)
+    if gain <= 1.02:
+        # Schon laut genug — Originalbytes durchreichen, kein Umrechnen.
+        data = samples.tobytes()
+    else:
+        boosted = array.array("h", bytes(len(samples) * 2))
+        for i, s in enumerate(samples):
+            boosted[i] = int(s * gain)
+        data = boosted.tobytes()
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF",
@@ -108,6 +113,9 @@ class ElevenLabsTts:
             json={
                 "text": sauber[:400],
                 "model_id": ELEVENLABS_TTS_MODEL,
+                # Deutsch festnageln (Chef 27.08.: "english glitches") — nur
+                # Turbo/Flash v2.5+ kennen den Parameter, multilingual_v2 nicht.
+                **({"language_code": "de"} if ("v2_5" in ELEVENLABS_TTS_MODEL or "_v3" in ELEVENLABS_TTS_MODEL) else {}),
                 "voice_settings": {
                     "stability": 0.45,
                     "similarity_boost": 0.85,

@@ -30,6 +30,13 @@ _JA_RE = re.compile(
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
+# "Äh, nein." / "Also ja" / "Hm, nee" — Füllwörter vor dem Ja/Nein abstreifen
+# (live 27.08.2026: "Äh, nein" wurde NICHT als Nein erkannt, die Zustands-
+# maschine blieb auf der Frage hängen und das LLM übernahm mit Fantasie).
+_ANLAUF_RE = re.compile(
+    r"^\s*(?:(?:äh+m*|aeh+m*|hm+|mh+m*|also|na|nun|tja|ach|oh|ähm|öhm)\b[\s,.!—-]*)+",
+    re.I,
+)
 
 _TERMIN_RE = re.compile(
     r"termin|vorbeikommen|ausmachen|vereinbaren|buchen|kontroll|schmerz|zahnweh|"
@@ -42,7 +49,7 @@ _ABSAGE_RE = re.compile(
     r"nicht\s+(kommen|wahrnehmen|schaffen|einhalten)|"
     # Trennbares Verb: "ich sage den Termin ab" / "sag ihn bitte ab" — aber
     # NICHT "können Sie mir sagen, ab wann ..." (Auskunftsfrage).
-    r"\bsag\w*\s+(?:ich\s+|wir\s+)?(?:den\s+|meinen\s+|diesen\s+|ihn\s+|sie\s+|bitte\s+)*(?:termin\s+)?ab\b(?!\s*(?:wann|wie|welch))",
+    r"\bsag\w*\s+(?:ich\s+|wir\s+|sie\s+)?(?:den\s+|meinen\s+|diesen\s+|ihn\s+|sie\s+|bitte\s+|doch\s+|wieder\s+|einfach\s+|lieber\s+|gerne\s+|gleich\s+|sofort\s+)*(?:termin\s+)?(?:doch\s+|wieder\s+|bitte\s+|einfach\s+|lieber\s+|gerne\s+|gleich\s+|sofort\s+)*ab\b(?!\s*(?:wann|wie|welch))",
     re.I,
 )
 _VERSCHIEBEN_RE = re.compile(
@@ -81,6 +88,10 @@ _NAME_STOP = {
     "und", "der", "die", "das", "ein", "eine", "herr", "frau", "doktor", "dr",
     "mein", "name", "ist", "hier", "spricht", "ich", "bin", "heiße", "heisse",
     "guten", "tag", "morgen", "hallo", "von", "aus", "am", "apparat",
+    # "Auch Paul" (Antwort auf die Vornamens-Frage) darf keinen Vornamen
+    # "Auch" erzeugen (live 27.08.2026) — dito weitere Füllwörter.
+    "auch", "ebenfalls", "genau", "also", "wieder", "nochmal", "eben",
+    "ähm", "äh", "aeh", "aehm", "halt", "wie", "gesagt",
 }
 _AKTE_NUMMER_RE = re.compile(
     r"(nummer|handy|telefon)[^.]{0,50}(akte|hinterlegt|haben\s+sie\s+(ja|doch|schon|bereits))|"
@@ -116,6 +127,7 @@ FELDER_START = {
     "buchstabiert": False,
     "telefon": "",
     "telefonOffen": "",
+    "telefonTeil": "",
     "telefonOk": False,
     "telefonAkte": False,
     "patientId": "",
@@ -138,12 +150,16 @@ def sammler(sit: dict) -> dict:
     return s
 
 
+def _ohne_anlauf(text: str) -> str:
+    return _ANLAUF_RE.sub("", _s(text))
+
+
 def ist_ja(text: str) -> bool:
-    return bool(_JA_RE.search(_s(text)))
+    return bool(_JA_RE.search(_ohne_anlauf(text)))
 
 
 def ist_nein(text: str) -> bool:
-    return bool(_NEIN_RE.search(_s(text)))
+    return bool(_NEIN_RE.search(_ohne_anlauf(text)))
 
 
 def _relatives_datum(t: str) -> str:
@@ -347,9 +363,28 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     d = telefon.aus_satz(t)
     if d and d != s["telefon"]:
         s["telefonOffen"] = d
+        s["telefonTeil"] = ""
         s["telefonOk"] = False
         neu.add("telefonOffen")
-    elif not d and not s["telefonOk"] and not s["telefonAkte"] and _AKTE_NUMMER_RE.search(t):
+    elif not d and s["frage"] in {"telefon", "telefon_check"} and not s["telefonOk"]:
+        # Stückweise diktierte Nummer ("null eins sieben sieben" … Pause …
+        # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
+        stueck = telefon.ziffern(t).replace("+", "")
+        if 2 <= len(stueck) <= 13:
+            if stueck.startswith("0") and len(stueck) >= 4:
+                # Neue Nummer beginnt — der Anrufer setzt neu an.
+                zusammen = stueck
+            else:
+                zusammen = (s["telefonTeil"] + stueck)[:16]
+            if telefon.plausibel(zusammen):
+                s["telefonOffen"] = telefon.normaliert(zusammen)
+                s["telefonTeil"] = ""
+                s["telefonOk"] = False
+                neu.add("telefonOffen")
+            else:
+                s["telefonTeil"] = zusammen
+                neu.add("telefonTeil")
+    if not d and not s["telefonOk"] and not s["telefonAkte"] and _AKTE_NUMMER_RE.search(t):
         # "Meine Nummer haben Sie ja in der Akte" — nicht darauf beharren,
         # die Akten-Nummer (oder die Praxis-Nachpflege) übernimmt das.
         s["telefonAkte"] = True
@@ -386,6 +421,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if not s["bekannt"] and not s["buchstabiert"]:
             return "buchstabieren", "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?"
         if not s["telefonOk"] and not s["telefonAkte"] and not (s["bekannt"] and s["aktePhone"]):
+            if s["telefonTeil"]:
+                return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
             return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
         return "", ""
 
@@ -402,6 +439,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if not s["buchstabiert"] and not s["bekannt"]:
         return "buchstabieren", "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?"
     if not s["telefonOk"] and not s["telefonAkte"]:
+        if s["telefonTeil"]:
+            return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
         return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
     return "", ""
 
