@@ -190,15 +190,25 @@ _KORREKTUR_KONTEXT_RE = re.compile(
 _TEL_FALSCH_RE = re.compile(
     r"(?:nummer|handy|telefon)[^.!?]{0,40}(?:falsch|stimmt\s+nicht|nicht\s+richtig|verkehrt)|"
     r"falsche\s+(?:nummer|handynummer|telefonnummer)", re.I)
-# Neupatient-/Schonmal-Floskeln sind KEINE Namen: "Ich bin neu bei Ihnen"
-# wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026). Der ganze
-# Floskel-Teilsatz fliegt VOR der Namens-Ernte raus; ein echter Name im
+# Neupatient-/Schonmal-Floskeln und ZUSTAENDE sind KEINE Namen: "Ich bin neu
+# bei Ihnen" wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026),
+# "ich bin ganz aufgeregt" als "Ganz Aufgeregt" (Talk-Probe 27.08.2026). Der
+# ganze Floskel-Teilsatz fliegt VOR der Namens-Ernte raus; ein echter Name im
 # selben Satz ("..., mein Name ist Paul Neumann") bleibt erhalten, ebenso
 # "Ich bin Paul Neumann" und der Nachname "Neu" (Wortgrenze nach "neu").
+# Zustandswoerter, die auch Nachnamen sein koennen (Sauer, Krank, Froh),
+# stehen BEWUSST nicht in der Liste.
 _KEIN_NAME_RE = re.compile(
-    r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+)?"
-    r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+)*"
-    r"(?:neu\b|noch\s+nie\b|zum\s+ersten\s+mal\b|das\s+erste\s+mal\b)[^,.!?]*",
+    r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+"
+    r"(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+|ja\s+|gerade\s+|heute\s+)*"
+    r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+|sehr\s+|so\s+|total\s+|"
+    r"richtig\s+|echt\s+|etwas\s+|schon\s+|wirklich\s+)*"
+    r"(?:neu\b|noch\s+nie\b|zum\s+ersten\s+mal\b|das\s+erste\s+mal\b|"
+    r"aufgeregt|nervös|nervoes|gespannt|begeistert|erleichtert|verzweifelt|"
+    r"durcheinander|erkältet|erkaeltet|müde|muede|erschöpft|erschoepft|"
+    r"gestresst|genervt|verwirrt|unterwegs|beschäftigt|beschaeftigt|"
+    r"spät\b|spaet\b|zufrieden|unzufrieden|glücklich|gluecklich|traurig|"
+    r"wütend|wuetend|verheiratet|geschieden|schwanger|aufgeschmissen)[^,.!?]*",
     re.I,
 )
 _AKTE_NUMMER_RE = re.compile(
@@ -445,6 +455,12 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     toks = _name_tokens(kandidat)
     if not toks:
         return False
+    if m is None and erzwungen and len(toks) > 3:
+        # Ganze-Satz-Rueckfall NUR fuer namensartige Antworten: Wer auf die
+        # Namensfrage eine Geschichte erzaehlt ("Ach, wissen Sie — meine
+        # Tochter heiratet naemlich!"), nennt keinen Namen — das gehoert der
+        # Talk-Schicht, nicht der Kartei (Talk-Probe 27.08.2026).
+        return False
     if s["frage"] == "vorname" and erzwungen:
         s["vorname"] = toks[0].capitalize()
         return True
@@ -662,6 +678,61 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         neu.add("telefonAkte")
 
     return neu
+
+
+# Formulierungs-Varianten je Pflichtfrage für den Wiederholungs-Wächter
+# (kern/wiederholung.py): muss dieselbe Frage erneut gestellt werden, kommt
+# die nächste Form — nie zweimal derselbe Wortlaut (Chef 27.08.2026: "nie
+# wieder doppelte telefonnummer oder behandler abfragen"). JEDE Variante
+# trägt die Kern-Wörter aus agent._FRAGE_KERN, damit Anker/Wachen sie
+# weiter als die offene Frage erkennen. telefon_check hat BEWUSST keine
+# Varianten — die Rückbestätigung bleibt deterministisch.
+FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
+    "schonmal": (
+        "Waren Sie schon einmal bei uns?",
+        "Kurz zur Einordnung: Waren Sie schon mal in unserer Praxis?",
+    ),
+    "arzt": (
+        "Bei welchem Behandler waren Sie zuletzt?",
+        "Wissen Sie den Namen Ihres Behandlers noch?",
+    ),
+    "name": (
+        "Sagen Sie mir bitte noch Ihren Namen — Vor- und Nachname?",
+        "Auf welchen Namen darf ich das aufnehmen?",
+    ),
+    "vorname": (
+        "Wie ist Ihr Vorname?",
+        "Welchen Vornamen darf ich notieren?",
+    ),
+    "nachname": (
+        "Wie lautet der Nachname?",
+        "Welchen Nachnamen darf ich eintragen?",
+    ),
+    "grund": (
+        "Was ist denn der Grund für Ihren Besuch?",
+        "Um welches Anliegen geht es denn?",
+    ),
+    "wunsch": (
+        "Wann würde es Ihnen denn gut passen — eher vormittags oder nachmittags?",
+        "Ab welchem Tag passt es Ihnen — und lieber vormittags oder nachmittags?",
+    ),
+    "buchstabieren": (
+        "Buchstabieren Sie mir den Nachnamen bitte einmal?",
+        "Mögen Sie den Nachnamen kurz buchstabieren?",
+    ),
+    "telefon": (
+        "Welche Handynummer darf ich eintragen?",
+        "Sagen Sie mir bitte noch Ihre Handynummer?",
+    ),
+    "slotwahl": (
+        "Welcher davon passt Ihnen?",
+        "Welcher der Termine passt Ihnen am besten?",
+    ),
+    "bestaetigung": (
+        "Darf ich den Termin so eintragen?",
+        "Soll ich es so festhalten?",
+    ),
+}
 
 
 def naechste_frage(sit: dict) -> tuple[str, str]:

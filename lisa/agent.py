@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kern import zuege
+from kern import gespraech, wiederholung, zuege
 from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
@@ -70,14 +70,32 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     # Solange nicht geklaert ist, WER am Telefon sitzt, antwortet die
     # Zustandsmaschine — ohne Modell, also ohne Wartezeit und ohne Abweichen.
     id_zug = identitaet.naechster_zug(session_doc, text_in)
+    # Talk-Schicht (kern/gespraech.py): hoert jeden Satz ab und entscheidet,
+    # wie frei das Modell gleich sprechen darf — der Auftrag bleibt Gesetz.
+    route = gespraech.routen(
+        session_doc, text_in,
+        job_gesprochen=bool(id_zug),
+        job_aktiv=True,
+    )
     if id_zug:
         msgs.append({"role": "assistant", "content": id_zug["text"]})
         session_doc["messages"] = msgs
+        gespraech.nach_antwort(session_doc)
         return {"text": id_zug["text"], "book": None}
+    # Gespraechslage frisch in den Systemprompt (Talk-/Brueckenzuege).
+    plan = gespraech.plan_block(route, stimme="lisa")
+    if msgs and msgs[0].get("role") == "system":
+        msgs[0]["content"] = system_prompt_aktuell(session_doc, plan=plan)
     # Stream: der erste fertige Satz geht sofort an die Stimme (vorab),
     # waehrend das Modell den Rest schreibt — halbiert die gefuehlte Latenz.
     # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben.
     extra = {"max_tokens": kern_wissen.LANGTEXT_MAX_TOKENS} if kern_wissen.braucht_langtext(text_in) else {}
+    # Talk-/Brueckenzuege duerfen laenger und waermer sein als Job-Zuege.
+    for k, v in gespraech.budget(route["floor"]).items():
+        if k == "max_tokens":
+            extra[k] = max(int(extra.get(k) or 0), int(v))
+        else:
+            extra[k] = v
     if vorab is not None:
         out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab, **extra)
     else:
@@ -91,11 +109,23 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     # Werkzeug-Schleife und Wachen liegen im gemeinsamen Kern (kern.zuege) —
     # dieselbe Mechanik traegt auch Bianca.
     text, msgs, book = zuege.apply_tools(session_doc, msgs, out, melde=melde)
+    # Wiederholungs-Wächter (Chef 27.08.2026): wortgleich wiederholte Frage-/
+    # Langsätze gegen die letzten Antworten streichen — nie stumm werden.
+    # session_doc["messages"] traegt hier noch den Stand VOR diesem Zug.
+    entdoppelt = wiederholung.pruefen(
+        session_doc, text,
+        frueher=wiederholung.letzte_antworten(session_doc.get("messages") or []),
+    )
+    if entdoppelt and entdoppelt != text:
+        text = entdoppelt
+        if msgs and msgs[-1].get("role") == "assistant":
+            msgs[-1]["content"] = text
     session_doc["messages"] = msgs
+    gespraech.nach_antwort(session_doc)
     return {"text": text, "book": book}
 
 
-def system_prompt_aktuell(session_doc: dict) -> str:
+def system_prompt_aktuell(session_doc: dict, plan: str = "") -> str:
     tenant = session_doc["tenant"]
     patient = session_doc.get("patient") or {}
     return system_prompt(
@@ -107,6 +137,7 @@ def system_prompt_aktuell(session_doc: dict) -> str:
         termine_text=_termine_zeile(session_doc.get("past") or [], session_doc.get("upcoming") or []),
         slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
         wissen=tenant.get("wissen"),
+        plan=plan,
     )
 
 
