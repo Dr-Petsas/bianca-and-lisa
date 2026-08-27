@@ -79,6 +79,22 @@ _SLOTWORT = (
 
 _SATZ = re.compile(r"(?<=[.!?])\s+")
 
+# Abkuerzungen ausschreiben — ElevenLabs buchstabiert "Dr." sonst.
+# Muss VOR dem Satz-Splitten laufen, sonst gilt der Punkt als Satzende.
+_ABK = (
+    (re.compile(r"\bProf\.\s*Dr\.\s*", re.I), "Professor Doktor "),
+    (re.compile(r"\bDr\.\s*med\.\s*dent\.\s*", re.I), "Doktor "),
+    (re.compile(r"\bDr\.\s*med\.\s*", re.I), "Doktor "),
+    (re.compile(r"\bDr\.\s*", re.I), "Doktor "),
+    (re.compile(r"\bProf\.\s*", re.I), "Professor "),
+    (re.compile(r"\bz\.\s*B\.\s*", re.I), "zum Beispiel "),
+    (re.compile(r"\bbzw\.\s*", re.I), "beziehungsweise "),
+    (re.compile(r"\busw\.\s*", re.I), "und so weiter "),
+    (re.compile(r"\bca\.\s*", re.I), "circa "),
+    (re.compile(r"\bStr\.\s*", re.I), "Straße "),
+    (re.compile(r"\bggf\.\s*", re.I), "gegebenenfalls "),
+)
+
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
@@ -213,6 +229,9 @@ def sanitize(text: str, *, heute: date | None = None) -> str:
     roh = _s(text)
     if not roh:
         return ""
+    for cre, ersatz in _ABK:
+        roh = cre.sub(ersatz, roh)
+    roh = _s(roh)
     saetze = [_s(s) for s in _SATZ.split(roh) if _s(s)]
     ohne_tech = [s for s in saetze if not _TECH.search(s)]
     if not ohne_tech:

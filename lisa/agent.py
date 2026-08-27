@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from lisa import calendar, llm, notes, session
@@ -24,7 +25,12 @@ def _termine_zeile(past: list, upcoming: list) -> str:
 def start_reply(session_doc: dict) -> dict[str, Any]:
     tenant = session_doc["tenant"]
     patient = session_doc.get("patient") or {}
-    text = begruessung(_s(tenant.get("praxisName")), _s(session_doc.get("auftrag")))
+    text = begruessung(
+        _s(tenant.get("praxisName")),
+        _s(session_doc.get("auftrag")),
+        patient=patient,
+        behandler=_s(tenant.get("behandler")),
+    )
     msgs = [
         {
             "role": "system",
@@ -152,6 +158,10 @@ def _apply_tools(session_doc: dict, msgs: list, first: dict, melde=None) -> tupl
     text = _s(first.get("text"))
     book = None
     if not calls:
+        gerettet, book = _buchungs_wache(session_doc, text, melde=melde)
+        if gerettet:
+            msgs.append({"role": "assistant", "content": gerettet})
+            return gerettet, msgs, book
         if text:
             msgs.append({"role": "assistant", "content": text})
         return text, msgs, None
@@ -205,3 +215,64 @@ def _apply_tools(session_doc: dict, msgs: list, first: dict, melde=None) -> tupl
     if spoken:
         msgs.append({"role": "assistant", "content": spoken})
     return spoken, msgs, book
+
+
+# Vorfall 27.08.2026: Das Modell sagte "dann buche ich Ihnen heute um neun Uhr
+# fünfzehn" OHNE book_slot aufzurufen — der Kalender blieb leer, der Patient
+# haette sich auf einen Termin verlassen, den es nicht gibt. Eine Zusage ohne
+# Werkzeug darf den Mund nie erreichen.
+_BUCH_ZUSAGE = re.compile(
+    r"(buche\s+ich|ich\s+buche|reserviere\s+ich|ich\s+reserviere|"
+    r"(?:ich\s+trage|trage\s+ich)\s+(?:Sie|das|ihn|den|Ihren)\b|"
+    r"habe\s+ich\s+eingetragen|"
+    r"ist\s+(?:gebucht|eingetragen|reserviert|fest\s+eingetragen))",
+    re.I,
+)
+
+
+def _zusage_ohne_werkzeug(text: str) -> bool:
+    for satz in re.split(r"(?<=[.!?])\s+", _s(text)):
+        s = _s(satz)
+        if s and not s.endswith("?") and _BUCH_ZUSAGE.search(s):
+            return True
+    return False
+
+
+def _gemeinter_slot(text: str, offered: list) -> str:
+    """Welchen der angebotenen Termine meint der Satz?"""
+    t = _s(text).lower()
+    for x in offered:
+        gesagt = _s(x.get("spoken")).lower()
+        if gesagt and gesagt in t:
+            return _s(x.get("iso"))
+    if len(offered) == 1:
+        return _s(offered[0].get("iso"))
+    return ""
+
+
+def _buchungs_wache(session_doc: dict, text: str, melde=None) -> tuple[str, dict | None]:
+    """Zusage ohne Werkzeug: entweder wirklich buchen oder nachfragen."""
+    if not _zusage_ohne_werkzeug(text):
+        return "", None
+    offered = [x for x in (session_doc.get("offered") or []) if isinstance(x, dict)]
+    iso = _gemeinter_slot(text, offered)
+    print(f"lisa-buchwache: Zusage ohne Werkzeug, iso={iso or '-'} text={text!r}", flush=True)
+    if not iso:
+        return (
+            "Einen Moment — welchen Termin darf ich fest eintragen?",
+            None,
+        )
+    if melde:
+        try:
+            melde("book_slot")
+        except Exception:
+            pass
+    result = _run_tool(session_doc, "book_slot", {"slot_iso": iso})
+    session.merke_tool(session_doc, "book_slot", result)
+    book = {
+        "booked": bool(result.get("booked")),
+        "dryRun": bool(result.get("dryRun")),
+        "slotIso": result.get("slotIso") or iso,
+        "spoken": result.get("spoken") or "",
+    }
+    return _s(result.get("spoken")), book

@@ -9,12 +9,14 @@ BASE = "http://127.0.0.1:8095"
 body = {
     "tenant": "meddent",
     "auftrag": "Kontrolltermin vereinbaren",
-    "patient": {"name": "Anna Test", "firstName": "Anna", "lastName": "Test"},
+    "patient": {"name": "Anna Test", "firstName": "Anna", "lastName": "Test", "gender": "f"},
 }
+t0 = time.perf_counter()
 r = httpx.post(f"{BASE}/api/start", json=body, timeout=25)
 d = r.json()
 sid = d.get("sessionId")
-print("START", r.status_code, "text=", (d.get("text") or "")[:90])
+print(f"START {r.status_code} in {round(time.perf_counter()-t0,2)}s")
+print("  ", d.get("text"))
 time.sleep(2.5)  # Anreicherung (Slots-Vorrat) fertig werden lassen
 
 def zug(text: str) -> None:

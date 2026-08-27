@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import json
 
-from lisa import agent, calendar, llm, patients, remote, session, sprech, stt, tenants, tts
+from lisa import agent, calendar, filler, llm, patients, remote, session, sprech, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, ELEVENLABS_TTS_MODEL, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
@@ -144,43 +144,47 @@ def _zeile(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=False) + "\n"
 
 
-# Füller gegen die Totzeit: sobald ein Werkzeug startet, hört der Anrufer
-# sofort einen kurzen Satz, während Kalender/Kartei im Hintergrund arbeiten.
-_FILLER_STD = "Einen kleinen Moment bitte."
-_FILLER_JE_TOOL = {
-    "offer_slots": "Einen Moment, ich schaue in den Kalender.",
-    "book_slot": "Einen Moment, ich trage den Termin ein.",
-    "cancel_appointment": "Einen Moment, ich nehme den Termin raus.",
-    "move_appointment": "Einen Moment, ich verschiebe den Termin.",
-    "list_appointments": "Einen Moment, ich schaue in Ihre Termine.",
-    "create_patient": "Einen Moment, ich lege Ihre Akte an.",
-}
+# Füller gegen die Totzeit. Die Audios werden beim Start einmal gerendert und
+# bleiben liegen — abspielen kostet danach null Zeit.
 _FILLER_URLS: dict[str, str] = {}
-# Zäher Zug ohne Werkzeug-Meldung: erst nach dieser Frist den Standard-Füller.
-# Nicht zu knapp wählen, sonst überholt er die passenden Werkzeug-Sätze.
-_FILLER_SPAET_S = 2.2
+# Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
+# blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
+_FILLER_VORAB_S = 0.3
+# Not-Füller: nur wenn ein Zug OHNE erkannte Absicht UND ohne Werkzeug wirklich
+# haengt. Normale Plauder-Antworten kommen nach 1,4 bis 2,6 s — eine kuerzere
+# Frist wuerde den Fueller in die Antwort hineinsprechen (gemessen 27.08.2026).
+_FILLER_SPAET_S = 3.2
 
 
 def _filler_vorbereiten() -> None:
     if not tts.bereit():
         return
-    for text in [_FILLER_STD, *_FILLER_JE_TOOL.values()]:
+    for text in filler.alle_saetze():
         try:
             url = _audio_legen(tts.engine().speak(text))
             if url:
                 _FILLER_URLS[text] = url
         except Exception as e:
             print(f"lisa-filler fail {text!r} {e}", flush=True)
+    print(f"lisa-filler bereit: {len(_FILLER_URLS)} Saetze", flush=True)
 
 
-def _filler_url(tool: str = "") -> str:
-    text = _FILLER_JE_TOOL.get(tool, _FILLER_STD)
-    return _FILLER_URLS.get(text) or _FILLER_URLS.get(_FILLER_STD) or ""
+def _filler_url(sit, gruppe: str) -> str:
+    nr = int(sit.get("fillerNr") or 0)
+    sit["fillerNr"] = nr + 1
+    url = _FILLER_URLS.get(filler.satz(gruppe, nr))
+    if url:
+        return url
+    return _FILLER_URLS.get(filler.satz("allgemein", nr)) or ""
+
+
+def _angebot_offen(sit) -> bool:
+    return bool(sit.get("offered"))
 
 
 def _zug_stream(sit, *, art: str, text_in: str = "", extra: dict | None = None,
                 stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = ""):
-    """NDJSON: Füller sofort raus, sobald ein Werkzeug loslegt — Antwort folgt."""
+    """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
     q: queue.Queue = queue.Queue()
 
     def melde(tool: str) -> None:
@@ -216,23 +220,31 @@ def _zug_stream(sit, *, art: str, text_in: str = "", extra: dict | None = None,
 
     threading.Thread(target=arbeit, daemon=True).start()
     filler_raus = False
-    frist = time.monotonic() + _FILLER_SPAET_S
+
+    def frist_setzen(gehoert: str) -> tuple[float, str]:
+        """Aus dem Gehörten raten, ob ein Kalender-Zugriff kommt."""
+        gruppe = filler.vermutet(gehoert, angebot_offen=_angebot_offen(sit))
+        if gruppe:
+            return time.monotonic() + _FILLER_VORAB_S, gruppe
+        return time.monotonic() + _FILLER_SPAET_S, "allgemein"
+
+    frist, vorab_gruppe = frist_setzen(text_in)
     while True:
         try:
-            wartezeit = None if filler_raus else max(0.05, frist - time.monotonic())
+            wartezeit = None if filler_raus else max(0.02, frist - time.monotonic())
             typ, wert = q.get(timeout=wartezeit)
         except queue.Empty:
-            url = _filler_url()
+            url = _filler_url(sit, vorab_gruppe)
             if url:
                 yield _zeile({"type": "filler", "audioUrl": url})
             filler_raus = True
             continue
         if typ == "gehoert":
-            frist = time.monotonic() + _FILLER_SPAET_S
+            frist, vorab_gruppe = frist_setzen(wert)
             yield _zeile({"type": "transcript", "textIn": wert})
         elif typ == "tool":
             if not filler_raus:
-                url = _filler_url(wert)
+                url = _filler_url(sit, filler.fuer_tool(wert))
                 if url:
                     yield _zeile({"type": "filler", "audioUrl": url})
                 filler_raus = True
@@ -296,6 +308,7 @@ def health():
         "llm": h,
         "tts": tts.engine().name if tts.bereit() else "fehlt",
         "ttsModel": ELEVENLABS_TTS_MODEL if tts.bereit() else "",
+        "filler": f"{len(_FILLER_URLS)}/{len(filler.alle_saetze())}",
         "stt": "live+elevenlabs" if stt.bereit() else "live",
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
@@ -360,9 +373,14 @@ def api_turn(body: TurnIn):
 @app.on_event("startup")
 def _warm_start():
     def _run():
-        t = tenants.laden(DEFAULT_TENANT)
-        tts.warm(begruessung(t.get("praxisName") or "", "Kontrolltermin vorverlegen"))
+        # Füller zuerst: ohne sie entsteht genau die Stille, die weg soll.
         _filler_vorbereiten()
+        t = tenants.laden(DEFAULT_TENANT)
+        tts.warm(begruessung(
+            t.get("praxisName") or "",
+            "Kontrolltermin vorverlegen",
+            behandler=t.get("behandler") or "",
+        ))
     threading.Thread(target=_run, daemon=True).start()
 
 

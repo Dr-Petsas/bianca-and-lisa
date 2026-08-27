@@ -404,6 +404,7 @@ def karten_patient(p: dict) -> dict[str, Any]:
         "firstName": _s(p.get("firstName")),
         "lastName": _s(p.get("lastName")),
         "name": f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip(),
+        "gender": _s(p.get("gender")),
         "birthDate": _s(p.get("birthDate")),
         "phone": phone,
         "phoneDisplay": format_de_phone(phone) if phone else "",

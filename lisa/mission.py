@@ -35,14 +35,15 @@ def identitaets_rahmen(praxis: str, behandler: str = "") -> str:
     praxis = " ".join(str(praxis or "").split()).strip() or "der Praxis"
     arzt = " ".join(str(behandler or "").split()).strip()
     arzt_teil = (
-        f'Stelle den Behandler nur namentlich, wenn es noetig ist: "{arzt}".'
+        f'Du rufst im Auftrag von "{arzt}" an. Fragt jemand, wer dich schickt, '
+        f'oder wer du bist, nenne "{arzt}" und die Praxis. Erfinde keinen anderen Arzt.'
         if arzt else
         "Nenne keinen Arzt, wenn der Auftrag keinen nennt."
     )
     return (
         f'\n\n[Identitaet fuer dieses Gespraech, Regieanweisung — NICHT vorlesen: '
-        f'Du rufst im Auftrag der Praxis "{praxis}" an. Stelle dich mit GENAU '
-        f'dieser Praxis vor ("hier ist Lisa aus der {praxis}"). {arzt_teil} '
+        f'Du rufst fuer die Praxis "{praxis}" an. Stelle dich mit GENAU dieser '
+        f'Praxis vor ("hier ist Lisa von der {praxis}"). {arzt_teil} '
         f"Nenne NIE eine andere Praxis und keinen anderen Arzt, auch wenn im "
         f"Prompt ein Beispiel mit einem anderen Namen steht — dieser Auftrag gilt.]"
     )

@@ -8,6 +8,9 @@ from lisa.mission import ist_termin_auftrag
 
 _SATZ = re.compile(r"(?<=[.!?])\s+")
 
+_HERR = {"m", "male", "herr", "mann", "männlich", "maennlich"}
+_FRAU = {"f", "w", "female", "frau", "weiblich"}
+
 
 def _s(v: object) -> str:
     return " ".join(str(v or "").split()).strip()
@@ -24,15 +27,44 @@ def erste_botschaft(auftrag: str) -> str:
     return satz
 
 
-def begruessung(praxis: str, auftrag: str = "") -> str:
-    name = _s(praxis) or "der Praxis"
+def anrede(patient: dict | None) -> str:
+    """'Frau Müller', 'Herr Müller' — ohne bekanntes Geschlecht der ganze Name."""
+    p = patient or {}
+    last = _s(p.get("lastName"))
+    name = _s(p.get("name"))
+    if not last and name:
+        teile = name.split()
+        last = teile[-1] if len(teile) >= 2 else ""
+    g = _s(p.get("gender")).lower()
+    if last:
+        if g in _HERR:
+            return f"Herr {last}"
+        if g in _FRAU:
+            return f"Frau {last}"
+    # Nicht raten: lieber der volle Name als eine falsche Anrede.
+    return name or last
+
+
+def vorstellung(praxis: str, behandler: str = "") -> str:
+    haus = _s(praxis)
+    arzt = _s(behandler)
+    kern = f"hier ist Lisa von der {haus}" if haus else "hier ist Lisa"
+    if arzt:
+        kern += f", ich rufe im Auftrag von {arzt} an"
+    return kern
+
+
+def begruessung(praxis: str, auftrag: str = "", *, patient: dict | None = None,
+                behandler: str = "") -> str:
+    wen = anrede(patient)
+    gruss = f"Guten Tag, {wen}," if wen else "Guten Tag,"
+    kopf = f"{gruss} {vorstellung(praxis, behandler)}."
     if ist_termin_auftrag(auftrag):
         return (
-            f"Guten Tag, hier ist Lisa aus der {name}. "
-            "Ich rufe wegen Ihres Termins an. "
+            f"{kopf} Es geht um Ihren Termin. "
             "Passt es Ihnen vormittags oder nachmittags besser?"
         )
     botschaft = erste_botschaft(auftrag)
     if botschaft:
-        return f"Guten Tag, hier ist Lisa aus der {name}. {botschaft}"
-    return f"Guten Tag, hier ist Lisa aus der {name}."
+        return f"{kopf} {botschaft}"
+    return kopf
