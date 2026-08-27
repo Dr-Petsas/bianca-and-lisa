@@ -518,6 +518,49 @@ def test_aeh_nein_ist_nein():
     assert not gehirn.ist_ja("Ähm, nein danke.")
 
 
+def test_bin_neu_ist_kein_name():
+    """'Ich bin neu bei Ihnen' wurde live als Name geerntet ('Danke, Neu
+    Ihnen') — Neupatient-Floskeln duerfen NIE in die Namensfelder, zaehlen
+    aber als Schonmal-Nein."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    neu = gehirn.einsammeln(sit, "Ich bin neu bei Ihnen")
+    assert not s["vorname"] and not s["nachname"]
+    assert "name" not in neu and "nachname" not in neu
+    assert s["warSchonMal"] is False
+
+
+def test_neupatient_floskeln_kein_name():
+    """Auch 'ganz neu', 'noch nie', 'zum ersten Mal' ergeben keinen Namen."""
+    for satz in ["Ich bin ganz neu bei euch", "Ich war noch nie da", "Bin zum ersten Mal hier"]:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "frage": "name"})
+        gehirn.einsammeln(sit, satz)
+        assert not s["vorname"] and not s["nachname"], satz
+        assert s["warSchonMal"] is False, satz
+
+
+def test_ich_bin_paul_neumann_bleibt_name():
+    """Gegenprobe: 'bin NEUmann' ist KEIN 'bin neu' — echter Name bleibt."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit, "Ich bin Paul Neumann")
+    assert s["vorname"] == "Paul" and s["nachname"] == "Neumann"
+    assert s["warSchonMal"] is None  # kein falsches Neupatient-Signal
+
+
+def test_nachname_neu_funktioniert():
+    """Gegenprobe: der echte Nachname 'Neu' wird weiter aufgenommen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit, "Mein Name ist Anna Neu")
+    assert s["vorname"] == "Anna" and s["nachname"] == "Neu"
+
+
 def test_auch_paul_wird_paul():
     """'Auch Paul' auf die Vornamens-Frage ergab Vorname 'Auch' (live)."""
     sit = _sit()

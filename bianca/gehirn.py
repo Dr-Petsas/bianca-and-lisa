@@ -107,9 +107,14 @@ _SCHONMAL_JA_RE = re.compile(
     r"bin\s+(schon\s+)?patient|bin\s+bei\s+ihnen\s+in\s+behandlung",
     re.I,
 )
+# "bin neu" braucht die Wortgrenze und darf Fuellwoerter tragen: ohne \b traf
+# der Ausdruck auch "bin NEUmann" (echter Nachname!), und "bin GANZ neu bei
+# euch" fiel durch (live 27.08.2026: "Ich bin neu bei Ihnen" -> "Danke, Neu
+# Ihnen").
 _SCHONMAL_NEIN_RE = re.compile(
-    r"noch\s+nie|zum\s+ersten\s+mal|das\s+erste\s+mal|bin\s+neu|noch\s+kein\s+patient|"
-    r"noch\s+nicht\s+bei\s+(ihnen|euch)",
+    r"noch\s+nie|zum\s+ersten\s+mal|das\s+erste\s+mal|"
+    r"bin\s+(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+)*neu\b|"
+    r"noch\s+kein\s+patient|noch\s+nicht\s+bei\s+(ihnen|euch)",
     re.I,
 )
 _ARZT_KONTEXT_RE = re.compile(r"arzt|ärztin|aerztin|behandler|doktor|dr\.|bei\s+wem|zu\s+wem", re.I)
@@ -129,6 +134,17 @@ _NAME_STOP = {
     "auch", "ebenfalls", "genau", "also", "wieder", "nochmal", "eben",
     "ähm", "äh", "aeh", "aehm", "halt", "wie", "gesagt",
 }
+# Neupatient-/Schonmal-Floskeln sind KEINE Namen: "Ich bin neu bei Ihnen"
+# wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026). Der ganze
+# Floskel-Teilsatz fliegt VOR der Namens-Ernte raus; ein echter Name im
+# selben Satz ("..., mein Name ist Paul Neumann") bleibt erhalten, ebenso
+# "Ich bin Paul Neumann" und der Nachname "Neu" (Wortgrenze nach "neu").
+_KEIN_NAME_RE = re.compile(
+    r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+)?"
+    r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+)*"
+    r"(?:neu\b|noch\s+nie\b|zum\s+ersten\s+mal\b|das\s+erste\s+mal\b)[^,.!?]*",
+    re.I,
+)
 _AKTE_NUMMER_RE = re.compile(
     r"(nummer|handy|telefon)[^.]{0,50}(akte|hinterlegt|haben\s+sie\s+(ja|doch|schon|bereits))|"
     r"steht\s+(ja\s+|doch\s+)?in\s+der\s+akte|"
@@ -255,6 +271,9 @@ def _name_tokens(text: str) -> list[str]:
 
 def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     """Vor-/Nachname aus dem Satz ziehen. erzwungen=True: die Frage war der Name."""
+    text = _s(_KEIN_NAME_RE.sub(" ", text))
+    if not text:
+        return False
     m = _NAME_LEADIN_RE.search(text)
     kandidat = m.group(1) if m else (text if erzwungen else "")
     toks = _name_tokens(kandidat)
