@@ -7,3 +7,4 @@ __pycache__/
 .data/
 _posteingang/
 *.log
+tts_serve-5090.zip
