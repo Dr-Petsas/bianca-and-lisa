@@ -11,10 +11,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from bianca import flow, gehirn, session
+from bianca import flow, gehirn, session, telefon
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
-from kern import gespraech, llm, wiederholung, zuege
+from kern import gespraech, llm, stille, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
@@ -128,6 +128,103 @@ def _wiederholungs_wache(sit: dict, text: str) -> str:
         frage_kern=_FRAGE_KERN.get(fid, ""),
         varianten=gehirn.FRAGE_VARIANTEN,
     )
+
+
+_FEHLT_WORT = {
+    "schonmal": "ob Sie schon Patient bei uns sind",
+    "arzt": "der Behandler",
+    "name": "Ihr Name",
+    "vorname": "Ihr Vorname",
+    "nachname": "der Nachname",
+    "grund": "der Grund Ihres Besuchs",
+    "wunsch": "Ihr Wunschtermin",
+    "buchstabieren": "die Schreibweise des Nachnamens",
+    "telefon": "Ihre Handynummer",
+    "slotwahl": "Ihre Terminwahl",
+    "bestaetigung": "Ihr Okay",
+}
+
+
+def _stand_ansage(sit: dict) -> str:
+    """Wo stehen wir, was war der Auftrag, was fehlt noch — deterministisch
+    aus dem Sammler, nie geraten (Stille-Wächter, Chef 27.08.2026: 'Gehirn
+    einschalten und nicht bei null von vorne anfangen')."""
+    s = sit.get("sammler") or {}
+    modus = _s(s.get("modus"))
+    phase = _s(s.get("phase"))
+    fid = _s(s.get("frage"))
+    if modus in {"absagen", "verschieben"}:
+        tun = "abzusagen" if modus == "absagen" else "zu verschieben"
+        frage = _s(sit.get("flussFrage")) or "Um welchen Termin geht es denn?"
+        return f"Wir waren gerade dabei, Ihren Termin {tun}. {frage}"
+    if modus == "buchen" and phase not in {"gebucht", "fertig"}:
+        auftrag = "Wir waren mitten in der Terminaufnahme"
+        if _s(s.get("grund")):
+            auftrag += f" wegen {_s(s.get('grund'))}"
+        habe = []
+        if _s(s.get("vorname")) or _s(s.get("nachname")):
+            habe.append("Ihren Namen habe ich schon.")
+        a = s.get("arzt") or {}
+        if a.get("calendarId") or _s(a.get("typ")):
+            habe.append("Der Behandler ist notiert.")
+        fehlt = _FEHLT_WORT.get(fid, "")
+        frage = _kanonische_frage(sit, fid) if fid else ""
+        teile = [auftrag + "."] + habe
+        if fehlt:
+            teile.append(f"Mir fehlt noch {fehlt}.")
+        if frage:
+            teile.append(frage)
+        return " ".join(teile)
+    return "Kann ich sonst noch etwas für Sie tun?"
+
+
+def stille_zug(sit: dict) -> dict[str, Any]:
+    """Stille-Wächter (Chef 27.08.2026): der Anrufer sagt seit ~4 Sekunden
+    nichts — Bianca ergreift selbst das Wort, statt stumm zu warten.
+
+    - Läuft gerade ein Nebenthema (Talk-Floor), knüpft der ERSTE Stups dort
+      an; der zweite holt auf die Job-Spur.
+    - Auf der Job-Spur kommt der volle Stand (Auftrag, was schon da ist,
+      offene Frage) — beim wiederholten Stups nur noch kurz die Frage, den
+      Wortlaut variiert der Wiederholungs-Wächter.
+    - Nach MAX_STUPSE Stupsen ohne Antwort: Schweigen (leerer Text), bis der
+      Anrufer wieder spricht (user_turn setzt den Zähler zurück).
+    """
+    n = stille.stups_zaehlen(sit)
+    if n > stille.MAX_STUPSE:
+        return {"text": "", "book": None}
+    s = sit.get("sammler") or {}
+    fid = _s(s.get("frage"))
+
+    # Nummern-Rückbestätigung bleibt IMMER deterministisch — hier ist die
+    # wortgleiche Wiederholung der Nummer ausdrücklich richtig.
+    if fid == "telefon_check" and _s(s.get("telefonOffen")):
+        text = (f"{stille.anrede(n)} Ich wiederhole die Nummer: "
+                f"{telefon.sprechbar(s['telefonOffen'])}. Stimmt das so?")
+        stille.anhaengen(sit, text)
+        return {"text": text, "book": None}
+
+    st = gespraech.stand(sit)
+    stack = st.get("stack") or []
+    if (n == 1 and stack and gespraech.floor(sit) in (gespraech.TALK, gespraech.BLENDED)):
+        thema = _s((stack[-1] or {}).get("thema"))
+        if thema:
+            text = (f"{stille.anrede(n)} Wir waren gerade beim Thema {thema} — "
+                    "erzählen Sie gern weiter.")
+            stille.anhaengen(sit, text)
+            return {"text": text, "book": None}
+
+    if stille.job_stups_gemerkt(sit):
+        # Stand kam schon einmal — jetzt nur kurz die offene Frage neu
+        # anstoßen (ohne Begleitsätze); den Wortlaut tauscht der
+        # Wiederholungs-Wächter.
+        frage = stille.nur_fragesaetze(_kanonische_frage(sit, fid)) if fid else ""
+        text = " ".join(x for x in [stille.anrede(n), frage] if x)
+    else:
+        text = f"{stille.anrede(n)} {_stand_ansage(sit)}"
+    text = _wiederholungs_wache(sit, text) or text
+    stille.anhaengen(sit, text)
+    return {"text": text, "book": None}
 
 
 def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False,
@@ -293,6 +390,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
+    stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
     msgs = list(sit.get("messages") or [])
     if not msgs:
         return start_reply(sit)

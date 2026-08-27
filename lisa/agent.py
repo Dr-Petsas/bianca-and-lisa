@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kern import gespraech, wiederholung, zuege
+from kern import gespraech, stille, wiederholung, zuege
 from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
@@ -59,10 +59,40 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+def stille_zug(session_doc: dict) -> dict[str, Any]:
+    """Stille-Wächter (Chef 27.08.2026): der Angerufene sagt seit ~4 Sekunden
+    nichts — Lisa ergreift das Wort und knüpft am Stand an: Identitätsfrage
+    bzw. Auftrag plus zuletzt gestellte Frage (mit Präfix, nie wortgleich —
+    Wiederholungs-Wächter-Regel). Nach MAX_STUPSE Stupsen: Schweigen, bis
+    wieder gesprochen wird (user_turn setzt den Zähler zurück)."""
+    n = stille.stups_zaehlen(session_doc)
+    if n > stille.MAX_STUPSE:
+        return {"text": "", "book": None}
+    teile = [stille.anrede(n)]
+    if _s(session_doc.get("idCheck")) in {identitaet.FRAGE, identitaet.HOLEN, identitaet.WARTEN}:
+        teile.append(stille.frage_praefix(identitaet.frage_satz(session_doc.get("patient") or {})))
+    else:
+        auftrag = _s(session_doc.get("auftrag"))
+        if auftrag:
+            teile.append(f"Es geht um Folgendes: {auftrag}.")
+        offene = stille.letzte_frage(session_doc.get("messages") or [])
+        if offene:
+            teile.append(stille.frage_praefix(offene))
+    text = " ".join(x for x in teile if x).strip()
+    ent = wiederholung.pruefen(
+        session_doc, text,
+        frueher=wiederholung.letzte_antworten(session_doc.get("messages") or []),
+    )
+    text = ent or text
+    stille.anhaengen(session_doc, text)
+    return {"text": text, "book": None}
+
+
 def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
+    stille.reset(session_doc)  # es wird wieder gesprochen — Stupse von vorn
     msgs = list(session_doc.get("messages") or [])
     if not msgs:
         return start_reply(session_doc)

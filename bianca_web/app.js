@@ -14,6 +14,11 @@ let liveOhr = null;
 let kiSpricht = false;
 let zugBusy = false;
 let hoerNr = 0;
+// Stille-Wächter (Chef 27.08.2026): ~4 s Funkstille => Bianca stupst selbst
+// an — mit Stand (Auftrag, was schon da ist, was fehlt) statt stumm zu
+// warten. Max. 2 Stupse in Folge; echtes Gehörtes setzt den Zähler zurück.
+const STILLE_MS = 4000;
+let stilleStupse = 0;
 
 function bubble(role, text) {
   if (!text) return;
@@ -380,7 +385,9 @@ function recordUntilSilence(stream) {
       if (rms > 0.02) { heard = true; quiet = 0; }
       else if (heard) quiet += dt;
       // 500 ms Ruhe statt 300: nicht in Denkpausen hineinreden (27.08.2026).
-      if ((heard && quiet > 500 && now - t0 > 450) || now - t0 > 8000) {
+      // Ohne jedes Geräusch nach STILLE_MS abbrechen: der Stille-Wächter
+      // stupst dann an, statt weitere Sekunden stumm zu warten.
+      if ((heard && quiet > 500 && now - t0 > 450) || (!heard && now - t0 > STILLE_MS) || now - t0 > 8000) {
         recLocal.stop();
         try { src.disconnect(); } catch { /* */ }
         return;
@@ -391,7 +398,7 @@ function recordUntilSilence(stream) {
   });
 }
 
-async function warteAufWorte(maxMs) {
+async function warteAufWorte(maxMs, stillMs) {
   const t0 = performance.now();
   let lastLen = 0;
   let quiet = 0;
@@ -410,11 +417,36 @@ async function warteAufWorte(maxMs) {
       } else if (t.length >= 2) quiet += dt;
       // 500 ms statt 260: nicht mitten in die Denkpause hineinreden.
       if (t.length >= 2 && quiet > 500) return resolve(liveOhr.take());
+      // Stille-Wächter: KEIN einziges Wort bis stillMs => leer zurück, der
+      // Aufrufer stupst an. Sobald Worte laufen, gilt wieder die lange Frist.
+      if (stillMs && t.length < 2 && now - t0 > stillMs) return resolve("");
       if (now - t0 > maxMs) return resolve((liveOhr && liveOhr.take()) || "");
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   });
+}
+
+async function stilleStups(nr) {
+  // Nach ~4 s Stille: Server baut den Stups deterministisch (Stand + offene
+  // Frage bzw. Talk-Thema). false = kein Stups (Budget leer/Fehler) —
+  // dann läuft das normale "Nichts gehört"-Verhalten.
+  if (!callOn || nr !== hoerNr || zugBusy || stilleStupse >= 2) return false;
+  stilleStupse += 1;
+  try {
+    const r = await fetch("api/stille", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+    const d = await r.json();
+    if (!callOn || nr !== hoerNr) return true;
+    if (d.empty || !d.audioUrl) return false;
+    if (d.text) bubble("ki", d.text);
+    phase("ki", "Bianca spricht …");
+    await playUrl(d.audioUrl);
+    return true;
+  } catch { return false; }
 }
 
 async function sendeZug({ text, blob, nr }) {
@@ -456,6 +488,7 @@ async function sendeZug({ text, blob, nr }) {
       if (callOn && nr === hoerNr) setTimeout(hoeren, 250);
       return;
     }
+    stilleStupse = 0; // echter Zug gehört und beantwortet — Stupse von vorn
     if (data.textIn) bubble("user", data.textIn);
     if (data.text) bubble("ki", data.text);
     if (data.book) zeigeBuch(data.book, data.writeLive);
@@ -480,10 +513,15 @@ async function hoeren() {
   }
   phase("du", "Sie sind dran — einfach reden");
   if (liveOhr && liveOhr.ok) {
-    const text = await warteAufWorte(12000);
+    const text = await warteAufWorte(12000, stilleStupse < 2 ? STILLE_MS : 0);
     if (!callOn || nr !== hoerNr) return;
     if (text.length >= 2) {
       await sendeZug({ text, blob: null, nr });
+      return;
+    }
+    // Stille-Wächter: nichts gehört — anstupsen statt stumm zu warten.
+    if (await stilleStups(nr)) {
+      if (callOn && nr === hoerNr) hoeren();
       return;
     }
     phase("du", "Nichts gehört — bitte nochmal");
@@ -501,6 +539,11 @@ async function hoeren() {
   }
   if (!callOn || nr !== hoerNr) return;
   if (!blob || blob.size < 1200) {
+    // Stille-Wächter (iOS-Pfad ohne Live-STT): erst anstupsen.
+    if (await stilleStups(nr)) {
+      if (callOn && nr === hoerNr) hoeren();
+      return;
+    }
     phase("du", "Nichts gehört — bitte nochmal");
     if (callOn) setTimeout(hoeren, 250);
     return;
@@ -586,6 +629,7 @@ async function weiterNachMic(micBitte) {
   callOn = true;
   hoerNr += 1;
   zugBusy = false;
+  stilleStupse = 0;
   startLiveSttPersistent();
   phase("warte", "verbindet …");
   try {

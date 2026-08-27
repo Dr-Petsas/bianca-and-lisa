@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from bianca import agent, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import llm, stt, tenants, tts
+from kern import llm, sprech, stt, tenants, tts
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -107,6 +107,24 @@ def api_turn(body: TurnIn):
         raise HTTPException(404, "sitzung unbekannt")
     print(f"bianca-turn session={body.sessionId} text={body.text!r}", flush=True)
     return ndjson(DIENST.zug_stream(sit, art="turn", text_in=body.text))
+
+
+@app.post("/api/stille")
+def api_stille(body: HangupIn):
+    """Stille-Wächter (Chef 27.08.2026): das Dock meldet ~4 s Funkstille —
+    Bianca stupst deterministisch an (Stand + offene Frage bzw. Talk-Thema),
+    ohne LLM und ohne Kalender. Leerer Text = Stups-Budget verbraucht."""
+    sit = session.holen(body.sessionId)
+    if not sit:
+        raise HTTPException(404, "sitzung unbekannt")
+    reply = agent.stille_zug(sit)
+    text = sprech.sanitize(reply.get("text") or "")
+    if not text:
+        return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
+    url, tts_s = DIENST.stimme(text)
+    session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
+    print(f"bianca-stille session={body.sessionId} text={text!r}", flush=True)
+    return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
 
 @app.post("/api/listen")

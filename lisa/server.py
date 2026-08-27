@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
+from kern import sprech
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, ELEVENLABS_TTS_MODEL, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
@@ -218,6 +219,24 @@ def api_turn(body: TurnIn):
         raise HTTPException(404, "sitzung unbekannt")
     print(f"lisa-turn session={body.sessionId} text={body.text!r}", flush=True)
     return _ndjson(_zug_stream(sit, art="turn", text_in=body.text))
+
+
+@app.post("/api/stille")
+def api_stille(body: HangupIn):
+    """Stille-Wächter (Chef 27.08.2026): das Dock meldet ~4 s Funkstille —
+    Lisa stupst deterministisch an (Auftrag + zuletzt offene Frage), ohne
+    LLM und ohne Kalender. Leerer Text = Stups-Budget verbraucht."""
+    sit = session.holen(body.sessionId)
+    if not sit:
+        raise HTTPException(404, "sitzung unbekannt")
+    reply = agent.stille_zug(sit)
+    text = sprech.sanitize(reply.get("text") or "")
+    if not text:
+        return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
+    url, tts_s = DIENST.stimme(text)
+    session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
+    print(f"lisa-stille session={body.sessionId} text={text!r}", flush=True)
+    return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
 
 @app.on_event("startup")

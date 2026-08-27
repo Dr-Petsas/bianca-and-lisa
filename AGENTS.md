@@ -53,6 +53,21 @@ Zaluma/SIP hängt ein Kollege später an denselben Sitzungs-Umschlag.
   Sätze mit Ziffern/Ziffern-Wörtern (Readbacks), kurze Quittungen.
   Nie stumm: bleibt nichts übrig, greift der Original- bzw. Rückfalltext.
   Tests: `tests/test_wiederholung.py`.
+- **Stille-Wächter** (`kern/stille.py`, 27.08.2026 — nicht rückbauen): meldet
+  das Dock ~4 s Funkstille (`STUPS_NACH_S`, gemessen in `web/app.js` und
+  `bianca_web/app.js` nach dem eigenen Sprech-Ende), ergreift die Stimme
+  selbst das Wort: `POST /api/stille` -> `agent.stille_zug` (deterministisch,
+  ohne LLM, ohne Kalender). Gehirn an, nie bei null: auf der Job-Spur kommt
+  der STAND (Auftrag, was schon eingesammelt ist, offene Frage — Bianca
+  `_stand_ansage` aus dem Sammler, Lisa Auftrag + zuletzt gestellte Frage
+  mit "Meine Frage war:"-Präfix); läuft gerade ein Nebenthema (Talk-Floor),
+  knüpft der ERSTE Stups dort an, der zweite holt auf die Job-Spur.
+  `telefon_check` wiederholt deterministisch die Nummer. Max. `MAX_STUPSE`
+  (2) Stupse in Folge, dann Schweigen; jedes echte Gehörte setzt zurück
+  (`stille.reset` in beiden `user_turn`, Zähler auch im Dock). Jeder Stups
+  läuft durch den Wiederholungs-Wächter — nie wortgleich; der Kurz-Stups
+  spricht nur Frage-Sätze (`nur_fragesaetze`), keine Begleitsätze doppelt.
+  Tests: `tests/test_stille.py`.
 - Namens-Wache: Zustände/Prosa ("ich bin ganz aufgeregt", Erzählsätze auf
   die Namensfrage) sind KEINE Namen (`gehirn._KEIN_NAME_RE`, Token-Deckel).
 - Tests: `tests/test_gespraech.py` (offline); Sprech-Probe am echten LLM:
