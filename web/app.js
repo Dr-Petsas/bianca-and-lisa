@@ -81,14 +81,17 @@ function speechRec() {
 
 function toggleMic(btn, recRef, liveEl, intoField) {
   if (recRef.current) {
-    recRef.current.stop();
-    recRef.current = null;
-    btn.classList.remove("on");
+    // Stoppt Web Speech ODER die Diktat-Aufnahme; deren onstop/onend räumt auf.
+    try { recRef.current.stop(); } catch { /* */ }
     return;
   }
   const r = speechRec();
   if (!r) {
-    $("status").textContent = "Spracheingabe braucht Chrome/Edge.";
+    // iPhone/Safari/Firefox haben kein Web Speech — vorher tat der Knopf hier
+    // NICHTS und es kam nie eine Mikrofon-Freigabe (Chef 27.08.2026).
+    // Jetzt: aufnehmen (getUserMedia zeigt die Freigabe) und serverseitig
+    // erkennen lassen — derselbe Weg, den der Anruf auf iOS längst nutzt.
+    diktatAufnahme(btn, recRef, liveEl, intoField);
     return;
   }
   let final = intoField ? intoField.value : "";
@@ -110,6 +113,59 @@ function toggleMic(btn, recRef, liveEl, intoField) {
   recRef.current = r;
   btn.classList.add("on");
   r.start();
+}
+
+async function diktatAufnahme(btn, recRef, liveEl, intoField) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+    meld("Dieser Browser kann kein Mikrofon freigeben — bitte Safari, Chrome oder Edge nutzen.", true);
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+  } catch {
+    meld("Mikrofon-Freigabe abgelehnt — bitte in den Browser-Einstellungen für diese Seite erlauben.", true);
+    return;
+  }
+  const mime = mimeType();
+  const recLocal = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks = [];
+  recLocal.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  recLocal.onstop = async () => {
+    try { stream.getTracks().forEach((t) => t.stop()); } catch { /* */ }
+    recRef.current = null;
+    btn.classList.remove("on");
+    if (liveEl) liveEl.textContent = "erkenne …";
+    try {
+      const blob = new Blob(chunks, { type: recLocal.mimeType || mime || "audio/webm" });
+      if (blob.size < 1500) {
+        if (liveEl) liveEl.textContent = "";
+        meld("Zu kurz — bitte noch einmal diktieren.", true);
+        return;
+      }
+      const fd = new FormData();
+      fd.append("audio", blob, blob.type.includes("mp4") ? "diktat.m4a" : "diktat.webm");
+      const r = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await r.json();
+      const text = ((data && data.text) || "").trim();
+      if (text && intoField) {
+        const alt = intoField.value.trim();
+        intoField.value = alt ? alt + " " + text : text;
+        meld("");
+      } else {
+        meld("Nichts verstanden — bitte noch einmal diktieren.", true);
+      }
+    } catch {
+      meld("Diktat-Erkennung fehlgeschlagen — läuft Lisas Dienst?", true);
+    }
+    if (liveEl) liveEl.textContent = "";
+  };
+  recRef.current = recLocal;
+  btn.classList.add("on");
+  if (liveEl) liveEl.textContent = "● Aufnahme läuft — zum Übernehmen erneut tippen";
+  recLocal.start();
 }
 
 function meld(text, schlecht) {
