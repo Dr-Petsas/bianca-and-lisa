@@ -26,8 +26,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HOST = "100.77.30.98"
-USER_KANDIDATEN = ("root", "pickadoc", "pickadoc1", "ubuntu", "admin", "anmeldung2", "petsas", "kirri")
+# "pickadoc1" ist ein Alias aus ~/.ssh/config: LAN-IP 192.168.0.246, User
+# cursor, Key id_ed25519_pickadoc1 (Zugang seit 03.07.2026, docker-Gruppe).
+HOST = "pickadoc1"
+USER_KANDIDATEN = ("cursor",)
 ZIP = ROOT / "tts_serve-5090.zip"
 APP_ZIP = ROOT / "app-5090.zip"
 MAS_ENV = Path(r"F:\MAS-2\backend\.env")
@@ -102,15 +104,19 @@ def deploy_tts(user: str, compose: str) -> bool:
         log(f"DEPLOY_FEHLER scp: {r.stderr[:400]}")
         return False
 
-    r = ssh(user, "mkdir -p ~/telefonki/tts_serve && cd ~/telefonki/tts_serve && "
-                  "python3 -m zipfile -e /tmp/tts_serve-5090.zip . && ls", timeout=60)
+    # Ordner vorher leeren: ein frueheres ZIP mit Backslash-Pfaden hat dort
+    # kaputte Dateinamen hinterlassen. Modelle liegen im Docker-Volume, nicht hier.
+    r = ssh(user, "rm -rf ~/telefonki/tts_serve && mkdir -p ~/telefonki/tts_serve && "
+                  "cd ~/telefonki/tts_serve && python3 -m zipfile -e /tmp/tts_serve-5090.zip . && "
+                  "ls chatterbox/ stimmen/", timeout=60)
     if r.returncode != 0:
         log(f"DEPLOY_FEHLER entpacken: {r.stderr[:400]}")
         return False
     log(f"entpackt: {' '.join((r.stdout or '').split())}")
 
     log("baue + starte Chatterbox (kann 10-20 min dauern: Image-Build + Modell-Download) ...")
-    r = ssh(user, f"cd ~/telefonki/tts_serve && {compose} --profile chatterbox up -d --build 2>&1 | tail -n 30",
+    r = ssh(user, f"cd ~/telefonki/tts_serve && set -o pipefail && "
+                  f"{compose} --profile chatterbox up -d --build 2>&1 | tail -n 30",
             timeout=2400)
     log((r.stdout or "").strip()[-1500:] or "(keine Ausgabe)")
     if r.returncode != 0:
@@ -118,7 +124,11 @@ def deploy_tts(user: str, compose: str) -> bool:
         return False
 
     r = ssh(user, f"cd ~/telefonki/tts_serve && {compose} --profile chatterbox ps", timeout=30)
-    log((r.stdout or "").strip())
+    ps_out = (r.stdout or "").strip()
+    log(ps_out)
+    if "chatterbox" not in ps_out or ("Up" not in ps_out and "running" not in ps_out):
+        log("DEPLOY_FEHLER: Chatterbox-Container laeuft nicht (ps ohne Up/running)")
+        return False
     log("DEPLOY_OK: TTS-Container gestartet — tts_umschalter uebernimmt (Warmlauf laeuft).")
     return True
 
@@ -146,7 +156,9 @@ def deploy_app(user: str, compose: str) -> bool:
         "# 5090-App — vom Deploy-Waechter erzeugt\n"
         "WRITE_LIVE=1\n"
         "DEFAULT_TENANT=meddent\n"
-        "LLM_BASE=http://host.docker.internal:8000/v1\n"
+        # vLLM bindet NUR an die Tailscale-IP der 5090 (100.82.122.62) —
+        # host.docker.internal greift dort ins Leere.
+        "LLM_BASE=http://100.82.122.62:8000/v1\n"
         "TTS_BASE=http://host.docker.internal:8210\n"
         f"ELEVENLABS_API_KEY={key}\n"
     )
@@ -161,7 +173,8 @@ def deploy_app(user: str, compose: str) -> bool:
         return False
 
     log("baue + starte App-Container (Lisa 8095, Bianca 8096) ...")
-    r = ssh(user, f"cd ~/telefonki/app && {compose} up -d --build 2>&1 | tail -n 25", timeout=1200)
+    r = ssh(user, f"cd ~/telefonki/app && set -o pipefail && {compose} up -d --build 2>&1 | tail -n 25",
+            timeout=1200)
     log((r.stdout or "").strip()[-1200:] or "(keine Ausgabe)")
     if r.returncode != 0:
         log(f"APP_FEHLER compose: rc={r.returncode} {(r.stderr or '')[:400]}")

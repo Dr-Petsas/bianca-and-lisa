@@ -7,8 +7,8 @@ Baseline (von diesem Rechner):
   .venv\\Scripts\\python tts_serve\\bench.py --engine eleven --voice lisa
 
 Lokale Container (sobald sie auf der 5090 laufen):
-  .venv\\Scripts\\python tts_serve\\bench.py --engine lokal --url http://100.77.30.98:8210 --voice bianca
-  .venv\\Scripts\\python tts_serve\\bench.py --engine lokal --url http://100.77.30.98:8211 --voice bianca
+  .venv\\Scripts\\python tts_serve\\bench.py --engine lokal --url http://192.168.0.246:8210 --voice bianca
+  .venv\\Scripts\\python tts_serve\\bench.py --engine lokal --url http://192.168.0.246:8211 --voice bianca
 
 Referenz-Stimmen fuer die Container erzeugen (einmalig, aus ElevenLabs):
   .venv\\Scripts\\python tts_serve\\bench.py --ref-erzeugen
@@ -159,7 +159,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--engine", choices=["eleven", "lokal"], default="")
     p.add_argument("--voice", choices=sorted(VOICE_IDS), default="bianca")
-    p.add_argument("--url", default="", help="TTS-Container, z. B. http://100.77.30.98:8210")
+    p.add_argument("--url", default="", help="TTS-Container, z. B. http://192.168.0.246:8210")
     p.add_argument("--korpus", default=str(HIER / "korpus.jsonl"))
     p.add_argument("--ref-erzeugen", action="store_true", help="Klon-Referenzen aus ElevenLabs rendern")
     a = p.parse_args()

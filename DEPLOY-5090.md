@@ -1,4 +1,4 @@
-# Rollout auf der 5090 (pickadoc1, Tailscale 100.77.30.98)
+# Rollout auf der 5090 (pickadoc1, LAN 192.168.0.246 — SSH-Alias `pickadoc1`)
 
 Drei getrennte Stacks, bewusst einzeln startbar:
 
@@ -48,8 +48,8 @@ curl http://127.0.0.1:8211/health
 ## 4. Shootout gegen die Container (vom Dev-Rechner)
 
 ```powershell
-.\.venv\Scripts\python tts_serve\bench.py --engine lokal --url http://100.77.30.98:8210 --voice bianca
-.\.venv\Scripts\python tts_serve\bench.py --engine lokal --url http://100.77.30.98:8211 --voice bianca
+.\.venv\Scripts\python tts_serve\bench.py --engine lokal --url http://192.168.0.246:8210 --voice bianca
+.\.venv\Scripts\python tts_serve\bench.py --engine lokal --url http://192.168.0.246:8211 --voice bianca
 ```
 
 WAVs zum Anhoeren + `ergebnis.csv` liegen unter `tts_serve/bench_out/<lauf>/`.
@@ -60,7 +60,7 @@ Entscheidend: Latenz p50/p95 gegen die ElevenLabs-Baseline und das Ohr des Chefs
 In der `.env` (Dev-Rechner oder App-Container) EINE Zeile:
 
 ```
-TTS_BASE=http://100.77.30.98:8210     # bzw. :8211
+TTS_BASE=http://192.168.0.246:8210     # bzw. :8211
 ```
 
 Dienst neu starten — `/health` zeigt dann `"tts": "lokal"` und die URL unter

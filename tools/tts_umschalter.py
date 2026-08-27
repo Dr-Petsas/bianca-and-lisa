@@ -3,7 +3,7 @@ lokales TTS um und meldet den Vollzug per SMS an den Chef (01776004600).
 
 Ablauf (Chef 27.08.2026: "SMS wenn Bianca und Lisa mit Chatterbox verbunden
 sind und ich ohne ElevenLabs testen kann"):
-  1. Poll http://100.77.30.98:8210/health bis ok+warm mit bianca+lisa.
+  1. Poll http://192.168.0.246:8210/health (LAN der 5090) bis ok+warm mit bianca+lisa.
   2. Probe /speak fuer BEIDE Stimmen (deutsches PCM, plausible Laenge).
   3. .env: TTS_BASE setzen -> ab jetzt spricht NUR der Container (kein
      ElevenLabs-Rueckfall, kern/tts.py).
@@ -33,7 +33,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-CHATTERBOX = "http://100.77.30.98:8210"
+CHATTERBOX = "http://192.168.0.246:8210"
 CHEF_NUMMER = "+491776004600"
 MAS_ENV = Path(r"F:\MAS-2\backend\.env")
 ENV_PFAD = ROOT / ".env"
