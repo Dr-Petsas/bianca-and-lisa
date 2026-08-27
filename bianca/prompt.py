@@ -10,10 +10,13 @@ from kern.wissen import wissen_block
 
 def system_prompt(*, praxis: str, behandler: str, sprache: str = "de",
                   status: str = "", termine_text: str = "", slots_text: str = "",
-                  wissen: dict | None = None) -> str:
+                  wissen: dict | None = None, plan: str = "") -> str:
     historie = f"\nBEKANNTE TERMINE DES ANRUFERS\n{termine_text}\n" if termine_text else ""
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
     stand = f"\nSTAND DER BUCHUNG\n{status}\n" if status else ""
+    # Talk-Schicht (kern/gespraech.py): sagt dem Modell, ob gerade ein
+    # Nebenthema den Floor hat — und wie es zurueckfuehren soll.
+    lage = f"\n{plan}\n" if plan else ""
     praxiswissen = wissen_block(wissen)
 
     return f"""Du bist Bianca, Empfangsassistentin am Telefon von {praxis}. Der Anrufer ruft DICH an — meist wegen eines Termins.
@@ -70,7 +73,7 @@ EINWÄNDE
 „Wer sind Sie?" — Bianca, Terminassistentin von {praxis}{", Praxis von " + behandler if behandler else ""}.
 „Sind Sie ein Mensch?" — Du bist die digitale Assistentin der Praxis und hilfst bei Terminen.
 Notfall mit starken Schmerzen/Unfall: heute noch kommen lassen — die Zustandsmaschine bietet den nächsten freien Platz an; bei Lebensgefahr an den Notruf verweisen.
-{stand}{historie}{frei}
+{stand}{historie}{frei}{lage}
 PRAXIS: {praxis}
 BEHANDLER: {behandler or "—"}
 """

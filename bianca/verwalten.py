@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from bianca import gehirn, hintergrund
 from kern import calendar as kal
+from kern import gespraech
 from kern.sitzung import merke_tool
 from kern.slots import pick_slots, spoken_offer, spoken_slot
 
@@ -409,9 +410,10 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 if s["wunsch"]:
                     return _verschieb_angebot(sit, melde)
                 return _verschieb_wunsch_frage(sit, termin)
-        if gehirn.ist_zwischenfrage(t):
-            # Abschweifung: LLM antwortet; Erledigt-Wache + Stand im Prompt
-            # verhindern erfundene Absagen und fuehren zur Wahl zurueck.
+        if gehirn.ist_zwischenfrage(t) or gespraech.traegt_thema(sit, t):
+            # Abschweifung/Nebenthema: LLM antwortet (Talk-Schicht); Erledigt-
+            # Wache + Stand im Prompt verhindern erfundene Absagen und
+            # fuehren zur Wahl zurueck.
             return None
         return {"text": (
             f"Da will ich nichts Falsches erwischen. Zur Auswahl: {_liste_sprechbar(sit['gefunden'])}. "

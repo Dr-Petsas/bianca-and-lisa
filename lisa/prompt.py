@@ -8,7 +8,7 @@ from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
                   sprache: str = "de", termine_text: str = "", slots_text: str = "",
-                  wissen: dict | None = None) -> str:
+                  wissen: dict | None = None, plan: str = "") -> str:
     auftrag_gerahmt = rahme_auftrag(auftrag) + identitaets_rahmen(praxis, behandler)
     praxiswissen = wissen_block(wissen)
     termin_logik = ""
@@ -35,6 +35,9 @@ Sagt er etwas Besonderes zu einem bestehenden Termin: note_appointment.
 
     historie = f"\nBEKANNTE TERMINE DES PATIENTEN\n{termine_text}\n" if termine_text else ""
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
+    # Talk-Schicht (kern/gespraech.py): hat gerade ein Nebenthema den Floor,
+    # steht hier, wie frei dieser Zug sein darf und wie es zurueckgeht.
+    lage = f"\n{plan}\n" if plan else ""
 
     return f"""Du bist Lisa, Telefonassistentin einer Zahnarztpraxis.
 WELCHE Praxis du vertrittst, steht in der Identität des Auftrags — stelle dich immer mit genau dieser Praxis vor und nenne niemals eine andere Praxis oder einen anderen Arzt.
@@ -82,7 +85,7 @@ EINWÄNDE
 WERKZEUGE
 Nur die Kalender-Werkzeuge unten. IDs kommen aus der Sitzung — du erfindest keine.
 {termin_logik}
-{historie}{frei}
+{historie}{frei}{lage}
 GESPRÄCHSPARTNER: {patient or "der Patient"}
 PRAXIS: {praxis}
 BEHANDLER (nur wenn nötig): {behandler or "—"}

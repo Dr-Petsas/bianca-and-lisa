@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from bianca import gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import calendar as kal
+from kern import gespraech
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
@@ -462,6 +463,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # Frisch gebucht — aber "sagen Sie ihn doch wieder ab" / "wann war
         # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.
         neu = gehirn.einsammeln(sit, t)
+        sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
         if s["modus"] in {"absagen", "verschieben", "auskunft"}:
             sit["gefundenKey"] = ""  # Bestand frisch laden, der neue Termin zaehlt mit
             return verwalten.zug(sit, t, neu, melde)
@@ -484,6 +486,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _readback(sit)
 
     neu = gehirn.einsammeln(sit, t)
+    sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
     # eigenen deterministischen Fluss.
@@ -514,7 +517,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit.pop("angebotKalender", None)
             s["frage"] = "wunsch"
             return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
-        elif s["phase"] == "bestaetigen" and not gehirn.ist_zwischenfrage(t):
+        elif (s["phase"] == "bestaetigen" and not gehirn.ist_zwischenfrage(t)
+              and not gespraech.traegt_thema(sit, t)):
             # Unklare Antwort auf "Soll ich das so eintragen?" bleibt
             # DETERMINISTISCH: das LLM erfand hier sonst Erledigt-Meldungen,
             # und der Frage-Anker stellte die Frage danach ERNEUT — genau die
@@ -538,11 +542,16 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     fid, frage = gehirn.naechste_frage(sit)
     if fid:
-        if gehirn.ist_zwischenfrage(t):
-            # Echte Zwischenfrage/Abschweifung ("Was kostet das?"): das LLM
-            # antwortet natürlich, die Ernte aus diesem Satz ist gesichert,
-            # der Frage-Anker stellt danach die offene Frage — zählt NIE als
-            # Leerlauf (Chef 27.08.: "Abschweifungen müssen erlaubt sein").
+        if gehirn.ist_zwischenfrage(t) or (
+            not neu and fid != "telefon_check" and gespraech.traegt_thema(sit, t)
+        ):
+            # Echte Zwischenfrage/Abschweifung ("Was kostet das?") ODER ein
+            # erzaehltes Nebenthema OHNE Ernte ("Meine Tochter heiratet!"):
+            # das LLM antwortet natürlich (Talk-Schicht), zurueckgefuehrt
+            # wird ueber Floor/Anker — zählt NIE als Leerlauf (Chef 27.08.:
+            # "Abschweifungen müssen erlaubt sein"). Brachte der Satz Ernte,
+            # macht die Maschine normal weiter; die Nummern-Rückbestätigung
+            # (telefon_check) bleibt IMMER deterministisch.
             s["frage"] = fid
             return None
         if not neu and s["frage"] == fid:

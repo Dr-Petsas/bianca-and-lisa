@@ -14,7 +14,7 @@ from typing import Any
 from bianca import flow, gehirn, session
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
-from kern import llm, zuege
+from kern import gespraech, llm, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
@@ -110,7 +110,19 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
     return frage if fid2 == fid else ""
 
 
-def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False) -> str:
+def _vorige_antwort(msgs: list[dict]) -> str:
+    """Die VORIGE Assistenten-Antwort (die letzte ist der frische LLM-Text)."""
+    n = 0
+    for m in reversed(msgs or []):
+        if m.get("role") == "assistant":
+            n += 1
+            if n == 2:
+                return _s(m.get("content"))
+    return ""
+
+
+def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False,
+                 floor: str = gespraech.JOB) -> str:
     """LLM-Antworten auf dem Buchungspfad absichern: erfundene Angebote
     durch echte ersetzen, danach die offene Sammler-Frage wieder verankern."""
     s = sit.get("sammler") or {}
@@ -145,7 +157,27 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False) 
     if gestrichen != t:
         t = gestrichen
 
-    # 3) Frage-Anker: die offene Pflichtfrage muss am Zugende stehen.
+    # 3) Frage-Anker: die offene Pflichtfrage muss am Zugende stehen —
+    #    ABER nicht auf dem Talk-Floor (Chef 27.08.2026: Abschweifen ohne
+    #    den Faden zu verlieren, ohne nervende Wiederholungen). Solange der
+    #    Anrufer ein Thema zieht, haelt der Buchungs-Stand im Prompt die
+    #    Spur; zurueckgefuehrt wird beim Floor "zurueck"/"blended".
+    #    Haengt das Modell die Job-Frage TROTZDEM an (Probe 27.08.2026:
+    #    "... alles Liebe. Worum geht es bei Ihrem Besuch?"), wird sie hier
+    #    abgeschnitten — im Talk-Zug gehoert der Mund dem Thema.
+    #    Leergelaufene Antworten fallen weiter unten in den Frage-Rueckfall.
+    if floor == gespraech.TALK and t:
+        fid_talk = _s(s.get("frage"))
+        kern_talk = _FRAGE_KERN.get(fid_talk)
+        if fid_talk and kern_talk:
+            saetze = _SATZ_ENDE_RE.split(t)
+            while len(saetze) > 1 and saetze[-1].rstrip().endswith("?") \
+                    and re.search(kern_talk, saetze[-1], re.I):
+                saetze.pop()
+            gekuerzt = " ".join(x for x in saetze if x).strip()
+            if gekuerzt:
+                t = gekuerzt
+        return t
     fid = _s(s.get("frage"))
     kern = _FRAGE_KERN.get(fid)
     if fid and kern and not re.search(kern, t, re.I):
@@ -153,6 +185,11 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False) 
         if saetze and saetze[-1].rstrip().endswith("?"):
             saetze = saetze[:-1]  # fremde Frage weicht der offenen Frage
         frage = _kanonische_frage(sit, fid)
+        # Anti-Wiederholung: dieselbe Frage nicht wortgleich nachschieben,
+        # wenn schon die VORIGE Antwort mit genau ihr endete (live 27.08.:
+        # "Wie ist Ihre Handynummer?" kam dreimal in Folge).
+        if frage and _vorige_antwort(sit.get("messages") or []).endswith(frage):
+            frage = ""
         if frage:
             t = " ".join([x for x in saetze if x] + [frage]).strip()
     if not t:
@@ -199,7 +236,21 @@ def _termine_zeile(sit: dict) -> str:
     return "Kommend: " + "; ".join(x.get("label") or "" for x in up[:4] if isinstance(x, dict))
 
 
-def system_prompt_aktuell(sit: dict) -> str:
+def _job_aktiv(sit: dict) -> bool:
+    """Laeuft gerade eine Buchung/Verwaltung (dann zaehlt Ernte als Task)?"""
+    s = sit.get("sammler") or {}
+    return (s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"}
+            and s.get("phase") not in {"gebucht", "fertig"})
+
+
+def _offene_frage(sit: dict) -> str:
+    """Die offene Pflichtfrage des Sammlers als Satz — '' wenn keine offen."""
+    s = sit.get("sammler") or {}
+    fid = _s(s.get("frage"))
+    return _kanonische_frage(sit, fid) if fid else ""
+
+
+def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
     tenant = sit["tenant"]
     return system_prompt(
         praxis=_s(tenant.get("praxisName")),
@@ -209,6 +260,7 @@ def system_prompt_aktuell(sit: dict) -> str:
         termine_text=_termine_zeile(sit),
         slots_text=slots_zeile(sit.get("offered") or []),
         wissen=tenant.get("wissen"),
+        plan=plan,
     )
 
 
@@ -234,16 +286,28 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
-    if fl and _s(fl.get("text")):
+    job_sprach = bool(fl and _s(fl.get("text")))
+    # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am
+    # Sammler/Fluss aendert sie nichts, sie entscheidet nur, wie frei das
+    # LLM gleich sprechen darf und ob der Frage-Anker feuert.
+    route = gespraech.routen(
+        sit, text_in,
+        ernte=sit.pop("ernteZuletzt", []) or [],
+        job_gesprochen=job_sprach,
+        job_aktiv=_job_aktiv(sit),
+    )
+    if job_sprach:
         if "?" in fl["text"]:
             sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
         msgs.append({"role": "assistant", "content": fl["text"]})
         sit["messages"] = msgs
+        gespraech.nach_antwort(sit)
         return {"text": fl["text"], "book": fl.get("book")}
 
-    # 2) Modell-Pfad: Stand der Buchung frisch in den Systemprompt.
+    # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.
+    plan = gespraech.plan_block(route, offene_frage=_offene_frage(sit), stimme="bianca")
     if msgs and msgs[0].get("role") == "system":
-        msgs[0]["content"] = system_prompt_aktuell(sit)
+        msgs[0]["content"] = system_prompt_aktuell(sit, plan=plan)
     # Kein Stream-Vorab, solange Buchung ODER Verwaltung offen ist: die Wachen
     # unten (_nachbessern) duerfen den Text noch umbauen — ein schon
     # gesprochener erster Satz waere dann falsch. Nur freies Geplauder streamt.
@@ -254,6 +318,12 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben,
     # sonst reisst der Anfahrtstext mitten im Wort ab (E2E 27.08.2026).
     extra = {"max_tokens": kern_wissen.LANGTEXT_MAX_TOKENS} if kern_wissen.braucht_langtext(text_in) else {}
+    # Talk-/Brueckenzuege duerfen laenger und waermer sein als Job-Zuege.
+    for k, v in gespraech.budget(route["floor"]).items():
+        if k == "max_tokens":
+            extra[k] = max(int(extra.get(k) or 0), int(v))
+        else:
+            extra[k] = v
     if darf_vorab:
         out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab, **extra)
     else:
@@ -268,12 +338,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     gelaufen = [_s(w.get("name")) for w in (sit.get("tools") or [])[werkzeuge_vorher:]]
     werkzeug_lief = bool(gelaufen)
     _fluss_sync(sit, gelaufen, book)
-    bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief)
+    bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief, floor=route["floor"])
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht
         text = bewacht
     sit["messages"] = msgs
+    gespraech.nach_antwort(sit)
     return {"text": text, "book": book}
 
 

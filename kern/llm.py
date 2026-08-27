@@ -20,7 +20,10 @@ def _client() -> httpx.Client:
         _CLIENT = httpx.Client(
             base_url=LLM_BASE.rstrip("/"),
             headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-            timeout=httpx.Timeout(12.0, connect=2.0),
+            # 20 s Lesezeit: Talk-Zuege (bis 240 Tokens) + kalter Prompt-Cache
+            # liefen mit 12 s in den Timeout (Talk-Probe 27.08.2026). Der
+            # Fueller ueberbrueckt Wartezeit — die Reissleine bleibt Reissleine.
+            timeout=httpx.Timeout(20.0, connect=2.0),
         )
     return _CLIENT
 
