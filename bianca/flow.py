@@ -236,9 +236,13 @@ def _grund_sprechbar(s: dict) -> str:
 def _quittung(s: dict, neu: set[str]) -> str:
     if "nachname" in neu and s["buchstabiert"]:
         return f"Danke — {s['nachname']}, notiert. "
-    if "name" in neu and s["nachname"]:
-        voll = f"{s['vorname']} {s['nachname']}".strip()
-        return f"Danke, {voll}. "
+    if "name" in neu:
+        # Mit dem VOLLEN Namen quittieren — nie mit einem halben ("Danke,
+        # Paul" klingt nach Anrede und war live 27.08.2026 auch noch falsch
+        # zugeordnet). Fehlt ein Teil, fragt die nächste Frage ihn nach.
+        if s["vorname"] and s["nachname"]:
+            return f"Danke, {s['vorname']} {s['nachname']}. "
+        return "Danke. "
     if "telefon" in neu:
         return "Prima, die Nummer habe ich. "
     if "telefonAkte" in neu:
@@ -423,6 +427,15 @@ def _eskalieren(sit: dict, fid: str) -> str:
     if fid == "buchstabieren":
         s["buchstabiert"] = True
         return ""
+    if fid == "telefon_check" and s["telefonOffen"]:
+        # Zweimal keine klare Antwort auf die Rückbestätigung, aber auch kein
+        # Nein: die vorgelesene Nummer gilt — nicht zum dritten Mal fragen
+        # (Chef 27.08.2026: Nummer wurde mehrfach abgefragt und bestätigt).
+        s["telefon"] = s["telefonOffen"]
+        s["telefonOk"] = True
+        s["telefonOffen"] = ""
+        s["telefonTeil"] = ""
+        return "Dann nehme ich die Nummer so auf. "
     if fid in {"telefon", "telefon_check"}:
         s["telefonAkte"] = True
         s["telefonOffen"] = ""
@@ -456,8 +469,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     if s["phase"] == "bestaetigen":
         if gehirn.ist_ja(t):
+            sit.pop("bestaetigenUnklar", None)
             return _buchen(sit, melde)
         if gehirn.ist_nein(t):
+            sit.pop("bestaetigenUnklar", None)
             s["phase"] = ""
             s["slotIso"] = ""
             return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
@@ -499,6 +514,19 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit.pop("angebotKalender", None)
             s["frage"] = "wunsch"
             return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
+        elif s["phase"] == "bestaetigen" and not gehirn.ist_zwischenfrage(t):
+            # Unklare Antwort auf "Soll ich das so eintragen?" bleibt
+            # DETERMINISTISCH: das LLM erfand hier sonst Erledigt-Meldungen,
+            # und der Frage-Anker stellte die Frage danach ERNEUT — genau die
+            # Doppelfrage vom 27.08.2026. Beim zweiten unklaren, nicht
+            # verneinenden Anlauf gilt der Termin als gewollt (der Anrufer
+            # hat zweimal nicht widersprochen; die SMS bestätigt ihn eh).
+            z = int(sit.get("bestaetigenUnklar") or 0) + 1
+            sit["bestaetigenUnklar"] = z
+            if z <= 1:
+                return {"text": "Entschuldigung, das habe ich akustisch nicht verstanden — soll ich den Termin so eintragen? Ein kurzes Ja genügt."}
+            sit.pop("bestaetigenUnklar", None)
+            return _buchen(sit, melde)
         else:
             return None  # Zwischenfrage — LLM antwortet, Status hält die Spur
 
@@ -522,6 +550,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             zaehler = sit.setdefault("frageLeer", {})
             zaehler[fid] = int(zaehler.get(fid) or 0) + 1
             if zaehler[fid] <= 1:
+                if fid == "telefon_check":
+                    # Rückbestätigung bleibt deterministisch: das LLM erfand
+                    # hier "die Nummer habe ich notiert" UND der Anker fragte
+                    # danach erneut — die Doppelfrage vom 27.08.2026.
+                    return {"text": "Entschuldigung, kurz zur Sicherheit: Stimmt die Nummer so? Ein kurzes Ja oder Nein genügt."}
                 # Erster Leerlauf: das LLM antwortet kurz,
                 # der Stand im Prompt führt zur offenen Frage zurück.
                 return None

@@ -114,6 +114,8 @@ def deute(text: str) -> dict[str, Any] | None:
     letters: list[str] = []
     woerter: list[str] = []  # zusammenhängende Nicht-Buchstabier-Wörter
     fremd = 0
+    kette = False   # sind wir gerade IN einer Buchstabier-Folge?
+    fuell_folge = 0  # wie viele Füllwörter seit dem letzten Buchstaben?
     i = 0
     while i < len(toks):
         tok = toks[i]
@@ -149,18 +151,37 @@ def deute(text: str) -> dict[str, Any] | None:
         l = _als_buchstabe(tok)
         if l:
             letters.append(l)
+            kette = True
+            fuell_folge = 0
             i += 1
             continue
         if tok in _TAFEL and len(tok) > 1:
-            letters.append(_TAFEL[tok])
+            # Ein Tafel-Wort OHNE "wie" zählt nur INNERHALB einer
+            # Buchstabier-Kette ("Anton Berta Cäsar") oder wenn direkt das
+            # nächste Token weiterbuchstabiert. Sonst ist es ein normales
+            # Wort: "… der Vorname ist Paul" hängte live (27.08.2026) ein
+            # P an den buchstabierten Namen ("Panzerp").
+            im_fluss = kette and fuell_folge <= 1
+            nxt_buchstabig = bool(_als_buchstabe(nxt)) or (nxt in _TAFEL and len(nxt) > 1) or nxt == "wie"
+            if im_fluss or nxt_buchstabig:
+                letters.append(_TAFEL[tok])
+                kette = True
+                fuell_folge = 0
+                i += 1
+                continue
+            woerter.append(tok)
+            fremd += 1
             i += 1
             continue
         if tok in _FUELL:
+            fuell_folge += 1
             i += 1
             continue
         if tok.isalpha() and len(tok) >= 2:
             woerter.append(tok)
         fremd += 1
+        kette = False
+        fuell_folge = 0
         i += 1
 
     if len(letters) < 2:

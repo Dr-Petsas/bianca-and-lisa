@@ -55,6 +55,41 @@ _FRAGE_KERN = {
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
+# Wiederhol-Wache (Chef 27.08.2026: "wenn der String Behandler im Gehirn
+# gefüllt ist, ist der Wert halt da — fertig"): Fragen des Modells nach
+# Feldern, die der Sammler LÄNGST hat, werden gestrichen. Der Frage-Anker
+# hängt danach die wirklich offene Frage an.
+_GEFUELLT_WACHEN: list[tuple[re.Pattern, Any]] = [
+    (re.compile(r"handynummer|telefonnummer|welcher\s+nummer|ihre\s+nummer", re.I),
+     lambda s: bool(s.get("telefonOk") or s.get("telefonAkte"))),
+    (re.compile(r"bei\s+(welchem|wem)|welche[rm]?\s+(behandler|arzt|ärztin|aerztin)|zu\s+welchem\s+(arzt|behandler)", re.I),
+     lambda s: bool((s.get("arzt") or {}).get("calendarId") or (s.get("arzt") or {}).get("typ") == "egal")),
+    (re.compile(r"wie\s+(heißen|heissen)\s+sie|wie\s+(ist|lautet)\s+ihr\s+(vor.{0,6}|nach)?name|ihren\s+namen", re.I),
+     lambda s: bool(s.get("vorname") and s.get("nachname"))),
+    (re.compile(r"worum\s+geht\s+es|welche[rm]?\s+grund|was\s+für\s+ein\s+anliegen", re.I),
+     lambda s: bool(s.get("grund"))),
+    (re.compile(r"schon\s+(ein)?mal\s+bei\s+uns", re.I),
+     lambda s: s.get("warSchonMal") is not None),
+    (re.compile(r"buchstabier", re.I),
+     lambda s: bool(s.get("buchstabiert"))),
+    (re.compile(r"wann\s+passt\s+es\s+ihnen", re.I),
+     lambda s: s.get("wunsch") is not None),
+]
+
+
+def _gefuellte_fragen_streichen(s: dict, text: str) -> str:
+    """Sätze streichen, die ein bereits gefülltes Sammler-Feld erfragen."""
+    saetze = _SATZ_ENDE_RE.split(text)
+    behalten = []
+    for satz in saetze:
+        frage_satz = "?" in satz
+        raus = frage_satz and any(
+            cre.search(satz) and gefuellt(s) for cre, gefuellt in _GEFUELLT_WACHEN
+        )
+        if not raus:
+            behalten.append(satz)
+    return " ".join(x for x in behalten if x).strip()
+
 # Behauptet das Modell eine Absage/Verschiebung, ohne dass ein Werkzeug lief?
 # "sage ... ab" darf einen kompletten gesprochenen Termin ueberspannen
 # ("ich sage den Termin morgen um zehn Uhr dreissig bei Doktor Petsas ab").
@@ -104,7 +139,13 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False) 
             return ang["text"]
         return "Einen Moment, ich schaue in den Kalender."
 
-    # 2) Frage-Anker: die offene Pflichtfrage muss am Zugende stehen.
+    # 2) Wiederhol-Wache: Fragen nach längst gefüllten Feldern fliegen raus
+    #    (Chef 27.08.2026: Telefonnummer wurde mehrfach erfragt/bestätigt).
+    gestrichen = _gefuellte_fragen_streichen(s, t)
+    if gestrichen != t:
+        t = gestrichen
+
+    # 3) Frage-Anker: die offene Pflichtfrage muss am Zugende stehen.
     fid = _s(s.get("frage"))
     kern = _FRAGE_KERN.get(fid)
     if fid and kern and not re.search(kern, t, re.I):
@@ -114,6 +155,12 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False) 
         frage = _kanonische_frage(sit, fid)
         if frage:
             t = " ".join([x for x in saetze if x] + [frage]).strip()
+    if not t:
+        fid2, frage2 = gehirn.naechste_frage(sit)
+        if fid2:
+            s["frage"] = fid2
+            return frage2
+        return "Was kann ich sonst noch für Sie tun?"
     return t
 
 

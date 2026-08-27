@@ -76,26 +76,49 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
         return None
     t = raw.lower()
     doktor_kontext = bool(_DOKTOR_RE.search(t))
+
+    # Korrektur-Sätze ("nein, nicht Doktor Patrikis — ich wollte zu Doktor
+    # Petsas", Chef 27.08.2026): der VERNEINTE Name fliegt vor dem Abgleich
+    # raus, sonst gewinnt er den Gleichstand und Bianca wechselt nicht.
+    nachnamen = [n for n in (_nachname(c.get("name")) for c in tenant.get("calendars") or []) if n]
+    if nachnamen:
+        t = re.sub(
+            r"\bnicht\s+(?:zu[mr]?\s+|bei\s+)?(?:dr\.?\s*|doktor\s+|prof\.?\s*|professor\s+|herrn?\s+|frau\s+)?(?:"
+            + "|".join(re.escape(n) for n in nachnamen) + r")\b",
+            " ", t,
+        )
+
     # Ein konkreter Name schlägt "egal"-Floskeln im selben Satz.
     tokens = [w for w in re.sub(r"[^\wäöüß]+", " ", t).split() if w not in _STOP and len(w) >= 3]
-    best, roh_best, score = None, 0.0, 0.0
+    kandidaten: list[tuple[dict, float, float, int]] = []  # (cal, roh, score, position)
     for cal in tenant.get("calendars") or []:
         ziel = _nachname(cal.get("name"))
         if not ziel:
             continue
-        for tok in tokens:
+        roh_b, score_b, pos_b = 0.0, 0.0, -1
+        for pos, tok in enumerate(tokens):
             roh = SequenceMatcher(None, tok, ziel).ratio()
             # Klang-Faltung: "Petzers" ~ "Petsas" liegt roh bei 0,62 — nach
             # Faltung darüber. Gleicher Wortanfang gibt einen Namens-Bonus.
             r = max(roh, SequenceMatcher(None, _klang(tok), _klang(ziel)).ratio())
             if len(tok) >= 4 and tok[:3] == ziel[:3]:
                 r += 0.1
-            if r > score:
-                best, roh_best, score = cal, roh, r
+            if r > score_b:
+                roh_b, score_b, pos_b = roh, r, pos
+        if score_b > 0:
+            kandidaten.append((cal, roh_b, score_b, pos_b))
     # Sicherer Treffer: roh eindeutig. Toleranter Treffer (Klang/Anfang) nur,
     # wenn der Satz erkennbar von einem Arzt spricht — sonst würde ein
     # Patienten-Vorname wie "Peter" auf "Petsas" springen.
-    if best and (roh_best >= 0.72 or (score >= 0.72 and doktor_kontext)):
+    tragfaehig = [k for k in kandidaten if k[1] >= 0.72 or (k[2] >= 0.72 and doktor_kontext)]
+    if tragfaehig:
+        korrektur = bool(re.search(r"\bnicht\b|\bsondern\b|\bstatt\b|\blieber\b|vertan|meinte|falsch|verwechselt", t))
+        if korrektur and len(tragfaehig) > 1:
+            # Korrektur-Satz mit zwei Namen: das Gemeinte steht HINTEN
+            # ("nicht Petzers, lieber Patrikis" — Chef 27.08.2026).
+            best = max(tragfaehig, key=lambda k: (k[3], k[2]))[0]
+        else:
+            best = max(tragfaehig, key=lambda k: k[2])[0]
         return {"typ": "genannt", "calendarId": _s(best.get("id")), "calendarName": _s(best.get("name"))}
     if _UNBEKANNT_RE.search(t):
         return {"typ": "unbekannt"}

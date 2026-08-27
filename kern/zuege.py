@@ -71,11 +71,19 @@ def run_tool(sit: dict, name: str, args: dict) -> dict[str, Any]:
 def auto_notiz(sit: dict, *, force: bool = False) -> dict[str, Any]:
     if sit.get("noteWritten") and not force:
         return sit.get("lastNote") or {}
+    if force and sit.get("hangupNotiert"):
+        # Doppelter Auflege-Aufruf (Client-Retry/Reload) schrieb live am
+        # 27.08.2026 die Notiz ZWEIMAL in den Termin — einmal reicht.
+        return sit.get("lastNote") or {}
     if not notes.braucht_notiz(sit):
         return {}
-    # Beim Auflegen (force) kommt das volle Telefonprotokoll in die Terminnotiz;
-    # doppelte Zeilen filtert masAppointmentNote serverseitig (zeilen-idempotent).
+    if force:
+        sit["hangupNotiert"] = True
+    # Minimale, deterministische Notiz (Chef 27.08.2026) — identische Zeilen
+    # filtert masAppointmentNote serverseitig (zeilen-idempotent) zusätzlich.
     text = notes.termin_notiz(sit) if force else notes.zusammenfassung(sit)
+    if not _s(text):
+        return {}
     result = calendar.note_appointment(
         sit["tenant"],
         sit.get("booking") or {},

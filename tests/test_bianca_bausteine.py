@@ -1079,27 +1079,236 @@ def test_notfall_im_fluss_bietet_dicht_an():
     assert [o["iso"] for o in sit.get("offered") or []] == dicht
 
 
-def test_termin_notiz_kurzfassung_statt_transkript():
-    """Chef 27.08.: kein Volltranskript mehr im Termin — nach dem Auflegen
-    kommt nur die LLM-Kurzfassung in die Notiz."""
-    from kern import llm as llmmod
+def test_termin_notiz_minimal_ohne_datenkern():
+    """Chef 27.08. (zweite Runde): NUR noch der eine Satz mit Grund plus
+    Auffälligem — kein Datenkern, keine Kurzfassung, kein LLM."""
+    sit = _sit()
+    sit["stimme"] = "Bianca"
+    sit["lastBook"] = {"name": "book_slot", "booked": True}
+    s = gehirn.sammler(sit)
+    s["grund"] = "akute Beschwerden/Notfall"
+    s["grundWortlaut"] = "Ich habe ganz dolle Zahnschmerzen"
+    sit["zuege"] = [
+        {"textIn": "Ich habe ganz dolle Zahnschmerzen", "text": "Waren Sie schon mal bei uns?"},
+        {"textIn": "Nein", "text": "Der Termin morgen um dreizehn Uhr fünfzehn ist eingetragen."},
+    ]
     from kern import notes
-    echt = llmmod.chat
-    llmmod.chat = lambda messages, tools=None, **kw: {
-        "ok": True,
-        "text": "Neupatient mit akuten Zahnschmerzen.\nTermin gebucht: morgen 13:15 bei Dr. Petsas.",
-    }
-    try:
-        sit = _sit()
-        sit["stimme"] = "Bianca"
-        sit["lastBook"] = {"name": "book_slot", "booked": True}
-        sit["zuege"] = [
-            {"textIn": "Ich habe Zahnschmerzen", "text": "Waren Sie schon mal bei uns?"},
-            {"textIn": "Nein", "text": "Der Termin morgen um dreizehn Uhr fünfzehn ist eingetragen."},
-        ]
-        notiz = notes.termin_notiz(sit)
-        assert "Kurzfassung" in notiz and "Telefonprotokoll" not in notiz
-        assert "Zahnschmerzen" in notiz
-        assert "Waren Sie schon mal bei uns?" not in notiz  # kein Wortlaut mehr
-    finally:
-        llmmod.chat = echt
+    notiz = notes.termin_notiz(sit)
+    zeilen = notiz.splitlines()
+    assert zeilen[0].startswith("telefonisch Termin vereinbart wegen ")
+    assert "Zahnschmerzen" in zeilen[0]
+    assert zeilen[0].endswith("// Bianca")
+    assert "Kurzfassung" not in notiz and "Telefonprotokoll" not in notiz
+    assert "Waren Sie schon mal bei uns?" not in notiz  # kein Dialog-Wortlaut
+    # "Schmerzen" ist ein Auffälligkeits-Stichwort — als Patienten-O-Ton ok:
+    for zeile in zeilen[1:]:
+        assert zeile.startswith("Patient erwähnt: ") and zeile.endswith("// Bianca")
+
+
+# --- Chef 27.08. (Runde 3): Namen sauber trennen, Korrekturen sofort -------
+
+def test_einzelner_vorname_wird_vorname():
+    """"Paul?" auf die Namensfrage ist ein VORNAME — live wurde daraus
+    'Herr Paul' (als Nachname geführt und falsch angesprochen)."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "name"
+    gehirn.einsammeln(sit, "Paul?")
+    assert s["vorname"] == "Paul" and not s["nachname"]
+    fid, frage = gehirn.naechste_frage(sit)
+    # Es fehlt jetzt der NACHNAME — nicht noch einmal der volle Name.
+    assert s["warSchonMal"] is None or fid  # naechste_frage läuft
+    s["warSchonMal"] = False
+    s["grund"] = "Kontrolluntersuchung"
+    s["wunsch"] = {}
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "nachname" and "Nachname" in frage
+
+
+def test_explizite_vor_und_nachnamen_ansage():
+    """"Nee, der Vorname ist Paul und der Nachname ist Panzer" — live wurde
+    'Nee Paul' geerntet."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "vorname"
+    s["nachname"] = "Paul"  # der falsche Stand aus dem Live-Gespräch
+    gehirn.einsammeln(sit, "Nee, der Vorname ist Paul und der Nachname ist Panzer")
+    assert s["vorname"] == "Paul"
+    assert s["nachname"] == "Panzer"
+
+
+def test_buchstabieren_frisst_keine_nachbarworte():
+    """"... P-A-N-Z-E-R. Der Vorname ist Paul" ergab live 'Panzerp' — das P
+    von 'Paul' (Buchstabier-Tafelwort) klebte am Namen."""
+    d = buchstaben.deute("Also der Nachname ist Panzer. P-A-N-Z-E-R. Der Vorname ist Paul")
+    assert d and d["name"] == "Panzer"
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    gehirn.einsammeln(sit, "Also der Nachname ist Panzer. P-A-N-Z-E-R. Der Vorname ist Paul")
+    assert s["nachname"] == "Panzer" and s["buchstabiert"]
+    assert s["vorname"] == "Paul"
+
+
+def test_buchstabieren_nachgesprochen_in_silben():
+    """"MATTA VATTA" statt Buchstabierung: übernehmen statt auf dem alten
+    Hörfehler ('Pidoq') zu beharren."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    s["nachname"] = "Pidoq"
+    gehirn.einsammeln(sit, "MATTA VATTA")
+    assert s["nachname"] == "Mattavatta" and s["buchstabiert"]
+
+
+def test_name_korrektur_heisse_x_nicht_y():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["vorname"], s["nachname"] = "Paul", "Müller"
+    s["patientId"], s["bekannt"] = "p77", True
+    gehirn.einsammeln(sit, "Das ist falsch, ich heiße Meier nicht Müller")
+    assert s["nachname"] == "Meier"
+    # Kartei-Treffer ist mit dem korrigierten Namen hinfällig:
+    assert not s["patientId"] and not s["bekannt"]
+
+
+def test_name_korrektur_nicht_x_sondern_y():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["vorname"], s["nachname"] = "Paul", "Müller"
+    gehirn.einsammeln(sit, "Nicht Müller, sondern Meier")
+    assert s["nachname"] == "Meier"
+
+
+def test_arzt_korrektur_nicht_patrikis_sondern_petsas():
+    """"Nein, nicht Dr. Patrikis — ich habe mich vertan, ich wollte zu
+    Dr. Petsas": der Behandler wird SOFORT umgestellt (Chef 27.08.)."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["arzt"] = {"typ": "genannt", "calendarId": "RHYdoQFD7oAhqIepLzC2", "calendarName": "Dr. Patrikis"}
+    gehirn.einsammeln(sit, "Nein, nicht Doktor Patrikis, ich habe mich vertan — ich wollte zu Doktor Petsas.")
+    assert (s["arzt"] or {}).get("calendarName") == "Dr. Petsas"
+    # Und der Patientennamen-Speicher bleibt unangetastet (Arzt-Kontext!):
+    assert not s["nachname"]
+
+
+def test_arzt_korrektur_erst_richtig_dann_verneint():
+    """"Zu Petsas bitte, nicht zu Patrikis" — der verneinte Name fliegt raus."""
+    from bianca import arzt as arztmod
+    sit = _sit()
+    d = arztmod.deute("Zu Doktor Petsas bitte, nicht zu Doktor Patrikis", sit["tenant"])
+    assert d and d.get("calendarName") == "Dr. Petsas"
+
+
+def test_telefon_korrektur_nummer_war_falsch():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["telefon"], s["telefonOk"] = "01776004600", True
+    neu = gehirn.einsammeln(sit, "Die Nummer war falsch, die stimmt nicht.")
+    assert "telefonKorrektur" in neu
+    assert not s["telefon"] and not s["telefonOk"]
+
+
+def test_jupp_und_hier_nein():
+    assert gehirn.ist_ja("Jupp")
+    assert gehirn.ist_ja("Joa, passt schon")
+    assert gehirn.ist_nein("Äh, hier nein")
+    assert gehirn.ist_nein("Ich glaube nein.")
+
+
+def test_telefon_check_bleibt_deterministisch():
+    """Unklare Antwort auf die Nummern-Rückbestätigung geht NICHT ans LLM
+    (das erfand 'die habe ich notiert' und der Anker fragte doppelt)."""
+    sit = _sit()
+    sit["slotVorrat"] = [_iso_in(3, 9, 0), _iso_in(4, 10, 30), _iso_in(5, 14, 0)]
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "grund": "Kontrolluntersuchung",
+              "wunsch": {}, "vorname": "Pinocchio", "nachname": "Mattavatta",
+              "buchstabiert": True, "telefonOffen": "01776004600", "frage": "telefon_check"})
+    r = flow.zug(sit, "Wird schon stimmen irgendwie")
+    assert r and "Stimmt die Nummer so" in r["text"]
+    # Zweiter unklarer, nicht verneinender Anlauf: Nummer gilt.
+    r2 = flow.zug(sit, "Mhm, wird schon stimmen")
+    assert s["telefonOk"] and s["telefon"] == "01776004600"
+    assert r2 and "Stimmt das so" not in (r2.get("text") or "")
+
+
+def test_besuchsgrund_mapping_auf_behandlerliste():
+    """Wurzelbehandlung/PZR/Reparatur werden auf die Besuchsgrund-Liste des
+    Behandlers gemappt — 'klein' gewinnt, im Zweifel Kontrolle/Besprechung."""
+    from bianca import besuchsgrund
+    tenant = _sit()["tenant"]
+    # PZR gibt es in der Liste (PRO professionelle Zahnreinigung):
+    kern, vm = besuchsgrund.deute(tenant, "Ich brauche mal wieder eine Zahnreinigung")
+    assert kern == "professionelle Zahnreinigung"
+    assert vm and "Zahnreinigung" in vm["name"]
+    # Wurzelbehandlung führt der Mandant nicht -> Zweifelsfall Kontrolle:
+    kern, vm = besuchsgrund.deute(tenant, "Ich brauche eine Wurzelbehandlung")
+    assert kern == "Wurzelbehandlung"
+    assert vm and "Kontroll" in vm["name"]
+    # Kaputte Prothese ist eine Reparatur -> hier: ZE Besprechung:
+    kern, vm = besuchsgrund.deute(tenant, "Meine Prothese ist gebrochen")
+    assert kern == "Reparatur Zahnersatz"
+    assert vm and vm["name"] == "ZE Besprechung"
+
+
+def test_besuchsgrund_klein_praeferenz():
+    from bianca import besuchsgrund
+    tenant = {"visitMotives": [
+        {"id": "1", "name": "WK groß"},
+        {"id": "2", "name": "WK klein"},
+        {"id": "3", "name": "PZR"},
+        {"id": "4", "name": "Reparatur (klein)"},
+        {"id": "5", "name": "Reparatur (groß)"},
+        {"id": "6", "name": "Kontrolltermin"},
+    ]}
+    kern, vm = besuchsgrund.deute(tenant, "Ich brauche eine Wurzelbehandlung")
+    assert vm and vm["name"] == "WK klein"
+    kern, vm = besuchsgrund.deute(tenant, "Meine Prothese ist gebrochen")
+    assert vm and vm["name"] == "Reparatur (klein)"
+    kern, vm = besuchsgrund.deute(tenant, "Einmal Zahnreinigung bitte")
+    assert vm and vm["name"] == "PZR"
+
+
+def test_grund_wortlaut_landet_im_sammler():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "grund"
+    gehirn.einsammeln(sit, "Ich wollte mir die Fingernägel lackieren lassen")
+    assert s["grundWortlaut"].startswith("Ich wollte mir die Fingernägel")
+    assert s["motivName"]  # Zweifelsfall-Motiv ist gesetzt
+
+
+def test_wiederhol_wache_streicht_gefuellte_fragen():
+    from bianca import agent as bagent
+    s = {"telefonOk": True, "vorname": "Paul", "nachname": "Panzer",
+         "arzt": {"typ": "genannt", "calendarId": "x"}, "grund": "Kontrolle",
+         "warSchonMal": True, "buchstabiert": True, "wunsch": {}}
+    text = ("Das kläre ich gern. Unter welcher Handynummer erreichen wir Sie? "
+            "Und bei welchem Behandler waren Sie zuletzt?")
+    raus = bagent._gefuellte_fragen_streichen(s, text)
+    assert "Handynummer" not in raus and "Behandler" not in raus
+    assert raus.startswith("Das kläre ich gern.")
+
+
+def test_bestaetigung_unklar_bleibt_deterministisch():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung",
+              "warSchonMal": False, "grund": "Kontrolluntersuchung", "wunsch": {},
+              "vorname": "Paul", "nachname": "Panzer", "buchstabiert": True,
+              "telefon": "01776004600", "telefonOk": True,
+              "slotIso": "2026-09-02T09:00:00+02:00"})
+    sit["offered"] = [{"iso": "2026-09-02T09:00:00+02:00", "spoken": "am Mittwoch um neun"}]
+    r = flow.zug(sit, "Hmpf, von mir aus halt")
+    # "von mir aus" ist eine Kurz-Zustimmung — sonst deterministische Rückfrage.
+    assert r is not None

@@ -19,14 +19,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
-from bianca import buchstaben, telefon
+from bianca import besuchsgrund, buchstaben, telefon
 from kern.slots import parse_slot_wish
-from kern.tenants import motiv_von
 
 TZ = ZoneInfo("Europe/Berlin")
 
 _JA_RE = re.compile(
-    r"^\s*(ja|jap|jep|jup|jo|jou|yep|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|sicher|natürlich|natuerlich)\b",
+    r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|sicher|natürlich|natuerlich)\b",
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
@@ -69,8 +68,10 @@ _ZWISCHENFRAGE_KERN_RE = re.compile(
 # "Äh, nein." / "Also ja" / "Hm, nee" — Füllwörter vor dem Ja/Nein abstreifen
 # (live 27.08.2026: "Äh, nein" wurde NICHT als Nein erkannt, die Zustands-
 # maschine blieb auf der Frage hängen und das LLM übernahm mit Fantasie).
+# "hier"/"naja" gehören dazu: "Äh, hier nein" fiel live (27.08. 18:10) durch
+# und die Schonmal-Frage kam doppelt.
 _ANLAUF_RE = re.compile(
-    r"^\s*(?:(?:äh+m*|aeh+m*|hm+|mh+m*|also|na|nun|tja|ach|oh|ähm|öhm)\b[\s,.!—-]*)+",
+    r"^\s*(?:(?:äh+m*|aeh+m*|hm+|mh+m*|also|na|naja|nun|tja|ach|och|oh|boah|puh|hier|ähm|öhm)\b[\s,.!—-]*)+",
     re.I,
 )
 
@@ -133,7 +134,62 @@ _NAME_STOP = {
     # "Auch" erzeugen (live 27.08.2026) — dito weitere Füllwörter.
     "auch", "ebenfalls", "genau", "also", "wieder", "nochmal", "eben",
     "ähm", "äh", "aeh", "aehm", "halt", "wie", "gesagt",
+    # Korrektur-Einstiege sind NIE Namen: "Nee, der Vorname ist Paul" wurde
+    # live (27.08.2026) als "Nee Paul" geerntet.
+    "nee", "nein", "nö", "noe", "ne", "doch", "falsch", "moment", "sekunde",
+    "vorname", "nachname", "familienname", "lautet",
 }
+# Gängige Vornamen (nur zur Zuordnung "ein einzelnes Wort = eher Vorname?").
+# Live 27.08.2026: die Antwort "Paul?" auf die Namensfrage wurde als NACHNAME
+# geführt und der Anrufer als "Herr Paul" angesprochen.
+_VORNAMEN = {
+    "alexander", "andreas", "anna", "anne", "anja", "antje", "barbara", "bernd",
+    "birgit", "brigitte", "carsten", "christian", "christina", "christine",
+    "claudia", "daniel", "daniela", "david", "dennis", "dieter", "dirk",
+    "dominik", "doris", "elena", "elias", "elke", "emil", "emma", "erik",
+    "eva", "felix", "finn", "florian", "frank", "franz", "frieda", "gabriele",
+    "georg", "gerhard", "gisela", "hanna", "hannah", "hans", "heike", "heinz",
+    "helga", "henry", "holger", "ingrid", "jan", "jana", "jens", "joachim",
+    "johann", "johanna", "johannes", "jonas", "julia", "julian", "jürgen",
+    "juergen", "kai", "karin", "karl", "katharina", "kathrin", "katja",
+    "kerstin", "kevin", "klaus", "kurt", "lara", "laura", "lea", "lena",
+    "leon", "leonie", "lisa", "luca", "luis", "luise", "lukas", "manfred",
+    "manuela", "marc", "marcel", "marco", "maria", "marie", "mario", "marion",
+    "markus", "martin", "martina", "mathias", "matthias", "max", "maximilian",
+    "melanie", "mia", "michael", "michaela", "mila", "monika", "moritz",
+    "nadine", "nicole", "niklas", "nina", "noah", "nora", "olaf", "oliver",
+    "otto", "patrick", "paul", "paula", "peter", "petra", "philipp", "ralf",
+    "regina", "renate", "richard", "robert", "rolf", "rudolf", "sabine",
+    "sandra", "sara", "sarah", "sebastian", "silke", "simon", "simone",
+    "sofia", "sophie", "stefan", "stefanie", "steffen", "susanne", "sven",
+    "tanja", "theo", "thomas", "thorsten", "tim", "tobias", "tom", "torsten",
+    "ulrich", "ulrike", "ursula", "uwe", "vanessa", "verena", "walter",
+    "werner", "wolfgang", "yvonne",
+}
+# Explizite Zuweisungen schlagen alles: "der Vorname ist Paul", "Panzer ist
+# der Nachname". Erfasst wird genau EIN Wort — sonst frisst der Ausdruck
+# "Paul und der Nachname ist Panzer" komplett (live 27.08.2026: "Nee Paul").
+_TEIL_VOR_RE = re.compile(
+    r"(?:der\s+|mein\s+)?vorname\s+(?:ist|lautet|wäre|waere)\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
+_TEIL_NACH_RE = re.compile(
+    r"(?:der\s+|mein\s+)?(?:nachname|familienname|zuname)\s+(?:ist|lautet|wäre|waere)\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
+_TEIL_VOR_UMGEKEHRT_RE = re.compile(
+    r"([A-Za-zÄÖÜäöüß'-]{2,})\s+(?:ist|wäre|waere)\s+(?:der\s+|mein\s+)?vorname", re.I)
+_TEIL_NACH_UMGEKEHRT_RE = re.compile(
+    r"([A-Za-zÄÖÜäöüß'-]{2,})\s+(?:ist|wäre|waere)\s+(?:der\s+|mein\s+)?(?:nachname|familienname|zuname)", re.I)
+# Korrekturen ÜBERSCHREIBEN sofort (Chef 27.08.2026: "das war falsch, ich
+# heiße Meier nicht Müller" -> Gedächtnis augenblicklich aktualisieren,
+# NIE noch einmal fragen). Neu = das Bejahte, Alt = das Verneinte.
+_NAME_FALSCH_RE = re.compile(
+    r"(?:heiße|heisse|heißen|heissen|schreibt\s+sich|name\s+ist|richtig\s+ist|richtig\s+wäre|richtig\s+waere)\s+"
+    r"([A-Za-zÄÖÜäöüß'-]{2,})\s*[,.]?\s*(?:und\s+)?nicht\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
+_NAME_SONDERN_RE = re.compile(
+    r"nicht\s+([A-Za-zÄÖÜäöüß'-]{2,})\s*[,.]?\s*sondern\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
+_KORREKTUR_KONTEXT_RE = re.compile(
+    r"falsch|vertan|verhört|verhoert|versprochen|verwechselt|korrigier|irrtum|stimmt\s+nicht|meinte", re.I)
+_TEL_FALSCH_RE = re.compile(
+    r"(?:nummer|handy|telefon)[^.!?]{0,40}(?:falsch|stimmt\s+nicht|nicht\s+richtig|verkehrt)|"
+    r"falsche\s+(?:nummer|handynummer|telefonnummer)", re.I)
 # Neupatient-/Schonmal-Floskeln sind KEINE Namen: "Ich bin neu bei Ihnen"
 # wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026). Der ganze
 # Floskel-Teilsatz fliegt VOR der Namens-Ernte raus; ein echter Name im
@@ -152,16 +208,8 @@ _AKTE_NUMMER_RE = re.compile(
     re.I,
 )
 
-# Frei Gesprochenes -> kanonischer Motiv-Kern (fuzzy gegen tenant.visitMotives).
-_GRUND_MAP = [
-    (re.compile(r"schmerz|zahnweh|weh\b|akut|notfall|dick[e]?\s+backe|geschwollen|abgebrochen|entzünd|entzuend", re.I), "akute Beschwerden/Notfall"),
-    (re.compile(r"zahnreinigung|reinigung|prophylaxe|pzr|zahnstein", re.I), "professionelle Zahnreinigung"),
-    (re.compile(r"aufhellung|bleaching", re.I), "Zahnaufhellung"),
-    (re.compile(r"erstuntersuchung|neupatient|erstbesuch", re.I), "Erstuntersuchung/Neupatient"),
-    (re.compile(r"implantat", re.I), "IMP Besprechung"),
-    (re.compile(r"krone|brücke|bruecke|prothese|zahnersatz", re.I), "ZE Besprechung"),
-    (re.compile(r"kontroll|vorsorge|check|routine|durchsicht|nachschauen|halbjahr", re.I), "Kontrolluntersuchung"),
-]
+# Frei Gesprochenes -> Besuchsgrund aus der Behandler-Liste: bianca/besuchsgrund.py
+# (Konzept-Erkennung + Motiv-Suche mit "klein"-Präferenz, Chef 27.08.2026).
 
 FELDER_START = {
     "modus": "",
@@ -177,6 +225,7 @@ FELDER_START = {
     "vorname": "",
     "nachname": "",
     "buchstabiert": False,
+    "grundWortlaut": "",
     "telefon": "",
     "telefonOffen": "",
     "telefonTeil": "",
@@ -213,7 +262,12 @@ def ist_ja(text: str) -> bool:
 
 def ist_nein(text: str) -> bool:
     k = _ohne_anlauf(text)
-    return bool(_NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k))
+    if _NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k):
+        return True
+    # Kurze Äußerung mit klarem Nein-Wort irgendwo ("glaube nein", "hier nein"):
+    # bei <= 3 Wörtern gibt es keinen Kontext, der das Nein umdrehen könnte.
+    toks = re.sub(r"[.,!?…]+", " ", k.lower()).split()
+    return len(toks) <= 3 and any(t in {"nein", "nee", "nö", "noe"} for t in toks)
 
 
 def ist_zwischenfrage(text: str) -> bool:
@@ -258,10 +312,7 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
 
 
 def _grund_deuten(tenant: dict, text: str) -> tuple[str, dict | None]:
-    for cre, kern_name in _GRUND_MAP:
-        if cre.search(text):
-            return kern_name, motiv_von(tenant, kern_name)
-    return "", None
+    return besuchsgrund.deute(tenant, text)
 
 
 def _name_tokens(text: str) -> list[str]:
@@ -269,11 +320,126 @@ def _name_tokens(text: str) -> list[str]:
     return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
 
 
+_NACHSPRECH_STOP = _NAME_STOP | {
+    "mal", "kurz", "warte", "warten", "augenblick", "bitte", "langsam",
+    "buchstabieren", "gerne", "okay", "gleich", "sofort", "was", "wieso",
+}
+
+
+def _nachgesprochen(text: str) -> str:
+    """Auf die Buchstabier-Frage den Namen NOCHMAL gesprochen statt buchstabiert.
+
+    STT zerlegt lange Namen gern in Silbenblöcke ("MATTA VATTA" statt
+    Mattavatta, live 27.08.2026). Ein bis zwei reine Wort-Tokens ohne
+    Füllwörter werden als Nachname übernommen — alles andere bleibt beim
+    LLM bzw. der Eskalation.
+    """
+    if ist_ja(text) or ist_nein(text) or ist_zwischenfrage(text):
+        return ""
+    raw = re.sub(r"[^\wäöüßÄÖÜ-]+", " ", _s(text))
+    toks = [t for t in raw.split() if t]
+    if not 1 <= len(toks) <= 2:
+        return ""
+    if any(t.lower() in _NACHSPRECH_STOP or t.isdigit() or len(t) < (3 if len(toks) == 2 else 4) for t in toks):
+        return ""
+    zusammen = "".join(toks)
+    if not zusammen.isalpha() or not 4 <= len(zusammen) <= 20:
+        return ""
+    return zusammen.capitalize()
+
+
+def _kartei_zuruecksetzen(s: dict) -> None:
+    """Nach einer Namens-Korrektur ist der Kartei-Treffer hinfällig —
+    die Hintergrund-Suche läuft mit dem richtigen Namen neu an."""
+    s["patientId"] = ""
+    s["bekannt"] = False
+    s["aktePhone"] = ""
+    s["gesucht"] = ""
+
+
+def _name_korrektur(s: dict, text: str) -> bool:
+    """"Ich heiße Meier, nicht Müller" / "nicht Müller, sondern Meier":
+    sofort übernehmen — auch wenn der Name längst gespeichert ist."""
+    neu_wert, alt_wert = "", ""
+    m = _NAME_FALSCH_RE.search(text)
+    if m:
+        neu_wert, alt_wert = m.group(1), m.group(2)
+    else:
+        m = _NAME_SONDERN_RE.search(text)
+        if m:
+            alt_wert, neu_wert = m.group(1), m.group(2)
+            # "nicht Patrikis, sondern Petsas" meint den ARZT: nur als
+            # Patientenname werten, wenn das Verneinte wirklich einer der
+            # gespeicherten Namensteile ist oder es klar um den Namen geht.
+            if _ARZT_KONTEXT_RE.search(text):
+                gespeichert = {s["vorname"].lower(), s["nachname"].lower()} - {""}
+                if alt_wert.lower() not in gespeichert:
+                    return False
+    if not m or not neu_wert:
+        # "Das war falsch — ich heiße Paul Meier": Korrektur-Kontext plus
+        # normale Namensnennung überschreibt ebenfalls.
+        if _KORREKTUR_KONTEXT_RE.search(text):
+            lead = _NAME_LEADIN_RE.search(text)
+            toks = _name_tokens(lead.group(1)) if lead else []
+            if toks:
+                if len(toks) >= 2:
+                    s["vorname"] = toks[0].capitalize()
+                    alt_nach = s["nachname"]
+                    s["nachname"] = toks[-1].capitalize()
+                else:
+                    alt_nach = s["nachname"]
+                    s["nachname"] = toks[0].capitalize()
+                if s["nachname"] != alt_nach:
+                    s["buchstabiert"] = False
+                    _kartei_zuruecksetzen(s)
+                return True
+        return False
+    if neu_wert.lower() in _NAME_STOP or alt_wert.lower() in _NAME_STOP:
+        return False
+    neu_name = neu_wert.capitalize()
+    alt = alt_wert.lower()
+    if alt == s["vorname"].lower() and s["vorname"]:
+        s["vorname"] = neu_name
+        if s["patientId"] or s["bekannt"]:
+            _kartei_zuruecksetzen(s)
+        return True
+    # Standard: der Nachname wird korrigiert (auch wenn "alt" nur ähnlich
+    # klingt wie das Gespeicherte — STT hatte ja gerade falsch gehört).
+    if s["nachname"] and neu_name != s["nachname"]:
+        s["buchstabiert"] = False
+        _kartei_zuruecksetzen(s)
+    s["nachname"] = neu_name
+    return True
+
+
 def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     """Vor-/Nachname aus dem Satz ziehen. erzwungen=True: die Frage war der Name."""
     text = _s(_KEIN_NAME_RE.sub(" ", text))
     if not text:
         return False
+
+    # Explizite Zuweisung gewinnt IMMER und darf Falsches überschreiben:
+    # "Nee, der Vorname ist Paul und der Nachname ist Panzer" (live 27.08.2026
+    # als "Nee Paul" verbucht). Ein neuer Nachname macht die alte
+    # Buchstabierung ungültig.
+    getroffen = False
+    mv = _TEIL_VOR_RE.search(text) or _TEIL_VOR_UMGEKEHRT_RE.search(text)
+    if mv and mv.group(1).lower() not in _NAME_STOP:
+        s["vorname"] = mv.group(1).capitalize()
+        getroffen = True
+    mn = _TEIL_NACH_RE.search(text) or _TEIL_NACH_UMGEKEHRT_RE.search(text)
+    if mn and mn.group(1).lower() not in _NAME_STOP:
+        neu_nach = mn.group(1).capitalize()
+        if s["nachname"] and neu_nach != s["nachname"]:
+            s["buchstabiert"] = False
+            _kartei_zuruecksetzen(s)
+        elif neu_nach != s["nachname"]:
+            s["buchstabiert"] = False
+        s["nachname"] = neu_nach
+        getroffen = True
+    if getroffen:
+        return True
+
     m = _NAME_LEADIN_RE.search(text)
     kandidat = m.group(1) if m else (text if erzwungen else "")
     toks = _name_tokens(kandidat)
@@ -291,8 +457,13 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         s["nachname"] = toks[-1].capitalize()
         return True
     if erzwungen:
-        # Nur ein Wort auf die Namensfrage: als Nachname nehmen, Vorname folgt.
-        s["nachname"] = toks[0].capitalize()
+        # Nur EIN Wort auf die Namensfrage: gängige Vornamen (Paul, Anna …)
+        # sind der VORNAME — alles andere führen wir als Nachnamen. Live
+        # 27.08.2026 wurde "Paul?" als Nachname geführt ("Herr Paul").
+        if toks[0].lower() in _VORNAMEN and not s["vorname"]:
+            s["vorname"] = toks[0].capitalize()
+        else:
+            s["nachname"] = toks[0].capitalize()
         return True
     return False
 
@@ -375,19 +546,23 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["fuerWen"] = fm.group(1).lower()
         neu.add("fuerWen")
 
-    # Besuchsgrund
+    # Besuchsgrund: auf die Besuchsgrund-Liste des Behandlers mappen; der
+    # WORTLAUT des Patienten bleibt für die Terminnotiz erhalten (Chef 27.08.).
     if not s["grund"]:
         kern_name, vm = _grund_deuten(tenant, t)
         if kern_name:
             s["grund"] = kern_name
+            s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
             if vm:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
             neu.add("grund")
         elif s["frage"] == "grund" and len(t) >= 3 and not ist_ja(t) and not ist_nein(t):
-            # Frei formulierter Grund: fürs Protokoll behalten, Standard-Motiv buchen.
+            # Frei formulierter Grund ("Holzbein absägen"): Wortlaut behalten,
+            # gebucht wird der Zweifelsfall-Grund (Kontrolle/Besprechung).
             s["grund"] = t if len(t) <= 90 else t[:87] + "…"
-            vm = motiv_von(tenant, "Kontrolluntersuchung")
+            s["grundWortlaut"] = s["grund"]
+            vm = besuchsgrund.fallback_motiv(tenant)
             if vm:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
@@ -400,13 +575,38 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["wunschText"] = _s(f"{s['wunschText']} {t}") if s["wunschText"] else t
         neu.add("wunsch")
 
-    # Buchstabierung schlägt den frei gehörten Nachnamen.
+    # Buchstabierung schlägt den frei gehörten Nachnamen — auch wenn sie ihm
+    # WIDERSPRICHT: wer buchstabiert, korrigiert gerade (live 27.08.2026:
+    # "MATTA VATTA" gegen gespeichertes "Pidoq" — Bianca beharrte auf Pidoq).
+    if _name_korrektur(s, t):
+        neu.add("name")
     buch = buchstaben.deute(t)
-    if buch and (s["frage"] in {"buchstabieren", "name", "nachname"} or not s["nachname"]):
+    if "name" in neu:
+        pass  # Korrektur hat Vorrang — nichts erneut ernten.
+    elif buch and (s["frage"] in {"buchstabieren", "name", "nachname"} or not s["nachname"]):
         s["nachname"] = buch["name"]
         s["buchstabiert"] = True
         s["bekannt"] = False if s["frage"] == "buchstabieren" and not s["patientId"] else s["bekannt"]
         neu.add("nachname")
+        # Im selben Satz kann der Vorname stecken: "… P-A-N-Z-E-R. Der
+        # Vorname ist Paul" — nicht verschlucken (live 27.08.2026).
+        mv = _TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
+        if mv and mv.group(1).lower() not in _NAME_STOP:
+            s["vorname"] = mv.group(1).capitalize()
+    elif s["frage"] == "buchstabieren":
+        nach = _nachgesprochen(t)
+        if nach:
+            # Statt zu buchstabieren hat der Anrufer den Namen (ggf. in
+            # Silben: "MATTA VATTA") noch einmal gesprochen: übernehmen.
+            if nach != s["nachname"]:
+                s["bekannt"] = False if not s["patientId"] else s["bekannt"]
+            s["nachname"] = nach
+            s["buchstabiert"] = True
+            neu.add("nachname")
+        elif _name_aufnehmen(s, t, erzwungen=False):
+            # "Der Nachname ist Panzer. P-A-N-Z-E-R. Der Vorname ist Paul":
+            # explizite Zuweisungen zählen auch auf die Buchstabier-Frage.
+            neu.add("name")
     elif s["frage"] in {"name", "vorname", "nachname"}:
         if _name_aufnehmen(s, t, erzwungen=True):
             neu.add("name")
@@ -447,6 +647,14 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             else:
                 s["telefonTeil"] = zusammen
                 neu.add("telefonTeil")
+    if not d and (s["telefon"] or s["telefonOffen"]) and _TEL_FALSCH_RE.search(t):
+        # "Die Nummer war falsch": sofort verwerfen und neu erfragen —
+        # ohne dass der Anrufer erst durch eine Rückbestätigung muss.
+        s["telefon"] = ""
+        s["telefonOk"] = False
+        s["telefonOffen"] = ""
+        s["telefonTeil"] = ""
+        neu.add("telefonKorrektur")
     if not d and not s["telefonOk"] and not s["telefonAkte"] and _AKTE_NUMMER_RE.search(t):
         # "Meine Nummer haben Sie ja in der Akte" — nicht darauf beharren,
         # die Akten-Nummer (oder die Praxis-Nachpflege) übernimmt das.
@@ -473,6 +681,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:
+            if s["vorname"]:
+                return "nachname", "Und der Nachname, bitte?"
             wen = f"Wie heißt {'Ihr' if s['fuerWen'] in {'sohn', 'mann', 'vater', 'opa'} else 'Ihre'} {s['fuerWen']}?" if s["fuerWen"] else "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?"
             return "name", wen
         if not s["vorname"]:
@@ -495,6 +705,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if s["wunsch"] is None:
         return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags? Und ab welchem Tag?"
     if not s["nachname"]:
+        if s["vorname"]:
+            return "nachname", "Und der Nachname, bitte?"
         wen = f"Wie heißt {'Ihr' if s['fuerWen'] in {'sohn', 'mann', 'vater', 'opa'} else 'Ihre'} {s['fuerWen']}?" if s["fuerWen"] else "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?"
         return "name", wen
     if not s["vorname"]:
