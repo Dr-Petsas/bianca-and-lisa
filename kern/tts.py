@@ -9,7 +9,13 @@ from typing import Protocol
 
 import httpx
 
-from kern.config import ELEVENLABS_API_KEY, ELEVENLABS_TTS_MODEL, ELEVENLABS_VOICE_ID
+from kern.config import (
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_TTS_MODEL,
+    ELEVENLABS_VOICE_ID,
+    TTS_BASE,
+    TTS_VOICE,
+)
 
 # Aussprache-Umschrift NUR fuer den Mund (Chef 27.08.2026: "Michael Petsas
 # wird englisch ausgesprochen"): ElevenLabs liest englisch klingende Vornamen
@@ -36,17 +42,23 @@ PCM_RATE = 24000
 _CACHE: dict[str, bytes] = {}
 _CACHE_ORD: list[str] = []
 _CLIENT: httpx.Client | None = None
+_LOKAL_CLIENT: httpx.Client | None = None
 
 # Stimme pro PROZESS: Lisa und Bianca laufen als getrennte Dienste — Bianca
-# setzt beim Start ihre eigene Voice-ID (kern.config.BIANCA_VOICE_ID).
+# setzt beim Start ihre eigene Voice-ID (kern.config.BIANCA_VOICE_ID) und
+# ihren lokalen Stimmnamen ("bianca" = Referenz im TTS-Container).
 _VOICE_ID = ELEVENLABS_VOICE_ID
+_VOICE_NAME = TTS_VOICE or "lisa"
 
 
-def set_voice(voice_id: str) -> None:
-    global _VOICE_ID
+def set_voice(voice_id: str, name: str = "") -> None:
+    global _VOICE_ID, _VOICE_NAME
     sauber = " ".join(str(voice_id or "").split()).strip()
     if sauber:
         _VOICE_ID = sauber
+    sauber_name = " ".join(str(name or "").split()).strip().lower()
+    if sauber_name:
+        _VOICE_NAME = sauber_name
 
 
 def _client() -> httpx.Client:
@@ -57,6 +69,15 @@ def _client() -> httpx.Client:
             headers={"xi-api-key": ELEVENLABS_API_KEY},
         )
     return _CLIENT
+
+
+def _lokal_client() -> httpx.Client:
+    global _LOKAL_CLIENT
+    if _LOKAL_CLIENT is None:
+        # Read-Timeout bewusst grosszuegig: nach Kaltstart oder bei langen
+        # Saetzen braucht die lokale Synthese ein paar Sekunden.
+        _LOKAL_CLIENT = httpx.Client(timeout=httpx.Timeout(30.0, connect=2.0))
+    return _LOKAL_CLIENT
 
 
 def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
@@ -156,12 +177,59 @@ class ElevenLabsTts:
         return blob
 
 
-def engine() -> ElevenLabsTts:
+class LokalTts:
+    """Spricht den TTS-Container auf der 5090 (tts_serve/, Vertrag api.md).
+
+    In der Testphase gibt es bewusst KEINEN ElevenLabs-Rueckfall (Chef
+    27.08.2026): schlaegt der Container fehl, fliegt ein RuntimeError —
+    Dienst.stimme() faengt ihn, der Zug erscheint im Dock ohne Audio und
+    der Fehler ist sofort hoerbar statt still kaschiert.
+    """
+
+    name = "lokal"
+
+    def speak(self, text: str) -> bytes:
+        sauber = " ".join(str(text or "").split()).strip()
+        if not sauber:
+            return b""
+        for cre, ersatz in _AUSSPRACHE:
+            sauber = cre.sub(ersatz, sauber)
+        schluessel = f"lokal|{_VOICE_NAME}|{sauber}"
+        hit = _CACHE.get(schluessel)
+        if hit:
+            return hit
+        r = _lokal_client().post(
+            f"{TTS_BASE}/speak",
+            json={"text": sauber[:400], "voice": _VOICE_NAME},
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"tts_lokal_http_{r.status_code}")
+        raw = r.content
+        if not raw:
+            return b""
+        # Container liefert rohes PCM16/24k — dieselbe Pegel-Schicht wie beim
+        # ElevenLabs-Pfad, damit lokale Zuege gleich laut klingen.
+        blob = pcm16_wav(raw)
+        _CACHE[schluessel] = blob
+        _CACHE_ORD.append(schluessel)
+        if len(_CACHE_ORD) > 48:
+            _CACHE.pop(_CACHE_ORD.pop(0), None)
+        return blob
+
+
+def engine() -> TtsEngine:
+    if TTS_BASE:
+        return LokalTts()
     return ElevenLabsTts()
 
 
 def bereit() -> bool:
-    return bool(ELEVENLABS_API_KEY)
+    return bool(TTS_BASE or ELEVENLABS_API_KEY)
+
+
+def modell_info() -> str:
+    """Fuer die /health-Anzeige: was spricht hier gerade?"""
+    return TTS_BASE if TTS_BASE else ELEVENLABS_TTS_MODEL
 
 
 def warm(text: str) -> None:

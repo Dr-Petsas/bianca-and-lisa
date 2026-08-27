@@ -1,0 +1,52 @@
+# Lisa + Bianca auf der 5090 — der stabile Umschlag fuer SIP/Zaluma.
+#   cp .env.example .env   # einmal ausfuellen (Keys, TTS_BASE)
+#   docker compose up -d --build
+# Port-Landkarte 5090: vLLM 8000, Lisa 8095, Bianca 8096,
+# Chatterbox 8210, CosyVoice 8211 (TTS-Stack: tts_serve/compose.yml).
+x-app: &app
+  build: .
+  image: telefonki:v1
+  env_file: .env
+  environment: &app-env
+    # vLLM und TTS laufen auf dem HOST der 5090 (eigene Stacks) — darum
+    # host-gateway statt Compose-Netz: die Stacks bleiben einzeln startbar.
+    LLM_BASE: ${LLM_BASE:-http://host.docker.internal:8000/v1}
+    # Leer = ElevenLabs. Lokal-TTS: http://host.docker.internal:8210
+    # (Chatterbox) bzw. :8211 (CosyVoice). KEIN Fallback (Chef 27.08.2026).
+    TTS_BASE: ${TTS_BASE:-}
+  volumes:
+    - ./tenants:/app/tenants:ro
+    - telefonki-data:/app/.data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+
+services:
+  lisa:
+    <<: *app
+    command: python -m uvicorn lisa.server:app --host 0.0.0.0 --port 8095
+    ports:
+      - "8095:8095"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  bianca:
+    <<: *app
+    command: python -m uvicorn bianca.server:app --host 0.0.0.0 --port 8096
+    ports:
+      - "8096:8096"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8096/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  telefonki-data:

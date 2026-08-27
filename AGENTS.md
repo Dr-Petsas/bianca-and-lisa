@@ -20,7 +20,36 @@ Dev-Default: `tenants/meddent.json`. Schreiben: `WRITE_LIVE=1`
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.
-- TTS: `lisa/tts.py` — heute ElevenLabs, später lokales TTS. Nur diese Datei tauschen.
+- TTS-Tauschpunkt ist `kern/tts.py` (`lisa/tts.py` ist nur ein Re-Export).
+  Zwei Engines: ElevenLabs (Default) und **LokalTts** gegen die 5090-Container.
+
+## Lokales TTS auf der 5090 (27.08.2026 — nicht rückbauen)
+
+Shootout Chatterbox-Multilingual-V3 gegen Fun-CosyVoice3, Ziel: ElevenLabs
+ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
+
+- `tts_serve/` traegt beide Container (je eigenes Dockerfile, gemeinsamer
+  Vertrag `tts_serve/api.md`: `POST /speak {text, voice}` -> rohes PCM16
+  mono 24 kHz). Compose-Profile: **nie beide gleichzeitig** (eine GPU,
+  vLLM 8000 daneben; Chatterbox 8210, CosyVoice 8211). Blackwell-Falle:
+  die Dockerfiles zwingen torch nach der Modell-Installation auf cu128
+  zurueck — Zeile nicht entfernen.
+- Umschalten NUR ueber `TTS_BASE` in der `.env`: gesetzt = es spricht
+  AUSSCHLIESSLICH der lokale Container, **KEIN ElevenLabs-Rueckfall**
+  (Chef 27.08.2026: Fehler muessen in der Testphase hoerbar sein —
+  `Dienst.stimme()` faengt den RuntimeError, Zug erscheint ohne Audio).
+  Leer = ElevenLabs, byte-identisch wie vorher. Stimmname pro Prozess:
+  Lisa "lisa", Bianca setzt sich in `bianca/server.py` auf "bianca"
+  (Referenzen in `tts_serve/stimmen/`, CosyVoice braucht zusaetzlich
+  das wortgetreue Transkript als `.txt`).
+- Rollout/Bench/Referenzen: `DEPLOY-5090.md`; Korpus aus ECHTEN Bausteinen
+  via `tts_serve/korpus_bauen.py`, Messung via `tts_serve/bench.py`
+  (blocking gemessen wie live, WAVs mit derselben Pegel-Schicht).
+- App-Container (Lisa 8095 + Bianca 8096, Tenant-Mount read-only) liegen in
+  `compose.yml`/`Dockerfile` an der Repo-Wurzel — der stabile Umschlag,
+  gegen den der Kollege SIP/Zaluma haengt.
+- Tests: `tests/test_tts_lokal.py` (Engine-Wahl, Payload, Pegel, Cache,
+  **kein** Fallback-Pfad).
 
 ## Lisa zuerst
 

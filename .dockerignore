@@ -1,0 +1,17 @@
+# Secrets NIE ins Image
+.env
+*.env
+!.env.example
+
+.venv/
+.git/
+.data/
+.run/
+.cursor/
+__pycache__/
+**/__pycache__/
+tests/
+tts_serve/
+tools/
+*.ps1
+*.md

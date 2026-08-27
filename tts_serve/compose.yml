@@ -1,0 +1,62 @@
+# TTS-Container fuer die 5090 — IMMER NUR EIN PROFIL STARTEN (eine GPU,
+# vLLM laeuft daneben):
+#   docker compose --profile chatterbox up -d --build
+#   docker compose --profile chatterbox down
+#   docker compose --profile cosyvoice  up -d --build
+# Port-Landkarte 5090: vLLM 8000, Chatterbox 8210, CosyVoice 8211.
+services:
+  chatterbox:
+    build: ./chatterbox
+    image: tts-chatterbox:v1
+    profiles: ["chatterbox"]
+    ports:
+      - "8210:8100"
+    volumes:
+      - ./stimmen:/stimmen:ro
+      - tts-models:/models
+    environment:
+      TTS_SPRACHE: "de"
+      # Referenz spricht schnell? CHATTERBOX_CFG: "0.3" probieren (README-Tipp).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s   # erster Start laedt Gewichte von HuggingFace
+
+  cosyvoice:
+    build: ./cosyvoice
+    image: tts-cosyvoice:v1
+    profiles: ["cosyvoice"]
+    ports:
+      - "8211:8100"
+    volumes:
+      - ./stimmen:/stimmen:ro
+      - tts-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s   # erster Start laedt ~5 GB Modell ins Volume
+
+volumes:
+  tts-models:

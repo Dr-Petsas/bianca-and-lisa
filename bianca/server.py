@@ -18,7 +18,6 @@ from kern.config import (
     BIANCA_VOICE_ID,
     BIANCA_WEB_DIR,
     DEFAULT_TENANT,
-    ELEVENLABS_TTS_MODEL,
     LLM_BASE,
     LLM_MODEL,
     WRITE_LIVE,
@@ -26,8 +25,9 @@ from kern.config import (
 from kern.dienst import Dienst, ndjson
 
 # Biancas Stimme gilt fuer diesen PROZESS — Lisa laeuft als eigener Dienst
-# mit ihrer eigenen Stimme weiter.
-tts.set_voice(BIANCA_VOICE_ID)
+# mit ihrer eigenen Stimme weiter. "bianca" = Referenz-Stimme im lokalen
+# TTS-Container (tts_serve/stimmen/bianca.wav), falls TTS_BASE gesetzt ist.
+tts.set_voice(BIANCA_VOICE_ID, name="bianca")
 
 app = FastAPI(title="Bianca Telefon-KI", version="0.1")
 
@@ -75,7 +75,7 @@ def health():
         "writeLive": WRITE_LIVE,
         "llm": h,
         "tts": tts.engine().name if tts.bereit() else "fehlt",
-        "ttsModel": ELEVENLABS_TTS_MODEL if tts.bereit() else "",
+        "ttsModel": tts.modell_info() if tts.bereit() else "",
         "voice": BIANCA_VOICE_ID,
         "filler": len(DIENST.filler_urls),
         "stt": "live+elevenlabs" if stt.bereit() else "live",

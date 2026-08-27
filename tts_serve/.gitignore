@@ -1,0 +1,4 @@
+# Stimm-Referenzen und Bench-Audio sind Arbeitsmaterial, kein Code.
+stimmen/*.wav
+stimmen/*.txt
+bench_out/

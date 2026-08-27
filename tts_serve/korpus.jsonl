@@ -1,0 +1,54 @@
+{"id": "filler-01", "kategorie": "filler", "text": "Hm, Moment mal, ich schaue eben in den Kalender."}
+{"id": "filler-02", "kategorie": "filler", "text": "Eine Sekunde bitte, ich prüfe kurz den Kalender."}
+{"id": "filler-03", "kategorie": "filler", "text": "Huch, ich schaue schnell, was frei ist."}
+{"id": "filler-04", "kategorie": "filler", "text": "Einen Augenblick — was hat der Kalender frei?"}
+{"id": "filler-05", "kategorie": "filler", "text": "Eine Sekunde, ich suche gerade Ihren Termin."}
+{"id": "filler-06", "kategorie": "filler", "text": "Moment, ich hole Ihre Termine auf den Schirm."}
+{"id": "filler-07", "kategorie": "filler", "text": "Ganz kurz, ich schaue in Ihre Akte."}
+{"id": "filler-08", "kategorie": "filler", "text": "Hm, einen kleinen Moment bitte."}
+{"id": "filler-09", "kategorie": "filler", "text": "Eine Sekunde, ich schaue eben nach."}
+{"id": "filler-10", "kategorie": "filler", "text": "Ganz kurz bitte, ich bin gleich wieder da."}
+{"id": "filler-11", "kategorie": "filler", "text": "Alles klar, ich trage das eben ein."}
+{"id": "filler-12", "kategorie": "filler", "text": "Sehr gut, ich setze den Termin gerade rein."}
+{"id": "filler-13", "kategorie": "filler", "text": "Alles klar, ich nehme den Termin eben raus."}
+{"id": "filler-14", "kategorie": "filler", "text": "Verstanden, ich streiche den Termin gerade."}
+{"id": "filler-15", "kategorie": "filler", "text": "Gut, ich schiebe den Termin eben um."}
+{"id": "filler-16", "kategorie": "filler", "text": "Alles klar, ich suche eben einen Platz."}
+{"id": "filler-17", "kategorie": "filler", "text": "Danke, ich lege Ihre Daten eben an."}
+{"id": "filler-18", "kategorie": "filler", "text": "Alles klar, ich trage Sie gerade ein."}
+{"id": "gruss-01", "kategorie": "gruss", "text": "Med Dent Zahnklinik, guten Tag! Mein Name ist Bianca. Was kann ich für Sie tun?"}
+{"id": "gruss-02", "kategorie": "gruss", "text": "Guten Tag, hier ist Lisa von der Med Dent Zahnklinik. Spreche ich mit Anna Bauer?"}
+{"id": "frage-01", "kategorie": "frage", "text": "Waren Sie schon einmal bei uns?"}
+{"id": "frage-02", "kategorie": "frage", "text": "Kurz zur Einordnung: Waren Sie schon mal in unserer Praxis?"}
+{"id": "frage-03", "kategorie": "frage", "text": "Bei welchem Behandler waren Sie zuletzt?"}
+{"id": "frage-04", "kategorie": "frage", "text": "Wissen Sie den Namen Ihres Behandlers noch?"}
+{"id": "frage-05", "kategorie": "frage", "text": "Sagen Sie mir bitte noch Ihren Namen — Vor- und Nachname?"}
+{"id": "frage-06", "kategorie": "frage", "text": "Auf welchen Namen darf ich das aufnehmen?"}
+{"id": "frage-07", "kategorie": "frage", "text": "Wie ist Ihr Vorname?"}
+{"id": "frage-08", "kategorie": "frage", "text": "Welchen Vornamen darf ich notieren?"}
+{"id": "frage-09", "kategorie": "frage", "text": "Wie lautet der Nachname?"}
+{"id": "frage-10", "kategorie": "frage", "text": "Welchen Nachnamen darf ich eintragen?"}
+{"id": "frage-11", "kategorie": "frage", "text": "Was ist denn der Grund für Ihren Besuch?"}
+{"id": "frage-12", "kategorie": "frage", "text": "Um welches Anliegen geht es denn?"}
+{"id": "frage-13", "kategorie": "frage", "text": "Wann würde es Ihnen denn gut passen — eher vormittags oder nachmittags?"}
+{"id": "frage-14", "kategorie": "frage", "text": "Ab welchem Tag passt es Ihnen — und lieber vormittags oder nachmittags?"}
+{"id": "frage-15", "kategorie": "frage", "text": "Buchstabieren Sie mir den Nachnamen bitte einmal?"}
+{"id": "frage-16", "kategorie": "frage", "text": "Mögen Sie den Nachnamen kurz buchstabieren?"}
+{"id": "frage-17", "kategorie": "frage", "text": "Welche Handynummer darf ich eintragen?"}
+{"id": "frage-18", "kategorie": "frage", "text": "Sagen Sie mir bitte noch Ihre Handynummer?"}
+{"id": "frage-19", "kategorie": "frage", "text": "Welcher davon passt Ihnen?"}
+{"id": "frage-20", "kategorie": "frage", "text": "Welcher der Termine passt Ihnen am besten?"}
+{"id": "frage-21", "kategorie": "frage", "text": "Darf ich den Termin so eintragen?"}
+{"id": "frage-22", "kategorie": "frage", "text": "Soll ich es so festhalten?"}
+{"id": "nummer-01", "kategorie": "nummer", "text": "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null, vier sechs, null null. Stimmt das so?"}
+{"id": "weiterleiten-01", "kategorie": "weiterleiten", "text": "Bei uns gibt es keine menschlichen Mitarbeiter in dem Sinn — die Praxis ist komplett KI-geführt und personalfrei. Ich kann Sie aber gern mit einem unserer Aerzte verbinden."}
+{"id": "weiterleiten-02", "kategorie": "weiterleiten", "text": "Sehr gern — zu welchem unserer Aerzte darf ich Sie verbinden?"}
+{"id": "stups-01", "kategorie": "stups", "text": "Sind Sie noch dran? Wir waren mitten in der Terminaufnahme. Ihren Namen habe ich schon."}
+{"id": "stups-02", "kategorie": "stups", "text": "Ich bin noch da. Meine Frage war: Wie ist denn Ihre Handynummer?"}
+{"id": "haerte-01", "kategorie": "haerte", "text": "Am Donnerstag, den dritten September, haette ich um vierzehn Uhr dreissig einen Termin frei."}
+{"id": "haerte-02", "kategorie": "haerte", "text": "Alternativ gaebe es noch Mittwoch um neun Uhr fuenfzehn oder Freitag um sechzehn Uhr."}
+{"id": "haerte-03", "kategorie": "haerte", "text": "Sie sind dann bei Doktor Michael Petsas zur Prophylaxe eingetragen."}
+{"id": "haerte-04", "kategorie": "haerte", "text": "Die Wurzelbehandlung bei Doktor Patrikis dauert ungefaehr eine Stunde."}
+{"id": "haerte-05", "kategorie": "haerte", "text": "Oh, das kenne ich — bei Gewitter wird das Wartezimmer auch bei uns immer ganz schoen leer. Aber keine Sorge, wir finden gleich trotzdem einen Termin fuer Sie."}
+{"id": "haerte-06", "kategorie": "haerte", "text": "Ja, gerne."}
+{"id": "haerte-07", "kategorie": "haerte", "text": "Alles klar, vielen Dank fuer Ihren Anruf. Auf Wiederhoeren!"}

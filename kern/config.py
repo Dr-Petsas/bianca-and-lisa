@@ -53,6 +53,14 @@ LLM_API_KEY = _s("LLM_API_KEY", "local") or "local"
 ELEVENLABS_API_KEY = _s("ELEVENLABS_API_KEY") or _peek_key(
     Path(r"F:\MAS-2\backend\.env"), "ELEVENLABS_API_KEY"
 ) or _peek_key(Path(r"F:\Clara-Voice\.env"), "ELEVENLABS_API_KEY")
+
+# Lokales TTS auf der 5090 (tts_serve/): GESETZT = NUR der lokale Container
+# spricht, OHNE ElevenLabs-Rueckfall (Chef 27.08.2026 — Fehler sollen in der
+# Testphase hoerbar sein). Leer = ElevenLabs wie bisher (byte-identisch).
+TTS_BASE = _s("TTS_BASE").rstrip("/")
+# Stimmname im Container (Referenz-WAV in tts_serve/stimmen/). Leer = "lisa";
+# der Bianca-Prozess setzt sich beim Start selbst auf "bianca".
+TTS_VOICE = _s("TTS_VOICE")
 ELEVENLABS_VOICE_ID = _s("ELEVENLABS_VOICE_ID", "1iF3vHdwHKuVKSPDK23Z")
 # Biancas Stimme = die des laufenden ElevenLabs-Agenten "Med Dent Zahnklinik"
 # (BIANCA_AGENT_ID, abgefragt 27.08.2026) — dieselbe Stimme wie Clara.

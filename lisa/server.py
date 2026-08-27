@@ -14,7 +14,7 @@ from starlette.background import BackgroundTask
 from kern import sprech
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
-from lisa.config import DEFAULT_TENANT, DEV_PHONE, ELEVENLABS_TTS_MODEL, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
+from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
 app = FastAPI(title="Lisa Telefon-KI", version="0.1")
@@ -155,7 +155,7 @@ def health():
         "devPhone": DEV_PHONE,
         "llm": h,
         "tts": tts.engine().name if tts.bereit() else "fehlt",
-        "ttsModel": ELEVENLABS_TTS_MODEL if tts.bereit() else "",
+        "ttsModel": tts.modell_info() if tts.bereit() else "",
         "filler": f"{len(DIENST.filler_urls)}/{len(filler.alle_saetze())}",
         "stt": "live+elevenlabs" if stt.bereit() else "live",
         "llmBase": LLM_BASE,
