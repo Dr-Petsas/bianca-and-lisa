@@ -116,6 +116,29 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False) 
     return t
 
 
+def _fluss_sync(sit: dict, gelaufen: list[str], book: dict | None) -> None:
+    """Hat das LLM selbst gebucht/abgesagt/verschoben, zieht die Zustands-
+    maschine nach. Live 27.08. 14:53: das LLM buchte (nach 'Jap, bitte'),
+    die Maschine blieb auf 'bestaetigen' — fragte NACH der Buchung erneut
+    'Soll ich eintragen?' und buchte nach dem 'Ja' ein zweites Mal."""
+    if not gelaufen:
+        return
+    s = sit.get("sammler") or {}
+    if "book_slot" in gelaufen and book and (book.get("booked") or book.get("dryRun")):
+        s["phase"] = "gebucht"
+        s["frage"] = ""
+        if _s(book.get("slotIso")):
+            s["slotIso"] = _s(book.get("slotIso"))
+    if "cancel_appointment" in gelaufen and (sit.get("lastCancel") or {}).get("ok"):
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["gefundenKey"] = ""
+    if "move_appointment" in gelaufen and (sit.get("lastMove") or {}).get("ok"):
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["gefundenKey"] = ""
+
+
 def _termine_zeile(sit: dict) -> str:
     up = sit.get("upcoming") or []
     if not up:
@@ -185,7 +208,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             "book": None,
         }
     text, msgs, book = zuege.apply_tools(sit, msgs, out, melde=melde)
-    werkzeug_lief = len(sit.get("tools") or []) > werkzeuge_vorher
+    gelaufen = [_s(w.get("name")) for w in (sit.get("tools") or [])[werkzeuge_vorher:]]
+    werkzeug_lief = bool(gelaufen)
+    _fluss_sync(sit, gelaufen, book)
     bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":

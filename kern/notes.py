@@ -133,16 +133,42 @@ def _stempel(sit: dict[str, Any]) -> str:
     return dt.strftime("%d.%m.%Y %H:%M")
 
 
+def gespraechs_zusammenfassung(sit: dict[str, Any]) -> str:
+    """Kurzfassung des Telefonats per LLM (3-5 Zeilen) — NICHT das Transkript.
+
+    Chef 27.08.2026: kein Volltranskript mehr im Termin; nach dem Auflegen
+    wird in einem zweiten Schritt nur die Zusammenfassung eingetragen.
+    """
+    verlauf = protokoll(sit, limit=4000)
+    if not verlauf:
+        return ""
+    from kern import llm
+    out = llm.chat([
+        {"role": "system", "content": (
+            "Du fasst ein Praxis-Telefonat für die Terminnotiz zusammen. "
+            "Antworte NUR mit 2 bis 5 kurzen Zeilen auf Deutsch, je Zeile ein Punkt: "
+            "Anliegen; Ergebnis (gebucht/abgesagt/verschoben mit Tag und Uhrzeit); "
+            "Name und Telefonnummer, falls genannt; Besonderheiten (Schmerzen, Angst, "
+            "Begleitung, Wünsche). Sachlich, keine Anrede, keine Floskeln, nichts erfinden."
+        )},
+        {"role": "user", "content": verlauf},
+    ], None, temperature=0.1, max_tokens=220)
+    if not out.get("ok"):
+        return ""
+    zeilen = [" ".join(z.split()) for z in str(out.get("text") or "").splitlines()]
+    return "\n".join(z for z in zeilen if z)[:700]
+
+
 def termin_notiz(sit: dict[str, Any]) -> str:
-    """Volle Notiz fürs Terminpopup: Kopfzeile + Telefonprotokoll."""
+    """Notiz fürs Terminpopup: Kopfzeile + Gesprächs-Kurzfassung (kein Transkript)."""
     wer = stimme_von(sit)
     teile: list[str] = []
     kopf = zusammenfassung(sit)
     if kopf:
         teile.append(notiz_anhaengen("", kopf, herkunft=wer))
-    verlauf = protokoll(sit)
-    if verlauf:
+    kurz = gespraechs_zusammenfassung(sit)
+    if kurz:
         stamp = _stempel(sit)
-        teile.append(f"— Telefonprotokoll {wer}{(' ' + stamp) if stamp else ''} —")
-        teile.append(verlauf)
+        teile.append(f"— Gespräch {wer}{(' ' + stamp) if stamp else ''}, Kurzfassung —")
+        teile.append(kurz)
     return "\n".join(teile)

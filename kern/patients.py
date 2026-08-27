@@ -408,7 +408,14 @@ def akte_anlegen(
 
 
 def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
-    """Hängt die Kartei-ID an, wenn der Name eindeutig ist. Legt niemanden neu an."""
+    """Hängt die Kartei-ID an, wenn der Name WIRKLICH passt. Legt niemanden neu an.
+
+    Vorfall 27.08.2026 14:53: Die Suche nach "Don Johnson" traf über die
+    Nachnamen-Variante nur "Nikki Johnson" — der EINE Treffer wurde blind
+    übernommen, der Termin landete auf der falschen Akte (falscher Name im
+    Kalender, SMS an die falsche Nummer). Ein Treffer zählt nur noch, wenn
+    Nachname UND (falls genannt) Vorname übereinstimmen.
+    """
     pat = dict(patient or {})
     if _s(pat.get("id")):
         return pat
@@ -421,17 +428,39 @@ def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
     treffer = [p for p in (found.get("patients") or []) if not ist_testakte(p)]
     if not treffer:
         return pat
-    gewaehlt = None
     qn = q.lower()
-    if len(treffer) == 1:
-        gewaehlt = treffer[0]
+    p_first = _s(pat.get("firstName")).lower()
+    p_last = _s(pat.get("lastName")).lower()
+    if not p_last:
+        teile = ohne_titel(q).split()
+        if len(teile) >= 2:
+            p_first = p_first or teile[0].lower()
+            p_last = teile[-1].lower()
+        elif len(teile) == 1:
+            p_last = teile[0].lower()
+
+    def _passt(p: dict) -> bool:
+        k_first = _s(p.get("firstName")).lower()
+        k_last = _s(p.get("lastName")).lower()
+        if p_last and k_last and k_last != p_last:
+            return False
+        if p_first and k_first and k_first != p_first:
+            return False
+        return bool(k_last or f"{k_first} {k_last}".strip() == qn)
+
+    passende = [p for p in treffer if _passt(p)]
+    gewaehlt = None
+    if len(passende) == 1:
+        gewaehlt = passende[0]
     else:
-        for p in treffer:
+        for p in passende:
             kn = f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip().lower()
             if kn == qn:
                 gewaehlt = p
                 break
     if not gewaehlt:
+        if treffer and not passende:
+            print(f"patients: Treffer verworfen (Name passt nicht) fuer {q!r}", flush=True)
         return pat
     karte = karten_patient(gewaehlt)
     for k in ("past", "upcoming", "devPhone", "devPhoneRaw"):

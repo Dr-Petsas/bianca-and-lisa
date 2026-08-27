@@ -26,10 +26,17 @@ from kern.tenants import motiv_von
 TZ = ZoneInfo("Europe/Berlin")
 
 _JA_RE = re.compile(
-    r"^\s*(ja|jawohl|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|sicher|natürlich|natuerlich)\b",
+    r"^\s*(ja|jap|jep|jup|jo|jou|yep|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|sicher|natürlich|natuerlich)\b",
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
+# Kurz-Verneinungen als GANZE Aeusserung: "Noch nicht." auf "Waren Sie schon
+# mal bei uns?" ist ein Nein (live 27.08. 14:53: fiel durch, Frage kam doppelt).
+_NEIN_KURZ_RE = re.compile(
+    r"^\s*(noch\s+nicht|noch\s+nie|bisher\s+nicht|bis\s+jetzt\s+nicht|"
+    r"eigentlich\s+nicht|eher\s+nicht|leider\s+nein)\s*[.!…]*\s*$",
+    re.I,
+)
 # Kurz-Zustimmungen als GANZE Aeusserung ("Stark.", "Super!", "Sehr gut") —
 # bewusst nur als Voll-Treffer: "Gut, aber ..." ist KEINE glatte Zustimmung.
 _JA_KURZ_RE = re.compile(
@@ -189,7 +196,8 @@ def ist_ja(text: str) -> bool:
 
 
 def ist_nein(text: str) -> bool:
-    return bool(_NEIN_RE.search(_ohne_anlauf(text)))
+    k = _ohne_anlauf(text)
+    return bool(_NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k))
 
 
 def ist_zwischenfrage(text: str) -> bool:

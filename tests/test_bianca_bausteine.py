@@ -700,3 +700,91 @@ def test_erledigt_wache_blockt_falsche_absage_behauptung():
     # Lief das Werkzeug wirklich, bleibt der Text unangetastet.
     gleich = agentmod._nachbessern(sit, text, werkzeug_lief=True)
     assert gleich == text
+
+
+def test_noch_nicht_ist_nein():
+    """'Äh, noch nicht' auf 'Waren Sie schon mal bei uns?' ist ein Nein —
+    live 27.08. 14:53 fiel es durch und die Frage kam doppelt."""
+    for satz in ["Äh, noch nicht", "Noch nicht.", "Noch nie", "Bisher nicht"]:
+        assert gehirn.ist_nein(satz), satz
+    # Nur als GANZE Äußerung — mitten im Satz bleibt es neutral.
+    assert not gehirn.ist_nein("Das passt noch nicht ganz, lieber später")
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "schonmal"})
+    gehirn.einsammeln(sit, "Äh, noch nicht")
+    assert s["warSchonMal"] is False
+
+
+def test_jap_und_jep_sind_ja():
+    """'Jap, bitte' scheiterte live am Wortgrenzen-Raster — das LLM übernahm
+    und buchte selbst (Doppelbuchung). Jetzt deterministisch."""
+    for satz in ["Jap, bitte", "Jep.", "Jo, passt", "Jawoll"]:
+        assert gehirn.ist_ja(satz), satz
+    assert not gehirn.ist_ja("Japan ist schön")
+
+
+def test_fluss_sync_nach_llm_buchung():
+    """Bucht das LLM selbst per book_slot, zieht die Zustandsmaschine nach:
+    Phase 'gebucht', keine offene Frage — sonst fragt sie 'Soll ich eintragen?'
+    NACH der Buchung nochmal und bucht doppelt (live 27.08. 14:53)."""
+    from bianca import agent as agentmod
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung"})
+    agentmod._fluss_sync(sit, ["book_slot"], {"booked": True, "slotIso": "2026-08-28T13:15:00+02:00"})
+    assert s["phase"] == "gebucht" and s["frage"] == "" and s["slotIso"] == "2026-08-28T13:15:00+02:00"
+    # Absage über das LLM: Phase fertig, gefundene Termine verworfen.
+    sit2 = _sit()
+    s2 = gehirn.sammler(sit2)
+    s2.update({"modus": "absagen", "phase": "wahl", "frage": "terminwahl"})
+    sit2["lastCancel"] = {"ok": True}
+    agentmod._fluss_sync(sit2, ["cancel_appointment"], None)
+    assert s2["phase"] == "fertig" and s2["frage"] == ""
+
+
+def test_kartei_treffer_mit_falschem_vornamen_wird_verworfen():
+    """Suche nach 'Don Johnson' findet nur 'Nikki Johnson': der Treffer wird
+    verworfen statt blind übernommen (live 27.08.: Buchung auf falscher Akte,
+    SMS an fremde Nummer)."""
+    from kern import patients as patmod
+    echt = patmod.search_patients
+    patmod.search_patients = lambda tenant, q: {"ok": True, "patients": [
+        {"id": "yxq123", "firstName": "Nikki", "lastName": "Johnson", "mobilePhoneNumber": "+4917673353526"},
+    ]}
+    try:
+        tenant = laden("meddent")
+        raus = patmod.patient_aufloesen(tenant, {"firstName": "Don", "lastName": "Johnson"})
+        assert not raus.get("id")  # Nikki ist NICHT Don
+        gleich = patmod.patient_aufloesen(tenant, {"firstName": "Nikki", "lastName": "Johnson"})
+        assert gleich.get("id") == "yxq123"  # echter Treffer bleibt Treffer
+        nur_nachname = patmod.patient_aufloesen(tenant, {"lastName": "Johnson"})
+        assert nur_nachname.get("id") == "yxq123"  # ohne Vornamen zählt der Nachname
+    finally:
+        patmod.search_patients = echt
+
+
+def test_termin_notiz_kurzfassung_statt_transkript():
+    """Chef 27.08.: kein Volltranskript mehr im Termin — nach dem Auflegen
+    kommt nur die LLM-Kurzfassung in die Notiz."""
+    from kern import llm as llmmod
+    from kern import notes
+    echt = llmmod.chat
+    llmmod.chat = lambda messages, tools=None, **kw: {
+        "ok": True,
+        "text": "Neupatient mit akuten Zahnschmerzen.\nTermin gebucht: morgen 13:15 bei Dr. Petsas.",
+    }
+    try:
+        sit = _sit()
+        sit["stimme"] = "Bianca"
+        sit["lastBook"] = {"name": "book_slot", "booked": True}
+        sit["zuege"] = [
+            {"textIn": "Ich habe Zahnschmerzen", "text": "Waren Sie schon mal bei uns?"},
+            {"textIn": "Nein", "text": "Der Termin morgen um dreizehn Uhr fünfzehn ist eingetragen."},
+        ]
+        notiz = notes.termin_notiz(sit)
+        assert "Kurzfassung" in notiz and "Telefonprotokoll" not in notiz
+        assert "Zahnschmerzen" in notiz
+        assert "Waren Sie schon mal bei uns?" not in notiz  # kein Wortlaut mehr
+    finally:
+        llmmod.chat = echt

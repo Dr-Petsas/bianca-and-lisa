@@ -283,15 +283,21 @@ def api_hangup(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         return {"ok": True, "empty": True}
-    note = agent.hangup(sit)
-    session.merke_zug(sit, art="hangup", note=(note or {}).get("note") or "", dryRun=bool((note or {}).get("dryRun")))
-    session.sichern(sit)
-    return {
-        "ok": True,
-        "writeLive": WRITE_LIVE,
-        "note": note or {},
-        "call": session.last_call(),
-    }
+
+    # Zweiter Schritt NACH dem Auflegen (Chef 27.08.): Kurzfassung des
+    # Gespraechs erzeugen und in den Termin schreiben — der Anruf-Pfad
+    # wartet darauf nicht mehr.
+    def _nacharbeit() -> None:
+        try:
+            note = agent.hangup(sit)
+            session.merke_zug(sit, art="hangup", note=(note or {}).get("note") or "", dryRun=bool((note or {}).get("dryRun")))
+        except Exception as e:
+            print(f"lisa-hangup-nacharbeit fail {e}", flush=True)
+            session.merke_zug(sit, art="hangup", note="", dryRun=False)
+        session.sichern(sit)
+
+    threading.Thread(target=_nacharbeit, daemon=True).start()
+    return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}
 
 
 @app.get("/remote/state")

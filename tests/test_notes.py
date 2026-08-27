@@ -59,11 +59,37 @@ def test_protokoll_kappt_am_ende():
     assert "Antwort 199" in text  # Ende (Buchung/Bestaetigung) bleibt erhalten
 
 
-def test_termin_notiz_mit_protokoll_und_stempel():
-    text = termin_notiz(_SIT)
-    zeilen = text.splitlines()
-    assert zeilen[0].startswith("Neuer Termin am Telefon.")
-    assert zeilen[0].endswith("(Lisa)")
-    # UTC 05:34 -> Berlin 07:34
-    assert "— Telefonprotokoll Lisa 27.08.2026 07:34 —" in zeilen
-    assert "Patient: Neun Uhr fünfundvierzig" in zeilen
+def test_termin_notiz_mit_kurzfassung_und_stempel():
+    """Chef 27.08.: kein Volltranskript mehr im Termin — nur die Kurzfassung."""
+    from kern import llm as llmmod
+    echt = llmmod.chat
+    llmmod.chat = lambda messages, tools=None, **kw: {
+        "ok": True,
+        "text": "Terminwunsch vormittags.\nGebucht: neun Uhr fünfundvierzig.",
+    }
+    try:
+        text = termin_notiz(_SIT)
+        zeilen = text.splitlines()
+        assert zeilen[0].startswith("Neuer Termin am Telefon.")
+        assert zeilen[0].endswith("(Lisa)")
+        # UTC 05:34 -> Berlin 07:34
+        assert "— Gespräch Lisa 27.08.2026 07:34, Kurzfassung —" in zeilen
+        assert "Gebucht: neun Uhr fünfundvierzig." in zeilen
+        assert "Telefonprotokoll" not in text
+        assert "Patient: Neun Uhr fünfundvierzig" not in text  # kein Wortlaut
+    finally:
+        llmmod.chat = echt
+
+
+def test_termin_notiz_ohne_llm_bleibt_kopfzeile():
+    """Fällt das LLM aus, bleibt wenigstens die sachliche Kopfzeile —
+    nie wieder das Transkript als Notbehelf."""
+    from kern import llm as llmmod
+    echt = llmmod.chat
+    llmmod.chat = lambda messages, tools=None, **kw: {"ok": False, "error": "aus"}
+    try:
+        text = termin_notiz(_SIT)
+        assert text.startswith("Neuer Termin am Telefon.")
+        assert "Telefonprotokoll" not in text and "Kurzfassung" not in text
+    finally:
+        llmmod.chat = echt
