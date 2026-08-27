@@ -45,13 +45,22 @@ select {
   border-radius: 12px; padding: 12px 14px; font-size: 15px;
 }
 .toast[hidden] { display: none !important; }
+/* Anrufen-Knopf GROSS und ZENTRIERT in der Bildmitte (Chef 27.08.2026) —
+   nicht mehr als Leiste am unteren Rand, die je nach Fenster/Zoom aus dem
+   Sichtbereich rutschen konnte. */
 .dock {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  background: #1a1218; border-top: 1px solid var(--line);
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  display: flex; gap: 8px; align-items: center;
+  position: fixed; left: 0; right: 0; top: 50%; bottom: auto; z-index: 30;
+  transform: translateY(-50%);
+  background: transparent; border: 0;
+  padding: 0 16px;
+  display: flex; justify-content: center; align-items: center;
+  pointer-events: none;
 }
-.dock .btn { flex: 1; }
+.dock .btn {
+  flex: 0 1 520px; pointer-events: auto;
+  min-height: 76px; font-size: 22px; border-radius: 999px;
+  box-shadow: 0 14px 44px rgba(186, 61, 120, .5);
+}
 .call {
   position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column;
   background: #100b0e; padding: calc(18px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
@@ -78,5 +87,5 @@ body.incall .wrap, body.incall .dock { display: none; }
   header { flex-direction: column; }
   .wrap { padding: 12px 12px 20px; }
   .live { min-height: 140px; max-height: 36vh; }
-  .dock .btn { min-height: 52px; font-size: 17px; }
+  .dock .btn { flex-basis: 100%; min-height: 64px; font-size: 19px; }
 }

@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <title>Lisa &amp; Bianca â€” Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call15" />
+  <title>Lisa &amp; Bianca — Telefon-KI</title>
+  <link rel="stylesheet" href="/styles.css?v=call16" />
 </head>
 <body>
   <nav class="tabs" id="tabs">
@@ -22,10 +22,10 @@
       <header>
         <div>
           <h1>Lisa</h1>
-          <div class="sub">Echtes GesprÃ¤ch: sie spricht, du redest, sie hÃ¶rt zu.</div>
+          <div class="sub">Echtes Gespräch: sie spricht, du redest, sie hört zu.</div>
         </div>
         <div>
-          <div class="sub" id="health">prÃ¼fe Gehirnâ€¦</div>
+          <div class="sub" id="health">prüfe Gehirn…</div>
           <div class="sub last-call" id="lastCall"></div>
           <a class="link" id="fern" href="/fernsteuerung.html">Fernsteuerung (Grok, nur Lisa)</a>
         </div>
@@ -37,7 +37,7 @@
           <label for="tenant">Mandant</label>
           <select id="tenant"></select>
           <label for="prompt">Was Lisa ausrichten soll</label>
-          <textarea id="prompt" placeholder="z. B. Wir mÃ¶chten Ihren Kontrolltermin vorverlegen â€” nÃ¤chste Woche ist ein Platz frei."></textarea>
+          <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
           <div class="row" style="margin-top:10px">
             <button class="btn ghost mic" id="micPrompt" type="button">Prompt diktieren</button>
             <span class="sub" id="promptLive"></span>
@@ -48,7 +48,7 @@
           <h2>Patient</h2>
           <label for="who">Wen ruft Lisa an?</label>
           <div class="row">
-            <input id="who" type="text" placeholder="Name eingebenâ€¦" autocomplete="off" />
+            <input id="who" type="text" placeholder="Name eingeben…" autocomplete="off" />
             <button class="btn ghost" id="suchen" type="button">Suchen</button>
           </div>
           <div class="hits" id="hits"></div>
@@ -62,7 +62,7 @@
                 <ul id="past"></ul>
               </div>
               <div>
-                <strong>NÃ¤chste Termine</strong>
+                <strong>Nächste Termine</strong>
                 <ul id="upcoming"></ul>
               </div>
             </div>
@@ -76,7 +76,7 @@
     <div id="call" class="call">
       <div class="call-top">
         <div class="call-name" id="callName">Lisa</div>
-        <div class="call-phase" id="phase">verbindetâ€¦</div>
+        <div class="call-phase" id="phase">verbindet…</div>
       </div>
       <div class="call-pulse" id="pulse"></div>
       <div class="live call-live" id="live"></div>
@@ -91,10 +91,10 @@
   </div>
 
   <div id="tab-bianca" hidden>
-    <iframe id="biancaFrame" class="tab-frame" title="Bianca â€” Patiententelefon"
+    <iframe id="biancaFrame" class="tab-frame" title="Bianca — Patiententelefon"
             allow="microphone; autoplay"></iframe>
     <div class="tab-frame-hinweis" id="biancaHinweis" hidden>
-      Bianca antwortet nicht. LÃ¤uft ihr Dienst? <code>start-bianca.ps1</code> (Port 8096)
+      Bianca antwortet nicht. Läuft ihr Dienst? <code>start-bianca.ps1</code> (Port 8096)
     </div>
   </div>
 
@@ -147,6 +147,6 @@
       if (start !== "lisa") zeige(start);
     })();
   </script>
-  <script src="/app.js?v=call15"></script>
+  <script src="/app.js?v=call16"></script>
 </body>
 </html>
