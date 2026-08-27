@@ -9,6 +9,7 @@ Anruf B (Lisa): ein Plauder-Zug — der Vorab-Satz (LLM-Stream) muss als
 """
 
 import json
+import pathlib
 import sys
 import time
 
@@ -16,6 +17,31 @@ import httpx
 
 BIANCA = "http://127.0.0.1:8096"
 LISA = "http://127.0.0.1:8095"
+SESS_DIR = pathlib.Path(__file__).resolve().parents[1] / ".data" / "bianca_sessions"
+
+
+def _angebot_streuung_pruefen(sid: str) -> None:
+    """Nach dem Auflegen: gespeicherte Sitzung lesen und pruefen, dass das
+    Angebot GESTREUT war — nie zwei Slots < 2,5 h am selben Tag (Chef 27.08.:
+    live kamen 12:15/12:45/13:15 bzw. 09:30/09:45/10:00)."""
+    pfad = SESS_DIR / f"{sid}.json"
+    for _ in range(60):  # Nacharbeit (LLM-Kurzfassung) laeuft im Hintergrund
+        if pfad.is_file():
+            break
+        time.sleep(0.5)
+    assert pfad.is_file(), f"Sitzung {sid} wurde nicht gespeichert"
+    sess = json.loads(pfad.read_text(encoding="utf-8"))
+    offered = sess.get("offered") or []
+    assert offered, "kein Angebot in der Sitzung"
+    minuten = []
+    for o in offered:
+        iso = str(o.get("iso") or "")
+        minuten.append((iso[:10], int(iso[11:13]) * 60 + int(iso[14:16]), iso))
+    for i, (tag_a, min_a, iso_a) in enumerate(minuten):
+        for tag_b, min_b, iso_b in minuten[i + 1:]:
+            if tag_a == tag_b:
+                assert abs(min_a - min_b) >= 150, f"Angebot zu dicht: {iso_a} / {iso_b}"
+    print(f"  >>> Angebot gestreut ok: {[m[2][:16] for m in minuten]}")
 
 
 def ndjson_zug(client: httpx.Client, base: str, pfad: str, body: dict) -> dict:
@@ -110,6 +136,7 @@ def main() -> int:
     print("  >>> Termin wieder abgesagt (Kalender sauber).")
 
     c.post(f"{BIANCA}/api/hangup", json={"sessionId": sid}, timeout=30.0)
+    _angebot_streuung_pruefen(sid)
 
     print("=== Anruf B: Lisa — Vorab-Satz aus dem LLM-Strom ===")
     startL = ndjson_zug(c, LISA, "/api/start", {

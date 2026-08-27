@@ -32,7 +32,34 @@ _M_WORT = {
     "zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40,
     "fünfundvierzig": 45, "fuenfundvierzig": 45, "fünfzig": 50, "fuenfzig": 50,
 }
+_M_ZEHNER = {
+    "zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40,
+    "fünfzig": 50, "fuenfzig": 50,
+}
+
+
+def _minuten_von(wort: str) -> int | None:
+    """Minutenwort 1-59 — auch zusammengesetzt ('vierundvierzig').
+
+    Live 27.08.2026: 'neun Uhr vierundvierzig' fiel durch, weil _M_WORT nur
+    runde Werte kennt — die Slot-Wahl scheiterte und das Angebot kam wortgleich
+    ein zweites Mal.
+    """
+    w = _s(wort).lower()
+    if not w:
+        return None
+    if w in _M_WORT:
+        return _M_WORT[w]
+    if w in _H_WORT and _H_WORT[w] <= 20:
+        return _H_WORT[w]
+    m = re.match(r"^([a-zäöüß]+)und([a-zäöüß]+)$", w)
+    if m and m.group(1) in _H_WORT and _H_WORT[m.group(1)] <= 9 and m.group(2) in _M_ZEHNER:
+        return _M_ZEHNER[m.group(2)] + _H_WORT[m.group(1)]
+    return None
 _ABLEHNUNG_RE = re.compile(r"passt nicht|passt mir nicht|keiner davon|nichts davon|geht nicht|geht bei mir nicht|anderer termin|was anderes", re.I)
+# Dringlichkeit (kanonischer Grund aus gehirn._GRUND_MAP): Notfaelle bekommen
+# die naechstmoeglichen Plaetze DICHT angeboten — Streuung gilt dort nicht.
+_DRINGEND_RE = re.compile(r"akut|notfall|schmerz", re.I)
 _KUERZEL_RE = re.compile(r"^[A-ZÄÖÜ]{2,4}\s+")
 
 
@@ -42,11 +69,12 @@ def _s(v: Any) -> str:
 
 def _zeit_von(t: str) -> tuple[int | None, int | None]:
     """Gehörte Uhrzeit: '9 uhr 15', 'um 14:30', 'neun uhr fünfzehn', 'halb zehn'."""
-    m = re.search(r"\b(\d{1,2})(?:[:.](\d{2}))?\s*uhr\b", t)
+    m = re.search(r"\b(\d{1,2})(?:[:.](\d{2}))?\s*uhr\b(?:\s+(\d{1,2})\b)?", t)
     if not m:
         m = re.search(r"\bum\s+(\d{1,2})(?:[:.](\d{2}))?\b", t)
     if m:
-        return int(m.group(1)), (int(m.group(2)) if m.group(2) else None)
+        minute = m.group(2) or (m.group(3) if m.lastindex and m.lastindex >= 3 else None)
+        return int(m.group(1)), (int(minute) if minute else None)
     m = re.search(r"\bhalb\s+([a-zäöü]+|\d{1,2})\b", t)
     if m:
         w = m.group(1)
@@ -55,7 +83,7 @@ def _zeit_von(t: str) -> tuple[int | None, int | None]:
             return h - 1, 30
     m = re.search(r"\b([a-zäöü]+)\s+uhr(?:\s+([a-zäöüß]+))?\b", t)
     if m and m.group(1) in _H_WORT:
-        return _H_WORT[m.group(1)], _M_WORT.get(m.group(2) or "")
+        return _H_WORT[m.group(1)], _minuten_von(m.group(2) or "")
     return None, None
 
 
@@ -74,6 +102,20 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
                  if int(o["iso"][11:13]) % 12 == hour % 12 and (minute is None or int(o["iso"][14:16]) == minute)]
         if len(c) == 1:
             return c[0]["iso"]
+        if minute is not None and not c:
+            # Konkrete Zielzeit ohne exakten Treffer: auf den NÄCHSTLIEGENDEN
+            # angebotenen Slot runden ('neun Uhr vierundvierzig' -> 09:45).
+            # Live 27.08.2026 wiederholte Bianca sonst wortgleich das Angebot.
+            ziel = hour * 60 + minute
+
+            def _abstand(o: dict) -> int:
+                slot = int(o["iso"][11:13]) * 60 + int(o["iso"][14:16])
+                slot12 = (int(o["iso"][11:13]) % 12) * 60 + int(o["iso"][14:16])
+                return min(abs(slot - ziel), abs(slot12 - (hour % 12) * 60 - minute))
+
+            nah = sorted(offered, key=_abstand)
+            if _abstand(nah[0]) <= 20 and (len(nah) == 1 or _abstand(nah[1]) > _abstand(nah[0])):
+                return nah[0]["iso"]
 
     for idx, cre in WEEKDAYS:
         if cre.search(t):
@@ -275,13 +317,14 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 "Die Praxis ruft Sie kurzfristig zurück — Ihre Nummer habe ich ja."
             )}
 
-    picked = pick_slots(vorrat, wish=wish)
+    dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
+    picked = pick_slots(vorrat, wish=wish, dringend=dringend)
     if wish and not picked["wishMatched"] and not nachladen:
         # Der Vorrat passt nicht zum Wunsch (z. B. "nächste Woche"): einmal
         # gezielt ab Wunschdatum nachladen, bevor wir Ausweichzeiten anbieten.
         _laden()
         vorrat = list(sit.get("slotVorrat") or [])
-        picked = pick_slots(vorrat, wish=wish)
+        picked = pick_slots(vorrat, wish=wish, dringend=dringend)
 
     # Merken, aus WELCHEM Kalender dieses Angebot kommt: die Buchung bindet
     # sich daran, nicht an spätere Sammler-Umbauten (Vorfall 27.08.2026:
@@ -299,6 +342,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             "calendarName": _s(a.get("calendarName")),
         }
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
+    zuletzt = sit.pop("angebotZuletzt", None)
     sit["offered"] = offered
     s["phase"] = "angebot"
     s["frage"] = "slotwahl"
@@ -310,6 +354,12 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     elif egal and _s(sit.get("angebotArzt")) and not sit.get("angebotArztGesagt"):
         sit["angebotArztGesagt"] = True
         vor = f"Am schnellsten geht es bei {arzt_sprechname(sit['angebotArzt'])}. "
+    if offered and zuletzt == [o["iso"] for o in offered]:
+        # Wiederhol-Wache: derselbe Wunsch fuehrt zum SELBEN Ergebnis — das
+        # ehrlich sagen statt das Angebot wortgleich herunterzubeten
+        # (live 27.08.2026: identische Slot-Liste zweimal hintereinander).
+        liste = "; oder ".join(o["spoken"] for o in offered)
+        return {"text": vor + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {liste}. Passt davon einer?"}
     return {"text": vor + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
@@ -431,6 +481,9 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if s["phase"] in {"angebot", "bestaetigen"}:
         if {"wunsch", "arzt", "grund"} & neu:
             # Anrufer will etwas anderes (Zeit/Arzt/Grund geändert): neu anbieten.
+            # Das alte Angebot merken — kommt dasselbe wieder heraus, sagt die
+            # Wiederhol-Wache in _angebot das ehrlich an.
+            sit["angebotZuletzt"] = [o["iso"] for o in sit.get("offered") or []]
             s["phase"] = ""
             s["slotIso"] = ""
             sit["offered"] = []

@@ -898,6 +898,187 @@ def test_kein_angebot_nach_verschieben():
         verwalten.kal.move_appointment = echt
 
 
+# --- Slot-Wahl: gesprochene Zielzeit rundet auf den nächsten Slot ----------
+# Live 27.08.2026 17:40 ("Um neun Uhr vierundvierzig ist super"): die Wahl
+# scheiterte, der Satz wurde als neuer Wunsch gedeutet und Bianca wiederholte
+# WORTGLEICH das Angebot 09:30/09:45/10:00.
+
+ANGEBOT_MONTAG = [
+    {"iso": "2026-08-31T09:30", "spoken": "am Montag um neun Uhr dreißig"},
+    {"iso": "2026-08-31T09:45", "spoken": "am Montag um neun Uhr fünfundvierzig"},
+    {"iso": "2026-08-31T10:00", "spoken": "am Montag um zehn Uhr"},
+]
+
+
+def test_zeit_von_zusammengesetzte_minuten():
+    assert flow._zeit_von(" um neun uhr vierundvierzig ") == (9, 44)
+    assert flow._zeit_von(" zwölf uhr sieben ") == (12, 7)
+    assert flow._zeit_von(" 9 uhr 44 ") == (9, 44)
+
+
+def test_slot_wahl_rundet_auf_naechsten_slot():
+    assert flow._slot_wahl("Um neun Uhr vierundvierzig ist super", ANGEBOT_MONTAG) == "2026-08-31T09:45"
+    assert flow._slot_wahl("dann 9 Uhr 44", ANGEBOT_MONTAG) == "2026-08-31T09:45"
+
+
+def test_slot_wahl_rundet_nicht_bei_fernen_zeiten():
+    assert flow._slot_wahl("geht auch vierzehn Uhr zehn?", ANGEBOT_MONTAG) == ""
+
+
+def test_angebot_wird_nicht_wiederholt_live_1740():
+    """Das Live-Muster im Fluss: Angebot steht, Anrufer nennt neun Uhr
+    vierundvierzig — es folgt der Readback auf 09:45, keine Wiederholung."""
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Michael", "nachname": "Petsas", "buchstabiert": True,
+                  "grund": "Kontrolluntersuchung", "wunsch": {"weekday": 1, "hour": 9},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["offered"] = list(ANGEBOT_MONTAG)
+        z = flow.zug(sit, "Um neun Uhr vierundvierzig ist super")
+        assert z and "halte ich fest" in z["text"].lower(), z
+        assert s["slotIso"] == "2026-08-31T09:45"
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def _iso_in(tage: int, h: int, m: int = 0) -> str:
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    d = datetime.now(ZoneInfo("Europe/Berlin")).replace(
+        hour=h, minute=m, second=0, microsecond=0) + timedelta(days=tage)
+    return d.isoformat(timespec="seconds")
+
+
+def test_wiederhol_wache_sagt_gleiches_angebot_ehrlich_an():
+    """Führt ein neuer Wunsch zum SELBEN Angebot, sagt Bianca das ehrlich
+    ('es bleibt bei …') statt die Liste wortgleich zu wiederholen."""
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        slot = _iso_in(30, 9, 30)
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Michael", "nachname": "Petsas", "buchstabiert": True,
+                  "grund": "Kontrolluntersuchung", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = [slot]
+        sit["offered"] = [{"iso": slot, "spoken": "in vier Wochen um neun Uhr dreißig"}]
+        z = flow.zug(sit, "Ginge es auch nächste Woche?")
+        assert z and "es bleibt bei" in z["text"], z
+        assert [o["iso"] for o in sit["offered"]] == [slot]
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+# --- Angebots-Streuung (Chef 27.08.: nie benachbarte Leer-Slots) ------------
+# Live 27.08.: angeboten wurden 12:15/12:45/13:15 bzw. 09:30/09:45/10:00 —
+# am selben Tag müssen mindestens 2,5 Stunden zwischen den Angeboten liegen.
+
+def _now_ms_test() -> int:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return int(datetime(2026, 8, 27, 12, 0, tzinfo=ZoneInfo("Europe/Berlin")).timestamp() * 1000)
+
+
+DICHT = [
+    "2026-08-28T12:15:00+02:00", "2026-08-28T12:45:00+02:00",
+    "2026-08-28T13:15:00+02:00", "2026-08-28T15:00:00+02:00",
+    "2026-08-31T09:30:00+02:00", "2026-08-31T09:45:00+02:00",
+]
+
+
+def _keine_nachbarn(slots: list[dict]) -> None:
+    from itertools import combinations
+    for a, b in combinations(slots, 2):
+        if a["date"] == b["date"]:
+            ta = int(a["time"][:2]) * 60 + int(a["time"][3:5])
+            tb = int(b["time"][:2]) * 60 + int(b["time"][3:5])
+            assert abs(ta - tb) >= 150, (a, b)
+
+
+def test_streuung_keine_nachbar_slots():
+    from kern.slots import pick_slots
+    res = pick_slots(DICHT, now_ms=_now_ms_test())
+    assert len(res["slots"]) == 3
+    _keine_nachbarn(res["slots"])
+    assert res["slots"][0]["iso"].startswith("2026-08-28T12:15")
+
+
+def test_streuung_wunsch_nachmittag_bleibt():
+    """'Morgen nachmittag' wird nicht verwässert: gestreut wird INNERHALB des
+    Wunschrahmens — lieber zwei gute Optionen als drei dichte."""
+    from kern.slots import pick_slots
+    res = pick_slots(DICHT, wish={"date": "2026-08-28", "hourMin": 12, "hourMax": 18},
+                     now_ms=_now_ms_test())
+    assert res["wishMatched"]
+    isos = [x["iso"] for x in res["slots"]]
+    assert isos == ["2026-08-28T12:15:00+02:00", "2026-08-28T15:00:00+02:00"], isos
+
+
+def test_streuung_fallback_ein_slot_plus_andere_tage():
+    """Wunschtag hat NUR benachbarte Slots: EIN Slot des Tages plus
+    Alternativen anderer Tage — nicht drei dichte."""
+    from kern.slots import pick_slots
+    vorrat = ["2026-08-28T12:15:00+02:00", "2026-08-28T12:45:00+02:00",
+              "2026-08-28T13:15:00+02:00", "2026-08-31T09:30:00+02:00"]
+    res = pick_slots(vorrat, wish={"date": "2026-08-28"}, now_ms=_now_ms_test())
+    isos = [x["iso"] for x in res["slots"]]
+    assert isos[0] == "2026-08-28T12:15:00+02:00", isos
+    assert "2026-08-31T09:30:00+02:00" in isos, isos
+    _keine_nachbarn(res["slots"])
+
+
+def test_streuung_gar_nichts_anderes_laesst_nahe_zu():
+    """Nur drei benachbarte Slots im ganzen Vorrat: besser dicht anbieten
+    als gar nichts."""
+    from kern.slots import pick_slots
+    vorrat = ["2026-08-28T12:15:00+02:00", "2026-08-28T12:45:00+02:00",
+              "2026-08-28T13:15:00+02:00"]
+    res = pick_slots(vorrat, now_ms=_now_ms_test())
+    assert [x["iso"] for x in res["slots"]] == vorrat
+
+
+def test_streuung_notfall_bleibt_dicht():
+    """Akute Beschwerden: die nächstmöglichen Plätze dicht anbieten —
+    Dringlichkeit schlägt Streuung."""
+    from kern.slots import pick_slots
+    res = pick_slots(DICHT, now_ms=_now_ms_test(), dringend=True)
+    assert [x["iso"] for x in res["slots"]] == DICHT[:3]
+
+
+def test_streuung_zielzeit_anker_zuerst():
+    """'Gegen zehn': der nächstliegende Slot bleibt das ERSTE Angebot."""
+    from kern.slots import pick_slots
+    vorrat = ["2026-08-28T09:00:00+02:00", "2026-08-28T10:05:00+02:00",
+              "2026-08-28T13:00:00+02:00"]
+    res = pick_slots(vorrat, wish={"hour": 10}, now_ms=_now_ms_test())
+    assert res["slots"][0]["iso"].startswith("2026-08-28T10:05"), res["slots"]
+    _keine_nachbarn(res["slots"])
+
+
+def test_notfall_im_fluss_bietet_dicht_an():
+    """Der Fluss reicht die Dringlichkeit durch: Grund 'akute Beschwerden/
+    Notfall' bekommt die nächsten Slots ohne Streuung."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True,
+              "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+              "vorname": "Michael", "nachname": "Petsas", "buchstabiert": True,
+              "grund": "akute Beschwerden/Notfall", "wunsch": {},
+              "telefonAkte": True})
+    dicht = [_iso_in(30, 12, 15), _iso_in(30, 12, 45), _iso_in(30, 13, 15)]
+    sit["slotVorrat"] = list(dicht)
+    flow._angebot(sit)
+    assert [o["iso"] for o in sit.get("offered") or []] == dicht
+
+
 def test_termin_notiz_kurzfassung_statt_transkript():
     """Chef 27.08.: kein Volltranskript mehr im Termin — nach dem Auflegen
     kommt nur die LLM-Kurzfassung in die Notiz."""

@@ -245,9 +245,15 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             "Ginge auch ein anderer Tag oder eine andere Tageszeit?"
         )}
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
+    zuletzt = [o.get("iso") for o in sit.get("offered") or []] if s["phase"] == "verschieb_angebot" else None
     sit["offered"] = offered
     s["phase"] = "verschieb_angebot"
     s["frage"] = "slotwahl"
+    if offered and zuletzt == [o["iso"] for o in offered]:
+        # Wiederhol-Wache (wie in flow._angebot): gleiches Ergebnis ehrlich
+        # ansagen statt die Liste wortgleich zu wiederholen.
+        liste = "; oder ".join(_s(o["spoken"]) for o in offered)
+        return {"text": hinweis + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {liste}. Passt davon einer?"}
     return {"text": hinweis + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 

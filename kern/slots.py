@@ -117,8 +117,66 @@ def _weekday_of(date_str: str) -> int:
     return int(d.astimezone(TZ).strftime("%w"))  # 0=So
 
 
+# Nie benachbarte Leer-Slots anbieten (Chef 27.08.2026, live: 12:15/12:45/13:15
+# bzw. 09:30/09:45/10:00): am selben Tag mindestens 2,5 Stunden Abstand.
+MIN_ABSTAND_MS = 150 * 60000
+
+
+def _vertraegt(kand: dict, gewaehlt: list[dict]) -> bool:
+    return all(
+        g["date"] != kand["date"] or abs(g["ms"] - kand["ms"]) >= MIN_ABSTAND_MS
+        for g in gewaehlt
+    )
+
+
+def _streuen(pool: list[dict], parsed: list[dict], wish: dict | None, max_n: int) -> list[dict]:
+    """Gestreute Auswahl: Vielfalt vor Dichte, der Wunsch bleibt führend.
+
+    1. Erstes Angebot: bei konkreter Zielzeit ("gegen zehn") der nächstliegende
+       Slot, sonst der früheste im Wunschrahmen.
+    2. Dann je ein Slot pro WEITEREM Tag (Tag A vormittags + Tag B nachmittags
+       schlägt zwei nahe Slots am selben Tag).
+    3. Dann derselbe Tag, aber nur mit >= 2,5 h Abstand.
+    4. Fallback (< 2 Optionen): lieber EIN Slot des Wunschtags plus Alternativen
+       anderer Tage außerhalb des Wunschrahmens.
+    5. Allerletzter Ausweg: nahe Slots durchrutschen lassen — besser als nichts.
+    """
+    if not pool:
+        return []
+    anker = pool[0]
+    if wish and wish.get("hour") is not None:
+        ziel = int(wish["hour"]) * 60
+        anker = min(pool, key=lambda p: (abs(p["hour"] * 60 + int(p["time"][3:5]) - ziel), p["ms"]))
+    gewaehlt = [anker]
+    for p in pool:
+        if len(gewaehlt) >= max_n:
+            break
+        if p["date"] not in {g["date"] for g in gewaehlt}:
+            gewaehlt.append(p)
+    for p in pool:
+        if len(gewaehlt) >= max_n:
+            break
+        if p not in gewaehlt and _vertraegt(p, gewaehlt):
+            gewaehlt.append(p)
+    if len(gewaehlt) < 2:
+        pool_ids = {id(p) for p in pool}
+        for p in parsed:
+            if len(gewaehlt) >= max_n:
+                break
+            if id(p) not in pool_ids and p not in gewaehlt and _vertraegt(p, gewaehlt):
+                gewaehlt.append(p)
+    if len(gewaehlt) < 2:
+        for p in pool:
+            if len(gewaehlt) >= max_n:
+                break
+            if p not in gewaehlt:
+                gewaehlt.append(p)
+    rest = sorted((g for g in gewaehlt if g is not anker), key=lambda p: p["ms"])
+    return [anker] + rest
+
+
 def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | None = None,
-               exclude_iso: str = "", max_n: int = 3) -> dict[str, Any]:
+               exclude_iso: str = "", max_n: int = 3, dringend: bool = False) -> dict[str, Any]:
     now = now_ms if now_ms is not None else int(datetime.now(TZ).timestamp() * 1000)
     parsed = []
     for iso in iso_slots or []:
@@ -165,21 +223,13 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
     matched = not wish or bool(pool)
     if not pool:
         pool = parsed
-    by_day, seen = [], set()
-    for p in pool:
-        if p["date"] in seen:
-            continue
-        seen.add(p["date"])
-        by_day.append(p)
-        if len(by_day) >= max_n:
-            break
-    for p in pool:
-        if len(by_day) >= max_n:
-            break
-        if p not in by_day:
-            by_day.append(p)
-    by_day.sort(key=lambda p: p["ms"])
-    slots = [{"iso": p["iso"], "date": p["date"], "time": p["time"]} for p in by_day]
+    if dringend:
+        # Notfall/akute Beschwerden: die NÄCHSTMÖGLICHEN Plätze dicht anbieten —
+        # Dringlichkeit schlägt Streuung (Chef 27.08.2026).
+        auswahl = pool[:max_n]
+    else:
+        auswahl = _streuen(pool, parsed, wish, max_n)
+    slots = [{"iso": p["iso"], "date": p["date"], "time": p["time"]} for p in auswahl]
     return {"slots": slots, "wishMatched": matched}
 
 
