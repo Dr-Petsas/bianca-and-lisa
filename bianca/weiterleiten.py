@@ -1,18 +1,22 @@
 """Weiterleitungs-Wunsch am Patiententelefon — deterministisch, ohne LLM.
 
-Der Anrufer will verbunden werden ("Verbinden Sie mich mit einem Mitarbeiter",
-"Kann ich mit einem Menschen sprechen?", "Kann ich mit Doktor Petsas
-sprechen?"). Ablauf (Chef 27.08.2026):
+Zwei Faelle, streng getrennt (Chef 27.08.2026, zweite Fassung):
 
-  1. Erst die Wahrheit: die Praxis ist komplett KI-gefuehrt und personalfrei.
-  2. Doppelte Fragen sind verboten: der Ziel-Behandler kommt aus dem
-     Sitzungsgedaechtnis (Sammler -> frueher erwaehnter Behandler ->
-     Patientenakte via arzt.letzter_behandler). Nur wenn GAR nichts bekannt
-     ist, wird gefragt: "Bei wem sind Sie denn in Behandlung?"
-  3. Bei Ja: Jingle ("Wir verbinden Sie zu Ihrem Arzt", bianca_web/verbinden.mp3)
-     und danach die Platzhalter-Ansage — die ECHTE Zaluma-/SIP-Weiterleitung
-     baut Kollege Kiriakos spaeter an der markierten Stelle ein
-     (grep: ZALUMA_TRANSFER_PLATZHALTER).
+  1. NAMENTLICH genannter Arzt ("Kann ich bitte mit Doktor Patrikis
+     sprechen?"): KEINE Personalfrei-Ansage, KEINE Rueckfrage — direkt
+     "Einen Moment, ich stelle die Verbindung her", Jingle, verbinden.
+  2. Mitarbeiter/Abteilung (Mensch, Empfang, Rezeption, Buchhaltung,
+     Patientenannahme, Verwaltung ...): erst die Wahrheit (Praxis ist
+     komplett KI-gefuehrt und personalfrei), dann das Angebot, zu einem
+     der Aerzte zu verbinden. Nennt der Anrufer daraufhin einen Arzt,
+     wird direkt verbunden.
+
+Doppelte Fragen bleiben verboten: ist der Behandler aus dem Gespraech oder
+der Akte bekannt (Sammler -> Angebots-Kalender -> arzt.letzter_behandler),
+wird er angeboten statt erfragt. Das Verbinden selbst ist heute eine
+Attrappe: Jingle ("Wir verbinden Sie zu Ihrem Arzt", bianca_web/verbinden.mp3)
+plus Platzhalter-Ansage — die ECHTE Zaluma-/SIP-Weiterleitung baut Kollege
+Kiriakos spaeter an der markierten Stelle ein (grep: ZALUMA_TRANSFER_PLATZHALTER).
 """
 
 from __future__ import annotations
@@ -46,24 +50,29 @@ ANSAGE_PLATZHALTER = (
 
 _MENSCH_WORT = (
     r"(?:mensch(?:en)?|mitarbeiter\w*|angestellte\w*|personal\b|empfang|rezeption|"
-    r"sekretariat|sekretär\w*|sekretaer\w*|sprechstundenhilfe|kolleg\w*)"
+    r"sekretariat|sekretär\w*|sekretaer\w*|sprechstundenhilfe|kolleg\w*|"
+    r"buchhaltung|patientenannahme|annahme|anmeldung|verwaltung|abrechnung)"
 )
+
+# Klassifikation: kommt im Satz ueberhaupt ein Mitarbeiter-/Abteilungs-Wort vor?
+# Nur DANN gibt es die Personalfrei-Ansage (Chef 27.08.2026, zweite Fassung).
+_MENSCH_NUR_RE = re.compile(_MENSCH_WORT, re.I)
 
 # Ausdruecklicher Verbinde-/Durchstell-Wunsch.
 _VERBINDEN_RE = re.compile(
     r"verbinden?\s+sie\s+(?:mich|uns)|"
-    r"(?:mich|uns)\s+(?:bitte\s+)?(?:mit\s+[\wäöüß.\- ]{2,30}\s+)?(?:verbinden|durchstellen|weiterleiten)|"
+    r"(?:mich|uns)\s+(?:[\wäöüß.\-, ]{0,40}?\s+)?(?:verbinden|verbunden|durchstellen|durchgestellt|weiterleiten|weitergeleitet)|"
     r"stell\w*\s+(?:sie\s+)?(?:mich|uns)\s+(?:bitte\s+)?durch\b|"
     r"durchstellen|durchgestellt|weiterleiten|weitergeleitet|weiterverbinden|durchverbinden",
     re.I,
 )
 
 # "Ich will einen Menschen/Mitarbeiter/jemanden vom Empfang" — auch als Frage
-# ("Gibt es da kein Personal?").
+# ("Gibt es da kein Personal?", "Kann ich mit der Buchhaltung sprechen?").
 _MENSCH_RE = re.compile(
-    rf"mit\s+(?:einem|einer|nem|ner)?\s*(?:echten|richtigen)?\s*{_MENSCH_WORT}\s+(?:sprechen|reden)|"
+    rf"mit\s+(?:einem|einer|nem|ner|der|dem)?\s*(?:echten|richtigen)?\s*{_MENSCH_WORT}\s+(?:sprechen|reden)|"
     rf"{_MENSCH_WORT}\s+(?:sprechen|erreichen|ans?\s+telefon)|"
-    rf"jemand\w*\s+vom\s+(?:empfang|team|personal|praxisteam)|"
+    rf"jemand\w*\s+vo[nm]\s+(?:der\s+|dem\s+)?(?:{_MENSCH_WORT}|team|praxisteam)|"
     rf"kein(?:e|en)?\s+(?:echten\s+|richtigen\s+|menschlichen\s+)?{_MENSCH_WORT}",
     re.I,
 )
@@ -100,16 +109,12 @@ def _arzt_merken(s: dict, ziel: dict) -> None:
         }
 
 
-def _ziel_finden(sit: dict, t: str, melde: Melde = None) -> dict | None:
-    """Ziel-Behandler OHNE Rueckfrage bestimmen — erst Sitzungsgedaechtnis,
-    dann Patientenakte. None = wirklich nichts bekannt."""
+def _ziel_finden(sit: dict, melde: Melde = None) -> dict | None:
+    """Ziel-Behandler aus dem GEDAECHTNIS bestimmen (nicht aus dem Satz —
+    das erledigt zug() via arzt.deute): erst Sitzungsgedaechtnis, dann
+    Patientenakte. None = wirklich nichts bekannt."""
     tenant = sit.get("tenant") or {}
     s = gehirn.sammler(sit)
-
-    # Im Satz selbst genannt ("Kann ich mit Doktor Petsas sprechen?").
-    d = arztmod.deute(t, tenant)
-    if d and d.get("typ") == "genannt":
-        return {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
 
     # 1) Sammler: Behandler wurde im Gespraech schon geklaert.
     a = s.get("arzt") or {}
@@ -147,15 +152,20 @@ def _angebot_text(ziel: dict) -> str:
 
 def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
     """Anrufer zum Behandler weiterleiten — heute eine Attrappe:
-    Jingle-Ereignis plus Platzhalter-Ansage."""
+    gesprochene Ansage, Jingle-Ereignis, Platzhalter-Ansage."""
     sit["weiterleiten"] = {}  # Anliegen ist bedient
     ziel_arzt = {
         "calendarId": _s(ziel.get("calendarId")),
         "calendarName": _s(ziel.get("calendarName")),
     }
     if melde:
-        # Jingle "Wir verbinden Sie zu Ihrem Arzt": laeuft als festes Audio
-        # ueber die bestehende Filler-Kette (kern/dienst.py -> Client).
+        # Erst die Ansage ("Ok, Moment — ich stelle die Verbindung her"),
+        # DANN der Jingle "Wir verbinden Sie zu Ihrem Arzt": beides laeuft
+        # in dieser Reihenfolge ueber die Filler-Kette (kern/dienst.py ->
+        # Client spielt Filler strikt nacheinander, Antwort-Audio danach).
+        wer = arzt_sprechname(ziel_arzt["calendarName"])
+        zu = f" zu {wer}" if wer else ""
+        melde(f"sag:Ok, einen Moment bitte — ich stelle die Verbindung{zu} her.")
         melde(JINGLE_EVENT)
     # =====================================================================
     # ZALUMA_TRANSFER_PLATZHALTER (Kirri): Hier die echte SIP-/Zaluma-
@@ -183,26 +193,27 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if w.get("frage") == "anbieten":
         if gehirn.ist_ja(t):
             return zaluma_weiterleitung(sit, w.get("ziel") or {}, melde)
+        d = arztmod.deute(t, sit.get("tenant") or {})
+        if d and d.get("typ") == "genannt":
+            # "Nein, lieber zu Doktor Nikolaou" — namentlich genannt heisst
+            # direkt verbinden (Chef 27.08.), nicht noch einmal anbieten.
+            ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
+            _arzt_merken(s, ziel)
+            return zaluma_weiterleitung(sit, ziel, melde)
         if gehirn.ist_nein(t):
             sit["weiterleiten"] = {}
             return {"text": "Alles klar, dann bleibe ich gern für Sie dran. Kann ich sonst noch etwas für Sie tun?"}
-        d = arztmod.deute(t, sit.get("tenant") or {})
-        if d and d.get("typ") == "genannt":
-            # "Nein, lieber zu Doktor Nikolaou" — Ziel umhaengen, neu anbieten.
-            ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
-            sit["weiterleiten"] = {"frage": "anbieten", "ziel": ziel}
-            return {"text": _angebot_text(ziel)}
         # Unklar/Zwischenfrage: unten neu pruefen (Wiederholung des Wunschs),
         # sonst uebernimmt das LLM.
 
-    # Offene Behandler-Rueckfrage ("Bei wem sind Sie denn in Behandlung?")
+    # Offene Arzt-Rueckfrage ("Zu welchem unserer Ärzte darf ich Sie verbinden?")
     elif w.get("frage") == "arzt":
         d = arztmod.deute(t, sit.get("tenant") or {})
         if d and d.get("typ") == "genannt":
+            # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.
             ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
             _arzt_merken(s, ziel)
-            sit["weiterleiten"] = {"frage": "anbieten", "ziel": ziel}
-            return {"text": _angebot_text(ziel)}
+            return zaluma_weiterleitung(sit, ziel, melde)
         if gehirn.ist_nein(t) or (d and d.get("typ") in {"egal", "unbekannt"}):
             sit["weiterleiten"] = {}
             return {"text": "Kein Problem — dann helfe ich Ihnen einfach direkt weiter. Was kann ich für Sie tun?"}
@@ -215,18 +226,35 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return {"text": "Machen wir es anders: Ich helfe Ihnen einfach direkt. Was kann ich für Sie tun?"}
         w["leer"] = zaehler
         sit["weiterleiten"] = w
-        return {"text": "Entschuldigung — bei welchem Behandler sind Sie denn in Behandlung?"}
+        return {"text": "Entschuldigung — zu welchem unserer Ärzte darf ich Sie denn verbinden?"}
 
     # Neuer (oder wiederholter) Weiterleitungs-Wunsch?
     if not erkannt(t):
         return None
-    ziel = _ziel_finden(sit, t, melde)
+
+    # Fall 1: Arzt NAMENTLICH im Satz ("Kann ich mit Doktor Patrikis
+    # sprechen?") -> direkt verbinden. KEINE Personalfrei-Ansage, keine Frage.
+    d = arztmod.deute(t, sit.get("tenant") or {})
+    if d and d.get("typ") == "genannt":
+        ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
+        _arzt_merken(s, ziel)
+        return zaluma_weiterleitung(sit, ziel, melde)
+
+    # Fall 2: Mitarbeiter/Abteilung gewuenscht (Mensch, Empfang, Buchhaltung,
+    # Patientenannahme ...) -> erst die Wahrheit, dann das Arzt-Angebot.
+    mensch = bool(_MENSCH_NUR_RE.search(t))
+    ziel = _ziel_finden(sit, melde)
     if ziel:
         _arzt_merken(s, ziel)
         sit["weiterleiten"] = {"frage": "anbieten", "ziel": ziel}
-        return {"text": WAHRHEIT + " " + _angebot_text(ziel)}
+        vorsatz = (WAHRHEIT + " ") if mensch else ""
+        return {"text": vorsatz + _angebot_text(ziel)}
     sit["weiterleiten"] = {"frage": "arzt"}
-    return {"text": (
-        WAHRHEIT + " Ich kann Sie aber zu Ihrem Behandler weiterleiten. "
-        "Bei wem sind Sie denn in Behandlung?"
-    )}
+    if mensch:
+        return {"text": (
+            WAHRHEIT + " Ich kann Sie aber gern mit einem unserer Ärzte "
+            "verbinden. Zu wem darf ich Sie durchstellen?"
+        )}
+    # Fall 3: Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort
+    # ("Können Sie mich bitte weiterleiten?") -> nur nach dem Arzt fragen.
+    return {"text": "Sehr gern — zu welchem unserer Ärzte darf ich Sie verbinden?"}

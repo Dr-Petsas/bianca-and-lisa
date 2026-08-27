@@ -267,7 +267,16 @@ class Dienst:
                 yield zeile({"type": "filler", "audioUrl": wert})
                 filler_raus = True
             elif typ == "tool":
-                if isinstance(wert, str) and wert.startswith("audio:"):
+                if isinstance(wert, str) and wert.startswith("sag:"):
+                    # Feste gesprochene Zwischen-Ansage (z. B. "Einen Moment,
+                    # ich stelle die Verbindung her") — Inhalt, kein geratener
+                    # Fueller: IMMER vertonen und VOR spaeteren Audios ausspielen.
+                    san = sprech.sanitize(wert.split(":", 1)[1])
+                    url = self.stimme(san)[0] if san else ""
+                    if url:
+                        yield zeile({"type": "filler", "audioUrl": url})
+                    filler_raus = True
+                elif isinstance(wert, str) and wert.startswith("audio:"):
                     # Festes Audio (z. B. Verbinden-Jingle): das ist Inhalt,
                     # kein geratener Ueberbrueckungssatz — IMMER ausspielen.
                     url = self.audio_fest_url(wert.split(":", 1)[1])

@@ -24,6 +24,9 @@ def test_erkennung_verbinden_saetze():
         "Kann ich mit Doktor Petsas sprechen?",
         "Können Sie mich bitte weiterleiten?",
         "Ich will mit einem echten Menschen reden.",
+        "Ich möchte mich direkt zu Doktor Petsas verbinden lassen.",
+        "Kann ich mit der Buchhaltung sprechen?",
+        "Verbinden Sie mich mit der Patientenannahme.",
     ]:
         assert weiterleiten.erkannt(satz), satz
 
@@ -52,9 +55,43 @@ def test_buchungssaetze_loesen_nicht_aus():
         flow.hintergrund.anstossen = echt_anstossen
 
 
-# --- (b) Mitarbeiter-Anfrage MIT bekanntem Arzt: direkt anbieten -------------
+# --- (b) Namentlich genannter Arzt: DIREKT verbinden, ohne Ansage ------------
 
-def test_mitarbeiter_mit_bekanntem_arzt_direkt_anbieten():
+def test_namentlich_genannt_verbindet_direkt_ohne_personalfrei():
+    """'Kann ich bitte mit Doktor Patrikis sprechen?' (Chef 27.08., zweite
+    Fassung): KEINE Personalfrei-Ansage, KEINE Rueckfrage — Ansage + Jingle
+    + Platzhalter, fertig."""
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, "Kann ich bitte mit Doktor Patrikis sprechen?", events.append)
+    assert z and "Kirri" in z["text"]  # Platzhalter = verbunden
+    assert "personalfrei" not in z["text"] and "KI-geführt" not in z["text"]
+    assert z.get("jingle") == weiterleiten.JINGLE_EVENT
+    assert weiterleiten.JINGLE_EVENT in events
+    # Gesprochene Ansage kommt VOR dem Jingle.
+    sag = [e for e in events if e.startswith("sag:")]
+    assert sag and "Verbindung" in sag[0] and "Doktor Patrikis" in sag[0]
+    assert events.index(sag[0]) < events.index(weiterleiten.JINGLE_EVENT)
+    assert not (sit.get("weiterleiten") or {})  # Anliegen bedient
+    # Doppelte Fragen verboten: der Behandler zaehlt auch fuer die Buchung.
+    s = gehirn.sammler(sit)
+    assert (s["arzt"] or {}).get("calendarName") == "Dr. Patrikis"
+
+
+def test_verbinden_lassen_mit_namen_verbindet_direkt():
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, "Ich möchte mich direkt zu Doktor Petsas verbinden lassen.", events.append)
+    assert z and "Kirri" in z["text"]
+    assert "personalfrei" not in z["text"]
+    assert weiterleiten.JINGLE_EVENT in events
+    s = gehirn.sammler(sit)
+    assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
+
+
+# --- (b2) Mitarbeiter-/Abteilungs-Anfrage: Wahrheit + Arzt-Angebot ------------
+
+def test_mitarbeiter_mit_bekanntem_arzt_wahrheit_und_angebot():
     sit = _sit()
     s = gehirn.sammler(sit)
     s["arzt"] = {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"}
@@ -66,15 +103,18 @@ def test_mitarbeiter_mit_bekanntem_arzt_direkt_anbieten():
     assert "bei wem" not in t.lower()  # NICHT nach dem Behandler fragen
 
 
-def test_direkter_behandlerwunsch_kennt_arzt_schon():
-    """'Kann ich mit Doktor Petsas sprechen?' — Arzt kommt aus dem Satz."""
+def test_buchhaltung_bekommt_wahrheit_und_arztfrage():
+    """Abteilungs-Wunsch (Buchhaltung/Rezeption/Patientenannahme) ohne
+    bekannten Arzt: Wahrheit + Angebot, zu einem Arzt zu verbinden."""
     sit = _sit()
-    z = flow.zug(sit, "Kann ich mit Doktor Petsas sprechen?")
-    assert z and "zu Doktor Petsas" in z["text"]
-    assert "bei wem" not in z["text"].lower()
-    # Doppelte Fragen verboten: der Behandler zaehlt auch fuer die Buchung.
-    s = gehirn.sammler(sit)
-    assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
+    z = flow.zug(sit, "Kann ich mit der Buchhaltung sprechen?")
+    assert z and "personalfrei" in z["text"] and "KI-geführt" in z["text"]
+    assert "Ärzte" in z["text"] and "durchstellen" in z["text"]
+    # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.
+    events: list[str] = []
+    z2 = flow.zug(sit, "Dann zu Doktor Patrikis, bitte.", events.append)
+    assert z2 and "Kirri" in z2["text"]
+    assert weiterleiten.JINGLE_EVENT in events
 
 
 def test_akte_liefert_letzten_behandler():
@@ -91,21 +131,33 @@ def test_akte_liefert_letzten_behandler():
         s["patientId"] = "pat-1"
         z = flow.zug(sit, "Gibt es da kein Personal?")
         assert z and "zu Doktor Nikolaou" in z["text"]
+        assert "personalfrei" in z["text"]  # Mitarbeiter-Frage -> Wahrheit
         assert "bei wem" not in z["text"].lower()
     finally:
         weiterleiten.arztmod.letzter_behandler = echt
 
 
-# --- (c) Ohne bekannten Arzt: EINE Rueckfrage --------------------------------
+# --- (c) Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort ------------------
 
-def test_ohne_arzt_fragt_nach_behandler():
+def test_weiterleiten_ohne_namen_fragt_nur_nach_arzt():
+    """'Können Sie mich bitte weiterleiten?': kein Mitarbeiter-Wort ->
+    KEINE Personalfrei-Ansage, nur die Arzt-Frage."""
+    sit = _sit()
+    z = flow.zug(sit, "Können Sie mich bitte weiterleiten?")
+    assert z and "personalfrei" not in z["text"]
+    assert "zu welchem unserer" in z["text"].lower() and "Ärzte" in z["text"]
+    # Antwort mit Behandler-Namen (Fuzzy ueber arzt.deute) -> direkt verbinden.
+    events: list[str] = []
+    z2 = flow.zug(sit, "Bei Doktor Patrikis.", events.append)
+    assert z2 and "Kirri" in z2["text"]
+    assert weiterleiten.JINGLE_EVENT in events
+
+
+def test_mensch_ohne_arzt_fragt_nach_arzt():
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit einem Menschen sprechen?")
     assert z and "personalfrei" in z["text"]
-    assert "Bei wem sind Sie denn in Behandlung?" in z["text"]
-    # Antwort mit Behandler-Namen (Fuzzy ueber arzt.deute) -> Angebot.
-    z2 = flow.zug(sit, "Bei Doktor Patrikis.")
-    assert z2 and "zu Doktor Patrikis" in z2["text"]
+    assert "Zu wem darf ich Sie durchstellen?" in z["text"]
 
 
 # --- (d) Ja -> Jingle-Event + Kirri-Platzhalter-Ansage ------------------------
@@ -117,10 +169,13 @@ def test_ja_spielt_jingle_und_kirri_ansage():
     events: list[str] = []
     z1 = flow.zug(sit, "Stellen Sie mich durch.", events.append)
     assert z1 and "weiterleiten" in z1["text"]
+    # Kein Mitarbeiter-Wort im Satz -> keine Personalfrei-Ansage.
+    assert "personalfrei" not in z1["text"]
     z2 = flow.zug(sit, "Ja, bitte.", events.append)
     assert z2 and "Kirri" in z2["text"] and "Zaluma" in z2["text"]
     assert "sonst noch etwas" in z2["text"].lower()  # Gespraech geht weiter
     assert weiterleiten.JINGLE_EVENT in events  # Jingle-Event erzeugt
+    assert any(e.startswith("sag:") for e in events)  # Ansage vor dem Jingle
     assert z2.get("jingle") == weiterleiten.JINGLE_EVENT
     assert not (sit.get("weiterleiten") or {})  # Anliegen bedient
 
