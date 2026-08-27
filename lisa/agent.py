@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from kern import zuege
+from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
 from lisa.prompt import TOOLS, system_prompt
@@ -75,10 +76,12 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
         return {"text": id_zug["text"], "book": None}
     # Stream: der erste fertige Satz geht sofort an die Stimme (vorab),
     # waehrend das Modell den Rest schreibt — halbiert die gefuehlte Latenz.
+    # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben.
+    extra = {"max_tokens": kern_wissen.LANGTEXT_MAX_TOKENS} if kern_wissen.braucht_langtext(text_in) else {}
     if vorab is not None:
-        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab)
+        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab, **extra)
     else:
-        out = llm.chat(msgs, TOOLS)
+        out = llm.chat(msgs, TOOLS, **extra)
     if not out.get("ok"):
         return {
             "text": "Einen Moment, ich komme gerade nicht an den Kalender. Darf ich später noch einmal anrufen?",

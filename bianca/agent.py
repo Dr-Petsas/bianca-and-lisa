@@ -15,6 +15,7 @@ from bianca import flow, gehirn, session
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
 from kern import llm, zuege
+from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
 
@@ -203,10 +204,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben"} and s.get("phase") not in {"gebucht", "fertig"}
     darf_vorab = vorab is not None and not mitten_drin
     werkzeuge_vorher = len(sit.get("tools") or [])
+    # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben,
+    # sonst reisst der Anfahrtstext mitten im Wort ab (E2E 27.08.2026).
+    extra = {"max_tokens": kern_wissen.LANGTEXT_MAX_TOKENS} if kern_wissen.braucht_langtext(text_in) else {}
     if darf_vorab:
-        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab)
+        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab, **extra)
     else:
-        out = llm.chat(msgs, TOOLS)
+        out = llm.chat(msgs, TOOLS, **extra)
     if not out.get("ok"):
         return {
             "text": "Entschuldigung, da ist mir gerade etwas dazwischengekommen. Was darf ich für Sie tun?",

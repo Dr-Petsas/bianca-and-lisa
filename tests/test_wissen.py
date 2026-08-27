@@ -43,6 +43,53 @@ def test_wissen_block_ohne_preise_verweist_ehrlich():
         assert "keine Diagnosen" in block
 
 
+# --- Anfahrt und ÖPNV (Chef 27.08.2026, Folgeauftrag) -----------------------
+
+def test_meddent_traegt_anfahrt_und_oepnv():
+    import re
+    w = laden("meddent").get("wissen") or {}
+    a = w.get("anfahrt") or ""
+    for kern in ("Düsseldorf-Grafenberg", "Grafenberger Allee", "BMW-Autohaus",
+                 "Luise-Rainer-Straße", "Arbeitsamt", "Medical Center",
+                 "Haus B", "zweite Etage", "Pförtner"):
+        assert kern in a, kern
+    o = w.get("oepnv") or ""
+    for kern in ("U zweiundsiebzig", "U dreiundsiebzig", "U dreiundachtzig",
+                 "siebenhundertneun", "Schlüterstraße", "Arbeitsamt"):
+        assert kern in o, kern
+    assert not re.search(r"\d", o), "Linien-Nummern müssen Wortform bleiben"
+    assert not re.search(r"\d", a), "Anfahrtstext muss ziffernfrei sprechbar sein"
+
+
+def test_wissen_block_traegt_anfahrt_und_oepnv():
+    block = wissen_block(laden("meddent").get("wissen"))
+    assert "ANFAHRT" in block and "Luise-Rainer-Straße" in block
+    assert "AUSNAHMSWEISE" in block, "voller Text muss ausdrücklich erlaubt sein"
+    assert "KEINE Parkplatz-Aussagen" in block
+    assert "ÖPNV" in block and "U zweiundsiebzig" in block and "Schlüterstraße" in block
+
+
+def test_langtext_erkennung_nur_bei_wegfragen():
+    """Anfahrtsfragen heben das Antwort-Limit an — der volle Text riss sonst
+    am Standard-max_tokens mitten im Wort ab ('zweite Et', E2E 27.08.)."""
+    from kern.wissen import braucht_langtext
+    for satz in ["Ähm, und wie komme ich denn zu Ihnen?", "Wie ist Ihre Adresse?",
+                 "Können Sie mir die Anfahrt beschreiben?", "Wo finde ich Sie denn?",
+                 "Wie kommt man zu Ihnen?", "Wo sind Sie genau?"]:
+        assert braucht_langtext(satz), satz
+    for satz in ["Was kostet eine Zahnreinigung?", "Ich hätte gern einen Termin.",
+                 "Ja, die Nummer stimmt.", "Welche Bahnlinie fährt zu Ihnen?", ""]:
+        assert not braucht_langtext(satz), satz
+
+
+def test_wissen_block_ohne_anfahrt_kein_abschnitt():
+    block = wissen_block({"preise": ["Zahnreinigung: circa 150 Euro."]})
+    assert "ANFAHRT" not in block and "ÖPNV" not in block
+    for wissen in (None, {}):
+        block = wissen_block(wissen)
+        assert "ANFAHRT" not in block and "ÖPNV" not in block
+
+
 # --- Prompt-Einbau: Bianca und Lisa -----------------------------------------
 
 def test_bianca_prompt_traegt_preise_und_verweisregel():
@@ -67,6 +114,7 @@ def test_bianca_agent_reicht_tenant_wissen_durch():
     sit = {"tenant": laden("meddent"), "messages": []}
     p = system_prompt_aktuell(sit)
     assert "1600 bis 1800 Euro" in p and VERWEIS_SATZ in p
+    assert "Luise-Rainer-Straße" in p and "U zweiundsiebzig" in p
 
 
 def test_lisa_prompt_traegt_preise_und_verweisregel():

@@ -1,11 +1,13 @@
-"""E2E-Probe Preiswissen (Chef 27.08.2026): Zwischenfrage nach dem Preis
-während der Nummer-Erfassung.
+"""E2E-Probe Praxiswissen (Chef 27.08.2026): Zwischenfragen nach Preis und
+Anfahrt während der Nummer-Erfassung.
 
 Erwartung gegen den LAUFENDEN Bianca-Dienst (Port 8096, neuer Stand):
 - "Was kostet eine Zahnreinigung?" -> circa 150 Euro (gesprochen
   "einhundertfünfzig Euro"), danach zurück zur offenen Handynummer-Frage.
 - Preis NICHT in der Liste (Wurzelbehandlung) -> Verweis an den Zahnarzt,
   kein erfundener Betrag.
+- "Wie komme ich zu Ihnen?" -> Wegbeschreibung (Grafenberg, Luise-Rainer-
+  Straße), "welche Bahn?" -> Linien in Wortform — und immer zurück zur Frage.
 
 Bewusst OHNE Buchung: die Probe bricht vor der Nummernabgabe ab und legt
 auf — der echte Kalender (WRITE_LIVE) bleibt unberührt.
@@ -70,8 +72,23 @@ def main() -> int:
     assert "euro" not in lw, f"Erfundener Preis: {tw}"
     assert "nummer" in lw or "handy" in lw, f"Offene Telefon-Frage fehlt: {tw}"
 
+    # 3) Anfahrt: voller Wegbeschreibungs-Text (bis zum Ende!), dann zurück zur Frage.
+    ta = zug(c, sid, "Ähm, und wie komme ich denn zu Ihnen?")
+    la = ta.lower()
+    assert "grafenberg" in la and "luise-rainer" in la, f"Wegbeschreibung fehlt: {ta}"
+    assert "haus b" in la and "etage" in la, f"Text bricht ab (Token-Limit?): {ta}"
+    assert "nummer" in la or "handy" in la, f"Offene Telefon-Frage fehlt: {ta}"
+
+    # 4) ÖPNV: Linien in Wortform (nie Ziffern).
+    to = zug(c, sid, "Und mit der Bahn — welche Linie fährt denn zu Ihnen?")
+    lo = to.lower()
+    assert ("zweiundsiebzig" in lo or "dreiundachtzig" in lo or "siebenhundertneun" in lo), \
+        f"ÖPNV-Linien fehlen: {to}"
+    assert "u72" not in lo and "709" not in to, f"Linien müssen Wortform bleiben: {to}"
+    assert "nummer" in lo or "handy" in lo, f"Offene Telefon-Frage fehlt: {to}"
+
     c.post(f"{BIANCA}/api/hangup", json={"sessionId": sid}, timeout=30.0)
-    print("\nPREIS-PROBE GRUEN — Liste wird genannt, Unbekanntes geht an den Zahnarzt.")
+    print("\nWISSENS-PROBE GRUEN — Preise, Verweis, Anfahrt und Bahnlinien sitzen.")
     return 0
 
 
