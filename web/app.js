@@ -647,7 +647,6 @@ function auflegen() {
   $("call").classList.remove("open", "lisa", "du", "warte");
   document.body.classList.remove("incall");
   $("start").disabled = false;
-  $("schnell").disabled = false;
   $("start").textContent = "Anruf starten";
 }
 
@@ -706,11 +705,6 @@ $("who").addEventListener("keydown", (e) => {
 const recP = { current: null };
 $("micPrompt").onclick = () => toggleMic($("micPrompt"), recP, $("promptLive"), $("prompt"));
 
-const SCHNELL = {
-  auftrag: "Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei. Freundlich anbieten und nach vormittags oder nachmittags fragen.",
-  name: "Anna Test",
-};
-
 function starteAnruf() {
   meld("");
   const auftrag = $("prompt").value.trim();
@@ -740,7 +734,6 @@ async function weiterNachMic(auftrag, wer, micBitte) {
   micWacheStarten();
   if (!patient) zeigePatient(wer);
   $("start").disabled = true;
-  $("schnell").disabled = true;
   $("start").textContent = "Lisa ruft an …";
   $("live").innerHTML = "";
   $("callName").textContent = wer.name || "Lisa";
@@ -777,13 +770,6 @@ async function weiterNachMic(auftrag, wer, micBitte) {
     auflegen();
   }
 }
-
-$("schnell").onclick = () => {
-  $("prompt").value = SCHNELL.auftrag;
-  $("who").value = SCHNELL.name;
-  patient = null;
-  starteAnruf();
-};
 
 $("start").onclick = () => starteAnruf();
 
