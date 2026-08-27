@@ -25,6 +25,34 @@ def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
 
+# Zahlwort-Stunden fuer "zwölf Uhr fünfzehn" — live 27.08.2026: die Uhrzeit in
+# Worten wurde gar nicht erkannt, der Wunsch "früher, so zwölf Uhr fünfzehn"
+# lief als "vormittags" und bot nur andere Tage an.
+_STUNDEN_WORT = {
+    "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "fuenf": 5,
+    "sechs": 6, "sieben": 7, "acht": 8, "neun": 9, "zehn": 10, "elf": 11,
+    "zwölf": 12, "zwoelf": 12, "dreizehn": 13, "vierzehn": 14, "fünfzehn": 15,
+    "fuenfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18,
+    "neunzehn": 19, "zwanzig": 20, "einundzwanzig": 21, "zweiundzwanzig": 22,
+    "dreiundzwanzig": 23,
+}
+_UHR_RE = re.compile(
+    r"\b(?:(?:um|gegen|auf|ab)\s+)?(\d{1,2}|"
+    + "|".join(sorted(_STUNDEN_WORT, key=len, reverse=True))
+    + r")(?::(\d{2}))?\s*uhr\b",
+    re.I,
+)
+_UHR_ZIFFER_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+
+
+def _stunde_von(token: str) -> int | None:
+    tok = token.strip().lower()
+    if tok.isdigit():
+        n = int(tok)
+        return n if 0 <= n <= 23 else None
+    return _STUNDEN_WORT.get(tok)
+
+
 def parse_slot_wish(text: str) -> dict[str, Any] | None:
     raw = _s(text)
     if not raw:
@@ -38,19 +66,40 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
         if cre.search(t):
             wish["weekday"] = idx
             break
-    if re.search(r"vormittag|frueh|früh|morgens", t):
+    # Wortgrenzen: "früher"/"frühestens" ist ein RELATIVER Wunsch (vor dem
+    # bestehenden Termin), KEINE Tageszeit — live 27.08.2026 wurde "früher"
+    # als "vormittags 7-12" gedeutet und der Nachmittags-Slot fiel weg.
+    if re.search(r"vormittag|morgens|\bfrüh\b|\bfrueh\b", t):
         wish["hourMin"], wish["hourMax"] = 7, 12
     elif "nachmittag" in t:
         wish["hourMin"], wish["hourMax"] = 12, 18
-    elif re.search(r"abend|spaet|spät", t):
+    elif re.search(r"abend|\bspaet\b|\bspät\b", t):
         wish["hourMin"], wish["hourMax"] = 16, 21
     if re.search(r"n[äa]chste woche|kommende woche", t):
         wish["minDaysAhead"] = 7
     elif re.search(r"uebernaechste|übernächste", t):
         wish["minDaysAhead"] = 14
-    hm = re.search(r"\b(?:um|gegen)\s+(\d{1,2})(?::(\d{2}))?\s*uhr", t)
-    if hm:
-        wish["hour"] = min(23, int(hm.group(1)))
+    # Uhrzeit: Ziffern ("13:15", "um 9 Uhr") UND Zahlwörter ("zwölf Uhr zwanzig").
+    # Bei "statt zwölf Uhr fünfundvierzig bitte zwölf Uhr zwanzig" zählt die
+    # ZIEL-Zeit — Nennungen direkt nach "statt" werden übersprungen.
+    stunde = None
+    for m in _UHR_RE.finditer(t):
+        davor = t[max(0, m.start() - 12):m.start()]
+        if re.search(r"\bstatt\s*$", davor):
+            continue
+        h = _stunde_von(m.group(1))
+        if h is not None:
+            stunde = h
+    if stunde is None:
+        for m in _UHR_ZIFFER_RE.finditer(t):
+            davor = t[max(0, m.start() - 12):m.start()]
+            if re.search(r"\bstatt\s*$", davor):
+                continue
+            h = _stunde_von(m.group(1))
+            if h is not None and 0 <= int(m.group(2)) <= 59:
+                stunde = h
+    if stunde is not None:
+        wish["hour"] = stunde
     dm = re.search(r"\b(\d{1,2})\.\s?(\d{1,2})\.(?:\s?(\d{4}))?", t)
     if dm:
         year = dm.group(3) or str(datetime.now(TZ).year)

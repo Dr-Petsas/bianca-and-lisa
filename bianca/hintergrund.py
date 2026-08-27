@@ -18,6 +18,7 @@ from typing import Any
 from bianca import arzt as arztmod
 from bianca import gehirn
 from kern import calendar, patients
+from kern.patients import arzt_sprechname
 
 
 def _s(v: Any) -> str:
@@ -83,7 +84,7 @@ def kartei_anstossen(sit: dict) -> None:
                             "calendarId": info["calendarId"],
                             "calendarName": info.get("calendarName") or "",
                         }
-                        name = _s(info.get("doctorName") or info.get("calendarName")).split(",")[0].strip()
+                        name = arzt_sprechname(info.get("doctorName") or info.get("calendarName") or "")
                         if name:
                             sit["arztHinweis"] = (
                                 f"Ich sehe hier: Sie waren zuletzt bei {name} — "

@@ -4,20 +4,20 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <title>Lisa &amp; Bianca — Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call18" />
+  <title>Bianca &amp; Lisa — Telefon-KI</title>
+  <link rel="stylesheet" href="/styles.css?v=call19" />
 </head>
 <body>
   <nav class="tabs" id="tabs">
-    <button class="tab active" data-tab="lisa" type="button">
-      Lisa <span class="tabsub">ruft Patienten an</span>
-    </button>
-    <button class="tab" data-tab="bianca" type="button">
+    <button class="tab active" data-tab="bianca" type="button">
       Bianca <span class="tabsub">nimmt Anrufe an</span>
+    </button>
+    <button class="tab" data-tab="lisa" type="button">
+      Lisa <span class="tabsub">ruft Patienten an</span>
     </button>
   </nav>
 
-  <div id="tab-lisa">
+  <div id="tab-lisa" hidden>
     <div class="wrap">
       <header>
         <div>
@@ -90,7 +90,7 @@
     <audio id="speaker" playsinline webkit-playsinline hidden></audio>
   </div>
 
-  <div id="tab-bianca" hidden>
+  <div id="tab-bianca">
     <iframe id="biancaFrame" class="tab-frame" title="Bianca — Patiententelefon"
             allow="microphone; autoplay"></iframe>
     <div class="tab-frame-hinweis" id="biancaHinweis" hidden>
@@ -124,7 +124,7 @@
             })
             .catch(function () { hinweis.hidden = false; });
         }
-        try { localStorage.setItem("tab", tab); } catch (e) {}
+        try { localStorage.setItem("tab2", tab); } catch (e) {}
         if (location.hash !== "#" + tab) {
           history.replaceState(null, "", "#" + tab);
         }
@@ -141,14 +141,16 @@
         if (location.hash === "#lisa") zeige("lisa");
       });
 
-      var start = "lisa";
-      if (location.hash === "#bianca") start = "bianca";
-      else {
-        try { if (localStorage.getItem("tab") === "bianca" && !location.hash) start = "bianca"; } catch (e) {}
+      // Startseite ist BIANCA (Chef 27.08.2026) — #lisa oder eine zuvor
+      // bewusst gewaehlte Lisa-Ansicht (neuer Speicher-Schluessel) gewinnt.
+      var start = "bianca";
+      if (location.hash === "#lisa") start = "lisa";
+      else if (!location.hash) {
+        try { if (localStorage.getItem("tab2") === "lisa") start = "lisa"; } catch (e) {}
       }
-      if (start !== "lisa") zeige(start);
+      zeige(start);
     })();
   </script>
-  <script src="/app.js?v=call18"></script>
+  <script src="/app.js?v=call19"></script>
 </body>
 </html>

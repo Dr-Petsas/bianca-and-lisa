@@ -124,15 +124,15 @@ def sms_body() -> str:
     t = token()
     hash_t = f"#t={t}" if t else ""
     return (
-        "LISA & BIANCA JETZT GESPRAECH.\n"
+        "BIANCA & LISA JETZT GESPRAECH.\n"
         "\n"
-        "https://lisa-bianca.pickadoc-tunnel.com\n"
+        "https://bianca-and-lisa.pickadoc-tunnel.com\n"
         "\n"
         "Mikrofon erlauben, Anruf starten, einfach reden.\n"
-        "Tab Lisa: sie ruft an. Tab Bianca: du rufst an.\n"
+        "Start ist Bianca: du rufst an. Tab Lisa: sie ruft an.\n"
         "\n"
         "Draht:\n"
-        f"https://lisa-bianca.pickadoc-tunnel.com/fernsteuerung.html{hash_t}"
+        f"https://bianca-and-lisa.pickadoc-tunnel.com/fernsteuerung.html{hash_t}"
     )
 
 

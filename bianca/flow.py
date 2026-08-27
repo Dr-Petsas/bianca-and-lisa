@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from bianca import gehirn, hintergrund, telefon, verwalten
 from kern import calendar as kal
+from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
 from kern.tenants import motiv_von
@@ -211,7 +212,9 @@ def _readback(sit: dict) -> dict:
     s = gehirn.sammler(sit)
     a = s["arzt"] or {}
     bind = sit.get("angebotKalender") or {}
-    beim = _s(bind.get("calendarName") or a.get("calendarName") or sit.get("angebotArzt"))
+    # Gesprochen wird NUR Titel + Nachname ("Doktor Petsas") — englische
+    # Vornamen (Michael) liest die Sprachausgabe sonst englisch vor.
+    beim = arzt_sprechname(bind.get("calendarName") or a.get("calendarName") or sit.get("angebotArzt") or "")
     wer = f"{s['vorname']} {s['nachname']}".strip()
     s["phase"] = "bestaetigen"
     s["frage"] = "bestaetigung"
@@ -306,7 +309,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         vor = hinweis + " "
     elif egal and _s(sit.get("angebotArzt")) and not sit.get("angebotArztGesagt"):
         sit["angebotArztGesagt"] = True
-        vor = f"Am schnellsten geht es bei {sit['angebotArzt']}. "
+        vor = f"Am schnellsten geht es bei {arzt_sprechname(sit['angebotArzt'])}. "
     return {"text": vor + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 

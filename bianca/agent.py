@@ -130,13 +130,18 @@ def _fluss_sync(sit: dict, gelaufen: list[str], book: dict | None) -> None:
         if _s(book.get("slotIso")):
             s["slotIso"] = _s(book.get("slotIso"))
     if "cancel_appointment" in gelaufen and (sit.get("lastCancel") or {}).get("ok"):
+        s["modus"] = ""
         s["phase"] = "fertig"
         s["frage"] = ""
         sit["gefundenKey"] = ""
+        sit["offered"] = []
     if "move_appointment" in gelaufen and (sit.get("lastMove") or {}).get("ok"):
+        s["modus"] = ""
         s["phase"] = "fertig"
         s["frage"] = ""
         sit["gefundenKey"] = ""
+        sit["offered"] = []
+        sit["verschiebRichtung"] = ""
 
 
 def _termine_zeile(sit: dict) -> str:

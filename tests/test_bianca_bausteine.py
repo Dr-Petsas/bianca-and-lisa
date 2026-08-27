@@ -764,6 +764,97 @@ def test_kartei_treffer_mit_falschem_vornamen_wird_verworfen():
         patmod.search_patients = echt
 
 
+def test_arzt_sprechname_ohne_vornamen():
+    """Gesprochen wird nur Titel + Nachname — englisch klingende Vornamen
+    ('Michael') liest die Stimme sonst englisch (Chef 27.08.)."""
+    from kern.patients import arzt_sprechname
+    assert arzt_sprechname("Dr. Michael Petsas, M.Sc.") == "Doktor Petsas"
+    assert arzt_sprechname("Prof. Dr. Anna Meier") == "Professor Meier"
+    assert arzt_sprechname("Dr. Petsas") == "Doktor Petsas"
+    assert arzt_sprechname("Patrikis") == "Patrikis"
+    assert arzt_sprechname("") == ""
+
+
+def test_tts_aussprache_umschrift():
+    """'Michael' wird fuer den Mund zu 'Micha-el' — Logs bleiben unveraendert."""
+    from kern import tts as ttsmod
+    text = "Dann halte ich fest: für Michael Peters bei Doktor Petsas."
+    for cre, ersatz in ttsmod._AUSSPRACHE:
+        text = cre.sub(ersatz, text)
+    assert "Micha-el Peters" in text and "Michael" not in text
+
+
+def test_wunsch_uhrzeit_in_worten_und_statt():
+    """'zwölf Uhr zwanzig' zaehlt als Uhrzeit; bei 'statt X bitte Y' zaehlt
+    die ZIEL-Zeit (live 27.08.: 'statt zwölf Uhr fünfundvierzig bitte zwölf
+    Uhr zwanzig' loeste keine neue Suche aus)."""
+    from kern.slots import parse_slot_wish
+    w = parse_slot_wish("Geht auch zwölf Uhr zwanzig?")
+    assert w and w.get("hour") == 12
+    w2 = parse_slot_wish("Statt zwölf Uhr fünfundvierzig bitte dreizehn Uhr.")
+    assert w2 and w2.get("hour") == 13
+    # "früher" ist ein RELATIVER Wunsch, keine Tageszeit (wurde als
+    # "vormittags 7-12" gedeutet und warf Nachmittags-Slots weg).
+    w3 = parse_slot_wish("Kann man den ein bisschen früher machen?")
+    assert not (w3 and w3.get("hourMin") == 7)
+
+
+def test_verschieben_gleicher_tag_frueher():
+    """'Früher' beim Verschieben: Slots am SELBEN Tag VOR dem Termin werden
+    angeboten (live 27.08. 15:22: 12:15 war frei, angeboten wurde erst
+    Montag drauf)."""
+    from bianca import verwalten
+    echt = verwalten.kal.find_slots
+    verwalten.kal.find_slots = lambda tenant, ctx, **kw: {"ok": True, "slots": [
+        "2026-08-28T12:15:00+02:00", "2026-08-28T13:15:00+02:00",
+        "2026-08-31T09:30:00+02:00", "2026-08-31T10:00:00+02:00",
+    ]}
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "verschieben", "vorname": "Felix", "nachname": "Magath"})
+        sit["gefunden"] = [{"id": "t1", "iso": "2026-08-28T12:45:00+02:00",
+                           "spoken": "morgen um zwölf Uhr fünfundvierzig",
+                           "calendarId": "kal1", "doctorName": "Dr. Petsas"}]
+        sit["verwaltenTermin"] = "t1"
+        verwalten._richtung_merken(sit, "Kann man den ein bisschen früher machen?")
+        assert sit.get("verschiebRichtung") == "frueher"
+        aus = verwalten._verschieb_angebot(sit, None)
+        isos = [o["iso"] for o in sit.get("offered") or []]
+        assert isos == ["2026-08-28T12:15:00+02:00"], isos
+        assert "zwölf Uhr fünfzehn" in (aus.get("text") or "")
+    finally:
+        verwalten.kal.find_slots = echt
+
+
+def test_kein_angebot_nach_verschieben():
+    """Nach erledigtem Verschieben ist das Anliegen ZU: 'Das war's, danke'
+    loest kein frisches Slot-Angebot mehr aus (live 27.08. 15:22)."""
+    from bianca import verwalten
+    echt = verwalten.kal.move_appointment
+    verwalten.kal.move_appointment = lambda tenant, ctx, **kw: {
+        "ok": True, "moved": True, "slotIso": kw.get("slot_iso") or "",
+        "appointmentId": "t1", "spoken": "Der Termin liegt jetzt am Montag um neun Uhr dreißig.",
+    }
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "verschieben", "vorname": "Felix", "nachname": "Magath",
+                  "phase": "verschieb_bestaetigen", "frage": "verschieb_ok",
+                  "slotIso": "2026-08-31T09:30:00+02:00"})
+        sit["gefunden"] = [{"id": "t1", "iso": "2026-08-28T12:45:00+02:00",
+                           "spoken": "morgen um zwölf Uhr fünfundvierzig"}]
+        sit["gefundenKey"] = "felix|magath"
+        sit["verwaltenTermin"] = "t1"
+        z = verwalten.zug(sit, "Ja", set())
+        assert z is not None and "verschoben" in (z.get("text") or "").lower() or "liegt jetzt" in (z.get("text") or "")
+        assert s["modus"] == "" and s["phase"] == "fertig" and not sit.get("offered")
+        # Verabschiedung danach: kein deterministisches Angebot mehr.
+        assert verwalten.zug(sit, "Das war's, danke schön.", set()) is None
+    finally:
+        verwalten.kal.move_appointment = echt
+
+
 def test_termin_notiz_kurzfassung_statt_transkript():
     """Chef 27.08.: kein Volltranskript mehr im Termin — nach dem Auflegen
     kommt nur die LLM-Kurzfassung in die Notiz."""

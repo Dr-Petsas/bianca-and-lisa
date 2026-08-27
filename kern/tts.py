@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import array
+import re
 import struct
 from typing import Protocol
 
 import httpx
 
 from kern.config import ELEVENLABS_API_KEY, ELEVENLABS_TTS_MODEL, ELEVENLABS_VOICE_ID
+
+# Aussprache-Umschrift NUR fuer den Mund (Chef 27.08.2026: "Michael Petsas
+# wird englisch ausgesprochen"): ElevenLabs liest englisch klingende Vornamen
+# trotz language_code=de gern englisch ("Maikl"). Der Bindestrich erzwingt die
+# deutsche Silbentrennung. Logs, Kalender und Transkript behalten die echte
+# Schreibweise — nur der Text an die Stimme wird umgeschrieben.
+_AUSSPRACHE = (
+    (re.compile(r"\bMichael\b"), "Micha-el"),
+    (re.compile(r"\bDavid\b"), "Dah-vid"),
+)
 
 # Lautheit (Chef 27.08.2026: "Lautstärke schwankt, wie ein Kompressor"):
 # Der alte feste Faktor 3,2 mit hartem Kappen übersteuerte normale Sprachpegel
@@ -98,6 +109,8 @@ class ElevenLabsTts:
         sauber = " ".join(str(text or "").split()).strip()
         if not sauber or not ELEVENLABS_API_KEY:
             return b""
+        for cre, ersatz in _AUSSPRACHE:
+            sauber = cre.sub(ersatz, sauber)
         schluessel = f"{_VOICE_ID}|{sauber}"
         hit = _CACHE.get(schluessel)
         if hit:

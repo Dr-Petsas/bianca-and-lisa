@@ -87,6 +87,11 @@ function stopVoice() {
   try { a.removeAttribute("src"); a.load(); } catch { /* */ }
   try { if (playUrl._src) playUrl._src.stop(); } catch { /* */ }
   playUrl._src = null;
+  // Falls die Wiedergabe gerade im Verdachts-Stopp hing: Kontext wieder
+  // freigeben, sonst bleibt die NÄCHSTE Antwort stumm.
+  try {
+    if (unlockAudio.ctx && unlockAudio.ctx.state === "suspended") unlockAudio.ctx.resume();
+  } catch { /* */ }
   kiSpricht = false;
 }
 
@@ -117,21 +122,45 @@ function micWacheStarten() {
 }
 
 function bargeOderCap(dauerMs) {
+  // Nebengeräusch-Schutz (Chef 27.08.): Pegel allein bricht NICHT mehr ab.
+  // Bei Pegel-Verdacht wird nur PAUSIERT; kommen binnen ~1,4 s echte Wörter
+  // (Live-STT), ist es ein Einwurf => Stopp. Sonst spricht sie an derselben
+  // Stelle weiter. Nur Geräte OHNE Live-STT (iOS) stoppen weiter direkt —
+  // dafür deutlich konservativer (~400 ms anhaltender Pegel).
   return new Promise((done) => {
-    const start = performance.now();
+    let start = performance.now();
     let laut = 0;
+    let pauseSeit = 0;
+    const hatOhr = () => !!(liveOhr && liveOhr.ok);
+    const pausieren = () => {
+      try { if (unlockAudio.ctx && playUrl._src) unlockAudio.ctx.suspend(); } catch { /* */ }
+      try { const a = lautsprecher(); if (a.src && !a.paused) a.pause(); } catch { /* */ }
+    };
+    const weiter = () => {
+      try { if (unlockAudio.ctx && unlockAudio.ctx.state === "suspended") unlockAudio.ctx.resume(); } catch { /* */ }
+      try { const a = lautsprecher(); if (a.src && a.paused) a.play(); } catch { /* */ }
+    };
     const tick = () => {
-      if (!kiSpricht || !callOn) return done("stop");
+      if (!kiSpricht || !callOn) { if (pauseSeit) weiter(); return done("stop"); }
       const jetzt = performance.now();
-      if (jetzt - start > dauerMs) return done("cap");
-      if (liveOhr && liveOhr.ok && liveOhr.text().length >= 2) {
+      if (!pauseSeit && jetzt - start > dauerMs) return done("cap");
+      if (hatOhr() && liveOhr.text().length >= 2) {
         stopVoice();
         return done("barge");
       }
-      // Pegel-Barge-in: ~150 ms anhaltende Stimme unterbricht Bianca.
-      if (micWache && jetzt - start > 350) {
-        laut = micWache.rms() > 0.06 ? laut + 1 : 0;
-        if (laut >= 3) {
+      if (pauseSeit) {
+        if (jetzt - pauseSeit > 1400) {
+          start += jetzt - pauseSeit; // Pausenzeit zählt nicht aufs Zeitlimit
+          pauseSeit = 0;
+          laut = 0;
+          weiter();
+        }
+      } else if (micWache && jetzt - start > 350) {
+        laut = micWache.rms() > (hatOhr() ? 0.06 : 0.09) ? laut + 1 : 0;
+        if (hatOhr() && laut >= 4) {
+          pauseSeit = jetzt; // nur anhalten — Abbruch erst bei echten Wörtern
+          pausieren();
+        } else if (!hatOhr() && laut >= 8) {
           stopVoice();
           return done("barge");
         }

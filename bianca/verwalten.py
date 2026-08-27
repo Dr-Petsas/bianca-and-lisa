@@ -10,6 +10,7 @@ zu tun hat — dann uebernimmt das LLM (Status steht im Prompt).
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from bianca import gehirn, hintergrund
@@ -20,6 +21,39 @@ from kern.slots import pick_slots, spoken_offer, spoken_slot
 Melde = Callable[[str], None] | None
 
 _MODI = {"absagen", "verschieben", "auskunft"}
+
+# "Früher"/"später" beim Verschieben ist RELATIV zum Bestandstermin — live
+# 27.08.2026: "ein bisschen früher, so zwölf Uhr fünfzehn" wurde als
+# "vormittags" gedeutet, der freie 12:15-Platz am SELBEN Tag nie angeboten.
+_FRUEHER_RE = re.compile(
+    r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen|vorverlegen|vor\s*verlegen",
+    re.I,
+)
+_SPAETER_RE = re.compile(
+    r"\bspäter\b|\bspaeter\b|nach\s+hinten\b|weiter\s+hinten|hinten\s*raus",
+    re.I,
+)
+
+
+def _richtung_merken(sit: dict, t: str) -> None:
+    """Verschiebe-Richtung ("früher"/"später") aus dem Anrufer-Satz ziehen."""
+    s = gehirn.sammler(sit)
+    if s["modus"] != "verschieben":
+        return
+    if _FRUEHER_RE.search(t):
+        sit["verschiebRichtung"] = "frueher"
+    elif _SPAETER_RE.search(t):
+        sit["verschiebRichtung"] = "spaeter"
+    if not sit.get("verschiebRichtung"):
+        return
+    # Nennt der Anrufer einen ANDEREN Tag/eine andere Woche, gilt die
+    # Richtung nicht mehr — dann zaehlt der explizite Wunsch.
+    termin_iso = _s(_gewaehlt(sit).get("iso"))
+    w = s["wunsch"] or {}
+    if w.get("date") and len(termin_iso) >= 10 and w["date"] != termin_iso[:10]:
+        sit["verschiebRichtung"] = ""
+    elif w.get("weekday") is not None or w.get("minDaysAhead"):
+        sit["verschiebRichtung"] = ""
 
 
 def _s(v: Any) -> str:
@@ -177,8 +211,32 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             "Der Terminkalender antwortet gerade nicht. "
             "Die Praxis ruft Sie zum Verschieben kurzfristig zurück."
         )}
-    isos = [x for x in kal._iso_liste(found.get("slots") or []) if x[:16] != _s(termin.get("iso"))[:16]]
+    termin_iso = _s(termin.get("iso"))
+    isos = [x for x in kal._iso_liste(found.get("slots") or []) if x[:16] != termin_iso[:16]]
+
+    # "Früher"/"später" heisst: am SELBEN Tag vor/nach dem Bestandstermin —
+    # erst wenn dort nichts frei ist, kommen andere Tage dran (ehrlich gesagt).
+    hinweis = ""
+    richtung = _s(sit.get("verschiebRichtung"))
+    if richtung and len(termin_iso) >= 16:
+        tag = termin_iso[:10]
+        if richtung == "frueher":
+            eng = [x for x in isos if x[:10] == tag and x[:16] < termin_iso[:16]]
+        else:
+            eng = [x for x in isos if x[:10] == tag and x[:16] > termin_iso[:16]]
+        if eng:
+            isos = eng
+        else:
+            wort = "vorher" if richtung == "frueher" else "später"
+            hinweis = f"Am selben Tag ist {wort} leider nichts mehr frei. "
+
     picked = pick_slots(isos, wish=s["wunsch"])
+    if not picked["slots"] and s["wunsch"]:
+        # Wunsch (z. B. konkrete Uhrzeit) passt nirgends: naechstliegende
+        # Zeiten zeigen statt in der Wunsch-Schleife zu haengen.
+        picked = pick_slots(isos)
+        if picked["slots"]:
+            hinweis = hinweis or "Genau zu dieser Zeit ist nichts frei. "
     if not picked["slots"]:
         s["phase"] = "verschieb_wunsch"
         s["frage"] = "wunsch"
@@ -190,7 +248,7 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     sit["offered"] = offered
     s["phase"] = "verschieb_angebot"
     s["frage"] = "slotwahl"
-    return {"text": spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
+    return {"text": hinweis + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
 def _verschieb_readback(sit: dict, neu_iso: str) -> dict:
@@ -217,8 +275,14 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
     if res.get("ok") and (res.get("moved") or res.get("dryRun")):
         _arzt_uebernehmen(sit, termin)
         sit["gefundenKey"] = ""
+        # Anliegen ERLEDIGT: Modus schliessen und Angebote verwerfen — sonst
+        # bot der Fluss nach "Das war's, danke" WIEDER Zeiten an (live 27.08.
+        # 15:22: Re-Dispatch ueber den geleerten Termin-Cache).
+        s["modus"] = ""
         s["phase"] = "fertig"
         s["frage"] = ""
+        sit["offered"] = []
+        sit["verschiebRichtung"] = ""
         return {
             "text": (res.get("spoken") or "Der Termin ist verschoben.")
                     + " Kann ich sonst noch etwas für Sie tun?",
@@ -294,6 +358,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     t = _s(gesagt)
     if s["modus"] not in _MODI:
         return None
+    _richtung_merken(sit, t)
 
     # 1) Offene Bestaetigungen zuerst — ein "ja" traegt sonst nichts Neues.
     if s["phase"] == "absage_bestaetigen":
@@ -395,8 +460,14 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         }[s["modus"]]
         return {"text": f"{was}: Wie ist Ihr Vor- und Nachname?"}
 
-    # 6) Name da — Termine holen und das Anliegen bedienen.
-    if s["phase"] in {"", "fertig"} and (("name" in neu or "nachname" in neu or "modus" in neu) or sit.get("gefundenKey") != f"{s['vorname']}|{s['nachname']}".lower()):
+    # 6) Name da — Termine holen und das Anliegen bedienen. Nach ERLEDIGTEM
+    #    Anliegen (phase fertig) nur mit NEUER Info wieder los — der geleerte
+    #    Termin-Cache allein ist kein Grund (live 27.08. 15:22: "Das war's,
+    #    danke" loeste sonst ein frisches Slot-Angebot aus).
+    if s["phase"] in {"", "fertig"} and (
+        ("name" in neu or "nachname" in neu or "modus" in neu)
+        or (s["phase"] == "" and sit.get("gefundenKey") != f"{s['vorname']}|{s['nachname']}".lower())
+    ):
         quittung = ""
         if ("name" in neu or "nachname" in neu) and s["nachname"]:
             voll = f"{s['vorname']} {s['nachname']}".strip()

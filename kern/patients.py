@@ -243,6 +243,27 @@ def ohne_titel(name: str) -> str:
     return " ".join(teile)
 
 
+def arzt_sprechname(name: str) -> str:
+    """"Dr. Michael Petsas, M.Sc." -> "Doktor Petsas" — fuers SPRECHEN.
+
+    Der Vorname faellt bewusst weg: ElevenLabs spricht englisch klingende
+    Vornamen ("Michael") trotz language_code=de gern englisch aus
+    (Chef 27.08.2026). Fuer Kalender-Aufloesung den VOLLEN Namen verwenden.
+    """
+    kern_name = _s(name).split(",")[0].strip()
+    if not kern_name:
+        return ""
+    tokens = [t.lower().rstrip(".") for t in kern_name.replace(".", ". ").split()]
+    hat_prof = "prof" in tokens
+    hat_dr = "dr" in tokens
+    rest = ohne_titel(kern_name).split()
+    nachname = rest[-1] if rest else ""
+    if not nachname:
+        return kern_name
+    titel = "Professor" if hat_prof else ("Doktor" if hat_dr else "")
+    return f"{titel} {nachname}".strip()
+
+
 def ist_testakte(p: dict) -> bool:
     pid = _s(p.get("id")).lower()
     if pid.startswith(_TEST_ID_PREFIXES):
