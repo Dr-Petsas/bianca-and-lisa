@@ -110,6 +110,79 @@ def _zahl(n: int) -> str:
     return f"{'ein' if e == 1 else _EINER[e]}und{_ZEHNER.get(z, str(z))}"
 
 
+# --- Euro-Beträge (Chef 27.08.2026: grobe Preise nennen können) -------------
+# _zahl/_ZEHNER decken nur Uhrzeiten (0-59) — Beträge brauchen die volle Reihe.
+
+_ZEHNER_BETRAG = {
+    2: "zwanzig", 3: "dreißig", 4: "vierzig", 5: "fünfzig",
+    6: "sechzig", 7: "siebzig", 8: "achtzig", 9: "neunzig",
+}
+
+
+def _unter_hundert(n: int) -> str:
+    if n < 20:
+        return _EINER[n]
+    z, e = divmod(n, 10)
+    if e == 0:
+        return _ZEHNER_BETRAG[z]
+    return f"{'ein' if e == 1 else _EINER[e]}und{_ZEHNER_BETRAG[z]}"
+
+
+def _unter_tausend(n: int) -> str:
+    h, rest = divmod(n, 100)
+    kopf = (("ein" if h == 1 else _EINER[h]) + "hundert") if h else ""
+    if rest or not kopf:
+        return kopf + _unter_hundert(rest)
+    return kopf
+
+
+def betrag_wort(n: int) -> str:
+    """120 -> 'einhundertzwanzig', 1600 -> 'sechzehnhundert' (Sprech-Stil),
+    2500 -> 'zweitausendfünfhundert'. Außerhalb 0..999999 bleiben Ziffern."""
+    n = int(n)
+    if n < 0 or n > 999_999:
+        return str(n)
+    if n < 1000:
+        return _unter_tausend(n)
+    if 1100 <= n <= 1999 and n % 100 == 0:
+        return _unter_hundert(n // 100) + "hundert"
+    t, rest = divmod(n, 1000)
+    kopf = ("ein" if t == 1 else _unter_tausend(t)) + "tausend"
+    return kopf + (_unter_tausend(rest) if rest else "")
+
+
+# "1.400" (Tausenderpunkt) oder "1400"; Lookbehind schützt Dezimal-/Teilzahlen
+# ("149,50 Euro" bleibt unangetastet, statt ",50" zu "fünfzig" zu machen).
+_EURO_ZAHL = r"\d{1,3}(?:\.\d{3})+|\d+"
+_EURO_SPANNE_RE = re.compile(
+    rf"(?<![\d,.])({_EURO_ZAHL})\s*(bis|und|[-–—])\s*({_EURO_ZAHL})\s*(?:Euros?\b|€)"
+)
+_EURO_RE = re.compile(rf"(?<![\d,.])({_EURO_ZAHL})\s*(?:Euros?\b|€)")
+
+
+def _betrag_gesprochen(n: int) -> str:
+    return "ein" if n == 1 else betrag_wort(n)
+
+
+def _ersetze_euro(text: str) -> str:
+    def spanne(mo: re.Match) -> str:
+        a = int(mo.group(1).replace(".", ""))
+        b = int(mo.group(3).replace(".", ""))
+        if a > 999_999 or b > 999_999:
+            return mo.group(0)
+        conn = mo.group(2) if mo.group(2) in {"bis", "und"} else "bis"
+        return f"{_betrag_gesprochen(a)} {conn} {_betrag_gesprochen(b)} Euro"
+
+    def einzel(mo: re.Match) -> str:
+        n = int(mo.group(1).replace(".", ""))
+        if n > 999_999:
+            return mo.group(0)
+        return f"{_betrag_gesprochen(n)} Euro"
+
+    out = _EURO_SPANNE_RE.sub(spanne, text)
+    return _EURO_RE.sub(einzel, out)
+
+
 def zeit_wort(hour: int, minute: int = 0) -> str:
     h = max(0, min(23, int(hour)))
     m = max(0, min(59, int(minute)))
@@ -241,6 +314,9 @@ def sanitize(text: str, *, heute: date | None = None) -> str:
     out = " ".join(s for s in ohne_tech if not _REGIE.search(s))
     for cre, ersatz in _SLOTWORT:
         out = cre.sub(ersatz, out)
+    # Euro VOR den Zeit-/Datumsregeln: danach sind die Ziffern schon Worte
+    # und keine Datumsregel kann einen Preis mehr zerlegen.
+    out = _ersetze_euro(out)
     out = _ersetze_zeiten(out, heute)
     out = re.sub(r"\s+([.,;:!?])", r"\1", out)
     out = re.sub(r"\(\s*\)", "", out)

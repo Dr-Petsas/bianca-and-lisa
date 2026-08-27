@@ -12,6 +12,17 @@
     { "id": "RHYdoQFD7oAhqIepLzC2", "name": "Dr. Patrikis" },
     { "id": "zex5bmv5jfIHWVW6zHbg", "name": "Dr. Petsas" }
   ],
+  "wissen": {
+    "preise": [
+      "Hochwertige Composite-Keramik-Füllung, unsichtbar zahnfarben: circa 120 Euro.",
+      "Krone aus heller Vollkeramik: circa 900 bis 1400 Euro, je nach Krankenkasse und Ausführung.",
+      "Implantat: in der Regel circa 1600 bis 1800 Euro.",
+      "Professionelle Zahnreinigung: circa 150 Euro.",
+      "Narval-Schiene gegen Schnarchen und Schlafapnoe: für gesetzlich Versicherte kostenfrei bis auf einen Beitrag von rund 80 Euro für das digitale Scannen."
+    ],
+    "preiseSonst": "Das müssen Sie direkt mit Ihrem Zahnarzt besprechen.",
+    "hinweise": []
+  },
   "visitMotives": [
     { "id": "F4EAa6O5qPo4n01AWD4Z", "name": "IMP Besprechung", "duration": 30 },
     { "id": "RcgGY82C3sBIxsXY3kbv", "name": "KB Besprechung", "duration": 15 },

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from kern.wissen import wissen_block
 from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 
 
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
-                  sprache: str = "de", termine_text: str = "", slots_text: str = "") -> str:
+                  sprache: str = "de", termine_text: str = "", slots_text: str = "",
+                  wissen: dict | None = None) -> str:
     auftrag_gerahmt = rahme_auftrag(auftrag) + identitaets_rahmen(praxis, behandler)
+    praxiswissen = wissen_block(wissen)
     termin_logik = ""
     if ist_termin_auftrag(auftrag):
         termin_logik = """
@@ -68,6 +71,8 @@ freundlich, ruhig, empathisch, nicht roboterhaft.
 Eine Frage pro Atemzug. Kurze Sätze. Wie am Telefon.
 Uhrzeiten und Daten sagst du in Worten („morgen um neun Uhr fünfzehn“), nie als Ziffern oder ISO-Format.
 Technik bleibt unsichtbar: Wörter wie Slot, Timeslot, Tool, ID oder Werkzeugnamen sagst du NIE. Es heißt immer „Termin“.
+
+{praxiswissen}
 
 EINWÄNDE
 „Wer sind Sie?“ — Lisa, Terminassistentin von {praxis}{", im Auftrag von " + behandler if behandler else ""}.

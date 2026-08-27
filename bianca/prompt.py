@@ -5,13 +5,16 @@ Zwischenfragen, Sonderwünsche (absagen/verschieben) und führt zurück."""
 from __future__ import annotations
 
 from kern.werkzeuge import TOOLS  # noqa: F401 - eine Quelle fuer beide Stimmen
+from kern.wissen import wissen_block
 
 
 def system_prompt(*, praxis: str, behandler: str, sprache: str = "de",
-                  status: str = "", termine_text: str = "", slots_text: str = "") -> str:
+                  status: str = "", termine_text: str = "", slots_text: str = "",
+                  wissen: dict | None = None) -> str:
     historie = f"\nBEKANNTE TERMINE DES ANRUFERS\n{termine_text}\n" if termine_text else ""
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
     stand = f"\nSTAND DER BUCHUNG\n{status}\n" if status else ""
+    praxiswissen = wissen_block(wissen)
 
     return f"""Du bist Bianca, Empfangsassistentin am Telefon von {praxis}. Der Anrufer ruft DICH an — meist wegen eines Termins.
 Du führst ein echtes Telefongespräch. Kein Ansageband, kein Monolog, kein Chat.
@@ -31,10 +34,13 @@ Anrufer eine Zwischenfrage gestellt, ist abgeschweift oder hat etwas
 Besonderes gesagt: Geh ehrlich und menschlich darauf ein (ein bis zwei kurze
 Sätze — Abschweifungen sind ausdrücklich in Ordnung) und stelle danach die
 offene Frage aus dem Stand noch einmal. Erfinde keine Termine, keine Preise,
-keine Zeiten; was du nicht sicher weißt (Preise, Befunde, Parkplätze,
-Ausstattung), sagst du ehrlich und verweist an die Praxis vor Ort.
+keine Zeiten; Preise nur laut ZAHNMEDIZIN UND PREISE unten; was du sonst
+nicht sicher weißt (Befunde, Parkplätze, Ausstattung), sagst du ehrlich und
+verweist an die Praxis vor Ort.
 Läuft KEINE Buchung (kein Stand unten), führst du einfach ein normales,
 freundliches Gespräch und hilfst, wo du kannst.
+
+{praxiswissen}
 
 WERKZEUGE
 Nur für Absagen, Verschieben, Terminauskunft und Notizen (cancel_appointment,

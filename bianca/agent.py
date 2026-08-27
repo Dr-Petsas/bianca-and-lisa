@@ -160,6 +160,7 @@ def system_prompt_aktuell(sit: dict) -> str:
         status=flow.status_zeile(sit),
         termine_text=_termine_zeile(sit),
         slots_text=slots_zeile(sit.get("offered") or []),
+        wissen=tenant.get("wissen"),
     )
 
 

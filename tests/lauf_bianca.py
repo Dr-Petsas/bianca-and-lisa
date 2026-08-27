@@ -7,6 +7,7 @@ MODULE = [
     "tests.test_bianca_bausteine",
     "tests.test_buchwache",
     "tests.test_sprech",
+    "tests.test_wissen",
     "tests.test_filler",
     "tests.test_notes",
     "tests.test_patients",
