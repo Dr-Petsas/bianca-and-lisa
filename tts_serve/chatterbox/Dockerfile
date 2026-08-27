@@ -1,12 +1,22 @@
 # Chatterbox Multilingual V3 auf der RTX 5090 (Blackwell sm_120).
-# WICHTIG: chatterbox-tts pinnt eine aeltere torch-Version ohne
-# Blackwell-Kernel — nach der Installation wird torch auf cu128
-# zurueckgezwungen. Diese Reihenfolge nicht umdrehen, sonst
-# "no kernel image is available for execution on the device".
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+#
+# Basis ist bewusst python:3.11-slim, NICHT pytorch/pytorch (conda):
+# das conda-Image traegt eigene CUDA-Libs in /opt/conda/lib — nach dem
+# torch-Reinstall passte libcupti nicht mehr zum Wheel
+# ("undefined symbol: cuptiActivityEnableDriverApi", Vorfall 28.08.2026).
+# Mit pip-only kommen ALLE nvidia-cu12-Libs konsistent aus dem cu128-Index.
+#
+# WICHTIG: chatterbox-tts pinnt torch 2.6 ohne Blackwell-Kernel — danach
+# wird torch MIT Abhaengigkeiten (nvidia-cupti & Co.!) auf cu128
+# zurueckgezwungen. Reihenfolge nicht umdrehen, --no-deps nicht ergaenzen.
+FROM python:3.11-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libsndfile1 curl && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir chatterbox-tts fastapi uvicorn && \
-    pip install --no-cache-dir --force-reinstall --no-deps \
+    pip install --no-cache-dir --force-reinstall \
       torch==2.7.1 torchaudio==2.7.1 \
       --index-url https://download.pytorch.org/whl/cu128
 

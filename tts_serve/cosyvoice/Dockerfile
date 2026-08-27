@@ -1,12 +1,20 @@
 # Fun-CosyVoice3-0.5B auf der RTX 5090 (Blackwell sm_120).
+#
+# Basis ist bewusst python:3.11-slim, NICHT pytorch/pytorch (conda) —
+# gleiche cupti-Falle wie beim Chatterbox-Container (28.08.2026):
+# conda-CUDA-Libs kollidieren mit den pip-Wheels. build-essential/cmake
+# braucht pynini (WeTextProcessing) aus den CosyVoice-requirements.
+#
 # Das CosyVoice-Repo pinnt aeltere torch-Versionen ohne Blackwell-Kernel —
-# nach den requirements wird torch auf cu128 zurueckgezwungen.
+# nach den requirements wird torch MIT Abhaengigkeiten auf cu128
+# zurueckgezwungen (--no-deps wuerde die nvidia-cu12-Libs alt lassen).
 # Klemmt der Build an einer Trainings-Abhaengigkeit (z. B. deepspeed):
 # Zeile in der requirements.txt auskommentieren, fuer Inferenz unnoetig.
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+FROM python:3.11-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git sox libsox-dev unzip && \
+    apt-get install -y --no-install-recommends \
+      git sox libsox-dev libsndfile1 unzip curl build-essential cmake && \
     rm -rf /var/lib/apt/lists/*
 
 ARG COSYVOICE_REF=main
@@ -16,7 +24,7 @@ RUN git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/Cosy
 
 RUN pip install --no-cache-dir -r /opt/CosyVoice/requirements.txt \
       fastapi uvicorn huggingface_hub && \
-    pip install --no-cache-dir --force-reinstall --no-deps \
+    pip install --no-cache-dir --force-reinstall \
       torch==2.7.1 torchaudio==2.7.1 \
       --index-url https://download.pytorch.org/whl/cu128
 
