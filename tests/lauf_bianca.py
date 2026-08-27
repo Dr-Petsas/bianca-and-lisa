@@ -5,6 +5,7 @@ import traceback
 
 MODULE = [
     "tests.test_bianca_bausteine",
+    "tests.test_weiterleiten",
     "tests.test_buchwache",
     "tests.test_sprech",
     "tests.test_wissen",

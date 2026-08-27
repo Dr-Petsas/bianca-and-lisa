@@ -71,6 +71,7 @@ class Dienst:
         self.merke_zug = merke_zug or (lambda sit, **zug: None)
         self.audio: dict[str, bytes] = {}
         self.filler_urls: dict[str, str] = {}
+        self.feste_urls: dict[str, str] = {}
 
     # ---- Audio-Ablage -----------------------------------------------------
 
@@ -84,6 +85,21 @@ class Dienst:
 
     def audio_holen(self, name: str) -> bytes | None:
         return self.audio.get(name.rsplit(".", 1)[0])
+
+    def audio_fest_legen(self, name: str, blob: bytes) -> str:
+        """Festes, benanntes Audio (z. B. Verbinden-Jingle) unter stabiler URL
+        ablegen — abspielbar ueber melde("audio:<name>") im Zug-Strom."""
+        name = _s(name)
+        if not name or not blob:
+            return ""
+        self.audio[name] = blob
+        ext = "wav" if blob[:4] == b"RIFF" else "mp3"
+        url = f"/api/audio/{name}.{ext}"
+        self.feste_urls[name] = url
+        return url
+
+    def audio_fest_url(self, name: str) -> str:
+        return self.feste_urls.get(_s(name)) or ""
 
     def stimme(self, text: str) -> tuple[str, float]:
         if not text or not tts.bereit():
@@ -251,7 +267,14 @@ class Dienst:
                 yield zeile({"type": "filler", "audioUrl": wert})
                 filler_raus = True
             elif typ == "tool":
-                if not filler_raus:
+                if isinstance(wert, str) and wert.startswith("audio:"):
+                    # Festes Audio (z. B. Verbinden-Jingle): das ist Inhalt,
+                    # kein geratener Ueberbrueckungssatz — IMMER ausspielen.
+                    url = self.audio_fest_url(wert.split(":", 1)[1])
+                    if url:
+                        yield zeile({"type": "filler", "audioUrl": url})
+                    filler_raus = True
+                elif not filler_raus:
                     url = self._filler_url(sit, filler.fuer_tool(wert))
                     if url:
                         yield zeile({"type": "filler", "audioUrl": url})

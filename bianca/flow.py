@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from bianca import gehirn, hintergrund, telefon, verwalten
+from bianca import gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import calendar as kal
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
@@ -387,6 +387,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     t = _s(gesagt)
     if not t:
         return None
+
+    # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
+    # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris
+    # Zaluma-/SIP-Weiterleitung (bianca/weiterleiten.py).
+    wl = weiterleiten.zug(sit, t, melde)
+    if wl is not None:
+        return wl
+
     if s["phase"] == "gebucht":
         # Frisch gebucht — aber "sagen Sie ihn doch wieder ab" / "wann war
         # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.

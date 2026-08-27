@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bianca import agent, session
+from bianca import agent, session, weiterleiten
 from bianca.greeting import begruessung
 from kern import llm, stt, tenants, tts
 from kern.config import (
@@ -41,6 +41,14 @@ DIENST = Dienst(
     schnell_fn=lambda sit: (sit.get("sammler") or {}).get("phase") != "gebucht",
     merke_zug=session.merke_zug,
 )
+
+
+# Verbinden-Jingle ("Wir verbinden Sie zu Ihrem Arzt") fuer den
+# Weiterleitungs-Platzhalter (bianca/weiterleiten.py): als festes Audio
+# ablegen — gespielt wird es ueber die bestehende Filler-Kette des Clients.
+_JINGLE_PFAD = BIANCA_WEB_DIR / "verbinden.mp3"
+if _JINGLE_PFAD.is_file():
+    DIENST.audio_fest_legen(weiterleiten.JINGLE_NAME, _JINGLE_PFAD.read_bytes())
 
 
 class StartIn(BaseModel):
