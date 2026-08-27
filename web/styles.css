@@ -14,11 +14,20 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
-body.bianca-aktiv { padding-bottom: 0; overflow: hidden; }
+/* Bianca aktiv: Seite wird zur Spalte (Tab-Leiste + Rest), das Iframe
+   bekommt EXAKT den restlichen Platz — egal wie hoch die Tab-Leiste bei
+   Zoom/schmalem Fenster wird. Vorher war die Hoehe hart gerechnet
+   (100dvh - 49px): wurde die Leiste hoeher, lag Biancas Anrufen-Knopf
+   unterhalb des Sichtbereichs (Chef 27.08.: "kein Startknopf"). */
+body.bianca-aktiv {
+  padding-bottom: 0; overflow: hidden;
+  display: flex; flex-direction: column; height: 100dvh;
+}
 
 /* --- Tabs: Lisa (Outbound) | Bianca (Inbound) --- */
 .tabs {
   position: sticky; top: 0; z-index: 60; display: flex; gap: 6px;
+  flex: 0 0 auto; flex-wrap: wrap;
   background: #0c110f; border-bottom: 1px solid var(--line);
   padding: 8px 10px calc(8px + 0px);
 }
@@ -32,7 +41,8 @@ body.bianca-aktiv { padding-bottom: 0; overflow: hidden; }
 .tab.active { background: var(--card); border-color: var(--line); color: var(--text); }
 .tab.active .tabsub { color: var(--accent); }
 .tab[data-tab="bianca"].active .tabsub { color: #e8a2b6; }
-#tab-bianca { position: relative; height: calc(100dvh - 49px); }
+#tab-bianca { position: relative; flex: 1 1 auto; min-height: 0; height: calc(100dvh - 49px); }
+body.bianca-aktiv #tab-bianca { height: auto; }
 .tab-frame { display: block; width: 100%; height: 100%; border: 0; background: #14100f; }
 .tab-frame-hinweis {
   position: absolute; left: 0; right: 0; top: 45%; text-align: center;
