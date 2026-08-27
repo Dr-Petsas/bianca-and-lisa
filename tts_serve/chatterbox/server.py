@@ -82,7 +82,12 @@ def _laden() -> None:
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
     t0 = time.time()
-    _MODEL = ChatterboxMultilingualTTS.from_pretrained(device="cuda", t3_model="v3")
+    try:
+        # Neuere chatterbox-Versionen waehlen das V3-T3 explizit; aeltere
+        # (z. B. PyPI 0.1.x) kennen das Argument nicht und laden direkt.
+        _MODEL = ChatterboxMultilingualTTS.from_pretrained(device="cuda", t3_model="v3")
+    except TypeError:
+        _MODEL = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
     _VOICES = _stimmen_scannen()
     _ALIASE = _aliase_lesen(_VOICES)
     print(f"chatterbox geladen in {time.time() - t0:.0f}s, "
