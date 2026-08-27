@@ -539,16 +539,15 @@ function auflegen() {
 }
 
 async function boot() {
+  // Technik-Zeile ist aus der Oberfläche raus (Chef 27.08.2026) —
+  // nur bei totem Dienst erscheint eine Warnung.
   try {
     const h = await (await fetch("health")).json();
-    const llm = h.llm && h.llm.ok ? "vLLM da" : "vLLM offline";
-    const live = h.writeLive ? "schreibt Kalender" : "Test: Kalender bleibt leer";
-    $("health").textContent = `${llm} · hört ${h.stt || "?"} · spricht ${h.tts} · ${live}`;
-    $("health").className = "sub" + (h.llm && h.llm.ok ? "" : " bad");
     zeigeLetzten(h.lastCall);
     zeigeStand(h.lastCall);
+    if (!(h.llm && h.llm.ok)) meld("Sprachmodell offline — Bianca kann nicht antworten.", true);
   } catch {
-    $("health").textContent = "Dienst antwortet nicht";
+    meld("Biancas Dienst antwortet nicht.", true);
   }
   const t = await (await fetch("api/tenants")).json();
   $("tenant").innerHTML = (t.tenants || []).map((x) =>

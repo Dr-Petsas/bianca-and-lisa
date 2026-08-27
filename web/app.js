@@ -652,19 +652,15 @@ function auflegen() {
 }
 
 async function boot() {
+  // Technik-Zeile und Fernsteuerungs-Link sind aus der Oberfläche raus
+  // (Chef 27.08.2026) — nur bei totem Dienst erscheint eine Warnung.
   try {
     const h = await (await fetch("/health")).json();
-    const llm = h.llm && h.llm.ok ? "vLLM da" : "vLLM offline";
-    const live = h.writeLive ? "schreibt Kalender" : "Test: Kalender bleibt leer";
-    $("health").textContent = `${llm} · hört ${h.stt || "?"} · spricht ${h.tts} · ${live}`;
-    $("health").className = "sub" + (h.llm && h.llm.ok ? "" : " bad");
-    zeigeLetzten(h.lastCall);  } catch {
-    $("health").textContent = "Dienst antwortet nicht";
+    zeigeLetzten(h.lastCall);
+    if (!(h.llm && h.llm.ok)) meld("Sprachmodell offline — Lisa kann nicht antworten.", true);
+  } catch {
+    meld("Lisas Dienst antwortet nicht.", true);
   }
-  try {
-    const s = await (await fetch("/remote/state")).json();
-    if (s.fernPath) $("fern").href = s.fernPath;
-  } catch { /* Handy ohne Token */ }
   const t = await (await fetch("/api/tenants")).json();
   $("tenant").innerHTML = (t.tenants || []).map((x) =>
     `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`
