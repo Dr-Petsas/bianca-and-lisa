@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from bianca import gehirn, hintergrund, telefon
+from bianca import gehirn, hintergrund, telefon, verwalten
 from kern import calendar as kal
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
@@ -352,6 +352,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if not t:
         return None
     if s["phase"] == "gebucht":
+        # Frisch gebucht — aber "sagen Sie ihn doch wieder ab" / "wann war
+        # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.
+        neu = gehirn.einsammeln(sit, t)
+        if s["modus"] in {"absagen", "verschieben", "auskunft"}:
+            sit["gefundenKey"] = ""  # Bestand frisch laden, der neue Termin zaehlt mit
+            return verwalten.zug(sit, t, neu, melde)
         return None
 
     if s["phase"] == "bestaetigen":
@@ -369,6 +375,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _readback(sit)
 
     neu = gehirn.einsammeln(sit, t)
+
+    # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
+    # eigenen deterministischen Fluss.
+    if s["modus"] in {"absagen", "verschieben", "auskunft"}:
+        return verwalten.zug(sit, t, neu, melde)
 
     if s["modus"] != "buchen" and "modus" not in neu:
         return None
@@ -426,6 +437,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 def status_zeile(sit: dict) -> str:
     """Kompakter Buchungsstand für den LLM-Prompt, wenn der Fluss abgibt."""
     s = sit.get("sammler") or {}
+    if s.get("modus") in {"absagen", "verschieben", "auskunft"}:
+        return verwalten.status_zeile(sit)
     if not s or s.get("modus") != "buchen":
         return ""
     a = s.get("arzt") or {}

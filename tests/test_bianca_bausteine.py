@@ -298,3 +298,194 @@ def test_status_zeile_traegt_stand():
     s["frage"] = "grund"
     zeile = gehirn.sammler(sit) and flow.status_zeile(sit)
     assert "Berger" in zeile and "grund" in zeile
+
+
+# --- Termin-Verwaltung: ansagen, absagen, verschieben ----------------------
+
+from bianca import verwalten  # noqa: E402
+
+
+GEFUNDEN = {
+    "ok": True,
+    "patient": {"id": "pat-1", "firstName": "Martin", "lastName": "Berger"},
+    "appointments": [{
+        "id": "apt-1", "iso": "2026-09-03T10:00", "date": "2026-09-03",
+        "calendarId": "zex5bmv5jfIHWVW6zHbg", "doctorName": "Dr. Petsas",
+        "motivId": "vm-1", "motivName": "01 Kontrolluntersuchung",
+        "spoken": "am Donnerstag, den dritten September um zehn Uhr bei Dr. Petsas",
+    }],
+}
+
+
+def test_modus_erkennung_verwaltung():
+    sit = _sit()
+    gehirn.einsammeln(sit, "Ich möchte meinen Termin absagen.")
+    assert gehirn.sammler(sit)["modus"] == "absagen"
+
+    sit2 = _sit()
+    gehirn.einsammeln(sit2, "Können wir meinen Termin verschieben?")
+    assert gehirn.sammler(sit2)["modus"] == "verschieben"
+
+    sit3 = _sit()
+    gehirn.einsammeln(sit3, "Wann ist mein Termin nochmal?")
+    assert gehirn.sammler(sit3)["modus"] == "auskunft"
+
+    # "sagen, ab wann" ist eine Auskunftsfrage, KEIN Storno.
+    sit4 = _sit()
+    gehirn.einsammeln(sit4, "Können Sie mir sagen, ab wann Sie morgens aufhaben?")
+    assert gehirn.sammler(sit4)["modus"] != "absagen"
+
+
+def test_absage_im_angebot_bleibt_buchung():
+    """'Absagen'/'verschieben' waehrend ein Buchungs-Angebot offen ist, meint
+    das Angebot — der Modus darf nicht in die Bestandsverwaltung kippen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "phase": "angebot"})
+    gehirn.einsammeln(sit, "Nee, das passt nicht — dann sagen Sie es ab.")
+    assert s["modus"] == "buchen"
+
+
+def test_absage_fluss_komplett():
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_cancel = verwalten.kal.cancel_by_id
+    echt_anstossen = verwalten.hintergrund.anstossen
+    aufrufe = {}
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    def _cancel(t, c, aid):
+        aufrufe["aid"] = aid
+        return {"ok": True, "cancelled": True, "appointmentId": aid, "spoken": "Der Termin ist abgesagt."}
+    verwalten.kal.cancel_by_id = _cancel
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
+        assert z1 and "name" in z1["text"].lower()
+
+        z2 = flow.zug(sit, "Martin Berger.")
+        assert z2 and "wirklich absagen" in z2["text"].lower()
+        assert gehirn.sammler(sit)["phase"] == "absage_bestaetigen"
+
+        z3 = flow.zug(sit, "Ja, bitte.")
+        assert z3 and "abgesagt" in z3["text"].lower()
+        assert aufrufe["aid"] == "apt-1"
+        assert "neuen termin" in z3["text"].lower()
+
+        z4 = flow.zug(sit, "Nein, danke.")
+        assert z4 and "sonst noch" in z4["text"].lower()
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.kal.cancel_by_id = echt_cancel
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_absage_dann_neubuchung():
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_cancel = verwalten.kal.cancel_by_id
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    verwalten.kal.cancel_by_id = lambda t, c, aid: {"ok": True, "cancelled": True, "appointmentId": aid, "spoken": "Der Termin ist abgesagt."}
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        flow.zug(sit, "Martin Berger.")
+        flow.zug(sit, "Ja.")
+        z = flow.zug(sit, "Ja, gerne einen neuen.")
+        s = gehirn.sammler(sit)
+        assert s["modus"] == "buchen"
+        assert z and _s_frage(z)
+        # Behandler des abgesagten Termins ist als Vorgabe uebernommen:
+        assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.kal.cancel_by_id = echt_cancel
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def _s_frage(z: dict) -> str:
+    return (z or {}).get("text") or ""
+
+
+def test_auskunft_und_folgeabsage():
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Wann ist mein Termin nochmal?")
+        assert z1 and "name" in z1["text"].lower()
+
+        z2 = flow.zug(sit, "Martin Berger.")
+        assert z2 and "nächster termin" in z2["text"].lower()
+        assert "Petsas" in z2["text"]
+
+        z3 = flow.zug(sit, "Ach, den können Sie absagen bitte.")
+        assert z3 and "wirklich absagen" in z3["text"].lower()
+        assert gehirn.sammler(sit)["modus"] == "absagen"
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_verschieben_fluss_komplett():
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_slots = verwalten.kal.find_slots
+    echt_move = verwalten.kal.move_appointment
+    aufrufe = {}
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    verwalten.kal.find_slots = lambda t, c, **k: {
+        "ok": True,
+        "slots": ["2026-09-03T10:00", "2026-09-08T14:30", "2026-09-09T15:00"],
+        "doctorName": "Dr. Petsas",
+    }
+    def _move(t, ctx, **k):
+        aufrufe["aid"] = ctx.get("appointmentId")
+        aufrufe["iso"] = k.get("slot_iso")
+        return {"ok": True, "moved": True, "appointmentId": ctx.get("appointmentId"),
+                "slotIso": k.get("slot_iso"), "spoken": "Der Termin liegt jetzt am Dienstag."}
+    verwalten.kal.move_appointment = _move
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich würde meinen Termin gern verschieben.")
+        assert z1 and "name" in z1["text"].lower()
+
+        z2 = flow.zug(sit, "Martin Berger.")
+        assert z2 and "besser" in z2["text"].lower()
+        assert gehirn.sammler(sit)["phase"] == "verschieb_wunsch"
+
+        z3 = flow.zug(sit, "Lieber nachmittags.")
+        assert z3 and sit.get("offered"), z3
+        # Der eigene Bestandstermin (10:00) darf NICHT angeboten werden:
+        assert all(not o["iso"].startswith("2026-09-03T10:00") for o in sit["offered"])
+
+        z4 = flow.zug(sit, "Der erste bitte.")
+        assert z4 and "passt das so" in z4["text"].lower()
+
+        z5 = flow.zug(sit, "Ja.")
+        assert z5 and "sonst noch" in z5["text"].lower()
+        assert aufrufe["aid"] == "apt-1"
+        assert aufrufe["iso"] and aufrufe["iso"] != "2026-09-03T10:00"
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.kal.find_slots = echt_slots
+        verwalten.kal.move_appointment = echt_move
+
+
+def test_verwaltung_kein_termin_gefunden():
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: {"ok": True, "patient": {}, "appointments": []}
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        z = flow.zug(sit, "Martin Berger.")
+        assert z and "keinen kommenden termin" in z["text"].lower()
+        assert "neuen termin" in z["text"].lower()
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_verwaltung_status_zeile():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "nachname": "Berger", "frage": "absage_ok", "phase": "absage_bestaetigen"})
+    zeile = flow.status_zeile(sit)
+    assert "absagen" in zeile and "Berger" in zeile

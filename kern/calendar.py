@@ -439,11 +439,13 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
     return {"ok": False}
 
 
-def _termin_id_suchen(tenant: dict, ctx: dict, iso: str) -> str:
-    """Read-only: Termin-ID zum gebuchten Slot ueber agentFindPatientAppointments."""
+def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
+    """Kommende Termine zum NAMEN — ueber die warme Demo-Function
+    agentFindPatientAppointments (Patient + Termine in EINEM Aufruf,
+    inkl. Behandlername, Kalender-ID und Behandlungsgrund)."""
     first, last = _name_teile(ctx)
-    if not last or len(_s(iso)) < 10:
-        return ""
+    if not last:
+        return {"ok": False, "appointments": [], "spoken": "Wie ist Ihr Nachname?"}
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -456,17 +458,89 @@ def _termin_id_suchen(tenant: dict, ctx: dict, iso: str) -> str:
     if phone:
         body["callerPhone"] = phone
     status, data = _cf_post("agentFindPatientAppointments", body)
-    if status != 200 or not isinstance(data, dict):
+    if not isinstance(data, dict):
+        data = {}
+    pat = data.get("patient") or {}
+    patient = {
+        "id": _s(pat.get("id")),
+        "firstName": _s(pat.get("firstName")),
+        "lastName": _s(pat.get("lastName")),
+    }
+    if status == 200 and data.get("status") == "success":
+        termine = []
+        for a in data.get("appointments") or []:
+            if not isinstance(a, dict):
+                continue
+            iso = _s(a.get("start")).replace(" ", "T")[:16]
+            if len(iso) < 16:
+                iso = f"{_s(a.get('appointmentDate'))}T{_s(a.get('appointmentTime'))}"
+            arzt = _s(a.get("doctorName")).split(",")[0].strip()
+            vm = a.get("visitMotive") or {}
+            gesprochen = spoken_slot(iso)
+            if arzt:
+                gesprochen += f" bei {arzt}"
+            termine.append({
+                "id": _s(a.get("appointmentId")),
+                "iso": iso,
+                "date": iso[:10],
+                "calendarId": _s(a.get("calendarId")),
+                "doctorName": arzt,
+                "motivId": _s(vm.get("id")),
+                "motivName": _s(vm.get("name")),
+                "spoken": gesprochen,
+            })
+        return {"ok": True, "patient": patient, "appointments": termine}
+    if status == 404 and data.get("status") == "no_upcoming":
+        return {"ok": True, "patient": patient, "appointments": []}
+    if status == 404:
+        return {"ok": True, "notFound": True, "patient": {}, "appointments": []}
+    msg = _s(data.get("message")) or f"http_{status}"
+    return {"ok": False, "appointments": [], "error": msg}
+
+
+def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]:
+    """Punktgenauer Storno ueber agentCancelAppointmentById (warm).
+
+    Anders als updateOrCancelAppointment(action=cancel) trifft das GENAU den
+    einen Termin — nicht alle des Tages mit passendem Nachnamen."""
+    aid = _s(appointment_id)
+    if not aid:
+        return {"ok": False, "spoken": "Welchen Termin soll ich absagen?"}
+    if not WRITE_LIVE:
+        return {
+            "ok": True, "cancelled": False, "dryRun": True, "appointmentId": aid,
+            "spoken": "Den Termin hätte ich jetzt abgesagt.",
+            "regie": "Testmodus: der Kalender wurde nicht geändert.",
+        }
+    status, data = _cf_post("agentCancelAppointmentById", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "appointmentId": aid,
+        "source": "telefonki-lisa",
+    }, timeout=_SCHREIB_TIMEOUT)
+    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
+        ctx["appointmentId"] = aid
+        return {"ok": True, "cancelled": True, "appointmentId": aid, "spoken": "Der Termin ist abgesagt."}
+    msg = (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"
+    return {
+        "ok": False,
+        "spoken": "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum.",
+        "regie": f"Absage fehlgeschlagen: {msg}",
+    }
+
+
+def _termin_id_suchen(tenant: dict, ctx: dict, iso: str) -> str:
+    """Read-only: Termin-ID zum gebuchten Slot ueber agentFindPatientAppointments."""
+    if len(_s(iso)) < 10:
         return ""
+    found = find_patient_appointments(tenant, ctx)
     tag, minute = iso[:10], (iso[11:16] if len(iso) >= 16 else "")
-    for a in data.get("appointments") or []:
-        if not isinstance(a, dict):
+    for a in found.get("appointments") or []:
+        if a.get("date") != tag:
             continue
-        if _s(a.get("appointmentDate")) != tag:
+        if minute and len(a.get("iso") or "") >= 16 and a["iso"][11:16] != minute:
             continue
-        if minute and _s(a.get("appointmentTime")) and _s(a.get("appointmentTime")) != minute:
-            continue
-        return _s(a.get("appointmentId"))
+        return _s(a.get("id"))
     return ""
 
 

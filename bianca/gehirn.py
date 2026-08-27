@@ -37,6 +37,28 @@ _TERMIN_RE = re.compile(
     r"abgebrochen|vorsorge|untersuchung",
     re.I,
 )
+_ABSAGE_RE = re.compile(
+    r"absagen|abzusagen|stornieren|storniert|abbestellen|canceln|"
+    r"nicht\s+(kommen|wahrnehmen|schaffen|einhalten)|"
+    # Trennbares Verb: "ich sage den Termin ab" / "sag ihn bitte ab" — aber
+    # NICHT "können Sie mir sagen, ab wann ..." (Auskunftsfrage).
+    r"\bsag\w*\s+(?:ich\s+|wir\s+)?(?:den\s+|meinen\s+|diesen\s+|ihn\s+|sie\s+|bitte\s+)*(?:termin\s+)?ab\b(?!\s*(?:wann|wie|welch))",
+    re.I,
+)
+_VERSCHIEBEN_RE = re.compile(
+    r"verschieben|verschoben|umbuchen|umzubuchen|verlegen|umlegen|vorverlegen|"
+    r"nach\s+hinten\s+schieben|anderen\s+tag\s+.{0,16}(statt|als)\b",
+    re.I,
+)
+_AUSKUNFT_RE = re.compile(
+    r"wann\s+(ist|war|wäre|waere|hab(e)?\s+ich)\b.{0,30}termin|"
+    r"hab(e)?\s+ich\s+(überhaupt\s+|ueberhaupt\s+)?(noch\s+)?(irgend)?einen\s+termin|"
+    r"welche[nr]?\s+termin(e)?\s+(hab|steht|stehen)|"
+    r"termin\s+(nochmal|noch\s+mal|nochmals)\s*(sagen|nennen|durchgeben)?|"
+    r"wann\s+(muss|soll|darf)\s+ich\s+(kommen|da\s+sein|vorbeikommen)|"
+    r"wann\s+bin\s+ich\s+(dran|eingetragen)",
+    re.I,
+)
 _SCHONMAL_JA_RE = re.compile(
     r"(war|bin|waren)\s+(schon|bereits|öfter|oefter|mal|einmal|früher|frueher)[^.]{0,40}(bei\s+(ihnen|euch)|da|dort|in\s+der\s+praxis)|"
     r"bin\s+(schon\s+)?patient|bin\s+bei\s+ihnen\s+in\s+behandlung",
@@ -205,9 +227,38 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if not t:
         return neu
 
-    if s["modus"] != "buchen" and _TERMIN_RE.search(t):
-        s["modus"] = "buchen"
-        neu.add("modus")
+    # Anliegen-Modus: absagen/verschieben/auskunft VOR der Buchungs-Erkennung
+    # prüfen — "Ich möchte meinen Termin absagen" enthält auch "Termin".
+    # Läuft schon ein Angebot im Buchungsfluss, bezieht sich "absagen"/
+    # "verschieben" auf das Angebot, nicht auf einen Bestandstermin.
+    im_angebot = s["modus"] == "buchen" and s["phase"] in {"angebot", "bestaetigen"}
+    if not im_angebot:
+        if _VERSCHIEBEN_RE.search(t):
+            if s["modus"] != "verschieben":
+                s["modus"] = "verschieben"
+                s["phase"] = ""
+                s["frage"] = ""
+                neu.add("modus")
+        elif _ABSAGE_RE.search(t):
+            if s["modus"] != "absagen":
+                s["modus"] = "absagen"
+                s["phase"] = ""
+                s["frage"] = ""
+                neu.add("modus")
+        elif _AUSKUNFT_RE.search(t):
+            if s["modus"] in {"", "buchen"} and s["phase"] in {"", "gebucht", "fertig"}:
+                s["modus"] = "auskunft"
+                s["phase"] = ""
+                s["frage"] = ""
+                neu.add("modus")
+        elif _TERMIN_RE.search(t):
+            # Neu buchen: aus dem Leeren — oder nach abgeschlossener
+            # Verwaltung ("fertig": Storno erledigt, Auskunft gegeben).
+            if s["modus"] == "" or (s["modus"] != "buchen" and s["phase"] == "fertig"):
+                s["modus"] = "buchen"
+                s["phase"] = ""
+                s["frage"] = ""
+                neu.add("modus")
 
     # Schon mal da gewesen?
     if _SCHONMAL_NEIN_RE.search(t):

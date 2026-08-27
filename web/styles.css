@@ -14,6 +14,31 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+body.bianca-aktiv { padding-bottom: 0; overflow: hidden; }
+
+/* --- Tabs: Lisa (Outbound) | Bianca (Inbound) --- */
+.tabs {
+  position: sticky; top: 0; z-index: 60; display: flex; gap: 6px;
+  background: #0c110f; border-bottom: 1px solid var(--line);
+  padding: 8px 10px calc(8px + 0px);
+}
+.tab {
+  appearance: none; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 15px;
+  font-weight: 650; padding: 9px 16px; cursor: pointer; display: flex;
+  align-items: baseline; gap: 8px;
+}
+.tab .tabsub { font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.tab.active { background: var(--card); border-color: var(--line); color: var(--text); }
+.tab.active .tabsub { color: var(--accent); }
+.tab[data-tab="bianca"].active .tabsub { color: #e8a2b6; }
+#tab-bianca { position: relative; height: calc(100dvh - 49px); }
+.tab-frame { display: block; width: 100%; height: 100%; border: 0; background: #14100f; }
+.tab-frame-hinweis {
+  position: absolute; left: 0; right: 0; top: 45%; text-align: center;
+  color: var(--warn); font-size: 15px; padding: 0 20px;
+}
+.tab-frame-hinweis code { background: #24302c; border-radius: 6px; padding: 2px 8px; }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 h1 { font-size: 22px; font-weight: 650; margin: 0; }

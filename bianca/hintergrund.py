@@ -40,7 +40,9 @@ def kartei_anstossen(sit: dict) -> None:
     """Patient auflösen, sobald ein Nachname da ist — parallel zum Gespräch."""
     s = gehirn.sammler(sit)
     key = f"{s['vorname']}|{s['nachname']}".lower()
-    if not s["nachname"] or s["gesucht"] == key or s["patientId"]:
+    # patientId allein reicht nicht: kommt sie aus agentFindPatientAppointments
+    # (Termin-Verwaltung), fehlt noch das Akten-Handy fuer eine Folge-Buchung.
+    if not s["nachname"] or s["gesucht"] == key or (s["patientId"] and s["aktePhone"]):
         return
     s["gesucht"] = key
     if _laeuft(sit, "kartei"):

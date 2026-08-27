@@ -4,80 +4,143 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <title>Lisa — Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call13" />
+  <title>Lisa &amp; Bianca — Telefon-KI</title>
+  <link rel="stylesheet" href="/styles.css?v=call14" />
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div>
-        <h1>Lisa</h1>
-        <div class="sub">Echtes Gespräch: sie spricht, du redest, sie hört zu.</div>
-      </div>
-      <div>
-        <div class="sub" id="health">prüfe Gehirn…</div>
-        <div class="sub last-call" id="lastCall"></div>
-        <a class="link" id="fern" href="/fernsteuerung.html">Fernsteuerung (Grok, nur Lisa)</a>
-      </div>
-    </header>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="lisa" type="button">
+      Lisa <span class="tabsub">ruft Patienten an</span>
+    </button>
+    <button class="tab" data-tab="bianca" type="button">
+      Bianca <span class="tabsub">nimmt Anrufe an</span>
+    </button>
+  </nav>
 
-    <div class="grid">
-      <section class="card">
-        <h2>Auftrag</h2>
-        <label for="tenant">Mandant</label>
-        <select id="tenant"></select>
-        <label for="prompt">Was Lisa ausrichten soll</label>
-        <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
-        <div class="row" style="margin-top:10px">
-          <button class="btn ghost mic" id="micPrompt" type="button">Prompt diktieren</button>
-          <span class="sub" id="promptLive"></span>
+  <div id="tab-lisa">
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>Lisa</h1>
+          <div class="sub">Echtes Gespräch: sie spricht, du redest, sie hört zu.</div>
         </div>
-      </section>
+        <div>
+          <div class="sub" id="health">prüfe Gehirn…</div>
+          <div class="sub last-call" id="lastCall"></div>
+          <a class="link" id="fern" href="/fernsteuerung.html">Fernsteuerung (Grok, nur Lisa)</a>
+        </div>
+      </header>
 
-      <section class="card">
-        <h2>Patient</h2>
-        <label for="who">Wen ruft Lisa an?</label>
-        <div class="row">
-          <input id="who" type="text" placeholder="Name eingeben…" autocomplete="off" />
-          <button class="btn ghost" id="suchen" type="button">Suchen</button>
-        </div>
-        <div class="hits" id="hits"></div>
-        <div id="person" hidden>
-          <div class="who" id="personName"></div>
-          <div class="phone-line" id="phones"></div>
-          <div class="devhint">Dev: es klingelt bei dir, nicht beim Patienten.</div>
-          <div class="appts">
-            <div>
-              <strong>Letzte Termine</strong>
-              <ul id="past"></ul>
-            </div>
-            <div>
-              <strong>Nächste Termine</strong>
-              <ul id="upcoming"></ul>
+      <div class="grid">
+        <section class="card">
+          <h2>Auftrag</h2>
+          <label for="tenant">Mandant</label>
+          <select id="tenant"></select>
+          <label for="prompt">Was Lisa ausrichten soll</label>
+          <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn ghost mic" id="micPrompt" type="button">Prompt diktieren</button>
+            <span class="sub" id="promptLive"></span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Patient</h2>
+          <label for="who">Wen ruft Lisa an?</label>
+          <div class="row">
+            <input id="who" type="text" placeholder="Name eingeben…" autocomplete="off" />
+            <button class="btn ghost" id="suchen" type="button">Suchen</button>
+          </div>
+          <div class="hits" id="hits"></div>
+          <div id="person" hidden>
+            <div class="who" id="personName"></div>
+            <div class="phone-line" id="phones"></div>
+            <div class="devhint">Dev: es klingelt bei dir, nicht beim Patienten.</div>
+            <div class="appts">
+              <div>
+                <strong>Letzte Termine</strong>
+                <ul id="past"></ul>
+              </div>
+              <div>
+                <strong>Nächste Termine</strong>
+                <ul id="upcoming"></ul>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
+      <div class="status" id="status"></div>
     </div>
-    <div class="status" id="status"></div>
-  </div>
-  <div class="toast" id="toast" hidden></div>
+    <div class="toast" id="toast" hidden></div>
 
-  <div id="call" class="call">
-    <div class="call-top">
-      <div class="call-name" id="callName">Lisa</div>
-      <div class="call-phase" id="phase">verbindet…</div>
+    <div id="call" class="call">
+      <div class="call-top">
+        <div class="call-name" id="callName">Lisa</div>
+        <div class="call-phase" id="phase">verbindet…</div>
+      </div>
+      <div class="call-pulse" id="pulse"></div>
+      <div class="live call-live" id="live"></div>
+      <button class="btn hang" id="hang" type="button">Auflegen</button>
     </div>
-    <div class="call-pulse" id="pulse"></div>
-    <div class="live call-live" id="live"></div>
-    <button class="btn hang" id="hang" type="button">Auflegen</button>
+
+    <div class="dock" id="dock">
+      <button class="btn ghost" id="schnell" type="button">Schnelltest</button>
+      <button class="btn" id="start" type="button">Anruf starten</button>
+    </div>
+    <audio id="speaker" playsinline webkit-playsinline hidden></audio>
   </div>
 
-  <div class="dock" id="dock">
-    <button class="btn ghost" id="schnell" type="button">Schnelltest</button>
-    <button class="btn" id="start" type="button">Anruf starten</button>
+  <div id="tab-bianca" hidden>
+    <iframe id="biancaFrame" class="tab-frame" title="Bianca — Patiententelefon"
+            allow="microphone; autoplay"></iframe>
+    <div class="tab-frame-hinweis" id="biancaHinweis" hidden>
+      Bianca antwortet nicht. Läuft ihr Dienst? <code>start-bianca.ps1</code> (Port 8096)
+    </div>
   </div>
-  <audio id="speaker" playsinline webkit-playsinline hidden></audio>
-  <script src="/app.js?v=call13"></script>
+
+  <script>
+    (function () {
+      var frame = document.getElementById("biancaFrame");
+      var hinweis = document.getElementById("biancaHinweis");
+      var geladen = false;
+
+      function biancaBase() {
+        return location.protocol + "//" + location.hostname + ":8096";
+      }
+
+      function zeige(tab) {
+        document.getElementById("tab-lisa").hidden = tab !== "lisa";
+        document.getElementById("tab-bianca").hidden = tab !== "bianca";
+        document.body.classList.toggle("bianca-aktiv", tab === "bianca");
+        var knoepfe = document.querySelectorAll("#tabs .tab");
+        for (var i = 0; i < knoepfe.length; i++) {
+          knoepfe[i].classList.toggle("active", knoepfe[i].dataset.tab === tab);
+        }
+        if (tab === "bianca" && !geladen) {
+          geladen = true;
+          fetch(biancaBase() + "/health", { mode: "no-cors" })
+            .then(function () { frame.src = biancaBase() + "/"; })
+            .catch(function () { hinweis.hidden = false; });
+        }
+        try { localStorage.setItem("tab", tab); } catch (e) {}
+        if (location.hash !== "#" + tab) {
+          history.replaceState(null, "", "#" + tab);
+        }
+      }
+
+      document.getElementById("tabs").addEventListener("click", function (ev) {
+        var b = ev.target.closest(".tab");
+        if (b) zeige(b.dataset.tab);
+      });
+
+      var start = "lisa";
+      if (location.hash === "#bianca") start = "bianca";
+      else {
+        try { if (localStorage.getItem("tab") === "bianca" && !location.hash) start = "bianca"; } catch (e) {}
+      }
+      if (start !== "lisa") zeige(start);
+    })();
+  </script>
+  <script src="/app.js?v=call14"></script>
 </body>
 </html>
