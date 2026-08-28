@@ -210,6 +210,7 @@ function stopLisaVoice() {
   try { a.removeAttribute("src"); a.load(); } catch { /* */ }
   try { if (playUrl._src) playUrl._src.stop(); } catch { /* */ }
   playUrl._src = null;
+  ketteStop();
   // Falls die Wiedergabe gerade im Verdachts-Stopp hing: Kontext wieder
   // freigeben, sonst bleibt die NÄCHSTE Antwort stumm.
   try {
@@ -256,7 +257,7 @@ function bargeOderCap(dauerMs) {
     let pauseSeit = 0;
     const hatOhr = () => !!(liveOhr && liveOhr.ok);
     const pausieren = () => {
-      try { if (unlockAudio.ctx && playUrl._src) unlockAudio.ctx.suspend(); } catch { /* */ }
+      try { if (unlockAudio.ctx && (playUrl._src || kette.quellen.length)) unlockAudio.ctx.suspend(); } catch { /* */ }
       try { const a = lautsprecher(); if (a.src && !a.paused) a.pause(); } catch { /* */ }
     };
     const weiter = () => {
@@ -345,6 +346,59 @@ async function playUrl(url) {
   const limit = (d && isFinite(d) && d > 0) ? d * 1000 + 200 : 12000;
   await Promise.race([ended, bargeOderCap(limit)]);
   lisaSpricht = false;
+}
+
+// Häppchen-Kette (28.08.2026): Stream-Stücke einer Antwort werden SOFORT
+// geladen und dekodiert, die Wiedergabe aber sample-genau aneinander geplant
+// (source.start(zeit)) — lückenlos statt "zerstückelt". Die alte
+// playUrl-Verkettung lud jedes Stück erst NACH dem Ende des vorigen:
+// fetch+decode rissen hörbare Löcher in den Satz.
+const kette = { quellen: [], naechsteZeit: 0, planung: Promise.resolve(), wache: null };
+
+function ketteStop() {
+  for (const s of kette.quellen.splice(0)) { try { s.stop(); } catch { /* */ } }
+  kette.naechsteZeit = 0;
+}
+
+async function spielGapless(url, nr) {
+  if (!url || !callOn || nr !== hoerNr) return;
+  await unlockAudio();
+  const ctx = unlockAudio.ctx;
+  if (!ctx) return playUrl(url); // ohne WebAudio bleibt die alte Kette
+  const laden = fetch(url)
+    .then((r) => r.arrayBuffer())
+    .then((raw) => ctx.decodeAudioData(raw.slice(0)))
+    .catch(() => null);
+  let fertig = null;
+  // Planung strikt in Ankunftsreihenfolge — ein kleines Stück darf ein
+  // grosses, noch dekodierendes nicht überholen.
+  kette.planung = kette.planung.then(async () => {
+    const decoded = await laden;
+    if (!decoded || !callOn || nr !== hoerNr) return;
+    try {
+      if (ctx.state === "suspended") await ctx.resume();
+      const src = ctx.createBufferSource();
+      src.buffer = decoded;
+      src.connect(ctx.destination);
+      const start = Math.max(ctx.currentTime + 0.03, kette.naechsteZeit);
+      kette.naechsteZeit = start + decoded.duration;
+      kette.quellen.push(src);
+      lisaSpricht = true;
+      const ended = new Promise((done) => { src.onended = () => done("end"); });
+      src.start(start);
+      // EIN Wächter für die ganze Kette: endet von selbst, sobald
+      // lisaSpricht erlischt (letzte Quelle fertig) oder bei Barge-in.
+      if (!kette.wache) {
+        kette.wache = bargeOderCap(120000).then(() => { kette.wache = null; });
+      }
+      fertig = ended.then(() => {
+        kette.quellen = kette.quellen.filter((x) => x !== src);
+        if (!kette.quellen.length) { kette.naechsteZeit = 0; lisaSpricht = false; }
+      });
+    } catch { /* Stück überspringen, Kette lebt weiter */ }
+  });
+  await kette.planung;
+  if (fertig) await fertig;
 }
 
 function startLiveSttPersistent() {
@@ -576,11 +630,10 @@ async function sendeZug({ text, blob, nr }) {
   const spielFiller = (url) => {
     if (!callOn || nr !== hoerNr) return;
     phase("lisa", "Lisa spricht …");
-    // Mehrere Häppchen (Füller, dann Vorab-Satz aus dem LLM-Stream) laufen
-    // als Kette nacheinander — nichts überlappt, nichts geht verloren.
-    fillerLauf = fillerLauf
-      ? fillerLauf.then(() => playUrl(url)).catch(() => {})
-      : playUrl(url).catch(() => {});
+    // Gapless-Kette: jedes Häppchen lädt SOFORT und plant sich nahtlos ans
+    // vorige Stück — nichts überlappt, nichts reißt Löcher in den Satz.
+    const p = spielGapless(url, nr).catch(() => {});
+    fillerLauf = fillerLauf ? Promise.all([fillerLauf, p]).then(() => {}) : p;
   };
   try {
     let data;

@@ -65,14 +65,28 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  Nach Änderungen an der Pegel-Schicht: Platten-Cache leeren, sonst mischen
  sich alte und neue Lautheit. Tests: `tests/test_tts_gain.py`.
 - **Satz-Häppchen + Chunk-Streaming** (28.08.2026): Lange Antworten gehen im
- Zug-Strom häppchenweise raus (`kern/dienst.py -> _vertonen`): Container mit
- `stream: true` im /health (CosyVoice-Turbo) => EIN `/speak-stream`-Aufruf
- mit Gesamttext, WAV-Häppchen sofort über den filler-Kanal (Docks spielen
- sie als Kette), Gain wird aus dem ersten sprach-aktiven Häppchen
- festgehalten; sonst satzweises Blocking (`haeppchen_teile`, splittet nie
- in Ziffern-Punkt wie "am 28. August"). Gewarmte Begrüßungen bleiben EIN
- Block (Cache-Key = Gesamttext). Notaus: `TTS_STREAM=0`. Tests:
- `tests/test_haeppchen.py`, `tests/test_tts_lokal.py`.
+  Zug-Strom häppchenweise raus (`kern/dienst.py -> _vertonen`): Container mit
+  `stream: true` im /health (CosyVoice-Turbo) => EIN `/speak-stream`-Aufruf
+  mit Gesamttext, WAV-Häppchen sofort über den filler-Kanal (Docks spielen
+  sie als Kette), Gain wird aus dem ersten sprach-aktiven Häppchen
+  festgehalten; sonst satzweises Blocking (`haeppchen_teile`, splittet nie
+  in Ziffern-Punkt wie "am 28. August"). Gewarmte Begrüßungen bleiben EIN
+  Block (Cache-Key = Gesamttext). Notaus: `TTS_STREAM=0`. Tests:
+  `tests/test_haeppchen.py`, `tests/test_tts_lokal.py`.
+- **Stream-Schnitt + Gapless-Docks (Vorfall 28.08.2026 "Rauschen/zerstückelt"
+  — nicht rückbauen):** Die HTTP-Chunks aus `/speak-stream` kommen mit
+  BELIEBIGEN (auch ungeraden) Byte-Grenzen an. `kern/tts.py -> speak_stream`
+  schneidet deshalb NIE mitten im 16-Bit-Sample (Überhang bleibt im Puffer) —
+  ein schiefer Schnitt verschiebt den Reststrom um 1 Byte und macht aus
+  Sprache Rauschen (live gehört). Pro Häppchen: Äußerungs-Gain festgehalten,
+  Peak-Deckel je Stück gegen Clipping, 2-ms-Rampen an den Rändern gegen
+  Klicks (`_haeppchen_wav`). Die Docks (`web/app.js`, `bianca_web/app.js`
+  -> `spielGapless`) laden Häppchen SOFORT und planen die Wiedergabe per
+  WebAudio sample-genau aneinander (`source.start(zeit)`, Planung in
+  Ankunftsreihenfolge) statt fetch+decode erst nach dem Ende des vorigen
+  Stücks — das war das "Zerstückelte". Barge-in: EIN `bargeOderCap`-Wächter
+  pro Kette, `stopLisaVoice`/`stopVoice` stoppen via `ketteStop()` alle
+  geplanten Quellen. Test: `test_speak_stream_schneidet_nie_mitten_im_sample`.
 - **CosyVoice-Turbo** (28.08.2026): Container lädt mit `load_vllm` (eigenes
  Mini-vLLM fürs 0.5B-Sprach-LLM, Export nach `MODEL_DIR/vllm` beim ersten
  Start) und `load_trt` (TensorRT-Engine für den Flow-Decoder, Bau beim

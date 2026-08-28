@@ -151,10 +151,42 @@ def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
         wavs = list(tts.LokalTts().speak_stream("Ein Satz für den Stream."))
         assert len(wavs) == 2 and all(w[:4] == b"RIFF" for w in wavs)
         gain = min(tts.MAX_GAIN, tts.ZIEL_RMS * 32767.0 / 2000)
-        probe1 = int.from_bytes(wavs[0][44:46], "little", signed=True)
-        probe2 = int.from_bytes(wavs[1][44:46], "little", signed=True)
+        # Probe aus der Stück-MITTE — die Ränder tragen 2-ms-Rampen.
+        mitte = 44 + ((n // 2) * 2)
+        probe1 = int.from_bytes(wavs[0][mitte:mitte + 2], "little", signed=True)
+        probe2 = int.from_bytes(wavs[1][mitte:mitte + 2], "little", signed=True)
         assert probe1 == int(2000 * gain), "Gain aus dem ersten Häppchen"
         assert probe2 == int(8000 * gain), "zweites Häppchen mit DEMSELBEN Gain"
+        rand = int.from_bytes(wavs[0][44:46], "little", signed=True)
+        assert rand == 0, "Fade-in: erstes Sample still (kein Klick an der Naht)"
+
+    _mit_lokal(fake, lauf)
+
+
+def test_speak_stream_schneidet_nie_mitten_im_sample():
+    # HTTP-Chunks mit UNGERADEN Grenzen (wie live per TCP): kein Stück darf
+    # eine ungerade Byte-Zahl tragen, und ausser hoechstens einem halben
+    # Sample am Strom-Ende darf nichts verloren gehen — sonst verschiebt
+    # sich der Reststrom um 1 Byte und wird zu Rauschen (live 28.08.2026).
+    einzel = (3000).to_bytes(2, "little", signed=True)
+    strom = einzel * int(2.0 * 24000)
+    grenzen = [14593, 8761, 17519, len(strom) - 14593 - 8761 - 17519]
+    chunks, pos = [], 0
+    for g in grenzen:
+        chunks.append(strom[pos:pos + g])
+        pos += g
+    fake = _FakeLokal(_Antwort(200, b""))
+    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, chunks)
+
+    def lauf():
+        wavs = list(tts.LokalTts().speak_stream("Ungerade Grenzen."))
+        nutz = sum(len(w) - 44 for w in wavs)
+        assert all((len(w) - 44) % 2 == 0 for w in wavs), "nur ganze Samples je Stück"
+        assert nutz >= len(strom) - 2, f"Strom fast verlustfrei: {nutz} von {len(strom)}"
+        for w in wavs:
+            mitte = 44 + ((len(w) - 44) // 4) * 2
+            probe = int.from_bytes(w[mitte:mitte + 2], "little", signed=True)
+            assert probe > 0, "kein Byte-Versatz: Samples bleiben positiv (3000er-Strom)"
 
     _mit_lokal(fake, lauf)
 

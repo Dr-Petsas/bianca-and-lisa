@@ -148,6 +148,33 @@ def _skaliert_bytes(samples: "array.array", gain: float) -> bytes:
     return skaliert.tobytes()
 
 
+def _haeppchen_wav(stueck: bytes, gain: float | None) -> tuple[bytes, float | None]:
+    """Ein Stream-Stück -> fertiges WAV-Häppchen + (ggf. neu bestimmter) Gain.
+
+    Der Äußerungs-Gain wird beim ersten sprach-aktiven Stück bestimmt und
+    danach festgehalten; pro Stück schützt zusätzlich der Peak-Deckel vor
+    Clipping (spätere Stücke können lauter sein als das erste). 2-ms-Rampen
+    an den Rändern schlucken Klicks, falls der Player doch eine Lücke lässt."""
+    samples = array.array("h")
+    samples.frombytes(stueck[: (len(stueck) // 2) * 2])
+    if not samples:
+        return b"", gain
+    if gain is None:
+        gain = _gain_oder_none(samples)
+    eff = gain if gain is not None else 1.0
+    spitze = max(1, max(abs(s) for s in samples))
+    eff = min(eff, (PEAK_DECKEL * 32767.0) / spitze)
+    skaliert = array.array("h")
+    skaliert.frombytes(_skaliert_bytes(samples, eff))
+    rampe = min(48, len(skaliert) // 2)  # 2 ms bei 24 kHz
+    for i in range(rampe):
+        f = i / rampe
+        skaliert[i] = int(skaliert[i] * f)
+        skaliert[-1 - i] = int(skaliert[-1 - i] * f)
+    data = skaliert.tobytes()
+    return _wav_header(len(data), PCM_RATE) + data, gain
+
+
 def _wav_header(data_len: int, rate: int) -> bytes:
     return struct.pack(
         "<4sI4s4sIHHIIHH4sI",
@@ -304,21 +331,21 @@ class LokalTts:
                 puffer += chunk
                 if len(puffer) < min_bytes:
                     continue
-                stueck, puffer = puffer, b""
+                # NIE mitten im 16-Bit-Sample schneiden: die HTTP-Chunks kommen
+                # mit beliebigen (auch ungeraden) Byte-Grenzen an — ein schiefer
+                # Schnitt verschiebt den Reststrom um 1 Byte und macht aus
+                # Sprache Rauschen (live 28.08.2026). Der Überhang bleibt im
+                # Puffer und geht dem nächsten Stück voran.
+                schnitt = (len(puffer) // 2) * 2
+                stueck, puffer = puffer[:schnitt], puffer[schnitt:]
                 min_bytes = folge_bytes
-                samples = array.array("h")
-                samples.frombytes(stueck[: (len(stueck) // 2) * 2])
-                if gain is None:
-                    gain = _gain_oder_none(samples)
-                data = _skaliert_bytes(samples, gain if gain is not None else 1.0)
-                yield _wav_header(len(data), PCM_RATE) + data
+                wav, gain = _haeppchen_wav(stueck, gain)
+                if wav:
+                    yield wav
         if puffer:
-            samples = array.array("h")
-            samples.frombytes(puffer[: (len(puffer) // 2) * 2])
-            if gain is None:
-                gain = _gain_oder_none(samples)
-            data = _skaliert_bytes(samples, gain if gain is not None else 1.0)
-            yield _wav_header(len(data), PCM_RATE) + data
+            wav, gain = _haeppchen_wav(puffer, gain)
+            if wav:
+                yield wav
 
 
 def engine() -> TtsEngine:
