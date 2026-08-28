@@ -58,6 +58,10 @@ ELEVENLABS_API_KEY = _s("ELEVENLABS_API_KEY") or _peek_key(
 # spricht, OHNE ElevenLabs-Rueckfall (Chef 27.08.2026 — Fehler sollen in der
 # Testphase hoerbar sein). Leer = ElevenLabs wie bisher (byte-identisch).
 TTS_BASE = _s("TTS_BASE").rstrip("/")
+# Lokales STT auf der 5090 (stt_serve/, deutscher Conformer): GESETZT = JEDE
+# Transkription geht an den Container, OHNE ElevenLabs-Rueckfall
+# (Chef 28.08.2026: "es geht nichts mehr zu elevenlabs"). Leer = Scribe.
+STT_BASE = _s("STT_BASE").rstrip("/")
 # Chunk-Streaming vom Container (/speak-stream, 28.08.2026): an, sobald der
 # Container es im /health meldet. Notaus: TTS_STREAM=0 => blocking wie vorher.
 TTS_STREAM = _b("TTS_STREAM", True)

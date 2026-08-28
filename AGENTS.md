@@ -96,6 +96,34 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  CosyVoice-Turbo NIE parallel starten. Notausgänge: `TTS_VLLM=0`,
  `TTS_TRT=0`, `TTS_FP16=0`.
 
+## Lokales STT auf der 5090 (28.08.2026 — nicht rückbauen)
+
+Chef 28.08.2026: **"es geht nichts mehr zu elevenlabs"** — auch die
+Transkription nicht. `stt_serve/` trägt den STT-Container (deutscher
+NVIDIA-Conformer-Transducer, NeMo, ~120M, deutsch-only) auf der 5090,
+Port **8212** (Landkarte: vLLM 8000, Chatterbox 8210 aus, CosyVoice 8211).
+Vertrag `stt_serve/api.md`: `POST /transcribe` (multipart `file`, ffmpeg
+wandelt WebM/M4A/WAV nach 16 kHz mono) -> `{"text": ...}`.
+
+- Umschalten NUR über `STT_BASE` in der `.env`: gesetzt = ALLE Züge über den
+  Container, **KEIN ElevenLabs-Rückfall** (gleiches Muster wie `TTS_BASE`);
+  leer = Scribe wie früher. Tests: `tests/test_stt_lokal.py`.
+- Latenz: Scribe lag live bei 0,8-2,0 s je Zug (gemessen 28.08.2026,
+  `tests/latenz_e2e.py` / `tests/timing_bericht.py`; `timings.stt` steht
+  seit 28.08. im Sitzungsprotokoll). Conformer-Ziel: unter 0,3 s.
+- VRAM 5090: Conformer FP32 ~1 GB in die freie Lücke neben qwen-vLLM
+  (25,7 GB, NICHT anfassen) und CosyVoice-Turbo (5,7 GB). Reicht es nicht,
+  fällt nur der STT-Container um — Notaus `STT_DEVICE=cpu`.
+- **Clara-Schutz:** Claras Parakeet, Clara V7/dev, Demo-Clara und Lena-Voice
+  sind NICHT beteiligt — eigener Container, eigenes Modell, eigenes Volume.
+  Dieses Repo fasst deren Prozesse/Dateien nie an.
+- **Bianca-Dock ohne Browser-Live-STT (28.08.2026):** Die Web-Speech-
+  Live-Transkription lieferte kaputte Transkripte und machte Züge lahm —
+  Bianca hört nur noch über Aufnahme (`recordUntilSilence`) + Server-STT.
+  `liveOhr` bleibt als immer-null-Feld (bargeOderCap strukturgleich zu
+  Lisas Dock; Barge-in läuft über den Mikro-Pegel-Pfad). Lisas Dock ist
+  unverändert.
+
 ## Lisa zuerst
 
 Bianca-Ordner bleibt leer, bis der Lisa-Kernel Anrufe hält.

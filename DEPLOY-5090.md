@@ -1,12 +1,23 @@
 # Rollout auf der 5090 (pickadoc1, LAN 192.168.0.246 — SSH-Alias `pickadoc1`)
 
-Drei getrennte Stacks, bewusst einzeln startbar:
+Vier getrennte Stacks, bewusst einzeln startbar:
 
 | Stack | Compose | Ports | Zweck |
 | --- | --- | --- | --- |
 | vLLM | (laeuft schon) | 8000 | Qwen 3.6 — nicht anfassen |
 | TTS | `tts_serve/compose.yml` | 8210 Chatterbox / 8211 CosyVoice | EIN Profil aktiv |
+| STT | `stt_serve/compose.yml` | 8212 | deutscher Conformer statt Scribe (28.08.2026) |
 | App | `compose.yml` (Repo-Wurzel) | 8095 Lisa / 8096 Bianca | Umschlag fuer SIP/Zaluma |
+
+STT-Rollout (Details `stt_serve/api.md`):
+
+```bash
+cd /home/cursor/telefonki/stt_serve
+docker compose up -d --build          # erster Start laedt ~0,5 GB Modell
+curl -s http://127.0.0.1:8212/health
+# App-Container umstellen: STT_BASE=http://host.docker.internal:8212 in die
+# .env der App, dann docker compose up -d (Repo-Wurzel). KEIN Scribe-Rueckfall.
+```
 
 Voraussetzung auf der 5090: Docker + NVIDIA Container Toolkit
 (`docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi` muss die GPU zeigen).

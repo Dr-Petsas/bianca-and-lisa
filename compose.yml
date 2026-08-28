@@ -2,7 +2,8 @@
 #   cp .env.example .env   # einmal ausfuellen (Keys, TTS_BASE)
 #   docker compose up -d --build
 # Port-Landkarte 5090: vLLM 8000, Lisa 8095, Bianca 8096,
-# Chatterbox 8210, CosyVoice 8211 (TTS-Stack: tts_serve/compose.yml).
+# Chatterbox 8210, CosyVoice 8211 (TTS-Stack: tts_serve/compose.yml),
+# STT 8212 (stt_serve/compose.yml).
 x-app: &app
   build: .
   image: telefonki:v1
@@ -14,6 +15,9 @@ x-app: &app
     # Leer = ElevenLabs. Lokal-TTS: http://host.docker.internal:8210
     # (Chatterbox) bzw. :8211 (CosyVoice). KEIN Fallback (Chef 27.08.2026).
     TTS_BASE: ${TTS_BASE:-}
+    # Leer = ElevenLabs Scribe. Lokal-STT (deutscher Conformer):
+    # http://host.docker.internal:8212. KEIN Fallback (Chef 28.08.2026).
+    STT_BASE: ${STT_BASE:-}
   volumes:
     - ./tenants:/app/tenants:ro
     - telefonki-data:/app/.data
