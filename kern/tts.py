@@ -28,18 +28,25 @@ from kern.config import (
 _AUSSPRACHE = (
     (re.compile(r"\bMichael\b"), "Micha-el"),
     (re.compile(r"\bDavid\b"), "Dah-vid"),
+    # Behandler-Namen: Qwen3 liest sie sonst englisch/lateinisch an.
+    (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
+    (re.compile(r"\bPatrikis\b", re.I), "Pa-tri-kis"),
+    (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
 
-# Lautheit — exakt das Demo-Clara-Rezept (Chef 27.08.2026 zweite Runde:
-# "mach die audios genau so laut wie demo clara"). Demo Clara
-# (worker_speech_out._demo_pcm_pegel) hebt NUR leise Sätze an: Ziel 0,82
-# der Vollaussteuerung, Faktor höchstens 1,8, nie absenken, Stille bleibt
-# Stille. Unser erster Wurf (Ziel 0,92, Faktor bis 6) riss leise Füller um
-# bis zu +15 dB hoch, während normale Sätze unverändert blieben — DAS waren
-# die verbliebenen Lautstärke-Schwankungen zwischen den Äußerungen.
-ZIEL_PEGEL = 0.82          # Spitze relativ zur Vollaussteuerung (Demo-Parität)
-MAX_ANHEBUNG = 1.8         # Demo Clara: "Nie übersteuern — klang wie runtergesampelt"
-STILLE_SPITZE = 80         # int16-Spitzen darunter sind Atmen/Rauschen: nicht anfassen
+# Lautheit — RMS-Angleichung auf Clara-/ElevenLabs-Niveau (28.08.2026).
+# Das Demo-Clara-Peak-Rezept (Ziel 0,82 FS, max 1,8, nie absenken) macht
+# ElevenLabs laut, weil speaker_boost das Audio schon komprimiert. Qwen3
+# hat hohe Spitzen bei leiser Sprache (gemessen: Peak 0,68 / RMS 0,08) —
+# ein Peak-Deckel auf den Gain hielt Bianca bei −19 dBFS, Clara liegt bei
+# etwa −13. Deshalb: Gain NUR aus dem Sprach-RMS, Peaks danach kappen.
+# Gleicher RMS je Satz = kein Pumpen (Chef 28.08.).
+ZIEL_RMS = 0.22            # Sprach-RMS ~ −13 dBFS, wie Clara Demo/V7 am Telefon
+PEAK_DECKEL = 0.95         # nach dem Gain hart kappen — kein Klirren
+MIN_GAIN = 0.5             # nie mehr als halbieren ...
+MAX_GAIN = 5.0             # Qwen-leise Saetze brauchen mehr als 4x
+AKTIV_SCHWELLE = 300       # |Sample| darunter = Pause/Atmen, zählt nicht zur Lautheit
+MIN_AKTIV_SAMPLES = 1200   # unter ~50 ms Sprachanteil gilt das Stück als Stille
 PCM_RATE = 24000
 
 _CACHE: dict[str, bytes] = {}
@@ -110,28 +117,48 @@ def _lokal_schluessel(sauber: str) -> str:
     return f"lokal|{TTS_BASE}|{_VOICE_NAME}|{sauber}"
 
 
-def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
-    """s16le mono → WAV. Pegel wie Demo Clara: nur leise Sätze anheben
-    (Ziel 0,82 FS, Faktor max. 1,8), nie absenken, nie kappen."""
-    n = len(pcm) // 2
-    if n <= 0:
-        return b""
-    samples = array.array("h")
-    samples.frombytes(pcm[: n * 2])
-    spitze = max(1, max(abs(s) for s in samples))
-    gain = min(MAX_ANHEBUNG, (ZIEL_PEGEL * 32767.0) / spitze)
-    if spitze < STILLE_SPITZE or gain <= 1.02:
-        # Stille/Atmen nie hochziehen; Lautes unverändert durchreichen.
-        data = samples.tobytes()
-    else:
-        boosted = array.array("h", bytes(len(samples) * 2))
-        for i, s in enumerate(samples):
-            boosted[i] = int(s * gain)
-        data = boosted.tobytes()
-    header = struct.pack(
+def _gain_oder_none(samples: "array.array") -> float | None:
+    """Lautheits-Gain für ein PCM-Stück — None, wenn zu wenig Sprache drin
+    ist (Stille/Atmen), dann wird nichts angefasst."""
+    quad = 0
+    aktiv = 0
+    for s in samples:
+        a = abs(s)
+        if a >= AKTIV_SCHWELLE:
+            quad += s * s
+            aktiv += 1
+    if aktiv < MIN_AKTIV_SAMPLES:
+        return None
+    rms = (quad / aktiv) ** 0.5
+    # Peak klemmt den Gain NICHT: sonst bleibt Qwen leise (Clara-Vergleich
+    # 28.08.2026). Spitzen werden in _skaliert_bytes gekappt.
+    return max(MIN_GAIN, min(MAX_GAIN, (ZIEL_RMS * 32767.0) / max(rms, 1.0)))
+
+
+def _skaliert_bytes(samples: "array.array", gain: float) -> bytes:
+    limit = int(PEAK_DECKEL * 32767.0)
+    if 0.98 <= gain <= 1.02 and max((abs(s) for s in samples), default=0) <= limit:
+        return samples.tobytes()
+    skaliert = array.array("h", bytes(len(samples) * 2))
+    for i, s in enumerate(samples):
+        v = int(s * gain)
+        if v > limit:
+            v = limit
+        elif v < -limit:
+            v = -limit
+        if v > 32767:
+            v = 32767
+        elif v < -32768:
+            v = -32768
+        skaliert[i] = v
+    return skaliert.tobytes()
+
+
+def _wav_header(data_len: int, rate: int) -> bytes:
+    return struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF",
-        36 + len(data),
+        36 + data_len,
         b"WAVE",
         b"fmt ",
         16,
@@ -142,9 +169,22 @@ def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
         2,
         16,
         b"data",
-        len(data),
+        data_len,
     )
-    return header + data
+
+
+def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
+    """s16le mono → WAV. Jede Äußerung auf dieselbe Sprach-Lautheit ziehen:
+    RMS über sprach-aktive Samples auf ZIEL_RMS (anheben UND absenken),
+    Peak-Deckel gegen Klirren, Stille/Atmen bleibt unangetastet."""
+    n = len(pcm) // 2
+    if n <= 0:
+        return b""
+    samples = array.array("h")
+    samples.frombytes(pcm[: n * 2])
+    gain = _gain_oder_none(samples)
+    data = _skaliert_bytes(samples, gain if gain is not None else 1.0)
+    return _wav_header(len(data), rate) + data
 
 
 def _ist_mp3(blob: bytes) -> bool:

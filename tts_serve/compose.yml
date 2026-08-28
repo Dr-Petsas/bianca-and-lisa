@@ -1,9 +1,9 @@
 # TTS-Container fuer die 5090 — IMMER NUR EIN PROFIL STARTEN (eine GPU,
 # vLLM laeuft daneben):
-#   docker compose --profile chatterbox up -d --build
 #   docker compose --profile chatterbox down
-#   docker compose --profile cosyvoice  up -d --build
-# Port-Landkarte 5090: vLLM 8000, Chatterbox 8210, CosyVoice 8211.
+#   docker compose --profile cosyvoice  down
+#   docker compose --profile qwen3      up -d --build
+# Port-Landkarte 5090: vLLM 8000, Chatterbox 8210, CosyVoice 8211, Qwen3 8213.
 services:
   chatterbox:
     build: ./chatterbox
@@ -42,6 +42,18 @@ services:
     volumes:
       - ./stimmen:/stimmen:ro
       - tts-models:/models
+    environment:
+      # Turbo (28.08.2026): eigenes Mini-vLLM fuer den LLM-Teil + TensorRT
+      # fuer den Flow-Decoder. Neben dem grossen qwen-vLLM (25,7 GB) bleiben
+      # ~6,9 GB — 0.08 = ~2,6 GB fuer das 0.5B-Sprach-LLM. Notausgaenge:
+      # TTS_VLLM=0 / TTS_TRT=0 => Verhalten wie vor dem Turbo.
+      # Erster Start (TRT-Engine-Bau braucht Workspace): einmal mit
+      # TTS_VLLM=0 booten, Plan landet im Volume, dann normal starten.
+      TTS_VLLM: "${TTS_VLLM:-1}"
+      TTS_TRT: "${TTS_TRT:-1}"
+      COSY_VLLM_GPU_UTIL: "0.08"
+      # torch.compile-/vLLM-Artefakte ins Volume — Folgestarts sind schneller.
+      VLLM_CACHE_ROOT: "/models/vllm-cache"
     deploy:
       resources:
         reservations:
@@ -56,7 +68,35 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 600s   # erster Start laedt ~5 GB Modell ins Volume
+      start_period: 1200s  # erster Start: Modell-Download + vllm-Export + TRT-Engine-Bau
+
+  qwen3:
+    build: ./qwen3
+    image: tts-qwen3:v1
+    profiles: ["qwen3"]
+    ports:
+      - "8213:8100"
+    volumes:
+      - ./stimmen:/stimmen:ro
+      - tts-models:/models
+    environment:
+      TTS_SPRACHE: "German"
+      QWEN_TTS_MODEL: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 900s   # erster Start laedt ~1 GB Gewichte von HuggingFace
 
 volumes:
   tts-models:

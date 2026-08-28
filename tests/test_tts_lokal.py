@@ -62,7 +62,7 @@ def test_engine_wahl_und_bereit():
 
 
 def test_speak_postet_stimme_und_pegelt():
-    leise = (2000).to_bytes(2, "little", signed=True) * 8
+    leise = (2000).to_bytes(2, "little", signed=True) * (tts.MIN_AKTIV_SAMPLES * 2)
     fake = _FakeLokal(_Antwort(200, leise))
 
     def lauf():
@@ -74,7 +74,8 @@ def test_speak_postet_stimme_und_pegelt():
         assert payload["text"].startswith("Guten Tag")
         assert wav[:4] == b"RIFF", "Rueckgabe ist WAV (fuer die Audio-Ablage)"
         probe = int.from_bytes(wav[44:46], "little", signed=True)
-        assert probe == int(2000 * tts.MAX_ANHEBUNG), "Demo-Clara-Pegel auch fuer lokale Zuege"
+        erwartet = int(2000 * min(tts.MAX_GAIN, tts.ZIEL_RMS * 32767.0 / 2000))
+        assert probe == erwartet, "Lautheits-Angleichung auch fuer lokale Zuege"
 
     _mit_lokal(fake, lauf)
 

@@ -8,7 +8,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env", override=False)
+# override=True: die .env dieses Repos ist die EINE Wahrheit — sonst bleibt
+# ein alter Prozess-/setx-Wert (z. B. TTS_BASE=:8210) stehen und der Dienst
+# spricht gegen den falschen Container (Vorfall 28.08.2026, kein Audio).
+load_dotenv(ROOT / ".env", override=True)
 
 
 def _peek_key(path: Path, name: str) -> str:
