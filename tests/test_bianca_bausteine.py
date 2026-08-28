@@ -161,6 +161,37 @@ def test_slot_wahl_wochentag():
     assert flow._slot_wahl("der Dienstag passt mir gut", ANGEBOT) == "2026-09-01T14:30"
 
 
+ANGEBOT_ZWEI_MONTAGE = [
+    {"iso": "2026-08-31T10:00", "spoken": "am Montag um zehn Uhr"},
+    {"iso": "2026-08-31T12:30", "spoken": "am Montag um zwölf Uhr dreißig"},
+    {"iso": "2026-09-01T09:15", "spoken": "am Dienstag um neun Uhr fünfzehn"},
+]
+
+
+def test_slot_wahl_um_zahlwort_ohne_uhr_live_2352():
+    """Live 28.08.2026, 23:52: 'Montag um zehn, bitte.' fiel durch — der Satz
+    wurde als neuer Wunsch geerntet, das Angebot kam wortgleich wieder und der
+    Wiederholungs-Waechter liess nur noch 'Gut.' uebrig. Keine Buchung."""
+    assert flow._slot_wahl("Montag um zehn, bitte.", ANGEBOT_ZWEI_MONTAGE) == "2026-08-31T10:00"
+    assert flow._slot_wahl("Ja, Montag um zehn.", ANGEBOT_ZWEI_MONTAGE) == "2026-08-31T10:00"
+
+
+def test_slot_wahl_wochentag_plus_stunde_grenzen_gemeinsam_ein():
+    # Wochentag allein waere doppeldeutig (zwei Montage), die Stunde allein
+    # eindeutig — und umgekehrt: zwei Zehn-Uhr-Slots braucht der Wochentag.
+    assert flow._slot_wahl("Montag um halb eins", ANGEBOT_ZWEI_MONTAGE) == "2026-08-31T12:30"
+    zwei_tage_zehn = [
+        {"iso": "2026-08-31T10:00", "spoken": "am Montag um zehn Uhr"},
+        {"iso": "2026-09-01T10:00", "spoken": "am Dienstag um zehn Uhr"},
+    ]
+    assert flow._slot_wahl("dann Montag um zehn", zwei_tage_zehn) == "2026-08-31T10:00"
+    assert flow._slot_wahl("lieber Dienstag um zehn Uhr", zwei_tage_zehn) == "2026-09-01T10:00"
+
+
+def test_slot_wahl_wochentag_allein_bleibt_doppeldeutig():
+    assert flow._slot_wahl("dann am Montag", ANGEBOT_ZWEI_MONTAGE) == ""
+
+
 def test_slot_wahl_ordinal():
     assert flow._slot_wahl("den ersten bitte", ANGEBOT) == "2026-08-31T09:15"
     assert flow._slot_wahl("den letzten", ANGEBOT) == "2026-09-02T11:00"

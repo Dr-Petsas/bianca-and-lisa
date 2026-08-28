@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # override=True: die .env dieses Repos ist die EINE Wahrheit — sonst bleibt
 # ein alter Prozess-/setx-Wert (z. B. TTS_BASE=:8210) stehen und der Dienst
 # spricht gegen den falschen Container (Vorfall 28.08.2026, kein Audio).
-load_dotenv(ROOT / ".env", override=True)
+# utf-8-sig: PowerShell schreibt .env gern MIT BOM — dotenv las den ersten
+# Schluessel dann als '\ufeffWRITE_LIVE' und das Live-Schreiben war still aus
+# (Vorfall 28.08.2026 nachts: Buchungen liefen unbemerkt als Trockenlauf).
+load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
 
 def _peek_key(path: Path, name: str) -> str:

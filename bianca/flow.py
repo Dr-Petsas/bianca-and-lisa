@@ -85,6 +85,12 @@ def _zeit_von(t: str) -> tuple[int | None, int | None]:
     m = re.search(r"\b([a-zäöü]+)\s+uhr(?:\s+([a-zäöüß]+))?\b", t)
     if m and m.group(1) in _H_WORT:
         return _H_WORT[m.group(1)], _minuten_von(m.group(2) or "")
+    m = re.search(r"\bum\s+([a-zäöüß]+)\b", t)
+    if m and m.group(1) in _H_WORT:
+        # 'Montag um zehn' OHNE das Wort 'Uhr' (live 28.08.2026): die Wahl
+        # fiel durch, der Satz wurde als NEUER Wunsch geerntet und das
+        # Angebot lief wortgleich in den Wiederholungs-Waechter ('Gut.').
+        return _H_WORT[m.group(1)], None
     return None, None
 
 
@@ -94,6 +100,7 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         return ""
     t = f" {_s(text).lower()} "
 
+    wd = next((idx for idx, cre in WEEKDAYS if cre.search(t)), None)
     hour, minute = _zeit_von(t)
     if hour is not None:
         c = [o for o in offered
@@ -101,6 +108,11 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         if not c:
             c = [o for o in offered
                  if int(o["iso"][11:13]) % 12 == hour % 12 and (minute is None or int(o["iso"][14:16]) == minute)]
+        if len(c) > 1 and wd is not None:
+            # 'Montag um zehn' bei zwei Zehn-Uhr-Slots: Wochentag grenzt ein.
+            cw = [o for o in c if _weekday_of(o["iso"][:10]) == wd]
+            if cw:
+                c = cw
         if len(c) == 1:
             return c[0]["iso"]
         if minute is not None and not c:
@@ -118,11 +130,17 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
             if _abstand(nah[0]) <= 20 and (len(nah) == 1 or _abstand(nah[1]) > _abstand(nah[0])):
                 return nah[0]["iso"]
 
-    for idx, cre in WEEKDAYS:
-        if cre.search(t):
-            c = [o for o in offered if _weekday_of(o["iso"][:10]) == idx]
-            if len(c) == 1:
-                return c[0]["iso"]
+    if wd is not None:
+        c = [o for o in offered if _weekday_of(o["iso"][:10]) == wd]
+        if len(c) > 1 and hour is not None:
+            # Zwei Slots am selben Tag: die gehoerte Stunde entscheidet.
+            ch = [o for o in c
+                  if int(o["iso"][11:13]) % 12 == hour % 12
+                  and (minute is None or int(o["iso"][14:16]) == minute)]
+            if ch:
+                c = ch
+        if len(c) == 1:
+            return c[0]["iso"]
 
     dm = re.search(r"\b(\d{1,2})\.\s?(\d{1,2})\.", t)
     if dm:
@@ -363,8 +381,19 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         # Wiederhol-Wache: derselbe Wunsch fuehrt zum SELBEN Ergebnis — das
         # ehrlich sagen statt das Angebot wortgleich herunterzubeten
         # (live 27.08.2026: identische Slot-Liste zweimal hintereinander).
+        # Formulierung ROTIERT (live 28.08.2026): eine wortgleiche zweite
+        # Ansage strich der Wiederholungs-Waechter komplett — der Anrufer
+        # hoerte nur noch 'Gut.' und die Buchung hing in der Luft.
         liste = "; oder ".join(o["spoken"] for o in offered)
-        return {"text": vor + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {liste}. Passt davon einer?"}
+        z = int(sit.get("angebotFestgefahren") or 0)
+        sit["angebotFestgefahren"] = z + 1
+        txt = [
+            f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {liste}. Passt davon einer?",
+            f"Ich habe wirklich nur diese Termine: {liste}. Sagen Sie gern einfach 'der erste' oder 'der zweite'.",
+            f"Mehr ist dazu gerade nicht frei — noch einmal: {liste}. Welcher soll es sein?",
+        ][z % 3]
+        return {"text": vor + txt}
+    sit.pop("angebotFestgefahren", None)
     return {"text": vor + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
