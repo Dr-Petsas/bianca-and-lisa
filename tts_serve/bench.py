@@ -51,10 +51,16 @@ VOICE_IDS = {
     "quizmaster": "pNInz6obpgDQGcFmaJgB",
 }
 
-# Klon-Referenz: ~40 s natuerlicher Praxiston (Chef 28.08.2026: laengere
-# Passagen, Bianca klang nicht wie das Original). Echte Umlaute, ruhige
-# Erklaersaetze, Fragen, Daten und Uhrzeiten — Klone uebernehmen den Duktus.
-# WORTGETREU — die .txt daneben ist CosyVoices Prompt-Transkript.
+# Klon-Referenzen (Chef 28.08.2026: laengere Passagen, Bianca klang nicht
+# wie das Original). Echte Umlaute, ruhiger Praxiston — Klone uebernehmen
+# den Duktus. WORTGETREU — die .txt daneben ist CosyVoices Prompt-Transkript.
+#
+# ZWEI Laengen, weil die Engines gegenlaeufig ticken:
+# - Chatterbox: je mehr Material, desto stabiler der Klang -> ~40 s
+#   (stimmen/<name>.wav).
+# - CosyVoice: der Prompt geht in JEDE Synthese ein; ist er laenger als der
+#   Sprech-Satz, kommen Stummel/Abbrueche ("synthesis text too short than
+#   prompt text", live 28.08.2026) -> ~10 s (stimmen/cosyvoice/<name>.wav).
 REF_TEXT = (
     "Guten Tag, hier ist die Zahnarztpraxis am Stadtpark, schön, dass Sie "
     "anrufen. Was kann ich für Sie tun? Einen kleinen Moment bitte, ich "
@@ -68,6 +74,11 @@ REF_TEXT = (
     "einen schönen Tag noch."
 )
 
+REF_TEXT_KURZ = (
+    "Guten Tag, hier ist die Zahnarztpraxis am Stadtpark. Am Donnerstag um "
+    "halb elf hätte ich einen Termin frei. Passt Ihnen das?"
+)
+
 # Der Quizmaster klingt nach Show, nicht nach Praxis — Klone uebernehmen den
 # Duktus der Referenz, darum ein eigener Text.
 REF_TEXT_QUIZ = (
@@ -78,7 +89,13 @@ REF_TEXT_QUIZ = (
     "Fantastisch, weiter geht die wilde Fahrt!"
 )
 
+REF_TEXT_QUIZ_KURZ = (
+    "Herzlich willkommen zur grossen Quizrunde! Erste Frage, aufgepasst: "
+    "Wie viele Zaehne hat ein erwachsener Mensch?"
+)
+
 REF_TEXTE = {"quizmaster": REF_TEXT_QUIZ}
+REF_TEXTE_KURZ = {"quizmaster": REF_TEXT_QUIZ_KURZ}
 
 
 def _wav_roh(pcm: bytes, rate: int = RATE) -> bytes:
@@ -124,16 +141,21 @@ def ref_erzeugen() -> None:
         raise SystemExit("ELEVENLABS_API_KEY fehlt — Referenzen brauchen die heutigen Stimmen.")
     ziel = HIER / "stimmen"
     ziel.mkdir(exist_ok=True)
+    ziel_cosy = ziel / "cosyvoice"
+    ziel_cosy.mkdir(exist_ok=True)
     for name, vid in VOICE_IDS.items():
-        text = REF_TEXTE.get(name, REF_TEXT)
         print(f"rendere Referenz {name} (Voice {vid}) ...", flush=True)
         # Referenzen IMMER mit dem vollen Qualitaetsmodell und OHNE
         # Latenz-Optimierung rendern (Chef 28.08.2026: Bianca-Klon klang
         # nicht wie das Original — Ursache war die flash-gerenderte Referenz).
-        pcm = _eleven_pcm(text, vid, modell="eleven_multilingual_v2", latenz_optimiert=False)
-        (ziel / f"{name}.wav").write_bytes(_wav_roh(pcm))
-        (ziel / f"{name}.txt").write_text(text, encoding="utf-8")
-        print(f"  {name}.wav ({len(pcm) / 2 / RATE:.1f} s) + {name}.txt", flush=True)
+        for ordner, text in (
+            (ziel, REF_TEXTE.get(name, REF_TEXT)),
+            (ziel_cosy, REF_TEXTE_KURZ.get(name, REF_TEXT_KURZ)),
+        ):
+            pcm = _eleven_pcm(text, vid, modell="eleven_multilingual_v2", latenz_optimiert=False)
+            (ordner / f"{name}.wav").write_bytes(_wav_roh(pcm))
+            (ordner / f"{name}.txt").write_text(text, encoding="utf-8")
+            print(f"  {ordner.name}/{name}.wav ({len(pcm) / 2 / RATE:.1f} s)", flush=True)
     print("Fertig. Ordner tts_serve/ jetzt auf die 5090 kopieren.")
 
 

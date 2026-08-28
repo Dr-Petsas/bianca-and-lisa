@@ -49,19 +49,31 @@ class SpeakIn(BaseModel):
 
 
 def _stimmen_scannen() -> None:
+    """stimmen/cosyvoice/<name>.wav hat Vorrang vor stimmen/<name>.wav.
+
+    CosyVoice braucht KURZE Prompts (~10 s): der Prompt geht in jede
+    Synthese ein — ist er laenger als der Sprech-Satz, entstehen Stummel
+    und Conv-Fehler (live 28.08.2026). Chatterbox liest nur die Top-Ebene
+    (lange Referenzen), dieser Server bevorzugt den Unterordner.
+    """
     _VOICES.clear()
     _TRANSKRIPT.clear()
     if not STIMMEN_DIR.is_dir():
         return
-    for w in sorted(STIMMEN_DIR.glob("*.wav")):
-        name = w.stem.lower()
-        txt = w.with_suffix(".txt")
-        if not txt.is_file():
-            print(f"cosyvoice: {w.name} ohne {txt.name} — Stimme uebersprungen "
-                  "(Zero-Shot braucht das Transkript)", flush=True)
+    for ordner in (STIMMEN_DIR / "cosyvoice", STIMMEN_DIR):
+        if not ordner.is_dir():
             continue
-        _VOICES[name] = w
-        _TRANSKRIPT[name] = " ".join(txt.read_text(encoding="utf-8").split()).strip()
+        for w in sorted(ordner.glob("*.wav")):
+            name = w.stem.lower()
+            if name in _VOICES:
+                continue
+            txt = w.with_suffix(".txt")
+            if not txt.is_file():
+                print(f"cosyvoice: {w.name} ohne {txt.name} — Stimme uebersprungen "
+                      "(Zero-Shot braucht das Transkript)", flush=True)
+                continue
+            _VOICES[name] = w
+            _TRANSKRIPT[name] = " ".join(txt.read_text(encoding="utf-8").split()).strip()
 
 
 def _aliase_lesen() -> None:
