@@ -32,8 +32,9 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
   Vertrag `tts_serve/api.md`: `POST /speak {text, voice}` -> rohes PCM16
   mono 24 kHz). Compose-Profile: **nie beide gleichzeitig** (eine GPU,
   vLLM 8000 daneben; Chatterbox 8210, CosyVoice 8211). Blackwell-Falle:
-  die Dockerfiles zwingen torch nach der Modell-Installation auf cu128
-  zurueck — Zeile nicht entfernen.
+  Chatterbox zwingt torch nach der Modell-Installation auf cu128 zurueck —
+  Zeile nicht entfernen. Im CosyVoice-Turbo bestimmt vllm die torch-Version
+  (bringt cu128 mit), torchaudio wird im Dockerfile versionsgleich nachgezogen.
 - Umschalten NUR ueber `TTS_BASE` in der `.env`: gesetzt = es spricht
   AUSSCHLIESSLICH der lokale Container, **KEIN ElevenLabs-Rueckfall**
   (Chef 27.08.2026: Fehler muessen in der Testphase hoerbar sein —
@@ -56,6 +57,30 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  — Chatterbox :8210 und CosyVoice :8211 haben getrennte Caches).
  Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
  weil der Key wechselt. Cache leeren = Ordner löschen.
+- **Lautheits-Angleichung statt Peak-Anhebung** (28.08.2026 — nicht
+ rückbauen): `kern/tts.py -> pcm16_wav` zieht jede Äußerung auf dasselbe
+ Sprach-RMS (`ZIEL_RMS`, anheben UND absenken, Peak-Deckel). Das alte
+ Demo-Clara-Peak-Rezept passte nur für ElevenLabs-Audio; bei lokalem TTS
+ sprang der Faktor hörbar zwischen den Sätzen ("Pumpen", Chef 28.08.).
+ Nach Änderungen an der Pegel-Schicht: Platten-Cache leeren, sonst mischen
+ sich alte und neue Lautheit. Tests: `tests/test_tts_gain.py`.
+- **Satz-Häppchen + Chunk-Streaming** (28.08.2026): Lange Antworten gehen im
+ Zug-Strom häppchenweise raus (`kern/dienst.py -> _vertonen`): Container mit
+ `stream: true` im /health (CosyVoice-Turbo) => EIN `/speak-stream`-Aufruf
+ mit Gesamttext, WAV-Häppchen sofort über den filler-Kanal (Docks spielen
+ sie als Kette), Gain wird aus dem ersten sprach-aktiven Häppchen
+ festgehalten; sonst satzweises Blocking (`haeppchen_teile`, splittet nie
+ in Ziffern-Punkt wie "am 28. August"). Gewarmte Begrüßungen bleiben EIN
+ Block (Cache-Key = Gesamttext). Notaus: `TTS_STREAM=0`. Tests:
+ `tests/test_haeppchen.py`, `tests/test_tts_lokal.py`.
+- **CosyVoice-Turbo** (28.08.2026): Container lädt mit `load_vllm` (eigenes
+ Mini-vLLM fürs 0.5B-Sprach-LLM, Export nach `MODEL_DIR/vllm` beim ersten
+ Start) und `load_trt` (TensorRT-Engine für den Flow-Decoder, Bau beim
+ ersten Start, gecacht im Volume). VRAM-Deckel: `COSY_VLLM_GPU_UTIL=0.08`
+ (Dockerfile-sed patcht CosyVoices hartes 0.2 — Build-Guard grep). Neben
+ dem grossen qwen-vLLM (~25,7 GB) bleiben nur ~6,9 GB — Chatterbox und
+ CosyVoice-Turbo NIE parallel starten. Notausgänge: `TTS_VLLM=0`,
+ `TTS_TRT=0`, `TTS_FP16=0`.
 
 ## Lisa zuerst
 
