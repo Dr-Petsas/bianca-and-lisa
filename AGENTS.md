@@ -116,11 +116,19 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 ## Ziel-Pipeline Lisa/Bianca (Stand 28.08.2026 spät)
 
 **Parakeet (STT, 8212) -> bewährte Guards/Wächter -> Qwen 3.6 (vLLM, 8000)
--> Qwen3-TTS (8213, blocking `/speak`).** Alles lokal auf der 5090, die
-Worker (8095/8096) bleiben lokal auf dem Dev-Rechner. Chatterbox (8210) und
-CosyVoice-Turbo (8211) bleiben als gebaute Images/Profile liegen, laufen
-aber nicht (nie mehrere zugleich — eine GPU). Clara V7 und Demo-Clara werden
-NICHT angefasst, bis Lisa/Bianca vernünftig funktionieren.
+-> lokales TTS, blocking `/speak`.** Alles lokal auf der 5090, die Worker
+(8095/8096) bleiben lokal auf dem Dev-Rechner. Nie mehrere TTS-Container
+zugleich (eine GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis
+Lisa/Bianca vernünftig funktionieren.
+
+- **Aktiv im Test: CosyVoice-Turbo (8211, TensorRT + Mini-vLLM).** Blocking
+  gemessen 28.08. spät: 0,4-0,7 s je Satz (RTF ~0,13) gegen Qwen3-TTS
+  1,8-3,2 s (RTF ~0,8) — Zug-Probe: Quittung+Frage 0,23 s statt 0,91 s.
+- **Rückbau-Anker: Tag `bianca-lisa-v1.0`** = derselbe Stand mit Qwen3-TTS
+  (8213); dessen Platten-Cache bleibt liegen (Key trägt die Basis). Zurück =
+  `TTS_BASE` auf :8213 + auf der 5090 `docker compose --profile cosyvoice
+  down && --profile qwen3 up -d` (Repo dort: /home/cursor/telefonki).
+- Chatterbox (8210) bleibt als gebautes Image/Profil liegen, läuft nicht.
 
 ## Neustart vom Mitternachts-Stand (28.08.2026 spät — Chef-Entscheid)
 
