@@ -2,11 +2,15 @@
 echtem Sprach-WAV, Zeitmarken je NDJSON-Event (transcript = STT fertig,
 erstes filler/vorab-Audio = erster hörbarer Ton, reply = alles fertig).
 
-    python tests/latenz_e2e.py [basis] [vorab]
+    python tests/latenz_e2e.py [basis] [vorab] [pfad.wav]
 
 Mit "vorab" wird der Dock-Ablauf seit dem 28.08.2026 nachgestellt: Mitschnitt
 schon beim Stille-VERDACHT an /api/hoervorab, ~350 ms später (Stille-
 Bestätigung) der Zug mit vorabId — misst den echten Gewinn des Vorab-Pfads.
+
+Ein expliziter WAV-Pfad pinnt das Proben-Audio — wichtig für Engine-
+Vergleiche (lokal vs. ElevenLabs): ein Engine-Wechsel legt neue Cache-
+Dateien an und würde die automatische Auswahl (Median nach Größe) verschieben.
 """
 
 from __future__ import annotations
@@ -18,16 +22,29 @@ from pathlib import Path
 
 import httpx
 
-BASIS = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8096"
-VORAB = "vorab" in sys.argv[2:]
+BASIS = "http://127.0.0.1:8096"
+VORAB = False
+WAV_PFAD = ""
+for arg in sys.argv[1:]:
+    if arg == "vorab":
+        VORAB = True
+    elif arg.lower().endswith(".wav"):
+        WAV_PFAD = arg
+    elif arg.startswith("http"):
+        BASIS = arg.rstrip("/")
 
 # Echte Bianca-Stimme aus dem Platten-Cache als Anrufer-Ersatz — Scribe
 # transkribiert das sauber, die Dauer (~2-3 s) entspricht einem kurzen Satz.
-kandidaten = sorted((Path(".data") / "tts-cache").glob("*.wav"),
-                    key=lambda f: f.stat().st_size)
-if not kandidaten:
-    sys.exit("kein WAV im tts-cache")
-wav = kandidaten[len(kandidaten) // 2]
+if WAV_PFAD:
+    wav = Path(WAV_PFAD)
+    if not wav.is_file():
+        sys.exit(f"WAV nicht gefunden: {wav}")
+else:
+    kandidaten = sorted((Path(".data") / "tts-cache").glob("*.wav"),
+                        key=lambda f: f.stat().st_size)
+    if not kandidaten:
+        sys.exit("kein WAV im tts-cache")
+    wav = kandidaten[len(kandidaten) // 2]
 print(f"probe-wav: {wav.name} ({wav.stat().st_size // 1024} KB)")
 
 client = httpx.Client(timeout=httpx.Timeout(60.0, connect=5.0))
