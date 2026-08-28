@@ -161,7 +161,13 @@ class Dienst:
             if gesprochen:
                 print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
             url, tts_s = self.stimme(text)
+        # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
+        # ein voller Latenz-Posten des Zugs (Messlücke bis 28.08.2026).
+        stt_s = sit.pop("_sttS", None)
         timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
+        if stt_s is not None:
+            timings = {"stt": stt_s, **timings}
+            timings["total"] = round(stt_s + llm_s + tts_s, 2)
         self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"), timings=timings)
         return {
             "ok": True,
@@ -222,11 +228,9 @@ class Dienst:
                         return
                     print(f"{self.name}-listen ok text={gesagt!r}", flush=True)
                     q.put(("gehoert", gesagt))
-                out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
                 if stt_s is not None:
-                    tt = {"stt": stt_s, **(out.get("timings") or {})}
-                    tt["total"] = round(stt_s + float(tt.get("llm") or 0) + float(tt.get("tts") or 0), 2)
-                    out["timings"] = tt
+                    sit["_sttS"] = stt_s
+                out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
                 q.put(("fertig", out))
             except Exception as e:
                 q.put(("fehler", str(e)))
