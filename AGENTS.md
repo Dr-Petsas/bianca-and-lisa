@@ -91,12 +91,13 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 - **Clara-Schutz:** Claras laufender Parakeet, Clara V7/dev, Demo-Clara und
   Lena-Voice sind NICHT beteiligt — eigener Container, eigene Modell-Kopie,
   anderer Rechner. Dieses Repo fasst deren Prozesse/Dateien nie an.
-- **Bianca-Dock ohne Browser-Live-STT (28.08.2026):** Die Web-Speech-
-  Live-Transkription lieferte kaputte Transkripte und machte Züge lahm —
-  Bianca hört nur noch über Aufnahme (`recordUntilSilence`) + Server-STT.
-  `liveOhr` bleibt als immer-null-Feld (bargeOderCap strukturgleich zu
-  Lisas Dock; Barge-in läuft über den Mikro-Pegel-Pfad). Lisas Dock ist
-  unverändert.
+- **Beide Docks ohne Browser-Live-STT (28.08.2026):** Die Web-Speech-
+ Live-Transkription lieferte kaputte Transkripte und machte Züge lahm —
+ Bianca und Lisa hören nur noch über Aufnahme (`recordUntilSilence`) +
+ Server-STT mit Vorab-Lauf. `liveOhr` bleibt in beiden Docks als
+ immer-null-Feld (bargeOderCap strukturgleich; Barge-in läuft über den
+ Mikro-Pegel-Pfad). Lisas Diktat-Knopf fürs Auftragsfeld (VOR dem Anruf)
+ nutzt weiter Web Speech, mit Aufnahme+`/api/transcribe` als Rückfall.
 - Der erste Wurf (NVIDIA-Conformer über NeMo, Image `stt-conformer-de:v1`)
   ist verworfen: 13,9-GB-Image, brauchte GPU (OOM — 5090 war voll belegt)
   bzw. träge CPU-Torch-Inferenz. Parakeet-ONNX: 1,07-GB-Image, CPU reicht.
