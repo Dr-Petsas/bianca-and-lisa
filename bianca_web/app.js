@@ -10,7 +10,12 @@ let sessionId = "";
 let callOn = false;
 let micStream = null;
 let rec = null;
-let liveOhr = null;
+// Browser-Live-Transkription ist bei Bianca RAUS (Chef 28.08.2026): sie
+// lieferte kaputte Transkripte und machte die Züge lahm. Bianca hört nur
+// noch über Aufnahme + Server-STT. liveOhr bleibt als immer-null-Feld,
+// damit bargeOderCap strukturgleich mit Lisas Dock bleibt (hatOhr = false
+// => bewährter Mikro-Pegel-Pfad für Barge-in).
+const liveOhr = null;
 let kiSpricht = false;
 let zugBusy = false;
 let hoerNr = 0;
@@ -37,22 +42,6 @@ function maleProtokoll(call, writeLive) {
     if (ein.text) bubble("ki", ein.text);
     if (ein.book) zeigeBuch(ein.book, writeLive);
   }
-}
-
-function istIos() {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-
-function speechRec() {
-  if (istIos()) return null;
-  const C = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!C) return null;
-  const r = new C();
-  r.lang = "de-DE";
-  r.interimResults = true;
-  r.continuous = true;
-  return r;
 }
 
 function meld(text, schlecht) {
@@ -230,56 +219,6 @@ async function playUrl(url) {
   kiSpricht = false;
 }
 
-function startLiveSttPersistent() {
-  if (liveOhr && liveOhr.ok) return liveOhr;
-  const r = speechRec();
-  if (!r) {
-    liveOhr = { ok: false, text: () => "", take: () => "", stop() {} };
-    return liveOhr;
-  }
-  if (liveOhr && !liveOhr.ok) liveOhr = null;
-  let final = "";
-  let interim = "";
-  r.interimResults = true;
-  r.continuous = true;
-  r.onresult = (ev) => {
-    interim = "";
-    for (let i = ev.resultIndex; i < ev.results.length; i++) {
-      const t = ev.results[i][0].transcript;
-      if (ev.results[i].isFinal) final += (final && !final.endsWith(" ") ? " " : "") + t;
-      else interim += t;
-    }
-    const live = (final + " " + interim).trim();
-    if (live && callOn) phase("du", live);
-  };
-  r.onerror = (ev) => {
-    const err = ev && ev.error;
-    if ((err === "not-allowed" || err === "service-not-allowed") && micStream) {
-      if (liveOhr) liveOhr.ok = false;
-    }
-  };
-  r.onend = () => {
-    if (callOn && liveOhr && liveOhr.ok) {
-      try { r.start(); } catch { /* */ }
-    }
-  };
-  try { r.start(); } catch { /* */ }
-  liveOhr = {
-    ok: true,
-    text: () => (final + " " + interim).trim(),
-    take() {
-      const t = (final + " " + interim).trim();
-      final = "";
-      interim = "";
-      return t;
-    },
-    stop() {
-      try { r.onend = null; r.onresult = null; r.stop(); } catch { /* */ }
-    },
-  };
-  return liveOhr;
-}
-
 async function leseZug(r, onFiller) {
   const out = { sessionId: "", textIn: "", text: "", audioUrl: "", book: null, writeLive: false, timings: {}, empty: false, error: "" };
   if (!r.ok && !r.body) {
@@ -398,35 +337,6 @@ function recordUntilSilence(stream) {
   });
 }
 
-async function warteAufWorte(maxMs, stillMs) {
-  const t0 = performance.now();
-  let lastLen = 0;
-  let quiet = 0;
-  let last = t0;
-  return await new Promise((resolve) => {
-    const tick = () => {
-      if (!callOn) return resolve("");
-      const t = liveOhr ? liveOhr.text() : "";
-      const now = performance.now();
-      const dt = now - last;
-      last = now;
-      if (t.length > lastLen) {
-        lastLen = t.length;
-        quiet = 0;
-        phase("du", t);
-      } else if (t.length >= 2) quiet += dt;
-      // 500 ms statt 260: nicht mitten in die Denkpause hineinreden.
-      if (t.length >= 2 && quiet > 500) return resolve(liveOhr.take());
-      // Stille-Wächter: KEIN einziges Wort bis stillMs => leer zurück, der
-      // Aufrufer stupst an. Sobald Worte laufen, gilt wieder die lange Frist.
-      if (stillMs && t.length < 2 && now - t0 > stillMs) return resolve("");
-      if (now - t0 > maxMs) return resolve((liveOhr && liveOhr.take()) || "");
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  });
-}
-
 async function stilleStups(nr) {
   // Nach ~4 s Stille: Server baut den Stups deterministisch (Stand + offene
   // Frage bzw. Talk-Thema). false = kein Stups (Budget leer/Fehler) —
@@ -507,28 +417,7 @@ async function sendeZug({ text, blob, nr }) {
 async function hoeren() {
   const nr = hoerNr;
   if (!callOn || !micStream || !sessionId || zugBusy) return;
-  if (liveOhr && liveOhr.ok && liveOhr.text().length >= 2) {
-    await sendeZug({ text: liveOhr.take(), blob: null, nr });
-    return;
-  }
   phase("du", "Sie sind dran — einfach reden");
-  if (liveOhr && liveOhr.ok) {
-    const text = await warteAufWorte(12000, stilleStupse < 2 ? STILLE_MS : 0);
-    if (!callOn || nr !== hoerNr) return;
-    if (text.length >= 2) {
-      await sendeZug({ text, blob: null, nr });
-      return;
-    }
-    // Stille-Wächter: nichts gehört — anstupsen statt stumm zu warten.
-    if (await stilleStups(nr)) {
-      if (callOn && nr === hoerNr) hoeren();
-      return;
-    }
-    phase("du", "Nichts gehört — bitte nochmal");
-    if (callOn && nr === hoerNr) setTimeout(hoeren, 250);
-    return;
-  }
-  if (!callOn || nr !== hoerNr) return;
   let blob;
   try {
     blob = await recordUntilSilence(micStream);
@@ -539,7 +428,7 @@ async function hoeren() {
   }
   if (!callOn || nr !== hoerNr) return;
   if (!blob || blob.size < 1200) {
-    // Stille-Wächter (iOS-Pfad ohne Live-STT): erst anstupsen.
+    // Stille-Wächter: nichts gehört — erst anstupsen.
     if (await stilleStups(nr)) {
       if (callOn && nr === hoerNr) hoeren();
       return;
@@ -569,7 +458,6 @@ function auflegen() {
   stopVoice();
   if (micWache) { try { micWache.stop(); } catch { /* */ } micWache = null; }
   try { const a = lautsprecher(); a.removeAttribute("src"); a.load(); } catch { /* */ }
-  if (liveOhr) { try { liveOhr.stop(); } catch { /* */ } liveOhr = null; }
   if (rec && rec.state === "recording") try { rec.stop(); } catch { /* */ }
   if (micStream) {
     for (const t of micStream.getTracks()) t.stop();
@@ -610,7 +498,6 @@ function starteAnruf() {
   const micBitte = navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
-  startLiveSttPersistent();
   weiterNachMic(micBitte);
 }
 
@@ -632,7 +519,6 @@ async function weiterNachMic(micBitte) {
   hoerNr += 1;
   zugBusy = false;
   stilleStupse = 0;
-  startLiveSttPersistent();
   phase("warte", "verbindet …");
   try {
     const r = await fetch("api/start", {

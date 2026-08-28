@@ -58,6 +58,10 @@ ELEVENLABS_API_KEY = _s("ELEVENLABS_API_KEY") or _peek_key(
 # spricht, OHNE ElevenLabs-Rueckfall (Chef 27.08.2026 — Fehler sollen in der
 # Testphase hoerbar sein). Leer = ElevenLabs wie bisher (byte-identisch).
 TTS_BASE = _s("TTS_BASE").rstrip("/")
+# Lokales STT auf der 5090 (stt_serve/, deutscher Conformer): GESETZT = JEDE
+# Transkription geht an den Container, OHNE ElevenLabs-Rueckfall
+# (Chef 28.08.2026: "es geht nichts mehr zu elevenlabs"). Leer = Scribe.
+STT_BASE = _s("STT_BASE").rstrip("/")
 # Stimmname im Container (Referenz-WAV in tts_serve/stimmen/). Leer = "lisa";
 # der Bianca-Prozess setzt sich beim Start selbst auf "bianca".
 TTS_VOICE = _s("TTS_VOICE")
