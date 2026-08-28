@@ -57,6 +57,12 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  — Chatterbox :8210 und CosyVoice :8211 haben getrennte Caches).
  Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
  weil der Key wechselt. Cache leeren = Ordner löschen.
+ Seit 28.08. nachmittags zusätzlich: gewarmte Sätze sind im RAM **gepinnt**
+ (`tts._FEST`, faellt nie aus dem 48er-LRU) und Bianca wärmt ihre festen
+ Maschinen-Fragen mit (`bianca/gehirn.feste_saetze()`, Warm-Form =
+ `sprech.sanitize`) — ein Maschinen-Zug spricht damit in ~0,1 s statt
+ ~1,2 s lokaler Synthese. Drift-Wache: `tests/test_feste_saetze.py`
+ (Quelltext-Abgleich gegen `naechste_frage`).
 - **Lautheits-Angleichung statt Peak-Anhebung** (28.08.2026 — nicht
  rückbauen): `kern/tts.py -> pcm16_wav` zieht jede Äußerung auf dasselbe
  Sprach-RMS (`ZIEL_RMS`, anheben UND absenken, Peak-Deckel). Das alte
@@ -66,13 +72,22 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  sich alte und neue Lautheit. Tests: `tests/test_tts_gain.py`.
 - **Satz-Häppchen + Chunk-Streaming** (28.08.2026): Lange Antworten gehen im
   Zug-Strom häppchenweise raus (`kern/dienst.py -> _vertonen`): Container mit
-  `stream: true` im /health (CosyVoice-Turbo) => EIN `/speak-stream`-Aufruf
+  `stream: true` im /health => EIN `/speak-stream`-Aufruf
   mit Gesamttext, WAV-Häppchen sofort über den filler-Kanal (Docks spielen
   sie als Kette), Gain wird aus dem ersten sprach-aktiven Häppchen
   festgehalten; sonst satzweises Blocking (`haeppchen_teile`, splittet nie
   in Ziffern-Punkt wie "am 28. August"). Gewarmte Begrüßungen bleiben EIN
   Block (Cache-Key = Gesamttext). Notaus: `TTS_STREAM=0`. Tests:
   `tests/test_haeppchen.py`, `tests/test_tts_lokal.py`.
+  Seit 28.08. nachmittags: **Chatterbox streamt auch** — der Container
+  synthetisiert stückweise (eigener Schnitt `tts_serve/chatterbox/schnitt.py`:
+  erstes Stück früh am Komma ab 24 Zeichen, dann satzweise; Kill-Switch
+  `CHATTERBOX_STREAM=0`). Client-seitig wachsen die Häppchen progressiv
+  (`kern/tts.py`: erstes ~0,5 s, dann verdoppelnd bis 3,2 s) und der
+  **LLM-Vorab-Satz** geht über den Stream statt blocking
+  (`kern/dienst.py -> zug_stream/vorab`, Test `tests/test_vorab_stream.py`).
+  Gemessen 5090: erster Ton Kurzsatz 0,48 s, Langsatz ~1,2 s (vorher
+  1,2-3,5 s blocking).
 - **Stream-Schnitt + Gapless-Docks (Vorfall 28.08.2026 "Rauschen/zerstückelt"
   — nicht rückbauen):** Die HTTP-Chunks aus `/speak-stream` kommen mit
   BELIEBIGEN (auch ungeraden) Byte-Grenzen an. `kern/tts.py -> speak_stream`

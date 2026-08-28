@@ -27,6 +27,14 @@ def test_kurzer_satz_bleibt_ein_stueck():
     assert schnitt.stuecke("Einen kleinen Moment bitte.") == ["Einen kleinen Moment bitte."]
 
 
+def test_komma_schnitt_schon_bei_mittellangen_saetzen():
+    # Der gefuehlte erste Ton: "Einen Moment," ist in ~0,6 s synthetisiert.
+    teile = schnitt.stuecke("Einen Moment, ich schaue kurz nach.")
+    assert teile == ["Einen Moment,", "ich schaue kurz nach."], teile
+    teile = schnitt.stuecke("Alles klar, dann trage ich Sie für Donnerstag ein.")
+    assert teile[0] == "Alles klar,", teile
+
+
 def test_leer_gibt_leer():
     assert schnitt.stuecke("") == []
     assert schnitt.stuecke("   ") == []

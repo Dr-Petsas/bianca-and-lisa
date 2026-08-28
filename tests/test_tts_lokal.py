@@ -41,12 +41,14 @@ def _mit_lokal(fake: _FakeLokal, fn) -> None:
     tts._CLIENT = _ElevenWaechter()
     tts._CACHE.clear()
     tts._CACHE_ORD.clear()
+    tts._FEST.clear()
     try:
         fn()
     finally:
         (tts.TTS_BASE, tts._LOKAL_CLIENT, tts._CLIENT, tts._VOICE_NAME, tts._VOICE_ID) = alt
         tts._CACHE.clear()
         tts._CACHE_ORD.clear()
+        tts._FEST.clear()
 
 
 def test_engine_wahl_und_bereit():
@@ -223,6 +225,34 @@ def test_speak_stream_fehler_wirft():
     _mit_lokal(fake, lauf)
 
 
+def test_gewarmte_saetze_ueberleben_den_lru_druck():
+    """Gepinnter Cache (28.08.2026): dauerhaft gewarmte Sätze (Füller,
+    Begrüßung, feste Maschinen-Fragen) dürfen nicht von dynamischen
+    Antworten aus dem 48er-LRU gedrängt werden — sonst spricht die Maschine
+    mitten im Gespräch wieder mit voller Synthese-Latenz."""
+    import tempfile
+    from pathlib import Path
+
+    pcm = (12000).to_bytes(2, "little", signed=True) * 8
+    fake = _FakeLokal(_Antwort(200, pcm))
+    frage = "Waren Sie denn schon einmal bei uns in der Praxis?"
+
+    def lauf():
+        with tempfile.TemporaryDirectory() as d:
+            alt_dir = tts._DISK_DIR
+            tts._DISK_DIR = Path(d)
+            try:
+                tts.speak_dauerhaft(frage)
+                eng = tts.LokalTts()
+                for i in range(60):
+                    eng.speak(f"Dynamische Antwort Nummer {i}, ganz frisch erzeugt.")
+                assert tts.im_cache(frage), "gepinnter Satz fiel aus dem RAM-Cache"
+            finally:
+                tts._DISK_DIR = alt_dir
+
+    _mit_lokal(fake, lauf)
+
+
 def test_dauerhaft_cache_ueberlebt_neustart(tmp_path=None):
     """Fueller werden EINMAL synthetisiert; nach Prozess-Neustart (RAM-Cache
     leer) kommen sie von der Platte — kein zweiter /speak-Aufruf."""
@@ -241,9 +271,10 @@ def test_dauerhaft_cache_ueberlebt_neustart(tmp_path=None):
                 assert len(fake.aufrufe) == 1 and a[:4] == b"RIFF"
                 dateien = list(Path(d).glob("*.wav"))
                 assert len(dateien) == 1, "Blob liegt als WAV auf der Platte"
-                # Neustart simulieren: RAM-Cache weg, Platte bleibt.
+                # Neustart simulieren: RAM-Cache (LRU UND Pins) weg, Platte bleibt.
                 tts._CACHE.clear()
                 tts._CACHE_ORD.clear()
+                tts._FEST.clear()
                 b = tts.speak_dauerhaft("Einen Moment bitte.")
                 assert b == a, "identisches Audio von der Platte"
                 assert len(fake.aufrufe) == 1, "KEINE zweite Synthese nach Neustart"

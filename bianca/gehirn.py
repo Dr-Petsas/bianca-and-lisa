@@ -735,6 +735,40 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
 }
 
 
+def feste_saetze() -> list[str]:
+    """Alle festen Maschinen-Sätze für den TTS-Platten-Cache (28.08.2026).
+
+    Die Buchungs-Maschine spricht diese Fragen wörtlich (naechste_frage
+    unten, plus die Wiederholungs-Varianten). Sie tragen NIE Patientendaten
+    und dürfen deshalb wie Füller und Begrüßung dauerhaft gecacht werden —
+    aus dem Cache antwortet die Maschine in ~0,2 s statt einer vollen
+    lokalen Synthese (~1,2 s). Bei Textänderungen in naechste_frage HIER
+    mitziehen (test_feste_saetze prüft das per Quelltext-Abgleich); ein
+    vergessener Satz ist nur langsamer, nie falsch.
+    """
+    erstformen = [
+        "Waren Sie denn schon einmal bei uns in der Praxis?",
+        "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?",
+        "Und der Nachname, bitte?",
+        "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?",
+        "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?",
+        "Und der Vorname?",
+        "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?",
+        "Wann passt es Ihnen am besten — eher vormittags oder nachmittags? Und ab welchem Tag?",
+        "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
+        "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?",
+        "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer.",
+        "Und unter welcher Handynummer erreichen wir Sie?",
+        "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung.",
+    ]
+    out = list(erstformen)
+    for varianten in FRAGE_VARIANTEN.values():
+        for v in varianten:
+            if v not in out:
+                out.append(v)
+    return out
+
+
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)

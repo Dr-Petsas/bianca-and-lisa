@@ -59,6 +59,11 @@ HAEPPCHEN_MAX_S = 3.2
 
 _CACHE: dict[str, bytes] = {}
 _CACHE_ORD: list[str] = []
+# Gepinnter Bereich fuer dauerhaft gewarmte Saetze (Fueller, Begruessungen,
+# feste Maschinen-Fragen): sie duerfen NICHT von dynamischen Antworten aus
+# dem 48er-LRU verdraengt werden — sonst spricht die Maschine mitten im
+# Gespraech ploetzlich wieder mit voller Synthese-Latenz (28.08.2026).
+_FEST: dict[str, bytes] = {}
 _CLIENT: httpx.Client | None = None
 _LOKAL_CLIENT: httpx.Client | None = None
 
@@ -111,11 +116,18 @@ def _normalisieren(text: str) -> str:
     return sauber
 
 
-def _ram_merken(schluessel: str, blob: bytes) -> None:
+def _ram_merken(schluessel: str, blob: bytes, *, fest: bool = False) -> None:
+    if fest:
+        _FEST[schluessel] = blob
+        return
     _CACHE[schluessel] = blob
     _CACHE_ORD.append(schluessel)
     if len(_CACHE_ORD) > 48:
         _CACHE.pop(_CACHE_ORD.pop(0), None)
+
+
+def _ram_holen(schluessel: str) -> bytes | None:
+    return _FEST.get(schluessel) or _CACHE.get(schluessel)
 
 
 def _lokal_schluessel(sauber: str) -> str:
@@ -237,7 +249,7 @@ class ElevenLabsTts:
         if not sauber or not ELEVENLABS_API_KEY:
             return b""
         schluessel = f"{_VOICE_ID}|{sauber}"
-        hit = _CACHE.get(schluessel)
+        hit = _ram_holen(schluessel)
         if hit:
             return hit
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{_VOICE_ID}/stream"
@@ -290,7 +302,7 @@ class LokalTts:
         if not sauber:
             return b""
         schluessel = _lokal_schluessel(sauber)
-        hit = _CACHE.get(schluessel)
+        hit = _ram_holen(schluessel)
         if hit:
             return hit
         r = _lokal_client().post(
@@ -374,9 +386,8 @@ def im_cache(text: str) -> bool:
     sauber = _normalisieren(text)
     if not sauber:
         return False
-    if TTS_BASE:
-        return _lokal_schluessel(sauber) in _CACHE
-    return f"{_VOICE_ID}|{sauber}" in _CACHE
+    schluessel = _lokal_schluessel(sauber) if TTS_BASE else f"{_VOICE_ID}|{sauber}"
+    return schluessel in _FEST or schluessel in _CACHE
 
 
 def bereit() -> bool:
@@ -446,7 +457,7 @@ def speak_dauerhaft(text: str) -> bytes:
         schluessel = _lokal_schluessel(sauber)
     else:
         schluessel = f"{_VOICE_ID}|{sauber}"
-    hit = _CACHE.get(schluessel)
+    hit = _ram_holen(schluessel)
     if hit:
         return hit
     datei = _DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")
@@ -454,12 +465,13 @@ def speak_dauerhaft(text: str) -> bytes:
         if datei.is_file():
             blob = datei.read_bytes()
             if blob:
-                _ram_merken(schluessel, blob)
+                _ram_merken(schluessel, blob, fest=True)
                 return blob
     except OSError:
         pass
     blob = eng.speak(sauber)
     if blob:
+        _ram_merken(schluessel, blob, fest=True)
         try:
             _DISK_DIR.mkdir(parents=True, exist_ok=True)
             datei.write_bytes(blob)
