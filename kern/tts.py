@@ -287,7 +287,11 @@ class LokalTts:
         sauber = _normalisieren(text)
         if not sauber:
             return
-        min_bytes = int(0.6 * PCM_RATE) * 2
+        # Erstes Häppchen klein (schneller Sprechstart), Folgestücke gross:
+        # jede Naht zwischen zwei WAVs ist im Dock ein potenzielles
+        # Mini-Knacken — also so wenige Übergänge wie möglich.
+        min_bytes = int(1.2 * PCM_RATE) * 2
+        folge_bytes = int(3.2 * PCM_RATE) * 2
         gain: float | None = None
         puffer = b""
         with _lokal_client().stream(
@@ -301,6 +305,7 @@ class LokalTts:
                 if len(puffer) < min_bytes:
                     continue
                 stueck, puffer = puffer, b""
+                min_bytes = folge_bytes
                 samples = array.array("h")
                 samples.frombytes(stueck[: (len(stueck) // 2) * 2])
                 if gain is None:

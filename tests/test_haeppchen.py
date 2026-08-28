@@ -24,6 +24,10 @@ def _dienst(gemerkt: list[str]) -> Dienst:
         turn_fn=lambda sit, text, melde=None, vorab=None: {"text": LANG},
     )
     d.stimme = lambda text: (gemerkt.append(text) or f"/api/audio/{len(gemerkt)}.wav", 0.1)
+    # Hermetisch halten: tts.bereit() wuerde sonst den ECHTEN Container aus
+    # der .env befragen — laeuft dort der Turbo, streamt der Test live statt
+    # den Blocking-Pfad zu pruefen. Stream-Tests patchen bereit/engine selbst.
+    tts.bereit = lambda: False
     return d
 
 

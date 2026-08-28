@@ -44,6 +44,26 @@ Der Client (`kern/tts.py`) macht daraus `RuntimeError` — in der Testphase gibt
 es KEINEN ElevenLabs-Rueckfall (Chef 27.08.2026): ein kaputter Container ist
 sofort hoerbar (Zug erscheint im Dock ohne Audio).
 
+## POST /speak-stream (optional, seit 28.08.2026)
+
+Gleiche Anfrage wie `/speak`, Antwort ist aber **chunked**: rohe PCM16-Stuecke
+(mono, 24 kHz), sobald sie fertig sind — erster Chunk nach wenigen hundert
+Millisekunden statt nach der kompletten Synthese. Ein Container, der diesen
+Endpoint anbietet, meldet im `/health` zusaetzlich `"stream": true`; nur dann
+nutzt der Client (`LokalTts.speak_stream`) ihn. Chatterbox hat den Endpoint
+nicht (Feld fehlt => Client bleibt beim blockenden `/speak`).
+Notaus clientseitig: `TTS_STREAM=0` in der `.env`.
+
+Fehler VOR dem ersten Chunk: HTTP-Status wie bei `/speak`. Bricht der Stream
+MITTENDRIN ab, endet die Antwort einfach frueher — der Client spricht die
+angefangenen Haeppchen und verschluckt den Rest (nie von vorn beginnen).
+
+Turbo-Flags des CosyVoice-Containers (compose-Env): `TTS_VLLM=1` (Mini-vLLM
+fuer den autoregressiven Teil, Speicher via `COSY_VLLM_GPU_UTIL`), `TTS_TRT=1`
+(TensorRT-Engine fuer den Flow-Decoder, Bau beim ersten Start ins Volume).
+Erster Start nach Image-Neubau: einmal `TTS_VLLM=0 docker compose --profile
+cosyvoice up -d` (TRT-Bau braucht den Speicher), danach normal starten.
+
 ## Stimmen (/stimmen, read-only Volume)
 
 - `<name>.wav` — Referenz fuers Klonen: 10-20 s, mono, sauber, >= 16 kHz.

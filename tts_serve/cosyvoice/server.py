@@ -109,9 +109,37 @@ def _modell_holen() -> None:
     snapshot_download(MODEL_HF, local_dir=MODEL_DIR)
 
 
+def _load_vllm_sparsam(self, model_dir):
+    """Ersatz fuer CosyVoices load_vllm: gleiche Logik, aber die Torch-LLM-
+    Gewichte werden VOR dem Engine-Start freigegeben (Upstream: danach) und
+    der Torch-Cache geleert. Neben dem grossen qwen-vLLM (25,7 GiB) waren
+    sonst beim Engine-Start nur 1,66 GiB frei — zu wenig (live 28.08.2026)."""
+    import cosyvoice.cli.model as cv_model
+
+    cv_model.export_cosyvoice2_vllm(self.llm, model_dir, self.device)
+    del self.llm.llm.model.model.layers
+    torch.cuda.empty_cache()
+    from vllm import EngineArgs, LLMEngine
+
+    engine_args = EngineArgs(
+        model=model_dir,
+        skip_tokenizer_init=True,
+        enable_prompt_embeds=True,
+        gpu_memory_utilization=float(os.environ.get("COSY_VLLM_GPU_UTIL", "0.08")),
+    )
+    self.llm.vllm = LLMEngine.from_engine_args(engine_args)
+    self.llm.lock = threading.Lock()
+
+
 def _laden() -> None:
     global _MODEL, _WARM
+    import cosyvoice.cli.model as cv_model
     from cosyvoice.cli.cosyvoice import AutoModel
+
+    for _name in ("CosyVoiceModel", "CosyVoice2Model", "CosyVoice3Model"):
+        _kls = getattr(cv_model, _name, None)
+        if _kls is not None and hasattr(_kls, "load_vllm"):
+            _kls.load_vllm = _load_vllm_sparsam
 
     t0 = time.time()
     _modell_holen()
@@ -124,7 +152,13 @@ def _laden() -> None:
     nutze_vllm = os.environ.get("TTS_VLLM", "1").strip() != "0"
     nutze_trt = os.environ.get("TTS_TRT", "1").strip() != "0"
     print(f"cosyvoice lade: fp16={fp16} vllm={nutze_vllm} trt={nutze_trt}", flush=True)
-    _MODEL = AutoModel(model_dir=MODEL_DIR, fp16=fp16, load_vllm=nutze_vllm, load_trt=nutze_trt)
+    # Reihenfolge gedreht (Upstream: vllm vor trt): TensorRT braucht beim
+    # Engine-Laden freie Puffer und gab neben der vLLM-Reservierung nur ein
+    # stilles None zurueck (live 28.08.2026). Also TRT zuerst, vLLM danach —
+    # die sparsame load_vllm-Variante gibt vorher die Torch-LLM-Gewichte frei.
+    _MODEL = AutoModel(model_dir=MODEL_DIR, fp16=fp16, load_vllm=False, load_trt=nutze_trt)
+    if nutze_vllm:
+        _MODEL.model.load_vllm(os.path.join(MODEL_DIR, "vllm"))
     _stimmen_scannen()
     _aliase_lesen()
     print(f"cosyvoice geladen in {time.time() - t0:.0f}s, "

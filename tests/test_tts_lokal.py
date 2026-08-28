@@ -136,10 +136,12 @@ class _FakeStreamAntwort:
 
 
 def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
-    # Zwei Chunks à 0,6 s: erst leise (2000), dann laut (8000). Der Gain wird
+    # Zwei Chunks à 1,2 s: erst leise (2000), dann laut (8000). Der Gain wird
     # aus dem ERSTEN sprach-aktiven Stück bestimmt und festgehalten — das
     # zweite Häppchen bekommt DENSELBEN Faktor (kein Pumpen in der Äußerung).
-    n = int(0.6 * 24000)
+    # Chunk 1 erreicht die Start-Schwelle (1,2 s) und geht sofort raus,
+    # Chunk 2 bleibt unter der Folge-Schwelle (3,2 s) und kommt als Rest-Flush.
+    n = int(1.2 * 24000)
     leise = (2000).to_bytes(2, "little", signed=True) * n
     laut = (8000).to_bytes(2, "little", signed=True) * n
     fake = _FakeLokal(_Antwort(200, b""))

@@ -47,8 +47,10 @@ services:
       # fuer den Flow-Decoder. Neben dem grossen qwen-vLLM (25,7 GB) bleiben
       # ~6,9 GB — 0.08 = ~2,6 GB fuer das 0.5B-Sprach-LLM. Notausgaenge:
       # TTS_VLLM=0 / TTS_TRT=0 => Verhalten wie vor dem Turbo.
-      TTS_VLLM: "1"
-      TTS_TRT: "1"
+      # Erster Start (TRT-Engine-Bau braucht Workspace): einmal mit
+      # TTS_VLLM=0 booten, Plan landet im Volume, dann normal starten.
+      TTS_VLLM: "${TTS_VLLM:-1}"
+      TTS_TRT: "${TTS_TRT:-1}"
       COSY_VLLM_GPU_UTIL: "0.08"
       # torch.compile-/vLLM-Artefakte ins Volume — Folgestarts sind schneller.
       VLLM_CACHE_ROOT: "/models/vllm-cache"
