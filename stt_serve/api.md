@@ -1,51 +1,70 @@
-# STT-Dienst (deutscher Conformer, 5090) — Vertrag
+# STT-Container (Parakeet, 5090) — Vertrag
 
-Ein Container, ein Vertrag — gleiches Muster wie `tts_serve/api.md`.
-Ersetzt ElevenLabs Scribe fuer Lisa und Bianca (Chef 28.08.2026:
-"es geht nichts mehr zu elevenlabs").
+Claras bewaehrte Telefon-Strecke als eigener Dienst fuer Lisa/Bianca
+(Chef 28.08.2026: Parakeet statt ElevenLabs, "alle besten und bewaehrtesten
+Entwicklungsstufen von Clara V7 und Demo Clara"):
+
+- Engine: **primeline-parakeet** (deutsches TDT-Finetune, 2,95 % WER) als
+  ONNX ueber `onnx-asr`, **CPU-only** (wie Claras Produktion; ~190 ms je Zug
+  auf dem Dev-Rechner, der Server-CPU ist schneller). KEIN Torch, KEINE GPU —
+  qwen-vLLM und TTS bleiben unberuehrt.
+- Nachkorrektur: `postcorrect.py` = Kopie von Claras
+  `services/stt_postcorrect.py` (Fuzzy-Hotwords, Anlaut-Gruppen P/B, T/D/Z,
+  Token-Paare fuer zerhackte Namen, Namens-Zweifel fuer Buchungs-Wachen).
+  Phrasen-Fixes (Heads-up/Teleskopkrone/Kons) sind Marker-gated — Lisa/Bianca
+  senden keine Marker und bleiben davon unberuehrt (wie Claras Bianca).
 
 ## Endpunkte
 
-### `POST /transcribe`
+### POST /transcribe
 
-Multipart-Upload, Feld `file` mit dem Aufnahme-Blob der Docks
-(WebM/Opus vom MediaRecorder, M4A von iOS, WAV aus Tests — ffmpeg im
-Container wandelt alles nach 16 kHz mono).
+Multipart:
+
+| Feld | Pflicht | Bedeutung |
+| --- | --- | --- |
+| `file` | ja | Audio (WebM/Opus, M4A, WAV ... — ffmpeg wandelt nach 16 kHz mono) |
+| `keywords` | nein | Komma-Liste Hotwords, z. B. `Petsas,Nikolaou,Patrikis` |
 
 Antwort:
 
 ```json
-{"text": "Ich haette gern einen Termin."}
+{
+  "text": "Ich moechte zu Doktor Petsas",
+  "korrekturen": [["Betsas", "Petsas"]],
+  "namenszweifel": {"unsicher": false, "wort": "", "grund": "", "kandidaten": []},
+  "ms": 187.3
+}
 ```
 
-Bei Fehlern kommt `{"text": "", "error": "..."}` mit HTTP 200 — der
-Client behandelt leeren Text wie "nichts gehoert".
+- `korrekturen`: was die Fuzzy-Nachkorrektur ersetzt hat (Diagnose).
+- `namenszweifel`: Claras `assess_name_certainty` — `unsicher:true` mit
+  `grund` `mehrdeutig`/`unbekannt` und `kandidaten`, gedacht als Wache VOR
+  schreibenden Aktionen (buchen/absagen/verschieben).
+- Fehler: `{"text": "", "error": "..."}` — der Client (kern/stt.py) wirft
+  bei HTTP != 200; es gibt KEINEN ElevenLabs-Rueckfall.
 
-### `GET /health`
+### GET /health
 
 ```json
-{"ok": true, "model": "stt_de_conformer_transducer_large", "device": "cuda", "loadSeconds": 42.0}
+{"ok": true, "model": "parakeet-primeline-onnx", "device": "cpu", "loadSeconds": 9.1}
 ```
 
-## Client-Seite (dieses Repo)
+## Client (Lisa/Bianca)
 
-- `kern/stt.py`: Ist `STT_BASE` in der `.env` gesetzt (z. B.
-  `http://192.168.0.246:8212`), geht JEDE Transkription an den Container —
-  **kein ElevenLabs-Rueckfall**. Leer = ElevenLabs Scribe wie vorher.
-- Modell: `nvidia/stt_de_conformer_transducer_large` (NeMo, ~120M,
-  deutsch-only — kein Sprachsprung-Risiko wie bei mehrsprachigen Modellen).
-- Latenz-Ziel: unter 0,3 s je Zug (Scribe: 0,8-2,0 s gemessen 28.08.2026).
+- `.env`: `STT_BASE=http://192.168.0.246:8212` (Dev-Rechner) bzw.
+  `http://host.docker.internal:8212` (App-Container auf der 5090).
+- `kern/stt.py` schickt `keywords` = Behandler-Nachnamen des Tenants
+  (`kern/tenants.py -> stt_keywords`).
 
-## Betrieb auf der 5090
+## Deploy (5090)
 
 ```bash
-cd /opt/telefonki/stt_serve
+cd /home/cursor/telefonki/stt_serve
+# Modell liegt als Bind-Mount in ./modell (parakeet-primeline-onnx, 2,5 GB;
+# Quelle: Claras Cache per scp ODER HF geier/deskscribe-parakeet-primeline-onnx)
 docker compose up -d --build
 curl -s http://127.0.0.1:8212/health
 ```
 
-- Erster Start laedt das Modell ins Volume `stt-models` (~0,5 GB, einmalig).
-- VRAM ~1 GB FP32. Notaus bei Speichernot: `STT_DEVICE=cpu docker compose up -d`
-  (Conformer-large dekodiert 5-s-Schnipsel auch auf CPU in ~0,3-0,5 s).
-- Claras Parakeet und Lena-Voice sind NICHT beteiligt — eigener Container,
-  eigenes Modell, eigenes Volume.
+Port-Landkarte 5090: vLLM 8000, Lisa 8095, Bianca 8096, Chatterbox 8210,
+CosyVoice 8211, **STT 8212**.

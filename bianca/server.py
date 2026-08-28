@@ -79,7 +79,7 @@ def health():
         "ttsEngine": tts.engine_anzeige() if tts.bereit() else "keine Stimme",
         "voice": BIANCA_VOICE_ID,
         "filler": len(DIENST.filler_urls),
-        "stt": "live+elevenlabs" if stt.bereit() else "live",
+        "stt": stt.engine_anzeige() if stt.bereit() else "live",
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "lastCall": session.last_call(),

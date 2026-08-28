@@ -158,7 +158,7 @@ def health():
         "ttsModel": tts.modell_info() if tts.bereit() else "",
         "ttsEngine": tts.engine_anzeige() if tts.bereit() else "keine Stimme",
         "filler": f"{len(DIENST.filler_urls)}/{len(filler.alle_saetze())}",
-        "stt": "live+elevenlabs" if stt.bereit() else "live",
+        "stt": stt.engine_anzeige() if stt.bereit() else "live",
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "lastCall": session.last_call(),

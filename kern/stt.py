@@ -1,6 +1,9 @@
-"""Spracheingabe. STT_BASE gesetzt = lokaler Conformer-Container (5090),
-OHNE ElevenLabs-Rueckfall (Chef 28.08.2026: "es geht nichts mehr zu
-elevenlabs"). Leer = ElevenLabs Scribe wie frueher."""
+"""Spracheingabe. STT_BASE gesetzt = lokaler Parakeet-Container (5090,
+Claras bewaehrte Telefon-Engine + Fuzzy-Namens-Nachkorrektur), OHNE
+ElevenLabs-Rueckfall (Chef 28.08.2026: "es geht nichts mehr zu elevenlabs").
+Leer = ElevenLabs Scribe wie frueher. ``keywords`` (Komma-Liste, z. B.
+Behandler-Nachnamen aus dem Tenant) gehen als Hotwords an die Nachkorrektur
+im Container — der Scribe-Pfad ignoriert sie."""
 
 from __future__ import annotations
 
@@ -26,21 +29,23 @@ def _sauber(text) -> str:
     return text
 
 
-def _lokal(audio: bytes, *, mime: str, name: str) -> str:
+def _lokal(audio: bytes, *, mime: str, name: str, keywords: str = "") -> str:
     r = _client().post(
         f"{STT_BASE}/transcribe",
         files={"file": (name, audio, mime or "application/octet-stream")},
+        data={"keywords": keywords} if keywords else None,
     )
     if r.status_code != 200:
         raise RuntimeError(f"stt_lokal_http_{r.status_code}")
     return _sauber(r.json().get("text"))
 
 
-def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm") -> str:
+def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
+               keywords: str = "") -> str:
     if not audio or len(audio) < 800:
         return ""
     if STT_BASE:
-        return _lokal(audio, mime=mime, name=name)
+        return _lokal(audio, mime=mime, name=name, keywords=keywords)
     if not ELEVENLABS_API_KEY:
         return ""
     r = httpx.post(
@@ -61,3 +66,10 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
 
 def bereit() -> bool:
     return bool(STT_BASE or ELEVENLABS_API_KEY)
+
+
+def engine_anzeige() -> str:
+    """Fuer die Dock-/Health-Anzeige: wer hoert gerade zu?"""
+    if STT_BASE:
+        return "Parakeet (lokal)"
+    return "ElevenLabs Scribe" if ELEVENLABS_API_KEY else "keine"

@@ -1,31 +1,20 @@
-# STT-Container fuer die 5090 — laeuft DAUERHAFT neben vLLM (8000) und
-# CosyVoice (8211). Port-Landkarte 5090: vLLM 8000, Chatterbox 8210 (aus),
-# CosyVoice 8211, STT 8212.
+# Parakeet-STT auf der 5090 — Port 8212 (Landkarte: vLLM 8000, Lisa 8095,
+# Bianca 8096, Chatterbox 8210, CosyVoice 8211, STT 8212).
 #
-#   docker compose up -d --build
+# CPU-only (wie Claras Produktions-Parakeet): KEINE GPU-Reservation, damit
+# qwen-vLLM und der TTS-Container unberuehrt bleiben.
 #
-# VRAM: Conformer-large (~120M Parameter, FP32) braucht ~1 GB — passt in die
-# freie Luecke neben qwen-vLLM (25,7 GB) und CosyVoice-Turbo (5,7 GB).
-# Reicht es wider Erwarten nicht, faellt NUR dieser Container beim Start um
-# (die Nachbarn haben ihren Speicher fest reserviert). Notaus: STT_DEVICE=cpu.
+# Modell: ./modell (parakeet-primeline-onnx, 2,5 GB) — kommt per scp aus
+# Claras Cache (nur lesend) bzw. HF geier/deskscribe-parakeet-primeline-onnx.
+# Bewusst Bind-Mount statt Volume: transparent, ohne Download-Logik im Image.
 services:
   stt:
     build: .
-    image: stt-conformer-de:v1
+    image: stt-parakeet-de:v1
     ports:
       - "8212:8100"
     volumes:
-      - stt-models:/models
-    environment:
-      STT_MODEL: "stt_de_conformer_transducer_large"
-      STT_DEVICE: "${STT_DEVICE:-cuda}"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - ./modell:/modell:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -33,7 +22,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 600s   # erster Start laedt das Modell (~0,5 GB) ins Volume
-
-volumes:
-  stt-models:
+      start_period: 120s

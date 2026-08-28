@@ -1,13 +1,15 @@
-"""kern/stt.py: lokaler Conformer-Container OHNE ElevenLabs-Rueckfall.
+"""kern/stt.py: lokaler Parakeet-Container OHNE ElevenLabs-Rueckfall.
 
 Vertrag (Chef 28.08.2026): Ist STT_BASE gesetzt, transkribiert NUR der
-lokale Container auf der 5090. Schlaegt er fehl, fliegt RuntimeError —
-es gibt KEINEN stillen Rueckfall auf ElevenLabs Scribe.
+lokale Container auf der 5090 (Claras bewaehrte Parakeet-Strecke).
+Schlaegt er fehl, fliegt RuntimeError — es gibt KEINEN stillen Rueckfall
+auf ElevenLabs Scribe. Behandler-Keywords gehen als Hotwords mit.
 """
 
 from __future__ import annotations
 
 import kern.stt as stt
+from kern import tenants
 
 
 class _Antwort:
@@ -22,10 +24,10 @@ class _Antwort:
 class _FakeLokal:
     def __init__(self, antwort: _Antwort):
         self.antwort = antwort
-        self.aufrufe: list[tuple[str, dict]] = []
+        self.aufrufe: list[tuple[str, dict, dict]] = []
 
-    def post(self, url, files=None, **kw):
-        self.aufrufe.append((url, files or {}))
+    def post(self, url, files=None, data=None, **kw):
+        self.aufrufe.append((url, files or {}, data or {}))
         return self.antwort
 
 
@@ -57,11 +59,57 @@ def test_lokal_transkribiert_ohne_elevenlabs():
     def lauf():
         text = stt.transcribe(BLOB, mime="audio/webm", name="turn.webm")
         assert text == "Ich haette gern einen Termin."
-        url, files = fake.aufrufe[0]
+        url, files, _ = fake.aufrufe[0]
         assert url == "http://stt-test:8100/transcribe"
         assert files["file"][0] == "turn.webm" and files["file"][2] == "audio/webm"
 
     _mit_lokal(fake, lauf)
+
+
+def test_keywords_gehen_als_hotwords_mit():
+    fake = _FakeLokal(_Antwort(200, {"text": "Termin bei Petsas"}))
+
+    def lauf():
+        stt.transcribe(BLOB, keywords="Petsas,Nikolaou,Patrikis")
+        _, _, data = fake.aufrufe[0]
+        assert data.get("keywords") == "Petsas,Nikolaou,Patrikis"
+
+    _mit_lokal(fake, lauf)
+
+
+def test_tenant_keywords_sind_behandler_nachnamen():
+    tenant = {
+        "behandler": "Dr. Petsas",
+        "calendars": [
+            {"id": "1", "name": "Dr. Nikolaou"},
+            {"id": "2", "name": "Dr. Patrikis"},
+            {"id": "3", "name": "Dr. Petsas"},
+        ],
+    }
+    kw = tenants.stt_keywords(tenant)
+    assert kw == ["Petsas", "Nikolaou", "Patrikis"], kw
+    # Marker-Keywords (Heads-up etc.) duerfen NIE dabei sein — Patiententelefon.
+    assert not {k.lower() for k in kw} & {"heads-up", "headsup", "teleskopkrone", "kons"}
+
+
+def test_postcorrect_kopie_fixt_behandler_hoerfehler():
+    # Die Kopie von Claras stt_postcorrect im Container-Ordner: Anlaut-
+    # Verwechslung P/B ("Betsas") und Vokal-Garble ("Patrikus") muessen auf
+    # die echten Behandler snappen; unbeteiligte Woerter bleiben stehen.
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stt_serve"))
+    try:
+        from postcorrect import correct_transcript
+    finally:
+        sys.path.pop(0)
+    kw = ["Petsas", "Nikolaou", "Patrikis"]
+    text, repl = correct_transcript("Ich moechte zu Doktor Betsas bitte", kw)
+    assert "Petsas" in text and repl, (text, repl)
+    text2, _ = correct_transcript("Verbinden Sie mich mit Doktor Patrikus", kw)
+    assert "Patrikis" in text2, text2
+    text3, repl3 = correct_transcript("Ich haette gern einen Termin am Montag", kw)
+    assert text3 == "Ich haette gern einen Termin am Montag" and not repl3
 
 
 def test_lokal_fehler_wirft_statt_zurueckzufallen():
@@ -110,6 +158,9 @@ def test_bereit_mit_stt_base_auch_ohne_key():
 
 if __name__ == "__main__":
     test_lokal_transkribiert_ohne_elevenlabs()
+    test_keywords_gehen_als_hotwords_mit()
+    test_tenant_keywords_sind_behandler_nachnamen()
+    test_postcorrect_kopie_fixt_behandler_hoerfehler()
     test_lokal_fehler_wirft_statt_zurueckzufallen()
     test_kyrillische_halluzination_wird_verworfen()
     test_winzige_blobs_gehen_gar_nicht_erst_raus()
