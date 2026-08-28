@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, sprech, stt, tts
+from kern import filler, sprech, stt, tenants, tts
 from kern.config import WRITE_LIVE
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
@@ -216,7 +216,11 @@ class Dienst:
                 if stt_blob is not None:
                     t0 = time.perf_counter()
                     try:
-                        gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name)
+                        # Behandler-Namen des Mandanten als Hotwords fuer die
+                        # Parakeet-Nachkorrektur ("Betsas" -> "Petsas").
+                        kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+                        gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name,
+                                                keywords=kw)
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
                         q.put(("leer", str(e)))

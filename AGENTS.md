@@ -57,33 +57,59 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
  weil der Key wechselt. Cache leeren = Ordner löschen.
 
-## Lokales STT auf der 5090 (28.08.2026 — nicht rückbauen)
+## Lokales STT auf der 5090: Parakeet wie Clara (28.08.2026 — nicht rückbauen)
 
 Chef 28.08.2026: **"es geht nichts mehr zu elevenlabs"** — auch die
-Transkription nicht. `stt_serve/` trägt den STT-Container (deutscher
-NVIDIA-Conformer-Transducer, NeMo, ~120M, deutsch-only) auf der 5090,
-Port **8212** (Landkarte: vLLM 8000, Chatterbox 8210 aus, CosyVoice 8211).
-Vertrag `stt_serve/api.md`: `POST /transcribe` (multipart `file`, ffmpeg
-wandelt WebM/M4A/WAV nach 16 kHz mono) -> `{"text": ...}`.
+Transkription nicht. Und: **"bianca und lisa sollten stt parakeet nutzen
+mit allen entwicklungsstufen ... nur das beste und bewährteste von
+clara v7 und demo clara."** Deshalb trägt `stt_serve/` Claras bewährte
+Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
+(Landkarte: vLLM 8000, Chatterbox 8210, CosyVoice 8211, STT 8212):
 
+- Engine: **primeline-parakeet** (deutsches TDT-Finetune, 2,95 % WER) als
+  ONNX über `onnx-asr`, **CPU-only** wie Claras Produktion — die GPU
+  (qwen-vLLM, TTS) bleibt komplett unberührt. Modell liegt als Bind-Mount
+  in `stt_serve/modell/` (Kopie aus Claras `.cache/parakeet-primeline-onnx`,
+  nur lesend gezogen; Quelle sonst: HF geier/deskscribe-parakeet-primeline-onnx).
+- Nachkorrektur: `stt_serve/postcorrect.py` = **KOPIE** von Claras
+  `services/stt_postcorrect.py` (Fuzzy-Hotwords, Anlaut-Gruppen P/B & T/D/Z,
+  Token-Paare, `assess_name_certainty` für Buchungs-Wachen). Kopie statt
+  Import — dieses Repo fasst Clara-Voice nie an. Phrasen-Fixes (Heads-up/
+  Teleskopkrone/Kons) sind Marker-gated; Lisa/Bianca senden keine Marker.
+- Keywords: `kern/tenants.py -> stt_keywords()` liefert die Behandler-
+  Nachnamen des Mandanten ("Petsas", "Nikolaou", "Patrikis"), `kern/stt.py`
+  schickt sie je Request mit ("Betsas" -> "Petsas" VOR dem LLM).
 - Umschalten NUR über `STT_BASE` in der `.env`: gesetzt = ALLE Züge über den
   Container, **KEIN ElevenLabs-Rückfall** (gleiches Muster wie `TTS_BASE`);
   leer = Scribe wie früher. Tests: `tests/test_stt_lokal.py`.
-- Latenz: Scribe lag live bei 0,8-2,0 s je Zug (gemessen 28.08.2026,
-  `tests/latenz_e2e.py` / `tests/timing_bericht.py`; `timings.stt` steht
-  seit 28.08. im Sitzungsprotokoll). Conformer-Ziel: unter 0,3 s.
-- VRAM 5090: Conformer FP32 ~1 GB in die freie Lücke neben qwen-vLLM
-  (25,7 GB, NICHT anfassen) und CosyVoice-Turbo (5,7 GB). Reicht es nicht,
-  fällt nur der STT-Container um — Notaus `STT_DEVICE=cpu`.
-- **Clara-Schutz:** Claras Parakeet, Clara V7/dev, Demo-Clara und Lena-Voice
-  sind NICHT beteiligt — eigener Container, eigenes Modell, eigenes Volume.
-  Dieses Repo fasst deren Prozesse/Dateien nie an.
+- Gemessen 28.08.2026: Container 0,34-0,43 s je Zug (Server-lokal, wortgenau
+  gegen Referenztranskript), E2E im Bianca-Dienst `timings.stt` = 0,44 s —
+  Scribe lag bei 0,8-2,0 s. Messwerkzeuge: `tests/latenz_e2e.py`,
+  `tests/timing_bericht.py`, `stt_serve/latenz_probe.sh`.
+- Health-/Dock-Anzeige: `kern/stt.py -> engine_anzeige()` ("Ohr: Parakeet
+  (lokal)" neben "Stimme: Chatterbox (lokal)").
+- **Clara-Schutz:** Claras laufender Parakeet, Clara V7/dev, Demo-Clara und
+  Lena-Voice sind NICHT beteiligt — eigener Container, eigene Modell-Kopie,
+  anderer Rechner. Dieses Repo fasst deren Prozesse/Dateien nie an.
 - **Bianca-Dock ohne Browser-Live-STT (28.08.2026):** Die Web-Speech-
   Live-Transkription lieferte kaputte Transkripte und machte Züge lahm —
   Bianca hört nur noch über Aufnahme (`recordUntilSilence`) + Server-STT.
   `liveOhr` bleibt als immer-null-Feld (bargeOderCap strukturgleich zu
   Lisas Dock; Barge-in läuft über den Mikro-Pegel-Pfad). Lisas Dock ist
   unverändert.
+- Der erste Wurf (NVIDIA-Conformer über NeMo, Image `stt-conformer-de:v1`)
+  ist verworfen: 13,9-GB-Image, brauchte GPU (OOM — 5090 war voll belegt)
+  bzw. träge CPU-Torch-Inferenz. Parakeet-ONNX: 1,07-GB-Image, CPU reicht.
+
+## Ziel-Pipeline Lisa/Bianca (Chef 28.08.2026)
+
+**Parakeet (STT, 8212) -> bewährte Guards/Wächter -> Qwen 3.6 (vLLM, 8000)
+-> Chatterbox (TTS, 8210).** Alles lokal auf der 5090, die Worker (8095/8096)
+bleiben lokal auf dem Dev-Rechner. Chatterbox ist die bevorzugte Stimme
+(Chef: "vorzugsweise chatterbox"); CosyVoice-Turbo (8211) bleibt als
+gebautes Image/Profil liegen, läuft aber nicht (nie beide zugleich — eine
+GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis Lisa/Bianca
+vernünftig funktionieren.
 
 ## Lisa zuerst
 

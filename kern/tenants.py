@@ -37,6 +37,32 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
     return raw
 
 
+def stt_keywords(tenant: dict[str, Any]) -> list[str]:
+    """Einwort-Namen fuer die STT-Nachkorrektur (Behandler des Mandanten).
+
+    Claras Fuzzy-Nachkorrektur (stt_serve/postcorrect.py) arbeitet mit
+    Einwort-Keywords ab 4 Zeichen — wir liefern die Behandler-Nachnamen
+    ("Petsas", "Nikolaou", "Patrikis"), damit Hoerfehler wie "Betsas" oder
+    "Batrikis" schon VOR dem LLM korrigiert werden (Claras Anlaut-Gruppen
+    P/B, T/D/Z ...). Bewusst KEINE Marker-Keywords (Heads-up, Teleskopkrone,
+    Kons): das Patiententelefon bleibt wie Claras Bianca ohne Phrasen-Fixes.
+    """
+    kandidaten: list[str] = []
+    quellen: list[Any] = [tenant.get("behandler")]
+    cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
+    quellen += [c.get("name") for c in cals if isinstance(c, dict)]
+    for q in quellen:
+        for tok in _sauber(q).replace(".", " ").split():
+            t = tok.strip("-()")
+            if len(t) >= 4 and t.lower() not in {"doktor", "prof", "med", "dent"}:
+                kandidaten.append(t[0].upper() + t[1:])
+    out: list[str] = []
+    for k in kandidaten:
+        if k not in out:
+            out.append(k)
+    return out
+
+
 def kalender_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | None:
     cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
     q = _sauber(name).lower()
