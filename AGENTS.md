@@ -52,7 +52,8 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  **kein** Fallback-Pfad).
 - **Füller-Platten-Cache** (28.08.2026): `tts.speak_dauerhaft()` cached
  statische Sätze (Füller, Begrüßungen — NIE Gesprächsantworten mit
- Patientenbezug) als WAV unter `.data/tts-cache/` (Key: Engine+Stimme+Text).
+ Patientenbezug) als WAV unter `.data/tts-cache/` (Key: TTS-Basis+Stimme+Text
+ — Chatterbox :8210 und CosyVoice :8211 haben getrennte Caches).
  Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
  weil der Key wechselt. Cache leeren = Ordner löschen.
 

@@ -103,6 +103,13 @@ def _ram_merken(schluessel: str, blob: bytes) -> None:
         _CACHE.pop(_CACHE_ORD.pop(0), None)
 
 
+def _lokal_schluessel(sauber: str) -> str:
+    # TTS_BASE gehoert in den Schluessel: Chatterbox (:8210) und CosyVoice
+    # (:8211) sind beide "lokal" — ohne Basis im Key wuerde ein Engine-Wechsel
+    # alte Fueller aus dem Cache der anderen Stimme abspielen.
+    return f"lokal|{TTS_BASE}|{_VOICE_NAME}|{sauber}"
+
+
 def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
     """s16le mono → WAV. Pegel wie Demo Clara: nur leise Sätze anheben
     (Ziel 0,82 FS, Faktor max. 1,8), nie absenken, nie kappen."""
@@ -210,7 +217,7 @@ class LokalTts:
         sauber = _normalisieren(text)
         if not sauber:
             return b""
-        schluessel = f"lokal|{_VOICE_NAME}|{sauber}"
+        schluessel = _lokal_schluessel(sauber)
         hit = _CACHE.get(schluessel)
         if hit:
             return hit
@@ -291,7 +298,7 @@ def speak_dauerhaft(text: str) -> bytes:
         return b""
     eng = engine()
     if eng.name == "lokal":
-        schluessel = f"lokal|{_VOICE_NAME}|{sauber}"
+        schluessel = _lokal_schluessel(sauber)
     else:
         schluessel = f"{_VOICE_ID}|{sauber}"
     hit = _CACHE.get(schluessel)
