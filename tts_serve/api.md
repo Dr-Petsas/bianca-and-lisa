@@ -31,8 +31,8 @@ Antwort 200: **rohes PCM, 16 Bit signed little-endian, mono, 24000 Hz**
 (`application/octet-stream`, Header `X-Sample-Rate: 24000`, `X-Engine: ...`).
 
 Bewusst KEIN WAV: `kern/tts.py` legt auf das rohe PCM dieselbe
-Demo-Clara-Pegel-Schicht (`pcm16_wav`) wie heute auf ElevenLabs-`pcm_24000` —
-so klingen lokale und ElevenLabs-Zuege gleich laut.
+Lautheits-Angleichung (`pcm16_wav`, RMS auf Zielwert, seit 28.08.2026) wie auf
+ElevenLabs-`pcm_24000` — so klingen alle Zuege und Engines gleich laut.
 
 Fehler:
 

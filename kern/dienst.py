@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import secrets
 import threading
 import time
@@ -27,6 +28,27 @@ FILLER_VORAB_S = 0.3
 # hängt. Normale Plauder-Antworten kommen nach 1,4 bis 2,6 s — eine kürzere
 # Frist würde den Füller in die Antwort hineinsprechen (gemessen 27.08.2026).
 FILLER_SPAET_S = 3.2
+
+# Satz-Häppchen (28.08.2026): lange Antworten werden satzweise vertont und
+# jedes fertige Stück SOFORT ausgespielt (die Docks spielen filler-Audios als
+# Kette), statt den ganzen Rest als EINEN Block zu synthetisieren — beim
+# lokalen TTS (~1,5 s je Satz) stand sonst nach dem Vorab-Satz nochmal
+# sekundenlang Stille, besonders bei Lisas langen Antworten. Kein Split nach
+# Ziffern-Punkt ("am 28. August"), nur vor großgeschriebenem Satzanfang.
+_HAEPPCHEN_RE = re.compile(r"(?<=[.!?…])(?<!\d[.!?…])\s+(?=[A-ZÄÖÜ„»(])")
+HAEPPCHEN_MIN = 25
+
+
+def haeppchen_teile(text: str) -> list[str]:
+    """Sätze fürs häppchenweise Vertonen — Winzlinge kleben am Nachbarn."""
+    roh = [t.strip() for t in _HAEPPCHEN_RE.split(_s(text)) if t.strip()]
+    teile: list[str] = []
+    for t in roh:
+        if teile and (len(teile[-1]) < HAEPPCHEN_MIN or len(t) < HAEPPCHEN_MIN):
+            teile[-1] = f"{teile[-1]} {t}"
+        else:
+            teile.append(t)
+    return teile
 
 
 def _s(v) -> str:
@@ -111,6 +133,27 @@ class Dienst:
             return "", round(time.perf_counter() - t0, 2)
         return url, round(time.perf_counter() - t0, 2)
 
+    def _vertonen(self, text: str, haeppchen=None) -> tuple[str, float]:
+        """Wie stimme(), aber im Zug-Strom satzweise: fertige Häppchen gehen
+        sofort über haeppchen(url) raus, nur das letzte Stück kommt als
+        reguläres reply-Audio zurück. Gecachte Texte (gewarmte Begrüßungen)
+        bleiben EIN Block — ihr Cache-Key trägt den Gesamttext."""
+        if not text:
+            return "", 0.0
+        if haeppchen is None or tts.im_cache(text):
+            return self.stimme(text)
+        teile = haeppchen_teile(text)
+        if len(teile) < 2:
+            return self.stimme(text)
+        gesamt = 0.0
+        for teil in teile[:-1]:
+            url, dauer = self.stimme(teil)
+            gesamt += dauer
+            if url:
+                haeppchen(url)
+        url, dauer = self.stimme(teile[-1])
+        return url, round(gesamt + dauer, 2)
+
     # ---- Füller gegen die Totzeit ------------------------------------------
     # Die Audios kommen aus dem Platten-Cache (.data/tts-cache) — nur beim
     # allerersten Start (oder nach Stimmen-/Engine-Wechsel) wird synthetisiert.
@@ -138,7 +181,8 @@ class Dienst:
     # ---- Antwort-Bau -------------------------------------------------------
 
     def json_antwort(self, sit: dict, *, art: str, text_in: str = "",
-                     extra: dict | None = None, melde=None, vorab=None) -> dict[str, Any]:
+                     extra: dict | None = None, melde=None, vorab=None,
+                     haeppchen=None) -> dict[str, Any]:
         extra = extra or {}
         sit.pop("_vorabText", None)
         t0 = time.perf_counter()
@@ -156,11 +200,11 @@ class Dienst:
         gesprochen = _s(sit.pop("_vorabText", ""))
         if gesprochen and text.startswith(gesprochen):
             rest = text[len(gesprochen):].strip()
-            url, tts_s = self.stimme(rest) if rest else ("", 0.0)
+            url, tts_s = self._vertonen(rest, haeppchen) if rest else ("", 0.0)
         else:
             if gesprochen:
                 print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
-            url, tts_s = self.stimme(text)
+            url, tts_s = self._vertonen(text, haeppchen)
         timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
         self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"), timings=timings)
         return {
@@ -222,7 +266,10 @@ class Dienst:
                         return
                     print(f"{self.name}-listen ok text={gesagt!r}", flush=True)
                     q.put(("gehoert", gesagt))
-                out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
+                out = self.json_antwort(
+                    sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab,
+                    haeppchen=lambda url: q.put(("vorab", url)),
+                )
                 if stt_s is not None:
                     tt = {"stt": stt_s, **(out.get("timings") or {})}
                     tt["total"] = round(stt_s + float(tt.get("llm") or 0) + float(tt.get("tts") or 0), 2)

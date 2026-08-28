@@ -30,16 +30,19 @@ _AUSSPRACHE = (
     (re.compile(r"\bDavid\b"), "Dah-vid"),
 )
 
-# Lautheit — exakt das Demo-Clara-Rezept (Chef 27.08.2026 zweite Runde:
-# "mach die audios genau so laut wie demo clara"). Demo Clara
-# (worker_speech_out._demo_pcm_pegel) hebt NUR leise Sätze an: Ziel 0,82
-# der Vollaussteuerung, Faktor höchstens 1,8, nie absenken, Stille bleibt
-# Stille. Unser erster Wurf (Ziel 0,92, Faktor bis 6) riss leise Füller um
-# bis zu +15 dB hoch, während normale Sätze unverändert blieben — DAS waren
-# die verbliebenen Lautstärke-Schwankungen zwischen den Äußerungen.
-ZIEL_PEGEL = 0.82          # Spitze relativ zur Vollaussteuerung (Demo-Parität)
-MAX_ANHEBUNG = 1.8         # Demo Clara: "Nie übersteuern — klang wie runtergesampelt"
-STILLE_SPITZE = 80         # int16-Spitzen darunter sind Atmen/Rauschen: nicht anfassen
+# Lautheit — echte RMS-Angleichung statt Spitzenwert-Anhebung (28.08.2026).
+# Das Demo-Clara-Peak-Rezept (nur leise Sätze anheben, Ziel 0,82 FS, max 1,8)
+# passte für ElevenLabs: deren Audio kommt schon komprimiert und gleichmäßig.
+# CosyVoice/Chatterbox schwanken dagegen in der Lautheit von Satz zu Satz —
+# der Peak-Gain sprang hörbar zwischen den Äußerungen ("Pumpen", Chef
+# 28.08.2026). Jetzt wird jede Äußerung auf DIESELBE Sprach-Lautheit gezogen
+# (auch absenken), Ziel weiter auf Demo-Clara-Niveau kalibriert.
+ZIEL_RMS = 0.15            # Sprach-RMS relativ zur Vollaussteuerung
+PEAK_DECKEL = 0.95         # nach dem Gain nie über 0,95 FS — kein Klirren
+MIN_GAIN = 0.5             # nie mehr als halbieren ...
+MAX_GAIN = 4.0             # ... oder vervierfachen (kaputte Stücke nicht "retten")
+AKTIV_SCHWELLE = 300       # |Sample| darunter = Pause/Atmen, zählt nicht zur Lautheit
+MIN_AKTIV_SAMPLES = 1200   # unter ~50 ms Sprachanteil gilt das Stück als Stille
 PCM_RATE = 24000
 
 _CACHE: dict[str, bytes] = {}
@@ -111,23 +114,42 @@ def _lokal_schluessel(sauber: str) -> str:
 
 
 def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
-    """s16le mono → WAV. Pegel wie Demo Clara: nur leise Sätze anheben
-    (Ziel 0,82 FS, Faktor max. 1,8), nie absenken, nie kappen."""
+    """s16le mono → WAV. Jede Äußerung auf dieselbe Sprach-Lautheit ziehen:
+    RMS über sprach-aktive Samples auf ZIEL_RMS (anheben UND absenken),
+    Peak-Deckel gegen Klirren, Stille/Atmen bleibt unangetastet."""
     n = len(pcm) // 2
     if n <= 0:
         return b""
     samples = array.array("h")
     samples.frombytes(pcm[: n * 2])
-    spitze = max(1, max(abs(s) for s in samples))
-    gain = min(MAX_ANHEBUNG, (ZIEL_PEGEL * 32767.0) / spitze)
-    if spitze < STILLE_SPITZE or gain <= 1.02:
-        # Stille/Atmen nie hochziehen; Lautes unverändert durchreichen.
+    spitze = 1
+    quad = 0
+    aktiv = 0
+    for s in samples:
+        a = abs(s)
+        if a > spitze:
+            spitze = a
+        if a >= AKTIV_SCHWELLE:
+            quad += s * s
+            aktiv += 1
+    if aktiv >= MIN_AKTIV_SAMPLES:
+        rms = (quad / aktiv) ** 0.5
+        gain = max(MIN_GAIN, min(MAX_GAIN, (ZIEL_RMS * 32767.0) / max(rms, 1.0)))
+        gain = min(gain, (PEAK_DECKEL * 32767.0) / spitze)
+    else:
+        gain = 1.0
+    if 0.98 <= gain <= 1.02:
         data = samples.tobytes()
     else:
-        boosted = array.array("h", bytes(len(samples) * 2))
+        skaliert = array.array("h", bytes(len(samples) * 2))
         for i, s in enumerate(samples):
-            boosted[i] = int(s * gain)
-        data = boosted.tobytes()
+            v = int(s * gain)
+            if v > 32767:
+                v = 32767
+            elif v < -32768:
+                v = -32768
+            skaliert[i] = v
+        data = skaliert.tobytes()
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF",
@@ -241,6 +263,18 @@ def engine() -> TtsEngine:
     if TTS_BASE:
         return LokalTts()
     return ElevenLabsTts()
+
+
+def im_cache(text: str) -> bool:
+    """RAM-Cache-Blick fuer den Haeppchen-Entscheid in dienst.py: gewarmte
+    Begruessungen und Fueller sollen EIN Block bleiben — ihr Cache-Key
+    traegt den Gesamttext, ein Satz-Split wuerde ihn verfehlen."""
+    sauber = _normalisieren(text)
+    if not sauber:
+        return False
+    if TTS_BASE:
+        return _lokal_schluessel(sauber) in _CACHE
+    return f"{_VOICE_ID}|{sauber}" in _CACHE
 
 
 def bereit() -> bool:

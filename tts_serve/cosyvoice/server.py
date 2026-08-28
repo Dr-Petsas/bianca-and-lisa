@@ -115,7 +115,11 @@ def _laden() -> None:
 
     t0 = time.time()
     _modell_holen()
-    _MODEL = AutoModel(model_dir=MODEL_DIR)
+    # fp16 halbiert die Rechenzeit des Flow-Decoders (live 28.08.2026: volle
+    # Praezision brauchte ~1,5 s pro Satz — zu langsam am Telefon).
+    # Notaus: TTS_FP16=0.
+    fp16 = os.environ.get("TTS_FP16", "1").strip() != "0"
+    _MODEL = AutoModel(model_dir=MODEL_DIR, fp16=fp16)
     _stimmen_scannen()
     _aliase_lesen()
     print(f"cosyvoice geladen in {time.time() - t0:.0f}s, "
