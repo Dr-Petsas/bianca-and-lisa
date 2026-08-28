@@ -80,6 +80,87 @@ def test_speak_postet_stimme_und_pegelt():
     _mit_lokal(fake, lauf)
 
 
+def test_ziffernketten_gehen_als_einzelziffern_an_den_container():
+    """CosyVoice verschmilzt wiederholte Zahlwoerter ('null null' -> ein
+    'null') — live 29.08.2026 verlor die Nummern-Rueckbestaetigung Ziffern.
+    Der lokale Mund bekommt Ketten deshalb als Einzelziffern ('0 1 7 7');
+    Uhrzeiten und Einzel-Zahlwoerter bleiben unberuehrt."""
+    assert tts._ziffern_einzeln(
+        "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null, "
+        "vier sechs, null null. Stimmt das so?"
+    ) == "Ich wiederhole die Nummer: 0 1 7 7, 6 0 0, 4 6, 0 0. Stimmt das so?"
+    assert tts._ziffern_einzeln("Ihr Termin ist um neun Uhr fünfzehn.") == \
+        "Ihr Termin ist um neun Uhr fünfzehn."
+    assert tts._ziffern_einzeln("Es ist nur eins frei.") == "Es ist nur eins frei."
+
+    from kern import config as cfg
+
+    leise = (2000).to_bytes(2, "little", signed=True) * (tts.MIN_AKTIV_SAMPLES * 2)
+    fake = _FakeLokal(_Antwort(200, leise))
+
+    def lauf():
+        alt = cfg.STT_BASE
+        cfg.STT_BASE = ""  # ohne lokales STT: kein Nachhoeren, genau EIN Post
+        try:
+            tts.LokalTts().speak("Die Nummer lautet null eins sieben sieben.")
+        finally:
+            cfg.STT_BASE = alt
+        _, payload = fake.aufrufe[0]
+        assert payload["text"] == "Die Nummer lautet 0 1 7 7."
+        assert len(fake.aufrufe) == 1
+
+    _mit_lokal(fake, lauf)
+
+
+def test_ziffern_nachhoeren_rendert_neu_bis_alle_ziffern_da_sind():
+    """Nachhoer-Waechter (29.08.2026): riss die gesprochene Nummer ab (E2E:
+    '017760' statt 01776004600), wird neu gerendert — erst der Wurf, den
+    Parakeet vollstaendig gegenhoert, geht raus."""
+    from kern import config as cfg
+    from kern import stt as stt_mod
+
+    leise = (2000).to_bytes(2, "little", signed=True) * (tts.MIN_AKTIV_SAMPLES * 2)
+    fake = _FakeLokal(_Antwort(200, leise))
+    gehoert = iter(["null eins sieben sieben, sechs null", "0177 600 4600"])
+
+    def lauf():
+        alt_base, alt_tr = cfg.STT_BASE, stt_mod.transcribe
+        cfg.STT_BASE = "http://stt-test:8212"
+        stt_mod.transcribe = lambda *a, **k: next(gehoert)
+        try:
+            wav = tts.LokalTts().speak(
+                "Ich wiederhole die Nummer: null eins sieben sieben, "
+                "sechs null null, vier sechs, null null.")
+        finally:
+            cfg.STT_BASE, stt_mod.transcribe = alt_base, alt_tr
+        assert len(fake.aufrufe) == 2, "erster Wurf unvollstaendig -> genau ein zweiter"
+        assert wav[:4] == b"RIFF"
+
+    _mit_lokal(fake, lauf)
+
+
+def test_warm_gegenhoeren_score():
+    """Warm-Abnahme (29.08.2026): Parakeet hoert Warm-Renders gegen — Babble
+    ('hissio') faellt durch, ein korrekter Render besteht, ohne lokales STT
+    wird nicht geprueft (None)."""
+    from kern import config as cfg
+    from kern import stt as stt_mod
+
+    alt_base, alt_tr = cfg.STT_BASE, stt_mod.transcribe
+    wav = tts._wav_header(4, tts.PCM_RATE) + b"\x00\x00\x00\x00"
+    satz = "Waren Sie denn schon einmal bei uns in der Praxis?"
+    try:
+        cfg.STT_BASE = "http://stt-test:8212"
+        stt_mod.transcribe = lambda *a, **k: "waren sie denn schon einmal bei uns in der praxis"
+        assert tts._warm_score(satz, wav) >= 0.99
+        stt_mod.transcribe = lambda *a, **k: "hissio hissio was"
+        assert tts._warm_score(satz, wav) < tts._WARM_CHECK_MIN
+        cfg.STT_BASE = ""
+        assert tts._warm_score(satz, wav) is None, "ohne lokales STT keine Pruefung"
+    finally:
+        cfg.STT_BASE, stt_mod.transcribe = alt_base, alt_tr
+
+
 def test_fehler_wirft_und_faellt_nie_auf_elevenlabs_zurueck():
     fake = _FakeLokal(_Antwort(503, b""))
 

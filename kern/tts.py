@@ -108,6 +108,67 @@ def _normalisieren(text: str) -> str:
     return sauber
 
 
+# Ziffern-Ketten fuer den lokalen Mund (29.08.2026): CosyVoice verschmilzt
+# wiederholte Zahlwoerter ("null null" -> EIN "null") und verlor so live
+# Ziffern der Telefonnummer; Ziffern-Probe: Wortform 1/5, Einzelziffern
+# mit Leerzeichen 5/5 ("0 1 7 7" spricht die Engine als "null eins sieben
+# sieben"). Nur der Text AN DEN CONTAINER wird umgeschrieben — Cache-Key,
+# Logs und Transkript behalten die Wortform. Gilt erst ab ZWEI Zahlwoertern
+# in Folge (Telefonnummern-Muster); Uhrzeiten ("neun Uhr fuenfzehn") und
+# Mengen ("zwoelf Termine") bleiben unberuehrt.
+_ZIFFER_WORT = {
+    "null": "0", "eins": "1", "zwei": "2", "drei": "3", "vier": "4",
+    "fünf": "5", "fuenf": "5", "sechs": "6", "sieben": "7", "acht": "8",
+    "neun": "9",
+}
+_ZIFFER_KETTE_RE = re.compile(
+    r"\b(?:null|eins|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun)"
+    r"(?:\s+(?:null|eins|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun))+\b",
+    re.I,
+)
+
+
+def _ziffern_einzeln(text: str) -> str:
+    def _ersetzen(m: "re.Match[str]") -> str:
+        return " ".join(_ZIFFER_WORT[w.lower()] for w in m.group(0).split())
+    return _ZIFFER_KETTE_RE.sub(_ersetzen, text)
+
+
+# Nachhoer-Waechter fuer Ziffern-Saetze (29.08.2026): auch in Ziffern-Form
+# wuerfelt CosyVoice GELEGENTLICH einen Abbruch/Babble-Wurf (E2E-Probe:
+# 14-s-Audio, Nummer riss nach '0 1 7 7 6 0' ab). Eine Nummern-Ansage darf
+# den Anrufer nur erreichen, wenn der lokale Parakeet ALLE Soll-Ziffern in
+# Reihenfolge gegengehoert hat — sonst wird neu gerendert (max. 3 Wuerfe,
+# ~1 s je Pruefung). Ohne lokales STT wird nicht geprueft (ElevenLabs-Pfad
+# bleibt unberuehrt). Notaus: TTS_ZIFFERN_CHECK=0.
+_ZIFFERN_VERSUCHE = 3
+
+
+def _ziffern_soll(payload: str) -> str:
+    """Alle Ziffern des Sprech-Texts in Reihenfolge — '' wenn kein
+    Nummern-Satz (keine Kette, nichts zu pruefen)."""
+    import os
+
+    if os.environ.get("TTS_ZIFFERN_CHECK", "1").strip() == "0":
+        return ""
+    ziffern = re.findall(r"\d", payload)
+    return "".join(ziffern) if len(ziffern) >= 4 else ""
+
+
+def _ziffern_gehoert(blob: bytes, soll: str) -> bool:
+    """Stimmen die gehoerten Ziffern? STT-Fehler => nicht blockieren (True)."""
+    from kern import config as _cfg
+    from kern import stt as _stt
+
+    if not _cfg.STT_BASE or not blob or blob[:4] != b"RIFF":
+        return True
+    try:
+        gehoert = _stt.transcribe(blob, mime="audio/wav", name="ziffern.wav")
+    except Exception:
+        return True
+    return soll in re.sub(r"\D", "", gehoert)
+
+
 def _ram_merken(schluessel: str, blob: bytes, *, fest: bool = False) -> None:
     if fest:
         _FEST[schluessel] = blob
@@ -273,18 +334,25 @@ class LokalTts:
         hit = _ram_holen(schluessel)
         if hit:
             return hit
-        r = _lokal_client().post(
-            f"{TTS_BASE}/speak",
-            json={"text": sauber[:400], "voice": _VOICE_NAME},
-        )
-        if r.status_code != 200:
-            raise RuntimeError(f"tts_lokal_http_{r.status_code}")
-        raw = r.content
-        if not raw:
-            return b""
-        # Container liefert rohes PCM16/24k — dieselbe Pegel-Schicht wie beim
-        # ElevenLabs-Pfad, damit lokale Zuege gleich laut klingen.
-        blob = pcm16_wav(raw)
+        payload = _ziffern_einzeln(sauber)[:400]
+        soll = _ziffern_soll(payload)
+        blob = b""
+        for versuch in range(_ZIFFERN_VERSUCHE if soll else 1):
+            r = _lokal_client().post(
+                f"{TTS_BASE}/speak",
+                json={"text": payload, "voice": _VOICE_NAME},
+            )
+            if r.status_code != 200:
+                raise RuntimeError(f"tts_lokal_http_{r.status_code}")
+            raw = r.content
+            if not raw:
+                return b""
+            # Container liefert rohes PCM16/24k — dieselbe Pegel-Schicht wie
+            # beim ElevenLabs-Pfad, damit lokale Zuege gleich laut klingen.
+            blob = pcm16_wav(raw)
+            if not soll or _ziffern_gehoert(blob, soll):
+                break
+            print(f"tts-ziffern: Wurf {versuch + 1} unvollstaendig ({soll}) — neu", flush=True)
         _ram_merken(schluessel, blob)
         return blob
 
@@ -419,9 +487,47 @@ def _warm_unplausibel(text: str, blob: bytes) -> bool:
     return dauer > _WARM_GRUND_S + _WARM_S_JE_ZEICHEN * len(text)
 
 
+# Warm-Abnahme per Gegenhoeren (29.08.2026): der Laengen-Deckel allein liess
+# Babble-Renders durch (CosyVoice plapperte live '...hissio' in eine feste
+# Ansage, der Pin spielte das bei JEDER Frage). Ist der lokale Parakeet da
+# (STT_BASE), hoert er jeden Warm-Render gegen: zu wenig Soll-Woerter im
+# Gehoerten => ein neuer Wurf, der besser passende wird gepinnt.
+# Notaus: TTS_WARM_CHECK=0.
+_WARM_CHECK_MIN = 0.6
+
+
+def _warm_score(text: str, blob: bytes) -> float | None:
+    """Anteil der Soll-Woerter (ab 3 Zeichen), die das STT im Render hoert.
+    None = nicht pruefbar (kein lokales STT, kein WAV, STT-Fehler)."""
+    import os
+
+    if os.environ.get("TTS_WARM_CHECK", "1").strip() == "0":
+        return None
+    if not blob or blob[:4] != b"RIFF":
+        return None
+    from kern import config as _cfg
+    from kern import stt as _stt
+
+    if not _cfg.STT_BASE:
+        return None
+    try:
+        gehoert = _stt.transcribe(blob, mime="audio/wav", name="warm.wav")
+    except Exception:
+        return None
+    soll = [w for w in re.findall(r"[a-zäöüß]+", text.lower()) if len(w) >= 3]
+    if not soll:
+        return None
+    da = set(re.findall(r"[a-zäöüß]+", gehoert.lower()))
+    return sum(w in da for w in soll) / len(soll)
+
+
 def _dauerhaft_key(text: str) -> str:
     sauber = _normalisieren(text)
     return _lokal_schluessel(sauber) if TTS_BASE else f"{_VOICE_ID}|{sauber}"
+
+
+def _dauerhaft_datei(text: str) -> Path:
+    return _DISK_DIR / (hashlib.sha1(_dauerhaft_key(text).encode("utf-8")).hexdigest() + ".wav")
 
 
 def _vergessen(text: str) -> None:
@@ -449,19 +555,41 @@ def _dauerhaft_speichern(text: str, blob: bytes) -> None:
 def warm(text: str) -> None:
     """Startup-Vorwaermen statischer Saetze — dauerhaft gecacht.
 
-    Zweitpruefung vor dem Pinnen: ist der Render unplausibel lang fuer den
-    Text (TTS wuerfelt Tempo und Babble), wird EINMAL neu geholt und das
-    KUERZERE der beiden Ergebnisse gepinnt — nie endlos wuerfeln, der
+    Zwei Abnahmen vor dem Pinnen: (1) unplausibel LANGER Render (TTS
+    wuerfelt Tempo und Babble) und (2) Gegenhoeren per lokalem STT —
+    fehlen Soll-Woerter im Gehoerten, war der Wurf Babble. Jeweils EINMAL
+    neu holen und den besseren behalten — nie endlos wuerfeln, der
     Dienststart muss durchlaufen."""
     try:
+        # Platten-Eintrag vorhanden = frueher schon abgenommen (Laenge +
+        # Gegenhoeren liefen beim ERSTEN Waermen). Nur laden, nicht erneut
+        # pruefen — sonst kostet jeder Dienststart ~0,4 s STT je Satz und
+        # der 2-Sekunden-Start waere dahin.
+        schon_abgenommen = _dauerhaft_datei(text).is_file()
         erste = speak_dauerhaft(text)
-        if not _warm_unplausibel(text, erste):
+        if schon_abgenommen:
             return
-        print(f"tts-warm: unplausibler Render ({len(text)} Z, "
-              f"{max(0, len(erste) - 44) / 2 / PCM_RATE:.1f}s) — neuer Wurf", flush=True)
+        score1 = None
+        if not _warm_unplausibel(text, erste):
+            score1 = _warm_score(text, erste)
+            if score1 is None or score1 >= _WARM_CHECK_MIN:
+                return
+            print(f"tts-warm: Gegenhoeren {score1:.0%} fuer {text[:40]!r} — neuer Wurf", flush=True)
+        else:
+            print(f"tts-warm: unplausibler Render ({len(text)} Z, "
+                  f"{max(0, len(erste) - 44) / 2 / PCM_RATE:.1f}s) — neuer Wurf", flush=True)
         _vergessen(text)
         zweite = speak_dauerhaft(text)
-        if erste and zweite and len(zweite) > len(erste):
+        if not erste or not zweite:
+            return
+        if score1 is not None:
+            # Gegenhoer-Fall: den Wurf mit mehr getroffenen Soll-Woertern pinnen.
+            score2 = _warm_score(text, zweite)
+            if score2 is not None and score2 < score1:
+                _dauerhaft_speichern(text, erste)
+            return
+        # Laengen-Fall: der KUERZERE Render gewinnt (Babble ist lang).
+        if len(zweite) > len(erste):
             _dauerhaft_speichern(text, erste)
     except Exception:
         pass

@@ -19,11 +19,16 @@ import wave
 import httpx
 
 from kern.config import STT_BASE, TTS_BASE
+from kern.tts import _ziffern_einzeln
 
-TEXT = ("Ich wiederhole die Nummer: null eins sieben sieben, "
-        "sechs null null, vier sechs, null null. Stimmt das so?")
+# Wortform wie im Gespraechstext — die Probe schickt sie durch dieselbe
+# Ziffern-Transformation wie der Live-Pfad (kern/tts.LokalTts.speak).
+TEXT = _ziffern_einzeln(
+    "Ich wiederhole die Nummer: null eins sieben sieben, "
+    "sechs null null, vier sechs, null null. Stimmt das so?")
 SOLL = "01776004600"
-KURZ = ["null null.", "sechs null null,", "Ich wiederhole die Nummer:"]
+KURZ = [_ziffern_einzeln("null null."), _ziffern_einzeln("sechs null null,"),
+        "Ich wiederhole die Nummer:"]
 
 
 def wav_von(pcm: bytes) -> bytes:

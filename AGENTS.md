@@ -121,24 +121,39 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 zugleich (eine GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis
 Lisa/Bianca vernünftig funktionieren.
 
-- **Aktiv: Qwen3-TTS (8213).** Der CosyVoice-Turbo-Versuch (8211) ist am
-  29.08. früh ABGEBROCHEN: bei Ziffern-Texten halluziniert die Engine —
-  Nummern-Rueckbestaetigung verlor Nullen ("sechs null null" -> "sechs
-  null", 4/5 Laeufen), brach live mitten in der Nummer ab und plapperte
-  bei kurzen Texten ("null null." -> "What?"/"Don Mul.", "null." ->
-  "Thank you.", Praefix-Babble "hissio"). Qwen3 sprach dieselbe
-  Rueckbestaetigung 5/5 vollstaendig (synth 4,4-5,1 s, dann LRU).
-  Die Nummern-Ansage ist sicherheitskritisch — Tempo schlaegt hier NICHT
-  Korrektheit. CosyVoice nur wieder aktivieren, wenn die Ziffern-Probe
-  `tests/tts_ziffern_probe.py` (Render 5x + Parakeet-Gegenhoeren) fuer
-  die Engine 5/5 liefert — die Probe ist fuer JEDEN Engine-Wechsel Pflicht.
-- CosyVoice-Turbo war schneller (0,4-0,7 s je Satz, RTF ~0,13 gegen Qwen3
-  1,8-3,2 s / RTF ~0,8) — Image/Profil (8211) bleibt fuer einen spaeteren
-  Anlauf liegen, laeuft aber nicht.
-- **Rückbau-Anker: Tag `bianca-lisa-v1.0`** = Stand mit Qwen3-TTS (8213);
-  Platten-Cache traegt die Basis im Key. Umschalten = `TTS_BASE` in `.env`
-  + auf der 5090 `docker compose --profile <alt> down && --profile <neu>
-  up -d` (Repo dort: /home/cursor/telefonki).
+- **Aktiv: CosyVoice-Turbo (8211) MIT Ziffern-Schutz** (Chef 29.08.2026:
+  "mach das jetzt zuverlaessig mit Cosy"). Roh halluziniert die Engine bei
+  Zahlwort-Ketten — Nummern-Rueckbestaetigung verlor Nullen ("sechs null
+  null" -> "sechs null", Wortform 1/5), brach live mitten in der Nummer ab
+  und plapperte bei kurzen Texten ("null null." -> "What?"). Deshalb drei
+  Schichten in `kern/tts.py` (nur lokaler Pfad, ElevenLabs unberuehrt —
+  nicht rueckbauen):
+  1. **Ziffern-Transformation** `_ziffern_einzeln`: Ketten ab zwei
+     Zahlwoertern gehen als Einzelziffern an den Container ("null eins
+     sieben sieben" -> "0 1 7 7", gemessen 5/5 statt 1/5; Ziffern
+     GRUPPIERT "0177" liest Cosy die fuehrende Null weg — nie so senden).
+     Cache-Key, Logs und Transkript behalten die Wortform. Uhrzeiten
+     ("neun Uhr fuenfzehn") bleiben unberuehrt.
+  2. **Nachhoer-Waechter** fuer Saetze mit >= 4 Ziffern: Parakeet hoert
+     jeden frischen Render gegen (~0,4 s); fehlen Ziffern, wird neu
+     gewuerfelt (max. 3 Wuerfe, Log `tts-ziffern:`). Erst der verifizierte
+     Wurf erreicht Anrufer und LRU. E2E gemessen: Readback frisch ~1,0-1,2 s
+     inkl. Pruefung (Qwen3 brauchte 4,4-5,1 s). Notaus: `TTS_ZIFFERN_CHECK=0`.
+  3. **Warm-Abnahme per Gegenhoeren** (`_warm_score`): beim Vorwaermen
+     faellt Babble ("hissio") jetzt auch dann auf, wenn die Laenge plausibel
+     ist — zu wenig Soll-Woerter im Gehoerten => neuer Wurf, der bessere
+     wird gepinnt. Nur beim ERSTEN Waermen (Platten-Eintrag = abgenommen,
+     Dienststart bleibt ~2 s). Notaus: `TTS_WARM_CHECK=0`.
+  Die Ziffern-Probe `tests/tts_ziffern_probe.py` (Render 5x + Parakeet-
+  Gegenhoeren, prueft die PRODUKTIONS-Form inkl. Transformation) ist fuer
+  JEDEN Engine-Wechsel Pflicht: 5/5 oder die Engine geht nicht live.
+  Engine-Wechsel danach: Platten-Cache leeren (`.data/tts-cache/`), damit
+  alte Pins neu durch die Abnahme laufen.
+- **Rückbau-Anker: Tag `bianca-lisa-v1.0`** = Stand mit Qwen3-TTS (8213,
+  langsamer, aber ziffernfest auch ohne Waechter); Platten-Cache traegt die
+  Basis im Key. Umschalten = `TTS_BASE` in `.env` + auf der 5090
+  `docker compose --profile <alt> down && --profile <neu> up -d`
+  (Repo dort: /home/cursor/telefonki).
 - Chatterbox (8210) bleibt als gebautes Image/Profil liegen, läuft nicht.
 - **.env-BOM-Falle (29.08.2026):** PowerShell-Redirects schreiben die .env
   MIT UTF-8-BOM — dotenv las `\ufeffWRITE_LIVE` und das Live-Schreiben war
