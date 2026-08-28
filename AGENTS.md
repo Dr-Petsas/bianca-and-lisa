@@ -88,20 +88,43 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
   (`kern/dienst.py -> zug_stream/vorab`, Test `tests/test_vorab_stream.py`).
   Gemessen 5090: erster Ton Kurzsatz 0,48 s, Langsatz ~1,2 s (vorher
   1,2-3,5 s blocking).
-- **Stream-Schnitt + Gapless-Docks (Vorfall 28.08.2026 "Rauschen/zerstückelt"
-  — nicht rückbauen):** Die HTTP-Chunks aus `/speak-stream` kommen mit
-  BELIEBIGEN (auch ungeraden) Byte-Grenzen an. `kern/tts.py -> speak_stream`
-  schneidet deshalb NIE mitten im 16-Bit-Sample (Überhang bleibt im Puffer) —
-  ein schiefer Schnitt verschiebt den Reststrom um 1 Byte und macht aus
-  Sprache Rauschen (live gehört). Pro Häppchen: Äußerungs-Gain festgehalten,
-  Peak-Deckel je Stück gegen Clipping, 2-ms-Rampen an den Rändern gegen
-  Klicks (`_haeppchen_wav`). Die Docks (`web/app.js`, `bianca_web/app.js`
-  -> `spielGapless`) laden Häppchen SOFORT und planen die Wiedergabe per
-  WebAudio sample-genau aneinander (`source.start(zeit)`, Planung in
-  Ankunftsreihenfolge) statt fetch+decode erst nach dem Ende des vorigen
-  Stücks — das war das "Zerstückelte". Barge-in: EIN `bargeOderCap`-Wächter
-  pro Kette, `stopLisaVoice`/`stopVoice` stoppen via `ketteStop()` alle
-  geplanten Quellen. Test: `test_speak_stream_schneidet_nie_mitten_im_sample`.
+- **Stream-Schnitt + Gapless-Docks (Vorfälle 28.08.2026 "Rauschen/zerstückelt"
+  und "Artefakte/Genuschel" — nicht rückbauen):** Die HTTP-Chunks aus
+  `/speak-stream` kommen mit BELIEBIGEN (auch ungeraden) Byte-Grenzen an.
+  `kern/tts.py -> speak_stream` schneidet deshalb NIE mitten im 16-Bit-Sample
+  (Überhang bleibt im Puffer) — ein schiefer Schnitt verschiebt den Reststrom
+  um 1 Byte und macht aus Sprache Rauschen (live gehört). Und er schneidet
+  NUR in Sprechpausen (`_PausenSpur`, Fenster-RMS < `PAUSE_RMS`; ohne Pause
+  nach einer Extra-Sekunde Notschnitt an der leisesten Stelle): der stumpfe
+  Byte-Schnitt an der Fahrplan-Schwelle legte die Naht mitten in Wörter —
+  mit 2-ms-Rampen und eigenem Decode je Häppchen wurde daraus alle 0,5-2 s
+  ein verwaschener Übergang ("Genuschel", live gehört am Nachmittag).
+  Pro Häppchen: Äußerungs-Gain festgehalten, Peak-Deckel je Stück gegen
+  Clipping, 2-ms-Rampen an den Rändern gegen Klicks (`_haeppchen_wav`).
+  Die Docks (`web/app.js`, `bianca_web/app.js` -> `spielGapless`) laden
+  Häppchen SOFORT und planen die Wiedergabe per WebAudio sample-genau
+  aneinander (`source.start(zeit)`, Planung in Ankunftsreihenfolge) statt
+  fetch+decode erst nach dem Ende des vorigen Stücks — das war das
+  "Zerstückelte". Barge-in: EIN `bargeOderCap`-Wächter pro Kette,
+  `stopLisaVoice`/`stopVoice` stoppen via `ketteStop()` alle geplanten
+  Quellen. Tests: `test_speak_stream_schneidet_nie_mitten_im_sample`,
+  Pausen-Schnitt-Fälle in `tests/test_tts_lokal.py`.
+- **Chatterbox-Nachbearbeitung (Vorfall 28.08.2026 "Artefakte/Genuschel" —
+  nicht rückbauen):** Chatterbox hängt manchen Stücken sekundenlange
+  Fast-Stille mit Nuschel-Resten an (live: Häppchen mit 54-69 % Stille) und
+  rennt selten in Runaway-Babble (5,88 s für "Wie lautet der Nachname?",
+  24 Zeichen — als gepinnter Warm-Render bei JEDER Nachnamen-Frage hörbar).
+  `tts_serve/chatterbox/pegel.py` kappt deshalb je Synthese-Stück die
+  Rand-Stille (Polster 150 ms, innere Pausen bleiben) und rendert
+  unplausibel lange Stücke (> ~1,4× Sprechdauer-Erwartung) EINMAL neu —
+  das kürzere gewinnt (`_synthese` in `server.py`, gilt für /speak,
+  /speak-stream UND alle Warm-Renders). Zweite Wache beim Wärmen selbst:
+  `kern/tts.py -> warm()` verwirft einen trotzdem unplausiblen Render
+  (RAM-Pin + Platte) und holt EINMAL neu, erst dann wird gepinnt.
+  Nach Änderungen an Trim/Gate: Platten-Cache leeren (`.data/tts-cache`
+  lokal + im App-Volume), sonst bleiben vermurkste Alt-Renders gepinnt.
+  Tests: `tests/test_chatterbox_pegel.py`, Warm-Fälle in
+  `tests/test_tts_lokal.py`; Cache-Audit: `tests/cache_pruefen.py`.
 - **CosyVoice-Turbo** (28.08.2026): Container lädt mit `load_vllm` (eigenes
  Mini-vLLM fürs 0.5B-Sprach-LLM, Export nach `MODEL_DIR/vllm` beim ersten
  Start) und `load_trt` (TensorRT-Engine für den Flow-Decoder, Bau beim

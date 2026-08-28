@@ -138,25 +138,31 @@ class _FakeStreamAntwort:
 
 
 def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
-    # Zwei Chunks à 1,2 s: erst leise (2000), dann laut (8000). Der Gain wird
-    # aus dem ERSTEN sprach-aktiven Stück bestimmt und festgehalten — das
-    # zweite Häppchen bekommt DENSELBEN Faktor (kein Pumpen in der Äußerung).
-    # Chunk 1 liegt über der Start-Schwelle (0,5 s) und geht sofort raus,
-    # Chunk 2 erreicht die Folge-Schwelle (= bisher gesendete 1,2 s) exakt.
+    # Zwei "Sätze" à 1,2 s (erst leise 2000, dann laut 8000), getrennt durch
+    # 60 ms Renderstille. Der Schnitt fällt in die PAUSE (nie mitten ins
+    # Wort), der Gain wird aus dem ERSTEN sprach-aktiven Stück bestimmt und
+    # festgehalten — das zweite Häppchen bekommt DENSELBEN Faktor (kein
+    # Pumpen in der Äußerung).
     n = int(1.2 * 24000)
+    pause = b"\x00\x00" * int(0.06 * 24000)
     leise = (2000).to_bytes(2, "little", signed=True) * n
     laut = (8000).to_bytes(2, "little", signed=True) * n
     fake = _FakeLokal(_Antwort(200, b""))
-    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, [leise, laut])
+    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, [leise + pause, laut])
 
     def lauf():
         wavs = list(tts.LokalTts().speak_stream("Ein Satz für den Stream."))
         assert len(wavs) == 2 and all(w[:4] == b"RIFF" for w in wavs)
         gain = min(tts.MAX_GAIN, tts.ZIEL_RMS * 32767.0 / 2000)
-        # Probe aus der Stück-MITTE — die Ränder tragen 2-ms-Rampen.
+        # Naht liegt in der Pause: Häppchen 1 = leiser Satz (+ Pausenanteil).
+        assert abs((len(wavs[0]) - 44) / 2 - n) <= int(0.06 * 24000), "Schnitt in der Pause"
+        # Probe mitten im jeweiligen Satz — die Ränder tragen 2-ms-Rampen.
         mitte = 44 + ((n // 2) * 2)
         probe1 = int.from_bytes(wavs[0][mitte:mitte + 2], "little", signed=True)
-        probe2 = int.from_bytes(wavs[1][mitte:mitte + 2], "little", signed=True)
+        probe2 = max(
+            int.from_bytes(wavs[1][i:i + 2], "little", signed=True)
+            for i in range(44, len(wavs[1]) - 1, 2)
+        )
         assert probe1 == int(2000 * gain), "Gain aus dem ersten Häppchen"
         assert probe2 == int(8000 * gain), "zweites Häppchen mit DEMSELBEN Gain"
         rand = int.from_bytes(wavs[0][44:46], "little", signed=True)
@@ -166,19 +172,31 @@ def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
 
 
 def test_speak_stream_erstes_haeppchen_klein_dann_verdoppelnd():
-    # Fahrplan (28.08.2026): erstes Häppchen ab 0,5 s raus (schneller
+    # Fahrplan (28.08.2026): erstes Häppchen ab ~0,5 s raus (schneller
     # Sprechstart), danach darf jedes Stück höchstens auf das bisher
-    # Gesendete anwachsen — 0,6 s / 0,6 s / 1,2 s statt alles erst bei 1,2 s.
-    einzel = (3000).to_bytes(2, "little", signed=True)
-    chunk = einzel * int(0.6 * 24000)
+    # Gesendete anwachsen. Geschnitten wird in den Renderpausen zwischen
+    # den "Wortgruppen" (0,57 s Ton + 60 ms Stille) — nie mitten im Ton.
+    ton = (3000).to_bytes(2, "little", signed=True) * int(0.57 * 24000)
+    pause = b"\x00\x00" * int(0.06 * 24000)
+    gruppe = ton + pause
     fake = _FakeLokal(_Antwort(200, b""))
-    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, [chunk, chunk, chunk, chunk])
+    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, [gruppe] * 6)
 
     def lauf():
         wavs = list(tts.LokalTts().speak_stream("Fahrplan-Probe."))
-        laengen = [round((len(w) - 44) / 2 / 24000, 2) for w in wavs]
-        assert laengen[0] == 0.6, f"erstes Häppchen sofort ab 0,5 s: {laengen}"
-        assert laengen == [0.6, 0.6, 1.2], f"verdoppelnd bis zur Zielgröße: {laengen}"
+        laengen = [(len(w) - 44) / 2 / 24000 for w in wavs]
+        assert 0.5 <= laengen[0] <= 0.75, f"erstes Häppchen früh raus: {laengen}"
+        assert len(wavs) >= 3, f"progressiv statt ein Riesenblock: {laengen}"
+        assert all(l >= 0.3 for l in laengen[:-1]), f"keine Winz-Häppchen: {laengen}"
+        # Nähte liegen in den Pausen: an jeder Grenze muss das Quellsignal
+        # still sein — Grenz-Offset im Strom = Vielfaches der Gruppenlänge
+        # minus Pausenrest, also innerhalb eines Pausenfensters.
+        grenze = 0
+        for w in wavs[:-1]:
+            grenze += (len(w) - 44)
+            im_takt = grenze % len(gruppe)
+            assert im_takt == 0 or im_takt >= len(ton), \
+                f"Naht bei Byte {grenze} liegt im Ton statt in der Pause"
 
     _mit_lokal(fake, lauf)
 
@@ -221,6 +239,97 @@ def test_speak_stream_fehler_wirft():
             raise AssertionError("503 muss RuntimeError werden")
         except RuntimeError as e:
             assert "tts_lokal_stream_http_503" in str(e)
+
+    _mit_lokal(fake, lauf)
+
+
+def test_warm_verwirft_unplausiblen_render_und_wuerfelt_neu():
+    """Babble-Schutz beim Vorwaermen (28.08.2026): ein Render, der fuer den
+    Text unplausibel lang ist, darf NICHT gepinnt werden — warm() verwirft
+    ihn (RAM + Platte) und holt einmal neu; das zweite Ergebnis zaehlt."""
+    import tempfile
+    from pathlib import Path
+
+    text = "Wie lautet der Nachname?"
+    lang = (6000).to_bytes(2, "little", signed=True) * int(5.9 * 24000)   # Babble
+    kurz = (6000).to_bytes(2, "little", signed=True) * int(1.6 * 24000)   # normal
+
+    class _FakeZweiWuerfe(_FakeLokal):
+        def post(self, url, json=None, **kw):
+            self.aufrufe.append((url, json or {}))
+            return _Antwort(200, lang if len(self.aufrufe) == 1 else kurz)
+
+    fake = _FakeZweiWuerfe(_Antwort(200, b""))
+
+    def lauf():
+        with tempfile.TemporaryDirectory() as d:
+            alt_dir = tts._DISK_DIR
+            tts._DISK_DIR = Path(d)
+            try:
+                tts.warm(text)
+                assert len(fake.aufrufe) == 2, "unplausibler Render => genau EIN neuer Wurf"
+                blob = tts.speak_dauerhaft(text)
+                dauer = (len(blob) - 44) / 2 / 24000
+                assert dauer < 3.0, f"der kurze Zweitwurf muss im Cache liegen ({dauer:.1f}s)"
+                assert len(fake.aufrufe) == 2, "danach reiner Cache-Hit"
+                assert len(list(Path(d).glob("*.wav"))) == 1, "nur der gute Render auf Platte"
+            finally:
+                tts._DISK_DIR = alt_dir
+
+    _mit_lokal(fake, lauf)
+
+
+def test_warm_behaelt_den_kuerzeren_wurf():
+    """Ist der ZWEITE Wurf noch laenger als der erste, gewinnt der erste —
+    warm() pinnt immer das kuerzere der beiden Ergebnisse."""
+    import tempfile
+    from pathlib import Path
+
+    text = "Wie lautet der Nachname?"
+    lang = (6000).to_bytes(2, "little", signed=True) * int(3.5 * 24000)
+    laenger = (6000).to_bytes(2, "little", signed=True) * int(5.0 * 24000)
+
+    class _FakeZweiWuerfe(_FakeLokal):
+        def post(self, url, json=None, **kw):
+            self.aufrufe.append((url, json or {}))
+            return _Antwort(200, lang if len(self.aufrufe) == 1 else laenger)
+
+    fake = _FakeZweiWuerfe(_Antwort(200, b""))
+
+    def lauf():
+        with tempfile.TemporaryDirectory() as d:
+            alt_dir = tts._DISK_DIR
+            tts._DISK_DIR = Path(d)
+            try:
+                tts.warm(text)
+                assert len(fake.aufrufe) == 2
+                blob = tts.speak_dauerhaft(text)
+                dauer = (len(blob) - 44) / 2 / 24000
+                assert 3.4 <= dauer <= 3.6, f"erster (kuerzerer) Wurf muss gepinnt sein ({dauer:.1f}s)"
+                assert len(fake.aufrufe) == 2, "kein dritter Render"
+            finally:
+                tts._DISK_DIR = alt_dir
+
+    _mit_lokal(fake, lauf)
+
+
+def test_warm_laesst_plausible_render_in_ruhe():
+    import tempfile
+    from pathlib import Path
+
+    text = "Wie lautet der Nachname?"
+    pcm = (6000).to_bytes(2, "little", signed=True) * int(1.6 * 24000)
+    fake = _FakeLokal(_Antwort(200, pcm))
+
+    def lauf():
+        with tempfile.TemporaryDirectory() as d:
+            alt_dir = tts._DISK_DIR
+            tts._DISK_DIR = Path(d)
+            try:
+                tts.warm(text)
+                assert len(fake.aufrufe) == 1, "plausibler Render => kein zweiter Wurf"
+            finally:
+                tts._DISK_DIR = alt_dir
 
     _mit_lokal(fake, lauf)
 

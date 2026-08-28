@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from pegel import ist_runaway, rand_trim
 from schnitt import stuecke
 
 PORT = int(os.environ.get("TTS_PORT", "8100"))
@@ -109,8 +110,8 @@ def _laden() -> None:
     _WARM = True
 
 
-def _synthese(text: str, voice: str) -> bytes:
-    """Text -> rohes PCM16 mono 24 kHz. Muss unter _LOCK laufen."""
+def _generieren(text: str, voice: str) -> bytes:
+    """Ein roher Modell-Lauf: Text -> PCM16 mono 24 kHz. Muss unter _LOCK laufen."""
     global _AKTIVE_STIMME, _KANN_PREPARE
     ref = _VOICES[voice]
     wav = None
@@ -135,6 +136,24 @@ def _synthese(text: str, voice: str) -> bytes:
             exaggeration=EXAGGERATION, cfg_weight=CFG_WEIGHT,
         )
     return _pcm16(wav, int(_MODEL.sr))
+
+
+def _synthese(text: str, voice: str) -> bytes:
+    """Modell-Lauf + Guertel: Rand-Stille kappen, Runaway EINMAL neu wuerfeln.
+
+    Chatterbox-Sampling ist stochastisch — selten laeuft ein Stueck in
+    sekundenlanges Babble oder haengt Fast-Stille mit Nuschel-Resten an
+    (Vorfall 28.08.2026). Unplausibel langes Audio wird einmal neu gerendert,
+    das kuerzere Ergebnis gewinnt. Muss unter _LOCK laufen."""
+    pcm = rand_trim(_generieren(text, voice))
+    dauer = len(pcm) / 2 / ZIEL_RATE
+    if ist_runaway(text, dauer):
+        zweite = rand_trim(_generieren(text, voice))
+        print(f"chatterbox runaway-retry zeichen={len(text)} "
+              f"s1={dauer:.1f} s2={len(zweite) / 2 / ZIEL_RATE:.1f}", flush=True)
+        if len(zweite) < len(pcm):
+            pcm = zweite
+    return pcm
 
 
 def _pcm16(wav: torch.Tensor, rate: int) -> bytes:

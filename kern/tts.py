@@ -57,6 +57,19 @@ PCM_RATE = 24000
 HAEPPCHEN_START_S = 0.5
 HAEPPCHEN_MAX_S = 3.2
 
+# Naht-Regel (Vorfall 28.08.2026 "Artefakte/Genuschel"): geschnitten wird NUR
+# in Sprechpausen, nie mitten im Wort. Der stumpfe Byte-Schnitt an der
+# Fahrplan-Schwelle legte die Naht (2-ms-Rampen + eigenständiges Decode/
+# Resampling je Häppchen im Dock) QUER durch Wörter — alle 0,5-2 s ein
+# verwaschener Übergang, live als Genuschel gehört. Ein Fenster gilt als
+# Pause, wenn sein RMS unter PAUSE_RMS liegt (deckt Chatterbox- wie
+# CosyVoice-Renderstille); findet sich eine Extra-Sekunde lang keine Pause,
+# schneidet der Notschnitt an der leisesten bekannten Stelle.
+PAUSE_RMS = 300            # Fenster-RMS darunter = Sprechpause (wie AKTIV_SCHWELLE)
+PAUSE_FENSTER = 720        # 30 ms bei 24 kHz
+PAUSE_SCHRITT = 360        # 15 ms Raster
+NOT_SCHNITT_EXTRA = PCM_RATE * 2  # 1 s über Soll ohne Pause => Notschnitt
+
 _CACHE: dict[str, bytes] = {}
 _CACHE_ORD: list[str] = []
 # Gepinnter Bereich fuer dauerhaft gewarmte Saetze (Fueller, Begruessungen,
@@ -169,6 +182,59 @@ def _skaliert_bytes(samples: "array.array", gain: float) -> bytes:
             v = -32768
         skaliert[i] = v
     return skaliert.tobytes()
+
+
+class _PausenSpur:
+    """Inkrementelle Pausen-Suche im wachsenden PCM-Puffer (16 Bit mono).
+
+    scan() vermisst nur den Zuwachs seit dem letzten Aufruf (30-ms-Fenster im
+    15-ms-Raster); pausen_schnitt() liefert die späteste Sprechpause ab einer
+    Mindestgröße als sample-geraden Byte-Offset, not_schnitt() die leiseste
+    bekannte Stelle für den Notfall ohne echte Pause."""
+
+    def __init__(self) -> None:
+        self.fenster: list[tuple[int, float]] = []  # (Mitte als Byte-Offset, RMS)
+        self.ab_sample = 0
+
+    def scan(self, puffer: bytes) -> None:
+        n = len(puffer) // 2
+        f = self.ab_sample
+        if f + PAUSE_FENSTER > n:
+            return
+        roh = array.array("h", puffer[f * 2 : n * 2])
+        while f + PAUSE_FENSTER <= n:
+            rel = f - self.ab_sample
+            quad = 0
+            for s in roh[rel : rel + PAUSE_FENSTER]:
+                quad += s * s
+            rms = (quad / PAUSE_FENSTER) ** 0.5
+            self.fenster.append(((f + PAUSE_FENSTER // 2) * 2, rms))
+            f += PAUSE_SCHRITT
+        self.ab_sample = f
+
+    def pausen_schnitt(self, min_ab: int) -> int:
+        for mitte, rms in reversed(self.fenster):
+            if mitte < min_ab:
+                break
+            if rms < PAUSE_RMS:
+                return mitte
+        return -1
+
+    def not_schnitt(self, min_ab: int) -> int:
+        """Leiseste bekannte Stelle ab min_ab — bei (fast) gleich leisen
+        gewinnt die SPAETESTE: das Stueck bleibt nah an der Sollgroesse."""
+        beste, beste_rms = -1, None
+        for mitte, rms in reversed(self.fenster):
+            if mitte < min_ab:
+                break
+            if beste_rms is None or rms < beste_rms * 0.98:
+                beste, beste_rms = mitte, rms
+        return beste
+
+    def verschieben(self, schnitt_bytes: int) -> None:
+        """Nach einem Schnitt: Offsets auf den Restpuffer umrechnen."""
+        self.fenster = [(m - schnitt_bytes, r) for m, r in self.fenster if m > schnitt_bytes]
+        self.ab_sample = max(0, self.ab_sample - schnitt_bytes // 2)
 
 
 def _haeppchen_wav(stueck: bytes, gain: float | None) -> tuple[bytes, float | None]:
@@ -339,12 +405,18 @@ class LokalTts:
             return
         # Fahrplan: klein anfangen, verdoppelnd wachsen (HAEPPCHEN_START_S/
         # HAEPPCHEN_MAX_S oben) — jede Naht ist ein potenzielles Mini-Knacken,
-        # also nur so viele Übergänge wie fürs Tempo nötig.
-        min_bytes = int(HAEPPCHEN_START_S * PCM_RATE) * 2
+        # also nur so viele Übergänge wie fürs Tempo nötig. Geschnitten wird
+        # NUR in Sprechpausen (PAUSE_RMS): der stumpfe Byte-Schnitt legte die
+        # Naht mitten in Wörter — live als Genuschel gehört (28.08.2026).
+        # NIE mitten im 16-Bit-Sample: alle Offsets sind sample-gerade,
+        # der Überhang bleibt im Puffer und geht dem nächsten Stück voran.
+        start_bytes = int(HAEPPCHEN_START_S * PCM_RATE) * 2
         max_bytes = int(HAEPPCHEN_MAX_S * PCM_RATE) * 2
+        min_bytes = start_bytes
         gesendet_bytes = 0
         gain: float | None = None
         puffer = b""
+        spur = _PausenSpur()
         with _lokal_client().stream(
             "POST", f"{TTS_BASE}/speak-stream",
             json={"text": sauber[:1200], "voice": _VOICE_NAME},
@@ -355,15 +427,19 @@ class LokalTts:
                 puffer += chunk
                 if len(puffer) < min_bytes:
                     continue
-                # NIE mitten im 16-Bit-Sample schneiden: die HTTP-Chunks kommen
-                # mit beliebigen (auch ungeraden) Byte-Grenzen an — ein schiefer
-                # Schnitt verschiebt den Reststrom um 1 Byte und macht aus
-                # Sprache Rauschen (live 28.08.2026). Der Überhang bleibt im
-                # Puffer und geht dem nächsten Stück voran.
-                schnitt = (len(puffer) // 2) * 2
+                spur.scan(puffer)
+                # Naht fruehestens ab ~60 % der Sollgroesse — eine Satzpause
+                # kurz vor der Schwelle ist besser als ein Schnitt kurz danach.
+                min_ab = (int(min_bytes * 0.6) // 2) * 2
+                schnitt = spur.pausen_schnitt(min_ab)
+                if schnitt < 0 and len(puffer) >= min_bytes + NOT_SCHNITT_EXTRA:
+                    schnitt = spur.not_schnitt(min_ab)
+                if schnitt <= 0:
+                    continue
                 stueck, puffer = puffer[:schnitt], puffer[schnitt:]
+                spur.verschieben(schnitt)
                 gesendet_bytes += len(stueck)
-                min_bytes = min(max_bytes, gesendet_bytes)
+                min_bytes = min(max_bytes, max(gesendet_bytes, start_bytes))
                 wav, gain = _haeppchen_wav(stueck, gain)
                 if wav:
                     yield wav
@@ -480,9 +556,66 @@ def speak_dauerhaft(text: str) -> bytes:
     return blob
 
 
-def warm(text: str) -> None:
-    """Startup-Vorwaermen statischer Saetze — dauerhaft gecacht."""
+# Plausibilitaets-Deckel fuers Vorwaermen — STRENGER als das Live-Gate im
+# Chatterbox-Container (tts_serve/chatterbox/pegel.py): live kostet ein
+# Retry Latenz, beim Wärmen kostet er nichts. Kalibrierung 28.08.2026:
+# gute Renders 47-97 ms/Zeichen, Grauzone/Babble ab ~116. Ein gepinnter
+# Babble-Render wuerde sonst bei JEDER Maschinen-Frage abgespielt
+# (Vorfall 28.08.2026: 5,88 s fuer "Wie lautet der Nachname?").
+_WARM_S_JE_ZEICHEN = 0.105
+_WARM_GRUND_S = 0.3
+
+
+def _warm_unplausibel(text: str, blob: bytes) -> bool:
+    if not blob or blob[:4] != b"RIFF":
+        return False  # nur eigene PCM-WAVs pruefen (ElevenLabs liefert MP3)
+    dauer = max(0, len(blob) - 44) / 2 / PCM_RATE
+    return dauer > _WARM_GRUND_S + _WARM_S_JE_ZEICHEN * len(text)
+
+
+def _dauerhaft_key(text: str) -> str:
+    sauber = _normalisieren(text)
+    return _lokal_schluessel(sauber) if TTS_BASE else f"{_VOICE_ID}|{sauber}"
+
+
+def _vergessen(text: str) -> None:
+    """Cache-Eintrag (RAM-Pin + Platte) eines Satzes verwerfen."""
+    schluessel = _dauerhaft_key(text)
+    _FEST.pop(schluessel, None)
+    _CACHE.pop(schluessel, None)
     try:
-        speak_dauerhaft(text)
+        (_DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _dauerhaft_speichern(text: str, blob: bytes) -> None:
+    """Ein fertiges Blob als dauerhaften Cache-Eintrag setzen (RAM-Pin + Platte)."""
+    schluessel = _dauerhaft_key(text)
+    _ram_merken(schluessel, blob, fest=True)
+    try:
+        _DISK_DIR.mkdir(parents=True, exist_ok=True)
+        (_DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")).write_bytes(blob)
+    except OSError:
+        pass
+
+
+def warm(text: str) -> None:
+    """Startup-Vorwaermen statischer Saetze — dauerhaft gecacht.
+
+    Zweitpruefung vor dem Pinnen: ist der Render unplausibel lang fuer den
+    Text (Chatterbox wuerfelt Tempo und Babble), wird EINMAL neu geholt und
+    das KUERZERE der beiden Ergebnisse gepinnt — nie endlos wuerfeln, der
+    Dienststart muss durchlaufen."""
+    try:
+        erste = speak_dauerhaft(text)
+        if not _warm_unplausibel(text, erste):
+            return
+        print(f"tts-warm: unplausibler Render ({len(text)} Z, "
+              f"{max(0, len(erste) - 44) / 2 / PCM_RATE:.1f}s) — neuer Wurf", flush=True)
+        _vergessen(text)
+        zweite = speak_dauerhaft(text)
+        if erste and zweite and len(zweite) > len(erste):
+            _dauerhaft_speichern(text, erste)
     except Exception:
         pass

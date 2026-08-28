@@ -194,6 +194,9 @@ class Dienst:
             return
         for text in filler.alle_saetze():
             try:
+                # warm() prueft den Render auf Plausibilitaet (Babble-Schutz)
+                # und pinnt ihn — der speak_dauerhaft danach ist ein RAM-Hit.
+                tts.warm(text)
                 url = self.audio_legen(tts.speak_dauerhaft(text))
                 if url:
                     self.filler_urls[text] = url

@@ -26,7 +26,7 @@ ENV HF_HOME=/models/hf \
     STIMMEN_DIR=/stimmen
 
 WORKDIR /app
-COPY server.py schnitt.py ./
+COPY server.py schnitt.py pegel.py ./
 
 EXPOSE 8100
 CMD ["python", "server.py"]
