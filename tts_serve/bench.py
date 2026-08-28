@@ -51,14 +51,21 @@ VOICE_IDS = {
     "quizmaster": "pNInz6obpgDQGcFmaJgB",
 }
 
-# Klon-Referenz: ~17 s natuerlicher Praxiston mit Fragen, Zahlen, Ausrufen.
+# Klon-Referenz: ~40 s natuerlicher Praxiston (Chef 28.08.2026: laengere
+# Passagen, Bianca klang nicht wie das Original). Echte Umlaute, ruhige
+# Erklaersaetze, Fragen, Daten und Uhrzeiten — Klone uebernehmen den Duktus.
 # WORTGETREU — die .txt daneben ist CosyVoices Prompt-Transkript.
 REF_TEXT = (
-    "Guten Tag, hier ist die Zahnarztpraxis am Stadtpark. Schoen, dass Sie "
-    "anrufen. Ich schaue kurz in den Kalender, einen kleinen Moment bitte. "
-    "Am Donnerstag um halb elf haette ich etwas frei, alternativ auch am "
-    "Freitagnachmittag. Passt Ihnen das? Wunderbar, dann trage ich Sie "
-    "gleich ein. Bis dahin, und einen schoenen Tag noch!"
+    "Guten Tag, hier ist die Zahnarztpraxis am Stadtpark, schön, dass Sie "
+    "anrufen. Was kann ich für Sie tun? Einen kleinen Moment bitte, ich "
+    "schaue kurz in den Kalender. Also, am Donnerstag, dem vierzehnten, "
+    "hätte ich um halb elf etwas frei, alternativ am Freitagnachmittag um "
+    "Viertel nach drei. Passt Ihnen einer der beiden Termine? Wunderbar, "
+    "dann trage ich Sie gleich ein. Bringen Sie bitte Ihre Versichertenkarte "
+    "mit, und falls Sie Unterlagen von einer anderen Praxis haben, gern auch "
+    "diese. Wenn etwas dazwischenkommt, rufen Sie uns einfach an, wir finden "
+    "immer eine Lösung. Vielen Dank für Ihren Anruf, bis Donnerstag, und "
+    "einen schönen Tag noch."
 )
 
 # Der Quizmaster klingt nach Show, nicht nach Praxis — Klone uebernehmen den
@@ -83,18 +90,22 @@ def _wav_roh(pcm: bytes, rate: int = RATE) -> bytes:
     return header + pcm
 
 
-def _eleven_pcm(text: str, voice_id: str) -> bytes:
+def _eleven_pcm(text: str, voice_id: str, modell: str = "", latenz_optimiert: bool = True) -> bytes:
+    modell = modell or ELEVENLABS_TTS_MODEL
+    params = {"output_format": "pcm_24000"}
+    if latenz_optimiert:
+        params["optimize_streaming_latency"] = "3"
     r = httpx.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream",
-        params={"optimize_streaming_latency": "3", "output_format": "pcm_24000"},
+        params=params,
         headers={"xi-api-key": ELEVENLABS_API_KEY, "Accept": "application/octet-stream"},
         json={
             "text": text,
-            "model_id": ELEVENLABS_TTS_MODEL,
-            **({"language_code": "de"} if ("v2_5" in ELEVENLABS_TTS_MODEL or "_v3" in ELEVENLABS_TTS_MODEL) else {}),
+            "model_id": modell,
+            **({"language_code": "de"} if ("v2_5" in modell or "_v3" in modell) else {}),
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.85, "use_speaker_boost": True},
         },
-        timeout=30.0,
+        timeout=60.0,
     )
     if r.status_code != 200:
         raise RuntimeError(f"eleven_http_{r.status_code}")
@@ -116,7 +127,10 @@ def ref_erzeugen() -> None:
     for name, vid in VOICE_IDS.items():
         text = REF_TEXTE.get(name, REF_TEXT)
         print(f"rendere Referenz {name} (Voice {vid}) ...", flush=True)
-        pcm = _eleven_pcm(text, vid)
+        # Referenzen IMMER mit dem vollen Qualitaetsmodell und OHNE
+        # Latenz-Optimierung rendern (Chef 28.08.2026: Bianca-Klon klang
+        # nicht wie das Original — Ursache war die flash-gerenderte Referenz).
+        pcm = _eleven_pcm(text, vid, modell="eleven_multilingual_v2", latenz_optimiert=False)
         (ziel / f"{name}.wav").write_bytes(_wav_roh(pcm))
         (ziel / f"{name}.txt").write_text(text, encoding="utf-8")
         print(f"  {name}.wav ({len(pcm) / 2 / RATE:.1f} s) + {name}.txt", flush=True)
