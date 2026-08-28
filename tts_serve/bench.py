@@ -74,9 +74,13 @@ REF_TEXT = (
     "einen schönen Tag noch."
 )
 
+# Kurz-Prompt endet bewusst mit einem NEUTRALEN Aussagesatz: endete er mit
+# einer Frage ("Passt Ihnen das?"), leakte CosyVoice den Prompt-Schluss in
+# den Satzanfang — Bianca begruesste live mit "Passt Ihnen das? med dent..."
+# (Chef 28.08.2026, ~06:45). Zusaetzlich haengt ref_erzeugen Stille ans Ende.
 REF_TEXT_KURZ = (
-    "Guten Tag, hier ist die Zahnarztpraxis am Stadtpark. Am Donnerstag um "
-    "halb elf hätte ich einen Termin frei. Passt Ihnen das?"
+    "Guten Tag, hier ist die Zahnarztpraxis am Stadtpark. Ich schaue kurz "
+    "in den Kalender. Am Donnerstag um halb elf ist ein Termin frei."
 )
 
 # Der Quizmaster klingt nach Show, nicht nach Praxis — Klone uebernehmen den
@@ -90,8 +94,8 @@ REF_TEXT_QUIZ = (
 )
 
 REF_TEXT_QUIZ_KURZ = (
-    "Herzlich willkommen zur grossen Quizrunde! Erste Frage, aufgepasst: "
-    "Wie viele Zaehne hat ein erwachsener Mensch?"
+    "Herzlich willkommen zur grossen Quizrunde! Ich bin Ihr Quizmaster, "
+    "und heute geht es wieder um alles. Die Spannung steigt."
 )
 
 REF_TEXTE = {"quizmaster": REF_TEXT_QUIZ}
@@ -153,6 +157,10 @@ def ref_erzeugen() -> None:
             (ziel_cosy, REF_TEXTE_KURZ.get(name, REF_TEXT_KURZ)),
         ):
             pcm = _eleven_pcm(text, vid, modell="eleven_multilingual_v2", latenz_optimiert=False)
+            if ordner is ziel_cosy:
+                # ~0,4 s Stille ans Ende: sauber ausklingender Prompt,
+                # weniger Leak des Prompt-Schlusses in den Satzanfang.
+                pcm += b"\x00" * int(0.4 * RATE) * 2
             (ordner / f"{name}.wav").write_bytes(_wav_roh(pcm))
             (ordner / f"{name}.txt").write_text(text, encoding="utf-8")
             print(f"  {ordner.name}/{name}.wav ({len(pcm) / 2 / RATE:.1f} s)", flush=True)
