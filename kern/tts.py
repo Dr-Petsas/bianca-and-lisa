@@ -17,6 +17,7 @@ from kern.config import (
     ELEVENLABS_TTS_MODEL,
     ELEVENLABS_VOICE_ID,
     TTS_BASE,
+    TTS_STREAM,
     TTS_VOICE,
 )
 
@@ -113,15 +114,9 @@ def _lokal_schluessel(sauber: str) -> str:
     return f"lokal|{TTS_BASE}|{_VOICE_NAME}|{sauber}"
 
 
-def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
-    """s16le mono → WAV. Jede Äußerung auf dieselbe Sprach-Lautheit ziehen:
-    RMS über sprach-aktive Samples auf ZIEL_RMS (anheben UND absenken),
-    Peak-Deckel gegen Klirren, Stille/Atmen bleibt unangetastet."""
-    n = len(pcm) // 2
-    if n <= 0:
-        return b""
-    samples = array.array("h")
-    samples.frombytes(pcm[: n * 2])
+def _gain_oder_none(samples: "array.array") -> float | None:
+    """Lautheits-Gain für ein PCM-Stück — None, wenn zu wenig Sprache drin
+    ist (Stille/Atmen), dann wird nichts angefasst."""
     spitze = 1
     quad = 0
     aktiv = 0
@@ -132,28 +127,32 @@ def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
         if a >= AKTIV_SCHWELLE:
             quad += s * s
             aktiv += 1
-    if aktiv >= MIN_AKTIV_SAMPLES:
-        rms = (quad / aktiv) ** 0.5
-        gain = max(MIN_GAIN, min(MAX_GAIN, (ZIEL_RMS * 32767.0) / max(rms, 1.0)))
-        gain = min(gain, (PEAK_DECKEL * 32767.0) / spitze)
-    else:
-        gain = 1.0
+    if aktiv < MIN_AKTIV_SAMPLES:
+        return None
+    rms = (quad / aktiv) ** 0.5
+    gain = max(MIN_GAIN, min(MAX_GAIN, (ZIEL_RMS * 32767.0) / max(rms, 1.0)))
+    return min(gain, (PEAK_DECKEL * 32767.0) / spitze)
+
+
+def _skaliert_bytes(samples: "array.array", gain: float) -> bytes:
     if 0.98 <= gain <= 1.02:
-        data = samples.tobytes()
-    else:
-        skaliert = array.array("h", bytes(len(samples) * 2))
-        for i, s in enumerate(samples):
-            v = int(s * gain)
-            if v > 32767:
-                v = 32767
-            elif v < -32768:
-                v = -32768
-            skaliert[i] = v
-        data = skaliert.tobytes()
-    header = struct.pack(
+        return samples.tobytes()
+    skaliert = array.array("h", bytes(len(samples) * 2))
+    for i, s in enumerate(samples):
+        v = int(s * gain)
+        if v > 32767:
+            v = 32767
+        elif v < -32768:
+            v = -32768
+        skaliert[i] = v
+    return skaliert.tobytes()
+
+
+def _wav_header(data_len: int, rate: int) -> bytes:
+    return struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF",
-        36 + len(data),
+        36 + data_len,
         b"WAVE",
         b"fmt ",
         16,
@@ -164,9 +163,22 @@ def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
         2,
         16,
         b"data",
-        len(data),
+        data_len,
     )
-    return header + data
+
+
+def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
+    """s16le mono → WAV. Jede Äußerung auf dieselbe Sprach-Lautheit ziehen:
+    RMS über sprach-aktive Samples auf ZIEL_RMS (anheben UND absenken),
+    Peak-Deckel gegen Klirren, Stille/Atmen bleibt unangetastet."""
+    n = len(pcm) // 2
+    if n <= 0:
+        return b""
+    samples = array.array("h")
+    samples.frombytes(pcm[: n * 2])
+    gain = _gain_oder_none(samples)
+    data = _skaliert_bytes(samples, gain if gain is not None else 1.0)
+    return _wav_header(len(data), rate) + data
 
 
 def _ist_mp3(blob: bytes) -> bool:
@@ -258,6 +270,51 @@ class LokalTts:
         _ram_merken(schluessel, blob)
         return blob
 
+    def kann_stream(self) -> bool:
+        """Chunk-Streaming nur, wenn der Container es im /health meldet
+        (CosyVoice-Turbo: stream=true; Chatterbox: Feld fehlt => blocking)."""
+        return TTS_STREAM and bool(_health_holen().get("stream"))
+
+    def speak_stream(self, text: str):
+        """Generator: abspielfertige WAV-Häppchen (~>=0,6 s) aus dem
+        Chunk-Strom von /speak-stream — das erste kommt nach wenigen hundert
+        Millisekunden, lange bevor die Äußerung fertig gerendert ist.
+
+        Pegel: der Gain wird aus dem ERSTEN sprach-aktiven Häppchen bestimmt
+        und für die ganze Äußerung festgehalten — sonst pumpt es zwischen
+        den Häppchen derselben Antwort. Kein Cache: hier laufen nur
+        dynamische Gesprächsantworten, nie Füller."""
+        sauber = _normalisieren(text)
+        if not sauber:
+            return
+        min_bytes = int(0.6 * PCM_RATE) * 2
+        gain: float | None = None
+        puffer = b""
+        with _lokal_client().stream(
+            "POST", f"{TTS_BASE}/speak-stream",
+            json={"text": sauber[:1200], "voice": _VOICE_NAME},
+        ) as r:
+            if r.status_code != 200:
+                raise RuntimeError(f"tts_lokal_stream_http_{r.status_code}")
+            for chunk in r.iter_bytes():
+                puffer += chunk
+                if len(puffer) < min_bytes:
+                    continue
+                stueck, puffer = puffer, b""
+                samples = array.array("h")
+                samples.frombytes(stueck[: (len(stueck) // 2) * 2])
+                if gain is None:
+                    gain = _gain_oder_none(samples)
+                data = _skaliert_bytes(samples, gain if gain is not None else 1.0)
+                yield _wav_header(len(data), PCM_RATE) + data
+        if puffer:
+            samples = array.array("h")
+            samples.frombytes(puffer[: (len(puffer) // 2) * 2])
+            if gain is None:
+                gain = _gain_oder_none(samples)
+            data = _skaliert_bytes(samples, gain if gain is not None else 1.0)
+            yield _wav_header(len(data), PCM_RATE) + data
+
 
 def engine() -> TtsEngine:
     if TTS_BASE:
@@ -286,7 +343,27 @@ def modell_info() -> str:
     return TTS_BASE if TTS_BASE else ELEVENLABS_TTS_MODEL
 
 
-_ENGINE_ANZEIGE: tuple[float, str] | None = None
+_HEALTH: tuple[float, dict] | None = None
+
+
+def _health_holen() -> dict:
+    """Container-/health, 60 s gecacht — speist Dock-Anzeige und
+    Stream-Faehigkeit, ohne den Container pro Zug zu belaestigen."""
+    global _HEALTH
+    if not TTS_BASE:
+        return {}
+    jetzt = time.monotonic()
+    if _HEALTH and jetzt - _HEALTH[0] < 60.0:
+        return _HEALTH[1]
+    daten: dict = {}
+    try:
+        r = _lokal_client().get(f"{TTS_BASE}/health", timeout=2.0)
+        if r.status_code == 200:
+            daten = r.json() or {}
+    except Exception:
+        pass
+    _HEALTH = (jetzt, daten)
+    return daten
 
 
 def engine_anzeige() -> str:
@@ -294,27 +371,16 @@ def engine_anzeige() -> str:
     (lokal)' oder 'ElevenLabs'. Fragt den Container-Health nach der Engine
     (60 s gecacht, kurzer Timeout) — so zeigt das Dock nach einem Wechsel
     automatisch das richtige Modell."""
-    global _ENGINE_ANZEIGE
     if not TTS_BASE:
         return "ElevenLabs"
-    jetzt = time.monotonic()
-    if _ENGINE_ANZEIGE and jetzt - _ENGINE_ANZEIGE[0] < 60.0:
-        return _ENGINE_ANZEIGE[1]
-    anzeige = "lokal — Container antwortet nicht"
-    try:
-        r = _lokal_client().get(f"{TTS_BASE}/health", timeout=2.0)
-        if r.status_code == 200:
-            eng = str((r.json() or {}).get("engine") or "").strip().lower()
-            if eng == "chatterbox":
-                anzeige = "Chatterbox (lokal)"
-            elif eng.startswith("cosy"):
-                anzeige = "CosyVoice (lokal)"
-            elif eng:
-                anzeige = f"{eng} (lokal)"
-    except Exception:
-        pass
-    _ENGINE_ANZEIGE = (jetzt, anzeige)
-    return anzeige
+    eng = str(_health_holen().get("engine") or "").strip().lower()
+    if eng == "chatterbox":
+        return "Chatterbox (lokal)"
+    if eng.startswith("cosy"):
+        return "CosyVoice (lokal)"
+    if eng:
+        return f"{eng} (lokal)"
+    return "lokal — Container antwortet nicht"
 
 
 def speak_dauerhaft(text: str) -> bytes:

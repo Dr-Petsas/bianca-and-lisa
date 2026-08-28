@@ -58,6 +58,9 @@ ELEVENLABS_API_KEY = _s("ELEVENLABS_API_KEY") or _peek_key(
 # spricht, OHNE ElevenLabs-Rueckfall (Chef 27.08.2026 — Fehler sollen in der
 # Testphase hoerbar sein). Leer = ElevenLabs wie bisher (byte-identisch).
 TTS_BASE = _s("TTS_BASE").rstrip("/")
+# Chunk-Streaming vom Container (/speak-stream, 28.08.2026): an, sobald der
+# Container es im /health meldet. Notaus: TTS_STREAM=0 => blocking wie vorher.
+TTS_STREAM = _b("TTS_STREAM", True)
 # Stimmname im Container (Referenz-WAV in tts_serve/stimmen/). Leer = "lisa";
 # der Bianca-Prozess setzt sich beim Start selbst auf "bianca".
 TTS_VOICE = _s("TTS_VOICE")

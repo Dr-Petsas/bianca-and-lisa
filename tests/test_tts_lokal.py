@@ -118,6 +118,59 @@ def test_aussprache_umschrift_auch_lokal():
     _mit_lokal(fake, lauf)
 
 
+class _FakeStreamAntwort:
+    """Nachbau von httpx.Client.stream(...) als Kontextmanager."""
+
+    def __init__(self, status_code: int, chunks: list[bytes]):
+        self.status_code = status_code
+        self._chunks = chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def iter_bytes(self):
+        yield from self._chunks
+
+
+def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
+    # Zwei Chunks à 0,6 s: erst leise (2000), dann laut (8000). Der Gain wird
+    # aus dem ERSTEN sprach-aktiven Stück bestimmt und festgehalten — das
+    # zweite Häppchen bekommt DENSELBEN Faktor (kein Pumpen in der Äußerung).
+    n = int(0.6 * 24000)
+    leise = (2000).to_bytes(2, "little", signed=True) * n
+    laut = (8000).to_bytes(2, "little", signed=True) * n
+    fake = _FakeLokal(_Antwort(200, b""))
+    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, [leise, laut])
+
+    def lauf():
+        wavs = list(tts.LokalTts().speak_stream("Ein Satz für den Stream."))
+        assert len(wavs) == 2 and all(w[:4] == b"RIFF" for w in wavs)
+        gain = min(tts.MAX_GAIN, tts.ZIEL_RMS * 32767.0 / 2000)
+        probe1 = int.from_bytes(wavs[0][44:46], "little", signed=True)
+        probe2 = int.from_bytes(wavs[1][44:46], "little", signed=True)
+        assert probe1 == int(2000 * gain), "Gain aus dem ersten Häppchen"
+        assert probe2 == int(8000 * gain), "zweites Häppchen mit DEMSELBEN Gain"
+
+    _mit_lokal(fake, lauf)
+
+
+def test_speak_stream_fehler_wirft():
+    fake = _FakeLokal(_Antwort(200, b""))
+    fake.stream = lambda *a, **kw: _FakeStreamAntwort(503, [])
+
+    def lauf():
+        try:
+            list(tts.LokalTts().speak_stream("Hallo?"))
+            raise AssertionError("503 muss RuntimeError werden")
+        except RuntimeError as e:
+            assert "tts_lokal_stream_http_503" in str(e)
+
+    _mit_lokal(fake, lauf)
+
+
 def test_dauerhaft_cache_ueberlebt_neustart(tmp_path=None):
     """Fueller werden EINMAL synthetisiert; nach Prozess-Neustart (RAM-Cache
     leer) kommen sie von der Platte — kein zweiter /speak-Aufruf."""

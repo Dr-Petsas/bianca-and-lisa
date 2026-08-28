@@ -72,6 +72,62 @@ def test_gecachte_texte_bleiben_ein_block():
     assert len(gemerkt) == 1 and not urls, "Warm-Cache-Treffer nicht zersplittern"
 
 
+class _StreamEngine:
+    """Fake-LokalTts mit Chunk-Streaming (CosyVoice-Turbo)."""
+
+    name = "lokal"
+
+    def __init__(self, wavs: list[bytes]):
+        self.wavs = wavs
+        self.texte: list[str] = []
+
+    def kann_stream(self) -> bool:
+        return True
+
+    def speak_stream(self, text: str):
+        self.texte.append(text)
+        yield from self.wavs
+
+
+def test_stream_faehiger_container_bekommt_die_ganze_aeusserung():
+    urls: list[str] = []
+    gemerkt: list[str] = []
+    d = _dienst(gemerkt)
+    eng = _StreamEngine([b"RIFF1", b"RIFF2", b"RIFF3"])
+    alt_engine, alt_bereit = tts.engine, tts.bereit
+    tts.engine = lambda: eng
+    tts.bereit = lambda: True
+    try:
+        out = d.json_antwort({}, art="turn", text_in="hallo", haeppchen=urls.append)
+    finally:
+        tts.engine, tts.bereit = alt_engine, alt_bereit
+    assert not gemerkt, "kein blocking-Satz-Rendern, wenn der Container streamt"
+    assert eng.texte == [LANG], "EIN Stream-Aufruf mit dem Gesamttext (beste Prosodie)"
+    assert len(urls) == 3, "alle Häppchen sofort über den Stream-Kanal raus"
+    assert out["audioUrl"] == "", "reply ohne Extra-Audio — alles ist schon gesprochen"
+
+
+def test_stream_fehlschlag_vor_dem_ersten_haeppchen_faellt_auf_blocking():
+    urls: list[str] = []
+    gemerkt: list[str] = []
+    d = _dienst(gemerkt)
+
+    class _Kaputt(_StreamEngine):
+        def speak_stream(self, text: str):
+            raise RuntimeError("tts_lokal_stream_http_503")
+            yield  # pragma: no cover
+
+    alt_engine, alt_bereit = tts.engine, tts.bereit
+    tts.engine = lambda: _Kaputt([])
+    tts.bereit = lambda: True
+    try:
+        out = d.json_antwort({}, art="turn", text_in="hallo", haeppchen=urls.append)
+    finally:
+        tts.engine, tts.bereit = alt_engine, alt_bereit
+    assert len(gemerkt) == 3, "Stream tot => satzweises Blocking übernimmt"
+    assert len(urls) == 2 and out["audioUrl"], "Häppchen-Verhalten wie ohne Stream"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_"):

@@ -21,7 +21,7 @@ sys.path.insert(0, f"{REPO}/third_party/Matcha-TTS")
 import torch
 import torchaudio
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 PORT = int(os.environ.get("TTS_PORT", "8100"))
@@ -115,11 +115,16 @@ def _laden() -> None:
 
     t0 = time.time()
     _modell_holen()
-    # fp16 halbiert die Rechenzeit des Flow-Decoders (live 28.08.2026: volle
-    # Praezision brauchte ~1,5 s pro Satz — zu langsam am Telefon).
-    # Notaus: TTS_FP16=0.
+    # Turbo (28.08.2026): load_vllm gibt den autoregressiven LLM-Teil an eine
+    # eigene kleine vLLM-Engine (Export beim ersten Start nach MODEL_DIR/vllm,
+    # Speicher via COSY_VLLM_GPU_UTIL), load_trt jagt den Flow-Decoder durch
+    # TensorRT (Engine-Bau beim ersten Start, ~Minuten, gecacht im Volume).
+    # Notausgaenge: TTS_VLLM=0, TTS_TRT=0, TTS_FP16=0 => wie vorher.
     fp16 = os.environ.get("TTS_FP16", "1").strip() != "0"
-    _MODEL = AutoModel(model_dir=MODEL_DIR, fp16=fp16)
+    nutze_vllm = os.environ.get("TTS_VLLM", "1").strip() != "0"
+    nutze_trt = os.environ.get("TTS_TRT", "1").strip() != "0"
+    print(f"cosyvoice lade: fp16={fp16} vllm={nutze_vllm} trt={nutze_trt}", flush=True)
+    _MODEL = AutoModel(model_dir=MODEL_DIR, fp16=fp16, load_vllm=nutze_vllm, load_trt=nutze_trt)
     _stimmen_scannen()
     _aliase_lesen()
     print(f"cosyvoice geladen in {time.time() - t0:.0f}s, "
@@ -182,14 +187,16 @@ def health():
         "aliase": _ALIASE,
         "device": "cuda",
         "warm": _WARM,
+        "vllm": os.environ.get("TTS_VLLM", "1").strip() != "0",
+        "trt": os.environ.get("TTS_TRT", "1").strip() != "0",
+        "stream": True,
     }
     if not ok:
         raise HTTPException(503, "modell laedt noch")
     return body
 
 
-@app.post("/speak")
-def speak(body: SpeakIn):
+def _speak_eingang(body: SpeakIn) -> tuple[str, str]:
     if _MODEL is None:
         raise HTTPException(503, "modell laedt noch")
     text = " ".join((body.text or "").split()).strip()
@@ -199,6 +206,12 @@ def speak(body: SpeakIn):
     voice = _ALIASE.get(voice, voice)
     if voice not in _VOICES:
         raise HTTPException(400, f"stimme unbekannt: {voice}")
+    return text, voice
+
+
+@app.post("/speak")
+def speak(body: SpeakIn):
+    text, voice = _speak_eingang(body)
     t0 = time.perf_counter()
     with _LOCK:
         try:
@@ -215,6 +228,46 @@ def speak(body: SpeakIn):
         media_type="application/octet-stream",
         headers={"X-Sample-Rate": str(ZIEL_RATE), "X-Engine": "cosyvoice",
                  "X-Dauer-S": f"{dauer:.2f}"},
+    )
+
+
+@app.post("/speak-stream")
+def speak_stream(body: SpeakIn):
+    """Wie /speak, aber chunked: rohe PCM16-Stuecke, sobald sie fertig sind.
+
+    Erster Chunk nach wenigen hundert Millisekunden statt nach der kompletten
+    Synthese — der Client (kern/tts.py) baut daraus Haeppchen fuers Dock.
+    """
+    text, voice = _speak_eingang(body)
+
+    def erzeuger():
+        t0 = time.perf_counter()
+        erster = 0.0
+        with _LOCK:
+            try:
+                if voice in _REGISTRIERT:
+                    gen = _MODEL.inference_zero_shot(text, "", "", zero_shot_spk_id=voice, stream=True)
+                else:
+                    gen = _MODEL.inference_zero_shot(
+                        text, CV3_PRAEFIX + _TRANSKRIPT[voice], str(_VOICES[voice]), stream=True,
+                    )
+                for out in gen:
+                    if not erster:
+                        erster = time.perf_counter() - t0
+                    yield _pcm16(out["tts_speech"], int(_MODEL.sample_rate))
+            except Exception as e:
+                # Mitten im Stream gibt es keinen HTTP-Fehler mehr — Abbruch
+                # loggen, der Client hoert das fehlende Ende.
+                print(f"cosyvoice stream-fehler: {e}", flush=True)
+                return
+        dauer = time.perf_counter() - t0
+        print(f"cosyvoice stream voice={voice} zeichen={len(text)} "
+              f"erster_chunk_s={erster:.2f} gesamt_s={dauer:.2f}", flush=True)
+
+    return StreamingResponse(
+        erzeuger(),
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": str(ZIEL_RATE), "X-Engine": "cosyvoice"},
     )
 
 

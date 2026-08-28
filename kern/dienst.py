@@ -134,14 +134,21 @@ class Dienst:
         return url, round(time.perf_counter() - t0, 2)
 
     def _vertonen(self, text: str, haeppchen=None) -> tuple[str, float]:
-        """Wie stimme(), aber im Zug-Strom satzweise: fertige Häppchen gehen
-        sofort über haeppchen(url) raus, nur das letzte Stück kommt als
-        reguläres reply-Audio zurück. Gecachte Texte (gewarmte Begrüßungen)
-        bleiben EIN Block — ihr Cache-Key trägt den Gesamttext."""
+        """Wie stimme(), aber im Zug-Strom häppchenweise: fertige Stücke gehen
+        sofort über haeppchen(url) raus. Gecachte Texte (gewarmte Begrüßungen)
+        bleiben EIN Block — ihr Cache-Key trägt den Gesamttext.
+
+        Kann der Container Chunk-Streaming (CosyVoice-Turbo), läuft die GANZE
+        Äußerung als EIN Stream-Aufruf (beste Prosodie, erster Ton nach
+        wenigen hundert Millisekunden); sonst satzweises Blocking."""
         if not text:
             return "", 0.0
         if haeppchen is None or tts.im_cache(text):
             return self.stimme(text)
+        t0 = time.perf_counter()
+        gestreamt = self._stream_haeppchen(text, haeppchen)
+        if gestreamt:
+            return "", round(time.perf_counter() - t0, 2)
         teile = haeppchen_teile(text)
         if len(teile) < 2:
             return self.stimme(text)
@@ -153,6 +160,30 @@ class Dienst:
                 haeppchen(url)
         url, dauer = self.stimme(teile[-1])
         return url, round(gesamt + dauer, 2)
+
+    def _stream_haeppchen(self, text: str, haeppchen) -> bool:
+        """Äußerung über den Chunk-Stream des Containers ausspielen.
+
+        True = alles (oder ein angefangener Teil) ist über haeppchen raus.
+        False = NICHTS gesendet — der Aufrufer darf blocking nachlegen.
+        Bricht der Stream MITTEN in der Äußerung ab, gilt sie als gesendet:
+        nochmal von vorn sprechen wäre schlimmer als ein fehlendes Ende."""
+        if not tts.bereit() or len(text) > 1200:
+            return False
+        eng = tts.engine()
+        if eng.name != "lokal" or not getattr(eng, "kann_stream", lambda: False)():
+            return False
+        gesendet = 0
+        try:
+            for wav in eng.speak_stream(text):
+                url = self.audio_legen(wav)
+                if url:
+                    haeppchen(url)
+                    gesendet += 1
+        except Exception as e:
+            print(f"{self.name}-stream fail nach {gesendet} Häppchen: {e}", flush=True)
+            return gesendet > 0
+        return gesendet > 0
 
     # ---- Füller gegen die Totzeit ------------------------------------------
     # Die Audios kommen aus dem Platten-Cache (.data/tts-cache) — nur beim

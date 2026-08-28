@@ -42,6 +42,16 @@ services:
     volumes:
       - ./stimmen:/stimmen:ro
       - tts-models:/models
+    environment:
+      # Turbo (28.08.2026): eigenes Mini-vLLM fuer den LLM-Teil + TensorRT
+      # fuer den Flow-Decoder. Neben dem grossen qwen-vLLM (25,7 GB) bleiben
+      # ~6,9 GB — 0.08 = ~2,6 GB fuer das 0.5B-Sprach-LLM. Notausgaenge:
+      # TTS_VLLM=0 / TTS_TRT=0 => Verhalten wie vor dem Turbo.
+      TTS_VLLM: "1"
+      TTS_TRT: "1"
+      COSY_VLLM_GPU_UTIL: "0.08"
+      # torch.compile-/vLLM-Artefakte ins Volume — Folgestarts sind schneller.
+      VLLM_CACHE_ROOT: "/models/vllm-cache"
     deploy:
       resources:
         reservations:
@@ -56,7 +66,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 600s   # erster Start laedt ~5 GB Modell ins Volume
+      start_period: 1200s  # erster Start: Modell-Download + vllm-Export + TRT-Engine-Bau
 
 volumes:
   tts-models:
