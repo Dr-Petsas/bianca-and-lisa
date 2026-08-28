@@ -121,14 +121,29 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 zugleich (eine GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis
 Lisa/Bianca vernünftig funktionieren.
 
-- **Aktiv im Test: CosyVoice-Turbo (8211, TensorRT + Mini-vLLM).** Blocking
-  gemessen 28.08. spät: 0,4-0,7 s je Satz (RTF ~0,13) gegen Qwen3-TTS
-  1,8-3,2 s (RTF ~0,8) — Zug-Probe: Quittung+Frage 0,23 s statt 0,91 s.
-- **Rückbau-Anker: Tag `bianca-lisa-v1.0`** = derselbe Stand mit Qwen3-TTS
-  (8213); dessen Platten-Cache bleibt liegen (Key trägt die Basis). Zurück =
-  `TTS_BASE` auf :8213 + auf der 5090 `docker compose --profile cosyvoice
-  down && --profile qwen3 up -d` (Repo dort: /home/cursor/telefonki).
+- **Aktiv: Qwen3-TTS (8213).** Der CosyVoice-Turbo-Versuch (8211) ist am
+  29.08. früh ABGEBROCHEN: bei Ziffern-Texten halluziniert die Engine —
+  Nummern-Rueckbestaetigung verlor Nullen ("sechs null null" -> "sechs
+  null", 4/5 Laeufen), brach live mitten in der Nummer ab und plapperte
+  bei kurzen Texten ("null null." -> "What?"/"Don Mul.", "null." ->
+  "Thank you.", Praefix-Babble "hissio"). Qwen3 sprach dieselbe
+  Rueckbestaetigung 5/5 vollstaendig (synth 4,4-5,1 s, dann LRU).
+  Die Nummern-Ansage ist sicherheitskritisch — Tempo schlaegt hier NICHT
+  Korrektheit. CosyVoice nur wieder aktivieren, wenn die Ziffern-Probe
+  `tests/tts_ziffern_probe.py` (Render 5x + Parakeet-Gegenhoeren) fuer
+  die Engine 5/5 liefert — die Probe ist fuer JEDEN Engine-Wechsel Pflicht.
+- CosyVoice-Turbo war schneller (0,4-0,7 s je Satz, RTF ~0,13 gegen Qwen3
+  1,8-3,2 s / RTF ~0,8) — Image/Profil (8211) bleibt fuer einen spaeteren
+  Anlauf liegen, laeuft aber nicht.
+- **Rückbau-Anker: Tag `bianca-lisa-v1.0`** = Stand mit Qwen3-TTS (8213);
+  Platten-Cache traegt die Basis im Key. Umschalten = `TTS_BASE` in `.env`
+  + auf der 5090 `docker compose --profile <alt> down && --profile <neu>
+  up -d` (Repo dort: /home/cursor/telefonki).
 - Chatterbox (8210) bleibt als gebautes Image/Profil liegen, läuft nicht.
+- **.env-BOM-Falle (29.08.2026):** PowerShell-Redirects schreiben die .env
+  MIT UTF-8-BOM — dotenv las `\ufeffWRITE_LIVE` und das Live-Schreiben war
+  still aus. `kern/config.py` liest jetzt `utf-8-sig`; .env trotzdem nie
+  per PowerShell-Redirect schreiben.
 
 ## Neustart vom Mitternachts-Stand (28.08.2026 spät — Chef-Entscheid)
 
