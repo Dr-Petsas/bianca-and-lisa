@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import array
+import hashlib
 import re
 import struct
+from pathlib import Path
 from typing import Protocol
 
 import httpx
@@ -44,6 +46,12 @@ _CACHE_ORD: list[str] = []
 _CLIENT: httpx.Client | None = None
 _LOKAL_CLIENT: httpx.Client | None = None
 
+# Platten-Cache NUR fuer statische Saetze (Fueller, Begruessungen — nie
+# Patientendaten): die aendern sich nie, ein Neustart soll sie nicht neu
+# synthetisieren (Chef 28.08.2026). Liegt unter .data/ und damit im
+# Container-Volume bzw. gitignored.
+_DISK_DIR = Path(__file__).resolve().parents[1] / ".data" / "tts-cache"
+
 # Stimme pro PROZESS: Lisa und Bianca laufen als getrennte Dienste — Bianca
 # setzt beim Start ihre eigene Voice-ID (kern.config.BIANCA_VOICE_ID) und
 # ihren lokalen Stimmnamen ("bianca" = Referenz im TTS-Container).
@@ -78,6 +86,20 @@ def _lokal_client() -> httpx.Client:
         # Saetzen braucht die lokale Synthese ein paar Sekunden.
         _LOKAL_CLIENT = httpx.Client(timeout=httpx.Timeout(30.0, connect=2.0))
     return _LOKAL_CLIENT
+
+
+def _normalisieren(text: str) -> str:
+    sauber = " ".join(str(text or "").split()).strip()
+    for cre, ersatz in _AUSSPRACHE:
+        sauber = cre.sub(ersatz, sauber)
+    return sauber
+
+
+def _ram_merken(schluessel: str, blob: bytes) -> None:
+    _CACHE[schluessel] = blob
+    _CACHE_ORD.append(schluessel)
+    if len(_CACHE_ORD) > 48:
+        _CACHE.pop(_CACHE_ORD.pop(0), None)
 
 
 def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
@@ -131,11 +153,9 @@ class ElevenLabsTts:
     name = "elevenlabs"
 
     def speak(self, text: str) -> bytes:
-        sauber = " ".join(str(text or "").split()).strip()
+        sauber = _normalisieren(text)
         if not sauber or not ELEVENLABS_API_KEY:
             return b""
-        for cre, ersatz in _AUSSPRACHE:
-            sauber = cre.sub(ersatz, sauber)
         schluessel = f"{_VOICE_ID}|{sauber}"
         hit = _CACHE.get(schluessel)
         if hit:
@@ -170,10 +190,7 @@ class ElevenLabsTts:
             blob = raw
         else:
             blob = pcm16_wav(raw)
-        _CACHE[schluessel] = blob
-        _CACHE_ORD.append(schluessel)
-        if len(_CACHE_ORD) > 48:
-            _CACHE.pop(_CACHE_ORD.pop(0), None)
+        _ram_merken(schluessel, blob)
         return blob
 
 
@@ -189,11 +206,9 @@ class LokalTts:
     name = "lokal"
 
     def speak(self, text: str) -> bytes:
-        sauber = " ".join(str(text or "").split()).strip()
+        sauber = _normalisieren(text)
         if not sauber:
             return b""
-        for cre, ersatz in _AUSSPRACHE:
-            sauber = cre.sub(ersatz, sauber)
         schluessel = f"lokal|{_VOICE_NAME}|{sauber}"
         hit = _CACHE.get(schluessel)
         if hit:
@@ -210,10 +225,7 @@ class LokalTts:
         # Container liefert rohes PCM16/24k — dieselbe Pegel-Schicht wie beim
         # ElevenLabs-Pfad, damit lokale Zuege gleich laut klingen.
         blob = pcm16_wav(raw)
-        _CACHE[schluessel] = blob
-        _CACHE_ORD.append(schluessel)
-        if len(_CACHE_ORD) > 48:
-            _CACHE.pop(_CACHE_ORD.pop(0), None)
+        _ram_merken(schluessel, blob)
         return blob
 
 
@@ -232,10 +244,49 @@ def modell_info() -> str:
     return TTS_BASE if TTS_BASE else ELEVENLABS_TTS_MODEL
 
 
-def warm(text: str) -> None:
+def speak_dauerhaft(text: str) -> bytes:
+    """Wie engine().speak(), aber mit Platten-Cache unter .data/tts-cache.
+
+    NUR fuer statische Saetze ohne Patientenbezug (Fueller, Begruessungen):
+    einmal gerendert, ueberlebt Neustarts — der Dienststart braucht dann
+    Millisekunden statt 18 Synthesen. Gespraechs-Antworten laufen weiter
+    ueber speak() und landen NIE auf der Platte.
+    """
     if not bereit():
-        return
+        return b""
+    sauber = _normalisieren(text)
+    if not sauber:
+        return b""
+    eng = engine()
+    if eng.name == "lokal":
+        schluessel = f"lokal|{_VOICE_NAME}|{sauber}"
+    else:
+        schluessel = f"{_VOICE_ID}|{sauber}"
+    hit = _CACHE.get(schluessel)
+    if hit:
+        return hit
+    datei = _DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")
     try:
-        engine().speak(text)
+        if datei.is_file():
+            blob = datei.read_bytes()
+            if blob:
+                _ram_merken(schluessel, blob)
+                return blob
+    except OSError:
+        pass
+    blob = eng.speak(sauber)
+    if blob:
+        try:
+            _DISK_DIR.mkdir(parents=True, exist_ok=True)
+            datei.write_bytes(blob)
+        except OSError:
+            pass
+    return blob
+
+
+def warm(text: str) -> None:
+    """Startup-Vorwaermen statischer Saetze — dauerhaft gecacht."""
+    try:
+        speak_dauerhaft(text)
     except Exception:
         pass

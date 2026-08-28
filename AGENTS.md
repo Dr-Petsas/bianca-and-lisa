@@ -49,7 +49,12 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
   `compose.yml`/`Dockerfile` an der Repo-Wurzel — der stabile Umschlag,
   gegen den der Kollege SIP/Zaluma haengt.
 - Tests: `tests/test_tts_lokal.py` (Engine-Wahl, Payload, Pegel, Cache,
-  **kein** Fallback-Pfad).
+ **kein** Fallback-Pfad).
+- **Füller-Platten-Cache** (28.08.2026): `tts.speak_dauerhaft()` cached
+ statische Sätze (Füller, Begrüßungen — NIE Gesprächsantworten mit
+ Patientenbezug) als WAV unter `.data/tts-cache/` (Key: Engine+Stimme+Text).
+ Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
+ weil der Key wechselt. Cache leeren = Ordner löschen.
 
 ## Lisa zuerst
 

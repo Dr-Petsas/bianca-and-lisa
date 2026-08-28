@@ -112,15 +112,15 @@ class Dienst:
         return url, round(time.perf_counter() - t0, 2)
 
     # ---- Füller gegen die Totzeit ------------------------------------------
-    # Die Audios werden beim Start einmal gerendert und bleiben liegen —
-    # abspielen kostet danach null Zeit.
+    # Die Audios kommen aus dem Platten-Cache (.data/tts-cache) — nur beim
+    # allerersten Start (oder nach Stimmen-/Engine-Wechsel) wird synthetisiert.
 
     def filler_vorbereiten(self) -> None:
         if not tts.bereit():
             return
         for text in filler.alle_saetze():
             try:
-                url = self.audio_legen(tts.engine().speak(text))
+                url = self.audio_legen(tts.speak_dauerhaft(text))
                 if url:
                     self.filler_urls[text] = url
             except Exception as e:

@@ -117,6 +117,36 @@ def test_aussprache_umschrift_auch_lokal():
     _mit_lokal(fake, lauf)
 
 
+def test_dauerhaft_cache_ueberlebt_neustart(tmp_path=None):
+    """Fueller werden EINMAL synthetisiert; nach Prozess-Neustart (RAM-Cache
+    leer) kommen sie von der Platte — kein zweiter /speak-Aufruf."""
+    import tempfile
+    from pathlib import Path
+
+    pcm = (12000).to_bytes(2, "little", signed=True) * 8
+    fake = _FakeLokal(_Antwort(200, pcm))
+
+    def lauf():
+        with tempfile.TemporaryDirectory() as d:
+            alt_dir = tts._DISK_DIR
+            tts._DISK_DIR = Path(d)
+            try:
+                a = tts.speak_dauerhaft("Einen Moment bitte.")
+                assert len(fake.aufrufe) == 1 and a[:4] == b"RIFF"
+                dateien = list(Path(d).glob("*.wav"))
+                assert len(dateien) == 1, "Blob liegt als WAV auf der Platte"
+                # Neustart simulieren: RAM-Cache weg, Platte bleibt.
+                tts._CACHE.clear()
+                tts._CACHE_ORD.clear()
+                b = tts.speak_dauerhaft("Einen Moment bitte.")
+                assert b == a, "identisches Audio von der Platte"
+                assert len(fake.aufrufe) == 1, "KEINE zweite Synthese nach Neustart"
+            finally:
+                tts._DISK_DIR = alt_dir
+
+    _mit_lokal(fake, lauf)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_"):
