@@ -50,9 +50,18 @@ Gleiche Anfrage wie `/speak`, Antwort ist aber **chunked**: rohe PCM16-Stuecke
 (mono, 24 kHz), sobald sie fertig sind — erster Chunk nach wenigen hundert
 Millisekunden statt nach der kompletten Synthese. Ein Container, der diesen
 Endpoint anbietet, meldet im `/health` zusaetzlich `"stream": true`; nur dann
-nutzt der Client (`LokalTts.speak_stream`) ihn. Chatterbox hat den Endpoint
-nicht (Feld fehlt => Client bleibt beim blockenden `/speak`).
+nutzt der Client (`LokalTts.speak_stream`) ihn.
 Notaus clientseitig: `TTS_STREAM=0` in der `.env`.
+
+Beide Container streamen, aber unterschiedlich:
+
+- **CosyVoice-Turbo:** echtes Chunk-Streaming aus der Synthese
+  (`inference_zero_shot(stream=True)`) — Chunk-Kadenz bestimmt das Modell.
+- **Chatterbox (seit 28.08.2026 nachmittags):** stueckweises Streaming —
+  `schnitt.py` schneidet frueh (erste Sinneinheit bis Komma, dann Saetze),
+  jedes Stueck ist eine eigene blockierende Synthese und geht sofort raus.
+  Erster Ton ~0,8 s statt 1,2-3,5 s. Notaus serverseitig:
+  `CHATTERBOX_STREAM=0` (Health traegt dann `"stream": false`).
 
 Fehler VOR dem ersten Chunk: HTTP-Status wie bei `/speak`. Bricht der Stream
 MITTENDRIN ab, endet die Antwort einfach frueher — der Client spricht die

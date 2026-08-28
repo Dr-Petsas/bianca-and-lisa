@@ -95,7 +95,12 @@ def _erster_satz_von(text: str) -> str:
         i = m.end()
         if i >= len(text):
             return ""  # Satzende noch nicht bestätigt (Stream läuft)
-        if i < 25 or text[i] not in " \n\t":
+        # Ab 12 Zeichen darf der Satz raus: kurze Quittungen ("Einen
+        # Moment.", "Sehr gerne.") sind am Telefon der halbe Auftakt — sie
+        # 25 Zeichen lang zurückzuhalten kostete einen ganzen LLM-Satz an
+        # gefühlter Antwortzeit (28.08.2026). Winzlinge unter 12 Zeichen
+        # ("Ja.") kleben weiter am Folgesatz.
+        if i < 12 or text[i] not in " \n\t":
             continue
         if m.group() == ".":
             davor = text[: m.start()]

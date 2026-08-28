@@ -15,8 +15,10 @@ from pathlib import Path
 import torch
 import torchaudio
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+
+from schnitt import stuecke
 
 PORT = int(os.environ.get("TTS_PORT", "8100"))
 STIMMEN_DIR = Path(os.environ.get("STIMMEN_DIR", "/stimmen"))
@@ -26,6 +28,11 @@ ZIEL_RATE = 24000
 EXAGGERATION = float(os.environ.get("CHATTERBOX_EXAGGERATION", "0.5"))
 CFG_WEIGHT = float(os.environ.get("CHATTERBOX_CFG", "0.5"))
 SPRACHE = os.environ.get("TTS_SPRACHE", "de")
+# Stueckweises Streaming (28.08.2026): Chatterbox rendert blockierend, aber
+# frueh geschnittene Stuecke (schnitt.py) gehen einzeln raus — erster Ton
+# nach EINER kurzen Synthese statt nach der ganzen Aeusserung.
+# Notaus: CHATTERBOX_STREAM=0 => /health ohne stream-Flag, Client blockt.
+STREAM_AN = os.environ.get("CHATTERBOX_STREAM", "1").strip() != "0"
 
 app = FastAPI(title="tts-chatterbox")
 
@@ -156,6 +163,7 @@ def health():
         "aliase": _ALIASE,
         "device": "cuda",
         "warm": _WARM,
+        "stream": STREAM_AN,
     }
     if not ok:
         return Response(
@@ -165,8 +173,7 @@ def health():
     return body
 
 
-@app.post("/speak")
-def speak(body: SpeakIn):
+def _speak_eingang(body: SpeakIn) -> tuple[str, str]:
     if _MODEL is None:
         raise HTTPException(503, "modell laedt noch")
     text = " ".join((body.text or "").split()).strip()
@@ -176,6 +183,12 @@ def speak(body: SpeakIn):
     voice = _ALIASE.get(voice, voice)
     if voice not in _VOICES:
         raise HTTPException(400, f"stimme unbekannt: {voice}")
+    return text, voice
+
+
+@app.post("/speak")
+def speak(body: SpeakIn):
+    text, voice = _speak_eingang(body)
     t0 = time.perf_counter()
     with _LOCK:
         try:
@@ -190,6 +203,44 @@ def speak(body: SpeakIn):
         media_type="application/octet-stream",
         headers={"X-Sample-Rate": str(ZIEL_RATE), "X-Engine": "chatterbox",
                  "X-Dauer-S": f"{dauer:.2f}"},
+    )
+
+
+@app.post("/speak-stream")
+def speak_stream(body: SpeakIn):
+    """Stueckweises Streaming: Text frueh schneiden (schnitt.stuecke), jedes
+    fertige Stueck sofort raus — erster Ton nach ~0,8 s (eine kurze Synthese)
+    statt nach der kompletten Aeusserung (lange Antwort: 3-4 s, gemessen
+    28.08.2026). Kein Token-Streaming: Chatterbox kann das nicht, die
+    Stuecke sind eigenstaendige Synthesen; die Naht glaettet der Client
+    (fester Aeusserungs-Gain + 2-ms-Rampen, Docks spielen gapless)."""
+    if not STREAM_AN:
+        raise HTTPException(404, "stream aus (CHATTERBOX_STREAM=0)")
+    text, voice = _speak_eingang(body)
+
+    def erzeuger():
+        t0 = time.perf_counter()
+        erster = 0.0
+        with _LOCK:
+            for stueck in stuecke(text):
+                try:
+                    pcm = _synthese(stueck, voice)
+                except Exception as e:
+                    # Mitten im Stream gibt es keinen HTTP-Fehler mehr —
+                    # Abbruch loggen, der Client hoert das fehlende Ende.
+                    print(f"chatterbox stream-fehler: {e}", flush=True)
+                    return
+                if not erster:
+                    erster = time.perf_counter() - t0
+                yield pcm
+        dauer = time.perf_counter() - t0
+        print(f"chatterbox stream voice={voice} zeichen={len(text)} "
+              f"erster_chunk_s={erster:.2f} gesamt_s={dauer:.2f}", flush=True)
+
+    return StreamingResponse(
+        erzeuger(),
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": str(ZIEL_RATE), "X-Engine": "chatterbox"},
     )
 
 

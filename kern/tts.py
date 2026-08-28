@@ -46,6 +46,17 @@ AKTIV_SCHWELLE = 300       # |Sample| darunter = Pause/Atmen, zählt nicht zur L
 MIN_AKTIV_SAMPLES = 1200   # unter ~50 ms Sprachanteil gilt das Stück als Stille
 PCM_RATE = 24000
 
+# Häppchen-Fahrplan im Stream (28.08.2026, "dramatisch schneller"): das erste
+# Stück klein — der Anrufer hört nach dem ersten Container-Chunk sofort etwas.
+# Danach darf jedes Stück höchstens so groß werden wie alles bisher Gesendete
+# (Verdopplung) bis zur Zielgröße: Stück k wird erst fällig, wenn die Stücke
+# davor noch spielen — die Kette bleibt gapless, solange der Container
+# schneller als halbe Echtzeit rendert (CosyVoice-Turbo ~0,3, Chatterbox
+# ~0,45). Der alte feste Start bei 1,2 s hängte den ersten Ton eine knappe
+# Sekunde hinter den ersten Chunk ("kackelahm", Chef 28.08.2026).
+HAEPPCHEN_START_S = 0.5
+HAEPPCHEN_MAX_S = 3.2
+
 _CACHE: dict[str, bytes] = {}
 _CACHE_ORD: list[str] = []
 _CLIENT: httpx.Client | None = None
@@ -314,11 +325,12 @@ class LokalTts:
         sauber = _normalisieren(text)
         if not sauber:
             return
-        # Erstes Häppchen klein (schneller Sprechstart), Folgestücke gross:
-        # jede Naht zwischen zwei WAVs ist im Dock ein potenzielles
-        # Mini-Knacken — also so wenige Übergänge wie möglich.
-        min_bytes = int(1.2 * PCM_RATE) * 2
-        folge_bytes = int(3.2 * PCM_RATE) * 2
+        # Fahrplan: klein anfangen, verdoppelnd wachsen (HAEPPCHEN_START_S/
+        # HAEPPCHEN_MAX_S oben) — jede Naht ist ein potenzielles Mini-Knacken,
+        # also nur so viele Übergänge wie fürs Tempo nötig.
+        min_bytes = int(HAEPPCHEN_START_S * PCM_RATE) * 2
+        max_bytes = int(HAEPPCHEN_MAX_S * PCM_RATE) * 2
+        gesendet_bytes = 0
         gain: float | None = None
         puffer = b""
         with _lokal_client().stream(
@@ -338,7 +350,8 @@ class LokalTts:
                 # Puffer und geht dem nächsten Stück voran.
                 schnitt = (len(puffer) // 2) * 2
                 stueck, puffer = puffer[:schnitt], puffer[schnitt:]
-                min_bytes = folge_bytes
+                gesendet_bytes += len(stueck)
+                min_bytes = min(max_bytes, gesendet_bytes)
                 wav, gain = _haeppchen_wav(stueck, gain)
                 if wav:
                     yield wav

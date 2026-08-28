@@ -324,9 +324,17 @@ class Dienst:
         def vorab(satz: str) -> None:
             # Erster Satz aus dem LLM-Stream: sofort vertonen und rausgeben,
             # während das Modell den Rest schreibt — DAS drückt die gefühlte
-            # Antwortzeit unter die reine Modell-Laufzeit.
+            # Antwortzeit unter die reine Modell-Laufzeit. Kann der Container
+            # streamen, geht schon das ERSTE Teilstück des Satzes raus
+            # (~0,3-0,8 s statt komplette Satz-Synthese, 28.08.2026);
+            # gecachte Sätze bleiben der noch schnellere RAM-Treffer.
             san = sprech.sanitize(satz)
             if not san:
+                return
+            if not tts.im_cache(san) and self._stream_haeppchen(
+                san, lambda url: q.put(("vorab", url))
+            ):
+                sit["_vorabText"] = san
                 return
             url, _ = self.stimme(san)
             if url:

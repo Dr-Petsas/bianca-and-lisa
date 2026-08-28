@@ -17,17 +17,22 @@ LANG = (
 )
 
 
-def _dienst(gemerkt: list[str]) -> Dienst:
+def _dienst(gemerkt: list[str], *, stream_aus: bool = True) -> Dienst:
     d = Dienst(
         name="test",
         start_fn=lambda sit: {"text": ""},
         turn_fn=lambda sit, text, melde=None, vorab=None: {"text": LANG},
     )
     d.stimme = lambda text: (gemerkt.append(text) or f"/api/audio/{len(gemerkt)}.wav", 0.1)
-    # Hermetisch halten: tts.bereit() wuerde sonst den ECHTEN Container aus
-    # der .env befragen — laeuft dort der Turbo, streamt der Test live statt
-    # den Blocking-Pfad zu pruefen. Stream-Tests patchen bereit/engine selbst.
-    tts.bereit = lambda: False
+    # Hermetisch halten: der echte Stream-Pfad wuerde sonst den ECHTEN
+    # Container aus der .env befragen — laeuft dort ein Stream-Faehiger,
+    # streamt der Test live statt den Blocking-Pfad zu pruefen. Bewusst nur
+    # an DIESER Instanz stummgeschaltet, nicht modulglobal: das alte
+    # `tts.bereit = lambda: False` blieb nach dem Modul haengen und liess
+    # test_tts_lokal im Sammel-Lauf (lauf_alle) rot werden (28.08.2026).
+    # Stream-Tests patchen bereit/engine selbst (mit Ruecksetzung).
+    if stream_aus:
+        d._stream_haeppchen = lambda text, haeppchen: False
     return d
 
 
@@ -96,7 +101,7 @@ class _StreamEngine:
 def test_stream_faehiger_container_bekommt_die_ganze_aeusserung():
     urls: list[str] = []
     gemerkt: list[str] = []
-    d = _dienst(gemerkt)
+    d = _dienst(gemerkt, stream_aus=False)
     eng = _StreamEngine([b"RIFF1", b"RIFF2", b"RIFF3"])
     alt_engine, alt_bereit = tts.engine, tts.bereit
     tts.engine = lambda: eng
@@ -114,7 +119,7 @@ def test_stream_faehiger_container_bekommt_die_ganze_aeusserung():
 def test_stream_fehlschlag_vor_dem_ersten_haeppchen_faellt_auf_blocking():
     urls: list[str] = []
     gemerkt: list[str] = []
-    d = _dienst(gemerkt)
+    d = _dienst(gemerkt, stream_aus=False)
 
     class _Kaputt(_StreamEngine):
         def speak_stream(self, text: str):

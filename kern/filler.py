@@ -14,28 +14,30 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Laenge ist hier eine Funktion, kein Stil: ein Fueller darf die Antwort NICHT
-# überdauern, sonst wird der Zug langsamer statt schneller. ElevenLabs spricht
-# rund 19 Zeichen je Sekunde.
-MAX_VORAB = 52   # ~2,7 s — fuellt die 2 bis 4 s bis zur Antwort
+# Laenge ist hier eine Funktion, kein Stil: die Docks spielen Fueller und
+# Antwort als KETTE — ein Fueller verzoegert den echten Inhalt um seine volle
+# Laenge. Seit die Antwort selbst gestreamt nach unter einer Sekunde beginnt
+# (28.08.2026), muss der geratene Vorab-Satz KURZ sein; rund 19 Zeichen je
+# Sekunde Sprechtempo.
+MAX_VORAB = 36   # ~1,9 s — ueberbrueckt, ohne den ersten Antwort-Ton zu wuergen
 MAX_TOOL = 46    # ~2,4 s — nach dem Sprachmodell fehlt nur noch der Netz-Umlauf
 
 # Sätze, die nur vom Nachschauen sprechen — für den geratenen Fall erlaubt.
 _SUCHEN = [
-    "Hm, Moment mal, ich schaue eben in den Kalender.",
-    "Eine Sekunde bitte, ich prüfe kurz den Kalender.",
-    "Huch, ich schaue schnell, was frei ist.",
-    "Einen Augenblick — was hat der Kalender frei?",
+    "Moment, ich schaue in den Kalender.",
+    "Sekunde, ich prüfe den Kalender.",
+    "Ich schaue kurz, was frei ist.",
+    "Einen Augenblick, ich schaue nach.",
 ]
 _AKTE = [
-    "Eine Sekunde, ich suche gerade Ihren Termin.",
-    "Moment, ich hole Ihre Termine auf den Schirm.",
-    "Ganz kurz, ich schaue in Ihre Akte.",
+    "Moment, ich suche Ihren Termin.",
+    "Sekunde, ich schaue in Ihre Akte.",
+    "Ich hole eben Ihre Termine.",
 ]
 _ALLGEMEIN = [
-    "Hm, einen kleinen Moment bitte.",
-    "Eine Sekunde, ich schaue eben nach.",
-    "Ganz kurz bitte, ich bin gleich wieder da.",
+    "Einen kleinen Moment bitte.",
+    "Sekunde, ich schaue eben nach.",
+    "Ganz kurz bitte.",
 ]
 
 # Diese Sätze nennen die Handlung — nur wenn das Werkzeug wirklich läuft.

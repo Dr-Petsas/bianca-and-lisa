@@ -139,8 +139,8 @@ def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
     # Zwei Chunks à 1,2 s: erst leise (2000), dann laut (8000). Der Gain wird
     # aus dem ERSTEN sprach-aktiven Stück bestimmt und festgehalten — das
     # zweite Häppchen bekommt DENSELBEN Faktor (kein Pumpen in der Äußerung).
-    # Chunk 1 erreicht die Start-Schwelle (1,2 s) und geht sofort raus,
-    # Chunk 2 bleibt unter der Folge-Schwelle (3,2 s) und kommt als Rest-Flush.
+    # Chunk 1 liegt über der Start-Schwelle (0,5 s) und geht sofort raus,
+    # Chunk 2 erreicht die Folge-Schwelle (= bisher gesendete 1,2 s) exakt.
     n = int(1.2 * 24000)
     leise = (2000).to_bytes(2, "little", signed=True) * n
     laut = (8000).to_bytes(2, "little", signed=True) * n
@@ -159,6 +159,24 @@ def test_speak_stream_liefert_wav_haeppchen_mit_festem_gain():
         assert probe2 == int(8000 * gain), "zweites Häppchen mit DEMSELBEN Gain"
         rand = int.from_bytes(wavs[0][44:46], "little", signed=True)
         assert rand == 0, "Fade-in: erstes Sample still (kein Klick an der Naht)"
+
+    _mit_lokal(fake, lauf)
+
+
+def test_speak_stream_erstes_haeppchen_klein_dann_verdoppelnd():
+    # Fahrplan (28.08.2026): erstes Häppchen ab 0,5 s raus (schneller
+    # Sprechstart), danach darf jedes Stück höchstens auf das bisher
+    # Gesendete anwachsen — 0,6 s / 0,6 s / 1,2 s statt alles erst bei 1,2 s.
+    einzel = (3000).to_bytes(2, "little", signed=True)
+    chunk = einzel * int(0.6 * 24000)
+    fake = _FakeLokal(_Antwort(200, b""))
+    fake.stream = lambda *a, **kw: _FakeStreamAntwort(200, [chunk, chunk, chunk, chunk])
+
+    def lauf():
+        wavs = list(tts.LokalTts().speak_stream("Fahrplan-Probe."))
+        laengen = [round((len(w) - 44) / 2 / 24000, 2) for w in wavs]
+        assert laengen[0] == 0.6, f"erstes Häppchen sofort ab 0,5 s: {laengen}"
+        assert laengen == [0.6, 0.6, 1.2], f"verdoppelnd bis zur Zielgröße: {laengen}"
 
     _mit_lokal(fake, lauf)
 
