@@ -40,6 +40,9 @@ DIENST = Dienst(
     # weiterhin über melde(), sobald wirklich Netz-Zeit anfällt.
     schnell_fn=lambda sit: (sit.get("sammler") or {}).get("phase") != "gebucht",
     merke_zug=session.merke_zug,
+    # Chef 28.08.2026: eine Aeusserung = ein Audio. Stream-Schnitt und
+    # Satz-Haeppchen waren das Genuschel (Lisa und Bianca gleich).
+    ganz=True,
 )
 
 
@@ -53,6 +56,8 @@ if _JINGLE_PFAD.is_file():
 
 class StartIn(BaseModel):
     tenant: str = ""
+    phone: str = ""
+    callerPhone: str = ""
 
 
 class TurnIn(BaseModel):
@@ -94,7 +99,10 @@ def api_tenants():
 @app.post("/api/start")
 def api_start(body: StartIn):
     t = tenants.laden(body.tenant or DEFAULT_TENANT)
-    sit = session.neu(tenant_id=body.tenant or DEFAULT_TENANT)
+    sit = session.neu(
+        tenant_id=body.tenant or DEFAULT_TENANT,
+        anrufer_nummer=body.phone or body.callerPhone,
+    )
     return DIENST.json_antwort(
         sit, art="start",
         extra={"sessionId": sit["id"], "praxis": t.get("praxisName")},
@@ -188,6 +196,8 @@ def api_hangup(body: HangupIn):
         try:
             note = agent.hangup(sit)
             session.merke_zug(sit, art="hangup", note=(note or {}).get("note") or "", dryRun=bool((note or {}).get("dryRun")))
+            from kern import anruf_gedaechtnis
+            anruf_gedaechtnis.merken(sit)
         except Exception as e:
             print(f"bianca-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)

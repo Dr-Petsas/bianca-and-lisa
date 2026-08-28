@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from kern.config import DEFAULT_TENANT, TENANTS_DIR
+from kern.stt_lexikon import NACHNAMEN, PRAXIS, VORNAMEN
 
 
 def _sauber(v: Any) -> str:
@@ -38,14 +39,12 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
 
 
 def stt_keywords(tenant: dict[str, Any]) -> list[str]:
-    """Einwort-Namen fuer die STT-Nachkorrektur (Behandler des Mandanten).
+    """Hotwords fuer die STT-Nachkorrektur (Clara-V7-Stufen, ohne Marker).
 
-    Claras Fuzzy-Nachkorrektur (stt_serve/postcorrect.py) arbeitet mit
-    Einwort-Keywords ab 4 Zeichen — wir liefern die Behandler-Nachnamen
-    ("Petsas", "Nikolaou", "Patrikis"), damit Hoerfehler wie "Betsas" oder
-    "Batrikis" schon VOR dem LLM korrigiert werden (Claras Anlaut-Gruppen
-    P/B, T/D/Z ...). Bewusst KEINE Marker-Keywords (Heads-up, Teleskopkrone,
-    Kons): das Patiententelefon bleibt wie Claras Bianca ohne Phrasen-Fixes.
+    1. Behandler-Nachnamen des Mandanten (Betsas -> Petsas).
+    2. Haeufige Vornamen + Praxiswoerter (stt_lexikon) — Clara V7 schickt
+       ein ganzes Profil-Lexikon, nicht nur drei Aerzte.
+    Bewusst KEINE Marker (Heads-up, Teleskopkrone, Kons): Patiententelefon.
     """
     kandidaten: list[str] = []
     quellen: list[Any] = [tenant.get("behandler")]
@@ -56,11 +55,20 @@ def stt_keywords(tenant: dict[str, Any]) -> list[str]:
             t = tok.strip("-()")
             if len(t) >= 4 and t.lower() not in {"doktor", "prof", "med", "dent"}:
                 kandidaten.append(t[0].upper() + t[1:])
+    kandidaten.extend(VORNAMEN)
+    kandidaten.extend(NACHNAMEN)
+    kandidaten.extend(PRAXIS)
     out: list[str] = []
     for k in kandidaten:
         if k not in out:
             out.append(k)
     return out
+
+
+def kalender_liste(tenant: dict[str, Any]) -> list[dict[str, Any]]:
+    """Alle Behandler-Kalender des Mandanten, ohne Default-Rückfall."""
+    cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
+    return [c for c in cals if isinstance(c, dict) and _sauber(c.get("id"))]
 
 
 def kalender_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | None:

@@ -28,13 +28,13 @@ Dev-Default: `tenants/meddent.json`. Schreiben: `WRITE_LIVE=1`
 Shootout Chatterbox-Multilingual-V3 gegen Fun-CosyVoice3, Ziel: ElevenLabs
 ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
 
-- `tts_serve/` traegt beide Container (je eigenes Dockerfile, gemeinsamer
+- `tts_serve/` traegt die Container (je eigenes Dockerfile, gemeinsamer
   Vertrag `tts_serve/api.md`: `POST /speak {text, voice}` -> rohes PCM16
-  mono 24 kHz). Compose-Profile: **nie beide gleichzeitig** (eine GPU,
-  vLLM 8000 daneben; Chatterbox 8210, CosyVoice 8211). Blackwell-Falle:
-  Chatterbox zwingt torch nach der Modell-Installation auf cu128 zurueck —
-  Zeile nicht entfernen. Im CosyVoice-Turbo bestimmt vllm die torch-Version
-  (bringt cu128 mit), torchaudio wird im Dockerfile versionsgleich nachgezogen.
+  mono 24 kHz). Compose-Profile: **nie zwei gleichzeitig** (eine GPU,
+  vLLM 8000 daneben; Chatterbox 8210, CosyVoice 8211, Qwen3 8213).
+  Aktuell im Test: **Qwen3-TTS-12Hz-0.6B-Base** (`--profile qwen3`).
+  Blackwell-Falle: nach der Modell-Installation torch auf cu128 zurueckzwingen
+  — Zeile nicht entfernen. CosyVoice-Turbo: vllm bestimmt die torch-Version.
 - Umschalten NUR ueber `TTS_BASE` in der `.env`: gesetzt = es spricht
   AUSSCHLIESSLICH der lokale Container, **KEIN ElevenLabs-Rueckfall**
   (Chef 27.08.2026: Fehler muessen in der Testphase hoerbar sein —
@@ -65,11 +65,17 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  (Quelltext-Abgleich gegen `naechste_frage`).
 - **Lautheits-Angleichung statt Peak-Anhebung** (28.08.2026 — nicht
  rückbauen): `kern/tts.py -> pcm16_wav` zieht jede Äußerung auf dasselbe
- Sprach-RMS (`ZIEL_RMS`, anheben UND absenken, Peak-Deckel). Das alte
- Demo-Clara-Peak-Rezept passte nur für ElevenLabs-Audio; bei lokalem TTS
- sprang der Faktor hörbar zwischen den Sätzen ("Pumpen", Chef 28.08.).
+ Sprach-RMS (`ZIEL_RMS=0.22`, ~−13 dBFS wie Clara Demo/V7 + ElevenLabs
+ speaker_boost; anheben UND absenken). Gain kommt NUR aus dem RMS —
+ ein Peak-Deckel auf den Faktor hielt Qwen bei −19 dBFS (Peak 0,68 /
+ RMS 0,08). Spitzen werden NACH dem Gain auf `PEAK_DECKEL` gekappt.
  Nach Änderungen an der Pegel-Schicht: Platten-Cache leeren, sonst mischen
  sich alte und neue Lautheit. Tests: `tests/test_tts_gain.py`.
+- **Lisa und Bianca sprechen ganz** (Chef 28.08.2026, nach dem
+  Genuschel-Vorfall): beide Dienste `ganz=True` — jede Äußerung EIN
+  `/speak`, kein Stream-Schnitt, kein Satz-Split. Qwen3-0.6B meldet
+  `stream: false`; `.env` trägt `TTS_STREAM=0`. Test:
+  `test_ganz_spricht_immer_einen_block`.
 - **Satz-Häppchen + Chunk-Streaming** (28.08.2026): Lange Antworten gehen im
   Zug-Strom häppchenweise raus (`kern/dienst.py -> _vertonen`): Container mit
   `stream: true` im /health => EIN `/speak-stream`-Aufruf
@@ -148,14 +154,17 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
   (qwen-vLLM, TTS) bleibt komplett unberührt. Modell liegt als Bind-Mount
   in `stt_serve/modell/` (Kopie aus Claras `.cache/parakeet-primeline-onnx`,
   nur lesend gezogen; Quelle sonst: HF geier/deskscribe-parakeet-primeline-onnx).
-- Nachkorrektur: `stt_serve/postcorrect.py` = **KOPIE** von Claras
-  `services/stt_postcorrect.py` (Fuzzy-Hotwords, Anlaut-Gruppen P/B & T/D/Z,
-  Token-Paare, `assess_name_certainty` für Buchungs-Wachen). Kopie statt
-  Import — dieses Repo fasst Clara-Voice nie an. Phrasen-Fixes (Heads-up/
-  Teleskopkrone/Kons) sind Marker-gated; Lisa/Bianca senden keine Marker.
-- Keywords: `kern/tenants.py -> stt_keywords()` liefert die Behandler-
-  Nachnamen des Mandanten ("Petsas", "Nikolaou", "Patrikis"), `kern/stt.py`
-  schickt sie je Request mit ("Betsas" -> "Petsas" VOR dem LLM).
+- Nachkorrektur: `stt_serve/postcorrect.py` = **KOPIE** von Clara V7
+  (`Clara-Voice-dev/services/stt_postcorrect.py`): Fuzzy-Hotwords,
+  Anlaut-Gruppen P/B & T/D/Z, Token-Paare, `buchstabiertes_zusammenziehen`
+  (T-Z-A-N-N-I-S / „T wie Theodor…“), y→i, `assess_name_certainty`.
+  Zusätzlich immer an (ohne Marker): Telefon-Garbles (`welcher Tacken`→Tag,
+  Wurzelkanal, Nachmittach, Zülung→Füllung). Heads-up/Teleskop/Kons bleiben
+  Marker-gated. Kopie statt Import — Clara-Voice nie anfassen.
+- Keywords: `kern/tenants.py -> stt_keywords()` = Behandler + Lexikon
+  (`kern/stt_lexikon.py`: Vornamen, Praxiswörter, Kartei-Nachnamen). Nie
+  Heads-up/Kons/Teleskopkrone. `kern/stt.py` schickt sie je Request mit
+  und filtert Clara-V7-Atem-/Untertitel-Halluzinationen („Tschüss“ bleibt).
 - Umschalten NUR über `STT_BASE` in der `.env`: gesetzt = ALLE Züge über den
   Container, **KEIN ElevenLabs-Rückfall** (gleiches Muster wie `TTS_BASE`);
   leer = Scribe wie früher. Tests: `tests/test_stt_lokal.py`.
@@ -196,12 +205,10 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 ## Ziel-Pipeline Lisa/Bianca (Chef 28.08.2026)
 
 **Parakeet (STT, 8212) -> bewährte Guards/Wächter -> Qwen 3.6 (vLLM, 8000)
--> Chatterbox (TTS, 8210).** Alles lokal auf der 5090, die Worker (8095/8096)
-bleiben lokal auf dem Dev-Rechner. Chatterbox ist die bevorzugte Stimme
-(Chef: "vorzugsweise chatterbox"); CosyVoice-Turbo (8211) bleibt als
-gebautes Image/Profil liegen, läuft aber nicht (nie beide zugleich — eine
-GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis Lisa/Bianca
-vernünftig funktionieren.
+-> Qwen3-TTS-12Hz-0.6B-Base (8213).** Eine Äußerung = ein `/speak`, kein
+Stream-Schnitt (Genuschel 28.08.2026). Chatterbox 8210 und CosyVoice 8211
+liegen als Image, laufen nicht. Nie zwei TTS zugleich. Clara V7 und
+Demo-Clara werden NICHT angefasst, bis Lisa/Bianca vernünftig funktionieren.
 
 ## Lisa zuerst
 

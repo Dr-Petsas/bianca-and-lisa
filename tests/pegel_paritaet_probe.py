@@ -28,7 +28,7 @@ TEXTE = [
     "Einen Moment bitte.",
     "Ich schaue kurz in den Kalender.",
     "Danke.",
-    "med dent Zahnklinik, guten Tag! Mein Name ist Bianca. Was kann ich für Sie tun?",
+    "Zahnärzte im Medical Center, guten Tag! Mein Name ist Bianca. Was kann ich für Sie tun?",
     "Frei ist morgen um zehn Uhr fünfundvierzig; oder morgen um dreizehn Uhr fünfzehn. Welcher passt Ihnen?",
     "Der Termin morgen um zehn Uhr fünfundvierzig ist fest eingetragen. Die Bestätigung kommt gleich per SMS.",
 ]

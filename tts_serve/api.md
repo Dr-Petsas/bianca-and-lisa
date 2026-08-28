@@ -1,15 +1,15 @@
-# TTS-Server-Vertrag (Chatterbox- und CosyVoice-Container, 27.08.2026)
+# TTS-Server-Vertrag (Chatterbox, CosyVoice, Qwen3, 27.08.2026)
 
-Beide Container sprechen EXAKT dieselbe Schnittstelle. Lisa/Bianca kennen nur
+Alle Container sprechen EXAKT dieselbe Schnittstelle. Lisa/Bianca kennen nur
 `TTS_BASE` — welches Modell dahinter antwortet, entscheidet allein, welcher
-Container laeuft. Nie beide gleichzeitig starten (eine GPU, vLLM laeuft daneben).
+Container laeuft. Nie zwei TTS gleichzeitig starten (eine GPU, vLLM daneben).
 
 ## GET /health
 
 ```json
 {
   "ok": true,
-  "engine": "chatterbox",          // oder "cosyvoice"
+  "engine": "chatterbox",          // oder "cosyvoice" / "qwen3"
   "model": "Chatterbox-Multilingual-V3",
   "voices": ["bianca", "lisa"],    // gefundene Referenzen in /stimmen
   "device": "cuda",
@@ -53,7 +53,11 @@ Endpoint anbietet, meldet im `/health` zusaetzlich `"stream": true`; nur dann
 nutzt der Client (`LokalTts.speak_stream`) ihn.
 Notaus clientseitig: `TTS_STREAM=0` in der `.env`.
 
-Beide Container streamen, aber unterschiedlich:
+**Qwen3-0.6B-Base (Port 8213, seit 28.08.2026):** `stream: false`. Eine
+Aeusserung = ein `/speak`. Client-Haeppchen und Server-Schnitt waren das
+Genuschel — der Container bietet `/speak-stream` bewusst nicht an.
+
+Chatterbox und CosyVoice streamen, aber unterschiedlich:
 
 - **CosyVoice-Turbo:** echtes Chunk-Streaming aus der Synthese
   (`inference_zero_shot(stream=True)`) — Chunk-Kadenz bestimmt das Modell.

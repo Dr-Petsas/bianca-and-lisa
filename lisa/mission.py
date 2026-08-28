@@ -12,6 +12,17 @@ TERMIN_WORT_RE = re.compile(
 )
 
 
+def praxis_an(praxis: str) -> str:
+    """„von der Demo-Praxis“ / „von Zahnärzte im Medical Center“."""
+    haus = " ".join(str(praxis or "").split()).strip()
+    if not haus:
+        return ""
+    low = haus.casefold()
+    if "zahnärzte" in low or "zahnaerzte" in low:
+        return f"von {haus}"
+    return f"von der {haus}"
+
+
 def rahme_auftrag(prompt: str) -> str:
     text = " ".join(str(prompt or "").split()).strip()
     if not text:
@@ -43,7 +54,7 @@ def identitaets_rahmen(praxis: str, behandler: str = "") -> str:
     return (
         f'\n\n[Identitaet fuer dieses Gespraech, Regieanweisung — NICHT vorlesen: '
         f'Du rufst fuer die Praxis "{praxis}" an. Stelle dich mit GENAU dieser '
-        f'Praxis vor ("hier ist Lisa von der {praxis}"). {arzt_teil} '
+        f'Praxis vor ("hier ist Lisa {praxis_an(praxis)}"). {arzt_teil} '
         f"Nenne NIE eine andere Praxis und keinen anderen Arzt, auch wenn im "
         f"Prompt ein Beispiel mit einem anderen Namen steht — dieser Auftrag gilt.]"
     )

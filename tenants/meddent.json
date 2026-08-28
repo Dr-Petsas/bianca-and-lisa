@@ -1,12 +1,23 @@
 {
   "clientId": "MEe4ZQHEzOPzLcexyhdT",
-  "praxisName": "med dent Zahnklinik",
+  "praxisName": "Zahnärzte im Medical Center",
   "behandler": "Dr. Petsas",
   "locationId": "VjdvbRQHH8oTId4f0GiX",
-  "locationName": "med dent Zahnklinik (Düsseldorf)",
-  "telefon": "",
+  "locationName": "Zahnärzte im Medical Center (Düsseldorf)",
+  "telefon": "0211 30293029",
   "sprache": "de",
+  "abschluss": "Sie bekommen eine SMS zur Bestätigung. Parkplätze finden Sie in der Tiefgarage des Medical Center.",
   "defaultCalendarId": "zex5bmv5jfIHWVW6zHbg",
+  "officeHours": {
+    "mon": [["08:00", "18:00"]],
+    "tue": [["08:00", "18:00"]],
+    "wed": [["08:00", "18:00"]],
+    "thu": [["08:00", "18:00"]],
+    "fri": [["08:00", "16:00"]],
+    "sat": [],
+    "sun": []
+  },
+  "closedDates": [],
   "calendars": [
     { "id": "GVyoyXqCYof1QrGaNNnG", "name": "Dr. Nikolaou" },
     { "id": "RHYdoQFD7oAhqIepLzC2", "name": "Dr. Patrikis" },
@@ -21,14 +32,25 @@
       "Narval-Schiene gegen Schnarchen und Schlafapnoe: für gesetzlich Versicherte kostenfrei bis auf einen Beitrag von rund 80 Euro für das digitale Scannen."
     ],
     "preiseSonst": "Das müssen Sie direkt mit Ihrem Zahnarzt besprechen.",
-    "anfahrt": "Die MedDent Zahnklinik liegt in Düsseldorf-Grafenberg. Wenn man vom Hauptbahnhof kommt und auf der Grafenberger Allee Richtung stadtauswärts fährt, sieht man nach dem BMW-Autohaus links die Luise-Rainer-Straße als Seitenstraße. Das ist direkt auf Höhe des Arbeitsamts. Dort befindet sich das Medical Center — der Pförtner erklärt Ihnen dann, wie Sie in Haus B, in die zweite Etage zur Praxis gelangen.",
+    "adresse": "Wir sind in der Luise-Rainer-Straße sechs bis zehn in Düsseldorf-Grafenberg, im Medical Center, Haus B, zweite Etage. Früher war die Praxis in der Oststraße unter dem Namen CeraWhite Zahnärzte.",
+    "anfahrt": "Die Zahnärzte im Medical Center liegen in Düsseldorf-Grafenberg. Wenn man vom Hauptbahnhof kommt und auf der Grafenberger Allee Richtung stadtauswärts fährt, sieht man nach dem BMW-Autohaus links die Luise-Rainer-Straße als Seitenstraße. Das ist direkt auf Höhe des Arbeitsamts. Dort befindet sich das Medical Center — der Pförtner erklärt Ihnen dann, wie Sie in Haus B, in die zweite Etage zur Praxis gelangen.",
     "oepnv": "Sie erreichen uns mit der U zweiundsiebzig, U dreiundsiebzig oder U dreiundachtzig sowie der Linie siebenhundertneun — Haltestellen Schlüterstraße und Arbeitsamt.",
-    "hinweise": []
+    "parken": "Im Medical Center gibt es eine eigene Tiefgarage mit über dreihundert Stellplätzen für Kurzparker mit Termin. Die Einfahrt liegt am Verkehrskreisel vor dem Air-Liquide-Gebäude. Parkgebühren zahlt man vor Ort; alternativ geht das Bezahlen über die App APCOA FLOW.",
+    "kontakt": "Die Telefonnummer ist 0211 30293029. Die E-Mail lautet info@med-dent.clinic. Die Website ist www.med-dent.clinic — mit c am Ende. Online kann man dort auch selbst einen Termin buchen.",
+    "oeffnung": "Montag bis Donnerstag von acht bis achtzehn Uhr, Freitag von acht bis sechzehn Uhr. Samstag und Sonntag geschlossen.",
+    "hinweise": [
+      "Ob Zahnersatz oder eine Schiene fertig ist, weißt du NICHT — der Patient wird angerufen, sobald es soweit ist.",
+      "Über laufende Behandlungen oder Bearbeitungsstände hast du keine Informationen. Verweise auf den jeweiligen Zahnarzt.",
+      "Die drei Zahnärzte Doktor Petsas, Doktor Patrikis und Doktor Nikolaou nennst du NUR, wenn ausdrücklich danach gefragt wird. Beim Terminwunsch nach dem Zahnarzt fragen — ohne die Namen aufzuzählen und ohne zu fragen, ob es egal ist.",
+      "Narval-, Resmed- oder Schnarchschienen und das Schlaflabor erwähnst du NUR, wenn der Anrufer selbst davon spricht. Dann braucht es einen Termin für einen Scan der Zähne.",
+      "Lisa ruft für Doktor Petsas ausgehend an. Ruft jemand zurück, weil Lisa ihn nicht erreicht hat: vermutlich wollte Doktor Petsas einen Kontroll- oder Folgetermin abstimmen."
+    ]
   },
   "visitMotives": [
     { "id": "F4EAa6O5qPo4n01AWD4Z", "name": "IMP Besprechung", "duration": 30 },
     { "id": "RcgGY82C3sBIxsXY3kbv", "name": "KB Besprechung", "duration": 15 },
     { "id": "6QHfsWALBRSyzBBbVCto", "name": "KCH akute Beschwerden/Notfall", "duration": 30 },
+    { "id": "qocQp8zmeMleYON7ZpPS", "name": "KCH Endo klein", "duration": 40 },
     { "id": "Cyy90WyFR1TcUzp8W7ED", "name": "KCH Erstuntersuchung/Neupatient", "duration": 30 },
     { "id": "qOQCI4vV2EhQVmKmRqdu", "name": "KCH Kontrolluntersuchung", "duration": 15 },
     { "id": "eYBEmjfzEExWpzBFkR1q", "name": "KFO Besprechung", "duration": 30 },
@@ -36,6 +58,7 @@
     { "id": "ltzsbKhy03hLvuF4yOWX", "name": "PRO professionelle Zahnreinigung", "duration": 30 },
     { "id": "iZvtXtkhlt4llWZiv7T1", "name": "PRO Zahnaufhellung", "duration": 45 },
     { "id": "SfSgpj8SeCSmwnAotqv4", "name": "SLM Besprechung", "duration": 15 },
-    { "id": "8QCwEyR3Jyao63PmJ7vo", "name": "ZE Besprechung", "duration": 25 }
+    { "id": "8QCwEyR3Jyao63PmJ7vo", "name": "ZE Besprechung", "duration": 25 },
+    { "id": "rOM5UKvEY4ykLd8bH1A0", "name": "ZE Reparatur klein", "duration": 45 }
   ]
 }

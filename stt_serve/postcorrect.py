@@ -1,6 +1,6 @@
 """Fuzzy-Nachkorrektur von STT-Transkripten gegen eine Hotword-Liste.
 
-KOPIE von F:\\Clara-Voice\\services\\stt_postcorrect.py (Stand 28.08.2026) —
+KOPIE von F:\\Clara-Voice-dev\\services\\stt_postcorrect.py (Clara V7, 28.08.2026) —
 Claras seit Monaten bewaehrte Telefon-Strecke, uebernommen fuer Lisa/Bianca
 (Chef 28.08.2026: "alle besten und bewaehrtesten Entwicklungsstufen von
 Clara V7 und Demo Clara"). Bewusst Kopie statt Import: dieses Repo darf
@@ -41,6 +41,93 @@ _STOPWORDS = {
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\-]+")
+
+# ---------------------------------------------------------------------------
+# Buchstabiertes Zuhoeren (Clara V7, Vorfall 16.08.2026) — Kopie.
+# "T-Z-A-N-N-I-S" / "T wie Theodor, Z wie Zeppelin, …" wird ZUERST zum
+# Namen, danach greift die Fuzzy-Korrektur gegen die Keyword-Liste.
+# ---------------------------------------------------------------------------
+_BUCHSTABIERTAFEL: dict[str, str] = {
+    "anton": "A", "ärger": "Ä", "aerger": "Ä", "berta": "B", "bertha": "B",
+    "cäsar": "C", "caesar": "C", "cesar": "C", "charlotte": "CH",
+    "david": "D", "dora": "D", "emil": "E", "friedrich": "F", "fritz": "F",
+    "gustav": "G", "heinrich": "H", "ida": "I", "julius": "J",
+    "kaufmann": "K", "konrad": "K", "ludwig": "L", "martha": "M",
+    "marta": "M", "nordpol": "N", "nathan": "N", "otto": "O",
+    "ökonom": "Ö", "oekonom": "Ö", "paula": "P", "quelle": "Q",
+    "richard": "R", "rudolf": "R", "samuel": "S", "siegfried": "S",
+    "schule": "SCH", "theodor": "T", "toni": "T", "ulrich": "U",
+    "übermut": "Ü", "uebermut": "Ü", "viktor": "V", "victor": "V",
+    "wilhelm": "W", "xanthippe": "X", "xaver": "X", "ypsilon": "Y",
+    "zacharias": "Z", "zeppelin": "Z", "eszett": "ß", "esszett": "ß",
+}
+_BUCHSTABENKETTE_RE = re.compile(
+    r"\b(?:[A-ZÄÖÜ](?:\s*[-–.]\s*|\s+)){3,}[A-ZÄÖÜ]\b")
+_BUCHSTABIER_MIN = 3
+_WIE_GLIED = r"[A-Za-zÄÖÜäöü]\s+wie\s+(?:in\s+)?[A-Za-zÄÖÜäöüß]+"
+_WIE_KETTE_RE = re.compile(
+    rf"\b{_WIE_GLIED}(?:\s*[,;]?\s*(?:und\s+)?{_WIE_GLIED})"
+    rf"{{{_BUCHSTABIER_MIN - 1},}}",
+    re.IGNORECASE)
+_WIE_BUCHSTABE_RE = re.compile(r"\b([A-Za-zÄÖÜäöü])\s+wie\s", re.IGNORECASE)
+
+
+def _kette_zusammenziehen(m: "re.Match[str]") -> str:
+    return "".join(re.findall(r"[A-ZÄÖÜ]", m.group(0))).title()
+
+
+def _wie_kette_zusammenziehen(m: "re.Match[str]") -> str:
+    return "".join(_WIE_BUCHSTABE_RE.findall(m.group(0))).upper().title()
+
+
+def buchstabiertes_zusammenziehen(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Buchstabierte Namen zu einem Wort: T-Z-A-N-N-I-S / T wie Theodor …"""
+    if not text:
+        return text, []
+    ersetzungen: list[tuple[str, str]] = []
+    neu = _WIE_KETTE_RE.sub(
+        lambda m: (ersetzungen.append((m.group(0), _wie_kette_zusammenziehen(m)))
+                   or _wie_kette_zusammenziehen(m)),
+        text)
+    neu = _BUCHSTABENKETTE_RE.sub(
+        lambda m: (ersetzungen.append((m.group(0), _kette_zusammenziehen(m)))
+                   or _kette_zusammenziehen(m)),
+        neu)
+    treffer = list(re.finditer(r"[A-Za-zÄÖÜäöüß]+", neu))
+    laeufe: list[tuple[int, int]] = []
+    start: int | None = None
+    for i, m in enumerate(treffer):
+        if m.group().lower() in _BUCHSTABIERTAFEL:
+            if start is None:
+                start = i
+        else:
+            if start is not None and i - start >= _BUCHSTABIER_MIN:
+                laeufe.append((start, i))
+            start = None
+    if start is not None and len(treffer) - start >= _BUCHSTABIER_MIN:
+        laeufe.append((start, len(treffer)))
+    for von, bis in reversed(laeufe):
+        a, b = treffer[von].start(), treffer[bis - 1].end()
+        wort = "".join(_BUCHSTABIERTAFEL[treffer[i].group().lower()]
+                       for i in range(von, bis)).title()
+        ersetzungen.append((neu[a:b], wort))
+        neu = neu[:a] + wort + neu[b:]
+    return neu, ersetzungen
+
+
+# Patiententelefon (immer an, ohne Marker): STT-Garbles aus echten Bianca-
+# Gespraechen. Heads-up/Teleskop/Kons bleiben marker-gated wie bei Clara.
+_TELEFON_PHRASE_FIXES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bwelcher\s+ta(?:cken|gen|ck|ggen)\b", re.IGNORECASE), "welcher Tag"),
+    (re.compile(r"\bwurzelkanal(?:behandlung)?\b", re.IGNORECASE), "Wurzelbehandlung"),
+    (re.compile(r"\bnachmittach\b", re.IGNORECASE), "Nachmittag"),
+    (re.compile(r"\bvormittach\b", re.IGNORECASE), "Vormittag"),
+    # Clara-V7-Dental-Garbles, die Patienten sagen — ohne Teleskop/Kons-Marker.
+    (re.compile(r"\bz[uü]lung\b", re.IGNORECASE), "Füllung"),
+    (re.compile(r"\bcovidus\b", re.IGNORECASE), "Karies"),
+    (re.compile(r"\bkarie\b", re.IGNORECASE), "Karies"),
+    (re.compile(r"\bf2ud\b", re.IGNORECASE), "Füllung MOD"),
+]
 
 # Deterministische PHRASEN-Korrekturen (Clara 07.07.2026): Parakeet hoert das
 # Kommando "Heads up" regelmaessig als "Hands up" / "Herz up" / "Hat's up" /
@@ -114,7 +201,8 @@ _INITIAL_CONFUSE = _build_initial_confuse()
 
 
 def _norm(s: str) -> str:
-    return re.sub(r"[^a-zäöüß]", "", s.lower())
+    # y klingt im Deutschen wie i (Hayla/Haila, Meyer/Meier) — Clara V7.
+    return re.sub(r"[^a-zäöüß]", "", s.lower()).replace("y", "i")
 
 
 def _ratio(a: str, b: str) -> float:
@@ -219,9 +307,19 @@ def correct_transcript(text: str, keywords: list[str]) -> tuple[str, list[tuple[
     werden ignoriert; benachbarte Token-Paare werden zusaetzlich als
     zusammengezogenes Wort geprueft (STT zerhackt lange Namen gern).
     """
-    if not text or not keywords:
+    if not text:
         return text, []
-    replacements_pre: list[tuple[str, str]] = []
+    # Buchstabiertes zuerst — auch ohne Keywords (Clara V7; dort hing das
+    # an keywords und blieb bei leerer Liste stumm).
+    text, replacements_pre = buchstabiertes_zusammenziehen(text)
+    for pat, repl in _TELEFON_PHRASE_FIXES:
+        def _tel_sub(m: "re.Match[str]", _repl=repl) -> str:
+            if _norm(m.group(0)) != _norm(_repl):
+                replacements_pre.append((m.group(0), _repl))
+            return _repl
+        text = pat.sub(_tel_sub, text)
+    if not keywords:
+        return text, replacements_pre
     marker_norms = {_norm(k) for k in keywords if k}
     if marker_norms & _PHRASE_MARKERS:
         for pat, repl in _PHRASE_FIXES:

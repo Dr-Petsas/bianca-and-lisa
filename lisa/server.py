@@ -31,6 +31,9 @@ DIENST = Dienst(
     # sofort — Vorab-Füller wären dort falsch.
     schnell_fn=lambda sit: sit.get("idCheck") not in (None, "", "fertig"),
     merke_zug=session.merke_zug,
+    # Chef 28.08.2026: eine Aeusserung = ein Audio. Stream-Schnitt und
+    # Satz-Haeppchen waren das Genuschel. Qwen3-0.6B spricht blocking.
+    ganz=True,
 )
 
 

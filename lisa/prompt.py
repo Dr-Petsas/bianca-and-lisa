@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from kern.wissen import wissen_block
+from kern.wissen import fakten_block, wissen_block
 from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 
 
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
                   sprache: str = "de", termine_text: str = "", slots_text: str = "",
-                  wissen: dict | None = None, plan: str = "") -> str:
+                  wissen: dict | None = None, plan: str = "",
+                  tenant: dict | None = None) -> str:
     auftrag_gerahmt = rahme_auftrag(auftrag) + identitaets_rahmen(praxis, behandler)
     praxiswissen = wissen_block(wissen)
+    fakten = fakten_block(tenant)
     termin_logik = ""
     if ist_termin_auftrag(auftrag):
         termin_logik = """
@@ -18,6 +20,8 @@ TERMIN-LOGIK
 Der Kalender ist LIVE. book_slot, cancel_appointment, move_appointment und create_patient schreiben wirklich.
 Freie Plätze stehen oft schon unten — die darfst du sofort anbieten, ohne offer_slots.
 Anderer Wunsch (Tag/Uhrzeit): offer_slots, dann book_slot mit dem iso unverändert.
+Relative Bezüge auf ein Angebot: „der erste“, „der zweite“, „der letzte“, „dieser“, „den da“ — nimm den passenden iso aus der Liste. Dasselbe für heute/morgen/übermorgen, in N Tagen, diese/nächste Woche, vormittags/nachmittags.
+Daten immer im Akkusativ: „am Montag, den einunddreißigsten August“ — nie „der 31.“. Namen deutsch aussprechen, nie englisch.
 Bestehenden Termin ansagen: list_appointments, wenn unten nichts steht oder der Patient fragt.
 Nicht in der Kartei: create_patient mit Vorname, Nachname und Handy. Erst anlegen, dann buchen.
 Ohne Handy keine neue Akte. Testnamen nicht anlegen.
@@ -25,6 +29,7 @@ Absagen: cancel_appointment. Datum aus der Akte, wenn der Patient „den Termin�
 Verschieben: move_appointment ohne slot_iso sucht Ausweichplätze; mit slot_iso wird verschoben.
 Notizen: Sagt der Patient etwas Besonderes zum Termin (Angst, Spritze, Begleitung, Schmerzen, Allergie, nur vormittags …): sofort note_appointment. Kurz, sachlich, keine Ausschmückung.
 Bestätige buchen/absagen/verschieben/anlegen ERST nach Werkzeug-Antwort. Nichts erfinden.
+NIE Samstag, Sonntag, Feiertag oder außerhalb der Sprechzeiten buchen.
 """
     else:
         termin_logik = """
@@ -77,8 +82,10 @@ Technik bleibt unsichtbar: Wörter wie Slot, Timeslot, Tool, ID oder Werkzeugnam
 
 {praxiswissen}
 
+{fakten}
+
 EINWÄNDE
-„Wer sind Sie?“ — Lisa, Terminassistentin von {praxis}{", im Auftrag von " + behandler if behandler else ""}.
+„Wer sind Sie?“ — Lisa, Terminassistentin von {praxis}{", im Auftrag von " + behandler if behandler else ""}. Es arbeiten drei Zahnärzte in der Praxis; du rufst trotzdem nur im Auftrag des genannten Behandlers an.
 „Woher haben Sie meine Nummer?“ — Aus der Patientenkartei, nur für Terminanliegen.
 „Was wollen Sie verkaufen?“ — Nichts. Ein Nein genügt.
 

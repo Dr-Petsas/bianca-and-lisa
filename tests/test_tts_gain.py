@@ -56,6 +56,22 @@ def test_peak_deckel_verhindert_klirren():
     assert spitze <= int(PEAK_DECKEL * 32767.0) + 1, "Peak nach Gain über dem Deckel"
 
 
+def test_hohe_spitze_haelt_den_satz_nicht_leise():
+    """Qwen: Peak 0,68 / RMS 0,08 — der alte Peak-Deckel auf den Gain
+    liess Clara-Lautheit nicht zu. Der Sprachkörper muss auf ZIEL_RMS."""
+    n = MIN_AKTIV_SAMPLES * 2
+    grund = bytearray(_block(2000, n))
+    grund[0:2] = (22000).to_bytes(2, "little", signed=True)
+    wav = pcm16_wav(bytes(grund), rate=24000)
+    # Mitte des Körpers, nicht die Spitze. RMS zählt die eine Spitze mit,
+    # Gain liegt deshalb knapp unter dem reinen 2000-Satz.
+    koerper = _probe(wav, offset=44 + (n // 2) * 2)
+    rms = ((22000.0 ** 2 + (n - 1) * 2000.0 ** 2) / n) ** 0.5
+    erwartet = int(2000 * min(MAX_GAIN, ZIEL_RMS * 32767.0 / rms))
+    assert abs(koerper - erwartet) <= 2, (koerper, erwartet)
+    assert _probe(wav) <= int(PEAK_DECKEL * 32767.0) + 1
+
+
 def test_gain_grenzen():
     # Extrem leise Sprache: Faktor endet bei MAX_GAIN, nicht darüber.
     sehr_leise = _block(400, MIN_AKTIV_SAMPLES * 2)

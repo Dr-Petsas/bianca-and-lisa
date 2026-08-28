@@ -51,6 +51,13 @@ def test_sanitize_deutsches_datum():
     # Ziffer vor Monatsnamen (so schreibt das LLM gern):
     s = sanitize("Frei am Donnerstag, den 14. November, um 9:30.", heute=HEUTE)
     assert s == "Frei am Donnerstag, den vierzehnten November, um neun Uhr dreißig."
+    # Nominativ nach Wochentag (live 28.08.2026: „am Montag, der 31.8.“):
+    s = sanitize("Passt Ihnen am Montag, der 31.8.?", heute=HEUTE)
+    assert "den einunddreißigsten August" in s
+    assert "der einunddreißigste" not in s
+    assert "der 31" not in s
+    s = sanitize("am Dienstag, der dritte September", heute=HEUTE)
+    assert s == "am Dienstag, den dritten September"
 
 
 def test_sanitize_technik_und_regie():

@@ -4,7 +4,7 @@ from lisa import identitaet
 from lisa.greeting import begruessung
 
 PATIENT = {"name": "Levi Tzannis", "firstName": "Levi", "lastName": "Tzannis", "gender": "m"}
-TENANT = {"praxisName": "med dent Zahnklinik", "behandler": "Dr. Petsas"}
+TENANT = {"praxisName": "Zahnärzte im Medical Center", "behandler": "Dr. Petsas"}
 
 
 def _sitzung(anliegen: str = "Ich rufe im Auftrag von Dr. Petsas an, um Ihnen einen Kontrolltermin anzubieten. Passt Ihnen vormittags oder nachmittags besser?") -> dict:
@@ -18,9 +18,10 @@ def _sitzung(anliegen: str = "Ich rufe im Auftrag von Dr. Petsas an, um Ihnen ei
 
 
 def test_begruessung_fragt_nach_der_person():
-    text = begruessung("med dent Zahnklinik", "Kontrolltermin anbieten",
+    text = begruessung("Zahnärzte im Medical Center", "Kontrolltermin anbieten",
                        patient=PATIENT, behandler="Dr. Petsas")
-    assert text == "Guten Tag, hier ist Lisa von der med dent Zahnklinik. Spreche ich mit Levi Tzannis?"
+    assert text == ("Guten Tag, hier ist Lisa von Zahnärzte im Medical Center. "
+                    "Spreche ich mit Levi Tzannis?")
     # Anliegen und Behandler kommen NICHT vor der Bestaetigung.
     assert "Auftrag" not in text
     assert "Kontrolltermin" not in text
@@ -28,7 +29,7 @@ def test_begruessung_fragt_nach_der_person():
 
 def test_ohne_vollen_namen_alter_ablauf():
     assert not identitaet.moeglich({"name": "Tzannis"})
-    text = begruessung("med dent Zahnklinik", "Kontrolltermin anbieten",
+    text = begruessung("Zahnärzte im Medical Center", "Kontrolltermin anbieten",
                        patient={"name": "Tzannis", "lastName": "Tzannis", "gender": "m"},
                        behandler="Dr. Petsas")
     assert "Spreche ich mit" not in text

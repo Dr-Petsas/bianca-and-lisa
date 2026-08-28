@@ -17,6 +17,7 @@ from typing import Any
 
 from kern import calendar, llm, notes
 from kern.sitzung import merke_tool
+from kern.slots import slot_wahl
 from kern.werkzeuge import TOOLS
 
 
@@ -26,6 +27,32 @@ def _s(v: Any) -> str:
 
 def _wer(sit: dict) -> str:
     return (_s(sit.get("stimme")) or "Lisa").lower()
+
+
+def _letzter_nutzersatz(sit: dict) -> str:
+    for m in reversed(sit.get("messages") or []):
+        if _s(m.get("role")) == "user":
+            return _s(m.get("content"))
+    return ""
+
+
+def _iso_schaerfen(sit: dict, gemeldet: str) -> str:
+    """Bezug ('der erste', 'dieser') auf einen echten angebotenen ISO-Slot ziehen.
+
+    Hat das Modell schon einen der angebotenen isos genannt, bleibt der.
+    Sonst entscheidet der letzte Nutzersatz — derselbe Deuter wie Biancas
+    Maschine, damit Lisa dieselben relativen Bezüge versteht.
+    """
+    offered = [x for x in (sit.get("offered") or []) if isinstance(x, dict) and x.get("iso")]
+    if not offered:
+        return gemeldet
+    g = _s(gemeldet)
+    for x in offered:
+        iso = _s(x.get("iso"))
+        if g and (g == iso or iso.startswith(g[:16]) or g.startswith(iso[:16])):
+            return iso
+    user = _letzter_nutzersatz(sit)
+    return slot_wahl(user, offered) or slot_wahl(g, offered) or g
 
 
 def run_tool(sit: dict, name: str, args: dict) -> dict[str, Any]:
@@ -48,7 +75,7 @@ def run_tool(sit: dict, name: str, args: dict) -> dict[str, Any]:
             gender=_s(args.get("gender")),
         )
     if name == "book_slot":
-        return calendar.book_slot(tenant, ctx, slot_iso=_s(args.get("slot_iso")))
+        return calendar.book_slot(tenant, ctx, slot_iso=_iso_schaerfen(sit, _s(args.get("slot_iso"))))
     if name == "cancel_appointment":
         return calendar.cancel_appointment(tenant, ctx, date=_s(args.get("date")))
     if name == "move_appointment":
@@ -182,6 +209,9 @@ def zusage_ohne_werkzeug(text: str) -> bool:
 
 def gemeinter_slot(text: str, offered: list) -> str:
     """Welchen der angebotenen Termine meint der Satz?"""
+    iso = slot_wahl(text, offered)
+    if iso:
+        return iso
     t = _s(text).lower()
     for x in offered:
         gesagt = _s(x.get("spoken")).lower()

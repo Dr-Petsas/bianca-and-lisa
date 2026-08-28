@@ -8,7 +8,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env", override=False)
+# .env ist die Quelle — sonst bleibt ein alter setx-TTS_BASE=8210
+# im Prozess stehen, und nach dem Qwen-Umzug kommt kein Audio.
+load_dotenv(ROOT / ".env", override=True)
 
 
 def _peek_key(path: Path, name: str) -> str:
@@ -73,7 +75,7 @@ TTS_STREAM = _b("TTS_STREAM", True)
 # der Bianca-Prozess setzt sich beim Start selbst auf "bianca".
 TTS_VOICE = _s("TTS_VOICE")
 ELEVENLABS_VOICE_ID = _s("ELEVENLABS_VOICE_ID", "1iF3vHdwHKuVKSPDK23Z")
-# Biancas Stimme = die des laufenden ElevenLabs-Agenten "Med Dent Zahnklinik"
+# Biancas Stimme = die des laufenden ElevenLabs-Agenten (Zahnärzte im Medical Center)
 # (BIANCA_AGENT_ID, abgefragt 27.08.2026) — dieselbe Stimme wie Clara.
 BIANCA_VOICE_ID = _s("BIANCA_VOICE_ID", "cgSgspJ2msm6clMCkdW9")
 ELEVENLABS_TTS_MODEL = _s("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")

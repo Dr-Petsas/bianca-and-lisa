@@ -16,7 +16,8 @@ from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
 from kern import gespraech, llm, stille, wiederholung, zuege
 from kern import wissen as kern_wissen
-from kern.calendar import slots_zeile
+from kern import zeiten
+from kern.calendar import slots_zeile, abwesen_antwort
 
 
 def _s(v: Any) -> str:
@@ -363,6 +364,7 @@ def _offene_frage(sit: dict) -> str:
 
 def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
     tenant = sit["tenant"]
+    mem = sit.get("letzterAnruf") or {}
     return system_prompt(
         praxis=_s(tenant.get("praxisName")),
         behandler=_s(tenant.get("behandler")),
@@ -372,6 +374,8 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
         slots_text=slots_zeile(sit.get("offered") or []),
         wissen=tenant.get("wissen"),
         plan=plan,
+        tenant=tenant,
+        letzter_anruf=_s(mem.get("prompt")),
     )
 
 
@@ -395,6 +399,35 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if not msgs:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
+
+    # 0) Datumsfrage — nie das Modell raten lassen (Vorfall 28.08.2026:
+    # "Welcher Tag es heute?" -> "Mittwoch, 25. Mai 2025").
+    if kern_wissen.ist_heute_frage(text_in):
+        text = kern_wissen.heute_antwort()
+        msgs.append({"role": "assistant", "content": text})
+        sit["messages"] = msgs
+        return {"text": text, "book": None}
+
+    # 0b) Geschlossen / Öffnungszeiten / Abwesenheit — nie das Modell raten lassen.
+    if zeiten.ist_offen_frage(text_in):
+        text = zeiten.offen_antwort(text_in, sit.get("tenant"))
+        msgs.append({"role": "assistant", "content": text})
+        sit["messages"] = msgs
+        return {"text": text, "book": None}
+    if zeiten.ist_abwesen_frage(text_in):
+        from bianca import arzt as arztmod
+        s = sit.get("sammler") or {}
+        gedeutet = arztmod.deute(text_in, sit.get("tenant") or {})
+        arzt = (s.get("arzt") or {}) if isinstance(s.get("arzt"), dict) else {}
+        text = abwesen_antwort(
+            sit.get("tenant") or {},
+            text_in,
+            calendar_id=_s((gedeutet or {}).get("calendarId") or arzt.get("calendarId")),
+            doctor=_s((gedeutet or {}).get("calendarName") or arzt.get("calendarName")),
+        )
+        msgs.append({"role": "assistant", "content": text})
+        sit["messages"] = msgs
+        return {"text": text, "book": None}
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
@@ -437,7 +470,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # sonst reisst der Anfahrtstext mitten im Wort ab (E2E 27.08.2026).
     extra = {"max_tokens": kern_wissen.LANGTEXT_MAX_TOKENS} if kern_wissen.braucht_langtext(text_in) else {}
     # Talk-/Brueckenzuege duerfen laenger und waermer sein als Job-Zuege.
-    for k, v in gespraech.budget(route["floor"]).items():
+    for k, v in gespraech.budget(route["floor"], genervt=bool(route.get("genervt"))).items():
         if k == "max_tokens":
             extra[k] = max(int(extra.get(k) or 0), int(v))
         else:

@@ -48,6 +48,12 @@ def test_mehrdeutig_gibt_nichts_zurueck():
     assert zuege.gemeinter_slot("Ich buche das.", ANGEBOT) == ""
 
 
+def test_gemeinter_slot_erster_und_dieser():
+    assert zuege.gemeinter_slot("den ersten bitte", ANGEBOT) == "2026-08-27T09:15"
+    assert zuege.gemeinter_slot("der letzte", ANGEBOT) == "2026-08-27T09:30"
+    assert zuege.gemeinter_slot("dieser", ANGEBOT) == "2026-08-27T09:30"
+
+
 def test_wache_fragt_nach_statt_zu_luegen():
     sit = {"offered": ANGEBOT}
     text, book = zuege.buchungs_wache(sit, "Alles klar, ich buche das für Sie.")

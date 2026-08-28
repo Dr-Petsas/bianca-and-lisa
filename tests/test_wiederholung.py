@@ -32,6 +32,7 @@ def _buchungs_sit(frage: str = "telefon") -> dict:
     s.update({
         "modus": "buchen", "phase": "", "frage": frage,
         "warSchonMal": False, "grund": "Kontrolle", "wunsch": {},
+        "arzt": {"typ": "egal"},
         "vorname": "Anna", "nachname": "Meier", "buchstabiert": True,
     })
     return sit

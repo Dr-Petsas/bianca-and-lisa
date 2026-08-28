@@ -121,7 +121,7 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben.
     extra = {"max_tokens": kern_wissen.LANGTEXT_MAX_TOKENS} if kern_wissen.braucht_langtext(text_in) else {}
     # Talk-/Brueckenzuege duerfen laenger und waermer sein als Job-Zuege.
-    for k, v in gespraech.budget(route["floor"]).items():
+    for k, v in gespraech.budget(route["floor"], genervt=bool(route.get("genervt"))).items():
         if k == "max_tokens":
             extra[k] = max(int(extra.get(k) or 0), int(v))
         else:
@@ -168,6 +168,7 @@ def system_prompt_aktuell(session_doc: dict, plan: str = "") -> str:
         slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
         wissen=tenant.get("wissen"),
         plan=plan,
+        tenant=tenant,
     )
 
 

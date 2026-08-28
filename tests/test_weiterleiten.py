@@ -27,6 +27,11 @@ def test_erkennung_verbinden_saetze():
         "Ich möchte mich direkt zu Doktor Petsas verbinden lassen.",
         "Kann ich mit der Buchhaltung sprechen?",
         "Verbinden Sie mich mit der Patientenannahme.",
+        "Ich möchte einen Mitarbeiter",
+        "Haben Sie einen Angestellten?",
+        "Gibt es einen Mitarbeiter?",
+        "Kann ich jemanden sprechen?",
+        "Ich will mit jemandem sprechen",
     ]:
         assert weiterleiten.erkannt(satz), satz
 
@@ -158,6 +163,22 @@ def test_mensch_ohne_arzt_fragt_nach_arzt():
     z = flow.zug(sit, "Kann ich mit einem Menschen sprechen?")
     assert z and "personalfrei" in z["text"]
     assert "Zu wem darf ich Sie durchstellen?" in z["text"]
+
+
+def test_angestellter_ohne_namen_bietet_arzt_an():
+    """Generelle Mitarbeiterfrage ohne Namen: Wahrheit + Arzt anwählen,
+    nicht raten und nicht nach einem konkreten Menschen suchen."""
+    for satz in (
+        "Ich möchte einen Angestellten",
+        "Haben Sie einen Mitarbeiter?",
+        "Kann ich jemanden sprechen?",
+    ):
+        sit = _sit()
+        z = flow.zug(sit, satz)
+        assert z, satz
+        assert "personalfrei" in z["text"] and "KI-geführt" in z["text"], satz
+        assert "Ärzte" in z["text"] and "durchstellen" in z["text"], satz
+        assert "Kirri" not in z["text"]  # noch kein Jingle — erst nach Arztwahl
 
 
 # --- (d) Ja -> Jingle-Event + Kirri-Platzhalter-Ansage ------------------------

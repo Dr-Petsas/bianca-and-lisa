@@ -7,6 +7,8 @@ Rueckfall auf ElevenLabs, der Fehler soll in der Testphase hoerbar sein.
 
 from __future__ import annotations
 
+import time
+
 from kern import tts
 
 
@@ -391,6 +393,19 @@ def test_dauerhaft_cache_ueberlebt_neustart(tmp_path=None):
                 tts._DISK_DIR = alt_dir
 
     _mit_lokal(fake, lauf)
+
+
+def test_engine_anzeige_qwen3():
+    alt_h, alt_b = tts._HEALTH, tts.TTS_BASE
+    try:
+        tts.TTS_BASE = "http://tts-test:8100"
+        tts._HEALTH = (time.monotonic(), {"engine": "qwen3", "stream": False})
+        assert tts.engine_anzeige() == "Qwen3-TTS (lokal)"
+        tts._HEALTH = (time.monotonic(), {"engine": "chatterbox"})
+        assert tts.engine_anzeige() == "Chatterbox (lokal)"
+    finally:
+        tts._HEALTH = alt_h
+        tts.TTS_BASE = alt_b
 
 
 if __name__ == "__main__":

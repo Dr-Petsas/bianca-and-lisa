@@ -13,50 +13,15 @@ from typing import Any, Callable
 
 from bianca import gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import calendar as kal
-from kern import gespraech
+from kern import gehoer, gespraech
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
-from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
+from kern.slots import pick_slots, slot_wahl, spoken_offer, spoken_slot, zeit_von
 from kern.tenants import motiv_von
+from kern import zeiten
 
 Melde = Callable[[str], None] | None
 
-_H_WORT = {
-    "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "fuenf": 5,
-    "sechs": 6, "sieben": 7, "acht": 8, "neun": 9, "zehn": 10, "elf": 11,
-    "zwölf": 12, "zwoelf": 12, "dreizehn": 13, "vierzehn": 14, "fünfzehn": 15,
-    "fuenfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18, "neunzehn": 19,
-    "zwanzig": 20,
-}
-_M_WORT = {
-    "fünf": 5, "fuenf": 5, "zehn": 10, "fünfzehn": 15, "fuenfzehn": 15,
-    "zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40,
-    "fünfundvierzig": 45, "fuenfundvierzig": 45, "fünfzig": 50, "fuenfzig": 50,
-}
-_M_ZEHNER = {
-    "zwanzig": 20, "dreißig": 30, "dreissig": 30, "vierzig": 40,
-    "fünfzig": 50, "fuenfzig": 50,
-}
-
-
-def _minuten_von(wort: str) -> int | None:
-    """Minutenwort 1-59 — auch zusammengesetzt ('vierundvierzig').
-
-    Live 27.08.2026: 'neun Uhr vierundvierzig' fiel durch, weil _M_WORT nur
-    runde Werte kennt — die Slot-Wahl scheiterte und das Angebot kam wortgleich
-    ein zweites Mal.
-    """
-    w = _s(wort).lower()
-    if not w:
-        return None
-    if w in _M_WORT:
-        return _M_WORT[w]
-    if w in _H_WORT and _H_WORT[w] <= 20:
-        return _H_WORT[w]
-    m = re.match(r"^([a-zäöüß]+)und([a-zäöüß]+)$", w)
-    if m and m.group(1) in _H_WORT and _H_WORT[m.group(1)] <= 9 and m.group(2) in _M_ZEHNER:
-        return _M_ZEHNER[m.group(2)] + _H_WORT[m.group(1)]
-    return None
 _ABLEHNUNG_RE = re.compile(r"passt nicht|passt mir nicht|keiner davon|nichts davon|geht nicht|geht bei mir nicht|anderer termin|was anderes", re.I)
 # Dringlichkeit (kanonischer Grund aus gehirn._GRUND_MAP): Notfaelle bekommen
 # die naechstmoeglichen Plaetze DICHT angeboten — Streuung gilt dort nicht.
@@ -69,92 +34,17 @@ def _s(v: Any) -> str:
 
 
 def _zeit_von(t: str) -> tuple[int | None, int | None]:
-    """Gehörte Uhrzeit: '9 uhr 15', 'um 14:30', 'neun uhr fünfzehn', 'halb zehn'."""
-    m = re.search(r"\b(\d{1,2})(?:[:.](\d{2}))?\s*uhr\b(?:\s+(\d{1,2})\b)?", t)
-    if not m:
-        m = re.search(r"\bum\s+(\d{1,2})(?:[:.](\d{2}))?\b", t)
-    if m:
-        minute = m.group(2) or (m.group(3) if m.lastindex and m.lastindex >= 3 else None)
-        return int(m.group(1)), (int(minute) if minute else None)
-    m = re.search(r"\bhalb\s+([a-zäöü]+|\d{1,2})\b", t)
-    if m:
-        w = m.group(1)
-        h = int(w) if w.isdigit() else _H_WORT.get(w)
-        if h:
-            return h - 1, 30
-    m = re.search(r"\b([a-zäöü]+)\s+uhr(?:\s+([a-zäöüß]+))?\b", t)
-    if m and m.group(1) in _H_WORT:
-        return _H_WORT[m.group(1)], _minuten_von(m.group(2) or "")
-    return None, None
+    return zeit_von(t)
 
 
 def _slot_wahl(text: str, offered: list[dict]) -> str:
     """Welchen der angebotenen Termine meint der Anrufer? '' wenn unklar."""
-    if not offered:
-        return ""
-    t = f" {_s(text).lower()} "
-
-    hour, minute = _zeit_von(t)
-    if hour is not None:
-        c = [o for o in offered
-             if int(o["iso"][11:13]) == hour and (minute is None or int(o["iso"][14:16]) == minute)]
-        if not c:
-            c = [o for o in offered
-                 if int(o["iso"][11:13]) % 12 == hour % 12 and (minute is None or int(o["iso"][14:16]) == minute)]
-        if len(c) == 1:
-            return c[0]["iso"]
-        if minute is not None and not c:
-            # Konkrete Zielzeit ohne exakten Treffer: auf den NÄCHSTLIEGENDEN
-            # angebotenen Slot runden ('neun Uhr vierundvierzig' -> 09:45).
-            # Live 27.08.2026 wiederholte Bianca sonst wortgleich das Angebot.
-            ziel = hour * 60 + minute
-
-            def _abstand(o: dict) -> int:
-                slot = int(o["iso"][11:13]) * 60 + int(o["iso"][14:16])
-                slot12 = (int(o["iso"][11:13]) % 12) * 60 + int(o["iso"][14:16])
-                return min(abs(slot - ziel), abs(slot12 - (hour % 12) * 60 - minute))
-
-            nah = sorted(offered, key=_abstand)
-            if _abstand(nah[0]) <= 20 and (len(nah) == 1 or _abstand(nah[1]) > _abstand(nah[0])):
-                return nah[0]["iso"]
-
-    for idx, cre in WEEKDAYS:
-        if cre.search(t):
-            c = [o for o in offered if _weekday_of(o["iso"][:10]) == idx]
-            if len(c) == 1:
-                return c[0]["iso"]
-
-    dm = re.search(r"\b(\d{1,2})\.\s?(\d{1,2})\.", t)
-    if dm:
-        jahr = offered[0]["iso"][:4]
-        datum = f"{jahr}-{int(dm.group(2)):02d}-{int(dm.group(1)):02d}"
-        c = [o for o in offered if o["iso"].startswith(datum)]
-        if len(c) == 1:
-            return c[0]["iso"]
-
-    rel = gehirn._relatives_datum(t)
-    if rel:
-        c = [o for o in offered if o["iso"].startswith(rel)]
-        if len(c) == 1:
-            return c[0]["iso"]
-
-    if "vormittag" in t or "nachmittag" in t:
-        früh = "vormittag" in t
-        c = [o for o in offered
-             if (int(o["iso"][11:13]) < 12) == früh]
-        if len(c) == 1:
-            return c[0]["iso"]
-
-    if re.search(r"\b(erste[rns]?|ersteren)\b", t):
-        return offered[0]["iso"]
-    if re.search(r"\b(zweite[rns]?)\b", t) and len(offered) > 1:
-        return offered[1]["iso"]
-    if re.search(r"\b(dritte[rns]?)\b", t) and len(offered) > 2:
-        return offered[2]["iso"]
-    if re.search(r"\b(letzte[rns]?)\b", t):
-        return offered[-1]["iso"]
-
-    if len(offered) == 1 and (gehirn.ist_ja(t) or re.search(r"nehm|passt|gerne|gut\b", t)):
+    iso = slot_wahl(text, offered)
+    if iso:
+        return iso
+    if offered and len(offered) == 1 and (
+        gehirn.ist_ja(text) or re.search(r"nehm|passt|gerne|gut\b", text, re.I)
+    ):
         return offered[0]["iso"]
     return ""
 
@@ -234,17 +124,32 @@ def _grund_sprechbar(s: dict) -> str:
     return _KUERZEL_RE.sub("", roh)
 
 
-def _quittung(s: dict, neu: set[str]) -> str:
+def _quittung(s: dict, neu: set[str], sit: dict | None = None) -> str:
+    if "kartei" in neu and s.get("bekannt"):
+        wen = gehirn.anrede(s, (sit or {}).get("patient"))
+        kopf = f"Willkommen zurück, {wen}. " if wen else "Willkommen zurück — ich habe Sie in der Kartei. "
+        mem = (sit or {}).get("letzterAnruf") or {}
+        satz = _s(mem.get("satz"))
+        if satz and sit is not None and not sit.get("gedaechtnisGesagt"):
+            sit["gedaechtnisGesagt"] = True
+            if not s.get("grund"):
+                sit["gedaechtnisOffen"] = True
+                return kopf + f"{satz}, richtig? "
+            return kopf + f"{satz}. "
+        return kopf
     if "nachname" in neu and s["buchstabiert"]:
         return f"Danke — {s['nachname']}, notiert. "
     if "name" in neu:
-        # Mit dem VOLLEN Namen quittieren — nie mit einem halben ("Danke,
-        # Paul" klingt nach Anrede und war live 27.08.2026 auch noch falsch
-        # zugeordnet). Fehlt ein Teil, fragt die nächste Frage ihn nach.
-        if s["vorname"] and s["nachname"]:
-            return f"Danke, {s['vorname']} {s['nachname']}. "
+        # Namentlich nur Herr/Frau + Nachname. Nie Vorname zuerst
+        # ("Danke, Peter Okay" / "Herr Peter" — live 28.08.2026).
+        wen = gehirn.anrede(s, (sit or {}).get("patient"))
+        if wen:
+            return f"Danke, {wen}. "
         return "Danke. "
     if "telefon" in neu:
+        if s.get("bekannt"):
+            wen = gehirn.anrede(s, (sit or {}).get("patient"))
+            return f"Willkommen zurück, {wen}. " if wen else "Prima, die Nummer habe ich. "
         return "Prima, die Nummer habe ich. "
     if "telefonAkte" in neu:
         return "Alles klar — dann nehmen wir die Nummer aus Ihrer Akte. "
@@ -288,18 +193,46 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     sit.pop("angebotKalender", None)  # neues Angebot => neue Bindung
     ctx = _ctx_bauen(sit)
     vorrat = list(sit.get("slotVorrat") or [])
-    wish = s["wunsch"]
+    wish, zu_vor = zeiten.wunsch_richten(s["wunsch"], sit.get("tenant"))
+    if wish:
+        s["wunsch"] = wish
     egal = not a.get("calendarId")
+    if a.get("calendarId") and (wish or {}).get("date"):
+        ab = kal.arzt_abwesen(
+            sit["tenant"],
+            calendar_id=_s(a.get("calendarId")),
+            start=_s(wish.get("date")),
+        )
+        treffer = next((d for d in (ab.get("doctors") or []) if d.get("isAbsent")), None)
+        if treffer:
+            bis = _s(treffer.get("absentUntil"))
+            name = arzt_sprechname(a.get("calendarName") or treffer.get("doctorName") or "")
+            zu_vor = (
+                (zu_vor + " " if zu_vor else "")
+                + (f"{name} ist bis einschließlich {bis} nicht da. " if bis
+                   else f"{name} ist an dem Tag nicht da. ")
+                + "Ich schaue, wo sonst etwas frei ist."
+            ).strip()
+            egal = True
+            sit.pop("angebotArzt", None)
 
     def _laden() -> dict:
         if melde:
             melde("offer_slots")
-        found = kal.find_slots(
-            sit["tenant"], ctx,
-            start_date=gehirn.start_datum(s),
-            egal=egal,
-            source="pickadoc-bianca",
-        )
+        if egal:
+            found = kal.finde_schnellsten(
+                sit["tenant"], ctx,
+                start_date=gehirn.start_datum(s),
+                wish=wish,
+                source="pickadoc-bianca",
+            )
+        else:
+            found = kal.find_slots(
+                sit["tenant"], ctx,
+                start_date=gehirn.start_datum(s),
+                egal=False,
+                source="pickadoc-bianca",
+            )
         if found.get("ok"):
             frisch = kal._iso_liste(found.get("slots") or [])
             if frisch:
@@ -323,13 +256,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             )}
 
     dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
-    picked = pick_slots(vorrat, wish=wish, dringend=dringend)
+    picked = pick_slots(vorrat, wish=wish, dringend=dringend, tenant=sit.get("tenant"))
     if wish and not picked["wishMatched"] and not nachladen:
         # Der Vorrat passt nicht zum Wunsch (z. B. "nächste Woche"): einmal
         # gezielt ab Wunschdatum nachladen, bevor wir Ausweichzeiten anbieten.
         _laden()
         vorrat = list(sit.get("slotVorrat") or [])
-        picked = pick_slots(vorrat, wish=wish, dringend=dringend)
+        picked = pick_slots(vorrat, wish=wish, dringend=dringend, tenant=sit.get("tenant"))
 
     # Merken, aus WELCHEM Kalender dieses Angebot kommt: die Buchung bindet
     # sich daran, nicht an spätere Sammler-Umbauten (Vorfall 27.08.2026:
@@ -365,6 +298,8 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         # (live 27.08.2026: identische Slot-Liste zweimal hintereinander).
         liste = "; oder ".join(o["spoken"] for o in offered)
         return {"text": vor + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {liste}. Passt davon einer?"}
+    if zu_vor:
+        vor = (zu_vor + " " + vor).strip() + " "
     return {"text": vor + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
@@ -386,7 +321,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         s["frage"] = ""
         text = res.get("spoken") or "Der Termin ist eingetragen."
         if res.get("booked"):
-            if s["telefon"] or s["aktePhone"]:
+            zusatz = _s((sit.get("tenant") or {}).get("abschluss"))
+            if zusatz:
+                text += " " + zusatz
+            elif s["telefon"] or s["aktePhone"]:
                 text += " Die Bestätigung kommt gleich per SMS."
             text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
@@ -452,6 +390,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if not t:
         return None
 
+    if gehoer.wacklig(t, frage=_s(s.get("frage"))):
+        n = int(sit.get("wackligZaehler") or 0) + 1
+        sit["wackligZaehler"] = n
+        if n <= 1:
+            return {"text": gehoer.rueckfrage(sit)}
+    else:
+        sit["wackligZaehler"] = 0
+
     # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
     # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris
     # Zaluma-/SIP-Weiterleitung (bianca/weiterleiten.py).
@@ -486,6 +432,30 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _readback(sit)
 
     neu = gehirn.einsammeln(sit, t)
+    # Rückkehrer: Nummer gegen die Kartei — ein Treffer füllt Name + Gedächtnis
+    # noch in DIESEM Zug, damit die nächste Frage nicht erneut nach dem Namen fragt.
+    if s["warSchonMal"] and not s.get("patientId"):
+        if sit.get("anruferNummer") and "warSchonMal" in neu and not s.get("telefon"):
+            s["telefon"] = sit["anruferNummer"]
+            s["telefonOk"] = True
+            s["telefonAkte"] = True
+            neu.add("telefon")
+        if (s.get("telefonOk") or sit.get("anruferNummer")) and hintergrund.karte_aus_handy(sit):
+            neu.add("kartei")
+        elif {"name", "nachname"} & neu and hintergrund.karte_aus_name(sit):
+            neu.add("kartei")
+    if sit.get("gedaechtnisOffen") and gehirn.ist_ja(t):
+        mem = sit.get("letzterAnruf") or {}
+        if _s(mem.get("grund")) and not s.get("grund"):
+            s["grund"] = _s(mem.get("grund"))
+            vm = motiv_von(sit.get("tenant") or {}, s["grund"])
+            if vm:
+                s["motivId"] = _s(vm.get("id"))
+                s["motivName"] = _s(vm.get("name"))
+            neu.add("grund")
+        sit["gedaechtnisOffen"] = False
+    elif sit.get("gedaechtnisOffen") and (gehirn.ist_nein(t) or "grund" in neu):
+        sit["gedaechtnisOffen"] = False
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
@@ -584,7 +554,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if s["frage"] != fid:
             (sit.get("frageLeer") or {}).pop(fid, None)
         s["frage"] = fid
-        return {"text": (_quittung(s, neu) + frage).strip()}
+        q = _quittung(s, neu, sit)
+        if sit.get("gedaechtnisOffen") and "richtig?" in q:
+            return {"text": q.strip()}
+        return {"text": (q + frage).strip()}
 
     if not neu and s["frage"]:
         return None  # nichts Verwertbares gehört — LLM klärt, Status führt zurück
@@ -592,7 +565,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     s["frage"] = ""
     ang = _angebot(sit, melde)
     if ang and _s(ang.get("text")):
-        q = _quittung(s, neu)
+        q = _quittung(s, neu, sit)
         if q:
             ang["text"] = q + ang["text"]
     return ang
@@ -608,6 +581,7 @@ def status_zeile(sit: dict) -> str:
     a = s.get("arzt") or {}
     teile = [
         f"Name={_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip(),
+        f"Kartei={'bekannt ' + _s(s.get('patientId')) if s.get('bekannt') else 'neu'}",
         f"Grund={_s(s.get('grund')) or '?'}",
         f"Arzt={_s(a.get('calendarName')) or a.get('typ') or '?'}",
         f"Telefon={_s(s.get('telefon')) or '?'}",

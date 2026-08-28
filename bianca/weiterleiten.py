@@ -69,11 +69,23 @@ _VERBINDEN_RE = re.compile(
 
 # "Ich will einen Menschen/Mitarbeiter/jemanden vom Empfang" — auch als Frage
 # ("Gibt es da kein Personal?", "Kann ich mit der Buchhaltung sprechen?").
+# Generell ohne Namen (Chef 28.08.2026): "einen Angestellten", "haben Sie
+# einen Mitarbeiter?", "kann ich jemanden sprechen?" — danach Angebot,
+# einen Arzt anzuwählen, kein Raten.
 _MENSCH_RE = re.compile(
     rf"mit\s+(?:einem|einer|nem|ner|der|dem)?\s*(?:echten|richtigen)?\s*{_MENSCH_WORT}\s+(?:sprechen|reden)|"
     rf"{_MENSCH_WORT}\s+(?:sprechen|erreichen|ans?\s+telefon)|"
     rf"jemand\w*\s+vo[nm]\s+(?:der\s+|dem\s+)?(?:{_MENSCH_WORT}|team|praxisteam)|"
-    rf"kein(?:e|en)?\s+(?:echten\s+|richtigen\s+|menschlichen\s+)?{_MENSCH_WORT}",
+    rf"kein(?:e|en)?\s+(?:echten\s+|richtigen\s+|menschlichen\s+)?{_MENSCH_WORT}|"
+    rf"(?:einen|eine[nr]?|nem|ner)\s+{_MENSCH_WORT}|"
+    rf"(?:gibt\s+es|haben\s+sie)\s+(?:da\s+)?(?:noch\s+)?(?:einen|eine[nr]?)?\s*{_MENSCH_WORT}|"
+    rf"mit\s+(?:einem\s+|einer\s+)?(?:echten\s+|richtigen\s+)?(?:jemand\w*|person)\s+(?:sprechen|reden)|"
+    rf"jemand(?:en|em)?\s+(?:sprechen|reden|erreichen)",
+    re.I,
+)
+_JEMAND_RE = re.compile(
+    r"mit\s+(?:einem\s+|einer\s+)?(?:echten\s+|richtigen\s+)?(?:jemand\w*|person)\s+(?:sprechen|reden)|"
+    r"jemand(?:en|em)?\s+(?:sprechen|reden|erreichen)",
     re.I,
 )
 
@@ -242,7 +254,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     # Fall 2: Mitarbeiter/Abteilung gewuenscht (Mensch, Empfang, Buchhaltung,
     # Patientenannahme ...) -> erst die Wahrheit, dann das Arzt-Angebot.
-    mensch = bool(_MENSCH_NUR_RE.search(t))
+    mensch = bool(_MENSCH_NUR_RE.search(t) or _JEMAND_RE.search(t))
     ziel = _ziel_finden(sit, melde)
     if ziel:
         _arzt_merken(s, ziel)

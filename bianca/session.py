@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
+from kern import anruf_gedaechtnis
 from kern.config import DATA_DIR
 from kern.sitzung import merke_tool, merke_zug, oeffentlich  # noqa: F401 - geteilt mit Lisa
 from kern.tenants import laden
@@ -21,7 +22,7 @@ _LAST_PATH = DATA_DIR / "bianca_last_call.json"
 _SESS_DIR = DATA_DIR / "bianca_sessions"
 
 
-def neu(*, tenant_id: str) -> dict[str, Any]:
+def neu(*, tenant_id: str, anrufer_nummer: str = "") -> dict[str, Any]:
     tenant = laden(tenant_id)
     sid = secrets.token_hex(8)
     doc = {
@@ -30,6 +31,7 @@ def neu(*, tenant_id: str) -> dict[str, Any]:
         "tenant": tenant,
         "tenantId": tenant.get("_id"),
         "auftrag": "Eingehender Anruf: Terminwunsch aufnehmen und buchen.",
+        "anruferNummer": " ".join(str(anrufer_nummer or "").split()).strip(),
         "patient": {},
         "booking": {},
         "past": [],
@@ -39,6 +41,8 @@ def neu(*, tenant_id: str) -> dict[str, Any]:
         "zuege": [],
         "startedAt": datetime.now(timezone.utc).isoformat(),
     }
+    if doc["anruferNummer"]:
+        anruf_gedaechtnis.anbinden(doc, phone=doc["anruferNummer"])
     _STORE[sid] = doc
     return doc
 
@@ -79,6 +83,8 @@ def _mit_sammler(sit: dict[str, Any]) -> dict[str, Any]:
         "vorname": s.get("vorname") or "",
         "nachname": s.get("nachname") or "",
         "buchstabiert": bool(s.get("buchstabiert")),
+        "bekannt": bool(s.get("bekannt")),
+        "patientId": s.get("patientId") or "",
         "grund": s.get("grund") or "",
         "telefon": s.get("telefon") or "",
         "warSchonMal": s.get("warSchonMal"),

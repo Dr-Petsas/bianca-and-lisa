@@ -17,7 +17,7 @@ from typing import Any
 
 from bianca import arzt as arztmod
 from bianca import gehirn
-from kern import calendar, patients
+from kern import anruf_gedaechtnis, calendar, patients
 from kern.patients import arzt_sprechname
 
 
@@ -37,13 +37,78 @@ def _frei(sit: dict, schluessel: str) -> None:
     sit.setdefault("hgLaeuft", {})[schluessel] = False
 
 
-def kartei_anstossen(sit: dict) -> None:
-    """Patient auflösen, sobald ein Nachname da ist — parallel zum Gespräch."""
+def _karte_binden(sit: dict, s: dict, pat: dict) -> bool:
+    """Kartei-Treffer ins Gedächtnis: Name, Nummer, Geschlecht, ID."""
+    if not _s(pat.get("id")):
+        return False
+    s["patientId"] = _s(pat.get("id"))
+    s["bekannt"] = True
+    s["aktePhone"] = _s(pat.get("phone"))
+    if _s(pat.get("firstName")):
+        s["vorname"] = _s(pat.get("firstName"))
+    if _s(pat.get("lastName")):
+        s["nachname"] = _s(pat.get("lastName"))
+    s["buchstabiert"] = True
+    if _s(pat.get("gender")):
+        s["geschlecht"] = _s(pat.get("gender"))
+    sit["patient"] = {**(sit.get("patient") or {}), **pat}
+    anruf_gedaechtnis.anbinden(
+        sit,
+        phone=s.get("telefon") or s.get("aktePhone") or sit.get("anruferNummer") or "",
+        patient_id=s["patientId"],
+    )
+    print(f"bianca-kartei: gefunden {pat.get('name')!r} id={pat.get('id')}", flush=True)
+    return True
+
+
+def karte_aus_handy(sit: dict) -> bool:
+    """Sync: Nummer gegen die Kartei. Ein Treffer => Name merken und anreden."""
     s = gehirn.sammler(sit)
-    key = f"{s['vorname']}|{s['nachname']}".lower()
-    # patientId allein reicht nicht: kommt sie aus agentFindPatientAppointments
-    # (Termin-Verwaltung), fehlt noch das Akten-Handy fuer eine Folge-Buchung.
-    if not s["nachname"] or s["gesucht"] == key or (s["patientId"] and s["aktePhone"]):
+    handy = s.get("telefon") or sit.get("anruferNummer") or ""
+    if not handy or s.get("patientId") or s.get("handyGeprueft"):
+        return False
+    s["handyGeprueft"] = True
+    try:
+        pat = patients.nach_handy(sit["tenant"], handy)
+    except Exception as e:
+        print(f"bianca-kartei handy fail {e}", flush=True)
+        return False
+    return _karte_binden(sit, s, pat)
+
+
+def karte_aus_name(sit: dict) -> bool:
+    """Sync: Nachname (+ Vorname) gegen die Kartei, wenn die Nummer nicht eindeutig war."""
+    s = gehirn.sammler(sit)
+    if s.get("patientId") or not s.get("nachname") or s.get("nameGeprueft"):
+        return False
+    s["nameGeprueft"] = True
+    try:
+        pat = patients.patient_aufloesen(sit["tenant"], {
+            "name": f"{s['vorname']} {s['nachname']}".strip(),
+            "firstName": s["vorname"],
+            "lastName": s["nachname"],
+        })
+        if not _s(pat.get("id")):
+            pat = patients.nach_name_phonetisch(sit["tenant"], s["vorname"], s["nachname"])
+    except Exception as e:
+        print(f"bianca-kartei name fail {e}", flush=True)
+        return False
+    return _karte_binden(sit, s, pat)
+
+
+def kartei_anstossen(sit: dict) -> None:
+    """Patient auflösen, sobald Nummer oder Nachname da ist — parallel."""
+    s = gehirn.sammler(sit)
+    handy = s.get("telefon") or sit.get("anruferNummer") or ""
+    name_key = f"{s['vorname']}|{s['nachname']}".lower() if s["nachname"] else ""
+    tel_key = f"tel|{patients.handy_kern(handy)}" if handy else ""
+    # Nach einem Nummern-Fehltreffer trotzdem noch per Name suchen.
+    if s["patientId"] and (s["aktePhone"] or not name_key):
+        return
+    if tel_key and s.get("handyGeprueft") and not name_key:
+        return
+    key = name_key or tel_key
+    if not key or s["gesucht"] == key:
         return
     s["gesucht"] = key
     if _laeuft(sit, "kartei"):
@@ -52,20 +117,20 @@ def kartei_anstossen(sit: dict) -> None:
     def arbeit() -> None:
         try:
             tenant = sit["tenant"]
-            pat = patients.patient_aufloesen(tenant, {
-                "name": f"{s['vorname']} {s['nachname']}".strip(),
-                "firstName": s["vorname"],
-                "lastName": s["nachname"],
-            })
-            if _s(pat.get("id")):
-                s["patientId"] = _s(pat.get("id"))
-                s["bekannt"] = True
-                s["aktePhone"] = _s(pat.get("phone"))
-                if not s["vorname"]:
-                    s["vorname"] = _s(pat.get("firstName"))
-                sit["patient"] = {**(sit.get("patient") or {}), **pat}
-                print(f"bianca-kartei: gefunden {pat.get('name')!r} id={pat.get('id')}", flush=True)
-            else:
+            pat: dict = {}
+            if handy and not s.get("handyGeprueft"):
+                pat = patients.nach_handy(tenant, handy)
+                s["handyGeprueft"] = True
+            if not _s(pat.get("id")) and s["nachname"] and not s.get("nameGeprueft"):
+                s["nameGeprueft"] = True
+                pat = patients.patient_aufloesen(tenant, {
+                    "name": f"{s['vorname']} {s['nachname']}".strip(),
+                    "firstName": s["vorname"],
+                    "lastName": s["nachname"],
+                })
+                if not _s(pat.get("id")):
+                    pat = patients.nach_name_phonetisch(tenant, s["vorname"], s["nachname"])
+            if not _karte_binden(sit, s, pat):
                 print(f"bianca-kartei: kein Treffer fuer {key!r}", flush=True)
             # "Weiß nicht mehr, bei wem ich war": jetzt können wir nachschlagen.
             if (s.get("arzt") or {}).get("typ") == "unbekannt" and s["patientId"]:
@@ -141,12 +206,20 @@ def vorrat_anstossen(sit: dict) -> None:
                 "visitMotiveId": s["motivId"],
                 "visitMotiveName": s["motivName"] or "Kontrolluntersuchung",
             }
-            found = calendar.find_slots(
-                tenant, ctx,
-                start_date=gehirn.start_datum(s),
-                egal=egal,
-                source="pickadoc-bianca",
-            )
+            if egal:
+                found = calendar.finde_schnellsten(
+                    tenant, ctx,
+                    start_date=gehirn.start_datum(s),
+                    wish=s.get("wunsch") or {},
+                    source="pickadoc-bianca",
+                )
+            else:
+                found = calendar.find_slots(
+                    tenant, ctx,
+                    start_date=gehirn.start_datum(s),
+                    egal=False,
+                    source="pickadoc-bianca",
+                )
             # Nur speichern, wenn der Rahmen noch stimmt — sonst würde eine
             # überholte Suche (alter Arzt/Tag) das frische Ziel überschreiben.
             if found.get("ok") and sit.get("vorratKey") == mein_key:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from lisa.mission import ist_termin_auftrag
+from lisa.mission import ist_termin_auftrag, praxis_an
 
 _SATZ = re.compile(r"(?<=[.!?])\s+")
 
@@ -48,7 +48,7 @@ def anrede(patient: dict | None) -> str:
 def vorstellung(praxis: str, behandler: str = "") -> str:
     haus = _s(praxis)
     arzt = _s(behandler)
-    kern = f"hier ist Lisa von der {haus}" if haus else "hier ist Lisa"
+    kern = f"hier ist Lisa {praxis_an(haus)}" if haus else "hier ist Lisa"
     if arzt:
         kern += f", ich rufe im Auftrag von {arzt} an"
     return kern
@@ -65,7 +65,7 @@ def begruessung(praxis: str, auftrag: str = "", *, patient: dict | None = None,
     from lisa.identitaet import frage_satz, moeglich
 
     haus = _s(praxis)
-    kopf = f"Guten Tag, hier ist Lisa von der {haus}." if haus else "Guten Tag, hier ist Lisa."
+    kopf = f"Guten Tag, hier ist Lisa {praxis_an(haus)}." if haus else "Guten Tag, hier ist Lisa."
     if moeglich(patient):
         return f"{kopf} {frage_satz(patient)}"
 

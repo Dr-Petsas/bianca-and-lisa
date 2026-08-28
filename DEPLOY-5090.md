@@ -5,7 +5,7 @@ Vier getrennte Stacks, bewusst einzeln startbar:
 | Stack | Compose | Ports | Zweck |
 | --- | --- | --- | --- |
 | vLLM | (laeuft schon) | 8000 | Qwen 3.6 — nicht anfassen |
-| TTS | `tts_serve/compose.yml` | 8210 Chatterbox / 8211 CosyVoice | EIN Profil aktiv |
+| TTS | `tts_serve/compose.yml` | 8210 Chatterbox / 8211 CosyVoice / 8213 Qwen3 | EIN Profil aktiv |
 | STT | `stt_serve/compose.yml` | 8212 | deutscher Conformer statt Scribe (28.08.2026) |
 | App | `compose.yml` (Repo-Wurzel) | 8095 Lisa / 8096 Bianca | Umschlag fuer SIP/Zaluma |
 
@@ -42,16 +42,21 @@ cd "F:\Bianca&Lisa TelefonKI"
 ```bash
 # auf der 5090, z. B. nach /srv/telefonki (git clone oder rsync/scp vom Dev-Rechner;
 # tts_serve/stimmen/*.wav+.txt MITKOPIEREN — die sind bewusst nicht im Git)
-cd /srv/telefonki/tts_serve
-docker compose --profile chatterbox up -d --build     # erster Kandidat
-docker logs -f tts_serve-chatterbox-1                 # warten bis "warm"
-curl http://127.0.0.1:8210/health
+cd ~/telefonki/tts_serve
+docker compose --profile chatterbox down
+docker compose --profile cosyvoice down
+docker compose --profile qwen3 up -d --build          # 0.6B-Base, Port 8213
+docker logs -f tts_serve-qwen3-1                      # warten bis "warm"
+curl http://127.0.0.1:8213/health
 ```
 
-Umschalten auf den zweiten Kandidaten (nie beide zugleich — eine GPU, vLLM daneben):
+Andere Kandidaten (nie zwei zugleich — eine GPU, vLLM daneben):
 
 ```bash
-docker compose --profile chatterbox down
+docker compose --profile qwen3 down
+docker compose --profile chatterbox up -d --build
+curl http://127.0.0.1:8210/health
+# oder
 docker compose --profile cosyvoice up -d --build      # erster Start laedt ~5 GB
 curl http://127.0.0.1:8211/health
 ```
@@ -71,7 +76,8 @@ Entscheidend: Latenz p50/p95 gegen die ElevenLabs-Baseline und das Ohr des Chefs
 In der `.env` (Dev-Rechner oder App-Container) EINE Zeile:
 
 ```
-TTS_BASE=http://192.168.0.246:8210     # bzw. :8211
+TTS_BASE=http://192.168.0.246:8213     # Qwen3; Chatterbox :8210 / Cosy :8211
+TTS_STREAM=0                           # eine Aeusserung, ein /speak
 ```
 
 Dienst neu starten — `/health` zeigt dann `"tts": "lokal"` und die URL unter

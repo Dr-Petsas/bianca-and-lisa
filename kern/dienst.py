@@ -75,6 +75,10 @@ class Dienst:
     schnell_fn(sit)             -> True, solange eine deterministische Phase
                                    sofort antwortet (Vorab-Füller unterdrücken)
     merke_zug(sit, **zug)       -> Sitzungsprotokoll der jeweiligen Stimme
+    ganz                        -> True = jede Äußerung als EIN /speak
+                                   (kein Stream, kein Satz-Split). Seit
+                                   Qwen3-0.6B (28.08.2026) gelten Lisa und
+                                   Bianca so — Häppchen-Nähte waren Genuschel.
     """
 
     def __init__(
@@ -85,12 +89,14 @@ class Dienst:
         turn_fn: Callable[..., dict],
         schnell_fn: Callable[[dict], bool] | None = None,
         merke_zug: Callable[..., None] | None = None,
+        ganz: bool = False,
     ) -> None:
         self.name = name
         self.start_fn = start_fn
         self.turn_fn = turn_fn
         self.schnell_fn = schnell_fn or (lambda sit: False)
         self.merke_zug = merke_zug or (lambda sit, **zug: None)
+        self.ganz = ganz
         self.audio: dict[str, bytes] = {}
         self.filler_urls: dict[str, str] = {}
         self.feste_urls: dict[str, str] = {}
@@ -143,7 +149,7 @@ class Dienst:
         wenigen hundert Millisekunden); sonst satzweises Blocking."""
         if not text:
             return "", 0.0
-        if haeppchen is None or tts.im_cache(text):
+        if self.ganz or haeppchen is None or tts.im_cache(text):
             return self.stimme(text)
         t0 = time.perf_counter()
         gestreamt = self._stream_haeppchen(text, haeppchen)
@@ -334,8 +340,10 @@ class Dienst:
             san = sprech.sanitize(satz)
             if not san:
                 return
-            if not tts.im_cache(san) and self._stream_haeppchen(
-                san, lambda url: q.put(("vorab", url))
+            if (
+                not self.ganz
+                and not tts.im_cache(san)
+                and self._stream_haeppchen(san, lambda url: q.put(("vorab", url)))
             ):
                 sit["_vorabText"] = san
                 return

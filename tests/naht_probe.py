@@ -41,6 +41,10 @@ def _naht_rms(wav: bytes, *, ende: bool) -> float:
 
 
 def main() -> None:
+    if "--voice" in sys.argv:
+        i = sys.argv.index("--voice")
+        tts.set_voice("egal", name=sys.argv[i + 1])
+        del sys.argv[i:i + 2]
     text = sys.argv[1] if len(sys.argv) > 1 else (
         "Alles klar, ich schaue kurz in den Kalender. Am Montag hätte ich "
         "vierzehn Uhr dreißig oder sechzehn Uhr fünfzehn frei, am Dienstag "

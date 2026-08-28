@@ -9,12 +9,16 @@ MODULE = [
     "tests.test_buchwache",
     "tests.test_sprech",
     "tests.test_wissen",
+    "tests.test_zeiten",
     "tests.test_filler",
     "tests.test_notes",
     "tests.test_patients",
     "tests.test_greeting",
     "tests.test_identitaet",
     "tests.test_notiz",
+    "tests.test_anruf_gedaechtnis",
+    "tests.test_phonetik",
+    "tests.test_gehoer",
 ]
 
 

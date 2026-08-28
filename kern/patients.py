@@ -428,6 +428,65 @@ def akte_anlegen(
     }
 
 
+def handy_kern(raw: str) -> str:
+    """Vergleichsform: Landesvorwahl weg, führende 0 weg."""
+    d = _digits(handy_e164(raw) if _digits(raw) else raw)
+    if d.startswith("49") and len(d) > 10:
+        d = d[2:]
+    return d.lstrip("0")
+
+
+def nach_handy(tenant: dict, raw: str) -> dict[str, Any]:
+    """Eindeutigen Kartei-Treffer zur Handynummer — sonst {}."""
+    kern = handy_kern(raw)
+    if len(kern) < 8:
+        return {}
+    # searchIndexes tragen Telefon-Präfixe ab 5 Zeichen; die letzten 8
+    # Ziffern sind selektiv genug und treffen 0… / +49… gleich.
+    q = kern[-8:]
+    found = search_patients(tenant, q)
+    treffer = []
+    for p in found.get("patients") or []:
+        if ist_testakte(p):
+            continue
+        pk = handy_kern(_phone_of(p))
+        if pk and (pk == kern or pk.endswith(kern) or kern.endswith(pk)):
+            treffer.append(p)
+    if len(treffer) != 1:
+        return {}
+    return karten_patient(treffer[0])
+
+
+def nach_name_phonetisch(tenant: dict, first: str, last: str) -> dict[str, Any]:
+    """Eindeutiger Kölner-Phonetik-Treffer gegen die Patientensuche.
+
+    Meier/Mayer/Maier zählen als derselbe Nachname. Mehrere Treffer oder
+    abweichender Vorname → {} (dann buchstabiert Bianca wie bisher).
+    """
+    from kern.phonetik import phonetik_treffer, such_varianten
+
+    last = _s(last)
+    first = _s(first)
+    if len(last) < 3:
+        return {}
+    seen: dict[str, dict] = {}
+    for q in such_varianten(last):
+        suche = f"{first} {q}".strip() if first else q
+        for p in (search_patients(tenant, suche).get("patients") or []):
+            if ist_testakte(p):
+                continue
+            key = _s(p.get("id")) or f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".lower()
+            if key and key not in seen:
+                seen[key] = p
+        if seen:
+            break
+    hit = phonetik_treffer(list(seen.values()), vorname=first, nachname=last)
+    if not hit:
+        return {}
+    print(f"patients: phonetik {last!r} -> {hit.get('lastName')!r} id={hit.get('id')}", flush=True)
+    return karten_patient(hit)
+
+
 def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
     """Hängt die Kartei-ID an, wenn der Name WIRKLICH passt. Legt niemanden neu an.
 

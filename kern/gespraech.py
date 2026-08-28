@@ -73,6 +73,16 @@ _DRINGEND_RE = re.compile(
     re.I,
 )
 
+# Genervtheit (Chef 28.08.2026): einmal entschuldigen, dann nur noch liefern.
+_GENERVT_RE = re.compile(
+    r"jetzt\s+machen\s+sie\s+mal|das\s+dauert\s+mir|zu\s+lange|"
+    r"ich\s+habe\s+nicht\s+ewig|ohne\s+umschweife|reicht\s+(jetzt|auch)|"
+    r"kann\s+das\s+(nicht\s+)?schneller|sind\s+sie\s+noch\s+da|"
+    r"das\s+nervt|geht\s+es\s+auch\s+k[uü]rzer|kommen\s+sie\s+zur\s+sache|"
+    r"nicht\s+schon\s+wieder\s+(fragen|die\s+frage)",
+    re.I,
+)
+
 # Loslassen: der Anrufer beendet das Nebenthema ausdruecklich ("na gut",
 # "okay dann", "wo waren wir") — dann EINE Bruecke und zurueck zum Job.
 _LOSLASS_RE = re.compile(
@@ -143,6 +153,8 @@ def stand(sit: dict) -> dict:
     st.setdefault("frisch", [])
     st.setdefault("letzterSatz", "")
     st.setdefault("letzteRoute", {})
+    st.setdefault("genervt", False)
+    st.setdefault("entschuldigt", False)
     return st
 
 
@@ -157,6 +169,8 @@ def traegt_thema(sit: dict, text: str) -> bool:
     Richtung Eskalation, sie gehen ans LLM (Talk-Schicht antwortet).
     """
     if not enabled():
+        return False
+    if (sit.get("talk") or {}).get("genervt"):
         return False
     low = _s(text).casefold()
     worte = _inhaltsworte(low)
@@ -217,6 +231,20 @@ def routen(sit: dict, text: str, *, ernte: list | tuple = (),
         st["bruecke"] = ""
         st["frisch"] = []
         return _fertig({"floor": JOB, "thema": "", "dringend": True})
+
+    if st.get("genervt") or _GENERVT_RE.search(low):
+        # Ungeduld: Talk aus, Floor bleibt Job. EINMAL entschuldigen
+        # (plan_block), danach nur noch den offenen Schritt liefern.
+        st["genervt"] = True
+        st["gravity"] = {}
+        st["woerter"] = {}
+        st["stack"] = []
+        st["bruecke"] = ""
+        st["frisch"] = []
+        return _fertig({
+            "floor": JOB, "thema": "", "dringend": False,
+            "genervt": True, "entschuldigt": bool(st.get("entschuldigt")),
+        })
 
     worte = _inhaltsworte(low)
     frisch: list[str] = []
@@ -307,6 +335,8 @@ def nach_antwort(sit: dict) -> None:
     st = sit.get("talk")
     if not isinstance(st, dict) or not enabled():
         return
+    if st.get("genervt"):
+        st["entschuldigt"] = True
     frisch = set(st.get("frisch") or [])
     gravity = st.setdefault("gravity", {})
     for k in list(gravity):
@@ -348,6 +378,19 @@ _SCHUTZ = (
 
 def plan_block(route: dict, *, offene_frage: str = "", stimme: str = "bianca") -> str:
     """GESPRAECHSLAGE-Block fuer den Systemprompt — '' auf dem Job-Floor."""
+    if route.get("genervt"):
+        einmal = (
+            "EINMAL kurz entschuldigen, dass es gedauert hat — danach NICHT nochmal."
+            if not route.get("entschuldigt") else
+            "Nicht noch einmal entschuldigen."
+        )
+        ziel = f"\u201e{offene_frage}\u201c" if _s(offene_frage) else "dem offenen nächsten Schritt"
+        return (
+            "GESPRÄCHSLAGE: Der Anrufer ist ungeduldig. "
+            f"{einmal} Dann NUR noch {ziel} — keine Begleitsätze, "
+            "keine Nebenthemen, kein Smalltalk. Ein kurzer Satz, dann die Frage. "
+            + _SCHUTZ
+        )
     f = _s(route.get("floor"))
     thema = _s(route.get("thema"))
     if _s(offene_frage):
@@ -388,10 +431,12 @@ def plan_block(route: dict, *, offene_frage: str = "", stimme: str = "bianca") -
     return ""
 
 
-def budget(floor_name: str) -> dict[str, Any]:
+def budget(floor_name: str, *, genervt: bool = False) -> dict[str, Any]:
     """Token-/Temperatur-Budget je Floor — {} heisst: Job-Standard (90/0.3)."""
     if not enabled():
         return {}
+    if genervt:
+        return {"max_tokens": 70, "temperature": 0.2}
     if floor_name == TALK:
         return {"max_tokens": 240, "temperature": 0.6}
     if floor_name == BLENDED:

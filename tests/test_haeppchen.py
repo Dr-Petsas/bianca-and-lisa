@@ -60,6 +60,19 @@ def test_haeppchen_gehen_sofort_raus_und_reply_traegt_das_letzte():
     assert abs(out["timings"]["tts"] - 0.3) < 0.01, "tts-Zeit ist die Summe aller Häppchen"
 
 
+def test_ganz_spricht_immer_einen_block():
+    """Bianca (ganz=True): lange Slot-Listen nicht zerlegen — ein /speak.
+    Chef 28.08.2026: Lisa gut, Bianca durch Häppchen-Nähte unbrauchbar."""
+    gemerkt: list[str] = []
+    urls: list[str] = []
+    d = _dienst(gemerkt, stream_aus=False)
+    d.ganz = True
+    out = d.json_antwort({}, art="turn", text_in="hallo", haeppchen=urls.append)
+    assert gemerkt == [LANG], f"ein Block, nicht satzweise: {gemerkt}"
+    assert not urls, "kein Häppchen-Kanal — alles hängt am reply-Audio"
+    assert out["audioUrl"] == "/api/audio/1.wav"
+
+
 def test_ohne_stream_bleibt_ein_block():
     gemerkt: list[str] = []
     d = _dienst(gemerkt)

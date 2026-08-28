@@ -192,6 +192,19 @@ def zeit_wort(hour: int, minute: int = 0) -> str:
     return f"{hw} Uhr {_zahl(m)}"
 
 
+def heute_ansage(*, heute: date | None = None) -> str:
+    """Voller Kalendertag für Datumsfragen — nie 'heute', nie ein geratenes Jahr.
+
+    Live 28.08.2026: Bianca antwortete auf 'Welcher Tag ist heute?' mit
+    'Mittwoch, der fünfundzwanzigsten Mai 2025'. Das Modell kennt das
+    Tagesdatum nicht. Diese Ansage kommt aus der Uhr, nicht aus dem LLM."""
+    d = heute or datetime.now(TZ).date()
+    return (
+        f"{_WOCHENTAG[d.weekday()]}, den "
+        f"{_ORDINAL.get(d.day, str(d.day))} {_MONAT[d.month]} {d.year}"
+    )
+
+
 def tag_wort(jahr: int, monat: int, tag: int, *, heute: date | None = None) -> str:
     """Relativ wenn möglich ('morgen'), sonst 'Donnerstag, den siebenundzwanzigsten August'."""
     try:
@@ -235,6 +248,92 @@ def slot_wort(iso: str, *, heute: date | None = None) -> str:
     return f"{_mit_praeposition(tag, 'am')} um {uhr}"
 
 
+_WT_RE = r"Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag"
+_MON_RE = r"Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember"
+_ORD_WORT_ZU_TAG: dict[str, int] = {}
+for _n, _akk in _ORDINAL.items():
+    _stamm = _akk[:-1] if _akk.endswith("n") else _akk
+    for _form in (_stamm, _stamm + "r", _stamm + "m", _akk):
+        _ORD_WORT_ZU_TAG[_form] = _n
+_ORD_ALT = "|".join(sorted(_ORD_WORT_ZU_TAG, key=len, reverse=True))
+
+
+def _wochentag_datum_sprechen(text: str, heute: date | None = None) -> str:
+    """'am Montag, der 31.8.' / 'Dienstag, der dritte September' → Akkusativ.
+
+    Das Modell schreibt gern Nominativ und Ziffern ('der 31. August'). Nach
+    einem Wochentag steht der Tag im Akkusativ: am Montag, den einunddreißigsten.
+    Der gesprochene Wochentag bleibt — nur Artikel und Tageszahl werden
+    zurechtgerückt, kein zweiter Wochentag aus dem Kalender.
+    """
+
+    def _akk(tag: int, monat: int) -> str:
+        return f"den {_ORDINAL.get(tag, str(tag))} {_MONAT[monat]}"
+
+    def _kopf(mo: re.Match) -> str:
+        praep = (mo.group(1) or "am ").strip()
+        wt = mo.group(2)
+        return f"{praep} {wt}, "
+
+    def dmy(mo: re.Match) -> str:
+        monat = int(mo.group(4))
+        tag = int(mo.group(3))
+        if not (1 <= monat <= 12 and 1 <= tag <= 31):
+            return mo.group(0)
+        return _kopf(mo) + _akk(tag, monat)
+
+    def monat(mo: re.Match) -> str:
+        name = mo.group(4).replace("Maerz", "März")
+        nr = next((k for k, v in _MONAT.items() if v.lower() == name.lower()), 0)
+        if not nr:
+            return mo.group(0)
+        return _kopf(mo) + _akk(int(mo.group(3)), nr)
+
+    def ordinal(mo: re.Match) -> str:
+        tag = _ORD_WORT_ZU_TAG.get(mo.group(3).lower())
+        name = mo.group(4).replace("Maerz", "März")
+        nr = next((k for k, v in _MONAT.items() if v.lower() == name.lower()), 0)
+        if not tag or not nr:
+            return mo.group(0)
+        return _kopf(mo) + _akk(tag, nr)
+
+    praep = rf"(am\s+|zum\s+|f(?:ü|ue)r\s+den\s+)?"
+    artikel = r"(?:der|den|die|dem)"
+    out = re.sub(
+        rf"\b{praep}({_WT_RE}),?\s+{artikel}\s+(\d{{1,2}})\.\s?(\d{{1,2}})\.?(?:\s?\d{{4}})?",
+        dmy, text, flags=re.I,
+    )
+    out = re.sub(
+        rf"\b{praep}({_WT_RE}),?\s+{artikel}\s+(\d{{1,2}})\.\s*({_MON_RE})\b",
+        monat, out, flags=re.I,
+    )
+    out = re.sub(
+        rf"\b{praep}({_WT_RE}),?\s+{artikel}\s+({_ORD_ALT})\s+({_MON_RE})\b",
+        ordinal, out, flags=re.I,
+    )
+    out = re.sub(
+        rf"\b(am|zum)\s+({_WT_RE}),?\s+der\b",
+        r"\1 \2, den",
+        out, flags=re.I,
+    )
+    out = re.sub(
+        rf"\b({_WT_RE}),\s+der\b",
+        r"\1, den",
+        out, flags=re.I,
+    )
+
+    def akk_rest(mo: re.Match) -> str:
+        tag = _ORD_WORT_ZU_TAG.get(mo.group(1).lower())
+        if not tag:
+            return mo.group(0)
+        return f"den {_ORDINAL[tag]} {mo.group(2)}"
+
+    return re.sub(
+        rf"\bden\s+({_ORD_ALT})\s+({_MON_RE})\b",
+        akk_rest, out, flags=re.I,
+    )
+
+
 def _ersetze_zeiten(text: str, heute: date | None = None) -> str:
     def iso_dt(mo: re.Match) -> str:
         praep = (mo.group(1) or "").strip()
@@ -272,7 +371,7 @@ def _ersetze_zeiten(text: str, heute: date | None = None) -> str:
     def stunde(mo: re.Match) -> str:
         return zeit_wort(int(mo.group(1)), 0)
 
-    out = text
+    out = _wochentag_datum_sprechen(text, heute)
     out = re.sub(r"\b(am\s+|vom\s+|zum\s+|f(?:ü|ue)r\s+den\s+)?(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::\d{2})?(?:[+-]\d{2}:?\d{2}|Z)?", iso_dt, out)
     out = re.sub(r"\b(am\s+|vom\s+|zum\s+|f(?:ü|ue)r\s+den\s+)?(\d{4})-(\d{2})-(\d{2})\b", iso_d, out)
     # "9.30 Uhr" (Punkt-Schreibweise) MUSS vor der Datums-Regel laufen,

@@ -163,7 +163,11 @@ def test_slot_wahl_wochentag():
 
 def test_slot_wahl_ordinal():
     assert flow._slot_wahl("den ersten bitte", ANGEBOT) == "2026-08-31T09:15"
+    assert flow._slot_wahl("den zweiten", ANGEBOT) == "2026-09-01T14:30"
     assert flow._slot_wahl("den letzten", ANGEBOT) == "2026-09-02T11:00"
+    assert flow._slot_wahl("dieser", ANGEBOT) == "2026-09-02T11:00"
+    assert flow._slot_wahl("genau den da", ANGEBOT) == "2026-09-02T11:00"
+    assert flow._slot_wahl("nummer zwei", ANGEBOT) == "2026-09-01T14:30"
 
 
 def test_slot_wahl_nachmittag():
@@ -191,12 +195,87 @@ def test_naechste_woche_ab_mitternacht():
     assert res["slots"][0]["iso"].startswith("2026-09-03T09:55")
 
 
+def test_naechste_woche_ist_naechster_montag():
+    """Freitag plus 'nächste Woche' darf nicht erst +7 Tage (nächster Freitag)
+    suchen — sonst fehlen Mo–Do der echten nächsten Woche (live 28.08.2026)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from kern.slots import pick_slots, wunsch_start
+
+    freitag = datetime(2026, 8, 28, 18, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    start = wunsch_start({"minDaysAhead": 7}, freitag)
+    assert start and start.date().isoformat() == "2026-08-31"
+    now_ms = int(freitag.timestamp() * 1000)
+    res = pick_slots(
+        ["2026-08-31T09:00:00+02:00", "2026-09-04T10:30:00+02:00"],
+        wish={"minDaysAhead": 7, "hourMin": 7, "hourMax": 12},
+        now_ms=now_ms,
+    )
+    assert res["wishMatched"]
+    assert res["slots"][0]["iso"].startswith("2026-08-31T09:00")
+
+
+def test_neu_sucht_sofort_global():
+    """Mitternacht 27.08.: Neue Patienten ohne Arzt-Frage — die Suche läuft
+    parallel über alle Kalender, sobald Grund und Wunsch stehen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False,
+              "grund": "Implantat-Beratung", "wunsch": {"minDaysAhead": 7, "hourMin": 7, "hourMax": 12}})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "name"
+    from bianca.hintergrund import _vorrat_schluessel
+    assert "EGAL" in _vorrat_schluessel(sit)
+
+
+def test_schnellster_nimmt_fruehesten_wunsch_slot():
+    """Arzt A hat früher einen Nachmittag, Arzt B früher den gewünschten
+    Vormittag — Gewinner muss B sein (live: Petsas gewann trotz späterem Vormittag)."""
+    from kern.calendar import finde_schnellsten
+
+    tenant = laden("meddent")
+    echt = __import__("kern.calendar", fromlist=["find_slots"]).find_slots
+
+    def fake(tenant_x, ctx, **kw):
+        cid = (ctx or {}).get("calendarId") or ""
+        if cid == "zex5bmv5jfIHWVW6zHbg":  # Petsas: früher Nachmittag, später Vormittag
+            return {"ok": True, "slots": [
+                "2026-08-31T14:00:00+02:00",
+                "2026-09-04T10:30:00+02:00",
+            ]}
+        if cid == "GVyoyXqCYof1QrGaNNnG":  # Nikolaou: früher Vormittag
+            return {"ok": True, "slots": [
+                "2026-08-31T09:00:00+02:00",
+                "2026-09-01T09:30:00+02:00",
+            ]}
+        return {"ok": True, "slots": ["2026-09-07T11:00:00+02:00"]}
+
+    import kern.calendar as kalmod
+    kalmod.find_slots = fake
+    try:
+        found = finde_schnellsten(
+            tenant, {"visitMotiveId": "x", "visitMotiveName": "Kontrolle"},
+            start_date="2026-08-31",
+            wish={"minDaysAhead": 7, "hourMin": 7, "hourMax": 12},
+        )
+        assert found.get("ok")
+        assert "Nikolaou" in (found.get("doctorName") or "")
+        assert any(str(s).startswith("2026-08-31T09:00") for s in found.get("slots") or [])
+    finally:
+        kalmod.find_slots = echt
+
+
 # --- Fluss ohne Netz ------------------------------------------------------
 
 def test_fluss_fragenkette_bis_angebot():
     echt_anstossen = flow.hintergrund.anstossen
+    echt_karte = flow.hintergrund.karte_aus_handy
+    echt_name = flow.hintergrund.karte_aus_name
     echt_find = flow.kal.find_slots
     flow.hintergrund.anstossen = lambda sit: None
+    flow.hintergrund.karte_aus_handy = lambda sit: False
+    flow.hintergrund.karte_aus_name = lambda sit: False
     flow.kal.find_slots = lambda *a, **k: {
         "ok": True,
         "slots": ["2026-08-31T09:15", "2026-09-01T14:30", "2026-09-02T11:00"],
@@ -229,7 +308,7 @@ def test_fluss_fragenkette_bis_angebot():
         assert z8 and "wiederhole" in z8["text"].lower()
 
         z9 = flow.zug(sit, "Ja, stimmt.")
-        assert z9 and "frei" in z9["text"].lower().replace("wäre", "wäre")
+        assert z9 and "frei" in z9["text"].lower()
         assert sit.get("offered")
 
         z10 = flow.zug(sit, "Der erste bitte.")
@@ -237,6 +316,8 @@ def test_fluss_fragenkette_bis_angebot():
         s = gehirn.sammler(sit)
         assert s["phase"] == "bestaetigen" and s["slotIso"]
     finally:
+        flow.hintergrund.karte_aus_handy = echt_karte
+        flow.hintergrund.karte_aus_name = echt_name
         flow.hintergrund.anstossen = echt_anstossen
         flow.kal.find_slots = echt_find
 
@@ -247,8 +328,14 @@ def test_buchung_bindet_angebots_kalender():
     im falschen Kalender. Die Buchung MUSS am Angebots-Kalender kleben."""
     echt_anstossen = flow.hintergrund.anstossen
     echt_find = flow.kal.find_slots
+    echt_schnell = flow.kal.finde_schnellsten
     flow.hintergrund.anstossen = lambda sit: None
     flow.kal.find_slots = lambda *a, **k: {
+        "ok": True,
+        "slots": ["2026-09-08T09:00", "2026-09-08T09:15", "2026-09-08T09:30"],
+        "doctorName": "Doktor Theodosios Patrikis, M.Sc.",
+    }
+    flow.kal.finde_schnellsten = lambda *a, **k: {
         "ok": True,
         "slots": ["2026-09-08T09:00", "2026-09-08T09:15", "2026-09-08T09:30"],
         "doctorName": "Doktor Theodosios Patrikis, M.Sc.",
@@ -277,6 +364,7 @@ def test_buchung_bindet_angebots_kalender():
     finally:
         flow.hintergrund.anstossen = echt_anstossen
         flow.kal.find_slots = echt_find
+        flow.kal.finde_schnellsten = echt_schnell
 
 
 def test_fluss_gibt_bei_fremdfrage_ab():
@@ -586,11 +674,298 @@ def test_telefon_stueckweise_diktiert():
     gehirn.einsammeln(sit, "null eins sieben sieben")
     assert s["telefonTeil"] == "0177" and not s["telefonOffen"]
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "telefon" and "fehlt" in frage.lower()
+    assert fid == "telefon" and "bisher" in frage.lower()
+    assert "null eins sieben sieben" in frage
     gehirn.einsammeln(sit, "sechs null null vier sechs null null")
     assert s["telefonOffen"] == "01776004600" and not s["telefonTeil"]
     fid2, _ = gehirn.naechste_frage(sit)
     assert fid2 == "telefon_check"
+
+
+def test_telefon_abgeschnittener_neuanfang():
+    """Live 28.08.2026: 017760046, dann 01776 — kürzerer Neuanfang darf den
+    längeren Stand nicht erschlagen."""
+    assert telefon.zusammenfuegen("017760046", "01776") == "017760046"
+    assert telefon.zusammenfuegen("017760046", "00") == "01776004600"
+    assert telefon.zusammenfuegen("017760046", "01776004600") == "01776004600"
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "arzt": {"typ": "genannt", "calendarId": "x", "calendarName": "Dr. Petsas"},
+              "vorname": "Martin", "nachname": "Berger", "buchstabiert": True,
+              "grund": "Kontrolluntersuchung", "wunsch": {}, "frage": "telefon"})
+    gehirn.einsammeln(sit, "017760046")
+    assert s["telefonTeil"] == "017760046"
+    _, frage = gehirn.naechste_frage(sit)
+    assert "letzten ziffern" in frage.lower()
+    gehirn.einsammeln(sit, "01776")
+    assert s["telefonTeil"] == "017760046" and not s["telefonOffen"]
+    gehirn.einsammeln(sit, "null null")
+    assert s["telefonOffen"] == "01776004600" and not s["telefonTeil"]
+
+
+def test_telefon_stt_muell_004():
+    """Live 28.08.2026: '004.' am Anfang der Nummerfrage ist kein Start."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "vorname": "Peter",
+              "nachname": "Muller", "buchstabiert": True, "grund": "Kontrolle",
+              "wunsch": {}, "frage": "telefon"})
+    gehirn.einsammeln(sit, "004.")
+    assert not s["telefonTeil"] and not s["telefonOffen"]
+    gehirn.einsammeln(sit, "01776004600")
+    assert s["telefonOffen"] == "01776004600"
+
+
+def test_okay_ist_kein_nachname():
+    """Live 28.08.2026: 'Okay.' auf die Namensfrage wurde zu Nachname Okay."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "grund": "Kontrolle",
+              "wunsch": {}, "frage": "name"})
+    gehirn.einsammeln(sit, "Okay.")
+    assert not s["nachname"] and not s["vorname"]
+
+
+def test_nachname_kommt_zuerst():
+    """Am Telefon sagt jeder Patient den Nachnamen zuerst ('Müller Peter').
+    Vorname-zuerst bleibt nur, wenn das erste Wort ein klarer Vorname ist."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit, "Müller Peter")
+    assert s["nachname"] == "Müller" and s["vorname"] == "Peter"
+
+    sit2 = _sit()
+    s2 = gehirn.sammler(sit2)
+    s2.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit2, "Peter Müller")
+    assert s2["vorname"] == "Peter" and s2["nachname"] == "Müller"
+
+    sit3 = _sit()
+    s3 = gehirn.sammler(sit3)
+    s3.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit3, "Schmidt Hans")
+    assert s3["nachname"] == "Schmidt" and s3["vorname"] == "Hans"
+
+
+def test_anrede_ist_herr_frau_nachname():
+    """Nie Vorname zuerst, nie 'Herr' raten."""
+    assert gehirn.anrede({"nachname": "Müller", "vorname": "Peter", "geschlecht": "m"}) == "Herr Müller"
+    assert gehirn.anrede({"nachname": "Müller", "vorname": "Petra", "geschlecht": "f"}) == "Frau Müller"
+    assert gehirn.anrede({"nachname": "Müller", "vorname": "Peter"}) == ""
+    q = flow._quittung(
+        {"nachname": "Müller", "vorname": "Peter", "geschlecht": "m",
+         "bekannt": False, "buchstabiert": False},
+        {"name"}, None,
+    )
+    assert "Herr Müller" in q and "Peter" not in q
+
+
+def test_rueckkehrer_name_trifft_kartei():
+    """Mitternacht 27.08.: nach dem Behandler kommt der Name; ein Kartei-
+    Treffer begrüßt mit Frau/Herr + Nachname — die Nummer kommt später."""
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_karte = flow.hintergrund.karte_aus_handy
+    echt_name = flow.hintergrund.karte_aus_name
+
+    def _treffer(sit):
+        s = gehirn.sammler(sit)
+        if not s.get("nachname"):
+            return False
+        s["patientId"] = "pat-mueller"
+        s["bekannt"] = True
+        s["vorname"] = "Petra"
+        s["nachname"] = "Müller"
+        s["geschlecht"] = "f"
+        s["buchstabiert"] = True
+        sit["patient"] = {
+            "id": "pat-mueller", "firstName": "Petra", "lastName": "Müller",
+            "gender": "f", "name": "Petra Müller",
+        }
+        return True
+
+    flow.hintergrund.anstossen = lambda sit: None
+    flow.hintergrund.karte_aus_handy = lambda sit: False
+    flow.hintergrund.karte_aus_name = _treffer
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich hätte gerne einen Termin.")
+        assert z1 and "schon" in z1["text"].lower()
+        z2 = flow.zug(sit, "Ja, ich war schon mal bei Ihnen.")
+        assert z2 and "behandler" in z2["text"].lower()
+        z3 = flow.zug(sit, "Bei Doktor Petsas.")
+        assert z3 and "name" in z3["text"].lower()
+        z4 = flow.zug(sit, "Müller Petra")
+        text = (z4 or {}).get("text") or ""
+        assert "willkommen" in text.lower()
+        assert "müller" in text.lower()
+        assert "petra" not in text.lower()
+        s = gehirn.sammler(sit)
+        assert s["bekannt"] and s["patientId"] == "pat-mueller"
+        assert s["nachname"] == "Müller" and s["vorname"] == "Petra"
+        assert sit.get("patient", {}).get("id") == "pat-mueller"
+        assert "worum" in text.lower()
+        assert "handynummer" not in text.lower()
+    finally:
+        flow.hintergrund.karte_aus_handy = echt_karte
+        flow.hintergrund.karte_aus_name = echt_name
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_rueckkehrer_name_trifft_nach_nummer_fehl():
+    """Nummer nicht eindeutig — der Nachname zuerst füllt trotzdem das Gedächtnis
+    noch im selben Zug (Willkommen zurück, nicht nur 'Danke.')."""
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_karte = flow.hintergrund.karte_aus_handy
+    echt_name = flow.hintergrund.karte_aus_name
+
+    def _name(sit):
+        s = gehirn.sammler(sit)
+        if not s.get("nachname"):
+            return False
+        s["patientId"] = "pat-name"
+        s["bekannt"] = True
+        s["geschlecht"] = "m"
+        s["buchstabiert"] = True
+        sit["patient"] = {"id": "pat-name", "firstName": s["vorname"],
+                          "lastName": s["nachname"], "gender": "m"}
+        return True
+
+    flow.hintergrund.anstossen = lambda sit: None
+    flow.hintergrund.karte_aus_handy = lambda sit: False
+    flow.hintergrund.karte_aus_name = _name
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "x", "calendarName": "Dr. Petsas"},
+                  "telefon": "01776004600", "telefonOk": True, "frage": "name"})
+        z = flow.zug(sit, "Müller Peter")
+        text = (z or {}).get("text") or ""
+        assert gehirn.sammler(sit)["vorname"] == "Peter"
+        assert gehirn.sammler(sit)["nachname"] == "Müller"
+        assert gehirn.sammler(sit)["bekannt"]
+        assert "willkommen" in text.lower() and "müller" in text.lower()
+        assert "peter" not in text.lower()
+    finally:
+        flow.hintergrund.karte_aus_handy = echt_karte
+        flow.hintergrund.karte_aus_name = echt_name
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_gedaechtnis_im_willkommen():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"nachname": "Müller", "vorname": "Petra", "geschlecht": "f", "bekannt": True})
+    sit["letzterAnruf"] = {"satz": "Sie hatten gestern wegen Krone angerufen"}
+    q = flow._quittung(s, {"kartei"}, sit)
+    assert "Willkommen zurück, Frau Müller" in q
+    assert "Krone" in q and "richtig?" in q
+    assert sit.get("gedaechtnisOffen")
+
+
+def test_gedaechtnis_ja_fuellt_grund():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "frage": "grund",
+              "arzt": {"typ": "egal"},
+              "telefonOk": True, "vorname": "Petra", "nachname": "Müller",
+              "bekannt": True, "buchstabiert": True})
+    sit["gedaechtnisOffen"] = True
+    sit["letzterAnruf"] = {"grund": "Krone", "satz": "Sie hatten gestern wegen Krone angerufen"}
+    echt = flow.hintergrund.anstossen
+    echt_h = flow.hintergrund.karte_aus_handy
+    echt_n = flow.hintergrund.karte_aus_name
+    flow.hintergrund.anstossen = lambda sit: None
+    flow.hintergrund.karte_aus_handy = lambda sit: False
+    flow.hintergrund.karte_aus_name = lambda sit: False
+    try:
+        flow.zug(sit, "Ja, genau.")
+        assert s["grund"] == "Krone"
+        assert not sit.get("gedaechtnisOffen")
+    finally:
+        flow.hintergrund.anstossen = echt
+        flow.hintergrund.karte_aus_handy = echt_h
+        flow.hintergrund.karte_aus_name = echt_n
+
+
+def test_abschluss_kommt_aus_tenant():
+    sit = _sit()
+    sit["tenant"] = {**sit["tenant"], "abschluss": "Parkplätze sind im Hof."}
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "phase": "bestaetigen", "slotIso": "2026-09-02T09:00:00+02:00",
+              "telefon": "015112345678", "telefonOk": True})
+    sit["offered"] = [{"iso": "2026-09-02T09:00:00+02:00", "spoken": "am Mittwoch um neun"}]
+    echt = flow.kal.book_slot
+    flow.kal.book_slot = lambda *a, **k: {
+        "ok": True, "booked": True, "dryRun": False,
+        "slotIso": "2026-09-02T09:00:00+02:00",
+        "spoken": "Der Termin ist eingetragen.",
+    }
+    try:
+        z = flow.zug(sit, "Ja, bitte eintragen.")
+        assert z and "Parkplätze sind im Hof" in z["text"]
+        assert "Kann ich sonst noch etwas" in z["text"]
+    finally:
+        flow.kal.book_slot = echt
+
+
+def test_nach_handy_nimmt_nur_eindeutigen_treffer():
+    from kern import patients as patmod
+    echt = patmod.search_patients
+    patmod.search_patients = lambda tenant, q: {
+        "ok": True,
+        "patients": [
+            {"id": "p1", "firstName": "Petra", "lastName": "Müller",
+             "gender": "f", "mobilePhoneNumber": "+491776004600"},
+            {"id": "p2", "firstName": "X", "lastName": "Y",
+             "mobilePhoneNumber": "+491511111111"},
+        ],
+    }
+    try:
+        hit = patmod.nach_handy({"_id": "meddent"}, "01776004600")
+        assert hit.get("id") == "p1" and hit.get("lastName") == "Müller"
+        leer = patmod.nach_handy({"_id": "meddent"}, "01771111111")
+        assert not leer
+    finally:
+        patmod.search_patients = echt
+
+
+def test_clip_nummer_beim_schonmal():
+    """Liegt die Anrufernummer schon vor (CLIP), wird sie beim 'schon mal'
+    geprüft — ohne extra nach der Nummer zu fragen."""
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_karte = flow.hintergrund.karte_aus_handy
+
+    def _treffer(sit):
+        s = gehirn.sammler(sit)
+        s["patientId"] = "pat-clip"
+        s["bekannt"] = True
+        s["vorname"] = "Hans"
+        s["nachname"] = "Berger"
+        s["geschlecht"] = "m"
+        s["buchstabiert"] = True
+        sit["patient"] = {"id": "pat-clip", "firstName": "Hans", "lastName": "Berger", "gender": "m"}
+        return True
+
+    flow.hintergrund.anstossen = lambda sit: None
+    flow.hintergrund.karte_aus_handy = _treffer
+    try:
+        sit = _sit()
+        sit["anruferNummer"] = "01776004600"
+        flow.zug(sit, "Termin bitte.")
+        z = flow.zug(sit, "Ja, ich war schon mal da.")
+        text = (z or {}).get("text") or ""
+        assert "willkommen" in text.lower()
+        assert "herr berger" in text.lower()
+        s = gehirn.sammler(sit)
+        assert s["telefon"] == "01776004600" and s["telefonOk"]
+        assert s["bekannt"] and s["nachname"] == "Berger"
+        assert "behandler" in text.lower()
+        assert "handynummer" not in text.lower()
+    finally:
+        flow.hintergrund.karte_aus_handy = echt_karte
+        flow.hintergrund.anstossen = echt_anstossen
 
 
 def test_frage_eskalation_statt_schleife():
@@ -840,6 +1215,13 @@ def test_wunsch_uhrzeit_in_worten_und_statt():
     # "vormittags 7-12" gedeutet und warf Nachmittags-Slots weg).
     w3 = parse_slot_wish("Kann man den ein bisschen früher machen?")
     assert not (w3 and w3.get("hourMin") == 7)
+    from datetime import date as _date
+    w4 = parse_slot_wish("morgen vormittags", heute=_date(2026, 8, 27))
+    assert w4 and w4.get("date") == "2026-08-28" and w4.get("hourMax") == 12
+    w5 = parse_slot_wish("in drei Tagen", heute=_date(2026, 8, 27))
+    assert w5 and w5.get("date") == "2026-08-30"
+    w6 = parse_slot_wish("diesen Freitag", heute=_date(2026, 8, 27))
+    assert w6 and w6.get("date") == "2026-08-28"
 
 
 def test_verschieben_gleicher_tag_frueher():
@@ -854,8 +1236,10 @@ def test_verschieben_gleicher_tag_frueher():
 
     def _um(tage: int, stunde: int, minute: int) -> str:
         d = datetime.now().astimezone() + timedelta(days=tage)
-        return d.replace(hour=stunde, minute=minute, second=0,
-                         microsecond=0).isoformat(timespec="seconds")
+        d = d.replace(hour=stunde, minute=minute, second=0, microsecond=0)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        return d.isoformat(timespec="seconds")
 
     frueher_slot = _um(1, 12, 15)
     echt = verwalten.kal.find_slots
@@ -961,6 +1345,8 @@ def _iso_in(tage: int, h: int, m: int = 0) -> str:
     from zoneinfo import ZoneInfo
     d = datetime.now(ZoneInfo("Europe/Berlin")).replace(
         hour=h, minute=m, second=0, microsecond=0) + timedelta(days=tage)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
     return d.isoformat(timespec="seconds")
 
 
@@ -1132,6 +1518,7 @@ def test_einzelner_vorname_wird_vorname():
     s["warSchonMal"] = False
     s["grund"] = "Kontrolluntersuchung"
     s["wunsch"] = {}
+    s["arzt"] = {"typ": "egal"}
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "nachname" and "Nachname" in frage
 
@@ -1260,14 +1647,14 @@ def test_besuchsgrund_mapping_auf_behandlerliste():
     kern, vm = besuchsgrund.deute(tenant, "Ich brauche mal wieder eine Zahnreinigung")
     assert kern == "professionelle Zahnreinigung"
     assert vm and "Zahnreinigung" in vm["name"]
-    # Wurzelbehandlung führt der Mandant nicht -> Zweifelsfall Kontrolle:
+    # Wurzelbehandlung -> KCH Endo klein (live-ID, Chef: immer klein).
     kern, vm = besuchsgrund.deute(tenant, "Ich brauche eine Wurzelbehandlung")
     assert kern == "Wurzelbehandlung"
-    assert vm and "Kontroll" in vm["name"]
-    # Kaputte Prothese ist eine Reparatur -> hier: ZE Besprechung:
+    assert vm and vm["id"] == "qocQp8zmeMleYON7ZpPS" and vm["name"] == "KCH Endo klein"
+    # Kaputte Prothese -> ZE Reparatur klein, nicht ZE Besprechung.
     kern, vm = besuchsgrund.deute(tenant, "Meine Prothese ist gebrochen")
     assert kern == "Reparatur Zahnersatz"
-    assert vm and vm["name"] == "ZE Besprechung"
+    assert vm and vm["id"] == "rOM5UKvEY4ykLd8bH1A0" and vm["name"] == "ZE Reparatur klein"
 
 
 def test_besuchsgrund_klein_praeferenz():

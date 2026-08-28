@@ -195,6 +195,7 @@ def _buchungs_sit() -> dict:
     s.update({
         "modus": "buchen", "phase": "", "frage": "telefon",
         "warSchonMal": False, "grund": "Kontrolle", "wunsch": {},
+        "arzt": {"typ": "egal"},
         "vorname": "Anna", "nachname": "Meier", "buchstabiert": True,
     })
     return sit
@@ -266,6 +267,31 @@ def test_zustand_ist_kein_name_aber_echter_name_bleibt():
     assert not s["vorname"] and not s["nachname"]
     gehirn.einsammeln(sit, "Ich bin Paul Neumann.")
     assert s["vorname"] == "Paul" and s["nachname"] == "Neumann"
+
+
+def test_genervt_schaltet_auf_knapp():
+    sit = _sit()
+    gespraech.routen(sit, "Meine Tochter heiratet am Wochenende und ich bin so aufgeregt!")
+    assert sit["talk"]["stack"]
+    r = gespraech.routen(sit, "Das dauert mir jetzt zu lange, jetzt machen Sie mal.")
+    assert r["floor"] == gespraech.JOB
+    assert r.get("genervt")
+    assert not sit["talk"]["stack"]
+    assert not gespraech.traegt_thema(sit, "Und die Hochzeit war wirklich schön.")
+    plan = gespraech.plan_block(r, offene_frage="Wie ist Ihr Nachname?")
+    assert "ungeduldig" in plan.lower()
+    assert "entschuldig" in plan.lower()
+    b = gespraech.budget(gespraech.TALK, genervt=True)
+    assert b["max_tokens"] <= 80
+
+
+def test_erzaehl_ich_bin_ist_kein_name():
+    """Live 28.08.2026: 'Ich bin hier per Raumschiff gelandet' -> Per Gelandet."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "frage": "schonmal"})
+    gehirn.einsammeln(sit, "Ich bin hier per Raumschiff gelandet, ich habe keinen Benzin mehr.")
+    assert not s["vorname"] and not s["nachname"], (s["vorname"], s["nachname"])
 
 
 if __name__ == "__main__":

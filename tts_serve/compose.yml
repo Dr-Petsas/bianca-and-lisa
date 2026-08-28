@@ -1,9 +1,9 @@
 # TTS-Container fuer die 5090 — IMMER NUR EIN PROFIL STARTEN (eine GPU,
 # vLLM laeuft daneben):
-#   docker compose --profile chatterbox up -d --build
 #   docker compose --profile chatterbox down
-#   docker compose --profile cosyvoice  up -d --build
-# Port-Landkarte 5090: vLLM 8000, Chatterbox 8210, CosyVoice 8211.
+#   docker compose --profile cosyvoice  down
+#   docker compose --profile qwen3      up -d --build
+# Port-Landkarte 5090: vLLM 8000, Chatterbox 8210, CosyVoice 8211, Qwen3 8213.
 services:
   chatterbox:
     build: ./chatterbox
@@ -69,6 +69,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 1200s  # erster Start: Modell-Download + vllm-Export + TRT-Engine-Bau
+
+  qwen3:
+    build: ./qwen3
+    image: tts-qwen3:v1
+    profiles: ["qwen3"]
+    ports:
+      - "8213:8100"
+    volumes:
+      - ./stimmen:/stimmen:ro
+      - tts-models:/models
+    environment:
+      TTS_SPRACHE: "German"
+      QWEN_TTS_MODEL: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 900s   # erster Start laedt ~1 GB Gewichte von HuggingFace
 
 volumes:
   tts-models:

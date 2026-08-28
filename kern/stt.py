@@ -7,9 +7,45 @@ im Container — der Scribe-Pfad ignoriert sie."""
 
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from kern.config import ELEVENLABS_API_KEY, STT_BASE
+
+# Clara-V7-Halluzinationsfilter (worker_mic_utils._is_stt_hallucination),
+# angepasst ans Patiententelefon: "Tschuess"/"Vielen Dank"/"Okay" bleiben
+# echte Antworten. Nur Atem-/Untertitel-Phantome und Token-Loops fallen.
+_HALLU_RE = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"^\s*thank you[!\.\s]*$",
+    r"^\s*thanks(?: for watching)?[!\.\s]*$",
+    r"^\s*you[!\.\?\s]*$",
+    r"^\s*bye[\s\-]*bye?[!\.\s]*$",
+    r"^\s*hello[!\.\?\s]*$",
+    r"^\s*subscribe[!\.\s]*$",
+    r"^\s*see you (?:next time|later)[!\.\s]*$",
+    r"^\s*ahem[!\.\s]*$",
+    r"^\s*music[!\.\s]*$",
+    r"^\s*\[?music\]?[!\.\s]*$",
+    r"^\s*\.{1,6}\s*$",
+    r"^\s*thank you[,!\.\s]*(?:dr|doctor|sir)?[,!\.\s]*$",
+    r"^\s*thank you very much[!\.\s]*$",
+    r"^\s*excuse me[,!\.\s]*$",
+    r"^\s*tchau[,!\.\s]*$",
+    r"^\s*ciao[,!\.\s]*$",
+    r"^\s*bye[,!\.\s]*$",
+    r".*untertitel.*(zdf|ard|amara|community|funk)",
+    r".*\bamara\.org\b",
+    r"^\s*konec[!\.,\s]*$",
+    r"^\s*obrigad[ao][!\.\s]*$",
+    r"^\s*c'est",
+    r"^\s*voil[àa]",
+))
+_KURZ_OK = frozenset({
+    "ja", "nein", "doch", "klar", "okay", "ok", "gut", "genau", "mhm",
+    "hm", "hmm", "aha", "stop", "halt", "weiter", "nö", "noe", "jo",
+    "joa", "jep", "nee", "näh", "naeh", "nix",
+})
 
 _CLIENT: httpx.Client | None = None
 
@@ -21,10 +57,33 @@ def _client() -> httpx.Client:
     return _CLIENT
 
 
+def _ist_halluzination(text: str) -> bool:
+    """Clara-V7-Atem-/Untertitel-Waechter. True = Transkript verwerfen."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    if any(0x0400 <= ord(c) < 0x0500 for c in t):
+        return True
+    stripped = re.sub(r"[\.!\?,;\s]+$", "", t.lower())
+    if stripped in _KURZ_OK:
+        return False
+    if len(t) < 4:
+        return True
+    if any(p.match(t) for p in _HALLU_RE):
+        return True
+    toks = re.findall(r"[A-Za-zÄÖÜäöüß]+", t.lower())
+    if len(toks) >= 3 and len(set(toks)) == 1:
+        return True
+    if len(toks) >= 5 and len(set(toks)) <= 2:
+        return True
+    if len(t) < 30 and re.search(r"[éèêàâóòôãáñç]", t):
+        return True
+    return False
+
+
 def _sauber(text) -> str:
     text = " ".join(str(text or "").split()).strip()
-    # Nicht-lateinische Ausreisser (kyrillische Halluzinationen) verwerfen.
-    if any(0x0400 <= ord(c) < 0x0500 for c in text):
+    if _ist_halluzination(text):
         return ""
     return text
 

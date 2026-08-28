@@ -27,21 +27,67 @@ from kern.config import (
 # deutsche Silbentrennung. Logs, Kalender und Transkript behalten die echte
 # Schreibweise — nur der Text an die Stimme wird umgeschrieben.
 _AUSSPRACHE = (
-    (re.compile(r"\bMichael\b"), "Micha-el"),
-    (re.compile(r"\bDavid\b"), "Dah-vid"),
+    # Englisch klingende Vornamen — Qwen/ElevenLabs lesen sie sonst englisch.
+    # Bindestrich erzwingt deutsche Silben; Logs behalten die echte Schreibweise.
+    (re.compile(r"\bMichael\b", re.I), "Micha-el"),
+    (re.compile(r"\bDavid\b", re.I), "Da-wid"),
+    (re.compile(r"\bPeter\b", re.I), "Peh-ter"),
+    (re.compile(r"\bJohn\b", re.I), "Dschon"),
+    (re.compile(r"\bSteve\b", re.I), "Stief"),
+    (re.compile(r"\bSteven\b", re.I), "Steh-wen"),
+    (re.compile(r"\bStephen\b", re.I), "Steh-fen"),
+    (re.compile(r"\bAndrew\b", re.I), "Än-dru"),
+    (re.compile(r"\bJames\b", re.I), "Dschehms"),
+    (re.compile(r"\bWilliam\b", re.I), "Will-jem"),
+    (re.compile(r"\bGeorge\b", re.I), "Schorsch"),
+    (re.compile(r"\bKevin\b", re.I), "Keh-win"),
+    (re.compile(r"\bBrian\b", re.I), "Brai-en"),
+    (re.compile(r"\bDaniel\b", re.I), "Dah-ni-el"),
+    (re.compile(r"\bChristopher\b", re.I), "Kris-to-fer"),
+    (re.compile(r"\bChris\b", re.I), "Kriss"),
+    (re.compile(r"\bJennifer\b", re.I), "Dschen-ni-fer"),
+    (re.compile(r"\bJessica\b", re.I), "Jess-i-ka"),
+    (re.compile(r"\bSarah\b", re.I), "Sah-ra"),
+    (re.compile(r"\bMichelle\b", re.I), "Mi-schell"),
+    (re.compile(r"\bMike\b", re.I), "Maik"),
+    (re.compile(r"\bJack\b", re.I), "Dschäck"),
+    (re.compile(r"\bJoseph\b", re.I), "Joh-sef"),
+    (re.compile(r"\bJoe\b", re.I), "Dscho"),
+    (re.compile(r"\bJonathan\b", re.I), "Joh-na-tan"),
+    (re.compile(r"\bNathan\b", re.I), "Nah-tan"),
+    (re.compile(r"\bJustin\b", re.I), "Juss-tin"),
+    (re.compile(r"\bJason\b", re.I), "Jeh-son"),
+    (re.compile(r"\bRyan\b", re.I), "Rai-en"),
+    (re.compile(r"\bSean\b", re.I), "Schohn"),
+    (re.compile(r"\bRichard\b", re.I), "Ri-chard"),
+    (re.compile(r"\bThomas\b", re.I), "Toh-mas"),
+    (re.compile(r"\bBenjamin\b", re.I), "Ben-ja-min"),
+    (re.compile(r"\bMatthew\b", re.I), "Mät-ju"),
+    (re.compile(r"\bAnthony\b", re.I), "Än-to-ni"),
+    (re.compile(r"\bCharles\b", re.I), "Tschahls"),
+    (re.compile(r"\bHenry\b", re.I), "Henn-ri"),
+    (re.compile(r"\bJeffrey\b", re.I), "Dscheff-ri"),
+    (re.compile(r"\bAmy\b", re.I), "Eh-mi"),
+    (re.compile(r"\bKate\b", re.I), "Keht"),
+    (re.compile(r"\bStephanie\b", re.I), "Steh-fa-ni"),
+    (re.compile(r"\bEmily\b", re.I), "Eh-mi-li"),
+    (re.compile(r"\bPatrick\b", re.I), "Patt-rick"),
+    (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
+    (re.compile(r"\bPatrikis\b", re.I), "Pa-tri-kis"),
+    (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
 
-# Lautheit — echte RMS-Angleichung statt Spitzenwert-Anhebung (28.08.2026).
-# Das Demo-Clara-Peak-Rezept (nur leise Sätze anheben, Ziel 0,82 FS, max 1,8)
-# passte für ElevenLabs: deren Audio kommt schon komprimiert und gleichmäßig.
-# CosyVoice/Chatterbox schwanken dagegen in der Lautheit von Satz zu Satz —
-# der Peak-Gain sprang hörbar zwischen den Äußerungen ("Pumpen", Chef
-# 28.08.2026). Jetzt wird jede Äußerung auf DIESELBE Sprach-Lautheit gezogen
-# (auch absenken), Ziel weiter auf Demo-Clara-Niveau kalibriert.
-ZIEL_RMS = 0.15            # Sprach-RMS relativ zur Vollaussteuerung
-PEAK_DECKEL = 0.95         # nach dem Gain nie über 0,95 FS — kein Klirren
+# Lautheit — RMS-Angleichung auf Clara-/ElevenLabs-Niveau (28.08.2026).
+# Das Demo-Clara-Peak-Rezept (Ziel 0,82 FS, max 1,8, nie absenken) macht
+# ElevenLabs laut, weil speaker_boost das Audio schon komprimiert. Qwen3
+# hat hohe Spitzen bei leiser Sprache (gemessen: Peak 0,68 / RMS 0,08) —
+# ein Peak-Deckel auf den Gain hielt Bianca bei −19 dBFS, Clara liegt bei
+# etwa −13. Deshalb: Gain NUR aus dem Sprach-RMS, Peaks danach kappen.
+# Gleicher RMS je Satz = kein Pumpen (Chef 28.08.).
+ZIEL_RMS = 0.22            # Sprach-RMS ~ −13 dBFS, wie Clara Demo/V7 am Telefon
+PEAK_DECKEL = 0.95         # nach dem Gain hart kappen — kein Klirren
 MIN_GAIN = 0.5             # nie mehr als halbieren ...
-MAX_GAIN = 4.0             # ... oder vervierfachen (kaputte Stücke nicht "retten")
+MAX_GAIN = 5.0             # Qwen-leise Saetze brauchen mehr als 4x
 AKTIV_SCHWELLE = 300       # |Sample| darunter = Pause/Atmen, zählt nicht zur Lautheit
 MIN_AKTIV_SAMPLES = 1200   # unter ~50 ms Sprachanteil gilt das Stück als Stille
 PCM_RATE = 24000
@@ -153,29 +199,32 @@ def _lokal_schluessel(sauber: str) -> str:
 def _gain_oder_none(samples: "array.array") -> float | None:
     """Lautheits-Gain für ein PCM-Stück — None, wenn zu wenig Sprache drin
     ist (Stille/Atmen), dann wird nichts angefasst."""
-    spitze = 1
     quad = 0
     aktiv = 0
     for s in samples:
         a = abs(s)
-        if a > spitze:
-            spitze = a
         if a >= AKTIV_SCHWELLE:
             quad += s * s
             aktiv += 1
     if aktiv < MIN_AKTIV_SAMPLES:
         return None
     rms = (quad / aktiv) ** 0.5
-    gain = max(MIN_GAIN, min(MAX_GAIN, (ZIEL_RMS * 32767.0) / max(rms, 1.0)))
-    return min(gain, (PEAK_DECKEL * 32767.0) / spitze)
+    # Peak klemmt den Gain NICHT: sonst bleibt Qwen leise (Clara-Vergleich
+    # 28.08.2026). Spitzen werden in _skaliert_bytes gekappt.
+    return max(MIN_GAIN, min(MAX_GAIN, (ZIEL_RMS * 32767.0) / max(rms, 1.0)))
 
 
 def _skaliert_bytes(samples: "array.array", gain: float) -> bytes:
-    if 0.98 <= gain <= 1.02:
+    limit = int(PEAK_DECKEL * 32767.0)
+    if 0.98 <= gain <= 1.02 and max((abs(s) for s in samples), default=0) <= limit:
         return samples.tobytes()
     skaliert = array.array("h", bytes(len(samples) * 2))
     for i, s in enumerate(samples):
         v = int(s * gain)
+        if v > limit:
+            v = limit
+        elif v < -limit:
+            v = -limit
         if v > 32767:
             v = 32767
         elif v < -32768:
@@ -251,8 +300,7 @@ def _haeppchen_wav(stueck: bytes, gain: float | None) -> tuple[bytes, float | No
     if gain is None:
         gain = _gain_oder_none(samples)
     eff = gain if gain is not None else 1.0
-    spitze = max(1, max(abs(s) for s in samples))
-    eff = min(eff, (PEAK_DECKEL * 32767.0) / spitze)
+    # Peak wird in _skaliert_bytes gekappt, der Äußerungs-Gain bleibt.
     skaliert = array.array("h")
     skaliert.frombytes(_skaliert_bytes(samples, eff))
     rampe = min(48, len(skaliert) // 2)  # 2 ms bei 24 kHz
@@ -510,6 +558,8 @@ def engine_anzeige() -> str:
         return "Chatterbox (lokal)"
     if eng.startswith("cosy"):
         return "CosyVoice (lokal)"
+    if eng in ("qwen3", "qwen"):
+        return "Qwen3-TTS (lokal)"
     if eng:
         return f"{eng} (lokal)"
     return "lokal — Container antwortet nicht"

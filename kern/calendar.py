@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
@@ -12,6 +13,7 @@ from kern import notes, patients
 from kern.slots import REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
 from kern.sprech import slot_wort
 from kern.tenants import kalender_von, motiv_von
+from kern import zeiten
 
 NO_CONTEXT = "Ich komme hier gerade nicht an den Kalender. Die Praxis meldet sich zeitnah mit Terminvorschlägen."
 NO_CONTEXT_REGIE = "Kein Kalenderkontext in dieser Sitzung. Biete einen Rückruf an, nenne keine erfundenen Zeiten."
@@ -84,13 +86,83 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = Fa
             slots = json.loads(raw) if isinstance(raw, str) else (raw or [])
         except json.JSONDecodeError:
             slots = []
+        frei = [s for s in _iso_liste(slots) if zeiten.slot_frei(s, tenant)]
         return {
-            "ok": True, "slots": slots, "calendar": cal, "motive": vm,
+            "ok": True, "slots": frei, "calendar": cal, "motive": vm,
             # Bei "egal" waehlt der Server den Kalender — der Name des
             # Gewinner-Arztes kommt hier zurueck (fuers Buchen + Ansagen).
             "doctorName": _s(nutz.get("doctor_name")),
         }
     return {"ok": False, "error": (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"}
+
+
+def finde_schnellsten(
+    tenant: dict,
+    ctx: dict,
+    *,
+    start_date: str = "",
+    wish: dict | None = None,
+    source: str = "",
+) -> dict[str, Any]:
+    """Alle Kalender abfragen, Gewinner = wer den frühesten Wunsch-Slot hat.
+
+    Die Cloud-Function 'anyDoctor' nimmt den Arzt mit dem allerersten Slot
+    (auch nachmittags) und liefert nur DESSEN Liste. Bei 'vormittags nächste
+    Woche' war das live nicht der schnellste Vormittag (28.08.2026).
+    """
+    from kern.slots import pick_slots
+    from kern.tenants import kalender_liste
+
+    cals = kalender_liste(tenant)
+    if not cals:
+        return find_slots(tenant, ctx, start_date=start_date, egal=True, source=source)
+
+    def _einer(cal: dict) -> tuple[dict, list[str]]:
+        found = find_slots(
+            tenant,
+            {
+                "calendarId": _s(cal.get("id")),
+                "calendarName": _s(cal.get("name")),
+                "visitMotiveId": _s(ctx.get("visitMotiveId")),
+                "visitMotiveName": _s(ctx.get("visitMotiveName")),
+            },
+            start_date=start_date,
+            egal=False,
+            source=source or "pickadoc-bianca",
+        )
+        return cal, _iso_liste(found.get("slots") or []) if found.get("ok") else []
+
+    if len(cals) == 1:
+        paare = [_einer(cals[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=min(4, len(cals))) as pool:
+            paare = list(pool.map(_einer, cals))
+
+    tagged: list[tuple[str, dict]] = []
+    for cal, isos in paare:
+        for iso in isos:
+            tagged.append((iso, cal))
+    if not tagged:
+        return {"ok": False, "slots": [], "error": "keine freien Termine"}
+
+    def _key(iso: str) -> str:
+        return str(iso).replace(" ", "T")[:16]
+
+    isos_alle = [iso for iso, _ in tagged]
+    picked = pick_slots(isos_alle, wish=wish, tenant=tenant)
+    treffer = [x["iso"] for x in (picked.get("slots") or [])]
+    if not treffer:
+        treffer = [min(isos_alle, key=_key)]
+    sieger_iso = treffer[0]
+    sieger = next((cal for iso, cal in tagged if _key(iso) == _key(sieger_iso)), cals[0])
+    nur = [iso for iso, cal in tagged if _s(cal.get("id")) == _s(sieger.get("id"))]
+    return {
+        "ok": True,
+        "slots": nur,
+        "doctorName": _s(sieger.get("name")),
+        "calendar": sieger,
+        "wishMatched": bool(picked.get("wishMatched")),
+    }
 
 
 def _iso_liste(raw) -> list[str]:
@@ -118,7 +190,7 @@ def vorrat_fuellen(sit: dict) -> list[dict[str, str]]:
     isos = _iso_liste(found.get("slots") or [])
     sit["slotVorrat"] = isos
     ctx["slotVorrat"] = isos
-    picked = pick_slots(isos)
+    picked = pick_slots(isos, tenant=tenant)
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     sit["offered"] = offered
     return offered
@@ -163,7 +235,7 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
         if found.get("ok"):
             vorrat = _iso_liste(found.get("slots") or [])
             ctx["slotVorrat"] = vorrat
-    picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso)
+    picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso, tenant=tenant)
     slots = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     return {
         "ok": True,
@@ -185,6 +257,9 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     if auftrag and iso[:16] != auftrag[:16]:
         if iso[4:16] == auftrag[4:16]:
             iso = auftrag
+    zu = zeiten.buch_verbot(iso, tenant)
+    if zu:
+        return {"ok": False, "spoken": zu, "closed": True, "regie": "Geschlossener Tag oder außerhalb der Sprechzeit — nicht buchen."}
     patient_id = _s(ctx.get("patientId"))
     if not patient_id:
         auf = patients.patient_aufloesen(tenant, {
@@ -670,7 +745,7 @@ def offer_move(tenant: dict, ctx: dict, *, date: str = "", wish: str = "") -> di
             slots = []
             for s in raw_slots[:8]:
                 iso = str(s).replace(" ", "T")
-                if len(iso) >= 16:
+                if len(iso) >= 16 and zeiten.slot_frei(iso, tenant):
                     slots.append({"iso": iso, "spoken": spoken_slot(iso)})
             aid = _s(appt.get("appointmentId"))
             liste = "; oder ".join(x["spoken"] for x in slots)
@@ -708,6 +783,9 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
             "spoken": "Welchen Termin möchten Sie verschieben?",
             "regie": "appointmentId fehlt. Erst den bestehenden Termin klären (list_appointments oder Datum erfragen).",
         }
+    zu = zeiten.buch_verbot(iso, tenant)
+    if zu:
+        return {"ok": False, "spoken": zu, "closed": True}
     if not WRITE_LIVE:
         return {
             "ok": True,
@@ -804,3 +882,67 @@ def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: 
         "spoken": "Die Notiz ist nicht im Termin gelandet.",
         "regie": f"masAppointmentNote fehlgeschlagen: {msg}",
     }
+
+
+# --- Arzt-Abwesenheiten (Pickadoc agentGetDoctorAbsences, nur lesen) --------
+
+_AB_CACHE: dict[str, tuple[float, dict]] = {}
+_AB_TTL_S = 10 * 60
+
+
+def arzt_abwesen(tenant: dict, *, calendar_id: str = "", doctor: str = "",
+                 start: str = "", ende: str = "") -> dict[str, Any]:
+    """Wer hat Urlaub/Fortbildung — leer bei Fehler, nie erfinden."""
+    import time
+    cid = _s(tenant.get("clientId"))
+    lid = _s(tenant.get("locationId"))
+    if not cid or not lid or not WRITE_LIVE:
+        return {"ok": False, "doctors": []}
+    key = f"{cid}|{lid}|{_s(calendar_id)}|{_s(doctor)}|{_s(start)}|{_s(ende)}"
+    hit = _AB_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _AB_TTL_S:
+        return hit[1]
+    body = {"clientId": cid, "locationId": lid}
+    if _s(calendar_id):
+        body["calendarId"] = _s(calendar_id)
+    if _s(doctor):
+        body["doctorName"] = _s(doctor)
+    if _s(start):
+        body["startDate"] = _s(start)
+    if _s(ende):
+        body["endDate"] = _s(ende)
+    status, data = _cf_post("agentGetDoctorAbsences", body, timeout=3.0)
+    if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
+        out = {"ok": False, "doctors": []}
+        _AB_CACHE[key] = (time.time(), out)
+        return out
+    docs = data.get("doctors") if isinstance(data.get("doctors"), list) else []
+    out = {"ok": True, "doctors": docs, "range": data.get("range") or {}}
+    _AB_CACHE[key] = (time.time(), out)
+    return out
+
+
+def abwesen_antwort(tenant: dict, text: str, *, calendar_id: str = "",
+                    doctor: str = "", start: str = "") -> str:
+    """Kurze, ehrliche Antwort auf 'Ist Doktor X da?' — ohne zu raten."""
+    found = arzt_abwesen(tenant, calendar_id=calendar_id, doctor=doctor, start=start)
+    docs = found.get("doctors") or []
+    if not found.get("ok"):
+        return (
+            "Ob jemand Urlaub hat, sehe ich gerade nicht zuverlässig. "
+            "Ich kann aber nach einem freien Termin schauen."
+        )
+    ab = [d for d in docs if d.get("isAbsent")]
+    if not ab:
+        if doctor:
+            return f"{doctor} ist an dem Tag da — soll ich nach einem Termin schauen?"
+        return "Heute ist niemand als abwesend eingetragen. Soll ich nach einem Termin schauen?"
+    teile = []
+    for d in ab[:3]:
+        name = _s(d.get("doctorName")) or "Der Behandler"
+        bis = _s(d.get("absentUntil"))
+        if bis:
+            teile.append(f"{name} ist bis einschließlich {bis} nicht da")
+        else:
+            teile.append(f"{name} ist gerade nicht da")
+    return ". ".join(teile) + ". Soll ich bei einem anderen Zahnarzt nachschauen?"

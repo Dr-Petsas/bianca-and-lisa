@@ -140,6 +140,63 @@ def aus_satz(text: str) -> str:
     return ""
 
 
+def _sieht_aus_wie_neuanfang(n: str) -> bool:
+    """Echte deutsche Vorwahl (01xx/02xx…), nicht 00… (international / STT-Müll)."""
+    return bool(n) and n.startswith("0") and len(n) >= 4 and not n.startswith("00")
+
+
+def zusammenfuegen(alt: str, neu: str) -> str:
+    """Zwei gehörte Stücke zu einer Kette.
+
+    Live 28.08.2026: STT lieferte 017760046, Bianca bat um die ganze Nummer,
+    der Anrufer setzte bei 0177… neu an, STT schnitt wieder ab (01776) —
+    der kürzere Neuanfang hat den längeren Stand erschlagen. Nie mehr.
+    """
+    a = normaliert(alt)
+    n = normaliert(neu)
+    if not n:
+        return a
+    if not a:
+        return n
+    if n == a:
+        return a
+    if a.startswith(n) and len(a) > len(n):
+        return a
+    if n.startswith(a):
+        return n
+    # Fast fertige Handy-Nummer + fehlende End-Nullen ("null null").
+    if 8 <= len(a) <= 9 and a.startswith("01") and n in {"0", "00", "000"}:
+        return (a + n)[:13]
+    for k in range(min(len(a), len(n)), 1, -1):
+        if a.endswith(n[:k]):
+            return (a + n[k:])[:16]
+    # "004" nach einem langen Stamm ist STT-Müll, keine Fortsetzung.
+    if n.startswith("0") and len(n) <= 3 and len(a) >= 6:
+        return a
+    if _sieht_aus_wie_neuanfang(n):
+        if len(n) < len(a):
+            return a
+        if len(n) >= 10:
+            return n
+        if a[:4] != n[:4]:
+            return n
+    return (a + n)[:16]
+
+
+def rest_frage(teil: str) -> str:
+    """Was wir schon haben vorlesen — nicht immer 'komplett, Ziffer für Ziffer'."""
+    d = normaliert(teil)
+    gehoert = sprechbar(d)
+    if 8 <= len(d) <= 9 and d.startswith("01"):
+        return f"Ich habe bisher {gehoert}. Die letzten Ziffern bitte noch einmal."
+    if gehoert:
+        return f"Ich habe bisher {gehoert}. Wie geht die Nummer weiter?"
+    return (
+        "Da fehlt noch ein Stück von der Nummer — "
+        "sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
+    )
+
+
 def _gruppen(d: str) -> list[str]:
     """0177 600 46 00 — Vorwahl zuerst, Rest in Zweier-/Dreiergruppen."""
     if not d:
