@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bianca import agent, session, weiterleiten
+from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
 from kern import llm, sprech, stt, tenants, tts
 from kern.config import (
@@ -189,6 +189,13 @@ def _warm_start():
         DIENST.filler_vorbereiten()
         t = tenants.laden(DEFAULT_TENANT)
         tts.warm(begruessung(t.get("praxisName") or ""))
+        # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
+        # aus dem Platten-Cache fragt die Maschine in ~0,2 s statt ~1,2 s
+        # lokaler Synthese. Gewarmt wird die SANITIZE-Form — genau die
+        # spricht der Zug später (Cache-Key muss treffen).
+        for satz in gehirn.feste_saetze():
+            tts.warm(sprech.sanitize(satz))
+        print("bianca-warm: feste Fragen im Cache", flush=True)
     threading.Thread(target=_run, daemon=True).start()
 
 

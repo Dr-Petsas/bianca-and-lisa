@@ -51,6 +51,11 @@ PCM_RATE = 24000
 
 _CACHE: dict[str, bytes] = {}
 _CACHE_ORD: list[str] = []
+# Gepinnter Bereich fuer dauerhaft gewarmte Saetze (Fueller, Begruessungen,
+# feste Maschinen-Fragen): sie duerfen NICHT von dynamischen Antworten aus
+# dem 48er-LRU verdraengt werden — sonst spricht die Maschine mitten im
+# Gespraech ploetzlich wieder mit voller Synthese-Latenz (28.08.2026).
+_FEST: dict[str, bytes] = {}
 _CLIENT: httpx.Client | None = None
 _LOKAL_CLIENT: httpx.Client | None = None
 
@@ -103,11 +108,18 @@ def _normalisieren(text: str) -> str:
     return sauber
 
 
-def _ram_merken(schluessel: str, blob: bytes) -> None:
+def _ram_merken(schluessel: str, blob: bytes, *, fest: bool = False) -> None:
+    if fest:
+        _FEST[schluessel] = blob
+        return
     _CACHE[schluessel] = blob
     _CACHE_ORD.append(schluessel)
     if len(_CACHE_ORD) > 48:
         _CACHE.pop(_CACHE_ORD.pop(0), None)
+
+
+def _ram_holen(schluessel: str) -> bytes | None:
+    return _FEST.get(schluessel) or _CACHE.get(schluessel)
 
 
 def _lokal_schluessel(sauber: str) -> str:
@@ -205,7 +217,7 @@ class ElevenLabsTts:
         if not sauber or not ELEVENLABS_API_KEY:
             return b""
         schluessel = f"{_VOICE_ID}|{sauber}"
-        hit = _CACHE.get(schluessel)
+        hit = _ram_holen(schluessel)
         if hit:
             return hit
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{_VOICE_ID}/stream"
@@ -258,7 +270,7 @@ class LokalTts:
         if not sauber:
             return b""
         schluessel = _lokal_schluessel(sauber)
-        hit = _CACHE.get(schluessel)
+        hit = _ram_holen(schluessel)
         if hit:
             return hit
         r = _lokal_client().post(
@@ -281,6 +293,33 @@ def engine() -> TtsEngine:
     if TTS_BASE:
         return LokalTts()
     return ElevenLabsTts()
+
+
+def im_cache(text: str) -> bool:
+    """RAM-Cache-Blick fuer den Satz-Split-Entscheid in dienst.py: gewarmte
+    Begruessungen und Fueller sollen EIN Block bleiben — ihr Cache-Key
+    traegt den Gesamttext, ein Satz-Split wuerde ihn verfehlen."""
+    sauber = _normalisieren(text)
+    if not sauber:
+        return False
+    schluessel = _lokal_schluessel(sauber) if TTS_BASE else f"{_VOICE_ID}|{sauber}"
+    return schluessel in _FEST or schluessel in _CACHE
+
+
+def wav_fuegen(blobs: list[bytes]) -> bytes:
+    """Mehrere eigene PCM16-WAVs (44-Byte-Header, 24 kHz mono) zu EINEM
+    fuegen. Liefert b"" wenn ein Teil kein fuegbares WAV ist — der Aufrufer
+    faellt dann auf einen Ein-Block-Render zurueck."""
+    teile = [b for b in blobs if b]
+    if not teile:
+        return b""
+    if len(teile) == 1:
+        return teile[0]
+    for b in teile:
+        if len(b) <= 44 or b[:4] != b"RIFF" or b[36:40] != b"data":
+            return b""
+    data = b"".join(b[44:] for b in teile)
+    return _wav_header(len(data), PCM_RATE) + data
 
 
 def bereit() -> bool:
@@ -341,7 +380,7 @@ def speak_dauerhaft(text: str) -> bytes:
         schluessel = _lokal_schluessel(sauber)
     else:
         schluessel = f"{_VOICE_ID}|{sauber}"
-    hit = _CACHE.get(schluessel)
+    hit = _ram_holen(schluessel)
     if hit:
         return hit
     datei = _DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")
@@ -349,12 +388,13 @@ def speak_dauerhaft(text: str) -> bytes:
         if datei.is_file():
             blob = datei.read_bytes()
             if blob:
-                _ram_merken(schluessel, blob)
+                _ram_merken(schluessel, blob, fest=True)
                 return blob
     except OSError:
         pass
     blob = eng.speak(sauber)
     if blob:
+        _ram_merken(schluessel, blob, fest=True)
         try:
             _DISK_DIR.mkdir(parents=True, exist_ok=True)
             datei.write_bytes(blob)
@@ -363,9 +403,65 @@ def speak_dauerhaft(text: str) -> bytes:
     return blob
 
 
-def warm(text: str) -> None:
-    """Startup-Vorwaermen statischer Saetze — dauerhaft gecacht."""
+# Plausibilitaets-Deckel fuers Vorwaermen — beim Wärmen kostet ein Retry
+# nichts. Kalibrierung 28.08.2026: gute Renders 47-97 ms/Zeichen, Grauzone/
+# Babble ab ~116. Ein gepinnter Babble-Render wuerde sonst bei JEDER
+# Maschinen-Frage abgespielt (Vorfall 28.08.2026: 5,88 s fuer
+# "Wie lautet der Nachname?").
+_WARM_GRUND_S = 0.3
+_WARM_S_JE_ZEICHEN = 0.105
+
+
+def _warm_unplausibel(text: str, blob: bytes) -> bool:
+    if not blob or blob[:4] != b"RIFF":
+        return False  # nur eigene PCM-WAVs pruefen (ElevenLabs liefert MP3)
+    dauer = max(0, len(blob) - 44) / 2 / PCM_RATE
+    return dauer > _WARM_GRUND_S + _WARM_S_JE_ZEICHEN * len(text)
+
+
+def _dauerhaft_key(text: str) -> str:
+    sauber = _normalisieren(text)
+    return _lokal_schluessel(sauber) if TTS_BASE else f"{_VOICE_ID}|{sauber}"
+
+
+def _vergessen(text: str) -> None:
+    """Cache-Eintrag (RAM-Pin + Platte) eines Satzes verwerfen."""
+    schluessel = _dauerhaft_key(text)
+    _FEST.pop(schluessel, None)
+    _CACHE.pop(schluessel, None)
     try:
-        speak_dauerhaft(text)
+        (_DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _dauerhaft_speichern(text: str, blob: bytes) -> None:
+    """Ein fertiges Blob als dauerhaften Cache-Eintrag setzen (RAM-Pin + Platte)."""
+    schluessel = _dauerhaft_key(text)
+    _ram_merken(schluessel, blob, fest=True)
+    try:
+        _DISK_DIR.mkdir(parents=True, exist_ok=True)
+        (_DISK_DIR / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest() + ".wav")).write_bytes(blob)
+    except OSError:
+        pass
+
+
+def warm(text: str) -> None:
+    """Startup-Vorwaermen statischer Saetze — dauerhaft gecacht.
+
+    Zweitpruefung vor dem Pinnen: ist der Render unplausibel lang fuer den
+    Text (TTS wuerfelt Tempo und Babble), wird EINMAL neu geholt und das
+    KUERZERE der beiden Ergebnisse gepinnt — nie endlos wuerfeln, der
+    Dienststart muss durchlaufen."""
+    try:
+        erste = speak_dauerhaft(text)
+        if not _warm_unplausibel(text, erste):
+            return
+        print(f"tts-warm: unplausibler Render ({len(text)} Z, "
+              f"{max(0, len(erste) - 44) / 2 / PCM_RATE:.1f}s) — neuer Wurf", flush=True)
+        _vergessen(text)
+        zweite = speak_dauerhaft(text)
+        if erste and zweite and len(zweite) > len(erste):
+            _dauerhaft_speichern(text, erste)
     except Exception:
         pass

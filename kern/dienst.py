@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import secrets
 import threading
 import time
@@ -106,10 +107,28 @@ class Dienst:
             return "", 0.0
         t0 = time.perf_counter()
         try:
-            url = self.audio_legen(tts.engine().speak(text))
+            url = self.audio_legen(self._sprech_blob(text))
         except RuntimeError:
             return "", round(time.perf_counter() - t0, 2)
         return url, round(time.perf_counter() - t0, 2)
+
+    def _sprech_blob(self, text: str) -> bytes:
+        """Satzweise sprechen, zu EINEM WAV fuegen (kein Streaming, keine
+        Naht im Wort): gewarmte Maschinen-Fragen kommen aus dem Pin-Cache
+        (~0 s), nur neue Saetze kosten Synthese — und jeder Satz landet
+        einzeln im LRU, Quittungen wiederholen sich im Gespraech gratis.
+        Gewarmte Gesamttexte (Begruessung, Fueller) bleiben EIN Block,
+        sonst verfehlte der Split ihren Cache-Key."""
+        if tts.im_cache(text):
+            return tts.engine().speak(text)
+        saetze = [s.strip() for s in re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", text.strip()) if s.strip()]
+        if len(saetze) <= 1:
+            return tts.engine().speak(text)
+        blob = tts.wav_fuegen([tts.engine().speak(s) for s in saetze])
+        if blob:
+            return blob
+        # Teile nicht fuegbar (z. B. MP3 vom ElevenLabs-Pfad): ein Render.
+        return tts.engine().speak(text)
 
     # ---- Füller gegen die Totzeit ------------------------------------------
     # Die Audios kommen aus dem Platten-Cache (.data/tts-cache) — nur beim

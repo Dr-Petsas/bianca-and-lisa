@@ -53,9 +53,20 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
 - **Füller-Platten-Cache** (28.08.2026): `tts.speak_dauerhaft()` cached
  statische Sätze (Füller, Begrüßungen — NIE Gesprächsantworten mit
  Patientenbezug) als WAV unter `.data/tts-cache/` (Key: TTS-Basis+Stimme+Text
- — Chatterbox :8210 und CosyVoice :8211 haben getrennte Caches).
+ — jede Engine-Basis hat ihren eigenen Cache).
  Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
  weil der Key wechselt. Cache leeren = Ordner löschen.
+- **Satz-Pinning** (28.08.2026 spät — nicht rückbauen): dauerhaft gewarmte
+ Sätze liegen im gepinnten RAM-Bereich (`kern/tts.py -> _FEST`), den das
+ 48er-LRU nie verdrängt. Bianca wärmt beim Start zusätzlich ALLE festen
+ Maschinen-Fragen (`bianca/gehirn.py -> feste_saetze()`, in Sanitize-Form).
+ `Dienst.stimme()` spricht mehrsätzige Antworten satzweise und fügt die
+ Teile zu EINEM WAV (`tts.wav_fuegen`, kein Streaming, keine Naht im Wort):
+ gewarmte Fragen kosten ~0,0 s statt ~1-2 s Synthese, Quittungen landen
+ einzeln im LRU. Gewarmte Gesamttexte (Begrüßung/Füller) bleiben EIN Block
+ (`tts.im_cache`-Vorabfrage — Satz-Split würde ihren Cache-Key verfehlen).
+ Beim Wärmen prüft `tts.warm()` die Render-Länge (`_warm_unplausibel`):
+ unplausibel lange Würfe werden EINMAL neu geholt, der kürzere gepinnt.
 
 ## Lokales STT auf der 5090: Parakeet wie Clara (28.08.2026 — nicht rückbauen)
 
@@ -102,15 +113,25 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
   ist verworfen: 13,9-GB-Image, brauchte GPU (OOM — 5090 war voll belegt)
   bzw. träge CPU-Torch-Inferenz. Parakeet-ONNX: 1,07-GB-Image, CPU reicht.
 
-## Ziel-Pipeline Lisa/Bianca (Chef 28.08.2026)
+## Ziel-Pipeline Lisa/Bianca (Stand 28.08.2026 spät)
 
 **Parakeet (STT, 8212) -> bewährte Guards/Wächter -> Qwen 3.6 (vLLM, 8000)
--> Chatterbox (TTS, 8210).** Alles lokal auf der 5090, die Worker (8095/8096)
-bleiben lokal auf dem Dev-Rechner. Chatterbox ist die bevorzugte Stimme
-(Chef: "vorzugsweise chatterbox"); CosyVoice-Turbo (8211) bleibt als
-gebautes Image/Profil liegen, läuft aber nicht (nie beide zugleich — eine
-GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis Lisa/Bianca
-vernünftig funktionieren.
+-> Qwen3-TTS (8213, blocking `/speak`).** Alles lokal auf der 5090, die
+Worker (8095/8096) bleiben lokal auf dem Dev-Rechner. Chatterbox (8210) und
+CosyVoice-Turbo (8211) bleiben als gebaute Images/Profile liegen, laufen
+aber nicht (nie mehrere zugleich — eine GPU). Clara V7 und Demo-Clara werden
+NICHT angefasst, bis Lisa/Bianca vernünftig funktionieren.
+
+## Neustart vom Mitternachts-Stand (28.08.2026 spät — Chef-Entscheid)
+
+Die Streaming-/Häppchen-Ära vom 28.08. vormittags ("Genuschel") und die
+Tagesfeatures vom Nachmittag sind AUSGEBAUT: Branch `neustart-mitternacht`
+setzt auf dem Gesprächs-Stand von 02:18 auf (Chef: "weltklasse") und trägt
+NUR die STT-/TTS-Anbindung (Parakeet 8212, Qwen3-TTS 8213, RMS-Lautheit,
+Satz-Pinning). Der komplette Abendstand liegt unangetastet auf dem Branch
+`sicherung-2026-08-28-abend` — Features von dort nur EINZELN und bewusst
+zurückholen, nie pauschal mergen. Es gibt KEIN TTS-Streaming auf diesem
+Stand: eine Äußerung = ein blockierender `/speak` (bzw. satzweise gefügt).
 
 ## Lisa zuerst
 
