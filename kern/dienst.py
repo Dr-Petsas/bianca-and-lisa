@@ -19,7 +19,7 @@ from typing import Any, Callable
 from fastapi.responses import StreamingResponse
 
 from kern import filler, sprech, stt, tenants, tts
-from kern.config import WRITE_LIVE
+from kern.config import STT_VORAB, WRITE_LIVE
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
 # blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
@@ -258,10 +258,59 @@ class Dienst:
             "timings": timings,
         }
 
+    # ---- Vorab-Transkript im Stille-Fenster (28.08.2026) ---------------------
+
+    def hoervorab(self, sit: dict, *, blob: bytes, mime: str, name: str) -> str:
+        """Startet die Transkription, WAEHREND das Dock die Stille noch bestaetigt.
+
+        Das Dock schickt den Mitschnitt schon bei ~150 ms Pegel-Stille (der
+        fehlende Rest ist Stille); die 350 ms bis zur Stille-Bestaetigung
+        plus Final-Upload reichen Parakeet (0,25-0,45 s) fast immer — beim
+        /api/listen-Eintreffen liegt das Transkript bereit und das LLM
+        startet sofort. Redet der Anrufer doch weiter, verwirft das Dock die
+        Kennung und der Lauf hier verfaellt ungenutzt (nur ein umsonst
+        gerechneter CPU-Decode im Container). Notaus: STT_VORAB=0.
+        """
+        if not STT_VORAB:
+            return ""
+        vid = secrets.token_hex(8)
+        eintrag: dict[str, Any] = {"id": vid, "event": threading.Event(),
+                                   "text": None, "fehler": "", "t0": time.perf_counter()}
+        sit["_vorabStt"] = eintrag  # neuer Lauf verdraengt den alten der Sitzung
+
+        def lauf() -> None:
+            try:
+                kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+                eintrag["text"] = stt.transcribe(blob, mime=mime, name=name, keywords=kw)
+            except Exception as e:  # noqa: BLE001 — Fehler => Normalpfad im Zug
+                eintrag["fehler"] = str(e)
+            finally:
+                eintrag["event"].set()
+
+        threading.Thread(target=lauf, daemon=True).start()
+        return vid
+
+    def _vorab_ergebnis(self, sit: dict, vorab_id: str) -> str | None:
+        """Vorab-Transkript abholen (None = kein brauchbares Vorab)."""
+        eintrag = sit.get("_vorabStt")
+        if not vorab_id or not eintrag or eintrag.get("id") != vorab_id:
+            return None
+        sit.pop("_vorabStt", None)
+        # Der Lauf hat ~0,35 s Vorsprung — laenger als 1,5 s Restwartezeit
+        # heisst Container-Problem: dann lieber Normalpfad mit dem Final-Blob.
+        if not eintrag["event"].wait(timeout=1.5):
+            print(f"{self.name}-vorab timeout — normalpfad", flush=True)
+            return None
+        if eintrag["fehler"] is not None and eintrag["fehler"] != "":
+            print(f"{self.name}-vorab fehler {eintrag['fehler']} — normalpfad", flush=True)
+            return None
+        return str(eintrag.get("text") or "")
+
     # ---- NDJSON-Zug-Strom ---------------------------------------------------
 
     def zug_stream(self, sit: dict, *, art: str, text_in: str = "", extra: dict | None = None,
-                   stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = ""):
+                   stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = "",
+                   vorab_id: str = ""):
         """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
         q: queue.Queue = queue.Queue()
         # JETZT ablesen, nicht später: der Arbeitsfaden unten beendet die
@@ -291,11 +340,16 @@ class Dienst:
                 if stt_blob is not None:
                     t0 = time.perf_counter()
                     try:
-                        # Behandler-Namen des Mandanten als Hotwords fuer die
-                        # Parakeet-Nachkorrektur ("Betsas" -> "Petsas").
-                        kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
-                        gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name,
-                                                keywords=kw)
+                        # Vorab-Transkript aus dem Stille-Fenster? Dann ist die
+                        # STT-Arbeit schon (fast) erledigt — stt_s misst ehrlich
+                        # nur die Restwartezeit auf dem kritischen Pfad.
+                        gesagt = self._vorab_ergebnis(sit, vorab_id)
+                        if gesagt is None:
+                            # Behandler-Namen des Mandanten als Hotwords fuer die
+                            # Parakeet-Nachkorrektur ("Betsas" -> "Petsas").
+                            kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+                            gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name,
+                                                    keywords=kw)
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
                         q.put(("leer", str(e)))

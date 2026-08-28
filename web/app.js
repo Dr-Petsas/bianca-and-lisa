@@ -13,6 +13,11 @@ let hoerNr = 0;
 // in Folge; echtes Gehörtes setzt den Zähler zurück.
 const STILLE_MS = 4000;
 let stilleStupse = 0;
+// Vorab-Transkript (28.08.2026): beim Stille-VERDACHT (~150 ms Pegel-Ruhe)
+// geht der Mitschnitt schon zum Server — Parakeet rechnet, während das Dock
+// die Stille noch bestätigt. Redet der Anrufer weiter, wird die Kennung
+// verworfen und nichts geht verloren.
+let vorabId = null;
 
 function bubble(role, text) {
   if (!text) return;
@@ -536,6 +541,23 @@ function recordUntilSilence(stream) {
     let quiet = 0;
     let last = performance.now();
     const t0 = last;
+    // Vorab-Transkript: bei ~150 ms Pegel-Ruhe den bisherigen Mitschnitt
+    // schon transkribieren lassen (der fehlende Schwanz ist Stille) — beim
+    // echten Zug-Start liegt das Ergebnis dann meist fertig vor.
+    let vorabAktiv = false;
+    let vorabVersuche = 0;
+    const sendeVorab = () => {
+      vorabAktiv = true;
+      vorabVersuche += 1;
+      const b = new Blob(chunks.slice(), { type: recLocal.mimeType || mime || "audio/webm" });
+      const fd = new FormData();
+      fd.append("sessionId", sessionId);
+      fd.append("audio", b, b.type.includes("mp4") ? "turn.m4a" : "turn.webm");
+      fetch("/api/hoervorab", { method: "POST", body: fd })
+        .then((r) => r.json())
+        .then((d) => { if (vorabAktiv && d && d.vorabId) vorabId = d.vorabId; })
+        .catch(() => { /* Vorab ist nur Beschleunigung — Zug läuft auch ohne */ });
+    };
     recLocal.start(250);
     const tick = () => {
       if (!callOn || recLocal.state !== "recording") {
@@ -553,8 +575,15 @@ function recordUntilSilence(stream) {
       const now = performance.now();
       const dt = now - last;
       last = now;
-      if (rms > 0.02) { heard = true; quiet = 0; }
-      else if (heard) quiet += dt;
+      if (rms > 0.02) {
+        heard = true;
+        quiet = 0;
+        // Weitergeredet: das Vorab-Transkript wäre unvollständig — verwerfen.
+        if (vorabAktiv) { vorabAktiv = false; vorabId = null; }
+      } else if (heard) quiet += dt;
+      if (heard && quiet > 150 && now - t0 > 450 && !vorabAktiv && vorabVersuche < 2 && chunks.length) {
+        sendeVorab();
+      }
       // 500 ms Ruhe statt 300: Lisa plapperte in Denkpausen hinein
       // ("sie quatschen rein", Chef 27.08.2026).
       // Ohne jedes Geräusch nach STILLE_MS abbrechen: der Stille-Wächter
@@ -648,6 +677,8 @@ async function sendeZug({ text, blob, nr }) {
       const fd = new FormData();
       fd.append("sessionId", sessionId);
       fd.append("audio", blob, blob.type.includes("mp4") ? "turn.m4a" : "turn.webm");
+      // Vorab-Transkript aus dem Stille-Fenster mitgeben (einmalig gültig).
+      if (vorabId) { fd.append("vorabId", vorabId); vorabId = null; }
       const r = await fetch("/api/listen", { method: "POST", body: fd });
       data = await leseZug(r, spielFiller);
     }

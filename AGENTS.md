@@ -139,6 +139,20 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 - Der erste Wurf (NVIDIA-Conformer über NeMo, Image `stt-conformer-de:v1`)
   ist verworfen: 13,9-GB-Image, brauchte GPU (OOM — 5090 war voll belegt)
   bzw. träge CPU-Torch-Inferenz. Parakeet-ONNX: 1,07-GB-Image, CPU reicht.
+- **Vorab-Transkript im Stille-Fenster** (28.08.2026 — nicht rückbauen):
+  Die Docks schicken den Mitschnitt schon beim Stille-VERDACHT (~150 ms
+  Pegel-Ruhe, `recordUntilSilence`) an `POST /api/hoervorab`; Parakeet
+  rechnet, während das Dock die restlichen ~350 ms Stille bestätigt. Der
+  Zug (`/api/listen` mit `vorabId`) heiratet das Ergebnis: `kern/dienst.py
+  -> hoervorab()/_vorab_ergebnis()` (Warte-Deckel 1,5 s). Gemessen: STT auf
+  dem kritischen Pfad 0,5 s -> 0,0 s (Transcript liegt beim Zug-Start vor).
+  Redet der Anrufer weiter, verwirft das Dock die Kennung (nur ein umsonst
+  gerechneter CPU-Decode); max. 2 Vorab-Versuche pro Zug. Fällt das Vorab
+  aus (Timeout/Fehler/falsche Kennung), läuft der Normalpfad mit dem
+  Final-Blob — nie schlechter als vorher. `timings.stt` misst seither die
+  RESTWARTEZEIT auf dem kritischen Pfad, nicht die volle Decode-Dauer.
+  Notaus: `STT_VORAB=0` (Worker) => Docks schicken ins Leere, Zug wie früher.
+  Tests: `tests/test_stt_vorab.py`; Messung: `tests/latenz_e2e.py <basis> vorab`.
 
 ## Ziel-Pipeline Lisa/Bianca (Chef 28.08.2026)
 

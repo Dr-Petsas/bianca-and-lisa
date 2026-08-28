@@ -2,7 +2,11 @@
 echtem Sprach-WAV, Zeitmarken je NDJSON-Event (transcript = STT fertig,
 erstes filler/vorab-Audio = erster hörbarer Ton, reply = alles fertig).
 
-    python tests/latenz_e2e.py [basis]
+    python tests/latenz_e2e.py [basis] [vorab]
+
+Mit "vorab" wird der Dock-Ablauf seit dem 28.08.2026 nachgestellt: Mitschnitt
+schon beim Stille-VERDACHT an /api/hoervorab, ~350 ms später (Stille-
+Bestätigung) der Zug mit vorabId — misst den echten Gewinn des Vorab-Pfads.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from pathlib import Path
 import httpx
 
 BASIS = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "http://127.0.0.1:8096"
+VORAB = "vorab" in sys.argv[2:]
 
 # Echte Bianca-Stimme aus dem Platten-Cache als Anrufer-Ersatz — Scribe
 # transkribiert das sauber, die Dauer (~2-3 s) entspricht einem kurzen Satz.
@@ -30,11 +35,22 @@ start = client.post(f"{BASIS}/api/start", json={}).json()
 sid = start.get("sessionId")
 print(f"sitzung: {sid}")
 
+daten: dict = {"sessionId": sid}
+if VORAB:
+    # Dock-Nachstellung: Vorab beim Stille-Verdacht, Zug ~350 ms später.
+    tv = time.perf_counter()
+    v = client.post(f"{BASIS}/api/hoervorab", data={"sessionId": sid},
+                    files={"audio": (wav.name, wav.read_bytes(), "audio/wav")}).json()
+    if v.get("vorabId"):
+        daten["vorabId"] = v["vorabId"]
+        print(f"vorab gestartet nach {time.perf_counter() - tv:.2f}s — 0,35 s Stille-Fenster …")
+        time.sleep(0.35)
+
 t0 = time.perf_counter()
 marken: list[tuple[float, str]] = []
 with client.stream(
     "POST", f"{BASIS}/api/listen",
-    data={"sessionId": sid},
+    data=daten,
     files={"audio": (wav.name, wav.read_bytes(), "audio/wav")},
 ) as r:
     r.raise_for_status()

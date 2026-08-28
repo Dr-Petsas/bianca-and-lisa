@@ -128,8 +128,22 @@ def api_stille(body: HangupIn):
     return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
 
+@app.post("/api/hoervorab")
+async def api_hoervorab(sessionId: str = Form(""), audio: UploadFile = File(...)):
+    """Vorab-Transkript im Stille-Fenster: STT startet, waehrend das Dock die
+    Stille noch bestaetigt. Antwort sofort — der Zug holt das Ergebnis ab."""
+    sit = session.holen(sessionId)
+    if not sit:
+        raise HTTPException(404, "sitzung unbekannt")
+    blob = await audio.read()
+    name = audio.filename or "turn.webm"
+    vid = DIENST.hoervorab(sit, blob=blob, mime=audio.content_type or "audio/webm", name=name)
+    return {"vorabId": vid}
+
+
 @app.post("/api/listen")
-async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: UploadFile = File(...)):
+async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: UploadFile = File(...),
+                     vorabId: str = Form("")):
     sit = session.holen(sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
@@ -140,7 +154,8 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     if live:
         print(f"bianca-listen live session={sessionId} text={live!r}", flush=True)
         return ndjson(DIENST.zug_stream(sit, art="turn", text_in=live))
-    return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name))
+    return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime,
+                                    stt_name=name, vorab_id=vorabId))
 
 
 @app.post("/api/transcribe")
