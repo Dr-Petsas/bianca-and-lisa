@@ -588,6 +588,8 @@ async function boot() {
     const h = await (await fetch("health")).json();
     zeigeLetzten(h.lastCall);
     zeigeStand(h.lastCall);
+    const ti = $("ttsInfo");
+    if (ti) ti.textContent = h.ttsEngine ? "Stimme: " + h.ttsEngine : "";
     if (!(h.llm && h.llm.ok)) meld("Sprachmodell offline — Bianca kann nicht antworten.", true);
   } catch {
     meld("Biancas Dienst antwortet nicht.", true);

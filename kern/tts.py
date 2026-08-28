@@ -6,6 +6,7 @@ import array
 import hashlib
 import re
 import struct
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -242,6 +243,37 @@ def bereit() -> bool:
 def modell_info() -> str:
     """Fuer die /health-Anzeige: was spricht hier gerade?"""
     return TTS_BASE if TTS_BASE else ELEVENLABS_TTS_MODEL
+
+
+_ENGINE_ANZEIGE: tuple[float, str] | None = None
+
+
+def engine_anzeige() -> str:
+    """Lesbarer Stimm-Name fuers Dock: 'Chatterbox (lokal)', 'CosyVoice
+    (lokal)' oder 'ElevenLabs'. Fragt den Container-Health nach der Engine
+    (60 s gecacht, kurzer Timeout) — so zeigt das Dock nach einem Wechsel
+    automatisch das richtige Modell."""
+    global _ENGINE_ANZEIGE
+    if not TTS_BASE:
+        return "ElevenLabs"
+    jetzt = time.monotonic()
+    if _ENGINE_ANZEIGE and jetzt - _ENGINE_ANZEIGE[0] < 60.0:
+        return _ENGINE_ANZEIGE[1]
+    anzeige = "lokal — Container antwortet nicht"
+    try:
+        r = _lokal_client().get(f"{TTS_BASE}/health", timeout=2.0)
+        if r.status_code == 200:
+            eng = str((r.json() or {}).get("engine") or "").strip().lower()
+            if eng == "chatterbox":
+                anzeige = "Chatterbox (lokal)"
+            elif eng.startswith("cosy"):
+                anzeige = "CosyVoice (lokal)"
+            elif eng:
+                anzeige = f"{eng} (lokal)"
+    except Exception:
+        pass
+    _ENGINE_ANZEIGE = (jetzt, anzeige)
+    return anzeige
 
 
 def speak_dauerhaft(text: str) -> bytes:

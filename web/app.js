@@ -699,6 +699,8 @@ async function boot() {
   try {
     const h = await (await fetch("/health")).json();
     zeigeLetzten(h.lastCall);
+    const ti = $("ttsInfo");
+    if (ti) ti.textContent = h.ttsEngine ? "Stimme: " + h.ttsEngine : "";
     if (!(h.llm && h.llm.ok)) meld("Sprachmodell offline — Lisa kann nicht antworten.", true);
   } catch {
     meld("Lisas Dienst antwortet nicht.", true);
