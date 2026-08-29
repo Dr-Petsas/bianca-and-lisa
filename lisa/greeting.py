@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from kern import vornamen
 from lisa.mission import ist_termin_auftrag
 
 _SATZ = re.compile(r"(?<=[.!?])\s+")
@@ -36,6 +37,12 @@ def anrede(patient: dict | None) -> str:
         teile = name.split()
         last = teile[-1] if len(teile) >= 2 else ""
     g = _s(p.get("gender")).lower()
+    if not g:
+        # Vornamen-Waechter (29.08.2026): traegt die Kartei kein Geschlecht,
+        # entscheidet ein EINDEUTIGER Vorname ("Anna" -> Frau). Mehrdeutige
+        # Namen (Kim, Sascha) bleiben beim vollen Namen — nie falsch raten.
+        vor = _s(p.get("firstName")) or (name.split()[0] if len(name.split()) >= 2 else "")
+        g = vornamen.geschlecht(vor)
     if last:
         if g in _HERR:
             return f"Herr {last}"

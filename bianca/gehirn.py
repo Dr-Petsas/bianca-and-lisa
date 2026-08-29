@@ -20,9 +20,29 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
+from kern import vornamen
 from kern.slots import parse_slot_wish
 
 TZ = ZoneInfo("Europe/Berlin")
+
+# --- Versichertenstatus (Chef 29.08.2026) ---------------------------------
+# "privat" faengt auch Beihilfe (Beamte) und "Privatpatient"; die Kassen-
+# Namen zaehlen als GESETZLICH — genau dadurch bleibt ein Kassenwechsel
+# ("jetzt TK statt AOK") folgenlos: beides ist und bleibt "gesetzlich".
+_VERS_PRIVAT_RE = re.compile(r"\bprivat|beihilfe", re.I)
+_VERS_GESETZLICH_RE = re.compile(
+    r"\bgesetzlich|kassenpatient(?:in)?|krankenkasse|familienversichert|"
+    r"\b(?:aok|tk|techniker|barmer|dak|ikk|bkk|kkh|hkk|sbk|knappschaft|viactiv)\b",
+    re.I,
+)
+# Spontan-Nennung ausserhalb der Frage ("ich bin uebrigens privat versichert").
+_VERS_KONTEXT_RE = re.compile(r"versichert|versicherung|kassenpatient|privatpatient", re.I)
+# "hat sich geaendert / ich habe gewechselt" auf die Bestands-Rueckfrage.
+_VERS_WECHSEL_RE = re.compile(
+    r"gewechselt|geändert|geaendert|umgestiegen|andere\s+versicherung|"
+    r"nicht\s+mehr\s+(?:privat|gesetzlich)|inzwischen\s+(?:privat|gesetzlich)",
+    re.I,
+)
 
 _JA_RE = re.compile(
     r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|sicher|natürlich|natuerlich)\b",
@@ -263,6 +283,23 @@ FELDER_START = {
     "gesucht": "",
     "fuerWen": "",
     "slotIso": "",
+    # Geschlecht fuer die Anrede (Chef 29.08.2026): aus der Kartei ("akte")
+    # oder vom Vornamen-Waechter geschaetzt ("rate"); unklare Vornamen =>
+    # Default weiblich + Praxis-Notiz "bitte Geschlecht aktualisieren".
+    "geschlecht": "",
+    "geschlechtQuelle": "",
+    "geschlechtVon": "",
+    "geschlechtUnklar": False,
+    # Versichertenstatus (Chef 29.08.2026): "privat" | "gesetzlich".
+    # Neupatienten werden gefragt; Bestandspatienten nur, wenn der letzte
+    # Besuch >6 Monate her ist — und NUR der Wechsel privat<->gesetzlich
+    # zaehlt (Kassenwechsel AOK->TK ist egal).
+    "versicherung": "",
+    "versicherungOk": False,
+    "versicherungAkte": "",
+    "versicherungWechsel": False,
+    "versicherungNotiz": False,
+    "letzterBesuch": "",
 }
 
 
@@ -382,6 +419,15 @@ def _kartei_zuruecksetzen(s: dict) -> None:
     s["aktePhone"] = ""
     s["telefonAlt"] = ""
     s["gesucht"] = ""
+    # Kartei-Wissen faellt mit: Versichertenstatus, letzter Besuch und ein
+    # aus der Akte uebernommenes Geschlecht gehoeren zum ALTEN Treffer.
+    s["versicherungAkte"] = ""
+    s["letzterBesuch"] = ""
+    if s.get("geschlechtQuelle") == "akte":
+        s["geschlecht"] = ""
+        s["geschlechtQuelle"] = ""
+        s["geschlechtVon"] = ""
+        s["geschlechtUnklar"] = False
 
 
 def _name_korrektur(s: dict, text: str) -> bool:
@@ -709,6 +755,48 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["telefonAkte"] = True
         neu.add("telefonAkte")
 
+    # Versichertenstatus (Chef 29.08.2026): in der offenen Frage zaehlt das
+    # nackte Wort ("privat"), ausserhalb nur mit Kontext ("ich bin privat
+    # versichert"). Verneinte Nennungen ("nicht mehr privat") werden vor dem
+    # Schluesselwort-Blick neutralisiert — sie bedeuten das GEGENTEIL und
+    # laufen unten ueber den Wechsel-Zweig.
+    if not s["versicherungOk"]:
+        in_frage = s["frage"] in {"versicherung", "versicherung_check"}
+        t_vers = re.sub(r"nicht\s+mehr\s+(?:privat\w*|gesetzlich\w*)", " ", tl)
+        privat = bool(_VERS_PRIVAT_RE.search(t_vers))
+        gesetzlich = bool(_VERS_GESETZLICH_RE.search(t_vers))
+        if privat and gesetzlich:
+            privat = gesetzlich = False  # beides im Satz: unklar, nicht raten
+        if (privat or gesetzlich) and (in_frage or _VERS_KONTEXT_RE.search(t)):
+            wert = "privat" if privat else "gesetzlich"
+            s["versicherung"] = wert
+            s["versicherungOk"] = True
+            s["versicherungWechsel"] = bool(s["versicherungAkte"] and s["versicherungAkte"] != wert)
+            neu.add("versicherung")
+        elif s["frage"] == "versicherung_check" and s["versicherungAkte"]:
+            if _VERS_WECHSEL_RE.search(t) or ist_nein(t):
+                # Es gibt nur zwei Zustaende — "hat sich geaendert" heisst
+                # deterministisch das Gegenteil des Kartei-Stands.
+                s["versicherung"] = "gesetzlich" if s["versicherungAkte"] == "privat" else "privat"
+                s["versicherungOk"] = True
+                s["versicherungWechsel"] = True
+                neu.add("versicherung")
+            elif ist_ja(t):
+                s["versicherung"] = s["versicherungAkte"]
+                s["versicherungOk"] = True
+                s["versicherungWechsel"] = False
+                neu.add("versicherungCheck")
+
+    # Vornamen-Waechter (Chef 29.08.2026): Anrede-Geschlecht aus dem Vornamen,
+    # sobald er da ist oder korrigiert wurde. Ein Kartei-Geschlecht (Quelle
+    # "akte", gesetzt vom Hintergrund-Treffer) wird NIE ueberschrieben.
+    if s["vorname"] and s["geschlechtQuelle"] != "akte" and s["geschlechtVon"] != s["vorname"]:
+        g = vornamen.geschlecht(s["vorname"])
+        s["geschlecht"] = g or "f"  # Chef: unklarer Vorname -> weiblich + Notiz
+        s["geschlechtUnklar"] = not g
+        s["geschlechtQuelle"] = "rate"
+        s["geschlechtVon"] = s["vorname"]
+
     return neu
 
 
@@ -764,6 +852,14 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Darf ich den Termin so eintragen?",
         "Soll ich es so festhalten?",
     ),
+    "versicherung": (
+        "Sind Sie privat oder gesetzlich versichert?",
+        "Wie sind Sie versichert — privat oder gesetzlich?",
+    ),
+    "versicherung_check": (
+        "Hat sich an Ihrer Versicherung etwas geändert — privat oder gesetzlich?",
+        "Sind Sie noch genauso versichert wie bei Ihrem letzten Besuch — privat oder gesetzlich?",
+    ),
 }
 
 
@@ -791,6 +887,12 @@ def feste_saetze() -> list[str]:
         "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer.",
         "Und unter welcher Handynummer erreichen wir Sie?",
         "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung.",
+        "Und sind Sie privat oder gesetzlich versichert?",
+        "Kurz für unsere Unterlagen: Sind Sie privat oder gesetzlich versichert?",
+        ("Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
+         "Unterlagen: Sind Sie weiterhin privat versichert, oder hat sich da etwas geändert?"),
+        ("Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
+         "Unterlagen: Sind Sie weiterhin gesetzlich versichert, oder hat sich da etwas geändert?"),
     ]
     out = list(erstformen)
     for varianten in FRAGE_VARIANTEN.values():
@@ -798,6 +900,27 @@ def feste_saetze() -> list[str]:
             if v not in out:
                 out.append(v)
     return out
+
+
+_HERR = {"m", "male", "herr", "mann", "männlich", "maennlich"}
+_FRAU = {"f", "w", "female", "frau", "weiblich"}
+
+
+def anrede(s: dict, patient: dict | None = None, *, beugen: bool = False) -> str:
+    """Geschlechts-Anrede 'Frau Müller' / 'Herr Müller' (beugen: 'Herrn Müller').
+
+    Kartei-Geschlecht schlaegt die Vornamen-Schaetzung. Der Vornamen-Waechter
+    setzt bei unklaren Namen ohnehin den Chef-Default weiblich — faellt
+    trotzdem alles aus, bleibt der volle Name (nie falsch raten)."""
+    last = _s(s.get("nachname"))
+    if not last:
+        return ""
+    g = (_s((patient or {}).get("gender")) or _s(s.get("geschlecht"))).lower()
+    if g in _HERR:
+        return f"{'Herrn' if beugen else 'Herr'} {last}"
+    if g in _FRAU:
+        return f"Frau {last}"
+    return f"{_s(s.get('vorname'))} {last}".strip()
 
 
 def telefon_alt_frage(s: dict) -> str:
@@ -854,6 +977,9 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             if s["telefonTeil"]:
                 return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
             return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
+        fid_v, frage_v = _versicherung_frage(s)
+        if fid_v:
+            return fid_v, frage_v
         return "", ""
 
     # Neu bei uns: erst Anliegen und Zeit, dann sauber aufnehmen.
@@ -874,7 +1000,52 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if s["telefonTeil"]:
             return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
         return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
+    fid_v, frage_v = _versicherung_frage(s)
+    if fid_v:
+        return fid_v, frage_v
     return "", ""
+
+
+def besuch_lange_her(s: dict, tage: int = 183) -> bool:
+    """Liegt der letzte Besuch mehr als ~6 Monate zurück? Ohne Datum: False."""
+    iso = _s(s.get("letzterBesuch"))[:10]
+    if not iso:
+        return False
+    try:
+        d = datetime.strptime(iso, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return (datetime.now(TZ).date() - d).days > tage
+
+
+def versicherung_check_frage(s: dict) -> str:
+    """Bestands-Rückfrage MIT dem Kartei-Stand (nur privat<->gesetzlich zählt)."""
+    art = "privat" if _s(s.get("versicherungAkte")) == "privat" else "gesetzlich"
+    return (
+        "Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
+        f"Unterlagen: Sind Sie weiterhin {art} versichert, oder hat sich da "
+        "etwas geändert?"
+    )
+
+
+def _versicherung_frage(s: dict) -> tuple[str, str]:
+    """Versichertenstatus-Frage, wenn sie dran ist — sonst ('', '').
+
+    Neupatient (war noch nie da): immer fragen, der Wert geht in die neue
+    Kartei. Bestandsakte: NUR wenn der letzte Besuch >6 Monate her ist (Chef
+    29.08.2026), mit bekanntem Kartei-Stand als Ja/Nein-Rückfrage. Bestand
+    OHNE Kartei-Treffer: nicht fragen — nicht auf Verdacht verhören."""
+    if s["versicherungOk"]:
+        return "", ""
+    if s["bekannt"]:
+        if not besuch_lange_her(s):
+            return "", ""
+        if s["versicherungAkte"]:
+            return "versicherung_check", versicherung_check_frage(s)
+        return "versicherung", "Kurz für unsere Unterlagen: Sind Sie privat oder gesetzlich versichert?"
+    if s["warSchonMal"]:
+        return "", ""
+    return "versicherung", "Und sind Sie privat oder gesetzlich versichert?"
 
 
 def start_datum(s: dict) -> str:

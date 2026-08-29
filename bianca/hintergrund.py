@@ -63,10 +63,27 @@ def kartei_anstossen(sit: dict) -> None:
                 s["aktePhone"] = _s(pat.get("phone"))
                 if not s["vorname"]:
                     s["vorname"] = _s(pat.get("firstName"))
+                # Kartei-Geschlecht schlaegt die Vornamen-Schaetzung (29.08.2026).
+                if _s(pat.get("gender")):
+                    s["geschlecht"] = _s(pat.get("gender")).lower()
+                    s["geschlechtQuelle"] = "akte"
+                    s["geschlechtUnklar"] = False
+                # Versichertenstatus aus der Akte — Grundlage fuer die
+                # Bestands-Rueckfrage (nur privat<->gesetzlich zaehlt).
+                if isinstance(pat.get("privateInsurance"), bool):
+                    s["versicherungAkte"] = "privat" if pat["privateInsurance"] else "gesetzlich"
                 sit["patient"] = {**(sit.get("patient") or {}), **pat}
                 print(f"bianca-kartei: gefunden {pat.get('name')!r} id={pat.get('id')}", flush=True)
             else:
                 print(f"bianca-kartei: kein Treffer fuer {key!r}", flush=True)
+            # Letzter Besuch (fuer die Versicherungs-Rueckfrage nach >6
+            # Monaten) — ein Abruf, den auch der Behandler-Zweig unten nutzt.
+            besuch_info: dict[str, Any] = {}
+            if s["patientId"] and not s["letzterBesuch"]:
+                besuch_info = arztmod.letzter_behandler(tenant, s["patientId"])
+                if besuch_info.get("ok") and besuch_info.get("war") and _s(besuch_info.get("lastIso")):
+                    s["letzterBesuch"] = _s(besuch_info["lastIso"])
+                    print(f"bianca-kartei: letzter Besuch {s['letzterBesuch'][:10]}", flush=True)
             # "Weiß nicht mehr, bei wem ich war": jetzt können wir nachschlagen.
             if (s.get("arzt") or {}).get("typ") == "unbekannt" and s["patientId"]:
                 if _s(s.get("phase")) in {"angebot", "bestaetigen", "gebucht"}:
@@ -77,7 +94,7 @@ def kartei_anstossen(sit: dict) -> None:
                     # Kalender gebucht -> "Termin ist gerade weg").
                     print("bianca-kartei: Angebot laeuft schon, Behandler-Wechsel unterlassen", flush=True)
                 else:
-                    info = arztmod.letzter_behandler(tenant, s["patientId"])
+                    info = besuch_info if besuch_info else arztmod.letzter_behandler(tenant, s["patientId"])
                     if info.get("ok") and info.get("calendarId"):
                         s["arzt"] = {
                             "typ": "letzter",

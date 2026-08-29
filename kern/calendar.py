@@ -219,6 +219,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             phone=phone,
             birth=_s(ctx.get("birthDate")),
             gender=_s(ctx.get("gender")),
+            private_insurance=(ctx.get("privateInsurance")
+                               if isinstance(ctx.get("privateInsurance"), bool) else None),
             name=_s(ctx.get("patientName")),
         )
         if angelegt.get("ok") and _s((angelegt.get("patient") or {}).get("id")):
@@ -373,6 +375,8 @@ def create_patient(
         phone=phone,
         birth=birth,
         gender=gender,
+        private_insurance=(ctx.get("privateInsurance")
+                           if isinstance(ctx.get("privateInsurance"), bool) else None),
         name=_s(ctx.get("patientName")),
     )
     karte = result.get("patient") if isinstance(result.get("patient"), dict) else {}
@@ -422,6 +426,10 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
         })
         if auf.get("id"):
             _bind_akte(ctx, auf)
+            # createAppointment kennt kein Versicherungs-Feld — den erfragten
+            # Status auf der frisch angelegten Akte nachtragen (29.08.2026).
+            if isinstance(ctx.get("privateInsurance"), bool):
+                patients.versicherung_aktualisieren(tenant, _s(auf.get("id")), ctx["privateInsurance"])
         # createAppointment liefert keine Termin-ID — fuer die Gespraechsnotiz
         # read-only nachschlagen (kein zweiter Buchungsversuch!).
         aid = _termin_id_suchen(tenant, ctx, iso)

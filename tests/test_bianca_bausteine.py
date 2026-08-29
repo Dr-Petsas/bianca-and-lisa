@@ -1103,18 +1103,28 @@ def test_wunsch_uhrzeit_in_worten_und_statt():
 def test_verschieben_gleicher_tag_frueher():
     """'Früher' beim Verschieben: Slots am SELBEN Tag VOR dem Termin werden
     angeboten (live 27.08. 15:22: 12:15 war frei, angeboten wurde erst
-    Montag drauf)."""
+    Montag drauf). Daten dynamisch (morgen statt hart 28.08.) — der Test
+    alterte sonst und lief ab dem 29.08. rot, weil die Slots vorbei waren."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
     from bianca import verwalten
+    tag = datetime.now(ZoneInfo("Europe/Berlin")).replace(
+        hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+    def _um(basis, h, m):
+        return basis.replace(hour=h, minute=m).isoformat(timespec="seconds")
+
+    spaeter = tag + timedelta(days=3)
     echt = verwalten.kal.find_slots
     verwalten.kal.find_slots = lambda tenant, ctx, **kw: {"ok": True, "slots": [
-        "2026-08-28T12:15:00+02:00", "2026-08-28T13:15:00+02:00",
-        "2026-08-31T09:30:00+02:00", "2026-08-31T10:00:00+02:00",
+        _um(tag, 12, 15), _um(tag, 13, 15),
+        _um(spaeter, 9, 30), _um(spaeter, 10, 0),
     ]}
     try:
         sit = _sit()
         s = gehirn.sammler(sit)
         s.update({"modus": "verschieben", "vorname": "Felix", "nachname": "Magath"})
-        sit["gefunden"] = [{"id": "t1", "iso": "2026-08-28T12:45:00+02:00",
+        sit["gefunden"] = [{"id": "t1", "iso": _um(tag, 12, 45),
                            "spoken": "morgen um zwölf Uhr fünfundvierzig",
                            "calendarId": "kal1", "doctorName": "Dr. Petsas"}]
         sit["verwaltenTermin"] = "t1"
@@ -1122,7 +1132,7 @@ def test_verschieben_gleicher_tag_frueher():
         assert sit.get("verschiebRichtung") == "frueher"
         aus = verwalten._verschieb_angebot(sit, None)
         isos = [o["iso"] for o in sit.get("offered") or []]
-        assert isos == ["2026-08-28T12:15:00+02:00"], isos
+        assert isos == [_um(tag, 12, 15)], isos
         assert "zwölf Uhr fünfzehn" in (aus.get("text") or "")
     finally:
         verwalten.kal.find_slots = echt

@@ -204,6 +204,37 @@ Satz-Pinning). Der komplette Abendstand liegt unangetastet auf dem Branch
 zurückholen, nie pauschal mergen. Es gibt KEIN TTS-Streaming auf diesem
 Stand: eine Äußerung = ein blockierender `/speak` (bzw. satzweise gefügt).
 
+## Versichertenstatus + Vornamen-Wächter (29.08.2026 — nicht rückbauen)
+
+Chef-Vorgabe: privat/gesetzlich gehört in die Kartei, Anrufer werden
+geschlechtsspezifisch angesprochen.
+
+- **Versicherungs-Frage** (`bianca/gehirn.py -> _versicherung_frage`):
+  Neupatienten (warSchonMal=False) als LETZTE Pflichtfrage; Bestandsakten
+  NUR, wenn der letzte Besuch >6 Monate her ist (`letzterBesuch` via
+  masPatientLastDoctor im Hintergrund), als Ja/Nein-Rückfrage gegen den
+  Kartei-Stand. NUR der Wechsel privat<->gesetzlich zählt — Kassenwechsel
+  (AOK->TK) ist bewusst KEIN Wechsel (Kassen-Namen zählen als "gesetzlich").
+  Bestand OHNE Kartei-Treffer wird nicht verhört. "Nein/geändert" auf die
+  Rückfrage heißt deterministisch das GEGENTEIL des Kartei-Stands.
+- **Kartei-Schreibwege:** Neupatient über `akte_anlegen`/masCreatePatient
+  (`privateInsurance`-Feld); Bestands-Wechsel SOFORT über
+  `masUpdatePatientInsurance` (neu, pickadoc-live-base) mit Sicherheitsnetz
+  in `_buchen` VOR der Buchung — so trägt der Termin-Schnappschuss
+  (Terminpopup) den richtigen Status. Scheitert das Update oder bleibt die
+  Frage unklar (Eskalation), hängt `_buchen` eine Praxis-Notiz an den Termin.
+  masSearchPatients liefert `privateInsurance` jetzt mit (additiv).
+- **Vornamen-Wächter** (`kern/vornamen.py`): kuratierte Listen + konservative
+  -a-Heuristik; Doppelnamen entscheidet der erste Teil; mehrdeutige Namen
+  (Kim, Sascha, Toni …) liefern "". Chef-Default: unklarer Vorname =>
+  WEIBLICH + Termin-Notiz "Bitte Geschlecht aktualisieren". Kartei-Geschlecht
+  (`geschlechtQuelle=akte`, via hintergrund) schlägt IMMER die Schätzung.
+  Anrede: `gehirn.anrede()` ("Frau Müller" / gebeugt "Herrn Müller") im
+  Readback ("für Frau Müller"); Lisa rät weiterhin NICHT (voller Name bei
+  mehrdeutigen Vornamen), nutzt den Wächter nur bei eindeutigen.
+- Neue Akten bekommen das Geschlecht (m/f) über masCreatePatient registriert.
+- Tests: `tests/test_versicherung_geschlecht.py` (Teil von lauf_bianca).
+
 ## Lisa zuerst
 
 Bianca-Ordner bleibt leer, bis der Lisa-Kernel Anrufe hält.

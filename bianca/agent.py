@@ -54,6 +54,8 @@ _FRAGE_KERN = {
     "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",
+    "versicherung": r"privat|gesetzlich|versichert",
+    "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -144,6 +146,8 @@ _FEHLT_WORT = {
     "telefon_alt": "Ihre Entscheidung zur alten Nummer in der Akte",
     "slotwahl": "Ihre Terminwahl",
     "bestaetigung": "Ihr Okay",
+    "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
+    "versicherung_check": "ob sich Ihre Versicherung geändert hat",
 }
 
 

@@ -14,7 +14,7 @@ from typing import Any, Callable
 from bianca import gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import calendar as kal
 from kern import gespraech
-from kern.patients import arzt_sprechname, telefon_aktualisieren
+from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_aktualisieren
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
 from kern.tenants import motiv_von
@@ -251,6 +251,12 @@ def _ctx_bauen(sit: dict) -> dict:
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
+    # Fuer eine NEUE Akte (book_slot -> akte_anlegen): Geschlecht aus dem
+    # Vornamen-Waechter und der erfragte Versichertenstatus (29.08.2026).
+    if s["geschlecht"]:
+        ctx["gender"] = s["geschlecht"]
+    if s["versicherung"]:
+        ctx["privateInsurance"] = s["versicherung"] == "privat"
     if sit.get("slotVorrat"):
         ctx["slotVorrat"] = list(sit["slotVorrat"])
     return ctx
@@ -275,6 +281,11 @@ def _quittung(s: dict, neu: set[str]) -> str:
         return "Prima, die Nummer habe ich. "
     if "telefonAkte" in neu:
         return "Alles klar — dann nehmen wir die Nummer aus Ihrer Akte. "
+    if "versicherung" in neu:
+        art = "privat" if s.get("versicherung") == "privat" else "gesetzlich"
+        return f"Alles klar — {art} versichert, notiert. "
+    if "versicherungCheck" in neu:
+        return "Prima, dann bleibt alles wie gehabt. "
     if "grund" in neu:
         return "Alles klar. "
     if "wunsch" in neu:
@@ -289,7 +300,9 @@ def _readback(sit: dict) -> dict:
     # Gesprochen wird NUR Titel + Nachname ("Doktor Petsas") — englische
     # Vornamen (Michael) liest die Sprachausgabe sonst englisch vor.
     beim = arzt_sprechname(bind.get("calendarName") or a.get("calendarName") or sit.get("angebotArzt") or "")
-    wer = f"{s['vorname']} {s['nachname']}".strip()
+    # Geschlechts-Anrede (Chef 29.08.2026): "für Frau Müller" / "für Herrn
+    # Müller" — ohne Geschlecht bleibt der volle Name.
+    wer = gehirn.anrede(s, sit.get("patient"), beugen=True)
     s["phase"] = "bestaetigen"
     s["frage"] = "bestaetigung"
     teile = [_grund_sprechbar(s), spoken_slot(s["slotIso"])]
@@ -436,6 +449,32 @@ def _telefon_alt_ausfuehren(sit: dict, melde: Melde = None) -> str:
     return "Das Umtragen klappt gerade technisch nicht — ich gebe Ihre neue Nummer der Praxis mit. "
 
 
+def _versicherung_ausfuehren(sit: dict, melde: Melde = None) -> str:
+    """Gemeldeten privat<->gesetzlich-Wechsel in die Kartei schreiben (29.08.2026).
+
+    Nur bei BESTANDSAKTE mit erkanntem Wechsel — Neupatienten bekommen den
+    Status direkt beim Anlegen (akte_anlegen ueber den Buchungskontext).
+    Scheitert das Update, haengt _buchen eine Praxis-Notiz an den Termin."""
+    s = gehirn.sammler(sit)
+    if not (s["versicherungWechsel"] and s["patientId"] and s["versicherung"]):
+        return ""
+    if s["versicherungAkte"] == s["versicherung"]:
+        return ""  # schon umgetragen (z. B. Sicherheitsnetz lief bereits)
+    if melde:
+        melde("update_insurance")
+    res = versicherung_aktualisieren(sit["tenant"], s["patientId"], s["versicherung"] == "privat")
+    merke_tool(sit, "update_insurance", res)
+    if res.get("ok"):
+        s["versicherungAkte"] = s["versicherung"]
+        art = "privat" if s["versicherung"] == "privat" else "gesetzlich"
+        if res.get("dryRun"):
+            return "Den Versichertenstatus hätte ich jetzt umgetragen — der Test schreibt die Kartei noch nicht. "
+        return f"Ich habe das in Ihrer Kartei aktualisiert — Sie sind jetzt als {art} versichert geführt. "
+    s["versicherungNotiz"] = True
+    print(f"bianca-versicherung: Update fehlgeschlagen — {res.get('error')}", flush=True)
+    return "Das Umtragen klappt gerade technisch nicht — ich gebe es der Praxis mit. "
+
+
 def _buchen(sit: dict, melde: Melde = None) -> dict:
     s = gehirn.sammler(sit)
     if (s["telefonAlt"] == "neu" and s["patientId"] and s["telefon"] and s["aktePhone"]
@@ -444,6 +483,12 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         # steht, aber das Update lief noch nicht — JETZT nachholen, BEVOR die
         # Buchung die Bestaetigungs-SMS an die Akten-Nummer schickt.
         _telefon_alt_ausfuehren(sit, melde)
+    if (s["versicherungWechsel"] and s["patientId"] and s["versicherung"]
+            and s["versicherungAkte"] != s["versicherung"]):
+        # Sicherheitsnetz: privat<->gesetzlich-Wechsel gemeldet, aber noch
+        # nicht in der Kartei — vor der Buchung nachholen, damit der
+        # Termin-Schnappschuss den richtigen Status traegt.
+        _versicherung_ausfuehren(sit, melde)
     if melde:
         melde("book_slot")
     ctx = _ctx_bauen(sit)
@@ -485,6 +530,28 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     text += " Ihre neue Handynummer gebe ich der Praxis mit."
             elif s["telefon"] or s["aktePhone"]:
                 text += " Die Bestätigung kommt gleich per SMS."
+            # Praxis-Notizen ans Terminpopup (29.08.2026): unklares Geschlecht
+            # (Default weiblich) und ein nicht geschriebener Versicherungs-
+            # Wechsel gehoeren sichtbar in den Termin.
+            hinweise = []
+            if s["versicherungNotiz"]:
+                if s["versicherung"]:
+                    hinweise.append(
+                        f"Versichertenstatus am Telefon: jetzt {s['versicherung']} — "
+                        "Akte konnte nicht aktualisiert werden, bitte nachtragen."
+                    )
+                else:
+                    hinweise.append(
+                        "Versichertenstatus (privat/gesetzlich) am Telefon nicht geklärt — bitte nachfragen."
+                    )
+            if s["geschlechtUnklar"]:
+                hinweise.append(
+                    "Bitte Geschlecht aktualisieren — Vorname unklar, vorläufig weiblich eingetragen."
+                )
+            if hinweise:
+                if melde:
+                    melde("note_appointment")
+                kal.note_appointment(sit["tenant"], ctx, sit, note=" ".join(hinweise))
             text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
     if res.get("slotTaken"):
@@ -545,6 +612,17 @@ def _eskalieren(sit: dict, fid: str) -> str:
         # _buchen als Sicherheitsnetz nach (vor der SMS).
         s["telefonAlt"] = "neu"
         return "Dann nehme ich einfach Ihre neue Nummer. "
+    if fid == "versicherung":
+        # Keine klare Antwort: nicht blockieren und nichts raten — die Praxis
+        # bekommt eine Notiz an den Termin (versicherungNotiz in _buchen).
+        s["versicherungOk"] = True
+        s["versicherungNotiz"] = True
+        return "Das klären wir dann in der Praxis — ich vermerke es. "
+    if fid == "versicherung_check":
+        # Keine klare Antwort auf die Rueckfrage: Kartei-Stand bleibt.
+        s["versicherungOk"] = True
+        s["versicherung"] = s["versicherungAkte"]
+        return "Dann lasse ich es wie gehabt eingetragen. "
     return "Entschuldigung, das habe ich nicht mitbekommen. "
 
 
@@ -655,6 +733,22 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if ang and _s(ang.get("text")):
             ang["text"] = vor + ang["text"]
         return ang
+
+    if "versicherung" in neu and s["versicherungWechsel"] and s["patientId"]:
+        # Gemeldeter privat<->gesetzlich-Wechsel einer Bestandsakte: SOFORT
+        # in die Kartei schreiben (Erledigt-Ansage nur nach echtem Erfolg),
+        # dann normal weiter im Fragenfluss.
+        vor = _versicherung_ausfuehren(sit, melde)
+        if vor:
+            hintergrund.anstossen(sit)
+            fid2, frage2 = gehirn.naechste_frage(sit)
+            s["frage"] = fid2
+            if fid2:
+                return {"text": (vor + frage2).strip()}
+            ang = _angebot(sit, melde)
+            if ang and _s(ang.get("text")):
+                ang["text"] = vor + ang["text"]
+            return ang
 
     hintergrund.anstossen(sit)
 

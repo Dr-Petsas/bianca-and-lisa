@@ -283,7 +283,8 @@ def ist_dev_handy(raw: str) -> bool:
     return d == "49" + dev.lstrip("0")
 
 
-def _cf_create(tenant: dict, first: str, last: str, phone: str, *, birth: str = "", gender: str = "") -> tuple[int, Any]:
+def _cf_create(tenant: dict, first: str, last: str, phone: str, *, birth: str = "",
+               gender: str = "", private_insurance: bool | None = None) -> tuple[int, Any]:
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -295,6 +296,8 @@ def _cf_create(tenant: dict, first: str, last: str, phone: str, *, birth: str = 
         body["birthDate"] = birth
     if gender:
         body["gender"] = gender
+    if private_insurance is not None:
+        body["privateInsurance"] = bool(private_insurance)
     try:
         r = httpx.post(f"{CF_BASE}/masCreatePatient", json=body, timeout=12.0)
         data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -360,6 +363,7 @@ def akte_anlegen(
     phone: str,
     birth: str = "",
     gender: str = "",
+    private_insurance: bool | None = None,
     name: str = "",
 ) -> dict[str, Any]:
     """Sucht zuerst. Neue Akte nur mit echtem Namen und Handy. Keine Testnamen."""
@@ -417,6 +421,7 @@ def akte_anlegen(
         "phone": e164,
         "phoneDisplay": format_de_phone(e164),
         "gender": _s(gender),
+        "privateInsurance": private_insurance,
     }
     if not WRITE_LIVE:
         return {
@@ -429,7 +434,8 @@ def akte_anlegen(
                 "der Test schreibt die Kartei noch nicht."
             ),
         }
-    status, data = _cf_create(tenant, first, last, e164, birth=birth, gender=gender)
+    status, data = _cf_create(tenant, first, last, e164, birth=birth, gender=gender,
+                              private_insurance=private_insurance)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         p = data.get("patient") if isinstance(data.get("patient"), dict) else {}
         fertig = karten_patient(p) if p.get("id") else {**karte, **p}
@@ -492,6 +498,43 @@ def telefon_aktualisieren(tenant: dict, patient_id: str, phone: str) -> dict[str
             "patientId": pid,
             "mobilePhoneNumber": _s(data.get("mobilePhoneNumber")) or e164,
             "previous": _s(data.get("previous")),
+        }
+    return {"ok": False, "error": _s(data.get("message")) or f"http_{r.status_code}"}
+
+
+def versicherung_aktualisieren(tenant: dict, patient_id: str, privat: bool) -> dict[str, Any]:
+    """Versichertenstatus einer BESTEHENDEN Akte setzen (masUpdatePatientInsurance).
+
+    Chef 29.08.2026: Bestandspatienten werden nach >6 Monaten gefragt, ob sie
+    zwischen privat und gesetzlich gewechselt haben — NUR dieser Wechsel
+    interessiert (Kassenwechsel AOK->TK bleibt unbeachtet). WRITE_LIVE=0 =>
+    Trockenlauf (ok+dryRun), es wird nichts geschrieben."""
+    pid = _s(patient_id)
+    if not pid:
+        return {"ok": False, "error": "patientId fehlt"}
+    if not WRITE_LIVE:
+        return {"ok": True, "dryRun": True, "patientId": pid,
+                "privateInsurance": bool(privat), "previous": None}
+    try:
+        r = httpx.post(
+            f"{CF_BASE}/masUpdatePatientInsurance",
+            json={
+                "clientId": _s(tenant.get("clientId")),
+                "locationId": _s(tenant.get("locationId")),
+                "patientId": pid,
+                "privateInsurance": bool(privat),
+            },
+            timeout=12.0,
+        )
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": str(e)}
+    if r.status_code == 200 and isinstance(data, dict) and data.get("status") == "success":
+        return {
+            "ok": True,
+            "patientId": pid,
+            "privateInsurance": bool(data.get("privateInsurance")),
+            "previous": data.get("previous"),
         }
     return {"ok": False, "error": _s(data.get("message")) or f"http_{r.status_code}"}
 
@@ -575,4 +618,7 @@ def karten_patient(p: dict) -> dict[str, Any]:
         "devPhone": format_de_phone(DEV_PHONE),
         "devPhoneRaw": DEV_PHONE,
         "test": ist_testakte(p),
+        # None = Kartei-Stand unbekannt (aeltere CF ohne das Feld), sonst bool.
+        "privateInsurance": (p.get("privateInsurance")
+                             if isinstance(p.get("privateInsurance"), bool) else None),
     }
