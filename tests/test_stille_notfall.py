@@ -27,15 +27,17 @@ def _dienst(*, langsam_s: float = 0.0, schnell: bool = False) -> Dienst:
         return {"ok": True, "empty": False, "text": "Antwort.", "audioUrl": ""}
 
     d.json_antwort = antwort
-    # Fueller-URLs vorbelegen (im Test laeuft kein TTS): jeder Satz der
-    # Rotations-Gruppe "allgemein" bekommt eine eigene Fake-URL.
-    for i, satz in enumerate(filler.GRUPPEN["allgemein"]):
-        d.filler_urls[satz] = f"/api/audio/f{i}"
+    # Fueller-URLs vorbelegen (im Test laeuft kein TTS).
+    nr = 0
+    for gruppe in filler.GRUPPEN.values():
+        for satz in gruppe:
+            d.filler_urls[satz] = f"/api/audio/f{nr}"
+            nr += 1
     return d
 
 
-def _zeilen(d: Dienst, sit: dict) -> list[dict]:
-    return [json.loads(z) for z in d.zug_stream(sit, art="turn", text_in="Hallo")]
+def _zeilen(d: Dienst, sit: dict, text: str = "Hallo") -> list[dict]:
+    return [json.loads(z) for z in d.zug_stream(sit, art="turn", text_in=text)]
 
 
 def test_schneller_zug_bleibt_ohne_fueller():
@@ -45,44 +47,42 @@ def test_schneller_zug_bleibt_ohne_fueller():
 
 
 def test_langsamer_zug_bekommt_fueller_und_nachschub():
-    alt = (dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S)
-    dienst_mod.FILLER_SPAET_S = 0.05
+    """Nur wenn wirklich Kalender erwartet wird — Plauder-Zuege bleiben
+    ohne Server-Fueller (Dock-Watchdog deckt Haenger)."""
+    alt = (dienst_mod.FILLER_VORAB_S, dienst_mod.FILLER_NACHSCHUB_S)
+    dienst_mod.FILLER_VORAB_S = 0.05
     dienst_mod.FILLER_NACHSCHUB_S = 0.08
     try:
         d = _dienst(langsam_s=0.4)
-        out = _zeilen(d, {})
+        out = _zeilen(d, {}, "Haben Sie nächste Woche vormittags etwas frei?")
         arten = [z["type"] for z in out]
         assert arten[-1] == "reply"
-        # Erster Fueller frueh, danach Nachschub — bis zum Deckel.
         assert arten.count("filler") == dienst_mod.FILLER_MAX
         urls = [z["audioUrl"] for z in out if z["type"] == "filler"]
         assert len(set(urls)) == len(urls)  # rotierend, nie derselbe Satz
     finally:
-        dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
+        dienst_mod.FILLER_VORAB_S, dienst_mod.FILLER_NACHSCHUB_S = alt
 
 
-def test_schnelle_phase_haengt_nicht_stumm():
-    """Regression: die alte 3,2-s-Frist liess Readback-/Kalender-Haenger in
-    der schnellen Phase sekundenlang stumm — jetzt gilt die kurze Frist
-    ueberall, die Zustandsmaschine schlaegt sie im Normalfall ohnehin."""
-    alt = (dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S)
-    dienst_mod.FILLER_SPAET_S = 0.05
-    dienst_mod.FILLER_NACHSCHUB_S = 5.0
-    try:
-        d = _dienst(langsam_s=0.25, schnell=True)
-        out = _zeilen(d, {})
-        arten = [z["type"] for z in out]
-        assert arten[0] == "filler"
-        assert arten[-1] == "reply"
-    finally:
-        dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
+def test_plauderzug_bekommt_keinen_server_fueller():
+    """„Wie heißt du?" darf keinen Nachschau-Füller auslösen — die echte
+    Antwort (P5) oder der neutrale Dock-Watchdog sprechen."""
+    d = _dienst(langsam_s=0.25)
+    out = _zeilen(d, {}, "Wie heißt du?")
+    assert [z["type"] for z in out] == ["reply"]
+
+
+def test_schnelle_phase_ohne_geratenen_fueller():
+    """Maschine/Readback liefern den ersten Ton selbst — kein „ich schaue
+    nach" in die Buchungsfragen hinein."""
+    d = _dienst(langsam_s=0.25, schnell=True)
+    out = _zeilen(d, {}, "Ja.")
+    assert [z["type"] for z in out] == ["reply"]
 
 
 def test_produktions_fristen_halten_die_regel():
-    """0,9 s Frist + Dock-Vorlauf (~0,5-0,8 s) bleibt beim ersten Ton unter
-    1,5 s; der Nachschub laesst zwischen zwei Fuellern nie mehr als ~1,5 s
-    Stille (Fueller-Audio ~1,2 s + 2,4er-Frist ab Fueller-BEGINN)."""
-    assert FILLER_SPAET_S <= 0.9
+    """Kalender-Vorab bleibt früh; Nachschub hält die 1,5-s-Lücke."""
+    assert dienst_mod.FILLER_VORAB_S <= 0.3
     assert FILLER_NACHSCHUB_S <= 2.4
     assert FILLER_MAX >= 2
 

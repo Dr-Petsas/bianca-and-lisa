@@ -313,7 +313,7 @@ async function playUrl(url) {
 }
 
 async function leseZug(r, onFiller) {
-  const out = { sessionId: "", textIn: "", text: "", audioUrl: "", book: null, writeLive: false, timings: {}, empty: false, error: "" };
+  const out = { sessionId: "", textIn: "", text: "", audioUrl: "", book: null, writeLive: false, timings: {}, empty: false, error: "", hangup: false, warte: false, stilleMs: 0 };
   if (!r.ok && !r.body) {
     throw new Error("Antwort fehlgeschlagen");
   }
@@ -346,6 +346,11 @@ async function leseZug(r, onFiller) {
         out.error = ev.error || "";
       }
       if (ev.type === "transcript" && ev.textIn) out.textIn = ev.textIn;
+      if (ev.type === "warte") {
+        // Halbsatz-Wache: Satz klingt unfertig — still weiterhören.
+        out.warte = true;
+        if (ev.stilleMs) out.stilleMs = ev.stilleMs;
+      }
       if (ev.type === "filler" && ev.audioUrl && onFiller) {
         // Überbrückungssatz SOFORT abspielen — die echte Antwort kommt gleich nach.
         try { onFiller(ev.audioUrl); } catch { /* */ }
@@ -360,6 +365,8 @@ async function leseZug(r, onFiller) {
         if (ev.textIn && !out.textIn) out.textIn = ev.textIn;
         if (ev.sessionId) out.sessionId = ev.sessionId;
         if (ev.empty) out.empty = true;
+        if (ev.hangup) out.hangup = true;
+        if (ev.stilleMs) out.stilleMs = ev.stilleMs;
       }
       if (ev.type === "audio") {
         out.audioUrl = ev.audioUrl || "";
@@ -483,7 +490,11 @@ async function stilleStups(nr) {
     });
     const d = await r.json();
     if (!callOn || nr !== hoerNr) return true;
+    if (d && d.stilleMs) stilleSoll = d.stilleMs;
     if (d.empty || !d.audioUrl) return false;
+    // Halbsatz-Flush: der Stups beantwortet ein gehaltenes Satz-Fragment —
+    // dann gehört der Anrufer-Satz auch in den Verlauf.
+    if (d.textIn) bubble("user", d.textIn);
     if (d.text) bubble("ki", d.text);
     phase("ki", "Bianca spricht …");
     await playUrl(d.audioUrl);
@@ -531,6 +542,16 @@ async function sendeZug({ text, blob, nr }) {
     if (fillerLauf) { try { await fillerLauf; } catch { /* */ } }
     if (data && data.stilleMs) stilleSoll = data.stilleMs;
     if (!callOn || nr !== hoerNr) { zugBusy = false; return; }
+    if (data.warte) {
+      // Halbsatz-Wache: der Satz klingt unfertig (Denkpause) — Bianca
+      // schweigt bewusst und hört mit längerer Ruhe-Schwelle weiter; der
+      // nächste Zug wird serverseitig an das Fragment angefügt.
+      wachtStopp();
+      phase("du", "… Sie sprechen — Bianca hört weiter zu");
+      zugBusy = false;
+      if (callOn && nr === hoerNr) hoeren();
+      return;
+    }
     if (bargeInfo && data.audioUrl && bargeInfo.url !== data.audioUrl) {
       // Reinsprecher während Füller/Vorab: die frische Antwort NICHT mehr
       // abspielen — sie gilt als bei null unterbrochen, der Server holt sie
@@ -551,6 +572,7 @@ async function sendeZug({ text, blob, nr }) {
     if (t.total != null) phase("ki", `Bianca spricht · ${t.total}s`);
     await playUrl(data.audioUrl);
     zugBusy = false;
+    if (data.hangup) { auflegen(); return; }
     if (callOn && nr === hoerNr) hoeren();
   } catch (e) {
     $("status").textContent = String(e.message || e);

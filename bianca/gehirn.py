@@ -129,13 +129,30 @@ _VERSCHIEBEN_RE = re.compile(
     r"nach\s+hinten\s+schieben|anderen\s+tag\s+.{0,16}(statt|als)\b",
     re.I,
 )
+# Woerter, die im "ich habe ... Termin"-Fenster einen WUNSCH verraten
+# (dann ist es eine Neubuchung, keine Bestands-Auskunft).
+_KEIN_WUNSCH_TOKEN = (
+    r"(?!(?:gern\w*|zeit|urlaub|frei|brauch\w*|bräucht\w*|braucht\w*|"
+    r"möcht\w*|moecht\w*|hätt\w*|haett\w*|will|wollte|dringend|"
+    r"\w*schmerz\w*|\w*weh)\b)"
+)
 _AUSKUNFT_RE = re.compile(
     r"wann\s+(ist|war|wäre|waere|hab(e)?\s+ich)\b.{0,30}termin|"
     r"hab(e)?\s+ich\s+(überhaupt\s+|ueberhaupt\s+)?(noch\s+)?(irgend)?einen\s+termin|"
     r"welche[nr]?\s+termin(e)?\s+(hab|steht|stehen)|"
     r"termin\s+(nochmal|noch\s+mal|nochmals)\s*(sagen|nennen|durchgeben)?|"
     r"wann\s+(muss|soll|darf)\s+ich\s+(kommen|da\s+sein|vorbeikommen)|"
-    r"wann\s+bin\s+ich\s+(dran|eingetragen)",
+    r"wann\s+bin\s+ich\s+(dran|eingetragen)|"
+    # "... einen Termin, aber ich weiss nicht mehr(, wann)" — Bestandstermin,
+    # Zeitpunkt vergessen (Live-Protokoll 29.08.2026, 09:34).
+    r"termin\b[^.!?]{0,60}?\b(?:weiß|weiss|wusste|wüsste|wuesste)\s+(?:\w+\s+){0,2}?nicht|"
+    r"\b(?:weiß|weiss|wusste|wüsste|wuesste)\s+(?:\w+\s+){0,2}?nicht\b[^.!?]{0,50}?\btermin|"
+    # Feststellung "ich habe <Zeitangabe> ... einen Termin" (ohne Wunsch-Wort
+    # wie brauche/hätte/Zeit): der Termin EXISTIERT — Auskunft, nie Neubuchung.
+    rf"ich\s+hab(?:e|')?\s+(?:{_KEIN_WUNSCH_TOKEN}[\wäöüß,]+\s+){{0,5}}?"
+    rf"(?:am\s+[\wäöüß]+|(?:n[äa]chste|diese|kommende)[nrs]?\s+woche|morgen|übermorgen|uebermorgen|heute|"
+    rf"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b"
+    rf"\s*(?:{_KEIN_WUNSCH_TOKEN}[\wäöüß,]+\s+){{0,5}}?termin\b",
     re.I,
 )
 _SCHONMAL_JA_RE = re.compile(
@@ -1018,6 +1035,10 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Stimmt das so?",
     ]
     out = list(erstformen)
+    # Kirri-Zettel (gesprochene Zeile nach dem Verbinden-Jingle) mitwaermen —
+    # Import in der Funktion, weil weiterleiten selbst gehirn importiert.
+    from bianca import weiterleiten as _wl
+    out.append(_wl.ANSAGE_PLATZHALTER)
     # Behandler-Wahl fuer Neupatienten: die Erstform traegt die Namen aus
     # dem Tenant (nur mit Tenant baubar), die Varianten sind statisch.
     if tenant:

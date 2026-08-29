@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from kern import sprech, unterbrechung
+from kern import halbsatz, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
@@ -268,6 +268,13 @@ def api_stille(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    # W-HALBSATZ: haengt ein gehaltenes Satz-Fragment in der Sitzung, hat der
+    # Anrufer den Satz nicht fortgesetzt — dann wird ER beantwortet, kein Stups.
+    rest = halbsatz.abholen(sit)
+    if rest:
+        print(f"lisa-stille halbsatz-flush: {rest!r}", flush=True)
+        return DIENST.json_antwort(sit, art="turn", text_in=rest,
+                                   extra={"sessionId": sit.get("id") or ""})
     reply = agent.stille_zug(sit)
     text = sprech.sanitize(reply.get("text") or "")
     if not text:

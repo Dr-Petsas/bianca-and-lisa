@@ -60,11 +60,12 @@ def test_buchungssaetze_loesen_nicht_aus():
 def test_namentlich_genannt_verbindet_direkt_ohne_personalfrei():
     """'Kann ich bitte mit Doktor Patrikis sprechen?' (Chef 27.08., zweite
     Fassung): KEINE Personalfrei-Ansage, KEINE Rueckfrage — Ansage + Jingle
-    + Platzhalter, fertig."""
+    + Kirri-Zettel, fertig."""
     sit = _sit()
     events: list[str] = []
     z = flow.zug(sit, "Kann ich bitte mit Doktor Patrikis sprechen?", events.append)
-    assert z and "Kirri" in z["text"]  # Platzhalter = verbunden
+    assert z and "Kirri" in z["text"]  # Diss-Spruch IST die gesprochene Zeile
+    assert z.get("hangup") is True
     assert "personalfrei" not in z["text"] and "KI-geführt" not in z["text"]
     assert z.get("jingle") == weiterleiten.JINGLE_EVENT
     assert weiterleiten.JINGLE_EVENT in events
@@ -83,6 +84,7 @@ def test_verbinden_lassen_mit_namen_verbindet_direkt():
     events: list[str] = []
     z = flow.zug(sit, "Ich möchte mich direkt zu Doktor Petsas verbinden lassen.", events.append)
     assert z and "Kirri" in z["text"]
+    assert z.get("hangup") is True
     assert "personalfrei" not in z["text"]
     assert weiterleiten.JINGLE_EVENT in events
     s = gehirn.sammler(sit)
@@ -114,6 +116,7 @@ def test_buchhaltung_bekommt_wahrheit_und_arztfrage():
     events: list[str] = []
     z2 = flow.zug(sit, "Dann zu Doktor Patrikis, bitte.", events.append)
     assert z2 and "Kirri" in z2["text"]
+    assert z2.get("hangup") is True
     assert weiterleiten.JINGLE_EVENT in events
 
 
@@ -150,6 +153,7 @@ def test_weiterleiten_ohne_namen_fragt_nur_nach_arzt():
     events: list[str] = []
     z2 = flow.zug(sit, "Bei Doktor Patrikis.", events.append)
     assert z2 and "Kirri" in z2["text"]
+    assert z2.get("hangup") is True
     assert weiterleiten.JINGLE_EVENT in events
 
 
@@ -183,9 +187,9 @@ def test_mensch_ohne_arzt_fragt_nach_arzt():
     assert "Zu wem darf ich Sie durchstellen?" in z["text"]
 
 
-# --- (d) Ja -> Jingle-Event + Kirri-Platzhalter-Ansage ------------------------
+# --- (d) Ja -> Jingle + Kirri-Zettel -----------------------------------------
 
-def test_ja_spielt_jingle_und_kirri_ansage():
+def test_ja_spielt_jingle_und_kirri_zettel():
     sit = _sit()
     s = gehirn.sammler(sit)
     s["arzt"] = {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"}
@@ -195,12 +199,13 @@ def test_ja_spielt_jingle_und_kirri_ansage():
     # Kein Mitarbeiter-Wort im Satz -> keine Personalfrei-Ansage.
     assert "personalfrei" not in z1["text"]
     z2 = flow.zug(sit, "Ja, bitte.", events.append)
-    assert z2 and "Kirri" in z2["text"] and "Zaluma" in z2["text"]
-    assert "sonst noch etwas" in z2["text"].lower()  # Gespraech geht weiter
-    assert weiterleiten.JINGLE_EVENT in events  # Jingle-Event erzeugt
-    assert any(e.startswith("sag:") for e in events)  # Ansage vor dem Jingle
+    assert z2 and z2["text"] == weiterleiten.ANSAGE_PLATZHALTER
+    assert z2.get("hangup") is True
+    assert "Kirri" in z2["text"] and "Lappen" in z2["text"]
+    assert weiterleiten.JINGLE_EVENT in events
+    assert any(e.startswith("sag:") for e in events)
     assert z2.get("jingle") == weiterleiten.JINGLE_EVENT
-    assert not (sit.get("weiterleiten") or {})  # Anliegen bedient
+    assert not (sit.get("weiterleiten") or {})
 
 
 def test_nein_bricht_sauber_ab():
@@ -232,9 +237,9 @@ def test_dienst_festes_audio():
 
 
 def test_ansage_ueberlebt_sprech_filter():
-    """Die Platzhalter-Ansage darf vom Sprech-Filter nicht zerlegt werden."""
+    """Kirri-Zettel und Wahrheit dürfen vom Sprech-Filter nicht zerlegt werden."""
     from kern import sprech
     raus = sprech.sanitize(weiterleiten.ANSAGE_PLATZHALTER)
-    assert "Kirri" in raus and "Zaluma" in raus and "Petsas" in raus
+    assert "Kirri" in raus and "Petsas" in raus and "Lappen" in raus
     wahr = sprech.sanitize(weiterleiten.WAHRHEIT)
     assert "personalfrei" in wahr and "KI-geführt" in wahr

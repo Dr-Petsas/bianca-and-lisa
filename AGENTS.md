@@ -408,19 +408,53 @@ Chef: "ich will 300 ms schneller werden." Zwei Bausteine, beide Docks:
   (test_bianca_bausteine). Live-Probe 29.08.: stilleMs 350/350/500 je nach
   Frage, /api/hoeren transkribiert Referenz-Audio wortgenau.
 
+## Halbsatz-Wache + Termin-Auskunft (W-HALBSATZ 29.08.2026 — nicht rückbauen)
+
+Live 09:34: „Hallo, ich habe nächste Woche Dienstag ein" — das Stille-Zugende
+(350-650 ms) schnitt in der Denkpause; Bianca beantwortete den halben Satz,
+verstand nur „Termin" und lief in die NEUBUCHUNG (schonmal-Frage) statt zur
+Frage nach dem BESTEHENDEN Termin. Der Anrufer setzte dreimal an und legte auf.
+
+- **Halbsatz-Wache** (`kern/halbsatz.py`, Einhängung `kern/dienst.zug_stream`
+ NACH der Transkription, VOR Fluss/LLM — gilt für Lisa UND Bianca): klingt
+ das Gehörte unfertig (Komma-/Gedankenstrich-Ende oder hängendes
+ Funktionswort: Artikel, Konjunktion, Präposition, Hilfsverb), antwortet die
+ Stimme NICHT. Das Dock bekommt `{"type":"warte","stilleMs":900}`: kein Ton,
+ kein Füller, Watchdog aus, weiterhören mit 900 ms Ruhe-Schwelle. Der
+ nächste Zug wird SERVERSEITIG an das gemerkte Fragment gefügt (Protokoll
+ und LLM sehen den ganzen Satz). Deckel: max. 2 Verlängerungen pro Satz.
+ NIE gehalten: Ziffern-Züge (Nummern-Diktat hat seine Teil-Logik). NIE
+ verschluckt: ein leeres Nach-Transkript beantwortet das Fragment direkt,
+ und der Stille-Stups (`/api/stille`, beide Server) flusht es als echten
+ Zug. Notaus: `SATZ_HOLD=0`. Tests: `tests/test_halbsatz.py`.
+- **Termin-Auskunft statt Zwangs-Buchung** (`bianca/gehirn._AUSKUNFT_RE`):
+ „ich habe <Zeitangabe> … einen Termin" (Feststellung ohne Wunsch-Wörter wie
+ brauche/hätte/Zeit/Urlaub/Schmerzen) und „… Termin … weiß nicht (mehr)"
+ schalten auf `modus=auskunft` — auch mitten in einer schon angelaufenen
+ Buchung. Dann übernimmt `bianca/verwalten.py`: Name erfragen →
+ agentFindPatientAppointments → Termin VORLESEN („Ihr nächster Termin: …")
+ mit Verschieben-/Absagen-Angebot. Wunsch-Sätze bleiben Neubuchung
+ (`test_auskunft_erkennung_*` in test_bianca_bausteine).
+- **Dock-Fix nebenbei:** `leseZug` übernahm `stilleMs` aus NDJSON-Antworten
+ nie — die W-TEMPO-Schwellen (350/650) kamen im Stream-Pfad still nicht an.
+ Jetzt kopiert der reply-Zweig das Feld (beide Docks, Cache-Buster b14/call31).
+
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 
 Chef: "es darf NIE zum Schweigen kommen … nie länger als 1,5 Sekunden …
 es darf nie das Gefühl gegeben werden, dass die KI abgestürzt ist."
 Zwei Verteidigungslinien, beide Stimmen:
 
-- **Server-Füller für JEDEN Zug:** `kern/dienst.FILLER_SPAET_S` ist von
-  3,2 s auf **0,9 s** runter und gilt auch in der schnellen Phase — die
-  Zustandsmaschine antwortet in <0,4 s und schlägt die Frist im Normalfall,
-  aber Readback-Render, Kalender-Hänger und LLM-Züge bekommen jetzt
-  rechtzeitig einen Ton (die alte Frist riss live 4-s-Löcher). Das
-  27.08.-Bedenken "Füller spricht in die Antwort hinein" ist überholt:
-  die Docks spielen Füller + Antwort als KETTE, nichts überlappt.
+- **Server-Füller nur bei Kalender/Werkzeug** (29.08. abends, Chef: auf
+  „wie heißt du" kam „einen Moment, ich schaue eben nach"): Der 0,9-s-
+  Allgemein-Füller gewann nach P5 das Rennen gegen den echten ersten
+  Satz und behauptete ein Nachschauen, das nicht stattfand. `frist_setzen`
+  feuert jetzt NUR noch nach `filler.vermutet()` (Kalender/Akte) oder
+  echtem `melde()`; Plauder- und Maschinen-Züge warten auf Vorab-Satz
+  oder Antwort. Hängt der Server, spricht der Dock-Watchdog eine
+  **neutrale** Ansage. `_ALLGEMEIN` behauptet kein Nachschauen mehr
+  („schaue nach" ist raus). Identität/Smalltalk (`_RE_PLAUSCH`) nie
+  Kalender-Füller.
 - **Füller-Nachschub:** steht die Antwort nach einem Füller weiter aus,
   spricht alle `FILLER_NACHSCHUB_S` (2,4 s, gerechnet ab Füller-BEGINN,
   Audio ~1,2 s => Lücke < 1,5 s) der nächste rotierte Satz — Deckel
@@ -460,12 +494,14 @@ am Wächter vorbei). Tests: `test_readback_text_ist_dreisatzform`,
 
 Gemessen auf der 5090: vLLM 25,6 GB + Qwen3-TTS 4,9 GB = 30,5 / 32,6 GB.
 Ein Draft-Modell (Qwen 0,6B, ~1,5–2 GB) passt neben TTS nicht, ohne das
-35B-Fenster oder den Hybrid-Mund zu gefährden. Die 3060 trägt Claras
-Ollama — dort kein zweites 35B, Isolation bleibt. N-Gram-Spekulation
-bräuchte einen vLLM-Neustart (läuft seit 08.08. mit Prefix-Cache und
-`--gpu-memory-utilization 0.70`); ohne Extra-VRAM-Gewinn und mit
-Restart-Risiko bewusst gelassen. Wieder aufmachen, wenn TTS von der
-5090 weg ist oder vLLM ohnehin neu startet.
+35B-Fenster oder den Hybrid-Mund zu gefährden. Alle Worker (Clara, Demo,
+Lisa, Bianca) sprechen denselben Qwen-Container auf der 5090
+(`:8000/v1`) — auf der 3060 läuft kein 4B/Ollama mehr. N-Gram-
+Spekulation bräuchte einen vLLM-Neustart (läuft seit 08.08. mit Prefix-
+Cache und `--gpu-memory-utilization 0.70`); ohne Extra-VRAM-Gewinn und
+mit Restart-Risiko bewusst gelassen. Wieder aufmachen, wenn TTS von der
+5090 weg ist (z. B. 3060, ohne Lena zu verdrängen) oder vLLM ohnehin
+neu startet.
 
 ## Satzweises LLM→TTS (P5 29.08.2026 — nicht rückbauen)
 

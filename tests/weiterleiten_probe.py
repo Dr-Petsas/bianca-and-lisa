@@ -2,7 +2,7 @@
 Bianca-Dienst auf 8096. Schreibt nichts in den Kalender — nur Gespraechszuege.
 
   1. "Kann ich bitte mit Doktor Patrikis sprechen?" -> DIREKT verbinden:
-     zwei Filler (gesprochene Ansage, dann verbinden.mp3), Kirri-Platzhalter,
+     zwei Filler (gesprochene Ansage, dann verbinden.mp3), Abschied,
      KEIN Personalfrei-Text.
   2. Neue Sitzung, "Kann ich mit einem Mitarbeiter sprechen?" -> Wahrheit
      (personalfrei) + Arzt-Frage; Arzt genannt -> direkt verbinden.
@@ -45,7 +45,8 @@ def main() -> int:
     text = out.get("text") or ""
     print(f"  BIA: {text}")
     print(f"  Filler: {[f.get('audioUrl') for f in filler]}")
-    assert "Kirri" in text, f"Platzhalter fehlt: {text!r}"
+    assert "Kirri" in text, f"Kirri-Zettel fehlt: {text!r}"
+    assert out.get("hangup"), "Dock soll nach dem Verbinden auflegen"
     assert "personalfrei" not in text and "KI-gef" not in text, f"Personalfrei-Ansage faelschlich da: {text!r}"
     assert len(filler) >= 2, f"Ansage+Jingle erwartet, kam: {filler}"
     assert filler[-1].get("audioUrl", "").endswith("verbinden.mp3"), "Jingle nicht als letzter Filler"
@@ -62,7 +63,7 @@ def main() -> int:
     text3 = out3.get("text") or ""
     print(f"  BIA: {text3}")
     print(f"  Filler: {[f.get('audioUrl') for f in filler3]}")
-    assert "Kirri" in text3, f"Platzhalter fehlt: {text3!r}"
+    assert "Kirri" in text3, f"Kirri-Zettel fehlt: {text3!r}"
     assert filler3 and filler3[-1].get("audioUrl", "").endswith("verbinden.mp3"), "Jingle fehlt"
     print("  >>> ok: Wahrheit einmal, dann direkt verbunden")
 

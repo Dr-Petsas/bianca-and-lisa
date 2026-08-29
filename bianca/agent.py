@@ -472,7 +472,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         msgs.append({"role": "assistant", "content": fl["text"]})
         sit["messages"] = msgs
         gespraech.nach_antwort(sit)
-        return {"text": fl["text"], "book": fl.get("book")}
+        aus = {"text": fl["text"], "book": fl.get("book")}
+        if fl.get("hangup"):
+            # Weiterleitung (Jingle + Kirri-Zettel): das Dock legt danach auf.
+            aus["hangup"] = True
+        return aus
 
     # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.
     plan = gespraech.plan_block(route, offene_frage=_offene_frage(sit), stimme="bianca")

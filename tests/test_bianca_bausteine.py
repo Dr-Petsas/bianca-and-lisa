@@ -369,6 +369,47 @@ def test_modus_erkennung_verwaltung():
     assert gehirn.sammler(sit4)["modus"] != "absagen"
 
 
+def test_auskunft_erkennung_vergessener_termin():
+    """Live 29.08.2026 (09:34): 'ich habe nächste Woche Dienstag einen
+    Termin, aber ich weiss nicht mehr, ...' lief in die NEUBUCHUNG
+    (schonmal-Frage) statt in die Termin-Auskunft."""
+    sit = _sit()
+    gehirn.einsammeln(sit, "Ich sagte, ich habe nächste Woche Dienstag einen "
+                           "Termin, aber ich weiss nicht mehr, wann genau.")
+    assert gehirn.sammler(sit)["modus"] == "auskunft"
+
+    # Feststellung mit Zeitangabe reicht: der Termin EXISTIERT schon.
+    sit2 = _sit()
+    gehirn.einsammeln(sit2, "Guten Tag, ich habe nächste Woche Dienstag einen Termin.")
+    assert gehirn.sammler(sit2)["modus"] == "auskunft"
+
+    sit3 = _sit()
+    gehirn.einsammeln(sit3, "Ich weiß nicht mehr, wann mein Termin ist.")
+    assert gehirn.sammler(sit3)["modus"] == "auskunft"
+
+    # Mitten in der angelaufenen Buchung rettet der Satz noch um:
+    sit4 = _sit()
+    gehirn.einsammeln(sit4, "Ich brauche einen Termin.")
+    assert gehirn.sammler(sit4)["modus"] == "buchen"
+    gehirn.einsammeln(sit4, "Nein — ich habe nächste Woche einen Termin, "
+                            "aber ich weiss nicht mehr,")
+    assert gehirn.sammler(sit4)["modus"] == "auskunft"
+
+
+def test_auskunft_erkennung_wunsch_bleibt_buchung():
+    """Wunsch-Sätze mit 'ich habe ... Termin' sind weiter NEUBUCHUNG."""
+    for satz in (
+        "Ich hätte gern nächste Woche einen Termin.",
+        "Ich habe nächste Woche Zeit für einen Termin.",
+        "Ich habe nächste Woche Urlaub und brauche einen Termin.",
+        "Ich habe seit Tagen Zahnschmerzen und brauche morgen einen Termin.",
+        "Haben Sie am Montag einen Termin frei?",
+    ):
+        sit = _sit()
+        gehirn.einsammeln(sit, satz)
+        assert gehirn.sammler(sit)["modus"] == "buchen", satz
+
+
 def test_absage_im_angebot_bleibt_buchung():
     """'Absagen'/'verschieben' waehrend ein Buchungs-Angebot offen ist, meint
     das Angebot — der Modus darf nicht in die Bestandsverwaltung kippen."""
@@ -438,6 +479,25 @@ def test_absage_dann_neubuchung():
 
 def _s_frage(z: dict) -> str:
     return (z or {}).get("text") or ""
+
+
+def test_termin_auskunft_statt_schonmal_frage():
+    """Der echte Fehllauf 29.08.: Bianca fragte 'Waren Sie schon einmal bei
+    uns?' statt in den Kalender zu schauen und den Termin vorzulesen."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Hallo, ich habe nächste Woche Dienstag einen "
+                           "Termin, aber ich weiss nicht mehr, wann genau.")
+        assert z1 and "kalender schauen" in z1["text"].lower()  # Namensfrage
+        assert "schon einmal" not in z1["text"].lower()
+        assert gehirn.sammler(sit)["modus"] == "auskunft"
+        z2 = flow.zug(sit, "Martin Berger.")
+        assert z2 and "nächster termin" in z2["text"].lower()
+        assert "Petsas" in z2["text"]
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
 
 
 def test_auskunft_und_folgeabsage():

@@ -32,10 +32,13 @@ _AKTE = [
     "Moment, ich hole Ihre Termine auf den Schirm.",
     "Ganz kurz, ich schaue in Ihre Akte.",
 ]
+# Neutral — KEIN Nachschauen behaupten (Chef 29.08.2026: auf „wie heißt du"
+# kam „einen Moment, ich schaue eben nach" — der Satz darf nur, wenn wirklich
+# Kalender oder Akte drankommt, also Gruppe suchen/akte).
 _ALLGEMEIN = [
     "Hm, einen kleinen Moment bitte.",
-    "Eine Sekunde, ich schaue eben nach.",
-    "Ganz kurz bitte, ich bin gleich wieder da.",
+    "Ganz kurz bitte.",
+    "Einen Augenblick.",
 ]
 
 # Diese Sätze nennen die Handlung — nur wenn das Werkzeug wirklich läuft.
@@ -81,12 +84,24 @@ TOOL_GRUPPE = {
 _TAGE = r"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonnabend|sonntag"
 
 # Anrufer fragt nach Terminen / nennt einen Wunschzeitpunkt.
+# KEINE bloßen Fragewörter (welche/wann/wer) — die treffen auch
+# „wie heißt du" / „wer sind Sie" und lösten den Kalender-Füller aus.
 _RE_SUCHEN = re.compile(
     r"\b(frei|freien|freie|termin|termine|platz|plätze|luecke|lücke|"
     r"vormittag\w*|nachmittag\w*|morgens|abends|frueher|früher|spaeter|später|"
     r"woche|naechste|nächste|uebernaechste|übernächste|"
-    rf"{_TAGE}|uhr|wann|welche|welcher|moeglich|möglich|passt|haetten|hätten|"
+    rf"{_TAGE}|uhr|moeglich|möglich|passt|haetten|hätten|"
     r"verschieb\w*|umleg\w*|absag\w*|streich\w*|storn\w*)\b",
+    re.I,
+)
+
+# Identität / Smalltalk: niemals Nachschau-Füller, auch wenn ein Wort
+# aus _RE_SUCHEN zufällig mitklingt.
+_RE_PLAUSCH = re.compile(
+    r"\b(wie\s+hei(?:ss|ß)t\s+(?:du|ihr|sie)|wie\s+hei(?:ss|ß)en\s+sie|"
+    r"wer\s+(?:bist|sind|ist)\s+(?:du|sie|das)|"
+    r"(?:dein|ihr|euer)\s+name|bist\s+du\s+(?:ein\s+)?mensch|"
+    r"guten\s+(?:tag|morgen|abend)|hallo|danke)\b",
     re.I,
 )
 
@@ -113,6 +128,8 @@ def vermutet(text: str, *, angebot_offen: bool = False) -> str:
     """Gruppe für den Vorab-Füller — '' wenn kein Kalender-Zugriff erwartet wird."""
     t = _s(text)
     if not t:
+        return ""
+    if _RE_PLAUSCH.search(t):
         return ""
     if _RE_AKTE.search(t):
         return "akte"

@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, sprech, stt, tenants, tts, unterbrechung
+from kern import filler, halbsatz, sprech, stt, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
@@ -451,6 +451,8 @@ class Dienst:
             "error": reply.get("error") or "",
             "timings": timings,
         }
+        if reply.get("hangup"):
+            antwort["hangup"] = True
         antwort.update(self._stille_feld(sit))
         return antwort
 
@@ -568,6 +570,7 @@ class Dienst:
                     print(f"{self.name}-barge echo verworfen (vorab): {gesagt!r}", flush=True)
                     q.put(("leer", "echo"))
                     return
+                flush = False
                 if stt_blob is not None:
                     t0 = time.perf_counter()
                     try:
@@ -582,16 +585,39 @@ class Dienst:
                         return
                     stt_s = round(time.perf_counter() - t0, 2)
                     if not gesagt:
-                        print(f"{self.name}-listen empty bytes={len(stt_blob)} mime={stt_mime}", flush=True)
-                        q.put(("leer", ""))
+                        # W-HALBSATZ: haengt noch ein gehaltenes Fragment in
+                        # der Sitzung, beantwortet dieses Schweigen es — der
+                        # Anrufer hat den Satz offenbar nicht fortgesetzt.
+                        gesagt = halbsatz.abholen(sit)
+                        if gesagt:
+                            flush = True
+                            print(f"{self.name}-halbsatz flush (nichts nachgekommen): {gesagt!r}", flush=True)
+                        else:
+                            print(f"{self.name}-listen empty bytes={len(stt_blob)} mime={stt_mime}", flush=True)
+                            q.put(("leer", ""))
+                            return
+                    else:
+                        print(f"{self.name}-listen ok text={gesagt!r}", flush=True)
+                        if unterbrechung.ist_echo(sit, gesagt):
+                            # Lautsprecher-Echo der eigenen Stimme hat den Barge
+                            # ausgeloest — kein Einwand: leise weitersprechen.
+                            print(f"{self.name}-barge echo verworfen: {gesagt!r}", flush=True)
+                            q.put(("leer", "echo"))
+                            return
+                # W-HALBSATZ (29.08.2026): gemerktes Fragment vor den neuen Zug
+                # setzen; klingt auch das Ergebnis unfertig (Komma-Ende,
+                # haengender Artikel/Konjunktion), wird NICHT geantwortet —
+                # das Dock hoert weiter, der naechste Zug fuegt an.
+                if not flush:
+                    voll = halbsatz.mergen(sit, gesagt)
+                    if voll != gesagt:
+                        print(f"{self.name}-halbsatz zusammengefuegt: {voll!r}", flush=True)
+                    if halbsatz.halten(sit, voll):
+                        print(f"{self.name}-halbsatz warte ({sit.get('halbsatzZahl')}): {voll!r}", flush=True)
+                        q.put(("warte", voll))
                         return
-                    print(f"{self.name}-listen ok text={gesagt!r}", flush=True)
-                    if unterbrechung.ist_echo(sit, gesagt):
-                        # Lautsprecher-Echo der eigenen Stimme hat den Barge
-                        # ausgeloest — kein Einwand: leise weitersprechen.
-                        print(f"{self.name}-barge echo verworfen: {gesagt!r}", flush=True)
-                        q.put(("leer", "echo"))
-                        return
+                    gesagt = voll
+                if stt_blob is not None:
                     q.put(("gehoert", gesagt))
                 if stt_s is not None:
                     sit["_sttS"] = stt_s
@@ -602,25 +628,30 @@ class Dienst:
 
         threading.Thread(target=arbeit, daemon=True).start()
 
-        def frist_setzen(gehoert: str) -> tuple[float, str]:
-            """Aus dem Gehörten raten, ob ein Kalender-Zugriff kommt."""
-            # In einer schnellen (deterministischen) Phase antwortet die
-            # Zustandsmaschine sofort — ein Kalender-Füller ("ich schaue kurz
-            # nach") wäre dort schlicht falsch. Werkzeug-Füller kommen dann
-            # nur noch über melde(), wenn wirklich Netz-Zeit anfällt.
+        def frist_setzen(gehoert: str) -> tuple[float | None, str]:
+            """Nur raten, wenn wirklich Kalender/Akte drankommt.
+
+            Chef 29.08.2026: auf „wie heißt du" kam „einen Moment, ich
+            schaue eben nach" — der späte Allgemein-Füller (0,9 s) gewann
+            nach P5 das Rennen gegen den echten ersten Satz und behauptete
+            ein Nachschauen, das nicht stattfand. Ohne Treffer in
+            filler.vermutet() wartet der Strom auf Vorab-Satz / Antwort /
+            Werkzeug; hängt der Server, spricht der Dock-Watchdog (1,4 s)
+            eine neutrale Ansage. In der schnellen Phase ebenso: die
+            Maschine oder der Readback-Vorsatz liefert den ersten Ton."""
             if schnelle_phase:
-                return time.monotonic() + FILLER_SPAET_S, "allgemein"
+                return None, "allgemein"
             gruppe = filler.vermutet(gehoert, angebot_offen=bool(sit.get("offered")))
             if gruppe:
                 return time.monotonic() + FILLER_VORAB_S, gruppe
-            return time.monotonic() + FILLER_SPAET_S, "allgemein"
+            return None, "allgemein"
 
         frist, vorab_gruppe = frist_setzen(text_in)
         inhalt = False    # Vorab-Satz / feste Ansage / festes Audio ist geflossen
         filler_zahl = 0   # gespielte Warte-Füller (geraten + Werkzeug)
         while True:
             try:
-                still = inhalt or filler_zahl >= FILLER_MAX
+                still = inhalt or filler_zahl >= FILLER_MAX or frist is None
                 wartezeit = None if still else max(0.02, frist - time.monotonic())
                 typ, wert = q.get(timeout=wartezeit)
             except queue.Empty:
@@ -671,6 +702,12 @@ class Dienst:
                     # Lief schon ein Warte-Füller, spricht erst der NÄCHSTE
                     # Nachschub — aber passend zum gemeldeten Werkzeug.
                     vorab_gruppe = filler.fuer_tool(wert)
+            elif typ == "warte":
+                # W-HALBSATZ: Satz klingt unfertig — kein Ton, kein Fueller.
+                # Das Dock hoert mit laengerer Ruhe-Schwelle weiter, der
+                # naechste Zug wird an das gemerkte Fragment angefuegt.
+                yield zeile({"type": "warte", "textIn": wert, "stilleMs": halbsatz.WARTE_MS})
+                return
             elif typ == "leer":
                 # W-BARGE: Barge ohne verwertbaren Einwand (nichts gehoert
                 # oder eigenes Echo) => an der Unterbrechungsstelle weiter.

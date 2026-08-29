@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import llm, sprech, stt, tenants, tts, unterbrechung
+from kern import halbsatz, llm, sprech, stt, tenants, tts, unterbrechung
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -159,6 +159,13 @@ def api_stille(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    # W-HALBSATZ: haengt ein gehaltenes Satz-Fragment in der Sitzung, hat der
+    # Anrufer den Satz nicht fortgesetzt — dann wird ER beantwortet, kein Stups.
+    rest = halbsatz.abholen(sit)
+    if rest:
+        print(f"bianca-stille halbsatz-flush: {rest!r}", flush=True)
+        return DIENST.json_antwort(sit, art="turn", text_in=rest,
+                                   extra={"sessionId": sit.get("id") or ""})
     reply = agent.stille_zug(sit)
     text = sprech.sanitize(reply.get("text") or "")
     if not text:

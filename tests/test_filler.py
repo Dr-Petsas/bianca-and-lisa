@@ -18,8 +18,27 @@ def test_aktenfrage_wird_erkannt():
 
 
 def test_geplauder_bekommt_keinen_fueller():
-    for satz in ["Guten Tag.", "Wer sind Sie denn?", "Danke, das war alles.", ""]:
+    for satz in [
+        "Guten Tag.",
+        "Wer sind Sie denn?",
+        "Wie heißt du?",
+        "Wie heißen Sie?",
+        "Wie ist dein Name?",
+        "Bist du ein Mensch?",
+        "Danke, das war alles.",
+        "",
+    ]:
         assert filler.vermutet(satz) == "", satz
+
+
+def test_allgemein_behauptet_kein_nachschauen():
+    """Späte/neutrale Füller dürfen kein Nachschauen behaupten — das war
+    der Live-Fehler: „wie heißt du" → „ich schaue eben nach"."""
+    verboten = ("schau", "prüf", "kalender", "akte", "termin")
+    for satz in filler.GRUPPEN["allgemein"]:
+        klein = satz.lower()
+        for wort in verboten:
+            assert wort not in klein, satz
 
 
 def test_zusage_nur_bei_offenem_angebot_und_dann_neutral():

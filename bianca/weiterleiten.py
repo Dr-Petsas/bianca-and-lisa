@@ -13,10 +13,10 @@ Zwei Faelle, streng getrennt (Chef 27.08.2026, zweite Fassung):
 
 Doppelte Fragen bleiben verboten: ist der Behandler aus dem Gespraech oder
 der Akte bekannt (Sammler -> Angebots-Kalender -> arzt.letzter_behandler),
-wird er angeboten statt erfragt. Das Verbinden selbst ist heute eine
-Attrappe: Jingle ("Wir verbinden Sie zu Ihrem Arzt", bianca_web/verbinden.mp3)
-plus Platzhalter-Ansage — die ECHTE Zaluma-/SIP-Weiterleitung baut Kollege
-Kiriakos spaeter an der markierten Stelle ein (grep: ZALUMA_TRANSFER_PLATZHALTER).
+wird er angeboten statt erfragt. Das Verbinden selbst: Ansage, Jingle
+(bianca_web/verbinden.mp3), Abschied, Dock legt auf. Die ECHTE Zaluma-/
+SIP-Weiterleitung baut Kollege Kiriakos an der markierten Stelle ein
+(grep: ZALUMA_TRANSFER_PLATZHALTER) — das ist sein Job.
 """
 
 from __future__ import annotations
@@ -40,8 +40,9 @@ WAHRHEIT = (
     "die Praxis ist komplett KI-geführt und personalfrei."
 )
 
-# Interner Platzhalter-Text (Chef 27.08.2026: wortwoertlich so, bis die echte
-# Weiterleitung steht) — KEIN Patiententext.
+# Der Kirri-Zettel IST die gesprochene Zeile nach dem Jingle (Chef 29.08.2026:
+# "beim Verbinden kommt ... kein Diss-Spruch an Kirri" — er soll am Telefon
+# zu hoeren sein, bis die echte Zaluma-Weiterleitung an der Marke steht).
 ANSAGE_PLATZHALTER = (
     "Kirri, such die Stelle mit dem Jingle und bau hier deine "
     "Zaluma-Weiterleitung ein — also, wenn du das überhaupt kannst … "
@@ -161,18 +162,19 @@ def _angebot_text(ziel: dict) -> str:
 
 
 def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
-    """Anrufer zum Behandler weiterleiten — heute eine Attrappe:
-    gesprochene Ansage, Jingle-Ereignis, Platzhalter-Ansage."""
+    """Anrufer zum Behandler weiterleiten: Ansage, Jingle, Kirri-Zettel.
+
+    Die echte SIP-/Zaluma-Weiterleitung ist Kirris Job — Marke unten.
+    Bis dahin: hoerbare Kette + Dock legt auf (hangup), damit es sich
+    wie ein physisches Verbinden anfuehlt."""
     sit["weiterleiten"] = {}  # Anliegen ist bedient
     ziel_arzt = {
         "calendarId": _s(ziel.get("calendarId")),
         "calendarName": _s(ziel.get("calendarName")),
     }
     if melde:
-        # Erst die Ansage ("Ok, Moment — ich stelle die Verbindung her"),
-        # DANN der Jingle "Wir verbinden Sie zu Ihrem Arzt": beides laeuft
-        # in dieser Reihenfolge ueber die Filler-Kette (kern/dienst.py ->
-        # Client spielt Filler strikt nacheinander, Antwort-Audio danach).
+        # Erst die Ansage, DANN der Jingle: beides ueber die Filler-Kette
+        # (Client spielt strikt nacheinander, Abschied-Audio danach).
         wer = arzt_sprechname(ziel_arzt["calendarName"])
         zu = f" zu {wer}" if wer else ""
         melde(f"sag:Ok, einen Moment bitte — ich stelle die Verbindung{zu} her.")
@@ -182,12 +184,15 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
     # Weiterleitung einhaengen. Verfuegbar im Sitzungs-Umschlag:
     #   sit["tenant"] (clientId/locationId), ziel_arzt (calendarId/-Name),
     #   sit["patient"] / sammler (Name, Telefon), sessionId (sit["id"]).
-    # Bis dahin: Jingle + Ansage unten als Attrappe.
+    # Der Anrufer hoert Jingle + Kirri-Zettel — das hier ist DEIN Job, Kirri.
     # =====================================================================
+    print(f"bianca-zaluma-platzhalter ziel={ziel_arzt!r} sit={sit.get('id')!r}",
+          flush=True)
     return {
-        "text": ANSAGE_PLATZHALTER + " Kann ich sonst noch etwas für Sie tun?",
+        "text": ANSAGE_PLATZHALTER,
         "jingle": JINGLE_EVENT,
         "ziel": ziel_arzt,
+        "hangup": True,
     }
 
 
