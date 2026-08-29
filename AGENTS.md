@@ -257,6 +257,22 @@ geschlechtsspezifisch angesprochen.
 - Neue Akten bekommen das Geschlecht (m/f) über masCreatePatient registriert.
 - Tests: `tests/test_versicherung_geschlecht.py` (Teil von lauf_bianca).
 
+## Rückblick + Zahnreinigung-Mitbuchung (29.08.2026 — nicht rückbauen)
+
+Bestandspatienten mit Kartei-Historie werden EINMAL pro Anruf auf den
+letzten Besuch angesprochen (`gehirn.rueckblick_faellig`/`rueckblick_text`:
+Abstand sprechbar + Verlaufs-Frage je Behandlung — verheilt/zufrieden/
+Schlaflabor-Werte/Zahn ruhig). Danach bietet Bianca die PZR zum Mitbuchen
+an (`pzr_faellig`/`pzr_frage`, Einschub in `flow._einschub`). Chef 29.08.
+("vortermin zwar gefunden aber keine zahnreinigung mit angeboten!!"):
+das Angebot kommt, SOBALD der Vortermin gefunden ist — KEINE 6-Monats-
+Schranke mehr auf dem letzten Besuch. Ausnahmen: der neue Termin ist
+selbst eine Zahnreinigung, Schmerz-/Notfall-Termin, oder der LETZTE
+Besuch war selbst eine PZR und liegt unter 6 Monaten zurück (frisch
+gereinigt). Der Zeitbezug in der Frage ("schon eine Weile her") wird nur
+gesprochen, wenn er stimmt. Zusage landet als "PLUS PZR heute" in der
+Termin-Notiz. Tests: `tests/test_rueckblick_pzr.py`.
+
 ## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
 
 Chef: "es gibt dr petsas dr patrikis und dr nikolaou … es muss zu beginn

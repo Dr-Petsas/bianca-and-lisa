@@ -1360,23 +1360,31 @@ def rueckblick_reaktion(text: str) -> str:
 
 
 def pzr_faellig(s: dict) -> bool:
-    """Zahnreinigung anbieten? Nur Bestand, letzter Besuch >6 Monate, der
-    NEUE Termin ist selbst keine Zahnreinigung (Chef: 'da muss man
-    aufpassen'), kein Schmerz-/Notfall-Termin, EINMAL pro Anruf."""
+    """Zahnreinigung anbieten? Sobald die Kartei den Vortermin hergibt
+    (Chef 29.08.2026: "vortermin zwar gefunden aber keine zahnreinigung mit
+    angeboten!! das solltest du tun") — Bestand im Sammel-Teil der Buchung,
+    der NEUE Termin ist selbst keine Zahnreinigung, kein Schmerz-/Notfall-
+    Termin, EINMAL pro Anruf. Einzige Zeitschranke: war der LETZTE Besuch
+    selbst eine Zahnreinigung und liegt er keine 6 Monate zurueck, ist die
+    Reinigung frisch — dann nicht noch eine anbieten."""
     if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("pzr"):
         return False
     if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
         return False
     if not s.get("grund") or ist_pzr_grund(s) or _ist_akut(s):
         return False
-    return besuch_lange_her(s)
+    if _PZR_GRUND_RE.search(_s(s.get("letzterGrund"))) and not besuch_lange_her(s):
+        return False
+    return True
 
 
 def pzr_frage(s: dict) -> str:
-    """Die Mitbuch-Frage — mit Zeitbezug nur, wenn der Rueckblick ihn nicht
-    schon gesprochen hat (sonst klingt es doppelt). Beide Formen sind
-    statisch und liegen im TTS-Platten-Cache (feste_saetze)."""
-    if s.get("rueckblick"):
+    """Die Mitbuch-Frage — der Zeitbezug ("schon eine Weile her") kommt nur,
+    wenn er WAHR ist und der Rueckblick ihn nicht schon gesprochen hat
+    (Chef-Fall 29.08.: Besuch erst sechs Wochen her — da waere "eine Weile
+    her" gelogen). Beide Formen sind statisch und liegen im TTS-Platten-
+    Cache (feste_saetze)."""
+    if s.get("rueckblick") or not besuch_lange_her(s):
         return "Soll ich Ihnen direkt eine professionelle Zahnreinigung mit dazu buchen?"
     return ("Ihr letzter Besuch ist ja schon eine Weile her — soll ich Ihnen "
             "direkt eine professionelle Zahnreinigung mit dazu buchen?")

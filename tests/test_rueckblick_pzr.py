@@ -173,8 +173,30 @@ def test_pzr_faellig_grenzen():
     s["grund"] = "akute Beschwerden/Notfall"
     assert not gehirn.pzr_faellig(s)
     s["grund"] = "Kontrolluntersuchung"
-    s["letzterBesuch"] = _vor_tagen(60)  # erst zwei Monate her
+    # Chef 29.08.2026: Vortermin gefunden => anbieten — auch wenn der letzte
+    # Besuch erst kurz zurueckliegt (live: sechs Wochen, kein Angebot kam).
+    s["letzterBesuch"] = _vor_tagen(60)
+    assert gehirn.pzr_faellig(s)
+    # ... AUSSER die letzte Behandlung war selbst die Reinigung und ist frisch.
+    s["letzterGrund"] = "PZR 60 Min."
     assert not gehirn.pzr_faellig(s)
+    s["letzterBesuch"] = _vor_tagen(400)  # alte Reinigung: wieder anbieten
+    assert gehirn.pzr_faellig(s)
+
+
+def test_pzr_frage_zeitbezug_nur_wenn_wahr():
+    # Chef-Fall 29.08.: Besuch sechs Wochen her — "schon eine Weile her"
+    # waere gelogen, die Frage kommt neutral.
+    sit = _sit()
+    s = _bestand(sit, 44, "KCH Erstuntersuchung/Neupatient")
+    assert gehirn.pzr_faellig(s)
+    assert "Weile her" not in gehirn.pzr_frage(s)
+    # Lange Pause ohne Rueckblick: Zeitbezug bleibt erlaubt.
+    s2 = _bestand(_sit(), 300, "IMP OP Implantation")
+    assert "Weile her" in gehirn.pzr_frage(s2)
+    # Rueckblick hat den Abstand schon gesprochen: nicht doppelt.
+    s2["rueckblick"] = "fertig"
+    assert "Weile her" not in gehirn.pzr_frage(s2)
 
 
 def test_pzr_ernte_ja_nein_und_spontan():
