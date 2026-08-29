@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from kern.sprech import heute_zeile
 from kern.wissen import wissen_block
 from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 
@@ -85,6 +86,8 @@ EINWÄNDE
 WERKZEUGE
 Nur die Kalender-Werkzeuge unten. IDs kommen aus der Sitzung — du erfindest keine.
 {termin_logik}
+HEUTE
+{heute_zeile()} Danach richten sich „heute", „morgen" und Wochentage.
 {historie}{frei}{lage}
 GESPRÄCHSPARTNER: {patient or "der Patient"}
 PRAXIS: {praxis}

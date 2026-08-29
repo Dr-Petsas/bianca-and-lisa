@@ -47,6 +47,24 @@ _WOCHENTAG = {
     4: "Freitag", 5: "Samstag", 6: "Sonntag",
 }
 
+
+def heute_zeile(jetzt: datetime | None = None) -> str:
+    """Datums-Anker fuer den LLM-Systemprompt (30.08.2026): das Modell kennt
+    das heutige Datum sonst NICHT und raet bei "Welcher Tag ist heute?".
+    Die Terminmaschine rechnet unabhaengig davon immer mit der echten Uhr."""
+    if jetzt is None:
+        j = datetime.now(TZ)
+    elif jetzt.tzinfo is not None:
+        j = jetzt.astimezone(TZ)
+    else:
+        j = jetzt  # naiv (Tests): unveraendert verwenden
+    morgen = j.date() + timedelta(days=1)
+    return (
+        f"Heute ist {_WOCHENTAG[j.weekday()]}, der {j.day}. {_MONAT[j.month]} {j.year}, "
+        f"es ist {j.hour:02d}:{j.minute:02d} Uhr. "
+        f"Morgen ist {_WOCHENTAG[morgen.weekday()]}, der {morgen.day}. {_MONAT[morgen.month]}."
+    )
+
 # Werkzeugnamen, Feldnamen, Entwickler-Jargon: nie in den Mund.
 _TECH = re.compile(
     r"\b("

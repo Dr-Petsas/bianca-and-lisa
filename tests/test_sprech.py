@@ -75,3 +75,28 @@ def test_sanitize_telefonnummer_bleibt():
 def test_sanitize_leer_und_normal():
     assert sanitize("") == ""
     assert sanitize("Guten Tag, hier ist Lisa.") == "Guten Tag, hier ist Lisa."
+
+
+def test_heute_zeile_fuer_den_prompt():
+    # Chef 30.08.2026: Bianca/Lisa wussten nicht, welcher Tag heute ist —
+    # der Datums-Anker gehoert in jeden Systemprompt.
+    from datetime import datetime
+
+    from kern.sprech import heute_zeile
+
+    z = heute_zeile(datetime(2026, 8, 29, 5, 3))
+    assert z == ("Heute ist Samstag, der 29. August 2026, es ist 05:03 Uhr. "
+                 "Morgen ist Sonntag, der 30. August.")
+    # Jahreswechsel: "morgen" springt sauber ins neue Jahr.
+    assert "Morgen ist Freitag, der 1. Januar." in heute_zeile(datetime(2026, 12, 31, 23, 59))
+
+
+def test_prompts_tragen_das_datum():
+    from bianca.prompt import system_prompt as bianca_prompt
+    from lisa.prompt import system_prompt as lisa_prompt
+
+    b = bianca_prompt(praxis="Testpraxis", behandler="Dr. Test")
+    l = lisa_prompt(praxis="Testpraxis", behandler="Dr. Test",
+                    auftrag="Termin vereinbaren", patient="Peter Berger")
+    for p in (b, l):
+        assert "HEUTE" in p and "Heute ist " in p and "Morgen ist " in p

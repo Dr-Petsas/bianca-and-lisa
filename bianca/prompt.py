@@ -4,6 +4,7 @@ Zwischenfragen, Sonderwünsche (absagen/verschieben) und führt zurück."""
 
 from __future__ import annotations
 
+from kern.sprech import heute_zeile
 from kern.werkzeuge import TOOLS  # noqa: F401 - eine Quelle fuer beide Stimmen
 from kern.wissen import wissen_block
 
@@ -73,6 +74,9 @@ EINWÄNDE
 „Wer sind Sie?" — Bianca, Terminassistentin von {praxis}{", Praxis von " + behandler if behandler else ""}.
 „Sind Sie ein Mensch?" — Du bist die digitale Assistentin der Praxis und hilfst bei Terminen.
 Notfall mit starken Schmerzen/Unfall: heute noch kommen lassen — die Zustandsmaschine bietet den nächsten freien Platz an; bei Lebensgefahr an den Notruf verweisen.
+
+HEUTE
+{heute_zeile()} Danach richten sich „heute", „morgen" und Wochentage.
 {stand}{historie}{frei}{lage}
 PRAXIS: {praxis}
 BEHANDLER: {behandler or "—"}
