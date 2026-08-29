@@ -186,6 +186,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         if iso[4:16] == auftrag[4:16]:
             iso = auftrag
     patient_id = _s(ctx.get("patientId"))
+    created_patient = False
     if not patient_id:
         auf = patients.patient_aufloesen(tenant, {
             "name": ctx.get("patientName"),
@@ -226,6 +227,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         if angelegt.get("ok") and _s((angelegt.get("patient") or {}).get("id")):
             karte = angelegt["patient"]
             patient_id = _s(karte.get("id"))
+            created_patient = bool(angelegt.get("created"))
             ctx["patientId"] = patient_id
             ctx["firstName"] = karte.get("firstName") or first
             ctx["lastName"] = karte.get("lastName") or last
@@ -271,6 +273,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
                 "booked": True,
                 "slotIso": iso,
                 "appointmentId": landung,
+                "patientId": patient_id,
+                "createdPatient": created_patient,
                 "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
             }
         return {
@@ -293,6 +297,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "booked": True,
             "slotIso": iso,
             "appointmentId": aid,
+            "patientId": patient_id,
+            "createdPatient": created_patient,
             "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
         }
     if status == 200 and isinstance(data, dict) and data.get("status") == "needs_phone":

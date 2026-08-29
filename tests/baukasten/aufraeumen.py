@@ -38,7 +38,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from kern import calendar as kal  # noqa: E402
-from kern import tenants  # noqa: E402
+from kern import patients, tenants  # noqa: E402
 from tests.baukasten import saetze  # noqa: E402
 
 BERICHTE_DIR = Path(__file__).resolve().parent / "berichte"
@@ -99,20 +99,32 @@ def schlange_schreiben(eintraege: list[dict], pfad: Path | None = None) -> None:
 
 
 def funde_aus_bericht(bericht: dict) -> list[dict]:
-    """Buchungs-IDs eines Story-Berichts inkl. Startzeit."""
+    """Buchungs- und neu angelegte Akten-IDs eines Story-Berichts."""
     funde: list[dict] = []
     lc = bericht.get("lastCall") or {}
     gebucht = str(bericht.get("start") or "")
+    story = str(bericht.get("id") or "")
     for key in ("lastBook", "lastMove"):
         eintrag = lc.get(key) or {}
         aid = str(eintrag.get("appointmentId") or "")
         if aid and (eintrag.get("booked") or eintrag.get("moved") or eintrag.get("ok")):
             funde.append({
-                "id": aid,
-                "story": str(bericht.get("id") or ""),
+                "id": aid, "art": "termin", "story": story,
                 "slotIso": str(eintrag.get("slotIso") or ""),
                 "gebuchtUm": gebucht,
             })
+    create = lc.get("lastCreate") or {}
+    book = lc.get("lastBook") or {}
+    neu = bool(create.get("created") or book.get("createdPatient"))
+    pid = str(create.get("patientId") or book.get("patientId") or "")
+    if neu and not pid:
+        pid = str(lc.get("patientId") or "")
+    if neu and pid:
+        funde.append({
+            "id": pid, "art": "patient", "story": story,
+            "name": str(lc.get("patientName") or ""),
+            "gebuchtUm": gebucht,
+        })
     return funde
 
 
@@ -144,7 +156,8 @@ def persona_termine(tenant: dict) -> list[dict]:
             for a in found.get("appointments") or []:
                 aid = str(a.get("id") or a.get("appointmentId") or "")
                 if aid:
-                    funde.append({"id": aid, "story": f"sweep {vorname} {nachname}",
+                    funde.append({"id": aid, "art": "termin",
+                                  "story": f"sweep {vorname} {nachname}",
                                   "slotIso": str(a.get("iso") or a.get("date") or "")})
     return funde
 
@@ -153,16 +166,22 @@ def vormerken(funde: list[dict], *, jetzt: datetime | str | None = None,
               halte_s: int = HALTE_S, pfad: Path | None = None) -> list[dict]:
     """Neue Buchungen in die Autoloesch-Schlange — bestehende IDs bleiben."""
     t0 = _jetzt(jetzt)
-    by_id = {str(e.get("id") or ""): e for e in schlange_lesen(pfad) if e.get("id")}
+    def _key(e: dict) -> str:
+        return f"{e.get('art') or 'termin'}:{e.get('id')}"
+
+    by_id = {_key(e): e for e in schlange_lesen(pfad) if e.get("id")}
     for f in funde:
         aid = str(f.get("id") or "")
-        if not aid or aid in by_id:
+        art = str(f.get("art") or "termin")
+        if not aid or _key({"art": art, "id": aid}) in by_id:
             continue
         start = _parse_dt(f.get("gebuchtUm")) or t0
-        by_id[aid] = {
+        by_id[_key({"art": art, "id": aid})] = {
             "id": aid,
+            "art": art,
             "story": str(f.get("story") or ""),
             "slotIso": str(f.get("slotIso") or ""),
+            "name": str(f.get("name") or ""),
             "gebuchtUm": start.isoformat(timespec="seconds"),
             "loeschenAb": (start + timedelta(seconds=halte_s)).isoformat(timespec="seconds"),
         }
@@ -185,7 +204,7 @@ def reife(eintraege: list[dict] | None = None, *, jetzt: datetime | str | None =
     out: list[dict] = []
     for e in eintraege:
         aid = str(e.get("id") or "")
-        if not aid or aid in schon:
+        if not aid or f"{e.get('art') or 'termin'}:{aid}" in schon or aid in schon:
             continue
         ab = _parse_dt(e.get("loeschenAb"))
         if ab is not None and ab <= t0:
@@ -193,53 +212,83 @@ def reife(eintraege: list[dict] | None = None, *, jetzt: datetime | str | None =
     return out
 
 
+def _merk_key(eintrag: dict) -> str:
+    return f"{eintrag.get('art') or 'termin'}:{eintrag.get('id')}"
+
+
 def ausfuehren(funde: list[dict], *, probe: bool = False,
                tenant: dict | None = None,
                merkliste: Path | None = None,
-               cancel_fn=None) -> dict[str, int]:
-    """Reife Testtermine absagen. cancel_fn nur fuer Tests."""
+               cancel_fn=None, delete_fn=None) -> dict[str, int]:
+    """Reife Testtermine absagen und neu angelegte Testakten loeschen."""
     gemerkt = _gemerkt(merkliste)
-    offen = [f for f in funde if f.get("id") and f["id"] not in gemerkt]
+    offen = [f for f in funde if f.get("id")
+             and _merk_key(f) not in gemerkt and f["id"] not in gemerkt]
     gesehen: set[str] = set()
-    offen = [f for f in offen if not (f["id"] in gesehen or gesehen.add(f["id"]))]
+    offen = [f for f in offen if not (_merk_key(f) in gesehen or gesehen.add(_merk_key(f)))]
+    # Termine zuerst, dann Akten — sonst bleiben verwaiste Termine.
+    offen.sort(key=lambda f: 0 if (f.get("art") or "termin") == "termin" else 1)
     if probe:
         for f in offen:
-            print(f"  wuerde absagen: {f['id']}  {f.get('slotIso')}  [{f.get('story')}]",
-                  flush=True)
+            was = "Akte" if f.get("art") == "patient" else "Termin"
+            print(f"  wuerde {was} loeschen: {f['id']}  {f.get('slotIso') or f.get('name')}  "
+                  f"[{f.get('story')}]", flush=True)
         return {"offen": len(offen), "abgesagt": 0, "fehler": 0}
+
+    ten = tenant if tenant is not None else tenants.laden("meddent")
+
     def _cancel(tid: str) -> dict:
         if cancel_fn:
             return cancel_fn(tid)
-        return kal.cancel_by_id(
-            tenant if tenant is not None else tenants.laden("meddent"), {}, tid)
+        return kal.cancel_by_id(ten, {}, tid)
+
+    def _delete(pid: str) -> dict:
+        if delete_fn:
+            return delete_fn(pid)
+        return patients.akte_loeschen(ten, pid)
 
     fehler = 0
     abgesagt = 0
     for f in offen:
-        r = _cancel(f["id"])
-        if isinstance(r, dict) and r.get("cancelled"):
+        art = str(f.get("art") or "termin")
+        if art == "patient":
+            r = _delete(f["id"])
+            ok = isinstance(r, dict) and (r.get("deleted") or r.get("alreadyGone") or r.get("dryRun"))
+            label = "Akte geloescht"
+        else:
+            r = _cancel(f["id"])
+            ok = isinstance(r, dict) and r.get("cancelled")
+            label = "abgesagt"
+        if ok:
+            gemerkt.add(_merk_key(f))
             gemerkt.add(f["id"])
             abgesagt += 1
-            print(f"  abgesagt: {f['id']}  {f.get('slotIso')}  [{f.get('story')}]",
+            print(f"  {label}: {f['id']}  {f.get('slotIso') or f.get('name')}  [{f.get('story')}]",
                   flush=True)
         else:
             fehler += 1
-            print(f"  FEHLER:   {f['id']}  {f.get('slotIso')}  [{f.get('story')}] -> "
-                  f"{(r or {}).get('spoken') if isinstance(r, dict) else r}", flush=True)
+            grund = ""
+            if isinstance(r, dict):
+                grund = str(r.get("spoken") or r.get("error") or r)
+            else:
+                grund = str(r)
+            print(f"  FEHLER:   {f['id']}  {f.get('slotIso') or f.get('name')}  [{f.get('story')}] -> "
+                  f"{grund}", flush=True)
     _merken(gemerkt, merkliste)
     return {"offen": len(offen), "abgesagt": abgesagt, "fehler": fehler}
 
 
 def reife_ausfuehren(*, jetzt: datetime | str | None = None, probe: bool = False,
                      pfad: Path | None = None, merkliste: Path | None = None,
-                     tenant: dict | None = None, cancel_fn=None) -> dict[str, int]:
+                     tenant: dict | None = None, cancel_fn=None,
+                     delete_fn=None) -> dict[str, int]:
     offen = reife(jetzt=jetzt, pfad=pfad, merkliste=merkliste)
     if not offen:
         return {"offen": 0, "abgesagt": 0, "fehler": 0}
-    print(f"autoloesch: {len(offen)} Testtermin(e) aelter als 2 h — raeume auf",
+    print(f"autoloesch: {len(offen)} Testeintraege aelter als 2 h — raeume auf",
           flush=True)
     return ausfuehren(offen, probe=probe, tenant=tenant, merkliste=merkliste,
-                      cancel_fn=cancel_fn)
+                      cancel_fn=cancel_fn, delete_fn=delete_fn)
 
 
 def waechter_starten(*, interval_s: int = 60) -> threading.Thread:

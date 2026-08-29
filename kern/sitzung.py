@@ -23,19 +23,25 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any]) -> None:
         "dryRun": bool(result.get("dryRun")),
         "slotIso": result.get("slotIso") or "",
         "appointmentId": result.get("appointmentId") or "",
+        "patientId": result.get("patientId") or (
+            (result.get("patient") or {}).get("id") if isinstance(result.get("patient"), dict) else ""
+        ) or "",
+        "createdPatient": bool(result.get("createdPatient") or result.get("created")),
         "spoken": result.get("spoken") or "",
         "note": result.get("note") or "",
     }
     sit.setdefault("tools", []).append(ein)
     sit["tools"] = sit["tools"][-12:]
     if name == "create_patient":
-        sit["lastCreate"] = ein
+        sit["lastCreate"] = {**ein, "created": bool(result.get("created"))}
         if result.get("patient") and isinstance(result.get("patient"), dict):
             sit["patient"] = {**(sit.get("patient") or {}), **result["patient"]}
     if name == "book_slot":
         sit["lastBook"] = ein
         if result.get("appointmentId"):
             sit.setdefault("booking", {})["appointmentId"] = result["appointmentId"]
+        if ein.get("createdPatient") and ein.get("patientId"):
+            sit["lastCreate"] = {**ein, "created": True}
     elif name == "cancel_appointment":
         sit["lastCancel"] = ein
     elif name == "move_appointment":

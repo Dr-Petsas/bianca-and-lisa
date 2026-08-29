@@ -464,6 +464,35 @@ def akte_anlegen(
     }
 
 
+def akte_loeschen(tenant: dict, patient_id: str) -> dict[str, Any]:
+    """Test-Akte wieder entfernen (masDeletePatient). Nur IDs, die der
+    Autoloesch-Waechter aus einem Testbericht kennt — nie per Name raten.
+    WRITE_LIVE=0 => Trockenlauf."""
+    pid = _s(patient_id)
+    if not pid:
+        return {"ok": False, "deleted": False, "error": "patientId fehlt"}
+    if not WRITE_LIVE:
+        return {"ok": True, "deleted": False, "dryRun": True, "patientId": pid}
+    try:
+        r = httpx.post(
+            f"{CF_BASE}/masDeletePatient",
+            json={
+                "clientId": _s(tenant.get("clientId")),
+                "locationId": _s(tenant.get("locationId")),
+                "patientId": pid,
+            },
+            timeout=15.0,
+        )
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    except httpx.HTTPError as e:
+        return {"ok": False, "deleted": False, "error": str(e)}
+    if r.status_code == 200 and isinstance(data, dict) and data.get("status") == "success":
+        return {"ok": True, "deleted": True, "patientId": pid,
+                "alreadyGone": bool(data.get("alreadyGone"))}
+    return {"ok": False, "deleted": False,
+            "error": _s(data.get("message")) if isinstance(data, dict) else f"http_{r.status_code}"}
+
+
 def telefon_aktualisieren(tenant: dict, patient_id: str, phone: str) -> dict[str, Any]:
     """Handynummer einer BESTEHENDEN Akte setzen (masUpdatePatientPhone).
 

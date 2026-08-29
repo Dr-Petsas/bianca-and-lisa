@@ -211,7 +211,58 @@ def test_vormerken_aus_bericht_nimmt_lastbook():
     }
     funde = aufraeumen.funde_aus_bericht(bericht)
     assert funde[0]["id"] == "xyz"
+    assert funde[0]["art"] == "termin"
     assert funde[0]["gebuchtUm"] == "2026-08-29T10:00:00"
+
+
+def test_neu_angelegte_testakte_wird_nach_2_stunden_reif():
+    """Nur createdPatient/lastCreate — Bestandspatienten bleiben in der Kartei."""
+    import tempfile
+    from datetime import datetime, timedelta
+    from pathlib import Path
+
+    from tests.baukasten import aufraeumen
+
+    t0 = datetime(2026, 8, 29, 10, 0, 0)
+    bericht = {
+        "id": "s02-markus-kontrolle",
+        "start": t0.isoformat(timespec="seconds"),
+        "lastCall": {
+            "patientId": "pat-neu",
+            "patientName": "Markus Berger",
+            "lastBook": {
+                "booked": True, "appointmentId": "apt-2",
+                "slotIso": "2026-09-02T09:00:00",
+                "createdPatient": True, "patientId": "pat-neu",
+            },
+            "lastCreate": {"created": True, "patientId": "pat-neu"},
+        },
+    }
+    bestand = {
+        "id": "s03-bestand",
+        "start": t0.isoformat(timespec="seconds"),
+        "lastCall": {
+            "patientId": "pat-echt",
+            "lastBook": {"booked": True, "appointmentId": "apt-3",
+                         "slotIso": "2026-09-03T09:00:00"},
+        },
+    }
+    funde = aufraeumen.funde_aus_bericht(bericht) + aufraeumen.funde_aus_bericht(bestand)
+    assert {f["id"] for f in funde if f.get("art") == "patient"} == {"pat-neu"}
+    with tempfile.TemporaryDirectory() as d:
+        schlange = Path(d) / "autoloesch.json"
+        merkliste = Path(d) / "aufgeraeumt.json"
+        aufraeumen.vormerken(funde, jetzt=t0, pfad=schlange)
+        assert aufraeumen.reife(jetzt=t0 + timedelta(hours=1),
+                                pfad=schlange, merkliste=merkliste) == []
+        geloescht = []
+        erg = aufraeumen.reife_ausfuehren(
+            jetzt=t0 + timedelta(hours=2), pfad=schlange, merkliste=merkliste,
+            cancel_fn=lambda tid: {"cancelled": True},
+            delete_fn=lambda pid: geloescht.append(pid) or {"deleted": True})
+        assert "pat-neu" in geloescht
+        assert "pat-echt" not in geloescht
+        assert erg["abgesagt"] >= 2  # Termin + Akte des neuen, Termin des Bestands
 
 
 def test_dauer_s_liest_8khz_header():
