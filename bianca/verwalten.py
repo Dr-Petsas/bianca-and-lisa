@@ -164,6 +164,7 @@ def _liste_sprechbar(termine: list[dict]) -> str:
 
 def _verw_reset(sit: dict) -> None:
     """Sammel-Stand raeumen (neues Anliegen bzw. Anliegen erledigt)."""
+    sit.pop("verwNotFound", None)
     sit["verwHinweis"] = {}
     sit["verwHinweisText"] = ""
     sit["verwWann"] = ""
@@ -359,6 +360,10 @@ def _nicht_gefunden(sit: dict) -> dict:
     s["phase"] = "fertig"
     s["frage"] = "neubuchung"
     sit["verwAktiv"] = False
+    # Marker fuer einen NEUEN Anlauf: die Suche scheiterte — haeufigste
+    # Ursache ist ein verhoerter Name (live 29.08.: "Peter Möbel" statt
+    # Müller). Beim Neustart wird der Name dann frisch erfragt.
+    sit["verwNotFound"] = True
     return {"text": (
         f"Da bin ich ehrlich: Ich finde unter {wer} gerade keinen passenden Termin. "
         f"Aber keine Sorge — ich schreibe eine Notiz, und die wird {behandler} vorgelegt. "
@@ -628,7 +633,16 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     if "modus" in neu and not sit.get("verwAktiv"):
         # Neues Anliegen (kein Korrektur-Wechsel absagen<->verschieben mitten
         # im Sammeln): alten Stand raeumen, Hinweise aus dem Einstiegssatz.
+        notfound_davor = bool(sit.pop("verwNotFound", False))
         _verw_reset(sit)
+        if notfound_davor:
+            # Der vorige Anlauf scheiterte an der SUCHE — meist ein verhoerter
+            # Name ("Peter Möbel"). Stur denselben Namen wieder zu suchen
+            # waere dieselbe Sackgasse: Name/Kartei frisch erfragen.
+            s["vorname"] = ""
+            s["nachname"] = ""
+            s["patientId"] = ""
+            s["buchstabiert"] = False
         if s["modus"] == "absagen":
             # "Ich muss meinen Termin am Dienstag absagen": die Zeitangabe
             # beschreibt den BESTANDSTERMIN — nie ein Neubuchungs-Wunsch.

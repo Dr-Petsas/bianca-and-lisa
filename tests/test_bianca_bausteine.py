@@ -743,6 +743,27 @@ def test_absage_neustart_nach_notfound_mit_namenskorrektur():
         verwalten.kal.find_patient_appointments = echt_find
 
 
+def test_wiederholte_wann_frage_nimmt_variante():
+    """W-ABSAGE-NEUSTART: startet die Sammel-Prozedur im selben Anruf neu,
+    darf der Wiederholungs-Wächter die Wann-Frage nicht streichen — live
+    29.08. blieb sonst nur 'Das machen wir.' übrig. Es kommt die nächste
+    Formulierung mit denselben Kern-Wörtern."""
+    import re
+
+    from bianca import agent as bianca_agent
+
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "frage": "wann"})
+    frage = ("Das machen wir. Wann ist der Termin denn — "
+             "zum Beispiel der Wochentag oder die Uhrzeit?")
+    sit["messages"].append({"role": "assistant", "content": frage})
+    raus = bianca_agent._wiederholungs_wache(sit, frage)
+    assert "zum beispiel der wochentag" not in raus.lower(), "nie zweimal wortgleich"
+    assert re.search(bianca_agent._FRAGE_KERN["wann"], raus, re.I), \
+        f"Wann-Frage muss hoerbar bleiben: {raus!r}"
+
+
 def test_absage_wiederholt_nach_abschluss_startet_neu():
     """Nach 'Alles klar.' (bares Nein auf die Neubuchungs-Frage) muss ein
     erneutes 'Ich möchte meinen Termin absagen.' die Prozedur NEU starten —

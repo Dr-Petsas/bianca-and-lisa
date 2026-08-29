@@ -59,6 +59,10 @@ _FRAGE_KERN = {
     "nachname": r"nachname",
     "grund": r"worum|grund|anliegen|kontrolle",
     "wunsch": r"\bwann\b|vormittag|nachmittag|uhrzeit",
+    # Verwaltungs-Fragen (W-SAMMELN): Wann-/Behandlungs-Frage zum Bestandstermin.
+    "wann": r"\bwann\b|uhrzeit|wochentag",
+    "behandlung": r"behandlung|kontrolle|zahnreinigung",
+    "neubuchung": r"neuen?\s+termin",
     "buchstabieren": r"buchstabier",
     "telefon": r"nummer|handy|telefon",
     "telefon_check": r"nummer|stimmt",

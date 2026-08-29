@@ -502,7 +502,36 @@ booking.appointmentId, Wahl-Liste) überspringt das Sammeln — nie den Anrufer
 ausfragen, was schon klar ist. Die AUSKUNFT bleibt beim alten Weg (Name ->
 vorlesen): wer fragt "wann ist mein Termin?", dem beantwortet man das Wann,
 statt es zu erfragen. Sammel-Stand räumt `_verw_reset` (nach Storno/Move/
-Notiz). Tests: `test_absage_fluss_komplett`, `test_absage_hinweis_im_
+Notiz).
+
+**Nachtrag W-ABSAGE-NEUSTART (29.08. 11:51, Peter-Müller-Gespräch — nicht
+rückbauen):** STT hörte "Peter Möbel", die Suche scheiterte ehrlich — dann
+wurde "Nein, ich möchte meinen Termin absagen, Peter Müller." vom Nein-Zweig
+der Neubuchungs-Frage verschluckt und das nackte "Ich möchte meinen Termin
+absagen." fiel ans LLM, weil `modus` auf "absagen" klebte (`einsammeln`
+bewaffnete nur bei Modus-WECHSEL neu). Seitdem:
+
+- `gehirn.einsammeln`: absagen/verschieben bewaffnen auch bei GLEICHEM Modus
+  neu, wenn `phase == "fertig"` (Anliegen war abgeschlossen); eine
+  Auskunfts-Frage nach fertigem absagen/verschieben schaltet auf auskunft.
+- `verwalten._nicht_gefunden` setzt `verwNotFound`; der nächste Neustart der
+  Sammel-Prozedur erfragt Name/Kartei FRISCH (haeufigste Fehlerursache ist
+  der verhörte Name) statt stur dieselbe Sackgasse zu suchen.
+- `_ABSAGE_RE` versteht die Sprech-Varianten: stornieren, canceln (alle
+  Formen), löschen/streichen/aufheben/rückgängig/entfernen (nur MIT
+  Termin-Bezug im Satz — "Nummer löschen" ist keine Absage), "Termin fällt
+  aus" (nur Termin-Subjekt — "mir fällt ein Zahn aus" nicht), "platzen
+  lassen", "nicht wahrnehmen/kommen/schaffen/einhalten", Substantiv "Absage".
+- Die Verwaltungs-Fragen tragen jetzt Wächter-Varianten: `FRAGE_VARIANTEN`/
+  `_FRAGE_KERN` um "wann", "behandlung", "neubuchung" ergänzt — beim
+  Neustart im selben Anruf formuliert der Wiederholungs-Wächter die Frage
+  um, statt sie zu streichen (live blieb sonst nur "Das machen wir." und
+  beim zweiten "nicht gefunden" fehlte die Neubuchungs-Frage, obwohl der
+  Zustand auf ihre Antwort wartete).
+- Tests: `test_absage_varianten_erkannt`, `test_absage_verben_ohne_termin_
+  bezug_zuenden_nicht`, `test_absage_neustart_nach_notfound_mit_
+  namenskorrektur` (Live-Gespräch wortgleich), `test_absage_wiederholt_
+  nach_abschluss_startet_neu`. Tests: `test_absage_fluss_komplett`, `test_absage_hinweis_im_
 einstiegssatz_ueberspringt_wann`, `test_absage_name_statt_wann_antwort`,
 `test_verwaltung_kein_termin_gefunden`, `test_verwaltung_hinweis_passt_
 nicht_ehrliche_rueckfrage`, `test_verwaltung_wahl_nein_fuehrt_zu_notiz`,

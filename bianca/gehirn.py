@@ -946,6 +946,21 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Wann würde es Ihnen denn gut passen — eher vormittags oder nachmittags?",
         "Ab welchem Tag passt es Ihnen — und lieber vormittags oder nachmittags?",
     ),
+    # Verwaltungs-Fragen (W-SAMMELN): beim Neustart der Prozedur im selben
+    # Anruf darf der Wiederholungs-Wächter die Frage nicht streichen —
+    # live 29.08. blieb sonst nur "Das machen wir." übrig.
+    "wann": (
+        "Wissen Sie noch, wann der Termin ist — Wochentag oder Uhrzeit reichen schon?",
+        "An welchem Wochentag oder zu welcher Uhrzeit ist der Termin denn?",
+    ),
+    "behandlung": (
+        "Für welche Behandlung war der Termin denn eingetragen?",
+        "Welche Behandlung stand denn an — Kontrolle, Zahnreinigung oder etwas anderes?",
+    ),
+    "neubuchung": (
+        "Soll ich Ihnen stattdessen einen neuen Termin heraussuchen?",
+        "Darf ich Ihnen direkt einen neuen Termin anbieten?",
+    ),
     "buchstabieren": (
         "Buchstabieren Sie mir den Nachnamen bitte einmal?",
         "Mögen Sie den Nachnamen kurz buchstabieren?",
