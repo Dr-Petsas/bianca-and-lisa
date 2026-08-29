@@ -47,3 +47,51 @@ def test_titel_wird_kein_vorname():
     assert ohne_titel("Dr. Petsas") == "Petsas"
     assert ohne_titel("Prof. Dr. med. Anna Meier") == "Anna Meier"
     assert ohne_titel("Levi Tzannis") == "Levi Tzannis"
+
+
+def test_suche_eindeutig_verwirft_fremden_namen_live_0219():
+    """Live 29.08.2026 02:19: 'Peter Muller' traf als EINZIGER Suchtreffer
+    'Petra Müller' — der Ein-Treffer-Kurzschluss haette Termin und
+    Bestaetigungs-SMS auf die falsche Akte gelegt. Ein Treffer zaehlt nur
+    noch mit passendem Namen (umlaut-tolerant)."""
+    from kern import patients as patmod
+    echt = patmod.search_patients
+    patmod.search_patients = lambda tenant, q: {"ok": True, "patients": [
+        {"id": "6cMY", "firstName": "Petra", "lastName": "Müller",
+         "mobilePhoneNumber": "+4915223361764"},
+    ]}
+    try:
+        assert patmod._suche_eindeutig({}, "Peter", "Muller") is None
+        assert patmod._suche_eindeutig({}, "Petra", "Muller")["id"] == "6cMY"
+        assert patmod._suche_eindeutig({}, "Petra", "Mueller")["id"] == "6cMY"
+    finally:
+        patmod.search_patients = echt
+
+
+def test_aufloesen_bindet_umlaut_akte_trotz_buchstabierter_form():
+    """Buchstabiert 'M U L L E R' -> die echte 'Müller'-Akte muss weiter
+    binden (Vorname stimmt); 'Petra' zur 'Peter'-Akte bleibt verworfen."""
+    from kern import patients as patmod
+    echt = patmod.search_patients
+    patmod.search_patients = lambda tenant, q: {"ok": True, "patients": [
+        {"id": "Uz5O", "firstName": "Peter", "lastName": "Müller",
+         "mobilePhoneNumber": "0123456789"},
+    ]}
+    try:
+        auf = patmod.patient_aufloesen({}, {
+            "firstName": "Peter", "lastName": "Muller", "name": "Peter Muller",
+        })
+        assert auf.get("id") == "Uz5O"
+        auf2 = patmod.patient_aufloesen({}, {
+            "firstName": "Petra", "lastName": "Muller", "name": "Petra Muller",
+        })
+        assert not auf2.get("id")
+    finally:
+        patmod.search_patients = echt
+
+
+def test_name_norm_umlaut_varianten():
+    from kern.patients import _name_norm
+    assert _name_norm("Müller") == _name_norm("Mueller") == _name_norm("Muller")
+    assert _name_norm("Süß") == _name_norm("Suess")
+    assert _name_norm("Peter") != _name_norm("Petra")

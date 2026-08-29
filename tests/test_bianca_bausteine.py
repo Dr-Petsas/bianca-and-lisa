@@ -798,6 +798,71 @@ def test_jap_und_jep_sind_ja():
     assert not gehirn.ist_ja("Japan ist schön")
 
 
+def test_buchen_neue_nummer_weicht_von_akte_ab_keine_sms_zusage():
+    """Live 29.08.2026 02:19: Bestandsakte trug 0123456789, der Anrufer
+    bestaetigte 0177 6004600 — Bianca versprach 'SMS kommt gleich', die
+    Plattform schickte aber an die Akten-Nummer (ins Leere). Jetzt: Notiz
+    an den Termin + ehrliche Ansage, kein SMS-Versprechen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung",
+        "vorname": "Peter", "nachname": "Müller", "patientId": "Uz5O",
+        "telefon": "01776004600", "aktePhone": "0123456789",
+        "slotIso": "2026-09-01T09:15",
+    })
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    notizen: list[str] = []
+
+    def _note(tenant, ctx, sit=None, *, note=""):
+        notizen.append(note)
+        return {"ok": True, "noted": True}
+
+    flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
+        "ok": True, "booked": True, "slotIso": slot_iso or "2026-09-01T09:15",
+        "appointmentId": "e7ho", "spoken": "Der Termin ist fest eingetragen.",
+    }
+    flow.kal.note_appointment = _note
+    try:
+        res = flow._buchen(sit)
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+    assert "SMS" not in res["text"]
+    assert "neue Handynummer" in res["text"]
+    assert notizen and "01776004600" in notizen[0] and "0123456789" in notizen[0]
+
+
+def test_buchen_gleiche_nummer_wie_akte_verspricht_sms():
+    """Gleiche Nummer (nur anderes Format) ist KEIN Konflikt — die
+    SMS-Zusage bleibt, es wird keine Notiz geschrieben."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung",
+        "vorname": "Peter", "nachname": "Müller", "patientId": "Uz5O",
+        "telefon": "+49 177 6004600", "aktePhone": "01776004600",
+        "slotIso": "2026-09-01T09:15",
+    })
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    notizen: list[str] = []
+
+    def _note(tenant, ctx, sit=None, *, note=""):
+        notizen.append(note)
+        return {"ok": True, "noted": True}
+
+    flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
+        "ok": True, "booked": True, "slotIso": slot_iso or "2026-09-01T09:15",
+        "appointmentId": "e7ho", "spoken": "Der Termin ist fest eingetragen.",
+    }
+    flow.kal.note_appointment = _note
+    try:
+        res = flow._buchen(sit)
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+    assert "Die Bestätigung kommt gleich per SMS." in res["text"]
+    assert not notizen
+
+
 def test_fluss_sync_nach_llm_buchung():
     """Bucht das LLM selbst per book_slot, zieht die Zustandsmaschine nach:
     Phase 'gebucht', keine offene Frage — sonst fragt sie 'Soll ich eintragen?'

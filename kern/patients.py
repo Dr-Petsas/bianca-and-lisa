@@ -303,13 +303,43 @@ def _cf_create(tenant: dict, first: str, last: str, phone: str, *, birth: str = 
         return 0, {"message": str(e)}
 
 
+_UMLAUT_TR = str.maketrans({"ä": "a", "ö": "o", "ü": "u", "ß": "s"})
+
+
+def _name_norm(roh: Any) -> str:
+    """Umlaut-tolerante Vergleichsform: Müller == Mueller == Muller.
+
+    STT und Buchstabieren liefern oft die umlautlose Form — fuer Namens-
+    Wachen zaehlt die Schreibvariante nicht, wohl aber jeder andere
+    Buchstabe (Peter != Petra)."""
+    t = _s(roh).lower().translate(_UMLAUT_TR)
+    for zwei, eins in (("ae", "a"), ("oe", "o"), ("ue", "u"), ("ss", "s")):
+        t = t.replace(zwei, eins)
+    return t
+
+
+def _name_passt(p: dict, first: str, last: str) -> bool:
+    """Zaehlt ein Suchtreffer? Nachname UND (falls genannt) Vorname muessen
+    stimmen — umlaut-tolerant. Vorfall 29.08.2026: 'Peter Muller' traf als
+    EINZIGER Suchtreffer 'Petra Müller'; der blinde Ein-Treffer-Kurzschluss
+    haette Termin und Bestaetigungs-SMS auf die falsche Akte gelegt (gleiche
+    Klasse wie 'Nikki Johnson' am 27.08.)."""
+    kf, kl = _name_norm(p.get("firstName")), _name_norm(p.get("lastName"))
+    fl, ll = _name_norm(first), _name_norm(last)
+    if ll and kl and kl != ll:
+        return False
+    if fl and kf and kf != fl:
+        return False
+    return bool(kf or kl)
+
+
 def _suche_eindeutig(tenant: dict, first: str, last: str) -> dict[str, Any] | None:
     q = f"{first} {last}".strip()
     if not q:
         return None
     treffer = [
         p for p in (search_patients(tenant, q).get("patients") or [])
-        if not ist_testakte(p)
+        if not ist_testakte(p) and _name_passt(p, first, last)
     ]
     if not treffer:
         return None
@@ -449,20 +479,23 @@ def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
     treffer = [p for p in (found.get("patients") or []) if not ist_testakte(p)]
     if not treffer:
         return pat
-    qn = q.lower()
-    p_first = _s(pat.get("firstName")).lower()
-    p_last = _s(pat.get("lastName")).lower()
+    # Umlaut-tolerant (29.08.2026): der Anrufer buchstabiert "M U L L E R",
+    # die Akte heisst "Müller" — dieselbe Person. Exakter Kleinbuchstaben-
+    # Vergleich verwarf den Treffer und die Buchung lief an der Akte vorbei.
+    qn = _name_norm(q)
+    p_first = _name_norm(pat.get("firstName"))
+    p_last = _name_norm(pat.get("lastName"))
     if not p_last:
         teile = ohne_titel(q).split()
         if len(teile) >= 2:
-            p_first = p_first or teile[0].lower()
-            p_last = teile[-1].lower()
+            p_first = p_first or _name_norm(teile[0])
+            p_last = _name_norm(teile[-1])
         elif len(teile) == 1:
-            p_last = teile[0].lower()
+            p_last = _name_norm(teile[0])
 
     def _passt(p: dict) -> bool:
-        k_first = _s(p.get("firstName")).lower()
-        k_last = _s(p.get("lastName")).lower()
+        k_first = _name_norm(p.get("firstName"))
+        k_last = _name_norm(p.get("lastName"))
         if p_last and k_last and k_last != p_last:
             return False
         if p_first and k_first and k_first != p_first:
@@ -475,7 +508,7 @@ def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
         gewaehlt = passende[0]
     else:
         for p in passende:
-            kn = f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip().lower()
+            kn = _name_norm(f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip())
             if kn == qn:
                 gewaehlt = p
                 break

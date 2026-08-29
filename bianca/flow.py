@@ -415,7 +415,26 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         s["frage"] = ""
         text = res.get("spoken") or "Der Termin ist eingetragen."
         if res.get("booked"):
-            if s["telefon"] or s["aktePhone"]:
+            neu = telefon.normaliert(s["telefon"]) if s["telefon"] else ""
+            akte = telefon.normaliert(s["aktePhone"]) if s["aktePhone"] else ""
+            if neu and akte and neu != akte:
+                # Bestandsakte traegt eine ANDERE Nummer als die gerade
+                # rueckbestaetigte — die Bestaetigungs-SMS der Plattform geht
+                # an die AKTEN-Nummer (live 29.08.2026: Alt-Akte mit
+                # 0123456789, die SMS lief ins Leere, der Anrufer wartete).
+                # Es gibt keine Update-Function fuer die Akte: Notiz an den
+                # Termin fuer die Praxis, ehrliche Ansage statt SMS-Zusage.
+                if melde:
+                    melde("note_appointment")
+                kal.note_appointment(
+                    sit["tenant"], ctx, sit,
+                    note=(
+                        f"Anrufer nennt neue Handynummer: {s['telefon']} — "
+                        f"Akte trägt {s['aktePhone']}. Bitte Akte aktualisieren."
+                    ),
+                )
+                text += " Ihre neue Handynummer gebe ich der Praxis mit."
+            elif s["telefon"] or s["aktePhone"]:
                 text += " Die Bestätigung kommt gleich per SMS."
             text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
