@@ -87,16 +87,20 @@ main { padding: 12px 14px 20px; max-width: 1180px; margin: 0 auto; }
 .chips:first-of-type { margin-top: 0; }
 
 .chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #354152;
   background: var(--panel2);
   color: var(--text);
   border-radius: 999px;
-  padding: 8px 13px;
-  font-size: 13px;
+  padding: 10px 14px;
+  font-size: 14px;
   cursor: pointer;
   transition: all 0.12s;
   user-select: none;
-  min-height: 36px;
+  min-height: 44px;
+  touch-action: manipulation;
 }
 
 .chip:hover { border-color: var(--akzent); }
@@ -231,6 +235,8 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
 .laufkarte:hover { border-color: var(--akzent); }
 .laufkarte .gruen { color: var(--gruen); font-weight: 700; }
 .laufkarte .rot { color: var(--rot); font-weight: 700; }
+.lauf-score { margin-left: auto; font-variant-numeric: tabular-nums; }
+.lauf-zeit { overflow-wrap: anywhere; }
 
 .storykarte { border-left: 4px solid var(--gruen); }
 .storykarte.rot { border-left-color: var(--rot); }
@@ -305,7 +311,7 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
   .block { padding: 14px 16px; }
   .eigen-zeile { flex-direction: row; }
   input.eigen, textarea.eigen { font-size: 13px; padding: 7px 10px; }
-  .chip { padding: 5px 13px; min-height: 0; }
+  .chip { padding: 5px 13px; min-height: 0; font-size: 13px; }
   body.studio { padding-bottom: 0; }
   .leiste {
     position: static;
@@ -329,8 +335,82 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 @media (max-width: 719px) {
-  .leiste button.gross { flex: 1 1 calc(50% - 8px); }
-  .leiste button.gross.primaer { flex: 1 1 100%; font-size: 16px; min-height: 48px; }
-  .leiste .klein { flex: 1 1 100%; }
-  .kopf .rechts, header .rechts { margin-left: 0; width: 100%; }
+  .kopf, header {
+    padding: 10px 12px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    gap: 6px 10px;
+  }
+  .kopf h1, header h1 { font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+  .kopf-links { flex: 1 1 auto; min-width: 0; }
+  .kopf .rechts, header .rechts {
+    margin-left: 0;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px 12px;
+    min-height: 44px;
+  }
+  .kopf a, header a {
+    font-size: 15px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .schalter { min-height: 44px; font-size: 14px; }
+  .schalter input { width: 22px; height: 22px; }
+
+  .leiste {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .leiste button.gross {
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 8px;
+    font-size: 14px;
+    white-space: normal;
+    line-height: 1.2;
+    touch-action: manipulation;
+  }
+  .leiste .klein { grid-column: 1 / -1; }
+
+  .anruf-kopf {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px 10px;
+  }
+  .anruf-kopf-text { flex: unset; min-width: 0; }
+  .anruf-kopf-aktion {
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: nowrap;
+  }
+  .anruf-kopf-aktion button.gross {
+    min-width: 108px;
+    min-height: 44px;
+  }
+
+  .laufkarte {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: 4px 10px;
+  }
+  .laufkarte strong { grid-column: 1; }
+  .laufkarte .lauf-zeit { grid-column: 1; }
+  .laufkarte .lauf-score {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-left: 0;
+    align-self: center;
+  }
+  .storykarte { flex-direction: column; align-items: stretch; }
+  .dialog-werkzeuge { width: 100%; }
+  .dialog-werkzeuge .chip { flex: 1 1 auto; min-height: 44px; }
+
+  .bubble .meta button { min-height: 36px; min-width: 36px; }
 }

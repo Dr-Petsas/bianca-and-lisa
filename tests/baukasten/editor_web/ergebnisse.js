@@ -64,8 +64,8 @@ async function laeufeLaden() {
     const div = document.createElement("div");
     div.className = "laufkarte";
     div.innerHTML = `<strong>${l.laufId}</strong>
-      <span class="klein">${l.gestartet || ""}</span>
-      <span style="margin-left:auto">
+      <span class="klein lauf-zeit">${l.gestartet || ""}</span>
+      <span class="lauf-score">
         <span class="gruen">${l.gruen}</span> / <span class="${l.gruen === l.gesamt ? "gruen" : "rot"}">${l.gesamt}</span>
       </span>`;
     div.addEventListener("click", () => laufOeffnen(l.laufId));
@@ -88,7 +88,7 @@ async function laufOeffnen(laufId) {
       `<span class="check ${c.ok ? "ok" : "rot"}"><span class="punkt"></span>${c.name}</span>`).join("");
     div.innerHTML = `<div><strong>${s.id}</strong><div>${checks}</div>
       ${s.fehler ? `<div class="klein" style="color:var(--rot)">${s.fehler}</div>` : ""}</div>
-      <span style="margin-left:auto" class="klein">max ${s.latenzMaxS || "?"}s</span>`;
+      <span class="klein lauf-score">max ${s.latenzMaxS || "?"}s</span>`;
     div.addEventListener("click", () => storyOeffnen(laufId, s.id));
     box.appendChild(div);
   });
