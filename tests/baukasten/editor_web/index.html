@@ -2,100 +2,92 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="web/stil.css?v=6">
+<link rel="stylesheet" href="web/stil.css?v=7">
 </head>
-<body>
-<header>
-  <h1>Baukasten-Teststudio</h1>
-  <span class="status" id="status">bereit</span>
+<body class="studio">
+<header class="kopf">
+  <div class="kopf-links">
+    <h1>Teststudio</h1>
+    <span class="status" id="status">bereit</span>
+  </div>
   <div class="rechts">
     <label class="schalter"><input type="checkbox" id="mithoeren" checked> Mith&ouml;ren</label>
-    <a href="ergebnisse">Ergebnisse &rarr;</a>
+    <a href="ergebnisse">Ergebnisse</a>
   </div>
 </header>
-<main>
-  <div class="zeile">
-    <div class="block">
-      <h2>Stimme &amp; Name</h2>
-      <div class="chips" id="chips-stimme"></div>
-      <div style="height:8px"></div>
-      <div class="chips" id="chips-nachname"></div>
-      <div class="eigen-zeile">
-        <input class="eigen" id="eigen-vorname" placeholder="eigener Vorname" autocomplete="off">
-        <input class="eigen" id="eigen-nachname" placeholder="eigener Nachname" autocomplete="off">
-      </div>
+<main class="raster">
+  <section class="block">
+    <h2>Stimme &amp; Name</h2>
+    <div class="chips" id="chips-stimme"></div>
+    <div class="chips" id="chips-nachname"></div>
+    <div class="eigen-zeile">
+      <input class="eigen" id="eigen-vorname" placeholder="eigener Vorname" autocomplete="off">
+      <input class="eigen" id="eigen-nachname" placeholder="eigener Nachname" autocomplete="off">
     </div>
-    <div class="block">
-      <h2>Anliegen</h2>
-      <div class="chips" id="chips-anliegen"></div>
-      <textarea class="eigen" id="eigen-eroeffnung" rows="2" placeholder="eigener Eröffnungssatz — wird vor dem Start gerendert"></textarea>
-    </div>
-  </div>
-  <div style="height:14px"></div>
-  <div class="zeile">
-    <div class="block">
-      <h2>Grund (bei Terminwunsch)</h2>
-      <div class="chips" id="chips-grund"></div>
-      <textarea class="eigen" id="eigen-grund" rows="2" placeholder="eigener Grund — überschreibt den Chip"></textarea>
-    </div>
-    <div class="block">
-      <h2>Behandler &amp; Versicherung</h2>
-      <div class="chips" id="chips-behandler"></div>
-      <input class="eigen" id="eigen-behandler" placeholder="eigener Behandlername" autocomplete="off">
-      <div style="height:8px"></div>
-      <div class="chips" id="chips-versicherung"></div>
-      <textarea class="eigen" id="eigen-versicherung" rows="2" placeholder="eigene Versicherungs-Antwort"></textarea>
-    </div>
-  </div>
-  <div style="height:14px"></div>
-  <div class="zeile">
-    <div class="block">
-      <h2>Wunschtag (n&auml;chste Woche)</h2>
-      <div class="chips" id="chips-tag"></div>
-      <textarea class="eigen" id="eigen-wunsch" rows="2" placeholder="eigener Wunschtag-Satz"></textarea>
-    </div>
-    <div class="block">
-      <h2>Slot-Verhalten</h2>
-      <div class="chips" id="chips-slot"></div>
-      <textarea class="eigen" id="eigen-slot" rows="2" placeholder="eigene Slot-Annahme (wenn genommen wird)"></textarea>
-    </div>
-  </div>
-  <div style="height:14px"></div>
-  <div class="block">
+  </section>
+  <section class="block">
+    <h2>Anliegen</h2>
+    <div class="chips" id="chips-anliegen"></div>
+    <textarea class="eigen" id="eigen-eroeffnung" rows="2" placeholder="eigener Eröffnungssatz — wird vor dem Start gerendert"></textarea>
+  </section>
+  <section class="block">
+    <h2>Grund (bei Terminwunsch)</h2>
+    <div class="chips" id="chips-grund"></div>
+    <textarea class="eigen" id="eigen-grund" rows="2" placeholder="eigener Grund — überschreibt den Chip"></textarea>
+  </section>
+  <section class="block">
+    <h2>Behandler &amp; Versicherung</h2>
+    <div class="chips" id="chips-behandler"></div>
+    <input class="eigen" id="eigen-behandler" placeholder="eigener Behandlername" autocomplete="off">
+    <div class="chips" id="chips-versicherung"></div>
+    <textarea class="eigen" id="eigen-versicherung" rows="2" placeholder="eigene Versicherungs-Antwort"></textarea>
+  </section>
+  <section class="block">
+    <h2>Wunschtag (n&auml;chste Woche)</h2>
+    <div class="chips" id="chips-tag"></div>
+    <textarea class="eigen" id="eigen-wunsch" rows="2" placeholder="eigener Wunschtag-Satz"></textarea>
+  </section>
+  <section class="block">
+    <h2>Slot-Verhalten</h2>
+    <div class="chips" id="chips-slot"></div>
+    <textarea class="eigen" id="eigen-slot" rows="2" placeholder="eigene Slot-Annahme (wenn genommen wird)"></textarea>
+  </section>
+  <section class="block block-breit">
     <h2>Absch&shy;weifer &amp; St&ouml;rungen (mehrfach w&auml;hlbar)</h2>
     <div class="chips" id="chips-abschweifer"></div>
     <textarea class="eigen" id="eigen-abschweifer" rows="2" placeholder="eigener Abschweifer — einmal, an der ersten Ankerfrage"></textarea>
-    <div style="height:8px"></div>
     <div class="chips" id="chips-extras"></div>
-  </div>
-
-  <div class="knoepfe">
-    <button class="gross" id="knopf-automatik">W&uuml;rfeln (Automatik)</button>
-    <button class="gross tel" id="knopf-telefon" type="button" aria-pressed="false">Telefonqualit&auml;t aus</button>
-    <button class="gross primaer" id="knopf-start">Anruf starten</button>
-    <button class="gross batch" id="knopf-batch">10 Tests generieren</button>
-    <span class="klein" id="lauf-hinweis"></span>
-  </div>
-
-  <div class="fehlerbox" id="fehler"></div>
+  </section>
 </main>
+
+<div class="leiste">
+  <button class="gross" id="knopf-automatik">W&uuml;rfeln</button>
+  <button class="gross tel" id="knopf-telefon" type="button" aria-pressed="false">Telefonqualit&auml;t aus</button>
+  <button class="gross primaer" id="knopf-start">Anruf starten</button>
+  <button class="gross batch" id="knopf-batch">10 Tests</button>
+  <span class="klein" id="lauf-hinweis"></span>
+</div>
+
+<div class="fehlerbox" id="fehler"></div>
 
 <div id="anruf-popup" class="anruf-popup" hidden>
   <div class="anruf-karte">
     <div class="anruf-kopf">
-      <div>
+      <div class="anruf-kopf-text">
         <div class="anruf-titel">Live-Anruf</div>
         <div class="klein" id="live-story">startet …</div>
       </div>
-      <label class="schalter"><input type="checkbox" id="mithoeren-popup" checked> Mithören</label>
-      <button class="gross" id="anruf-zu" type="button">Schließen</button>
+      <div class="anruf-kopf-aktion">
+        <label class="schalter"><input type="checkbox" id="mithoeren-popup" checked> Mithören</label>
+        <button class="gross" id="anruf-zu" type="button">Schließen</button>
+      </div>
     </div>
     <div class="klein" id="ton-hinweis"></div>
     <div class="dialog" id="live-dialog"></div>
   </div>
 </div>
-<script src="web/app.js?v=6"></script>
+<script src="web/app.js?v=7"></script>
 </body>
 </html>

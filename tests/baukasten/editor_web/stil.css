@@ -9,22 +9,32 @@
   --rot: #ff5f6b;
   --gelb: #ffc857;
   --rund: 12px;
+  --leiste-h: 0px;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-body {
+html, body {
   margin: 0;
   font-family: "Segoe UI", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
 
-header {
+body.studio {
+  padding-bottom: calc(148px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ---- Kopf -------------------------------------------------------------- */
+
+.kopf, header {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 22px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 12px 16px;
+  padding-top: calc(12px + env(safe-area-inset-top, 0px));
   background: var(--panel);
   border-bottom: 1px solid #2a3442;
   position: sticky;
@@ -32,70 +42,68 @@ header {
   z-index: 5;
 }
 
-header h1 { font-size: 17px; margin: 0; font-weight: 600; }
-header .status { color: var(--dim); font-size: 13px; }
-header .rechts { margin-left: auto; display: flex; gap: 10px; align-items: center; }
-header a { color: var(--akzent); text-decoration: none; font-size: 13px; }
+.kopf-links { min-width: 0; }
+.kopf h1, header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+.kopf .status, header .status { color: var(--dim); font-size: 13px; display: block; margin-top: 3px; }
+.kopf .rechts, header .rechts {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.kopf a, header a { color: var(--akzent); text-decoration: none; font-size: 13px; }
 
-main { padding: 18px 22px 60px; max-width: 1180px; margin: 0 auto; }
+/* ---- Raster: Handy 1 Spalte, Tablet/Desktop 2 -------------------------- */
+
+main { padding: 12px 14px 20px; max-width: 1180px; margin: 0 auto; }
+
+.raster {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 12px 14px 16px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
 
 .block {
   background: var(--panel);
   border: 1px solid #2a3442;
   border-radius: var(--rund);
-  padding: 14px 16px;
-  margin-bottom: 14px;
+  padding: 12px 14px;
+  min-width: 0;
 }
 
 .block h2 {
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--dim);
   margin: 0 0 10px;
 }
 
-.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.chips:first-of-type { margin-top: 0; }
 
 .chip {
   border: 1px solid #354152;
   background: var(--panel2);
   color: var(--text);
   border-radius: 999px;
-  padding: 5px 13px;
+  padding: 8px 13px;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.12s;
   user-select: none;
+  min-height: 36px;
 }
 
 .chip:hover { border-color: var(--akzent); }
 .chip.an { background: var(--akzent); border-color: var(--akzent); color: #08121f; font-weight: 600; }
 .chip.aus { opacity: 0.85; }
 
-.zeile { display: flex; gap: 22px; flex-wrap: wrap; }
-.zeile .block { flex: 1 1 320px; margin-bottom: 0; }
-
-.knoepfe { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0; align-items: center; }
-
-button.gross {
-  border: 0;
-  border-radius: var(--rund);
-  padding: 11px 22px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  background: var(--panel2);
-  color: var(--text);
-  border: 1px solid #354152;
-}
-
-button.gross.primaer { background: var(--akzent); color: #08121f; border-color: var(--akzent); }
-button.gross.batch { background: var(--gelb); color: #221a02; border-color: var(--gelb); }
-button.gross.tel.an { background: #3d2a12; border-color: var(--gelb); color: var(--gelb); }
-button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
-
-.eigen-zeile { display: flex; gap: 8px; margin-top: 8px; }
+.eigen-zeile { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .eigen-zeile .eigen { margin-top: 0; }
 input.eigen, textarea.eigen {
   width: 100%;
@@ -104,9 +112,9 @@ input.eigen, textarea.eigen {
   background: #141a22;
   color: var(--text);
   border-radius: 8px;
-  padding: 7px 10px;
+  padding: 10px 12px;
   font: inherit;
-  font-size: 13px;
+  font-size: 16px; /* iOS zoomt sonst ins Feld */
   resize: vertical;
 }
 input.eigen:focus, textarea.eigen:focus {
@@ -118,16 +126,54 @@ input.eigen:focus, textarea.eigen:focus {
 .schalter { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); cursor: pointer; }
 .schalter input { accent-color: var(--akzent); width: 17px; height: 17px; }
 
-/* Bubble-Dialog */
+/* ---- Feste Aktionsleiste ----------------------------------------------- */
+
+.leiste, .knoepfe {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.leiste {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 8;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: #151b24;
+  border-top: 1px solid #2a3442;
+}
+
+button.gross {
+  border: 0;
+  border-radius: var(--rund);
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid #354152;
+  min-height: 44px;
+}
+
+button.gross.primaer { background: var(--akzent); color: #08121f; border-color: var(--akzent); }
+button.gross.batch { background: var(--gelb); color: #221a02; border-color: var(--gelb); }
+button.gross.tel.an { background: #3d2a12; border-color: var(--gelb); color: var(--gelb); }
+button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- Dialog / Karten --------------------------------------------------- */
+
 .dialog { display: flex; flex-direction: column; gap: 10px; }
 
 .bubble {
-  max-width: 76%;
+  max-width: 92%;
   padding: 10px 14px;
   border-radius: 14px;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.45;
   position: relative;
+  overflow-wrap: anywhere;
 }
 
 .bubble.bianca { background: #253243; align-self: flex-start; border-bottom-left-radius: 4px; }
@@ -158,9 +204,10 @@ input.eigen:focus, textarea.eigen:focus {
   border: 1px solid #354152;
   color: var(--text);
   border-radius: 6px;
-  padding: 1px 9px;
+  padding: 4px 9px;
   cursor: pointer;
   font-size: 11px;
+  min-height: 28px;
 }
 
 .check { display: inline-flex; align-items: center; gap: 6px; margin: 2px 10px 2px 0; font-size: 13px; }
@@ -170,8 +217,9 @@ input.eigen:focus, textarea.eigen:focus {
 
 .laufkarte {
   display: flex;
-  gap: 14px;
+  gap: 10px 14px;
   align-items: center;
+  flex-wrap: wrap;
   padding: 10px 14px;
   border: 1px solid #2a3442;
   border-radius: 10px;
@@ -187,35 +235,102 @@ input.eigen:focus, textarea.eigen:focus {
 .storykarte { border-left: 4px solid var(--gruen); }
 .storykarte.rot { border-left-color: var(--rot); }
 
+.story-kopf {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dialog-werkzeuge { display: flex; flex-wrap: wrap; gap: 8px; }
+
 .klein { font-size: 12px; color: var(--dim); }
-.fehlerbox { color: var(--rot); font-size: 13px; margin: 8px 0; white-space: pre-wrap; }
+.fehlerbox {
+  color: var(--rot);
+  font-size: 13px;
+  margin: 0 14px 12px;
+  white-space: pre-wrap;
+}
+
+/* ---- Live-Popup -------------------------------------------------------- */
 
 .anruf-popup {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(6, 8, 12, .72);
-  display: flex; align-items: center; justify-content: center;
-  padding: 18px;
+  display: flex; align-items: stretch; justify-content: center;
+  padding: 0;
 }
 .anruf-popup[hidden] { display: none !important; }
 .anruf-karte {
-  width: min(720px, 100%);
-  max-height: 90vh;
+  width: 100%;
+  max-height: 100dvh;
+  height: 100dvh;
   background: var(--panel);
-  border: 1px solid #2a3442;
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
 .anruf-kopf {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 14px 12px;
   border-bottom: 1px solid #2a3442;
   background: #151b24;
+}
+.anruf-kopf-text { min-width: 0; flex: 1 1 160px; }
+.anruf-kopf-aktion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 .anruf-titel { font-size: 16px; font-weight: 650; }
 .anruf-karte .dialog {
   padding: 14px 16px 20px;
   overflow: auto;
-  min-height: 220px;
-  max-height: calc(90vh - 80px);
+  min-height: 0;
+  flex: 1;
+  -webkit-overflow-scrolling: touch;
+}
+#ton-hinweis { padding: 0 14px; }
+
+/* ---- Ab Tablet: zwei Spalten, Popup als Karte -------------------------- */
+
+@media (min-width: 720px) {
+  .raster { grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px 22px 24px; }
+  .block-breit { grid-column: 1 / -1; }
+  .block { padding: 14px 16px; }
+  .eigen-zeile { flex-direction: row; }
+  input.eigen, textarea.eigen { font-size: 13px; padding: 7px 10px; }
+  .chip { padding: 5px 13px; min-height: 0; }
+  body.studio { padding-bottom: 0; }
+  .leiste {
+    position: static;
+    background: transparent;
+    border: 0;
+    padding: 0 22px 28px;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+  .bubble { max-width: 76%; font-size: 14px; }
+  .anruf-popup { align-items: center; padding: 18px; }
+  .anruf-karte {
+    width: min(720px, 100%);
+    height: auto;
+    max-height: 90vh;
+    border: 1px solid #2a3442;
+    border-radius: 16px;
+  }
+  .anruf-kopf { padding: 14px 16px; }
+  .anruf-karte .dialog { max-height: calc(90vh - 80px); }
+}
+
+@media (max-width: 719px) {
+  .leiste button.gross { flex: 1 1 calc(50% - 8px); }
+  .leiste button.gross.primaer { flex: 1 1 100%; font-size: 16px; min-height: 48px; }
+  .leiste .klein { flex: 1 1 100%; }
+  .kopf .rechts, header .rechts { margin-left: 0; width: 100%; }
 }

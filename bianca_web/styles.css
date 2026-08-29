@@ -26,9 +26,9 @@ header { display: flex; justify-content: space-between; align-items: flex-start;
   background: #211a20; border: 1px solid var(--line); color: var(--text);
   font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; font: inherit;
 }
-.studio-overlay { z-index: 36; }
+.studio-overlay { z-index: 36; min-height: 0; }
 .studio-rahmen {
-  flex: 1; width: 100%; border: 0; border-radius: 12px; background: #10141a;
+  flex: 1; width: 100%; min-height: 0; border: 0; border-radius: 12px; background: #10141a;
 }
 .studio-link:hover { background: #2a2128; }
 @media (max-width: 860px) { .studio-links { justify-content: flex-start; } }
@@ -143,4 +143,13 @@ body.incall .wrap, body.incall .dock { display: none; }
   .wrap { padding: 12px 12px 20px; }
   .live { min-height: 140px; max-height: 36vh; }
   .dock .btn { min-height: 52px; font-size: 17px; }
+  .studio-overlay {
+    padding: env(safe-area-inset-top, 0px) 0 0;
+  }
+  .studio-overlay .k-kopf {
+    max-width: none;
+    margin: 0;
+    padding: 10px 12px;
+  }
+  .studio-overlay .studio-rahmen { border-radius: 0; }
 }

@@ -2,14 +2,16 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Ergebnisse</title>
-<link rel="stylesheet" href="web/stil.css?v=6">
+<link rel="stylesheet" href="web/stil.css?v=7">
 </head>
-<body>
-<header>
-  <h1>Ergebnisse</h1>
-  <span class="status" id="status"></span>
+<body class="ergebnisse">
+<header class="kopf">
+  <div class="kopf-links">
+    <h1>Ergebnisse</h1>
+    <span class="status" id="status"></span>
+  </div>
   <div class="rechts"><a href="./">&larr; Teststudio</a></div>
 </header>
 <main>
@@ -22,15 +24,17 @@
     <div id="stories"></div>
   </div>
   <div class="block" id="block-dialog" style="display:none">
-    <h2>
+    <h2 class="story-kopf">
       <span id="story-id"></span>
-      <button class="chip" id="knopf-alles" style="margin-left:12px">&#9654; ganzen Anruf abspielen</button>
-      <button class="chip" id="knopf-stopp">&#9632; Stopp</button>
+      <span class="dialog-werkzeuge">
+        <button class="chip" id="knopf-alles" type="button">&#9654; ganzen Anruf abspielen</button>
+        <button class="chip" id="knopf-stopp" type="button">&#9632; Stopp</button>
+      </span>
     </h2>
     <div id="story-checks" style="margin-bottom:10px"></div>
     <div class="dialog" id="dialog"></div>
   </div>
 </main>
-<script src="web/ergebnisse.js?v=6"></script>
+<script src="web/ergebnisse.js?v=7"></script>
 </body>
 </html>
