@@ -1,15 +1,18 @@
 """Qwen3-TTS-12Hz-0.6B-Base — Vertrag siehe ../api.md.
 
-Eine Aeusserung, EIN Render. Bewusst KEIN /speak-stream und KEIN Text-Schnitt:
-Client-Haeppchen und Server-Stueckelung waren das Genuschel (28.08.2026).
-Klon aus den kurzen Cosy-Referenzen (Qwen braucht ~3 s, nicht 40 s).
-Muss unter _LOCK laufen — eine GPU, vLLM daneben.
+Eine Aeusserung, EIN Render (blocking /speak). KEIN Text-Schnitt: Client-
+Haeppchen und Server-Stueckelung des TEXTES waren das Genuschel (28.08.2026).
 
 Hybrid (29.08.2026, Chef): Triton-Kerne + CUDA-Graph via qwen3-tts-triton
 TritonFasterRunner auf GENAU diesem 0.6B-Base — nicht das Default-1.7B-
 CustomVoice, und NICHT generate_voice_clone() des Runners (der laedt ein
 zweites ungepatchtes 1.7B-Base). Notaus: TTS_HYBRID=0 => nacktes qwen-tts.
-Kein TurboQuant, kein generate_batch, kein Streaming.
+Kein TurboQuant, kein generate_batch.
+
+Phase 2 (29.08.2026): /speak-stream — der GANZE Satz geht rein, AUDIO-Stuecke
+kommen raus, sobald der Codec sie liefert (generate_voice_clone_streaming).
+Das ist KEIN Text-Schnitt: die Prosodie bleibt ganz, nur die Auslieferung
+ist frueher. Muss unter _LOCK laufen — eine GPU, vLLM daneben.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 PORT = int(os.environ.get("TTS_PORT", "8100"))
@@ -163,16 +166,7 @@ def _laden() -> None:
 
 def _synthese(text: str, voice: str) -> bytes:
     """Text -> PCM16 mono 24 kHz. Muss unter _LOCK laufen."""
-    kw: dict = {"text": text, "language": SPRACHE}
-    if voice in _PROMPTS:
-        kw["voice_clone_prompt"] = _PROMPTS[voice]
-    else:
-        kw["ref_audio"] = str(_VOICES[voice])
-        if _TRANSKRIPT[voice]:
-            kw["ref_text"] = _TRANSKRIPT[voice]
-        else:
-            kw["x_vector_only_mode"] = True
-    wavs, sr = _MODEL.generate_voice_clone(**kw)
+    wavs, sr = _MODEL.generate_voice_clone(**_synthese_kwargs(text, voice))
     wav = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
     return _pcm16(wav, int(sr))
 
@@ -213,8 +207,9 @@ def health():
         "device": "cuda",
         "warm": _WARM,
         "hybrid": _HYBRID,
-        # bewusst AUS: Client-Haeppchen waren das Genuschel (28.08.2026).
-        "stream": False,
+        # Audio-Chunk-Streaming (Phase 2): ganzer Satz rein, PCM-Stuecke
+        # raus. Text-Haeppchen (Genuschel 28.08.2026) bleiben verboten.
+        "stream": bool(ok and _stream_faehig()),
     }
     if not ok:
         raise HTTPException(503, "modell laedt noch")
@@ -232,6 +227,64 @@ def _speak_eingang(body: SpeakIn) -> tuple[str, str]:
     if voice not in _VOICES:
         raise HTTPException(400, f"stimme unbekannt: {voice}")
     return text, voice
+
+
+def _stream_faehig() -> bool:
+    return _MODEL is not None and hasattr(_MODEL, "generate_voice_clone_streaming")
+
+
+def _synthese_kwargs(text: str, voice: str) -> dict:
+    kw: dict = {"text": text, "language": SPRACHE}
+    if voice in _PROMPTS:
+        kw["voice_clone_prompt"] = _PROMPTS[voice]
+    else:
+        kw["ref_audio"] = str(_VOICES[voice])
+        if _TRANSKRIPT[voice]:
+            kw["ref_text"] = _TRANSKRIPT[voice]
+        else:
+            kw["x_vector_only_mode"] = True
+    return kw
+
+
+@app.post("/speak-stream")
+def speak_stream(body: SpeakIn):
+    """Ganzer Satz -> PCM16-Stuecke (chunked), sobald der Codec sie liefert."""
+    text, voice = _speak_eingang(body)
+    if not _stream_faehig():
+        raise HTTPException(501, "streaming nur im hybrid-modus")
+
+    def gen():
+        t0 = time.perf_counter()
+        erster = -1.0
+        gesamt = 0
+        with _LOCK:
+            try:
+                for stueck, sr, _timing in _MODEL.generate_voice_clone_streaming(
+                    **_synthese_kwargs(text, voice)
+                ):
+                    pcm = _pcm16(stueck, int(sr))
+                    if not pcm:
+                        continue
+                    if erster < 0:
+                        erster = time.perf_counter() - t0
+                    gesamt += len(pcm)
+                    yield pcm
+            except Exception as e:
+                # Mitten im Chunked-Response laesst sich kein 500 mehr senden —
+                # Abbruch loggen, der Client hoert den Satz unvollstaendig.
+                print(f"qwen3-tts stream-fehler: {e}", flush=True)
+                return
+        print(f"qwen3-tts stream voice={voice} zeichen={len(text)} "
+              f"ttfa={erster:.2f}s gesamt={time.perf_counter() - t0:.2f}s "
+              f"bytes={gesamt}", flush=True)
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": str(ZIEL_RATE),
+                 "X-Engine": "qwen3-hybrid",
+                 "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/speak")

@@ -372,6 +372,18 @@ def api_audio(name: str):
     return Response(blob, media_type=mime)
 
 
+@app.get("/api/audio-stream/{name}")
+def api_audio_stream(name: str):
+    """Progressiver WAV-Strom (Phase 2, 29.08.2026): das Dock spielt, waehrend
+    der TTS-Container noch rendert. Nach Abschluss liefert dieselbe URL das
+    komplette Audio (Chunks bleiben im Slot liegen)."""
+    gen = DIENST.audio_stream_iter(name)
+    if gen is None:
+        raise HTTPException(404)
+    return StreamingResponse(gen, media_type="audio/wav",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 # --- Bianca-Durchreiche -----------------------------------------------------
 # Der Cloudflare-Tunnel zeigt nur auf DIESEN Dienst (8095). Biancas Dienst
 # (8096) ist von aussen nicht erreichbar — darum reicht Lisa alles unter

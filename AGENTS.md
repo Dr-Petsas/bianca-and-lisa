@@ -144,8 +144,20 @@ Lisa/Bianca vernünftig funktionieren.
   qwen3-hybrid`. Notaus: `TTS_HYBRID=0` im Qwen-Container. Gemessen
   29.08. nachts: Readback 1,5–2,3 s (nacktes Qwen 4,4–5,1 s; Cosy-Turbo
   0,6–1,2 s inkl. Nachhoeren), Kurzsaetze 0,5–1,3 s. Ziffern-Probe 5/5.
-  Audio-Chunk-Streaming (`/speak-stream`, ganzer Satz) ist Phase 2 — erst
-  nach dieser Baseline.
+  **Phase 2 AKTIV (29.08.2026): Audio-Chunk-Streaming.** Der GANZE Satz geht
+  als Text an `/speak-stream`, PCM-Stuecke kommen zurueck, sobald der Codec
+  sie liefert — KEIN Text-Schnitt (das war das Genuschel vom 28.08., bleibt
+  verboten). Gemessen: erster Ton nach ~0,2 s statt 0,6–2,3 s Voll-Render.
+  Kette: `kern/tts.py -> LokalTts.speak_stream` (Gain aus dem ersten sprach-
+  aktiven Stueck, dann KONSTANT; fertiger Satz landet normal gepegelt im
+  LRU) -> `kern/dienst.py -> stimme_stream` (sofortige URL, Feeder-Faden) ->
+  `GET /api/audio-stream/<id>.wav` (offener WAV-Header, waechst) -> Docks
+  spielen Stream-URLs ueber `<audio>` progressiv (decodeAudioData braucht
+  die ganze Datei). BLOCKING bleiben: Ziffern-/Readback-Saetze (der
+  Nachhoer-Waechter braucht das komplette Audio VOR dem Anrufer — sie werden
+  verifiziert in den Strom gelegt), Cache-Treffer (eh sofort) und der
+  ElevenLabs-Pfad. Notaus: `TTS_AUDIO_STREAM=0` (Dienst) => alles blocking
+  wie vor Phase 2; Container-Health zeigt `stream:true`.
 - CosyVoice-Turbo (8211) bleibt als Image liegen. Roh halluziniert die
   Engine bei Zahlwort-Ketten — deshalb drei Schichten in `kern/tts.py`
   (nur lokaler Pfad, ElevenLabs unberuehrt — nicht rueckbauen):

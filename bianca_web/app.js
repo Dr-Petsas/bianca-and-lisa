@@ -172,7 +172,12 @@ async function playUrl(url) {
   kiSpricht = true;
   const ctx = unlockAudio.ctx;
   const wav = /\.wav(\?|$)/i.test(url);
-  if (ctx) {
+  // Audio-Chunk-Streaming (Phase 2, 29.08.2026): /api/audio-stream/ liefert
+  // einen WACHSENDEN WAV — decodeAudioData bräuchte die ganze Datei und
+  // würde bis zum Synthese-Ende warten. Das <audio>-Element unten spielt
+  // progressiv, der erste Ton kommt nach der Container-TTFA.
+  const streamend = url.includes("/api/audio-stream/");
+  if (ctx && !streamend) {
     try {
       if (ctx.state === "suspended") await ctx.resume();
       const raw = await fetch(url).then((r) => r.arrayBuffer());
@@ -214,7 +219,9 @@ async function playUrl(url) {
     return;
   }
   const d = a.duration;
-  const limit = (d && isFinite(d) && d > 0) ? d * 1000 + 200 : 12000;
+  // Stream-WAV meldet keine Dauer (Infinity) — Deckel weiter fassen, sonst
+  // schneidet der Cap lange Angebots-Sätze nach 12 s ab.
+  const limit = (d && isFinite(d) && d > 0) ? d * 1000 + 200 : (streamend ? 30000 : 12000);
   await Promise.race([ended, bargeOderCap(limit)]);
   kiSpricht = false;
 }

@@ -229,6 +229,148 @@ def test_dauerhaft_cache_ueberlebt_neustart(tmp_path=None):
     _mit_lokal(fake, lauf)
 
 
+class _StreamAntwort:
+    def __init__(self, status_code: int, stuecke: list[bytes]):
+        self.status_code = status_code
+        self._stuecke = stuecke
+
+    def iter_bytes(self):
+        yield from self._stuecke
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_wav_header_offen_fuer_progressive_wiedergabe():
+    """Phase 2 (29.08.2026): der Stream-WAV traegt UNBEKANNTE Laengen
+    (0xFFFFFFFF) — Browser spielen ihn, waehrend noch Daten kommen."""
+    h = tts.wav_header_offen()
+    assert h[:4] == b"RIFF" and h[8:12] == b"WAVE"
+    assert h[4:8] == b"\xff\xff\xff\xff" and h[-4:] == b"\xff\xff\xff\xff"
+    assert int.from_bytes(h[24:28], "little") == tts.PCM_RATE
+    assert len(h) == 44
+
+
+def test_ziffern_satz_erkennt_readbacks():
+    """Ziffern-Saetze bleiben blocking (Nachhoer-Waechter braucht das ganze
+    Audio) — alles andere darf streamen."""
+    assert tts.ziffern_satz("Ich wiederhole die Nummer: null eins sieben sieben, sechs null null.")
+    assert not tts.ziffern_satz("Waren Sie denn schon einmal bei uns in der Praxis?")
+    assert not tts.ziffern_satz("Ihr Termin ist um neun Uhr fünfzehn.")
+
+
+def test_speak_stream_liefert_stuecke_und_fuellt_den_cache():
+    """Audio-Chunk-Streaming: Stuecke kommen sample-sauber (gerade Bytes)
+    raus, der fertige Satz liegt danach als EIN WAV im LRU — die
+    Wiederholung kostet keinen zweiten Container-Aufruf."""
+    pcm = (1500).to_bytes(2, "little", signed=True) * 4  # 8 Bytes = 4 Samples
+    fake = _FakeLokal(_Antwort(200, pcm))
+    fake.stream_aufrufe = []
+
+    def stream(methode, url, json=None, **kw):
+        fake.stream_aufrufe.append((url, json or {}))
+        # ungerader Schnitt: 3 + 5 Bytes — der Rest-Uebertrag muss die
+        # Sample-Grenze wiederherstellen
+        return _StreamAntwort(200, [pcm[:3], pcm[3:]])
+
+    fake.stream = stream
+
+    def lauf():
+        eng = tts.LokalTts()
+        stuecke = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
+        assert b"".join(stuecke) == pcm, "alle Samples, nichts verschluckt"
+        assert all(len(s) % 2 == 0 for s in stuecke), "nie mitten im Sample schneiden"
+        assert len(fake.stream_aufrufe) == 1
+        # Wiederholung: kommt als EIN Stueck aus dem Cache, kein neuer Aufruf
+        wieder = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
+        assert len(fake.stream_aufrufe) == 1 and len(fake.aufrufe) == 0
+        assert b"".join(wieder) == pcm
+
+    _mit_lokal(fake, lauf)
+
+
+def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
+    """Dienst.stimme_stream: mit stream-faehigem Container kommt SOFORT eine
+    /api/audio-stream/-URL, der Feeder fuellt den Slot im Hintergrund und
+    audio_stream_iter liefert Header + alle Stuecke. Ohne Stream-Faehigkeit
+    faellt alles auf den blocking Pfad (/api/audio/) zurueck."""
+    from kern import dienst as dienst_mod
+
+    d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
+    pcm = (1500).to_bytes(2, "little", signed=True) * 8
+
+    class _EngineFake:
+        def speak(self, text):
+            return tts._wav_header(len(pcm), tts.PCM_RATE) + pcm
+
+        def speak_stream(self, text):
+            yield pcm[:6]
+            yield pcm[6:]
+
+    alt = (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache)
+    tts.TTS_BASE = "http://tts-test:8100"
+    tts.engine = lambda: _EngineFake()
+    tts.im_cache = lambda text: False
+    try:
+        tts.stream_bereit = lambda: True
+        url, _ = d.stimme_stream("Passt Ihnen der Termin am Montag? Oder lieber Dienstag?")
+        assert url.startswith("/api/audio-stream/") and url.endswith(".wav")
+        gen = d.audio_stream_iter(url.rsplit("/", 1)[1])
+        teile = list(gen)
+        assert teile[0][:4] == b"RIFF", "erstes Stueck ist der offene Header"
+        assert b"".join(teile[1:]) == pcm + pcm, "beide Saetze vollstaendig im Strom"
+        assert d.audio_stream_iter("gibtsnicht.wav") is None
+
+        tts.stream_bereit = lambda: False
+        url2, _ = d.stimme_stream("Passt Ihnen der Termin am Montag?")
+        assert url2.startswith("/api/audio/"), "ohne Container-Stream: blocking wie bisher"
+    finally:
+        (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
+
+
+def test_stimme_stream_ziffern_satz_bleibt_verifiziert_blocking():
+    """Ein Readback-Satz MITTEN im Text laeuft weiter durch speak() (mit
+    Nachhoer-Waechter) und wird als fertiges Stueck in den Strom gelegt —
+    gestreamt wird nur der Rest."""
+    from kern import dienst as dienst_mod
+
+    d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
+    pcm = (1500).to_bytes(2, "little", signed=True) * 8
+    rufe: list[str] = []
+
+    class _EngineFake:
+        def speak(self, text):
+            rufe.append(("speak", text))
+            return tts._wav_header(len(pcm), tts.PCM_RATE) + pcm
+
+        def speak_stream(self, text):
+            rufe.append(("stream", text))
+            yield pcm
+
+    alt = (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache)
+    tts.TTS_BASE = "http://tts-test:8100"
+    tts.engine = lambda: _EngineFake()
+    tts.im_cache = lambda text: False
+    try:
+        tts.stream_bereit = lambda: True
+        url, _ = d.stimme_stream(
+            "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null. "
+            "Stimmt das so?")
+        assert url.startswith("/api/audio-stream/")
+        list(d.audio_stream_iter(url.rsplit("/", 1)[1]))  # Feeder zu Ende laufen lassen
+        arten = {art for art, _ in rufe}
+        assert ("speak", "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null.") in rufe
+        assert any(art == "stream" for art in arten), "der Nicht-Ziffern-Satz streamt"
+        for art, text in rufe:
+            if "null eins" in text:
+                assert art == "speak", "Readback NIE am Waechter vorbei streamen"
+    finally:
+        (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_"):

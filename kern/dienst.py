@@ -73,6 +73,12 @@ class Dienst:
         self.audio: dict[str, bytes] = {}
         self.filler_urls: dict[str, str] = {}
         self.feste_urls: dict[str, str] = {}
+        # Laufende Audio-Streams (Phase 2, 29.08.2026): aid -> Slot mit
+        # Chunk-Liste + done-Marke; der Feeder-Faden fuellt, /api/audio-stream
+        # liest mit. Chunks bleiben liegen — ein Re-Fetch nach Abschluss
+        # (Dock-Fehlerpfad) bekommt das komplette Audio.
+        self.audio_streams: dict[str, dict] = {}
+        self._stream_ord: list[str] = []
 
     # ---- Audio-Ablage -----------------------------------------------------
 
@@ -102,6 +108,57 @@ class Dienst:
     def audio_fest_url(self, name: str) -> str:
         return self.feste_urls.get(_s(name)) or ""
 
+    def audio_stream_anlegen(self) -> tuple[str, Callable[[bytes], None], Callable[[], None]]:
+        """Slot fuer einen laufenden Audio-Strom: (aid, push, fertig).
+        push() haengt PCM-Stuecke an, fertig() schliesst den Strom."""
+        aid = secrets.token_hex(6)
+        slot: dict[str, Any] = {"chunks": [], "done": False, "cond": threading.Condition()}
+        self.audio_streams[aid] = slot
+        self._stream_ord.append(aid)
+        while len(self._stream_ord) > 24:
+            self.audio_streams.pop(self._stream_ord.pop(0), None)
+
+        def push(b: bytes) -> None:
+            if not b:
+                return
+            with slot["cond"]:
+                slot["chunks"].append(b)
+                slot["cond"].notify_all()
+
+        def fertig() -> None:
+            with slot["cond"]:
+                slot["done"] = True
+                slot["cond"].notify_all()
+
+        return aid, push, fertig
+
+    def audio_stream_iter(self, name: str):
+        """Generator fuer /api/audio-stream/<aid>.wav: offener WAV-Header,
+        dann PCM-Stuecke, sobald der Feeder sie liefert. None = unbekannt."""
+        slot = self.audio_streams.get(name.rsplit(".", 1)[0])
+        if slot is None:
+            return None
+
+        def gen():
+            yield tts.wav_header_offen()
+            i = 0
+            while True:
+                with slot["cond"]:
+                    if i >= len(slot["chunks"]) and not slot["done"]:
+                        # Feeder-Absturz ohne fertig(): nach 30 s ohne neues
+                        # Stueck den Strom schliessen statt ewig haengen.
+                        if not slot["cond"].wait(timeout=30.0) and i >= len(slot["chunks"]):
+                            return
+                    stuecke = slot["chunks"][i:]
+                    i = len(slot["chunks"])
+                    zu_ende = slot["done"] and i >= len(slot["chunks"])
+                for s in stuecke:
+                    yield s
+                if zu_ende and i >= len(slot["chunks"]):
+                    return
+
+        return gen()
+
     def stimme(self, text: str) -> tuple[str, float]:
         if not text or not tts.bereit():
             return "", 0.0
@@ -111,6 +168,56 @@ class Dienst:
         except RuntimeError:
             return "", round(time.perf_counter() - t0, 2)
         return url, round(time.perf_counter() - t0, 2)
+
+    def stimme_stream(self, text: str) -> tuple[str, float]:
+        """Wie stimme(), aber mit SOFORTIGER Stream-URL, wenn der lokale
+        Container Audio-Chunk-Streaming kann (Phase 2, 29.08.2026): der Zug
+        geht raus, bevor die Synthese fertig ist — das Dock spielt progressiv,
+        der erste Ton kommt nach der Container-TTFA statt nach dem Voll-Render.
+
+        Blocking bleiben: ElevenLabs-Pfad, komplett gecachte Texte (eh sofort)
+        und Ziffern-Saetze (Nachhoer-Waechter braucht das ganze Audio) —
+        Ziffern-SAETZE innerhalb eines Mehr-Satz-Textes rendert der Feeder
+        blocking und schiebt sie verifiziert in den Strom."""
+        if not text or not tts.bereit():
+            return "", 0.0
+        if not tts.stream_bereit() or tts.im_cache(text):
+            return self.stimme(text)
+        saetze = [s.strip() for s in re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", text.strip()) if s.strip()] or [text.strip()]
+        frisch = [s for s in saetze if not tts.im_cache(s) and not tts.ziffern_satz(s)]
+        if not frisch:
+            return self.stimme(text)
+        t0 = time.perf_counter()
+        aid, push, fertig = self.audio_stream_anlegen()
+
+        def feeder() -> None:
+            t1 = time.perf_counter()
+            erster: float | None = None
+            try:
+                for satz in saetze:
+                    try:
+                        if tts.im_cache(satz) or tts.ziffern_satz(satz):
+                            blob = tts.engine().speak(satz)
+                            if blob and blob[:4] == b"RIFF" and len(blob) > 44:
+                                push(blob[44:])
+                                if erster is None:
+                                    erster = time.perf_counter() - t1
+                            continue
+                        for stueck in tts.engine().speak_stream(satz):
+                            push(stueck)
+                            if erster is None:
+                                erster = time.perf_counter() - t1
+                    except Exception as e:
+                        # Testphase: Fehler hoerbar lassen (Satz fehlt im
+                        # Audio), aber die restlichen Saetze noch sprechen.
+                        print(f"{self.name}-stream satz-fail {satz[:40]!r} {e}", flush=True)
+            finally:
+                fertig()
+                print(f"{self.name}-stream ttfa={erster if erster is not None else -1:.2f}s "
+                      f"gesamt={time.perf_counter() - t1:.2f}s saetze={len(saetze)}", flush=True)
+
+        threading.Thread(target=feeder, daemon=True).start()
+        return f"/api/audio-stream/{aid}.wav", round(time.perf_counter() - t0, 2)
 
     def _sprech_blob(self, text: str) -> bytes:
         """Satzweise sprechen, zu EINEM WAV fuegen (kein Streaming, keine
@@ -175,11 +282,11 @@ class Dienst:
         gesprochen = _s(sit.pop("_vorabText", ""))
         if gesprochen and text.startswith(gesprochen):
             rest = text[len(gesprochen):].strip()
-            url, tts_s = self.stimme(rest) if rest else ("", 0.0)
+            url, tts_s = self.stimme_stream(rest) if rest else ("", 0.0)
         else:
             if gesprochen:
                 print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
-            url, tts_s = self.stimme(text)
+            url, tts_s = self.stimme_stream(text)
         # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
         # ein voller Latenz-Posten des Zugs (Messlücke bis 28.08.2026).
         stt_s = sit.pop("_sttS", None)

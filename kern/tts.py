@@ -246,6 +246,18 @@ def _wav_header(data_len: int, rate: int) -> bytes:
     )
 
 
+def wav_header_offen(*, rate: int = PCM_RATE) -> bytes:
+    """WAV-Header mit UNBEKANNTER Laenge (0xFFFFFFFF) fuer Audio-Chunk-
+    Streaming an den Browser (Phase 2, 29.08.2026): Chrome/Firefox spielen
+    einen chunked ausgelieferten PCM-WAV progressiv, sobald Daten kommen."""
+    return struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 0xFFFFFFFF, b"WAVE",
+        b"fmt ", 16, 1, 1, rate, rate * 2, 2, 16,
+        b"data", 0xFFFFFFFF,
+    )
+
+
 def pcm16_wav(pcm: bytes, *, rate: int = PCM_RATE) -> bytes:
     """s16le mono → WAV. Jede Äußerung auf dieselbe Sprach-Lautheit ziehen:
     RMS über sprach-aktive Samples auf ZIEL_RMS (anheben UND absenken),
@@ -356,11 +368,95 @@ class LokalTts:
         _ram_merken(schluessel, blob)
         return blob
 
+    def speak_stream(self, text: str):
+        """Audio-Chunk-Strom (Phase 2, 29.08.2026): der GANZE Satz geht als
+        Text an /speak-stream, PCM-Stuecke kommen zurueck, waehrend die
+        Engine noch rendert — kein Text-Schnitt (das war das Genuschel vom
+        28.08.), die Prosodie bleibt ganz. NUR fuer Saetze ohne Ziffern-Soll
+        (der Nachhoer-Waechter braucht das komplette Audio, siehe speak()).
+
+        Pegel: Gain aus dem ersten sprach-aktiven Stueck, dann KONSTANT fuer
+        den ganzen Satz (kein Pumpen). Am Ende wandert der Satz normal
+        gepegelt in den LRU — Wiederholungen kommen wie gewohnt aus dem Cache.
+        Cache-Treffer liefern ihr PCM sofort als EIN Stueck."""
+        sauber = _normalisieren(text)
+        if not sauber:
+            return
+        schluessel = _lokal_schluessel(sauber)
+        hit = _ram_holen(schluessel)
+        if hit:
+            if hit[:4] == b"RIFF" and len(hit) > 44:
+                yield hit[44:]
+            return
+        payload = _ziffern_einzeln(sauber)[:400]
+        roh: list[bytes] = []
+        gain: float | None = None
+        rest = b""
+        with _lokal_client().stream(
+            "POST", f"{TTS_BASE}/speak-stream",
+            json={"text": payload, "voice": _VOICE_NAME},
+        ) as r:
+            if r.status_code != 200:
+                raise RuntimeError(f"tts_lokal_http_{r.status_code}")
+            for teil in r.iter_bytes():
+                buf = rest + teil
+                schnitt = len(buf) - (len(buf) % 2)
+                stueck, rest = buf[:schnitt], buf[schnitt:]
+                if not stueck:
+                    continue
+                roh.append(stueck)
+                samples = array.array("h")
+                samples.frombytes(stueck)
+                if gain is None:
+                    gain = _gain_oder_none(samples)
+                yield _skaliert_bytes(samples, gain if gain is not None else 1.0)
+        alles = b"".join(roh)
+        if alles:
+            # Standard-Pegel fuer den Cache-Eintrag (voller Satz-RMS) — die
+            # naechste Wiedergabe klingt exakt wie ein blocking-Render.
+            _ram_merken(schluessel, pcm16_wav(alles))
+
 
 def engine() -> TtsEngine:
     if TTS_BASE:
         return LokalTts()
     return ElevenLabsTts()
+
+
+def ziffern_satz(text: str) -> bool:
+    """Traegt der Satz ein Ziffern-Soll (Telefonnummern-Readback)? Solche
+    Saetze bleiben IMMER blocking — der Nachhoer-Waechter braucht das
+    komplette Audio, BEVOR der Anrufer es hoert."""
+    return bool(_ziffern_soll(_ziffern_einzeln(_normalisieren(text))))
+
+
+def stream_gewollt() -> bool:
+    """Notaus TTS_AUDIO_STREAM=0 => alles blocking wie vor Phase 2."""
+    import os
+
+    return os.environ.get("TTS_AUDIO_STREAM", "1").strip() != "0"
+
+
+_STREAM_BEREIT: tuple[float, bool] | None = None
+
+
+def stream_bereit() -> bool:
+    """Kann der lokale Container /speak-stream (Audio-Chunks)? 60 s gecacht.
+    ElevenLabs-Pfad: immer False — dort bleibt alles wie vor Phase 2."""
+    global _STREAM_BEREIT
+    if not TTS_BASE or not stream_gewollt():
+        return False
+    jetzt = time.monotonic()
+    if _STREAM_BEREIT and jetzt - _STREAM_BEREIT[0] < 60.0:
+        return _STREAM_BEREIT[1]
+    ok = False
+    try:
+        r = _lokal_client().get(f"{TTS_BASE}/health", timeout=2.0)
+        ok = bool(r.status_code == 200 and (r.json() or {}).get("stream"))
+    except Exception:
+        ok = False
+    _STREAM_BEREIT = (jetzt, ok)
+    return ok
 
 
 def im_cache(text: str) -> bool:
