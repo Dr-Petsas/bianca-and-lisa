@@ -376,6 +376,38 @@ reine Textarbeit, kein LLM, kein Netz.
 - **Notaus:** `BARGE_WEITER=0` (Umgebungsvariable) => Eingang/Fortsetzen
   stumm, `/api/quittung` liefert keine URLs — Verhalten wie vor W-BARGE.
 
+## Zug-Tempo: adaptive Stille + Vorab-STT (W-TEMPO 29.08.2026 — nicht rückbauen)
+
+Chef: "ich will 300 ms schneller werden." Zwei Bausteine, beide Docks:
+
+- **Adaptive Ruhe-Schwelle:** Das Zugende-Kriterium im Dock (`stilleSoll`,
+  Default 500 ms) sagt jetzt der Server an: Feld `stilleMs` in jeder Zug-/
+  Weiter-Antwort (`kern/dienst._stille_feld`, Hook `stille_fn` im
+  Konstruktor). Bianca: `gehirn.stille_ms` — 350 ms nach Ja/Nein-/Wahlfragen
+  (schonmal, arzt, slotwahl, bestaetigung, versicherung*, pzr, telefon_alt,
+  telefon_check, rueckblick), 650 ms beim telefon-/buchstabieren-Diktat
+  (NIE mitten in der Nummer schneiden), sonst die bewährten 500 ms.
+  Lisa hat keinen Hook => Feld fehlt => ihr Dock bleibt bei 500.
+- **Vorab-STT:** ab 200 ms Ruhe schickt das Dock den Aufnahme-Stand an
+  `POST /api/hoeren` (reines Ohr: Session-Hotwords wie der echte Zug,
+  kein Zug, kein Zustand, kein Protokoll) — die Rest-Stille bis zum
+  Zugende überlappt mit der Transkription. Liegt das Transkript binnen
+  700 ms nach Zugende vor, geht der Zug als TEXT an /api/turn
+  (timings.stt entfällt, STT war schon bezahlt); sonst Audio-Weg wie
+  bisher. Spricht der Anrufer doch weiter, wird das Vorab verworfen und
+  bei der nächsten Ruhephase frisch gestartet. Der Stille-Trim im
+  STT-Container (W-STT-TRIM) macht Vorab- und Final-Transkript identisch.
+- **Echo-Wache bleibt dicht:** der TEXT-Pfad in `kern/dienst.zug_stream`
+  prüft bei gemeldetem Barge jetzt ebenfalls `unterbrechung.ist_echo` —
+  ein Lautsprecher-Echo, das als Vorab-TEXT ankommt, wird verworfen und
+  weitergesprochen wie im Audio-Pfad.
+- Gewinn je Zug: −150 ms bei kurzen Antworten (Schwelle) plus −200 bis
+  −400 ms verstecktes STT. Web-Speech bleibt draußen (28.08.2026) — das
+  Vorab ist Server-Parakeet, kein Browser-STT.
+- Tests: `test_stille_ms_nach_fragetyp` / `test_dienst_traegt_stille_feld`
+  (test_bianca_bausteine). Live-Probe 29.08.: stilleMs 350/350/500 je nach
+  Frage, /api/hoeren transkribiert Referenz-Audio wortgenau.
+
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).

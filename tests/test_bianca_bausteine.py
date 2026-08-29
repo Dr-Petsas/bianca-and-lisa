@@ -1692,3 +1692,35 @@ def test_feste_saetze_waermen_die_arztwahl():
     assert gehirn.arztwahl_frage(tenant) in saetze
     for v in gehirn.ARZTWAHL_VARIANTEN:
         assert v in saetze
+
+
+# --- W-TEMPO: adaptive Stille-Schwelle (Chef 29.08.2026: "300 ms schneller") -
+
+def test_stille_ms_nach_fragetyp():
+    """Ja/Nein-/Wahlfragen erwarten kurze Antworten (350 ms Ruhe reichen),
+    Ziffern-/Buchstabier-Diktate brauchen Denkpausen (650 ms), sonst 500."""
+    assert gehirn.stille_ms({"frage": "schonmal"}) == 350
+    assert gehirn.stille_ms({"frage": "arzt"}) == 350
+    assert gehirn.stille_ms({"frage": "telefon_check"}) == 350
+    assert gehirn.stille_ms({"frage": "pzr"}) == 350
+    assert gehirn.stille_ms({"frage": "telefon"}) == 650
+    assert gehirn.stille_ms({"frage": "buchstabieren"}) == 650
+    assert gehirn.stille_ms({"frage": "grund"}) == 500
+    assert gehirn.stille_ms({"frage": "name"}) == 500
+    assert gehirn.stille_ms({"frage": ""}) == 500
+    assert gehirn.stille_ms({}) == 500
+
+
+def test_dienst_traegt_stille_feld():
+    """Der Dienst haengt stilleMs nur an, wenn ein stille_fn konfiguriert
+    ist — Lisa (ohne Hook) bleibt byte-identisch."""
+    from kern.dienst import Dienst
+
+    mit = Dienst(name="t", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {},
+                 stille_fn=lambda sit: gehirn.stille_ms(gehirn.sammler(sit)))
+    sit = _sit()
+    gehirn.sammler(sit)["frage"] = "schonmal"
+    assert mit._stille_feld(sit) == {"stilleMs": 350}
+
+    ohne = Dienst(name="t2", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
+    assert ohne._stille_feld(sit) == {}

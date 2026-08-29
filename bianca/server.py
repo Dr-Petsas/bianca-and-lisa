@@ -40,6 +40,9 @@ DIENST = Dienst(
     # weiterhin über melde(), sobald wirklich Netz-Zeit anfällt.
     schnell_fn=lambda sit: (sit.get("sammler") or {}).get("phase") != "gebucht",
     merke_zug=session.merke_zug,
+    # W-TEMPO: nach Ja/Nein-/Wahlfragen reicht dem Dock weniger Ruhe als
+    # Zugende, beim Ziffern-Diktat braucht es mehr (gehirn.stille_ms).
+    stille_fn=lambda sit: gehirn.stille_ms(gehirn.sammler(sit)),
 )
 
 
@@ -186,6 +189,27 @@ async def api_transcribe(audio: UploadFile = File(...)):
         gesagt = stt.transcribe(blob, mime=mime, name=name)
     except RuntimeError as e:
         return {"ok": False, "text": "", "error": str(e)}
+    return {"ok": True, "text": gesagt}
+
+
+@app.post("/api/hoeren")
+async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
+    """W-TEMPO Vorab-STT: Das Dock schickt die Aufnahme schon nach ~200 ms
+    Ruhe hierher — die restliche Stille-Wartezeit bis zum Zugende ueberlappt
+    mit der Transkription. Reines Ohr: kein Zug, kein Protokoll, kein
+    Zustand; dieselben Tenant-Hotwords wie der echte Zug (identisches
+    Transkript dank Stille-Trim im Container)."""
+    sit = session.holen(sessionId)
+    if not sit:
+        raise HTTPException(404, "sitzung unbekannt")
+    blob = await audio.read()
+    try:
+        kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+        gesagt = stt.transcribe(blob, mime=audio.content_type or "application/octet-stream",
+                                name=audio.filename or "vorab.webm", keywords=kw)
+    except RuntimeError as e:
+        return {"ok": False, "text": "", "error": str(e)}
+    print(f"bianca-vorab-stt bytes={len(blob)} text={gesagt!r}", flush=True)
     return {"ok": True, "text": gesagt}
 
 

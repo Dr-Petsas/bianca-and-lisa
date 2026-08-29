@@ -64,12 +64,17 @@ class Dienst:
         turn_fn: Callable[..., dict],
         schnell_fn: Callable[[dict], bool] | None = None,
         merke_zug: Callable[..., None] | None = None,
+        stille_fn: Callable[[dict], int] | None = None,
     ) -> None:
         self.name = name
         self.start_fn = start_fn
         self.turn_fn = turn_fn
         self.schnell_fn = schnell_fn or (lambda sit: False)
         self.merke_zug = merke_zug or (lambda sit, **zug: None)
+        # W-TEMPO: liefert die Stille-Schwelle (ms) fuer die NAECHSTE
+        # Dock-Aufnahme (offene Frage bekannt -> kurze Antwort = 350 ms).
+        # None = Feld fehlt in den Antworten, Dock bleibt bei seinem Default.
+        self.stille_fn = stille_fn
         self.audio: dict[str, bytes] = {}
         self.filler_urls: dict[str, str] = {}
         self.feste_urls: dict[str, str] = {}
@@ -371,7 +376,7 @@ class Dienst:
             timings = {"stt": stt_s, **timings}
             timings["total"] = round(stt_s + llm_s + tts_s, 2)
         self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"), timings=timings)
-        return {
+        antwort = {
             "ok": True,
             "empty": False,
             "sessionId": extra.get("sessionId") or sit.get("id") or "",
@@ -384,6 +389,8 @@ class Dienst:
             "error": reply.get("error") or "",
             "timings": timings,
         }
+        antwort.update(self._stille_feld(sit))
+        return antwort
 
     # ---- Barge-Fortsetzung (W-BARGE) ---------------------------------------
 
@@ -402,7 +409,7 @@ class Dienst:
         self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings)
         print(f"{self.name}-weiter (Barge-Fortsetzung): {text[:60]!r}", flush=True)
         extra = extra or {}
-        return {
+        antwort = {
             "ok": True,
             "empty": False,
             "sessionId": extra.get("sessionId") or sit.get("id") or "",
@@ -415,6 +422,17 @@ class Dienst:
             "error": "",
             "timings": timings,
         }
+        antwort.update(self._stille_feld(sit))
+        return antwort
+
+    def _stille_feld(self, sit: dict) -> dict[str, int]:
+        """W-TEMPO: Stille-Schwelle fuer die naechste Dock-Aufnahme (ms)."""
+        if not self.stille_fn:
+            return {}
+        try:
+            return {"stilleMs": int(self.stille_fn(sit))}
+        except Exception:
+            return {}
 
     # ---- NDJSON-Zug-Strom ---------------------------------------------------
 
@@ -452,6 +470,16 @@ class Dienst:
             try:
                 gesagt = text_in
                 stt_s = None
+                # W-TEMPO: Das Dock schickt Vorab-Transkripte als TEXT-Zug —
+                # der Echo-Waechter muss dort genauso greifen wie im
+                # Audio-Pfad, sonst schluckt ein Lautsprecher-Echo der
+                # eigenen Stimme den Barge nicht mehr. Nur bei gemeldetem
+                # Barge pruefen: ohne Unterbrechung sprach niemand, ein
+                # normaler Text-Zug (Lisa-Diktat, Tests) bleibt unberuehrt.
+                if stt_blob is None and gesagt and _s(barge_url) and unterbrechung.ist_echo(sit, gesagt):
+                    print(f"{self.name}-barge echo verworfen (vorab): {gesagt!r}", flush=True)
+                    q.put(("leer", "echo"))
+                    return
                 if stt_blob is not None:
                     t0 = time.perf_counter()
                     try:

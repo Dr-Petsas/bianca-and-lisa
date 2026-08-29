@@ -19,6 +19,9 @@ let hoerNr = 0;
 // in Folge; echtes Gehörtes setzt den Zähler zurück.
 const STILLE_MS = 4000;
 let stilleStupse = 0;
+// W-TEMPO (29.08.2026): Ruhe-Schwelle fürs Zugende — sagt der Server nach
+// einem Zug etwas anderes an (stilleMs), gilt das; sonst der Default.
+let stilleSoll = 500;
 // Barge-in mit Fortsetzung (W-BARGE 29.08.2026): beim Reinsprechen merkt sich
 // das Dock, WELCHES Audio bei WIE VIEL ms gestoppt wurde, spielt sofort eine
 // vorgewärmte Quittung ("Hm."/"Okay.") und meldet beides mit dem nächsten Zug
@@ -453,10 +456,24 @@ function recordUntilSilence(stream) {
     const recLocal = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
     rec = recLocal;
     const chunks = [];
-    recLocal.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const blobTyp = () => recLocal.mimeType || mime || "audio/webm";
+    // W-TEMPO Vorab-STT: ab 200 ms Ruhe geht der bisherige Stand schon zur
+    // Transkription — die restliche Wartezeit bis zum Zugende überlappt mit
+    // dem STT. Spricht der Anrufer doch weiter, wird das Vorab verworfen.
+    let vorabWunsch = false;
+    let vorabLauf = null;
+    recLocal.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunks.push(e.data);
+      if (vorabWunsch && !vorabLauf && chunks.length) {
+        vorabLauf = vorabStt(new Blob(chunks, { type: blobTyp() }));
+      }
+    };
     recLocal.onstop = () => {
       rec = null;
-      resolve(new Blob(chunks, { type: recLocal.mimeType || mime || "audio/webm" }));
+      resolve({
+        blob: new Blob(chunks, { type: blobTyp() }),
+        vorab: vorabWunsch ? vorabLauf : null,
+      });
     };
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = unlockAudio.ctx || new AC();
@@ -486,13 +503,24 @@ function recordUntilSilence(stream) {
       const now = performance.now();
       const dt = now - last;
       last = now;
-      if (rms > 0.02) { heard = true; quiet = 0; }
+      if (rms > 0.02) {
+        heard = true; quiet = 0;
+        // Wieder Sprache: laufendes Vorab verwerfen — bei der nächsten
+        // Ruhephase startet ein frisches mit mehr Audio.
+        if (vorabWunsch) { vorabWunsch = false; vorabLauf = null; }
+      }
       else if (heard) quiet += dt;
-      // 500 ms Ruhe statt 300: Lisa plapperte in Denkpausen hinein
-      // ("sie quatschen rein", Chef 27.08.2026).
+      if (heard && quiet > 200 && !vorabWunsch) {
+        vorabWunsch = true;
+        // Sofortiger Chunk-Flush, damit das Vorab das letzte Wortende trägt.
+        try { recLocal.requestData(); } catch { /* */ }
+      }
+      // Adaptive Ruhe-Schwelle (stilleSoll) statt fix 500 ms: Lisa plapperte
+      // früher in Denkpausen hinein ("sie quatschen rein", Chef 27.08.2026) —
+      // der Default bleibt 500, nur eine Server-Ansage ändert ihn.
       // Ohne jedes Geräusch nach STILLE_MS abbrechen: der Stille-Wächter
       // stupst dann an, statt weitere Sekunden stumm zu warten.
-      if ((heard && quiet > 500 && now - t0 > 450) || (!heard && now - t0 > STILLE_MS) || now - t0 > 8000) {
+      if ((heard && quiet > stilleSoll && now - t0 > 450) || (!heard && now - t0 > STILLE_MS) || now - t0 > 8000) {
         recLocal.stop();
         try { src.disconnect(); } catch { /* */ }
         return;
@@ -501,6 +529,19 @@ function recordUntilSilence(stream) {
     };
     requestAnimationFrame(tick);
   });
+}
+
+async function vorabStt(blob) {
+  // W-TEMPO: reines Vorab-Ohr (/api/hoeren) — Server transkribiert mit den
+  // Tenant-Hotwords des echten Zugs. Leer/Fehler => Audio-Weg wie bisher.
+  try {
+    const fd = new FormData();
+    fd.append("sessionId", sessionId);
+    fd.append("audio", blob, blob.type.includes("mp4") ? "vorab.m4a" : "vorab.webm");
+    const r = await fetch("/api/hoeren", { method: "POST", body: fd });
+    const d = await r.json();
+    return d && d.ok ? (d.text || "") : "";
+  } catch { return ""; }
 }
 
 async function stilleStups(nr) {
@@ -563,6 +604,7 @@ async function sendeZug({ text, blob, nr }) {
       data = await leseZug(r, spielFiller);
     }
     if (fillerLauf) { try { await fillerLauf; } catch { /* */ } }
+    if (data && data.stilleMs) stilleSoll = data.stilleMs;
     if (!callOn || nr !== hoerNr) { zugBusy = false; return; }
     if (bargeInfo && data.audioUrl && bargeInfo.url !== data.audioUrl) {
       // Reinsprecher während Füller/Vorab: die frische Antwort NICHT mehr
@@ -603,6 +645,7 @@ async function bargeWeiter(nr) {
       body: JSON.stringify({ sessionId, bargeUrl: b.url, bargeMs: b.ms }),
     });
     const d = await r.json();
+    if (d && d.stilleMs) stilleSoll = d.stilleMs;
     if (!callOn || nr !== hoerNr) return true;
     if (d.empty || !d.audioUrl) return false;
     phase("lisa", "Lisa spricht …");
@@ -616,8 +659,11 @@ async function hoeren() {
   if (!callOn || !micStream || !sessionId || zugBusy) return;
   phase("du", "Sie sind dran — einfach reden");
   let blob;
+  let vorab = null;
   try {
-    blob = await recordUntilSilence(micStream);
+    const auf = await recordUntilSilence(micStream);
+    blob = auf.blob;
+    vorab = auf.vorab;
   } catch (e) {
     $("status").textContent = String(e.message || e);
     if (callOn && nr === hoerNr) setTimeout(hoeren, 400);
@@ -639,7 +685,16 @@ async function hoeren() {
     if (callOn) setTimeout(hoeren, 250);
     return;
   }
-  await sendeZug({ text: "", blob, nr });
+  // W-TEMPO: liegt das Vorab-Transkript rechtzeitig vor, geht der Zug als
+  // TEXT raus (STT ist dann schon bezahlt); sonst wie bisher als Audio.
+  let vorabText = "";
+  if (vorab) {
+    vorabText = await Promise.race([
+      vorab,
+      new Promise((r) => setTimeout(() => r(""), 700)),
+    ]) || "";
+  }
+  await sendeZug({ text: vorabText, blob, nr });
 }
 
 function auflegen() {
@@ -774,6 +829,7 @@ async function weiterNachMic(auftrag, wer, micBitte) {
   hoerNr += 1;
   zugBusy = false;
   stilleStupse = 0;
+  stilleSoll = 500;
   phase("warte", "verbindet …");
   try {
     const r = await fetch("/api/start", {

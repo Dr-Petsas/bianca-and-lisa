@@ -1046,6 +1046,28 @@ def telefon_alt_frage(s: dict) -> str:
     )
 
 
+# Adaptive Stille-Schwelle fuers Dock (W-TEMPO 29.08.2026, Chef: "ich will
+# 300 ms schneller werden"): Die Maschine WEISS, was sie gefragt hat — nach
+# einer Ja/Nein- oder Wahlfrage kommt eine kurze Antwort (350 ms Ruhe
+# reichen als Zugende), beim Ziffern-/Buchstabier-Diktat sind Denkpausen
+# normal (650 ms, NIE mitten in der Nummer abschneiden). Default bleiben
+# die bewaehrten 500 ms (27.08.2026: "nicht in Denkpausen hineinreden").
+_STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
+                "versicherung_check", "pzr", "telefon_alt", "telefon_check",
+                "rueckblick"}
+_STILLE_DIKTAT = {"telefon", "buchstabieren"}
+
+
+def stille_ms(s: dict) -> int:
+    """Wie viel Ruhe gilt fuer die NAECHSTE Antwort als Zugende?"""
+    fid = _s((s or {}).get("frage"))
+    if fid in _STILLE_KURZ:
+        return 350
+    if fid in _STILLE_DIKTAT:
+        return 650
+    return 500
+
+
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)

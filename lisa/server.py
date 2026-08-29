@@ -316,6 +316,25 @@ async def api_transcribe(audio: UploadFile = File(...)):
     return {"ok": True, "text": gesagt}
 
 
+@app.post("/api/hoeren")
+async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
+    """W-TEMPO Vorab-STT (wie Bianca): Aufnahme kommt schon nach ~200 ms Ruhe
+    an — die restliche Stille-Wartezeit ueberlappt mit der Transkription.
+    Reines Ohr, kein Zug, kein Zustand; Tenant-Hotwords wie der echte Zug."""
+    sit = session.holen(sessionId)
+    if not sit:
+        raise HTTPException(404, "sitzung unbekannt")
+    blob = await audio.read()
+    try:
+        kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+        gesagt = stt.transcribe(blob, mime=audio.content_type or "application/octet-stream",
+                                name=audio.filename or "vorab.webm", keywords=kw)
+    except RuntimeError as e:
+        return {"ok": False, "text": "", "error": str(e)}
+    print(f"lisa-vorab-stt bytes={len(blob)} text={gesagt!r}", flush=True)
+    return {"ok": True, "text": gesagt}
+
+
 @app.post("/api/auftrag")
 def api_auftrag(body: AuftragIn):
     sit = session.holen(body.sessionId)
