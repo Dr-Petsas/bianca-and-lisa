@@ -109,6 +109,20 @@ def test_bianca_prompt_ohne_wissen_erfindet_nichts():
     assert "1600" not in p and "Narval" not in p
 
 
+def test_bianca_prompt_traegt_politik_leitplanke():
+    """Chef 29.08.2026: Abschweifer über Trump/Iran/Fußball — Bianca plaudert
+    kurz mit, äußert aber NIE eine politische Meinung und führt zurück."""
+    for p in (bianca_prompt(praxis="Testpraxis", behandler=""),
+              bianca_prompt(praxis="med dent Zahnklinik", behandler="Dr. Petsas",
+                            wissen=laden("meddent").get("wissen"))):
+        assert "HEIKLE THEMEN" in p
+        assert "KEINE Meinung" in p
+        assert "Trump" in p and "Iran" in p
+        assert "Fußball" in p
+        assert "keine Seite Partei" in p
+        assert "Rabatt" in p
+
+
 def test_bianca_agent_reicht_tenant_wissen_durch():
     from bianca.agent import system_prompt_aktuell
     sit = {"tenant": laden("meddent"), "messages": []}
