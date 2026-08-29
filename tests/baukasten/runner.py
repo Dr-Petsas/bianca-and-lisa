@@ -324,7 +324,14 @@ def bewerten(story: dict, zuege: list[dict], last_call: dict, ziel_iso: str,
         check("gebucht", gebucht)
         slot_iso = str(book.get("slotIso") or "")
         if gebucht and slot_iso:
-            check("Zieltag", slot_iso[:10] == ziel_iso, ziel_iso, slot_iso[:10])
+            # Ausweichtermin ist KEIN Fehler, wenn Bianca ehrlich gesagt
+            # hat, dass am Wunschtag nichts frei ist (Kalender-Realitaet).
+            voll = any("nichts frei" in (z.get("text") or "").lower()
+                       or "ausgebucht" in (z.get("text") or "").lower()
+                       for z in zuege if z.get("wer") == "bianca")
+            am_ziel = slot_iso[:10] == ziel_iso
+            check("Zieltag", am_ziel or voll, ziel_iso,
+                  slot_iso[:10] + ("" if am_ziel else " (Wunschtag ausgebucht)" if voll else ""))
         erwartet = saetze.GRUENDE.get(story.get("grund") or "", (None, ""))[1] or ""
         grund_ist = str(sammler.get("grund") or "")
         if erwartet:

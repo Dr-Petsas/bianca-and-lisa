@@ -29,7 +29,13 @@ def _s(v: Any) -> str:
 # geladen war, und stellte eigene Fragen statt der offenen Sammler-Frage.
 
 _ANGEBOT_VERB_RE = re.compile(
-    r"\bbiete|\banbieten|\bhätte\b|\bhaette\b|\bfrei\b|\bvorschlag|\bschlage\b|\bpasst\s+ihnen",
+    r"\bbiete|\banbieten|\bhätte\b|\bhaette\b|\bfrei\b|\bvorschlag|\bschlage\b|"
+    # Live 29.08.2026: "Ich habe hier gerade einen Termin am Mittwoch ...
+    # Passt das für Sie?" umging die Wache ("habe" statt "hätte", "passt
+    # das" statt "passt Ihnen") — der Slot war erfunden.
+    r"\bhabe\s+(?:hier\s+|gerade\s+|noch\s+|da\s+)*einen?\s+termin|"
+    r"\bpasst\s+(?:ihnen|das|der|er|es)\b|"
+    r"\bw(?:ä|ae)re\b[^.!?]{0,40}?(?:m(?:ö|oe)glich|verf(?:ü|ue)gbar)",
     re.I,
 )
 # Kurz-Laut ohne Inhalt ("Hm.", "Ähm", "Well." als STT-Artefakt): kein

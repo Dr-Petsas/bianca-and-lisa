@@ -63,6 +63,32 @@ def test_wache_laesst_normale_saetze_durch():
     assert book is None
 
 
+def test_angebots_wache_erkennt_erfundene_angebote():
+    """Live 29.08.2026: "Ich habe hier gerade einen Termin am Mittwoch, den
+    zweiten September, um zehn Uhr. Passt das für Sie?" — der Slot war
+    ERFUNDEN (keine Slot-Suche gelaufen), die Wache griff nicht ("habe"
+    statt "hätte", "passt das" statt "passt Ihnen")."""
+    from bianca.agent import _ANGEBOT_VERB_RE, _ANGEBOT_ZEIT_RE
+
+    erfunden = [
+        "Ich habe hier gerade einen Termin am Mittwoch, den zweiten September, um zehn Uhr. Passt das für Sie?",
+        "Ich hätte Donnerstag um vierzehn Uhr etwas für Sie.",
+        "Am Freitag wäre um neun Uhr noch möglich.",
+        "Ich schlage Montag um acht Uhr vor.",
+    ]
+    for satz in erfunden:
+        assert _ANGEBOT_ZEIT_RE.search(satz), satz
+        assert _ANGEBOT_VERB_RE.search(satz), satz
+
+    # Harmlose Sätze ohne konkretes Zeit-Angebot bleiben unangetastet.
+    for satz in [
+        "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?",
+        "Ich schaue eben in den Kalender.",
+        "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?",
+    ]:
+        assert not (_ANGEBOT_ZEIT_RE.search(satz) and _ANGEBOT_VERB_RE.search(satz)), satz
+
+
 def test_wache_bucht_wirklich_wenn_der_termin_klar_ist():
     gerufen = {}
 

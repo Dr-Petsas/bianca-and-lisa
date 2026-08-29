@@ -262,6 +262,15 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         if lage["slotZuege"] < min(int(story.get("slotAnnahme") or 1), MAX_SLOT_ZUEGE):
             liste = saetze.SLOT_FRUEHER if story.get("slotRichtung") == "frueher" else saetze.SLOT_SPAETER
             return {"text": _wahl(story, lage, "slot_schieben", liste), "baustein": "slot_schieben"}
+        # Eine pauschale Annahme ("buchen Sie den bitte") ist bei einer
+        # MEHRFACH-Liste zu Recht mehrdeutig — fragt Bianca "welcher?" oder
+        # kam die Annahme schon, wird konkret der erste Vorschlag gewaehlt
+        # (live 29.08.2026: Liste wurde erneut vorgelesen, Runner loopte).
+        mehrfach = "welcher" in (lage["biancaText"] or "").lower()
+        if "slot_angenommen" in lage["gemacht"] or mehrfach:
+            return {"text": _wahl(story, lage, "terminwahl", saetze.TERMINWAHL_ERSTER),
+                    "baustein": "terminwahl"}
+        lage["gemacht"].add("slot_angenommen")
         return {"text": _wahl(story, lage, "slot_annahme", saetze.SLOT_ANNAHME), "baustein": "slot_annahme"}
     if fid == "bestaetigung":
         return {"text": _wahl(story, lage, "bestaetigung", saetze.BESTAETIGUNG_JA), "baustein": "bestaetigung"}
