@@ -35,6 +35,8 @@ import os
 import re
 from typing import Any
 
+from kern import spur
+
 # Sofort-Quittungen beim Reinsprech-Stopp (Chef: "mit hmm oder okay").
 QUITTUNGEN = ("Hm.", "Okay.")
 
@@ -155,6 +157,7 @@ def eingang(sit: dict, barge_url: str, barge_ms: Any) -> bool:
         return False
     sit["unterbrochen"] = {"rest": rest, "gesprochen": " ".join(gesprochen).strip()}
     _protokoll_stutzen(sit, sit["unterbrochen"]["gesprochen"])
+    spur.merken(sit, "barge-eingang", f"restSaetze={len(rest)}")
     return True
 
 
@@ -223,6 +226,7 @@ def fortsetzen(sit: dict, text: str, reply: dict | None = None,
     if not t or not rest:
         return t
     if ist_abbruch(gesagt):
+        spur.merken(sit, "barge-abbruch", gesagt)
         return t
     if (reply or {}).get("book"):
         return t
@@ -236,6 +240,7 @@ def fortsetzen(sit: dict, text: str, reply: dict | None = None,
     sit["brueckeNr"] = n + 1
     anhang = f"{BRUECKEN[n % len(BRUECKEN)]} {' '.join(rest)}"
     nachtragen(sit, anhang)
+    spur.merken(sit, "barge-fortsetzen", f"restSaetze={len(rest)}")
     return _s(f"{t} {anhang}")
 
 

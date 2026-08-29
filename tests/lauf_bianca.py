@@ -20,6 +20,7 @@ MODULE = [
     "tests.test_stille_notfall",
     "tests.test_llm_deckel",
     "tests.test_baukasten",
+    "tests.test_spur",
 ]
 
 

@@ -37,6 +37,8 @@ import os
 import re
 from typing import Any
 
+from kern import spur
+
 JOB, BLENDED, TALK, ZURUECK = "job", "blended", "talk", "zurueck"
 
 # Gravity-Konstanten — Werte wie in Demo-Claras COS (bewaehrt seit 22.08.2026).
@@ -207,6 +209,10 @@ def routen(sit: dict, text: str, *, ernte: list | tuple = (),
         st["letzterSatz"] = t
         st["letzteRoute"] = dict(route)
         st["floor"] = route["floor"]
+        if route.get("dringend"):
+            spur.merken(sit, "notfall-vorrang", t)
+        elif route.get("floor") in (TALK, BLENDED, ZURUECK):
+            spur.merken(sit, "talk-floor", f"{route['floor']}:{route.get('thema') or ''}")
         return route
 
     if _DRINGEND_RE.search(low):

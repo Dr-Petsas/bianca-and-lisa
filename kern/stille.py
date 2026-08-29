@@ -22,6 +22,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from kern import spur
+
 # Richtwert fuer die Docks (dokumentiert an EINER Stelle): so lange darf es
 # nach dem Sprech-Ende still sein, bevor der Stups kommt.
 STUPS_NACH_S = 4.0
@@ -56,6 +58,7 @@ def stups_zaehlen(sit: dict) -> int:
     """Naechste Stups-Nummer (1-basiert) — Cap prueft der Aufrufer."""
     st = _stand(sit)
     st["stupse"] = int(st.get("stupse") or 0) + 1
+    spur.merken(sit, "stille-stups", str(st["stupse"]))
     return st["stupse"]
 
 

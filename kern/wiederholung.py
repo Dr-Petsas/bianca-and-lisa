@@ -32,6 +32,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from kern import spur
+
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 # Ziffern ODER drei und mehr Ziffern-Wörter am Stück ("null eins sieben ...").
 _ZIFFER_RE = re.compile(
@@ -128,6 +130,8 @@ def pruefen(sit: dict, text: str, *, frueher: list[str], frage_id: str = "",
             if ersatz:
                 behalten.append(ersatz)
                 getauscht = True
+                spur.merken(sit, "wiederholung-variante", frage_id)
                 continue
         # gestrichen — einmal gesagt reicht.
+        spur.merken(sit, "wiederholung-gestrichen", satz)
     return " ".join(behalten).strip()

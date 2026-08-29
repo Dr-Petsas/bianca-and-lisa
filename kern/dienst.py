@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, sprech, stt, tenants, tts, unterbrechung
+from kern import filler, halbsatz, sprech, spur, stt, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
@@ -437,7 +437,10 @@ class Dienst:
         if stt_s is not None:
             timings = {"stt": stt_s, **timings}
             timings["total"] = round(stt_s + llm_s + tts_s, 2)
-        self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"), timings=timings)
+        # Waechter-Spur dieses Zugs (W-BK-3): additiv in Antwort + Protokoll.
+        waechter = spur.abholen(sit)
+        self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"),
+                       timings=timings, waechter=waechter)
         antwort = {
             "ok": True,
             "empty": False,
@@ -450,9 +453,16 @@ class Dienst:
             "writeLive": WRITE_LIVE,
             "error": reply.get("error") or "",
             "timings": timings,
+            "waechter": waechter,
         }
         if reply.get("hangup"):
             antwort["hangup"] = True
+        # Offene Maschinen-Frage (Bianca-Sammler) additiv mitgeben — der
+        # Baukasten-Report mappt darueber Frage -> Antwort-Baustein.
+        sammler = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+        if sammler.get("frage") or sammler.get("modus"):
+            antwort["frage"] = str(sammler.get("frage") or "")
+            antwort["modus"] = str(sammler.get("modus") or "")
         antwort.update(self._stille_feld(sit))
         return antwort
 
@@ -466,11 +476,14 @@ class Dienst:
         text = unterbrechung.wiederaufnahme(sit)
         if not text:
             return None
+        spur.merken(sit, "barge-weiter", text)
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
         url, tts_s = self.stimme_stream(text, karte)
         unterbrechung.merken(sit, url=url, karte=karte, text=text)
         timings = {"llm": 0.0, "tts": tts_s, "total": tts_s}
-        self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings)
+        waechter = spur.abholen(sit)
+        self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings,
+                       waechter=waechter)
         print(f"{self.name}-weiter (Barge-Fortsetzung): {text[:60]!r}", flush=True)
         extra = extra or {}
         antwort = {
@@ -485,6 +498,7 @@ class Dienst:
             "writeLive": WRITE_LIVE,
             "error": "",
             "timings": timings,
+            "waechter": waechter,
         }
         antwort.update(self._stille_feld(sit))
         return antwort
@@ -504,6 +518,9 @@ class Dienst:
                    stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = "",
                    barge_url: str = "", barge_ms: float = 0.0):
         """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
+        # Waechter-Spur: frisch je Zug — jeder Waechter meldet sich hinein,
+        # die Antwort traegt die Liste additiv als "waechter" (W-BK-3).
+        spur.neu(sit)
         # W-BARGE: das Dock meldet, WO es der Stimme ins Wort gefallen ist —
         # daraus entstehen Rest + gestutztes Protokoll, BEVOR der Zug laeuft.
         if _s(barge_url):
@@ -568,6 +585,7 @@ class Dienst:
                 # normaler Text-Zug (Lisa-Diktat, Tests) bleibt unberuehrt.
                 if stt_blob is None and gesagt and _s(barge_url) and unterbrechung.ist_echo(sit, gesagt):
                     print(f"{self.name}-barge echo verworfen (vorab): {gesagt!r}", flush=True)
+                    spur.merken(sit, "barge-echo", gesagt)
                     q.put(("leer", "echo"))
                     return
                 flush = False
@@ -591,6 +609,7 @@ class Dienst:
                         gesagt = halbsatz.abholen(sit)
                         if gesagt:
                             flush = True
+                            spur.merken(sit, "halbsatz-flush", gesagt)
                             print(f"{self.name}-halbsatz flush (nichts nachgekommen): {gesagt!r}", flush=True)
                         else:
                             print(f"{self.name}-listen empty bytes={len(stt_blob)} mime={stt_mime}", flush=True)
@@ -602,6 +621,7 @@ class Dienst:
                             # Lautsprecher-Echo der eigenen Stimme hat den Barge
                             # ausgeloest — kein Einwand: leise weitersprechen.
                             print(f"{self.name}-barge echo verworfen: {gesagt!r}", flush=True)
+                            spur.merken(sit, "barge-echo", gesagt)
                             q.put(("leer", "echo"))
                             return
                 # W-HALBSATZ (29.08.2026): gemerktes Fragment vor den neuen Zug
@@ -611,8 +631,10 @@ class Dienst:
                 if not flush:
                     voll = halbsatz.mergen(sit, gesagt)
                     if voll != gesagt:
+                        spur.merken(sit, "halbsatz-fuge", voll)
                         print(f"{self.name}-halbsatz zusammengefuegt: {voll!r}", flush=True)
                     if halbsatz.halten(sit, voll):
+                        spur.merken(sit, "halbsatz-warte", voll)
                         print(f"{self.name}-halbsatz warte ({sit.get('halbsatzZahl')}): {voll!r}", flush=True)
                         q.put(("warte", voll))
                         return
