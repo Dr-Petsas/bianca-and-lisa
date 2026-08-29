@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 from bianca import arzt as arztmod
 from bianca import gehirn
+from kern import wiederholung
 from kern.patients import arzt_sprechname
 
 Melde = Callable[[str], None] | None
@@ -52,19 +53,28 @@ ANSAGE_PLATZHALTER = (
 _MENSCH_WORT = (
     r"(?:mensch(?:en)?|mitarbeiter\w*|angestellte\w*|personal\b|empfang|rezeption|"
     r"sekretariat|sekretär\w*|sekretaer\w*|sprechstundenhilfe|kolleg\w*|"
-    r"buchhaltung|patientenannahme|annahme|anmeldung|verwaltung|abrechnung)"
+    r"buchhaltung|patientenannahme|annahme|anmeldung|verwaltung|abrechnung|"
+    r"chef\w*|inhaber\w*|praxisleitung|boss)"
 )
 
 # Klassifikation: kommt im Satz ueberhaupt ein Mitarbeiter-/Abteilungs-Wort vor?
 # Nur DANN gibt es die Personalfrei-Ansage (Chef 27.08.2026, zweite Fassung).
 _MENSCH_NUR_RE = re.compile(_MENSCH_WORT, re.I)
 
-# Ausdruecklicher Verbinde-/Durchstell-Wunsch.
+# Ausdruecklicher Verbinde-/Durchstell-Wunsch. Die "verbunden"-Formen ohne
+# mich/uns stammen aus dem Live-Gespraech 29.08.2026 08:44: "Könnte ich bitte
+# mit Doktor Petzers verbunden?" und "Ich möchte verbunden." rutschten durch,
+# das LLM erfand daraufhin eine Ablehnung ("Hier spricht man nicht mit den
+# Ärzten"). "Ist das mit Kosten/Schmerzen verbunden?" bleibt bewusst draussen
+# (Preisfrage!): die neuen Formen verlangen Doktor-Wort oder "ich möchte/will".
 _VERBINDEN_RE = re.compile(
     r"verbinden?\s+sie\s+(?:mich|uns)|"
     r"(?:mich|uns)\s+(?:[\wäöüß.\-, ]{0,40}?\s+)?(?:verbinden|verbunden|durchstellen|durchgestellt|weiterleiten|weitergeleitet)|"
     r"stell\w*\s+(?:sie\s+)?(?:mich|uns)\s+(?:bitte\s+)?durch\b|"
-    r"durchstellen|durchgestellt|weiterleiten|weitergeleitet|weiterverbinden|durchverbinden",
+    r"durchstellen|durchgestellt|weiterleiten|weitergeleitet|weiterverbinden|durchverbinden|"
+    r"verbunden\s+werden|"
+    r"ich\s+(?:möchte|moechte|will|würde|wuerde)\s+(?:bitte\s+|gerne?\s+|auch\s+)*verbunden\b|"
+    r"mit\s+(?:dem\s+|der\s+|herrn\s+|frau\s+)?(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b[^.!?]{0,40}?\bverbunden\b",
     re.I,
 )
 
@@ -92,9 +102,26 @@ _INFOFRAGE_RE = re.compile(
 _ARZT_SPRECHEN_RE = re.compile(
     r"mit\s+(?:dem\s+|der\s+|herrn\s+|frau\s+)?(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b"
     r"[^.!?]{0,40}?\b(?:sprechen|reden)|"
-    r"\b(?:doktor|dr\.?)\s+[\wäöüß-]+\s+(?:selbst\s+|persönlich\s+|persoenlich\s+)?(?:sprechen|erreichen)",
+    r"\b(?:doktor|dr\.?)\s+[\wäöüß-]+\s+(?:selbst\s+|persönlich\s+|persoenlich\s+)?(?:sprechen|erreichen)|"
+    r"\b(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b[^.!?]{0,40}?\ban(?:s|\s+den)\s+(?:telefon|apparat)",
     re.I,
 )
+
+# Sprech-/Verbinde-Verben fuer den Namens-Weg: "Kann ich Herrn Petsas
+# sprechen?" traegt keinen Doktor-Titel und faellt durch _ARZT_SPRECHEN_RE —
+# der Behandler-Name (fuzzy ueber arzt.deute) plus so ein Verb zaehlt
+# trotzdem als Weiterleitungs-Wunsch.
+_SPRECH_VERB_RE = re.compile(
+    r"\b(?:sprechen|reden|erreichen|verbinden|verbunden|durchstellen|durchgestellt|"
+    r"weiterleiten|weitergeleitet|durchverbinden|weiterverbinden)\b|"
+    r"\ban(?:s|\s+den)\s+(?:telefon|apparat)\b",
+    re.I,
+)
+
+# LLM-Backstop-Rueckfrage (Prompt-Leitplanke WEITERLEITEN): hat die VORIGE
+# Assistentin-Zeile "Zu welchem unserer Ärzte darf ich Sie verbinden?"
+# gefragt, zaehlt der blosse Behandler-Name im naechsten Zug als Zielangabe.
+_RUECKFRAGE_RE = re.compile(r"(?:verbind|durchstell)\w*[^.!?]*\?", re.I)
 
 
 def _s(v: Any) -> str:
@@ -252,6 +279,27 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     # Neuer (oder wiederholter) Weiterleitungs-Wunsch?
     if not erkannt(t):
+        # Buchungs-/Verwaltungssaetze ("Termin bei Doktor Petsas ...")
+        # gehoeren den anderen Fluessen — kein Namens-Kurzschluss.
+        if "termin" in t.lower():
+            return None
+        d0 = arztmod.deute(t, sit.get("tenant") or {})
+        genannt = d0 if (d0 and d0.get("typ") == "genannt") else None
+        if genannt:
+            ziel0 = {"calendarId": _s(genannt.get("calendarId")), "calendarName": _s(genannt.get("calendarName"))}
+            # (a) Behandler-Name + Sprech-/Verbinde-Verb ohne Doktor-Titel:
+            #     "Kann ich Herrn Petsas sprechen?" — live 29.08.2026
+            #     verneinte das LLM solche Saetze frei erfunden.
+            if _SPRECH_VERB_RE.search(t):
+                _arzt_merken(s, ziel0)
+                return zaluma_weiterleitung(sit, ziel0, melde)
+            # (b) Rueckweg der Prompt-Leitplanke: das LLM hat "Zu welchem
+            #     unserer Ärzte darf ich Sie verbinden?" gefragt — der blosse
+            #     Name ist die Zielangabe (die Maschine war nicht bewaffnet).
+            letzte = wiederholung.letzte_antworten(sit.get("messages") or [], 1)
+            if letzte and _RUECKFRAGE_RE.search(letzte[0]):
+                _arzt_merken(s, ziel0)
+                return zaluma_weiterleitung(sit, ziel0, melde)
         return None
 
     # Fall 1: Arzt NAMENTLICH im Satz ("Kann ich mit Doktor Patrikis

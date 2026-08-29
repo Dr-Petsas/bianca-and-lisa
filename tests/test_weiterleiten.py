@@ -31,6 +31,34 @@ def test_erkennung_verbinden_saetze():
         assert weiterleiten.erkannt(satz), satz
 
 
+def test_live_saetze_29_08_verbunden_formen():
+    """Live 29.08.2026 08:44: 'Könnte ich bitte mit Doktor Petzers verbunden?'
+    und 'Ich möchte verbunden.' rutschten an der Erkennung vorbei — das LLM
+    erfand eine Ablehnung ('Hier spricht man nicht mit den Ärzten am
+    Telefon'). Um 07:15 halluzinierte es sogar ein Fake-Verbinden ohne
+    Jingle. Diese Formen MUESSEN deterministisch erkannt werden."""
+    for satz in [
+        "Könnte ich bitte mit Doktor Petzers verbunden?",
+        "Ich möchte verbunden.",
+        "denn ich möchte verbunden werden.",
+        "Ich würde gerne verbunden werden.",
+        "Ich will bitte verbunden werden.",
+    ]:
+        assert weiterleiten.erkannt(satz), satz
+
+
+def test_kosten_verbunden_ist_kein_weiterleitungswunsch():
+    """Preis-/Sachfragen mit 'verbunden' bleiben beim LLM (keine Doktor-Wörter,
+    kein 'ich möchte verbunden')."""
+    for satz in [
+        "Ist das mit Kosten verbunden?",
+        "Ist die Behandlung mit Schmerzen verbunden?",
+        "Ich möchte wissen, ob das mit Kosten verbunden ist.",
+    ]:
+        assert not weiterleiten.erkannt(satz), satz
+        assert weiterleiten.zug(_sit(), satz) is None, satz
+
+
 # --- (e) Buchungssaetze loesen den Zweig NICHT aus ---------------------------
 
 def test_buchungssaetze_loesen_nicht_aus():
@@ -77,6 +105,82 @@ def test_namentlich_genannt_verbindet_direkt_ohne_personalfrei():
     # Doppelte Fragen verboten: der Behandler zaehlt auch fuer die Buchung.
     s = gehirn.sammler(sit)
     assert (s["arzt"] or {}).get("calendarName") == "Dr. Patrikis"
+
+
+def test_petzers_hoerfehler_verbindet_zu_petsas():
+    """Der Chef-Satz vom 29.08. wortgleich: STT-Hörfehler 'Petzers' läuft
+    über die Klang-Faltung in arzt.deute auf Doktor Petsas — direkt
+    verbinden, Jingle, Kirri-Zettel, auflegen."""
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, "Könnte ich bitte mit Doktor Petzers verbunden?", events.append)
+    assert z and "Kirri" in z["text"]
+    assert z.get("hangup") is True
+    assert weiterleiten.JINGLE_EVENT in events
+    s = gehirn.sammler(sit)
+    assert (s["arzt"] or {}).get("calendarName") == "Dr. Petsas"
+
+
+def test_verbunden_ohne_namen_fragt_nach_arzt():
+    """'Ich möchte verbunden.' (Chef-Satz 29.08.): kein Name, kein
+    Mitarbeiter-Wort -> nur die Arzt-Frage, danach verbindet der Name."""
+    sit = _sit()
+    z = flow.zug(sit, "Ich möchte verbunden.")
+    assert z and "personalfrei" not in z["text"]
+    assert "zu welchem unserer" in z["text"].lower()
+    events: list[str] = []
+    z2 = flow.zug(sit, "Mit Doktor Petsas.", events.append)
+    assert z2 and "Kirri" in z2["text"] and z2.get("hangup") is True
+    assert weiterleiten.JINGLE_EVENT in events
+
+
+def test_herr_petsas_ohne_doktor_titel_verbindet():
+    """Name + Sprechverb ohne Doktor-Titel: 'Kann ich Herrn Petsas
+    sprechen?' zaehlt als Weiterleitungs-Wunsch (Namens-Weg)."""
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, "Kann ich Herrn Petsas sprechen?", events.append)
+    assert z and "Kirri" in z["text"]
+    assert z.get("hangup") is True
+    assert weiterleiten.JINGLE_EVENT in events
+    s = gehirn.sammler(sit)
+    assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
+
+
+def test_arzt_ans_telefon_verbindet():
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, "Holen Sie mir bitte Doktor Nikolaou ans Telefon.", events.append)
+    assert z and "Kirri" in z["text"]
+    assert weiterleiten.JINGLE_EVENT in events
+
+
+def test_chef_ans_telefon_bekommt_wahrheit_und_angebot():
+    sit = _sit()
+    z = flow.zug(sit, "Holen Sie mir mal den Chef ans Telefon.")
+    assert z and "personalfrei" in z["text"] and "KI-geführt" in z["text"]
+
+
+def test_llm_rueckfrage_name_allein_verbindet():
+    """Prompt-Leitplanke WEITERLEITEN: hat das LLM 'Zu welchem unserer Ärzte
+    darf ich Sie verbinden?' gefragt (Maschine war nicht bewaffnet), zaehlt
+    der blosse Behandler-Name im naechsten Zug als Zielangabe."""
+    sit = _sit()
+    sit["messages"].append({"role": "assistant",
+                            "content": "Zu welchem unserer Ärzte darf ich Sie verbinden?"})
+    events: list[str] = []
+    z = weiterleiten.zug(sit, "Doktor Nikolaou, bitte.", events.append)
+    assert z and "Kirri" in z["text"] and z.get("hangup") is True
+    assert weiterleiten.JINGLE_EVENT in events
+
+
+def test_name_allein_ohne_rueckfrage_verbindet_nicht():
+    """Ohne Verb und ohne Verbinde-Rueckfrage bleibt der blosse Name bei den
+    anderen Fluessen ('Bei Doktor Petsas' = Buchungs-Antwort)."""
+    sit = _sit()
+    sit["messages"].append({"role": "assistant",
+                            "content": "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"})
+    assert weiterleiten.zug(sit, "Bei Doktor Petsas.") is None
 
 
 def test_verbinden_lassen_mit_namen_verbindet_direkt():

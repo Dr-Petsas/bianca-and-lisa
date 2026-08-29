@@ -634,6 +634,34 @@ nichts Abgehacktes, Werkzeug-Züge unangetastet. Abkürzungen/Uhrzeiten
 (Dr., 13:00) zählen nicht als Satzende. Notaus: `LLM_SATZ_DECKEL=0`.
 Tests: `tests/test_llm_deckel.py`.
 
+## Weiterleitung an die Ärzte (W-VERBINDEN 29.08.2026 — nicht rückbauen)
+
+Chef: „wenn der anrufer mit dr petsas oder dr patrikis sprechen möchte oder
+sich verbinden lassen möchte musst du doch das jingle abspielen und den
+Kiri-grußsatz. momentan verneinst du eine weiterleitung." Live 08:44 rutschten
+„Könnte ich bitte mit Doktor Petzers verbunden?" und „Ich möchte verbunden."
+an `bianca/weiterleiten.erkannt()` vorbei — das LLM erfand eine Ablehnung
+(„Hier spricht man nicht mit den Ärzten am Telefon"), um 07:15 sogar ein
+Fake-Verbinden ohne Jingle. Seitdem gilt:
+
+- `_VERBINDEN_RE` kennt die „verbunden"-Formen ohne mich/uns („verbunden
+  werden", „ich möchte … verbunden", „mit Doktor X … verbunden"); Preis-/
+  Sachfragen („Ist das mit Kosten verbunden?") bleiben bewusst draussen.
+- **Namens-Weg:** Behandler-Name (fuzzy über `arzt.deute`, „Petzers"→Petsas)
+  plus Sprech-/Verbinde-Verb zählt auch OHNE Doktor-Titel („Kann ich Herrn
+  Petsas sprechen?", „… ans Telefon/an den Apparat"); Sätze mit „Termin"
+  sind ausgenommen (Buchung bleibt Buchung).
+- Mitarbeiter-Wortliste um Chef/Inhaber/Praxisleitung/Boss erweitert.
+- **Prompt-Leitplanke WEITERLEITEN** (`bianca/prompt.py`): das LLM lehnt
+  Weiterleitungen NIE ab, verbindet nie selbst, fragt nur „Zu welchem
+  unserer Ärzte darf ich Sie verbinden?" — und der Rückweg in
+  `weiterleiten.zug` wertet nach so einer Rückfrage (letzte
+  Assistentin-Zeile, `_RUECKFRAGE_RE`) den blossen Behandler-Namen als
+  Zielangabe.
+- Tests: Live-Sätze wortgleich in `tests/test_weiterleiten.py`; Live-Probe
+  `.data/verbinden_probe.py` (Jingle-URL + Kirri-Zeile + hangup, Preisfrage
+  bleibt beim LLM).
+
 ## Schaufenster „Das kann ich" (29.08.2026)
 
 Biancas Dock (8096) trägt neben dem Anruf-Knopf den Knopf **„Das kann ich"**:
