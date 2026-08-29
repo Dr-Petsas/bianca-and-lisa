@@ -217,6 +217,21 @@ _AKTE_NUMMER_RE = re.compile(
     r"(gleiche|selbe|alte)\s+nummer|nummer\s+wie\s+immer",
     re.I,
 )
+# Akten-Nummer-Konflikt (Chef 29.08.2026): "alte Nummer loeschen und neue
+# eintragen" vs. "Bestaetigungs-SMS an die alte Nummer schicken". NEU wird
+# ZUERST geprueft — "die alte ist falsch"/"loeschen Sie die alte" traegt
+# beide Marker und meint die neue Nummer.
+_ALT_NEU_RE = re.compile(
+    r"l(ö|oe)sch|ersetz|(ü|ue)berschreib|aktualisier|tausch|"
+    r"neue\s+(nummer|eintragen|nehmen|rein)|die\s+neue|"
+    r"falsch|stimmt\s+nicht\s+mehr|gilt\s+nicht\s+mehr|nicht\s+mehr\s+aktuell|veraltet",
+    re.I,
+)
+_ALT_AKTE_RE = re.compile(
+    r"behalt|bleib|an\s+die\s+alte|alte\s+nummer\s+(schicken|senden|nutzen|nehmen)|"
+    r"dahin|dorthin|so\s+lassen|drin\s+lassen|stimmt\s+noch|beide\s+(stimmen|richtig)",
+    re.I,
+)
 
 # Frei Gesprochenes -> Besuchsgrund aus der Behandler-Liste: bianca/besuchsgrund.py
 # (Konzept-Erkennung + Motiv-Suche mit "klein"-Präferenz, Chef 27.08.2026).
@@ -244,6 +259,7 @@ FELDER_START = {
     "patientId": "",
     "bekannt": False,
     "aktePhone": "",
+    "telefonAlt": "",
     "gesucht": "",
     "fuerWen": "",
     "slotIso": "",
@@ -364,6 +380,7 @@ def _kartei_zuruecksetzen(s: dict) -> None:
     s["patientId"] = ""
     s["bekannt"] = False
     s["aktePhone"] = ""
+    s["telefonAlt"] = ""
     s["gesucht"] = ""
 
 
@@ -629,6 +646,18 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     elif not s["nachname"] and _name_aufnehmen(s, t, erzwungen=False):
         neu.add("name")
 
+    # Akten-Nummer-Konflikt: Entscheidung des Anrufers deuten (Chef 29.08.2026).
+    # Diktiert der Satz zugleich eine NEUE Nummer ("die neue ist falsch,
+    # richtig ist 0163…"), gewinnt der Nummern-Pfad — erst rueckbestaetigen,
+    # die Konflikt-Frage kommt danach von selbst wieder.
+    if s["frage"] == "telefon_alt" and not s["telefonAlt"] and not telefon.aus_satz(t):
+        if _ALT_NEU_RE.search(t):
+            s["telefonAlt"] = "neu"
+            neu.add("telefonAlt")
+        elif _ALT_AKTE_RE.search(t):
+            s["telefonAlt"] = "akte"
+            neu.add("telefonAlt")
+
     # Telefonnummer: gehört -> erst rückbestätigen, dann fest.
     if s["frage"] == "telefon_check":
         if ist_ja(t) and s["telefonOffen"]:
@@ -663,9 +692,12 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             else:
                 s["telefonTeil"] = zusammen
                 neu.add("telefonTeil")
-    if not d and (s["telefon"] or s["telefonOffen"]) and _TEL_FALSCH_RE.search(t):
+    if (not d and s["frage"] != "telefon_alt"
+            and (s["telefon"] or s["telefonOffen"]) and _TEL_FALSCH_RE.search(t)):
         # "Die Nummer war falsch": sofort verwerfen und neu erfragen —
         # ohne dass der Anrufer erst durch eine Rückbestätigung muss.
+        # Bei offener Akten-Nummer-Frage meint "falsch" die ALTE Nummer aus
+        # der Akte — die frisch bestaetigte bleibt unangetastet (29.08.2026).
         s["telefon"] = ""
         s["telefonOk"] = False
         s["telefonOffen"] = ""
@@ -768,6 +800,19 @@ def feste_saetze() -> list[str]:
     return out
 
 
+def telefon_alt_frage(s: dict) -> str:
+    """Konflikt-Frage MIT der Alt-Nummer aus der Akte (Chef 29.08.2026:
+    'Ich habe hier noch eine andere Nummer stehen …'). Bewusst wortgleich
+    wiederholbar — der Anrufer darf sie mehrfach vorgelesen bekommen; der
+    Wiederholungs-Wächter lässt Ziffern-Sätze grundsätzlich in Ruhe."""
+    return (
+        "Ich habe hier in Ihrer Akte noch eine andere Nummer stehen: "
+        f"{telefon.sprechbar(s.get('aktePhone') or '')}. "
+        "Soll ich die alte Nummer löschen und Ihre neue eintragen — "
+        "oder die Bestätigungs-SMS an die alte Nummer schicken?"
+    )
+
+
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)
@@ -775,6 +820,14 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     # Eine gehörte Nummer wird IMMER erst rückbestätigt (Chef: sicher aufnehmen).
     if s["telefonOffen"] and not s["telefonOk"]:
         return "telefon_check", f"Ich wiederhole die Nummer: {telefon.sprechbar(s['telefonOffen'])}. Stimmt das so?"
+
+    # Akte gefunden, traegt aber eine ANDERE Nummer als die gerade
+    # rueckbestaetigte: der Anrufer entscheidet (Chef 29.08.2026) — alte
+    # Nummer loeschen/ersetzen oder die Bestaetigungs-SMS an die alte.
+    if (s["telefonOk"] and s["telefon"] and s["patientId"] and s["aktePhone"]
+            and not s["telefonAlt"]
+            and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
+        return "telefon_alt", telefon_alt_frage(s)
 
     if s["warSchonMal"] is None:
         return "schonmal", "Waren Sie denn schon einmal bei uns in der Praxis?"

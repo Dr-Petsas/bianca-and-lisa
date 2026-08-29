@@ -458,6 +458,44 @@ def akte_anlegen(
     }
 
 
+def telefon_aktualisieren(tenant: dict, patient_id: str, phone: str) -> dict[str, Any]:
+    """Handynummer einer BESTEHENDEN Akte setzen (masUpdatePatientPhone).
+
+    Konflikt-Fall 29.08.2026: Der Anrufer bestaetigt am Telefon eine neue
+    Nummer, die Akte traegt eine alte/Dummy-Nummer — die Bestaetigungs-SMS
+    der Plattform geht IMMER an die Akten-Nummer. Erst nach diesem Update
+    kommt die SMS beim Anrufer an. WRITE_LIVE=0 => Trockenlauf (ok+dryRun),
+    es wird nichts geschrieben."""
+    pid = _s(patient_id)
+    e164 = handy_e164(phone)
+    if not pid or not handy_ok(e164):
+        return {"ok": False, "error": "patientId oder Nummer fehlt"}
+    if not WRITE_LIVE:
+        return {"ok": True, "dryRun": True, "patientId": pid, "mobilePhoneNumber": e164, "previous": ""}
+    try:
+        r = httpx.post(
+            f"{CF_BASE}/masUpdatePatientPhone",
+            json={
+                "clientId": _s(tenant.get("clientId")),
+                "locationId": _s(tenant.get("locationId")),
+                "patientId": pid,
+                "mobilePhoneNumber": e164,
+            },
+            timeout=12.0,
+        )
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": str(e)}
+    if r.status_code == 200 and isinstance(data, dict) and data.get("status") == "success":
+        return {
+            "ok": True,
+            "patientId": pid,
+            "mobilePhoneNumber": _s(data.get("mobilePhoneNumber")) or e164,
+            "previous": _s(data.get("previous")),
+        }
+    return {"ok": False, "error": _s(data.get("message")) or f"http_{r.status_code}"}
+
+
 def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
     """Hängt die Kartei-ID an, wenn der Name WIRKLICH passt. Legt niemanden neu an.
 

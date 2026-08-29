@@ -51,6 +51,7 @@ _FRAGE_KERN = {
     "buchstabieren": r"buchstabier",
     "telefon": r"nummer|handy|telefon",
     "telefon_check": r"nummer|stimmt",
+    "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",
 }
@@ -140,6 +141,7 @@ _FEHLT_WORT = {
     "wunsch": "Ihr Wunschtermin",
     "buchstabieren": "die Schreibweise des Nachnamens",
     "telefon": "Ihre Handynummer",
+    "telefon_alt": "Ihre Entscheidung zur alten Nummer in der Akte",
     "slotwahl": "Ihre Terminwahl",
     "bestaetigung": "Ihr Okay",
 }
@@ -201,6 +203,12 @@ def stille_zug(sit: dict) -> dict[str, Any]:
     if fid == "telefon_check" and _s(s.get("telefonOffen")):
         text = (f"{stille.anrede(n)} Ich wiederhole die Nummer: "
                 f"{telefon.sprechbar(s['telefonOffen'])}. Stimmt das so?")
+        stille.anhaengen(sit, text)
+        return {"text": text, "book": None}
+    if fid == "telefon_alt" and _s(s.get("aktePhone")):
+        # Akten-Nummer-Frage genauso: mit der Nummer im Ohr faellt die Wahl
+        # leichter — wortgleiches Wiederholen ist hier gewollt (29.08.2026).
+        text = f"{stille.anrede(n)} {gehirn.telefon_alt_frage(s)}"
         stille.anhaengen(sit, text)
         return {"text": text, "book": None}
 

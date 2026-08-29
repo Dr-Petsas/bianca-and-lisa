@@ -14,12 +14,21 @@ from typing import Any, Callable
 from bianca import gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import calendar as kal
 from kern import gespraech
-from kern.patients import arzt_sprechname
+from kern.patients import arzt_sprechname, telefon_aktualisieren
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
 from kern.tenants import motiv_von
 
 Melde = Callable[[str], None] | None
+
+# "Welche Nummer? / Sagen Sie das nochmal": bei offener Akten-Nummer-Frage
+# wird die Nummer deterministisch ERNEUT vorgelesen (Chef 29.08.2026: "die KI
+# muss das mehrmals vorlesen können") — nie ans LLM, das kennt die Ziffern nicht.
+_NOCHMAL_RE = re.compile(
+    r"noch\s*ein?mal|nochmal|wiederhol|wie\s+bitte|welche\s+nummer|"
+    r"nicht\s+verstanden|versteh|langsam(er)?\b|wie\s+war\s+die",
+    re.I,
+)
 
 _H_WORT = {
     "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "fuenf": 5,
@@ -397,8 +406,44 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     return {"text": vor + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
+def _telefon_alt_ausfuehren(sit: dict, melde: Melde = None) -> str:
+    """Die Entscheidung zur Akten-Nummer umsetzen (Chef 29.08.2026).
+
+    "neu"  => masUpdatePatientPhone schreibt die bestaetigte Nummer in die
+              Akte (die Bestaetigungs-SMS der Plattform geht IMMER an die
+              Akten-Nummer — erst nach dem Update kommt sie richtig an).
+    "akte" => nichts schreiben, SMS geht an die Alt-Nummer.
+    Erledigt-Ansage NUR nach echtem Erfolg; scheitert das Update, faellt die
+    Entscheidung auf "notiz" zurueck und _buchen haengt die Praxis-Notiz an."""
+    s = gehirn.sammler(sit)
+    if s["telefonAlt"] == "akte":
+        return "Alles klar — die Nummer bleibt in der Akte, und die Bestätigungs-SMS geht an diese Nummer. "
+    if s["telefonAlt"] != "neu" or not (s["patientId"] and s["telefon"] and s["telefonOk"]):
+        return ""  # in die Akte kommt NUR eine rueckbestaetigte Nummer
+    if s["aktePhone"] and telefon.normaliert(s["aktePhone"]) == telefon.normaliert(s["telefon"]):
+        return ""  # schon umgetragen (z. B. Sicherheitsnetz lief bereits)
+    if melde:
+        melde("update_phone")
+    res = telefon_aktualisieren(sit["tenant"], s["patientId"], s["telefon"])
+    merke_tool(sit, "update_phone", res)
+    if res.get("ok"):
+        s["aktePhone"] = s["telefon"]
+        if res.get("dryRun"):
+            return "Die neue Nummer hätte ich jetzt eingetragen — der Test schreibt die Kartei noch nicht. "
+        return "Erledigt — die alte Nummer ist gelöscht, Ihre neue steht jetzt in der Akte. "
+    s["telefonAlt"] = "notiz"
+    print(f"bianca-telefon-alt: Update fehlgeschlagen — {res.get('error')}", flush=True)
+    return "Das Umtragen klappt gerade technisch nicht — ich gebe Ihre neue Nummer der Praxis mit. "
+
+
 def _buchen(sit: dict, melde: Melde = None) -> dict:
     s = gehirn.sammler(sit)
+    if (s["telefonAlt"] == "neu" and s["patientId"] and s["telefon"] and s["aktePhone"]
+            and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
+        # Sicherheitsnetz (Eskalations-/Renn-Fall): Entscheidung "neue Nummer"
+        # steht, aber das Update lief noch nicht — JETZT nachholen, BEVOR die
+        # Buchung die Bestaetigungs-SMS an die Akten-Nummer schickt.
+        _telefon_alt_ausfuehren(sit, melde)
     if melde:
         melde("book_slot")
     ctx = _ctx_bauen(sit)
@@ -422,18 +467,22 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 # rueckbestaetigte — die Bestaetigungs-SMS der Plattform geht
                 # an die AKTEN-Nummer (live 29.08.2026: Alt-Akte mit
                 # 0123456789, die SMS lief ins Leere, der Anrufer wartete).
-                # Es gibt keine Update-Function fuer die Akte: Notiz an den
-                # Termin fuer die Praxis, ehrliche Ansage statt SMS-Zusage.
-                if melde:
-                    melde("note_appointment")
-                kal.note_appointment(
-                    sit["tenant"], ctx, sit,
-                    note=(
-                        f"Anrufer nennt neue Handynummer: {s['telefon']} — "
-                        f"Akte trägt {s['aktePhone']}. Bitte Akte aktualisieren."
-                    ),
-                )
-                text += " Ihre neue Handynummer gebe ich der Praxis mit."
+                # Regulaer ist der Konflikt hier schon GEKLAERT (telefon_alt-
+                # Frage + masUpdatePatientPhone); dieser Zweig ist der Rest:
+                # Entscheidung "SMS an die alte", ungeklaert oder Update kaputt.
+                if s["telefonAlt"] == "akte":
+                    text += " Die Bestätigung kommt gleich per SMS an die Nummer aus Ihrer Akte."
+                else:
+                    if melde:
+                        melde("note_appointment")
+                    kal.note_appointment(
+                        sit["tenant"], ctx, sit,
+                        note=(
+                            f"Anrufer nennt neue Handynummer: {s['telefon']} — "
+                            f"Akte trägt {s['aktePhone']}. Bitte Akte aktualisieren."
+                        ),
+                    )
+                    text += " Ihre neue Handynummer gebe ich der Praxis mit."
             elif s["telefon"] or s["aktePhone"]:
                 text += " Die Bestätigung kommt gleich per SMS."
             text += " Kann ich sonst noch etwas für Sie tun?"
@@ -490,6 +539,12 @@ def _eskalieren(sit: dict, fid: str) -> str:
         s["telefonOffen"] = ""
         s["telefonTeil"] = ""
         return "Die Nummer gleichen wir später in Ruhe ab. "
+    if fid == "telefon_alt":
+        # Zweimal keine klare Wahl: die gerade Ziffer fuer Ziffer bestaetigte
+        # Nummer gilt — dafuer hat der Anrufer sie genannt. Das Umtragen holt
+        # _buchen als Sicherheitsnetz nach (vor der SMS).
+        s["telefonAlt"] = "neu"
+        return "Dann nehme ich einfach Ihre neue Nummer. "
     return "Entschuldigung, das habe ich nicht mitbekommen. "
 
 
@@ -586,10 +641,31 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         s["frage"] = "telefon"
         return {"text": "Entschuldigung! Dann bitte noch einmal — ganz in Ruhe, Ziffer für Ziffer."}
 
+    if "telefonAlt" in neu:
+        # Entscheidung zur Akten-Nummer ist gefallen: SOFORT umsetzen (bei
+        # "neu" schreibt masUpdatePatientPhone die Akte, BEVOR spaeter die
+        # Buchung die Bestaetigungs-SMS ausloest), dann normal weiter.
+        vor = _telefon_alt_ausfuehren(sit, melde)
+        hintergrund.anstossen(sit)
+        fid2, frage2 = gehirn.naechste_frage(sit)
+        s["frage"] = fid2
+        if fid2:
+            return {"text": (vor + frage2).strip()}
+        ang = _angebot(sit, melde)
+        if ang and _s(ang.get("text")):
+            ang["text"] = vor + ang["text"]
+        return ang
+
     hintergrund.anstossen(sit)
 
     fid, frage = gehirn.naechste_frage(sit)
     if fid:
+        if (fid == "telefon_alt" and s["frage"] == "telefon_alt"
+                and not neu and _NOCHMAL_RE.search(t)):
+            # "Welche Nummer nochmal?" — die Alt-Nummer wortgleich erneut
+            # vorlesen, so oft der Anrufer fragt (Chef 29.08.2026). Nie ans
+            # LLM: das kennt die Ziffern aus der Akte nicht.
+            return {"text": gehirn.telefon_alt_frage(s)}
         if gehirn.ist_zwischenfrage(t) or (
             not neu and fid != "telefon_check" and gespraech.traegt_thema(sit, t)
         ):
@@ -612,6 +688,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                     # hier "die Nummer habe ich notiert" UND der Anker fragte
                     # danach erneut — die Doppelfrage vom 27.08.2026.
                     return {"text": "Entschuldigung, kurz zur Sicherheit: Stimmt die Nummer so? Ein kurzes Ja oder Nein genügt."}
+                if fid == "telefon_alt":
+                    # Auch die Akten-Nummer-Frage bleibt deterministisch —
+                    # mit der Nummer im Ohr faellt die Wahl leichter.
+                    return {"text": gehirn.telefon_alt_frage(s)}
                 # Erster Leerlauf: das LLM antwortet kurz,
                 # der Stand im Prompt führt zur offenen Frage zurück.
                 return None
