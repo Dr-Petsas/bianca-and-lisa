@@ -56,6 +56,7 @@ _FRAGE_KERN = {
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",
     "versicherung": r"privat|gesetzlich|versichert",
     "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
+    "pzr": r"zahnreinigung|prophylaxe|\bpzr\b",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -110,6 +111,10 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         return f"Im Angebot sind: {angebote}. Welcher passt Ihnen?" if angebote else "Welcher der genannten Termine passt Ihnen?"
     if fid == "bestaetigung":
         return "Soll ich den Termin so fest eintragen?"
+    if fid == "pzr":
+        # Weiche Zusatzfrage (30.08.2026) — naechste_frage kennt sie nicht,
+        # der Anker soll sie nach einer LLM-Antwort trotzdem zurueckholen.
+        return gehirn.pzr_frage(sit.get("sammler") or {})
     fid2, frage = gehirn.naechste_frage(sit)
     return frage if fid2 == fid else ""
 
@@ -146,6 +151,7 @@ _FEHLT_WORT = {
     "telefon_alt": "Ihre Entscheidung zur alten Nummer in der Akte",
     "slotwahl": "Ihre Terminwahl",
     "bestaetigung": "Ihr Okay",
+    "pzr": "ob die Zahnreinigung mit dazu soll",
     "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
 }

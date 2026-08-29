@@ -17,7 +17,7 @@ from typing import Any
 
 from bianca import arzt as arztmod
 from bianca import gehirn
-from kern import calendar, patients
+from kern import calendar, motive, patients
 from kern.patients import arzt_sprechname
 
 
@@ -83,7 +83,11 @@ def kartei_anstossen(sit: dict) -> None:
                 besuch_info = arztmod.letzter_behandler(tenant, s["patientId"])
                 if besuch_info.get("ok") and besuch_info.get("war") and _s(besuch_info.get("lastIso")):
                     s["letzterBesuch"] = _s(besuch_info["lastIso"])
-                    print(f"bianca-kartei: letzter Besuch {s['letzterBesuch'][:10]}", flush=True)
+                    # Grund des letzten Besuchs — Stoff fuer die Rueckblick-
+                    # Ansprache ("letztes Mal waren Sie wegen … da", 30.08.2026).
+                    s["letzterGrund"] = _s(besuch_info.get("grund"))
+                    print(f"bianca-kartei: letzter Besuch {s['letzterBesuch'][:10]} "
+                          f"({s['letzterGrund'] or 'ohne Grund'})", flush=True)
             # "Weiß nicht mehr, bei wem ich war": jetzt können wir nachschlagen.
             if (s.get("arzt") or {}).get("typ") == "unbekannt" and s["patientId"]:
                 if _s(s.get("phase")) in {"angebot", "bestaetigen", "gebucht"}:
@@ -188,6 +192,9 @@ def vorrat_anstossen(sit: dict) -> None:
 
 
 def anstossen(sit: dict) -> None:
+    # Besuchsgrund-Katalog EINMAL pro Anruf frisch von der Plattform holen
+    # (behandlerspezifisches Mapping, Chef 30.08.2026) — laeuft parallel.
+    motive.anstossen(sit)
     kartei_anstossen(sit)
     vorrat_anstossen(sit)
 

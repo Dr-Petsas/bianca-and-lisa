@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
-from kern import vornamen
+from kern import motive, vornamen
 from kern.slots import parse_slot_wish
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -41,6 +41,20 @@ _VERS_KONTEXT_RE = re.compile(r"versichert|versicherung|kassenpatient|privatpati
 _VERS_WECHSEL_RE = re.compile(
     r"gewechselt|geändert|geaendert|umgestiegen|andere\s+versicherung|"
     r"nicht\s+mehr\s+(?:privat|gesetzlich)|inzwischen\s+(?:privat|gesetzlich)",
+    re.I,
+)
+
+# --- Zahnreinigung-Mitbuchung (Chef 30.08.2026) ----------------------------
+# Spontaner Wunsch ("machen Sie doch gleich eine Zahnreinigung mit dazu")
+# bzw. klare Ablehnung ("ohne Zahnreinigung"). Die nackte Grund-Nennung
+# ("Termin zur Zahnreinigung") bleibt Sache des Besuchsgrund-Deuters.
+_PZR_DAZU_RE = re.compile(
+    r"(?:zahnreinigung|prophylaxe|\bpzr\b)[^.!?]{0,50}\b(?:dazu|mitbuchen|mit\s*buchen|mitmachen|mit\s*machen|mit\s*einplanen|einplanen|auch\s+noch|gleich\s+mit|dran(?:haengen|hängen))"
+    r"|(?:dazu|gleich|auch)\s+(?:noch\s+)?(?:eine\s+|die\s+)?(?:professionelle\s+)?(?:zahnreinigung|prophylaxe|pzr)",
+    re.I,
+)
+_PZR_KEINE_RE = re.compile(
+    r"(?:keine?|ohne|nicht)\s+(?:noch\s+)?(?:eine\s+|die\s+)?(?:professionelle\s+)?(?:zahnreinigung|prophylaxe|pzr)",
     re.I,
 )
 
@@ -300,6 +314,14 @@ FELDER_START = {
     "versicherungWechsel": False,
     "versicherungNotiz": False,
     "letzterBesuch": "",
+    # Rueckblick auf den letzten Besuch (Chef 30.08.2026): Grund des letzten
+    # Termins aus der Historie; "rueckblick" haelt den Gespraechs-Zustand
+    # ("" = noch nicht angesprochen, "gefragt" = Verlaufs-Frage offen,
+    # "fertig" = abgehakt/uebersprungen). "pzr" traegt die Mitbuch-Frage
+    # zur Zahnreinigung ("" | "gefragt" | "ja" | "nein").
+    "letzterGrund": "",
+    "rueckblick": "",
+    "pzr": "",
 }
 
 
@@ -374,8 +396,8 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
     return out
 
 
-def _grund_deuten(tenant: dict, text: str) -> tuple[str, dict | None]:
-    return besuchsgrund.deute(tenant, text)
+def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) -> tuple[str, dict | None]:
+    return besuchsgrund.deute(tenant, text, katalog=katalog)
 
 
 def _name_tokens(text: str) -> list[str]:
@@ -421,8 +443,10 @@ def _kartei_zuruecksetzen(s: dict) -> None:
     s["gesucht"] = ""
     # Kartei-Wissen faellt mit: Versichertenstatus, letzter Besuch und ein
     # aus der Akte uebernommenes Geschlecht gehoeren zum ALTEN Treffer.
+    # (rueckblick/pzr bleiben bewusst stehen: EINE Plauderei pro Anruf.)
     s["versicherungAkte"] = ""
     s["letzterBesuch"] = ""
+    s["letzterGrund"] = ""
     if s.get("geschlechtQuelle") == "akte":
         s["geschlecht"] = ""
         s["geschlechtQuelle"] = ""
@@ -627,8 +651,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
 
     # Besuchsgrund: auf die Besuchsgrund-Liste des Behandlers mappen; der
     # WORTLAUT des Patienten bleibt für die Terminnotiz erhalten (Chef 27.08.).
+    # Gemappt wird gegen den FRISCH geholten Katalog der Sitzung (Chef
+    # 30.08.2026: Mapping in jedem Anruf neu); die endgueltige, behandler-
+    # spezifische Aufloesung macht flow._ctx_bauen vor Suche und Buchung.
     if not s["grund"]:
-        kern_name, vm = _grund_deuten(tenant, t)
+        kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
         if kern_name:
             s["grund"] = kern_name
             s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
@@ -641,7 +668,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             # gebucht wird der Zweifelsfall-Grund (Kontrolle/Besprechung).
             s["grund"] = t if len(t) <= 90 else t[:87] + "…"
             s["grundWortlaut"] = s["grund"]
-            vm = besuchsgrund.fallback_motiv(tenant)
+            vm = besuchsgrund.fallback_motiv(tenant, katalog=motive.katalog(sit))
             if vm:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
@@ -787,6 +814,25 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["versicherungWechsel"] = False
                 neu.add("versicherungCheck")
 
+    # Zahnreinigung-Mitbuchung (Chef 30.08.2026): Antwort auf die offene
+    # PZR-Frage oder spontaner Wunsch. Nur wenn der Termin-Grund selbst
+    # keine Zahnreinigung ist — sonst deutet der Satz den HAUPTGRUND.
+    if s["pzr"] in {"", "gefragt"} and s["grund"] and not ist_pzr_grund(s):
+        if _PZR_KEINE_RE.search(t):
+            if s["pzr"] == "gefragt":
+                s["pzr"] = "nein"
+                neu.add("pzr")
+        elif _PZR_DAZU_RE.search(t):
+            s["pzr"] = "ja"
+            neu.add("pzr")
+        elif s["frage"] == "pzr":
+            if ist_ja(t):
+                s["pzr"] = "ja"
+                neu.add("pzr")
+            elif ist_nein(t):
+                s["pzr"] = "nein"
+                neu.add("pzr")
+
     # Vornamen-Waechter (Chef 29.08.2026): Anrede-Geschlecht aus dem Vornamen,
     # sobald er da ist oder korrigiert wurde. Ein Kartei-Geschlecht (Quelle
     # "akte", gesetzt vom Hintergrund-Treffer) wird NIE ueberschrieben.
@@ -860,6 +906,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Hat sich an Ihrer Versicherung etwas geändert — privat oder gesetzlich?",
         "Sind Sie noch genauso versichert wie bei Ihrem letzten Besuch — privat oder gesetzlich?",
     ),
+    "pzr": (
+        "Möchten Sie eine professionelle Zahnreinigung mit dazu?",
+        "Soll die Zahnreinigung mit auf den Termin?",
+    ),
 }
 
 
@@ -893,6 +943,9 @@ def feste_saetze() -> list[str]:
          "Unterlagen: Sind Sie weiterhin privat versichert, oder hat sich da etwas geändert?"),
         ("Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
          "Unterlagen: Sind Sie weiterhin gesetzlich versichert, oder hat sich da etwas geändert?"),
+        "Soll ich Ihnen direkt eine professionelle Zahnreinigung mit dazu buchen?",
+        ("Ihr letzter Besuch ist ja schon eine Weile her — soll ich Ihnen "
+         "direkt eine professionelle Zahnreinigung mit dazu buchen?"),
     ]
     out = list(erstformen)
     for varianten in FRAGE_VARIANTEN.values():
@@ -1046,6 +1099,188 @@ def _versicherung_frage(s: dict) -> tuple[str, str]:
     if s["warSchonMal"]:
         return "", ""
     return "versicherung", "Und sind Sie privat oder gesetzlich versichert?"
+
+
+# --- Rueckblick auf den letzten Besuch + Zahnreinigung-Mitbuchung (30.08.2026) ---
+
+_PZR_GRUND_RE = re.compile(r"zahnreinigung|prophylaxe|\bpzr\b|zahnstein", re.I)
+_AKUT_GRUND_RE = re.compile(r"akut|notfall|schmerz|zahnweh|\bweh\b", re.I)
+# "PAR 1 Besprechung" / "KCH Kontrolluntersuchung": Fachkuerzel + Ziffer weg.
+_MOTIV_KUERZEL_RE = re.compile(r"^[A-ZÄÖÜ]{2,4}\s*\d?\s+")
+
+_ZAHL_WORT = {2: "zwei", 3: "drei", 4: "vier", 5: "fünf", 6: "sechs", 7: "sieben",
+              8: "acht", 9: "neun", 10: "zehn", 11: "elf"}
+
+
+def _besuch_tage(s: dict) -> int:
+    """Tage seit dem letzten Besuch — -1 ohne (lesbares) Datum."""
+    iso = _s(s.get("letzterBesuch"))[:10]
+    if not iso:
+        return -1
+    try:
+        d = datetime.strptime(iso, "%Y-%m-%d").date()
+    except ValueError:
+        return -1
+    return (datetime.now(TZ).date() - d).days
+
+
+def abstand_worte(tage: int) -> str:
+    """Sprechbarer Abstand: 'über zwei Jahre', 'etwa acht Monate', 'ein paar Wochen'."""
+    if tage >= 365:
+        jahre = tage // 365
+        if jahre >= 2:
+            return f"über {_ZAHL_WORT.get(jahre, str(jahre))} Jahre"
+        if tage >= 548:
+            return "über anderthalb Jahre"
+        return "über ein Jahr"
+    if tage >= 60:
+        monate = max(2, round(tage / 30.44))
+        return f"etwa {_ZAHL_WORT.get(monate, str(monate))} Monate"
+    return "ein paar Wochen"
+
+
+def grund_sprechbar(name: str) -> str:
+    """Motivname in sprechbare Form: Kuerzel weg, Slash-Alternative gekappt.
+
+    'KCH akute Beschwerden/Notfall' -> 'akute Beschwerden' — die TTS liest
+    sonst Kuerzel und Schraegstrich vor."""
+    roh = _MOTIV_KUERZEL_RE.sub("", _s(name))
+    return _s(roh.split("/")[0]) or _s(name)
+
+
+def ist_pzr_grund(s: dict) -> bool:
+    """Ist der NEUE Termin selbst schon eine Zahnreinigung? (Chef: dann nie fragen.)"""
+    return bool(_PZR_GRUND_RE.search(f"{s.get('motivName') or ''} {s.get('grund') or ''} {s.get('grundWortlaut') or ''}"))
+
+
+def _ist_akut(s: dict) -> bool:
+    return bool(_AKUT_GRUND_RE.search(f"{s.get('grund') or ''} {s.get('grundWortlaut') or ''}"))
+
+
+def verlaufs_frage(letzter_grund: str) -> str:
+    """Verlaufs-Frage passend zur letzten Behandlung (Chef 30.08.2026).
+
+    OP/Chirurgie -> verheilt? Zahnersatz-Eingliederung -> zufrieden?
+    Narval-/Schnarchschiene -> Werte im Schlaflabor kontrolliert?
+    Wurzelbehandlung -> Ruhe? Besprechungen/Kontrollen -> allgemein."""
+    n = _s(letzter_grund).lower()
+    if re.search(r"besprechung|beratung|planerstellung|kontroll|untersuchung|aufklärung|aufklaerung", n):
+        return "Ist damals alles gut verlaufen?"
+    if re.search(r"narval|schien|schnarch|apnoe|protrusion|\bslm\b", n):
+        return "Wurden die Werte im Schlaflabor mit der Schiene schon einmal kontrolliert — und gab es eine Besserung?"
+    if re.search(r"eingliederung|zahnersatz|prothes|krone|brück|brueck|teleskop|\bze\b|verblendung", n):
+        return "Sind Sie mit dem Zahnersatz denn zufrieden?"
+    if re.search(r"\bop\b|operation|chirurg|extrakt|weisheit|osteotomie|wurzelspitzen|implantat|aufbau|augmentation", n):
+        return "Ist denn alles gut verheilt?"
+    if re.search(r"wurzel|endo|\bwk\b", n):
+        return "Ist der Zahn seitdem denn ruhig geblieben?"
+    return "Ist damals alles gut verlaufen?"
+
+
+def rueckblick_faellig(s: dict) -> bool:
+    """Steht die Ansprache des letzten Besuchs an? EINMAL pro Anruf.
+
+    Nur Bestandsakte mit Historie (Datum + Grund), nur im Sammel-Teil der
+    Buchung, nie bei akuten Beschwerden (Schmerzpatienten plaudert man
+    nicht voll) und nie, wenn der Besuch erst wenige Tage her ist."""
+    if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("rueckblick"):
+        return False
+    if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
+        return False
+    if not s.get("letzterGrund") or _ist_akut(s):
+        return False
+    return _besuch_tage(s) > 7
+
+
+def rueckblick_text(s: dict) -> str:
+    """Die Rueckblick-Ansprache: Abstand + letzter Grund + Verlaufs-Frage."""
+    tage = _besuch_tage(s)
+    grund = grund_sprechbar(s.get("letzterGrund") or "")
+    if tage >= 730:
+        vorsatz = (f"Ich sehe gerade: Ihr letzter Besuch ist ja schon {abstand_worte(tage)} her — "
+                   f"damals ging es um {grund}. ")
+    else:
+        # "ist ... her" statt "war vor ...": die Abstands-Woerter stehen im
+        # Nominativ ("etwa acht Monate") — nach "vor" braeuchte es den Dativ.
+        vorsatz = (f"Ich sehe gerade: Ihr letzter Besuch ist {abstand_worte(tage)} her — "
+                   f"da ging es um {grund}. ")
+    return vorsatz + verlaufs_frage(s.get("letzterGrund") or "")
+
+
+_RB_SCHLECHT_RE = re.compile(
+    r"schlecht|\bweh\b|schmerz|problem|leider|entzünd|entzuend|kompliziert|schwierig|"
+    r"nicht\s+(?:gut|zufrieden|verheilt|so\s+toll|wirklich)|unzufrieden|beschwerden",
+    re.I,
+)
+_RB_GUT_RE = re.compile(
+    r"\bgut\b|super|prima|bestens|wunderbar|\btop\b|zufrieden|verheilt|problemlos|"
+    r"keine\s+(?:probleme|beschwerden)|alles\s+(?:gut|bestens|okay|ok|prima|glatt)|passt",
+    re.I,
+)
+
+
+def rueckblick_reaktion(text: str) -> str:
+    """Deterministische Mini-Empathie NUR bei klar positiver Kurzantwort.
+
+    Alles andere (negativ, erzaehlend, Gegenfrage) geht ans LLM — Chef
+    30.08.2026: 'LLM-Antworten auf das sich vielleicht entwickelnde
+    Gespraech'."""
+    t = _s(text)
+    if _RB_SCHLECHT_RE.search(t):
+        return ""
+    if _RB_GUT_RE.search(t) or (ist_ja(t) and len(t) <= 40):
+        return "Das freut mich zu hören! "
+    return ""
+
+
+def pzr_faellig(s: dict) -> bool:
+    """Zahnreinigung anbieten? Nur Bestand, letzter Besuch >6 Monate, der
+    NEUE Termin ist selbst keine Zahnreinigung (Chef: 'da muss man
+    aufpassen'), kein Schmerz-/Notfall-Termin, EINMAL pro Anruf."""
+    if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("pzr"):
+        return False
+    if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
+        return False
+    if not s.get("grund") or ist_pzr_grund(s) or _ist_akut(s):
+        return False
+    return besuch_lange_her(s)
+
+
+def pzr_frage(s: dict) -> str:
+    """Die Mitbuch-Frage — mit Zeitbezug nur, wenn der Rueckblick ihn nicht
+    schon gesprochen hat (sonst klingt es doppelt). Beide Formen sind
+    statisch und liegen im TTS-Platten-Cache (feste_saetze)."""
+    if s.get("rueckblick"):
+        return "Soll ich Ihnen direkt eine professionelle Zahnreinigung mit dazu buchen?"
+    return ("Ihr letzter Besuch ist ja schon eine Weile her — soll ich Ihnen "
+            "direkt eine professionelle Zahnreinigung mit dazu buchen?")
+
+
+def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
+    """Besuchsgrund fuer den ZIEL-Kalender frisch aufloesen (Chef 30.08.2026).
+
+    Das Mapping passiert in jedem Anruf neu und BEHANDLERSPEZIFISCH: gleiche
+    Motive sind je Kalender unterschiedlich sichtbar (calendarIds). Gesucht
+    wird das erkannte Konzept im frischen Katalog, gefiltert auf den Ziel-
+    Kalender; danach das bereits gewaehlte Motiv (wenn der Ziel-Kalender es
+    fuehrt); zuletzt der Zweifelsfall Kontrolle/Besprechung. None = nichts
+    Passendes, der Aufrufer laesst den alten Stand stehen."""
+    s = sammler(sit)
+    tenant = sit.get("tenant") or {}
+    kat = motive.katalog(sit)
+    if not kat:
+        return None
+    muster = besuchsgrund.konzept_muster(f"{s['grundWortlaut']} {s['grund']}")
+    vm = None
+    if muster:
+        vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=kat, calendar_id=calendar_id)
+    if not vm and s["motivId"]:
+        aktuell = next((v for v in kat if _s(v.get("id")) == s["motivId"]), None)
+        if aktuell and motive.erlaubt(aktuell, calendar_id):
+            vm = aktuell
+    if not vm and s["grund"]:
+        vm = besuchsgrund.fallback_motiv(tenant, katalog=kat, calendar_id=calendar_id)
+    return vm
 
 
 def start_datum(s: dict) -> str:

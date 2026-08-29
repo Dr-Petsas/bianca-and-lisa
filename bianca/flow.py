@@ -234,6 +234,21 @@ def _ctx_bauen(sit: dict) -> dict:
         # zum Buchen lösen wir dessen Kalender über den Namen auf.
         ctx.pop("calendarId", None)
         ctx["calendarName"] = sit["angebotArzt"]
+    # Besuchsgrund BEHANDLERSPEZIFISCH aufloesen — bei JEDEM Kontext-Bau neu
+    # (Chef 30.08.2026): Motive sind kalendergebunden (calendarIds); wechselt
+    # der Behandler im Gespraech, muss das Motiv gegen DESSEN Katalog neu
+    # gesucht werden. Ohne frischen Katalog bleibt der bisherige Stand.
+    if s["motivId"] or s["grund"]:
+        ziel_id = _s(ctx.get("calendarId"))
+        if not ziel_id and _s(ctx.get("calendarName")):
+            ziel_id = _s((_kalender_strikt(sit.get("tenant") or {}, ctx["calendarName"]) or {}).get("id"))
+        vm = gehirn.motiv_fuer_kalender(sit, ziel_id)
+        if vm and _s(vm.get("id")) != s["motivId"]:
+            print(f"bianca-motiv: {s['motivName'] or s['motivId'] or '?'} -> "
+                  f"{vm.get('name')} (Kalender {ziel_id or 'alle'})", flush=True)
+        if vm:
+            s["motivId"] = _s(vm.get("id"))
+            s["motivName"] = _s(vm.get("name"))
     if s["motivId"]:
         ctx["visitMotiveId"] = s["motivId"]
         ctx["visitMotiveName"] = s["motivName"]
@@ -286,6 +301,10 @@ def _quittung(s: dict, neu: set[str]) -> str:
         return f"Alles klar — {art} versichert, notiert. "
     if "versicherungCheck" in neu:
         return "Prima, dann bleibt alles wie gehabt. "
+    if "pzr" in neu:
+        if s.get("pzr") == "ja":
+            return "Sehr gerne — die Zahnreinigung nehme ich mit auf. "
+        return "Alles klar, dann ohne Zahnreinigung. "
     if "grund" in neu:
         return "Alles klar. "
     if "wunsch" in neu:
@@ -534,6 +553,12 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
             hinweise = []
+            if s["pzr"] == "ja":
+                # Chef 30.08.2026, exakter Wortlaut fuers Notizfeld: die
+                # Zahnreinigung wird nicht als zweiter Slot gebucht, sondern
+                # der Praxis am Termin sichtbar gemacht.
+                hinweise.append("PLUS PZR heute")
+                text += " Die professionelle Zahnreinigung habe ich mit dazu vermerkt."
             if s["versicherungNotiz"]:
                 if s["versicherung"]:
                     hinweise.append(
@@ -566,6 +591,27 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         s["frage"] = "telefon"
         s["telefonOk"] = False
     return {"text": gesagt or "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.", "book": book}
+
+
+def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
+    """Rueckblick-/PZR-Einschub, wenn einer faellig ist — sonst None.
+
+    Chef 30.08.2026: Bestandspatienten werden auf den letzten Besuch
+    angesprochen (Verlaufs-Frage als Plauder-Einstieg, das LLM uebernimmt
+    das sich entwickelnde Gespraech), und bei laengerer Pause wird eine
+    Zahnreinigung zum Mitbuchen angeboten — beides EINMAL pro Anruf,
+    der Rueckblick zuerst. Die offene Pflichtfrage verschiebt sich nur um
+    einen Zug; naechste_frage stellt sie danach von selbst wieder."""
+    s = gehirn.sammler(sit)
+    if gehirn.rueckblick_faellig(s):
+        s["rueckblick"] = "gefragt"
+        s["frage"] = "rueckblick"
+        return {"text": (vorsatz + gehirn.rueckblick_text(s)).strip()}
+    if gehirn.pzr_faellig(s):
+        s["pzr"] = "gefragt"
+        s["frage"] = "pzr"
+        return {"text": (vorsatz + gehirn.pzr_frage(s)).strip()}
+    return None
 
 
 def _eskalieren(sit: dict, fid: str) -> str:
@@ -677,6 +723,31 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if s["modus"] != "buchen" and "modus" not in neu:
         return None
 
+    if s["frage"] == "rueckblick":
+        # Antwort auf die Verlaufs-Frage zum letzten Besuch (30.08.2026).
+        # Ernte im Satz -> die Maschine macht normal weiter (faellt durch);
+        # klar positive Kurzantwort -> Mini-Empathie + naechster Schritt;
+        # alles andere (Erzaehlung, Negatives, Gegenfrage) -> LLM plaudert
+        # (Talk-Schicht), der Stand im Prompt fuehrt spaeter zurueck.
+        s["rueckblick"] = "fertig"
+        s["frage"] = ""
+        if not neu:
+            ton = gehirn.rueckblick_reaktion(t)
+            if not ton or gehirn.ist_zwischenfrage(t):
+                return None
+            hintergrund.anstossen(sit)
+            ein = _einschub(sit, ton)  # z. B. direkt die Zahnreinigungs-Frage
+            if ein is not None:
+                return ein
+            fid2, frage2 = gehirn.naechste_frage(sit)
+            s["frage"] = fid2
+            if fid2:
+                return {"text": (ton + frage2).strip()}
+            ang = _angebot(sit, melde)
+            if ang and _s(ang.get("text")):
+                ang["text"] = ton + ang["text"]
+            return ang
+
     if s["phase"] in {"angebot", "bestaetigen"}:
         if {"wunsch", "arzt", "grund"} & neu:
             # Anrufer will etwas anderes (Zeit/Arzt/Grund geändert): neu anbieten.
@@ -753,6 +824,19 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     hintergrund.anstossen(sit)
 
     fid, frage = gehirn.naechste_frage(sit)
+
+    # Rueckblick auf den letzten Besuch / Zahnreinigungs-Angebot (30.08.2026):
+    # als eigener Zug, sobald die Kartei-Daten da sind — aber nie vor einer
+    # Nummern-Rueckbestaetigung, nie statt einer Zwischenfragen-Antwort und
+    # nie mitten in einem unbeantworteten Pflichtfragen-Faden.
+    if (fid not in {"telefon_check", "telefon_alt"}
+            and (neu or not s["frage"])
+            and not gehirn.ist_zwischenfrage(t)
+            and not gespraech.traegt_thema(sit, t)):
+        ein = _einschub(sit, _quittung(s, neu))
+        if ein is not None:
+            return ein
+
     if fid:
         if (fid == "telefon_alt" and s["frage"] == "telefon_alt"
                 and not neu and _NOCHMAL_RE.search(t)):
@@ -770,7 +854,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # "Abschweifungen müssen erlaubt sein"). Brachte der Satz Ernte,
             # macht die Maschine normal weiter; die Nummern-Rückbestätigung
             # (telefon_check) bleibt IMMER deterministisch.
-            s["frage"] = fid
+            if s["frage"] != "pzr":
+                # Eine offene Zahnreinigungs-Frage bleibt offen ("Was kostet
+                # die denn?" -> LLM nennt den Preis, das Ja danach zaehlt).
+                s["frage"] = fid
             return None
         if not neu and s["frage"] == fid:
             # Dieselbe Frage ist schon offen und der Satz brachte nichts Neues.
@@ -835,9 +922,20 @@ def status_zeile(sit: dict) -> str:
         f"Telefon={_s(s.get('telefon')) or '?'}",
         f"Phase={_s(s.get('phase')) or 'sammeln'}",
     ]
+    if s.get("pzr") == "ja":
+        teile.append("Zahnreinigung=kommt mit dazu")
     offen = ""
     if s.get("frage"):
         offen = f" Offene Frage: {s['frage']}."
+    if s.get("frage") == "pzr":
+        offen += " (Bianca hat gefragt, ob eine professionelle Zahnreinigung mit dazu soll — Preisfragen dazu beantwortet der Preise-Abschnitt.)"
+    # Rueckblick-Kontext (30.08.2026): das LLM plaudert ueber den letzten
+    # Besuch mit — es muss wissen, wann und weswegen der Anrufer da war.
+    if s.get("rueckblick") and s.get("letzterGrund"):
+        offen += (f" Kontext: Der Anrufer war zuletzt am {_s(s.get('letzterBesuch'))[:10]} da, "
+                  f"Grund damals: {s['letzterGrund']}.")
+        if s.get("rueckblick") == "gefragt":
+            offen += " Bianca hat gerade nach dem Verlauf gefragt — reagiere empathisch auf die Antwort."
     slots = "; ".join(_s(x.get("spoken")) for x in (sit.get("offered") or [])[:3])
     if slots:
         offen += f" Angeboten: {slots}."

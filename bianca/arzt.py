@@ -148,6 +148,7 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
     if not termin:
         return {"ok": False, "leer": True}
     cal = kalender_von(tenant, _s(termin.get("calendarName")) or _s(termin.get("doctorName")))
+    vergangen = data.get("lastAppointment") or {}
     return {
         "ok": True,
         "calendarId": _s(termin.get("calendarId")) or _s((cal or {}).get("id")),
@@ -155,4 +156,7 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
         "doctorName": _s(termin.get("doctorName")),
         "lastIso": _s(termin.get("startIso")),
         "war": bool(data.get("lastAppointment")),
+        # Besuchsgrund des VERGANGENEN Termins (Rueckblick-Ansprache, Chef
+        # 30.08.2026) — bewusst nie vom Zukunfts-Termin.
+        "grund": _s(vergangen.get("visitMotiveName")),
     }

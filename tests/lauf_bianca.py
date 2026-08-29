@@ -16,6 +16,7 @@ MODULE = [
     "tests.test_identitaet",
     "tests.test_notiz",
     "tests.test_versicherung_geschlecht",
+    "tests.test_rueckblick_pzr",
 ]
 
 
