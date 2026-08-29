@@ -74,6 +74,10 @@ def stt_keywords(tenant: dict[str, Any]) -> list[str]:
     quellen: list[Any] = [tenant.get("behandler")]
     cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
     quellen += [c.get("name") for c in cals if isinstance(c, dict)]
+    # Mandanten-Hotwords (z. B. Ueberweiser "Grüger"/"Lange", "Narval"):
+    # gleiche Fuzzy-Nachkorrektur wie die Behandler-Namen, rein additiv.
+    extra = tenant.get("sttHotwords") if isinstance(tenant.get("sttHotwords"), list) else []
+    quellen += [w for w in extra if _sauber(w)]
     for q in quellen:
         for tok in _sauber(q).replace(".", " ").split():
             t = tok.strip("-()")

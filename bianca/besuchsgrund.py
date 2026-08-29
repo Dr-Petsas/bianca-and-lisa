@@ -40,9 +40,18 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
      "Zahnaufhellung", [r"aufhellung", r"bleaching"]),
     (re.compile(r"implantat", re.I),
      "Implantat-Beratung", [r"imp\w*\s+besprechung", r"implantat\w*\s+(?:besprechung|beratung)", r"imp\w*\s+kontroll"]),
-    (re.compile(r"schnarch|schlafapnoe|apnoe|narval|knirsch|aufbiss|schiene", re.I),
+    # Invisalign VOR dem Schienen-Konzept: "Invisalign-Schienen" ist KFO,
+    # nicht Schlafschiene (Baukasten-Test 29.08.2026).
+    (re.compile(r"invisalign|aligner", re.I),
+     "Invisalign-Beratung", [r"kfo\s+besprechung", r"kfo\s+kontroll", r"\bkfo\b", r"spange", r"kieferorthop"]),
+    # Ueberweiser-Wissen (Chef 29.08.2026): Doktor Grüger und Doktor Lange
+    # ueberweisen aus dem Schlaflabor fuer die Narval-Schiene. "lange" NUR
+    # mit Titel davor — "ich warte schon lange" ist keine Ueberweisung.
+    (re.compile(r"schnarch|schlafapnoe|apnoe|narval|knirsch|aufbiss|schiene"
+                r"|schlaflabor|schlafklinik|gr(?:ü|ue)ger|(?:dr\.?|doktor)\s+lange\b", re.I),
      "Schiene/Schnarchen", [r"slm\s+besprechung", r"schien\w*\s+besprech", r"\bslm\b", r"schien", r"schnarch", r"narval", r"knirsch"]),
-    (re.compile(r"zahnspange|spange|kieferorthop|\bkfo\b", re.I),
+    (re.compile(r"zahnspange|spange|kieferorthop|\bkfo\b"
+                r"|schief\w*[^.!?]{0,24}z(?:ä|ae)hn|z(?:ä|ae)hn\w*[^.!?]{0,24}(?:schief|gerade|richten)", re.I),
      "Zahnspange/KFO", [r"kfo\s+besprechung", r"kfo\s+kontroll", r"\bkfo\b", r"spange", r"kieferorthop"]),
     (re.compile(r"erstuntersuchung|erstbesuch|neupatient", re.I),
      "Erstuntersuchung/Neupatient", [r"erstuntersuchung", r"neupatient", r"\berst"]),

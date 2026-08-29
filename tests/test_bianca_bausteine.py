@@ -1798,6 +1798,38 @@ def test_besuchsgrund_klein_praeferenz():
     assert vm and vm["name"] == "PZR"
 
 
+def test_besuchsgrund_ueberweiser_und_invisalign():
+    """Ueberweiser-Wissen (Chef 29.08.2026): Grüger/Lange/Schlaflabor sind
+    Narval-Ueberweiser -> SLM Besprechung; Invisalign/schiefe Zähne -> KFO.
+    'ich warte schon lange' ist KEINE Ueberweisung."""
+    from bianca import besuchsgrund
+    tenant = _sit()["tenant"]
+    kern, vm = besuchsgrund.deute(tenant, "Ich bin von Doktor Grüger überwiesen worden")
+    assert kern == "Schiene/Schnarchen"
+    assert vm and vm["name"] == "SLM Besprechung"
+    kern, vm = besuchsgrund.deute(tenant, "Das Schlaflabor hat mich zu Ihnen überwiesen")
+    assert kern == "Schiene/Schnarchen"
+    kern, vm = besuchsgrund.deute(tenant, "Dr. Lange hat mich geschickt")
+    assert kern == "Schiene/Schnarchen"
+    assert vm and vm["name"] == "SLM Besprechung"
+    # "lange" ohne Titel ist keine Ueberweisung:
+    kern, _ = besuchsgrund.deute(tenant, "Ich warte schon lange auf einen Termin")
+    assert kern != "Schiene/Schnarchen"
+    # Invisalign ist KFO, auch wenn "Schienen" im Satz steht:
+    kern, vm = besuchsgrund.deute(tenant, "Ich hätte gern eine Invisalign-Beratung")
+    assert kern == "Invisalign-Beratung"
+    assert vm and vm["name"] == "KFO Besprechung"
+    kern, vm = besuchsgrund.deute(tenant, "Meine Invisalign-Schienen drücken ein bisschen")
+    assert kern == "Invisalign-Beratung"
+    kern, vm = besuchsgrund.deute(tenant, "Ich will meine schiefen Zähne gerade machen lassen")
+    assert kern == "Zahnspange/KFO"
+    assert vm and vm["name"] == "KFO Besprechung"
+    # Schlafschiene bleibt SLM (Bestand):
+    kern, vm = besuchsgrund.deute(tenant, "Ich schnarche und brauche eine Schlafschiene")
+    assert kern == "Schiene/Schnarchen"
+    assert vm and vm["name"] == "SLM Besprechung"
+
+
 def test_grund_wortlaut_landet_im_sammler():
     sit = _sit()
     s = gehirn.sammler(sit)

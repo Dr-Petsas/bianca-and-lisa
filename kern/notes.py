@@ -22,7 +22,10 @@ BESONDERS = re.compile(
     r"rollstuhl|rollator|gehhilfe|"
     r"begleit|mit kind|mit mutter|mit vater|nicht allein|"
     r"dolmetsch|übersetz|uebersetz|englisch|türkisch|tuerkisch|arabisch|"
-    r"nur vormittag|nur nachmittag|nur früh|nur frueh"
+    r"nur vormittag|nur nachmittag|nur früh|nur frueh|"
+    # Ratenzahlung/Finanzierung und Ueberweiser gehoeren in die Notiz
+    # (Chef 29.08.2026): der Behandler soll es beim Termin wissen.
+    r"raten|finanzier|überwies|ueberwies|überweis|ueberweis"
     r")\w*\b",
     re.I,
 )

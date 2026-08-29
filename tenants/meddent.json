@@ -8,6 +8,7 @@
   "locationName": "Zahnärzte im Medical Center (Düsseldorf)",
   "telefon": "",
   "sprache": "de",
+  "sttHotwords": ["Grüger", "Lange", "Schlaflabor", "Narval"],
   "defaultCalendarId": "zex5bmv5jfIHWVW6zHbg",
   "calendars": [
     { "id": "GVyoyXqCYof1QrGaNNnG", "name": "Dr. Nikolaou" },
@@ -25,7 +26,11 @@
     "preiseSonst": "Das müssen Sie direkt mit Ihrem Zahnarzt besprechen.",
     "anfahrt": "Die Praxis Zahnärzte im Medical Center liegt in Düsseldorf-Grafenberg. Wenn man vom Hauptbahnhof kommt und auf der Grafenberger Allee Richtung stadtauswärts fährt, sieht man nach dem BMW-Autohaus links die Luise-Rainer-Straße als Seitenstraße. Das ist direkt auf Höhe des Arbeitsamts. Dort befindet sich das Medical Center — der Pförtner erklärt Ihnen dann, wie Sie in Haus B, in die zweite Etage zur Praxis gelangen.",
     "oepnv": "Sie erreichen uns mit der U zweiundsiebzig, U dreiundsiebzig oder U dreiundachtzig sowie der Linie siebenhundertneun — Haltestellen Schlüterstraße und Arbeitsamt.",
-    "hinweise": []
+    "hinweise": [
+      "ÜBERWEISER — Doktor Grüger und Doktor Lange sind Überweiser aus dem Schlaflabor (Schlafklinik): deren Patienten kommen für eine Narval-Schiene gegen Schnarchen und Schlafapnoe. Sagt jemand, er sei von Doktor Grüger, Doktor Lange oder dem Schlaflabor überwiesen, geht es um diese Schiene — freundlich bestätigen, nichts anderes hineindeuten.",
+      "RATENZAHLUNG — fragt jemand nach Ratenzahlung oder Finanzierung, oder sagt er, das Geld sei knapp (Bürgergeld, Hartz vier, ‚kann ich mir nicht leisten‘, ‚zu teuer‘): Ratenzahlung ist grundsätzlich möglich; die Einzelheiten besprechen Sie direkt mit Ihrem Behandler beim Termin. KEINE Zusagen zu Beträgen, Zinsen oder Nachlässen.",
+      "TAXI — Taxischeine oder Fahrtkostenübernahmen kann die Praxis leider nicht ausstellen; das Taxi müsste der Anrufer selbst bestellen. Bei Bedarf freundlich auf Bahn und Bus verweisen."
+    ]
   },
   "visitMotives": [
     { "id": "F4EAa6O5qPo4n01AWD4Z", "name": "IMP Besprechung", "duration": 30 },
