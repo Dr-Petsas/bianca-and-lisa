@@ -253,6 +253,13 @@ def api_quittung():
     return {"ok": True, "urls": DIENST.quittung_urls if unterbrechung.enabled() else []}
 
 
+@app.get("/api/notfall")
+def api_notfall():
+    """W-STILLE: Warte-Ansagen, die das Dock beim Boot als Blob vorlädt und
+    LOKAL spielt, wenn ~1,4 s nach dem Sprechende kein Ton lief."""
+    return {"ok": True, "urls": DIENST.notfall_urls}
+
+
 @app.post("/api/stille")
 def api_stille(body: HangupIn):
     """Stille-Wächter (Chef 27.08.2026): das Dock meldet ~4 s Funkstille —
@@ -277,6 +284,7 @@ def _warm_start():
         # Füller zuerst: ohne sie entsteht genau die Stille, die weg soll.
         DIENST.filler_vorbereiten()
         DIENST.quittungen_vorbereiten()
+        DIENST.notfall_vorbereiten()
         t = tenants.laden(DEFAULT_TENANT)
         tts.warm(begruessung(
             tenants.praxis_von(t),

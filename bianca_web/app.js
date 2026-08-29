@@ -45,6 +45,59 @@ function bargeMerken(url, ms) {
   try { a.currentTime = 0; a.play().catch(() => {}); } catch { /* */ }
 }
 
+// W-STILLE (Chef 29.08.2026): Nach dem Sprechende des Anrufers darf NIE mehr
+// als ~1,4 s Stille herrschen — es darf nie das Gefühl entstehen, die KI sei
+// abgestürzt. Zweite Verteidigungslinie hinter den Server-Füllern: lokale,
+// beim Boot als BLOB geladene Warte-Ansagen. Sie spielen über ein EIGENES
+// Audio-Objekt (die playUrl-Kette bleibt unberührt) und verstummen, sobald
+// die echte Antwort loslegt. Blobs spielen auch bei hängendem Server.
+const WACHT_MS = 1400;
+const WACHT_MAX = 3;
+let notfall = [];
+let wachtTimer = null;
+let wachtAudio = null;
+
+function wachtStopp() {
+  if (wachtTimer) { clearInterval(wachtTimer); wachtTimer = null; }
+  if (wachtAudio) { try { wachtAudio.pause(); } catch { /* */ } wachtAudio = null; }
+}
+
+function wachtStart(nr) {
+  wachtStopp();
+  if (!notfall.length) return;
+  let tRuhe = performance.now();
+  let zahl = 0;
+  wachtTimer = setInterval(() => {
+    if (!callOn || nr !== hoerNr) return wachtStopp();
+    if (kiSpricht) {
+      // Echter Ton (Füller/Antwort) läuft — eigene Ansage sofort räumen.
+      if (wachtAudio) { try { wachtAudio.pause(); } catch { /* */ } wachtAudio = null; }
+      tRuhe = performance.now();
+      return;
+    }
+    if (wachtAudio) {
+      if (!wachtAudio.ended && !wachtAudio.paused) { tRuhe = performance.now(); return; }
+      wachtAudio = null;
+      tRuhe = performance.now();
+      return;
+    }
+    if (performance.now() - tRuhe < WACHT_MS) return;
+    if (zahl >= WACHT_MAX) return wachtStopp();
+    // Eskalation: erst "Einen kleinen Moment", zuletzt "bleiben Sie dran".
+    const a = new Audio(notfall[Math.min(zahl, notfall.length - 1)]);
+    zahl += 1;
+    wachtAudio = a;
+    a.play().catch(() => { wachtAudio = null; });
+  }, 150);
+}
+
+function wachtNot() {
+  // Hörbarer Fehlerfall (Netz/Server weg): die ehrliche letzte Ansage —
+  // losgelöst vom Timer, damit der nächste Anlauf sie nicht abwürgt.
+  if (!notfall.length) return;
+  try { new Audio(notfall[notfall.length - 1]).play().catch(() => {}); } catch { /* */ }
+}
+
 function bubble(role, text) {
   if (!text) return;
   const el = document.createElement("div");
@@ -107,6 +160,8 @@ function stopVoice() {
     if (unlockAudio.ctx && unlockAudio.ctx.state === "suspended") unlockAudio.ctx.resume();
   } catch { /* */ }
   kiSpricht = false;
+  // W-STILLE: beim Reinsprechen verstummt auch die lokale Warte-Ansage.
+  wachtStopp();
 }
 
 // Mikro-Pegelwächter: erkennt echtes Reinsprechen auch OHNE Spracherkennung
@@ -499,6 +554,10 @@ async function sendeZug({ text, blob, nr }) {
     if (callOn && nr === hoerNr) hoeren();
   } catch (e) {
     $("status").textContent = String(e.message || e);
+    // W-STILLE: ein Netz-/Serverfehler darf nicht stumm bleiben — die
+    // ehrliche "bleiben Sie dran"-Ansage spielt lokal aus dem Blob.
+    wachtStopp();
+    wachtNot();
     zugBusy = false;
     if (callOn && nr === hoerNr) setTimeout(hoeren, 600);
   }
@@ -531,6 +590,8 @@ async function bargeWeiter(nr) {
 async function hoeren() {
   const nr = hoerNr;
   if (!callOn || !micStream || !sessionId || zugBusy) return;
+  // W-STILLE: solange der Anrufer dran ist, wacht niemand — Stille gehört ihm.
+  wachtStopp();
   phase("du", "Sie sind dran — einfach reden");
   let blob;
   let vorab = null;
@@ -559,6 +620,10 @@ async function hoeren() {
     if (callOn) setTimeout(hoeren, 250);
     return;
   }
+  // W-STILLE: ab dem Sprechende zählt die Stille-Uhr — bis zum ersten Ton
+  // der Antwort dürfen nie mehr als ~1,4 s vergehen, sonst spricht die
+  // lokale Warte-Ansage.
+  wachtStart(nr);
   // W-TEMPO: liegt das Vorab-Transkript rechtzeitig vor, geht der Zug als
   // TEXT raus (STT ist dann schon bezahlt); sonst wie bisher als Audio.
   let vorabText = "";
@@ -577,6 +642,7 @@ function auflegen() {
   hoerNr += 1;
   zugBusy = false;
   bargeInfo = null;
+  wachtStopp();
   if (sid) {
     fetch("api/hangup", {
       method: "POST",
@@ -624,6 +690,17 @@ async function boot() {
     // Netz-Umweg spielen.
     const q = await (await fetch("api/quittung")).json();
     quittungen = (q.urls || []).map((u) => { const a = new Audio(apiUrl(u)); a.preload = "auto"; return a; });
+  } catch { /* */ }
+  try {
+    // W-STILLE: Notfall-Ansagen als BLOB vorladen — sie spielen auch dann
+    // noch, wenn der Server hängt oder das Netz weg ist.
+    const n = await (await fetch("api/notfall")).json();
+    const urls = [];
+    for (const u of (n.urls || [])) {
+      const b = await (await fetch(apiUrl(u))).blob();
+      urls.push(URL.createObjectURL(b));
+    }
+    notfall = urls;
   } catch { /* */ }
   const t = await (await fetch("api/tenants")).json();
   $("tenant").innerHTML = (t.tenants || []).map((x) =>

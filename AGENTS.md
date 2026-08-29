@@ -408,6 +408,42 @@ Chef: "ich will 300 ms schneller werden." Zwei Bausteine, beide Docks:
   (test_bianca_bausteine). Live-Probe 29.08.: stilleMs 350/350/500 je nach
   Frage, /api/hoeren transkribiert Referenz-Audio wortgenau.
 
+## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
+
+Chef: "es darf NIE zum Schweigen kommen … nie länger als 1,5 Sekunden …
+es darf nie das Gefühl gegeben werden, dass die KI abgestürzt ist."
+Zwei Verteidigungslinien, beide Stimmen:
+
+- **Server-Füller für JEDEN Zug:** `kern/dienst.FILLER_SPAET_S` ist von
+  3,2 s auf **0,9 s** runter und gilt auch in der schnellen Phase — die
+  Zustandsmaschine antwortet in <0,4 s und schlägt die Frist im Normalfall,
+  aber Readback-Render, Kalender-Hänger und LLM-Züge bekommen jetzt
+  rechtzeitig einen Ton (die alte Frist riss live 4-s-Löcher). Das
+  27.08.-Bedenken "Füller spricht in die Antwort hinein" ist überholt:
+  die Docks spielen Füller + Antwort als KETTE, nichts überlappt.
+- **Füller-Nachschub:** steht die Antwort nach einem Füller weiter aus,
+  spricht alle `FILLER_NACHSCHUB_S` (2,4 s, gerechnet ab Füller-BEGINN,
+  Audio ~1,2 s => Lücke < 1,5 s) der nächste rotierte Satz — Deckel
+  `FILLER_MAX` (3). Inhalt (Vorab-Satz, `sag:`-Ansage, festes Audio)
+  beendet die Kette; ein Werkzeug-`melde()` nach einem Warte-Füller
+  schärft nur die Gruppe des NÄCHSTEN Nachschubs (nie zwei direkt
+  hintereinander).
+- **Dock-Watchdog (zweite Linie, greift auch bei totem Server/Netz):**
+  beide Docks laden beim Boot `GET /api/notfall`
+  (`dienst.NOTFALL_SAETZE`, 3 Eskalationsstufen bis "bleiben Sie dran")
+  als **BLOB** vor. Nach dem Sprechende des Anrufers (`wachtStart` in
+  `hoeren`) prüft ein 150-ms-Tick: lief `WACHT_MS` (1,4 s) kein Ton
+  (`kiSpricht`/`lisaSpricht`), spielt die nächste lokale Ansage über ein
+  EIGENES Audio-Objekt — die playUrl-/Füller-Kette bleibt unberührt, bei
+  echtem Ton oder Barge (`stopVoice`/`stopLisaVoice`) verstummt sie
+  sofort. Max. `WACHT_MAX` (3) Ansagen je Zug. Ein Netz-/Serverfehler im
+  `sendeZug`-catch spielt hörbar die Dran-bleiben-Ansage (`wachtNot`)
+  statt still zu scheitern.
+- Tests: `tests/test_stille_notfall.py` (Frist gilt überall, Nachschub
+  rotiert bis Deckel, Produktions-Fristen halten die 1,5-s-Regel).
+  Live-Probe 29.08.: LLM-Plauderzug — Füller nach 0,92 s, Vorab-Satz
+  2,71 s, Antwort 3,43 s; `/api/notfall` liefert je 3 URLs (8095/8096).
+
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).

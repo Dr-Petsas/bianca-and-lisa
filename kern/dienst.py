@@ -24,10 +24,32 @@ from kern.config import WRITE_LIVE
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
 # blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
 FILLER_VORAB_S = 0.3
-# Not-Füller: nur wenn ein Zug OHNE erkannte Absicht UND ohne Werkzeug wirklich
-# hängt. Normale Plauder-Antworten kommen nach 1,4 bis 2,6 s — eine kürzere
-# Frist würde den Füller in die Antwort hineinsprechen (gemessen 27.08.2026).
-FILLER_SPAET_S = 3.2
+# Späte Frist (W-STILLE, Chef 29.08.2026: "es darf NIE zum Schweigen kommen —
+# nie länger als 1,5 Sekunden"): Mit dem Dock-Vorlauf (Stille-Schwelle +
+# Upload, ~0,5-0,8 s) muss der erste Ton spätestens ~0,9 s nach Zug-Eingang
+# raus. Die Zustandsmaschine liefert in <0,4 s — dort feuert die Frist nie;
+# sie greift bei LLM-Zügen, Kalender-Hängern und Readback-Rendern. Die alte
+# 3,2-s-Frist (27.08.: "nicht in die Antwort hineinsprechen") riss live
+# 4-s-Löcher; seit die Docks Füller und Antwort als KETTE spielen, überlappt
+# nichts mehr — der Füller darf früh kommen.
+FILLER_SPAET_S = 0.9
+# Nachschub: steht die Antwort nach einem Füller weiter aus, spricht alle
+# 2,4 s (Füller-Audio ~1,2 s + Rest unter 1,5 s Stille) der nächste — bis
+# FILLER_MAX. Danach ist die Antwort ohnehin da (LLM-Deckel ~5 s) oder der
+# Dock-Watchdog übernimmt mit den lokalen Notfall-Ansagen.
+FILLER_NACHSCHUB_S = 2.4
+FILLER_MAX = 3
+
+# Stille-Notfall-Ansagen (W-STILLE): das Dock lädt sie beim Boot als BLOB
+# und spielt sie LOKAL, wenn nach dem Sprechende des Anrufers ~1,4 s kein
+# Ton lief — das greift auch bei hängendem Server oder totem Netz, wo die
+# Füller-Fristen oben nie ankommen. Reihenfolge = Eskalation: die letzte
+# Ansage ist die ehrliche "bleiben Sie dran"-Zeile.
+NOTFALL_SAETZE = (
+    "Einen kleinen Moment bitte.",
+    "Einen Augenblick noch bitte, ich bin gleich wieder da.",
+    "Bitte entschuldigen Sie die Wartezeit. Bleiben Sie gern dran, ich bin gleich für Sie da.",
+)
 
 
 def _s(v) -> str:
@@ -81,6 +103,9 @@ class Dienst:
         # Barge-Quittungen (W-BARGE): vorgewärmte "Hm."/"Okay."-URLs, die das
         # Dock SOFORT beim Reinsprech-Stopp spielt (GET /api/quittung).
         self.quittung_urls: list[str] = []
+        # Stille-Notfall (W-STILLE): Warte-Ansagen, die das Dock beim Boot
+        # als Blob vorlädt und LOKAL spielt, wenn 1,4 s kein Ton lief.
+        self.notfall_urls: list[str] = []
         # Laufende Audio-Streams (Phase 2, 29.08.2026): aid -> Slot mit
         # Chunk-Liste + done-Marke; der Feeder-Faden fuellt, /api/audio-stream
         # liest mit. Chunks bleiben liegen — ein Re-Fetch nach Abschluss
@@ -324,6 +349,24 @@ class Dienst:
         self.quittung_urls = urls
         print(f"{self.name}-quittung bereit: {len(urls)} Saetze", flush=True)
 
+    def notfall_vorbereiten(self) -> None:
+        """Stille-Notfall-Ansagen (W-STILLE, Chef 29.08.2026: nie länger als
+        1,5 s stumm) vorwärmen: das Dock holt sie über GET /api/notfall,
+        lädt sie als BLOB und spielt sie lokal, wenn nach dem Sprechende
+        des Anrufers ~1,4 s kein Ton lief — auch bei hängendem Server."""
+        if not tts.bereit():
+            return
+        urls: list[str] = []
+        for text in NOTFALL_SAETZE:
+            try:
+                url = self.audio_legen(tts.speak_dauerhaft(text))
+                if url:
+                    urls.append(url)
+            except Exception as e:
+                print(f"{self.name}-notfall fail {text!r} {e}", flush=True)
+        self.notfall_urls = urls
+        print(f"{self.name}-notfall bereit: {len(urls)} Saetze", flush=True)
+
     def _filler_url(self, sit: dict, gruppe: str) -> str:
         nr = int(sit.get("fillerNr") or 0)
         sit["fillerNr"] = nr + 1
@@ -513,7 +556,6 @@ class Dienst:
                 q.put(("fehler", str(e)))
 
         threading.Thread(target=arbeit, daemon=True).start()
-        filler_raus = False
 
         def frist_setzen(gehoert: str) -> tuple[float, str]:
             """Aus dem Gehörten raten, ob ein Kalender-Zugriff kommt."""
@@ -529,24 +571,34 @@ class Dienst:
             return time.monotonic() + FILLER_SPAET_S, "allgemein"
 
         frist, vorab_gruppe = frist_setzen(text_in)
+        inhalt = False    # Vorab-Satz / feste Ansage / festes Audio ist geflossen
+        filler_zahl = 0   # gespielte Warte-Füller (geraten + Werkzeug)
         while True:
             try:
-                wartezeit = None if filler_raus else max(0.02, frist - time.monotonic())
+                still = inhalt or filler_zahl >= FILLER_MAX
+                wartezeit = None if still else max(0.02, frist - time.monotonic())
                 typ, wert = q.get(timeout=wartezeit)
             except queue.Empty:
                 url = self._filler_url(sit, vorab_gruppe)
                 if url:
                     yield zeile({"type": "filler", "audioUrl": url})
-                filler_raus = True
+                filler_zahl += 1
+                # W-STILLE: steht die Antwort weiter aus, spricht der nächste
+                # Füller, BEVOR wieder mehr als 1,5 s Stille entstehen.
+                frist = time.monotonic() + FILLER_NACHSCHUB_S
+                vorab_gruppe = "allgemein"
                 continue
             if typ == "gehoert":
-                frist, vorab_gruppe = frist_setzen(wert)
+                # Nur solange noch nichts gespielt wurde neu raten — nach
+                # einem Füller gilt die laufende Nachschub-Frist weiter.
+                if not inhalt and filler_zahl == 0:
+                    frist, vorab_gruppe = frist_setzen(wert)
                 yield zeile({"type": "transcript", "textIn": wert})
             elif typ == "vorab":
                 # Erster Antwortsatz — läuft über den Füller-Kanal des Clients
                 # (sofort abspielen), der Rest folgt im reply-Audio.
                 yield zeile({"type": "filler", "audioUrl": wert})
-                filler_raus = True
+                inhalt = True
             elif typ == "tool":
                 if isinstance(wert, str) and wert.startswith("sag:"):
                     # Feste gesprochene Zwischen-Ansage (z. B. "Einen Moment,
@@ -556,19 +608,24 @@ class Dienst:
                     url = self.stimme(san)[0] if san else ""
                     if url:
                         yield zeile({"type": "filler", "audioUrl": url})
-                    filler_raus = True
+                    inhalt = True
                 elif isinstance(wert, str) and wert.startswith("audio:"):
                     # Festes Audio (z. B. Verbinden-Jingle): das ist Inhalt,
                     # kein geratener Ueberbrueckungssatz — IMMER ausspielen.
                     url = self.audio_fest_url(wert.split(":", 1)[1])
                     if url:
                         yield zeile({"type": "filler", "audioUrl": url})
-                    filler_raus = True
-                elif not filler_raus:
-                    url = self._filler_url(sit, filler.fuer_tool(wert))
-                    if url:
-                        yield zeile({"type": "filler", "audioUrl": url})
-                    filler_raus = True
+                    inhalt = True
+                elif not inhalt:
+                    if filler_zahl == 0:
+                        url = self._filler_url(sit, filler.fuer_tool(wert))
+                        if url:
+                            yield zeile({"type": "filler", "audioUrl": url})
+                        filler_zahl += 1
+                        frist = time.monotonic() + FILLER_NACHSCHUB_S
+                    # Lief schon ein Warte-Füller, spricht erst der NÄCHSTE
+                    # Nachschub — aber passend zum gemeldeten Werkzeug.
+                    vorab_gruppe = filler.fuer_tool(wert)
             elif typ == "leer":
                 # W-BARGE: Barge ohne verwertbaren Einwand (nichts gehoert
                 # oder eigenes Echo) => an der Unterbrechungsstelle weiter.
