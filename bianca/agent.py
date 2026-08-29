@@ -227,8 +227,7 @@ def stille_zug(sit: dict) -> dict[str, Any]:
     # Nummern-Rückbestätigung bleibt IMMER deterministisch — hier ist die
     # wortgleiche Wiederholung der Nummer ausdrücklich richtig.
     if fid == "telefon_check" and _s(s.get("telefonOffen")):
-        text = (f"{stille.anrede(n)} Ich wiederhole die Nummer: "
-                f"{telefon.sprechbar(s['telefonOffen'])}. Stimmt das so?")
+        text = f"{stille.anrede(n)} {gehirn.readback_text(s['telefonOffen'])}"
         stille.anhaengen(sit, text)
         return {"text": text, "book": None}
     if fid == "telefon_alt" and _s(s.get("aktePhone")):

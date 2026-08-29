@@ -137,7 +137,7 @@ def test_telefon_check_wiederholt_die_nummer():
     s = sit["sammler"]
     s["telefonOffen"] = "017760011"
     t = bianca_agent.stille_zug(sit)["text"]
-    assert "null eins sieben sieben" in t, "die Nummer wird deterministisch wiederholt"
+    assert "null eins sieben sieben" in t.casefold(), "die Nummer wird deterministisch wiederholt"
     assert "timmt das so" in t, "die Rueckbestaetigung bleibt eine Frage"
 
 

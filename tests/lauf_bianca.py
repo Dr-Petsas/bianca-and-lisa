@@ -18,6 +18,7 @@ MODULE = [
     "tests.test_versicherung_geschlecht",
     "tests.test_rueckblick_pzr",
     "tests.test_stille_notfall",
+    "tests.test_llm_deckel",
 ]
 
 

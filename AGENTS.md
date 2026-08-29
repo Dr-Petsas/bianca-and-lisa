@@ -444,6 +444,27 @@ Zwei Verteidigungslinien, beide Stimmen:
   Live-Probe 29.08.: LLM-Plauderzug — Füller nach 0,92 s, Vorab-Satz
   2,71 s, Antwort 3,43 s; `/api/notfall` liefert je 3 URLs (8095/8096).
 
+## Readback-Parallelisierung (P1 29.08.2026 — nicht rückbauen)
+
+Nummern-Rückbestätigung als DREI Sätze (`gehirn.readback_text`): gewärmter
+Vorsatz „Ich wiederhole die Nummer." spielt SOFORT aus dem Pin-Cache,
+während der Feeder den Ziffern-Satz blocking rendert und der Nachhör-
+Wächter ihn verifiziert; Schlussfrage „Stimmt das so?" ebenfalls gewärmt.
+`stimme_stream` lohnt den Strom trotz Cache+Ziffern, WENN der erste Satz
+sofort lieferbar ist — beginnt der Text direkt mit dem Ziffern-Satz,
+bleibt der bewährte Blocking-Pfad. Sicherheit unverändert (Ziffern nie
+am Wächter vorbei). Tests: `test_readback_text_ist_dreisatzform`,
+`test_stimme_stream_readback_vorsatz_spielt_sofort`.
+
+## Satz-Deckel im LLM-Stream (P2 29.08.2026 — nicht rückbauen)
+
+Prompt sagt „höchstens zwei kurze Sätze plus EINE Frage" — Qwen hält sich
+nicht immer dran. `kern/llm.chat_stream` schließt den Stream hart, sobald
+zwei Sätze plus offene Frage (sonst drei Sätze) stehen — ganze Sätze,
+nichts Abgehacktes, Werkzeug-Züge unangetastet. Abkürzungen/Uhrzeiten
+(Dr., 13:00) zählen nicht als Satzende. Notaus: `LLM_SATZ_DECKEL=0`.
+Tests: `tests/test_llm_deckel.py`.
+
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).

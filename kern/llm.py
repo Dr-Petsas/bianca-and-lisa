@@ -88,22 +88,86 @@ def chat(messages: list[dict], tools: list[dict] | None = None, *, temperature: 
 
 _ABKUERZ = {"dr", "st", "ca", "bzw", "z", "b", "nr", "inkl", "ggf", "evtl", "usw", "min", "prof", "med"}
 
+# Hart-Deckel (P2, 29.08.2026): Prompt sagt "höchstens zwei kurze Sätze plus
+# EINE Frage", Qwen hält sich nicht immer dran. Nach dem zweiten Satz plus
+# offener Frage (sonst nach drei Sätzen) schließen wir den Stream — ganze
+# Sätze, nichts Abgehacktes. ~20-25 Tokens/s, jeder überflüssige Satz ~1 s.
+# Notaus: LLM_SATZ_DECKEL=0.
+SATZ_DECKEL = 3
 
-def _erster_satz_von(text: str) -> str:
-    """Erster abgeschlossener Satz — '' solange keiner bestätigt ist."""
-    for m in re.finditer(r"[.!?…]", text):
-        i = m.end()
+
+def _satz_ende(text: str, start: int = 0) -> int:
+    """Index HINTER dem nächsten bestätigten Satzende, sonst -1.
+
+    Bestätigt = Satzzeichen plus Whitespace danach (Stream läuft noch, wenn
+    das Satzende das letzte Zeichen ist). Abkürzungen und Ziffern-Punkte
+    (13:00 / Dr.) zählen nicht."""
+    for m in re.finditer(r"[.!?…]", text[start:]):
+        i = start + m.end()
         if i >= len(text):
-            return ""  # Satzende noch nicht bestätigt (Stream läuft)
-        if i < 25 or text[i] not in " \n\t":
+            return -1
+        if text[i] not in " \n\t":
             continue
         if m.group() == ".":
-            davor = text[: m.start()]
+            davor = text[start: start + m.start()]
             wort = re.search(r"([A-Za-zÄÖÜäöüß]+)$", davor)
             if (wort and wort.group(1).lower() in _ABKUERZ) or re.search(r"\d$", davor):
                 continue
-        return text[:i].strip()
+        return i
+    return -1
+
+
+def _saetze_bis(text: str, *, min_len: int = 0) -> list[str]:
+    """Abgeschlossene Sätze — der unfertige Rest bleibt draußen."""
+    out: list[str] = []
+    start = 0
+    while True:
+        ende = _satz_ende(text, start)
+        if ende < 0:
+            break
+        if ende - start < min_len:
+            start = ende
+            continue
+        satz = text[start:ende].strip()
+        if satz:
+            out.append(satz)
+        start = ende
+    return out
+
+
+def _erster_satz_von(text: str) -> str:
+    """Erster abgeschlossener Satz — '' solange keiner bestätigt ist.
+
+    Die 25-Zeichen-Schwelle gilt vom Textanfang: ein bloßes „Ja." allein
+    ist kein Vorab (zu kurz zum Vertonen), „Ja. Das mache ich sehr gerne."
+    zählt als EIN Vorab-Block, sobald der zweite Schlusspunkt bestätigt ist.
+    """
+    ende = 0
+    while True:
+        ende = _satz_ende(text, ende)
+        if ende < 0:
+            return ""
+        if ende >= 25:
+            return text[:ende].strip()
+
+
+def _deckel_text(text: str) -> str:
+    """Hart-Deckel: zwei Aussagen plus eine Frage, sonst drei Sätze.
+    '' = noch offen (ein Satz plus Frage darf noch wachsen)."""
+    saetze = _saetze_bis(text)
+    if not saetze:
+        return ""
+    if len(saetze) >= SATZ_DECKEL:
+        return " ".join(saetze[:SATZ_DECKEL])
+    fragen = sum(1 for s in saetze if s.endswith("?"))
+    if (len(saetze) - fragen) >= 2 and fragen >= 1:
+        return " ".join(saetze)
     return ""
+
+
+def _deckel_an() -> bool:
+    import os
+    return os.environ.get("LLM_SATZ_DECKEL", "1").strip() != "0"
 
 
 def chat_stream(
@@ -161,6 +225,18 @@ def chat_stream(
                                 erster_satz(vorab)
                             except Exception:
                                 pass
+                    # P2 Satz-Deckel: sobald zwei Sätze plus Frage (sonst
+                    # drei Sätze) stehen, den Stream schließen — der Rest
+                    # würde nur Tokens und ~1 s je Satz kosten. Werkzeug-
+                    # Züge bleiben unangetastet (Argumente laufen weiter).
+                    if (_deckel_an() and not tool_gesehen
+                            and "<think" not in text):
+                        gedeckelt = _deckel_text(text)
+                        if gedeckelt:
+                            text = gedeckelt
+                            print(f"llm-deckel: {len(_saetze_bis(text))} Saetze",
+                                  flush=True)
+                            break
     except httpx.HTTPError as e:
         return {"ok": False, "error": f"vllm_unreachable: {e}"}
     return {

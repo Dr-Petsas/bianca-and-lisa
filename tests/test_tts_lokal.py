@@ -371,6 +371,53 @@ def test_stimme_stream_ziffern_satz_bleibt_verifiziert_blocking():
         (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
 
 
+def test_stimme_stream_readback_vorsatz_spielt_sofort():
+    """P1 Readback-Parallelisierung (29.08.2026): Vorsatz und Schlussfrage
+    liegen im Pin-Cache, der Ziffern-Satz wird verifiziert nachgeschoben —
+    der Text streamt TROTZDEM (frueher: komplett blocking, 1,5-2,3 s bis
+    zum ersten Ton). Ein Text, der direkt mit dem Ziffern-Satz beginnt,
+    bleibt auf dem bewaehrten Blocking-Pfad."""
+    from bianca import gehirn
+    from kern import dienst as dienst_mod
+
+    d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
+    pcm = (1500).to_bytes(2, "little", signed=True) * 8
+    rufe: list[tuple[str, str]] = []
+
+    class _EngineFake:
+        def speak(self, text):
+            rufe.append(("speak", text))
+            return tts._wav_header(len(pcm), tts.PCM_RATE) + pcm
+
+        def speak_stream(self, text):
+            rufe.append(("stream", text))
+            yield pcm
+
+    gecacht = {"Ich wiederhole die Nummer.", "Stimmt das so?"}
+    alt = (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache)
+    tts.TTS_BASE = "http://tts-test:8100"
+    tts.engine = lambda: _EngineFake()
+    tts.im_cache = lambda text: text in gecacht
+    try:
+        tts.stream_bereit = lambda: True
+        text = gehirn.readback_text("01776004600")
+        url, _ = d.stimme_stream(text)
+        assert url.startswith("/api/audio-stream/"), "Vorsatz im Cache => Strom lohnt"
+        list(d.audio_stream_iter(url.rsplit("/", 1)[1]))  # Feeder zu Ende laufen lassen
+        assert rufe and rufe[0] == ("speak", "Ich wiederhole die Nummer."), \
+            "der gewaermte Vorsatz spielt ZUERST"
+        for art, t in rufe:
+            if "eins" in t.lower():
+                assert art == "speak", "Ziffern NIE am Waechter vorbei streamen"
+
+        # Nur der Ziffern-Satz allein: kein Gewinn durch den Strom => blocking.
+        rufe.clear()
+        url2, _ = d.stimme_stream("Null eins sieben sieben, sechs null null.")
+        assert url2.startswith("/api/audio/")
+    finally:
+        (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
+
+
 if __name__ == "__main__":
     for name, fn in sorted(list(globals().items())):
         if name.startswith("test_"):

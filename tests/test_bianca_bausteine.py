@@ -4,6 +4,8 @@ Läuft ohne Netz: Kartei-/Slot-Suche wird gestummt, der Mandant kommt aus
 tenants/meddent.json (lokale Datei).
 """
 
+import re
+
 from bianca import buchstaben, flow, gehirn, telefon
 from kern.tenants import laden
 
@@ -1724,3 +1726,16 @@ def test_dienst_traegt_stille_feld():
 
     ohne = Dienst(name="t2", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     assert ohne._stille_feld(sit) == {}
+
+
+def test_readback_text_ist_dreisatzform():
+    """P1 Readback-Parallelisierung: Vorsatz und Schlussfrage sind eigene,
+    warmbare Saetze (in feste_saetze), der Ziffern-Satz beginnt GROSS —
+    nur so trennt der Satz-Split in stimme_stream ihn vom Vorsatz ab."""
+    t = gehirn.readback_text("01776004600")
+    saetze = re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", t)
+    assert saetze[0] == "Ich wiederhole die Nummer."
+    assert saetze[-1] == "Stimmt das so?"
+    assert saetze[1].startswith("Null eins sieben sieben")
+    fest = gehirn.feste_saetze()
+    assert saetze[0] in fest and saetze[-1] in fest

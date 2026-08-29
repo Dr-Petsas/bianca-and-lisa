@@ -965,6 +965,19 @@ def arztwahl_frage(tenant: dict | None) -> str:
     return f"Zu welchem unserer Behandler möchten Sie — {liste}?"
 
 
+def readback_text(nummer: str) -> str:
+    """Nummern-Rückbestätigung als DREI eigenständige Sätze (P1 Readback-
+    Parallelisierung 29.08.2026): Vorsatz und Schlussfrage sind vorgewärmt
+    (feste_saetze) und spielen SOFORT aus dem Pin-Cache, während der
+    Ziffern-Satz im stimme_stream-Feeder blocking gerendert und vom
+    Nachhör-Wächter verifiziert wird — gefühlte Wartezeit nahe null,
+    Sicherheit unverändert. Der Ziffern-Satz beginnt GROSS, sonst trennt
+    der Satz-Split ihn nicht vom Vorsatz ab."""
+    z = telefon.sprechbar(nummer)
+    z = z[:1].upper() + z[1:]
+    return f"Ich wiederhole die Nummer. {z}. Stimmt das so?"
+
+
 def feste_saetze(tenant: dict | None = None) -> list[str]:
     """Alle festen Maschinen-Sätze für den TTS-Platten-Cache (28.08.2026).
 
@@ -998,6 +1011,11 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Soll ich Ihnen direkt eine professionelle Zahnreinigung mit dazu buchen?",
         ("Ihr letzter Besuch ist ja schon eine Weile her — soll ich Ihnen "
          "direkt eine professionelle Zahnreinigung mit dazu buchen?"),
+        # P1 Readback-Parallelisierung: Vorsatz + Schlussfrage der Nummern-
+        # Rückbestätigung (readback_text) — gewärmt spielt der Vorsatz
+        # sofort, während der Ziffern-Satz rendert und nachgehört wird.
+        "Ich wiederhole die Nummer.",
+        "Stimmt das so?",
     ]
     out = list(erstformen)
     # Behandler-Wahl fuer Neupatienten: die Erstform traegt die Namen aus
@@ -1074,7 +1092,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
 
     # Eine gehörte Nummer wird IMMER erst rückbestätigt (Chef: sicher aufnehmen).
     if s["telefonOffen"] and not s["telefonOk"]:
-        return "telefon_check", f"Ich wiederhole die Nummer: {telefon.sprechbar(s['telefonOffen'])}. Stimmt das so?"
+        return "telefon_check", readback_text(s["telefonOffen"])
 
     # Akte gefunden, traegt aber eine ANDERE Nummer als die gerade
     # rueckbestaetigte: der Anrufer entscheidet (Chef 29.08.2026) — alte

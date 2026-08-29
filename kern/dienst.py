@@ -223,7 +223,18 @@ class Dienst:
         saetze = [s.strip() for s in re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", text.strip()) if s.strip()] or [text.strip()]
         frisch = [s for s in saetze if not tts.im_cache(s) and not tts.ziffern_satz(s)]
         if not frisch:
-            return self.stimme(text, karte)
+            # P1 Readback-Parallelisierung (29.08.2026): Ein Mehr-Satz-Text
+            # aus Cache- und Ziffern-Saetzen lohnt den Strom TROTZDEM, wenn
+            # der ERSTE Satz sofort lieferbar ist — der gewaermte Vorsatz
+            # ("Ich wiederhole die Nummer.") spielt, WAEHREND der Feeder den
+            # Ziffern-Satz blocking rendert und der Nachhoer-Waechter ihn
+            # verifiziert. Erst dann kommt er in den Strom: Sicherheit
+            # unveraendert, gefuehlte Wartezeit nahe null. Beginnt der Text
+            # direkt mit dem Ziffern-Satz, bleibt der bewaehrte Blocking-
+            # Pfad (der erste Ton wartet ohnehin auf die Verifikation).
+            if not (len(saetze) > 1 and tts.im_cache(saetze[0])
+                    and any(tts.ziffern_satz(x) for x in saetze)):
+                return self.stimme(text, karte)
         if karte is not None:
             karte["saetze"] = list(saetze)
             karte["endenMs"] = []
