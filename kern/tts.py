@@ -422,6 +422,10 @@ def engine_anzeige() -> str:
                 anzeige = "Chatterbox (lokal)"
             elif eng.startswith("cosy"):
                 anzeige = "CosyVoice (lokal)"
+            elif "hybrid" in eng:
+                anzeige = "Qwen3 Hybrid (lokal)"
+            elif eng.startswith("qwen"):
+                anzeige = "Qwen3 (lokal)"
             elif eng:
                 anzeige = f"{eng} (lokal)"
     except Exception:

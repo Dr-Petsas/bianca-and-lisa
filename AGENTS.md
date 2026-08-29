@@ -121,13 +121,18 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
 zugleich (eine GPU). Clara V7 und Demo-Clara werden NICHT angefasst, bis
 Lisa/Bianca vernünftig funktionieren.
 
-- **Aktiv: CosyVoice-Turbo (8211) MIT Ziffern-Schutz** (Chef 29.08.2026:
-  "mach das jetzt zuverlaessig mit Cosy"). Roh halluziniert die Engine bei
-  Zahlwort-Ketten — Nummern-Rueckbestaetigung verlor Nullen ("sechs null
-  null" -> "sechs null", Wortform 1/5), brach live mitten in der Nummer ab
-  und plapperte bei kurzen Texten ("null null." -> "What?"). Deshalb drei
-  Schichten in `kern/tts.py` (nur lokaler Pfad, ElevenLabs unberuehrt —
-  nicht rueckbauen):
+- **Aktiv: Qwen3-TTS 0.6B-Base Hybrid (8213)** — Triton-Kerne + CUDA-Graph
+  (`qwen3-tts-triton` TritonFasterRunner, Chef 29.08.2026). Blocking
+  `/speak`, kein Audio-Stream, kein TurboQuant, kein vLLM-Omni, nicht 1.7B
+  (35B-vLLM teilt die 5090; 0.6B sprach Ziffern 5/5). Health: `engine=
+  qwen3-hybrid`. Notaus: `TTS_HYBRID=0` im Qwen-Container. Gemessen
+  29.08. nachts: Readback 1,5–2,3 s (nacktes Qwen 4,4–5,1 s; Cosy-Turbo
+  0,6–1,2 s inkl. Nachhoeren), Kurzsaetze 0,5–1,3 s. Ziffern-Probe 5/5.
+  Audio-Chunk-Streaming (`/speak-stream`, ganzer Satz) ist Phase 2 — erst
+  nach dieser Baseline.
+- CosyVoice-Turbo (8211) bleibt als Image liegen. Roh halluziniert die
+  Engine bei Zahlwort-Ketten — deshalb drei Schichten in `kern/tts.py`
+  (nur lokaler Pfad, ElevenLabs unberuehrt — nicht rueckbauen):
   1. **Ziffern-Transformation** `_ziffern_einzeln`: Ketten ab zwei
      Zahlwoertern gehen als Einzelziffern an den Container ("null eins
      sieben sieben" -> "0 1 7 7", gemessen 5/5 statt 1/5; Ziffern

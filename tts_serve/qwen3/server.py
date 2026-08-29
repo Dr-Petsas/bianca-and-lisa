@@ -4,6 +4,12 @@ Eine Aeusserung, EIN Render. Bewusst KEIN /speak-stream und KEIN Text-Schnitt:
 Client-Haeppchen und Server-Stueckelung waren das Genuschel (28.08.2026).
 Klon aus den kurzen Cosy-Referenzen (Qwen braucht ~3 s, nicht 40 s).
 Muss unter _LOCK laufen — eine GPU, vLLM daneben.
+
+Hybrid (29.08.2026, Chef): Triton-Kerne + CUDA-Graph via qwen3-tts-triton
+TritonFasterRunner auf GENAU diesem 0.6B-Base — nicht das Default-1.7B-
+CustomVoice, und NICHT generate_voice_clone() des Runners (der laedt ein
+zweites ungepatchtes 1.7B-Base). Notaus: TTS_HYBRID=0 => nacktes qwen-tts.
+Kein TurboQuant, kein generate_batch, kein Streaming.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ app = FastAPI(title="tts-qwen3")
 
 _LOCK = threading.Lock()
 _MODEL = None
+_HYBRID = False
 _VOICES: dict[str, Path] = {}
 _TRANSKRIPT: dict[str, str] = {}
 _ALIASE: dict[str, str] = {}
@@ -83,22 +90,61 @@ def _aliase_lesen() -> None:
             _ALIASE[a] = z
 
 
-def _laden() -> None:
-    global _MODEL, _WARM
+def _hybrid_gewollt() -> bool:
+    return os.environ.get("TTS_HYBRID", "1").strip() != "0"
+
+
+def _laden_hybrid() -> object:
+    """Triton + CUDA-Graph auf dem 0.6B-Base. Wirft, wenn Import/Load knallt."""
+    from qwen3_tts_triton import TritonFasterRunner
+
+    # patch_range=None: alle Layer. Der Runner-Default (0, 24) gilt fuer
+    # 1.7B/28 Layer — auf 0.6B waeren das zu viele Indizes oder die
+    # falsche Aussprache-Reserve.
+    runner = TritonFasterRunner(
+        model_id=MODEL_ID,
+        device="cuda",
+        dtype="bf16",
+        enable_turboquant=False,
+        patch_range=None,
+    )
+    runner.load_model()
+    model = runner.model
+    if model is None:
+        raise RuntimeError("TritonFasterRunner.model ist leer")
+    return model
+
+
+def _laden_nackt() -> object:
     from qwen_tts import Qwen3TTSModel
 
-    t0 = time.time()
-    # sdpa direkt: flash-attn ist im Image nicht gebaut (Compile auf slim
-    # scheitert). Ein erster from_pretrained mit flash_attention_2 wuerde
-    # das Modell zweimal laden und dauert auf der vollen 5090 unnoetig.
-    _MODEL = Qwen3TTSModel.from_pretrained(
+    return Qwen3TTSModel.from_pretrained(
         MODEL_ID, device_map="cuda:0", dtype=torch.bfloat16,
     )
-    print("qwen3-tts: sdpa (kein flash-attn)", flush=True)
+
+
+def _laden() -> None:
+    global _MODEL, _WARM, _HYBRID
+    t0 = time.time()
+    _HYBRID = False
+    if _hybrid_gewollt():
+        try:
+            _MODEL = _laden_hybrid()
+            _HYBRID = True
+            print("qwen3-tts: hybrid (triton + cuda graph) "
+                  f"modell={MODEL_ID}", flush=True)
+        except Exception as e:
+            print(f"qwen3-tts: hybrid fehlgeschlagen ({type(e).__name__}: {e}) "
+                  "— nacktes qwen-tts", flush=True)
+            _MODEL = None
+    if _MODEL is None:
+        _MODEL = _laden_nackt()
+        print("qwen3-tts: sdpa (kein flash-attn, kein hybrid)", flush=True)
     _stimmen_scannen()
     _aliase_lesen()
     print(f"qwen3-tts geladen in {time.time() - t0:.0f}s, "
-          f"stimmen={list(_VOICES)}, aliase={_ALIASE}", flush=True)
+          f"hybrid={_HYBRID} stimmen={list(_VOICES)}, aliase={_ALIASE}",
+          flush=True)
     for name in _VOICES:
         try:
             t1 = time.time()
@@ -160,12 +206,13 @@ def health():
     ok = _MODEL is not None
     body = {
         "ok": ok,
-        "engine": "qwen3",
+        "engine": "qwen3-hybrid" if _HYBRID else "qwen3",
         "model": MODEL_ID,
         "voices": sorted(_VOICES) if ok else [],
         "aliase": _ALIASE,
         "device": "cuda",
         "warm": _WARM,
+        "hybrid": _HYBRID,
         # bewusst AUS: Client-Haeppchen waren das Genuschel (28.08.2026).
         "stream": False,
     }
@@ -198,11 +245,13 @@ def speak(body: SpeakIn):
             print(f"qwen3-tts synthese-fehler: {e}", flush=True)
             raise HTTPException(500, f"synthese: {e}")
     dauer = time.perf_counter() - t0
-    print(f"qwen3-tts speak voice={voice} zeichen={len(text)} s={dauer:.2f}", flush=True)
+    print(f"qwen3-tts speak voice={voice} hybrid={_HYBRID} "
+          f"zeichen={len(text)} s={dauer:.2f}", flush=True)
     return Response(
         content=pcm,
         media_type="application/octet-stream",
-        headers={"X-Sample-Rate": str(ZIEL_RATE), "X-Engine": "qwen3",
+        headers={"X-Sample-Rate": str(ZIEL_RATE),
+                 "X-Engine": "qwen3-hybrid" if _HYBRID else "qwen3",
                  "X-Dauer-S": f"{dauer:.2f}"},
     )
 
