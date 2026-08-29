@@ -9,6 +9,7 @@ const wahl = {
   abschweifer: new Set(), extras: new Set(),
 };
 let storyNr = 1;
+let telefonQualitaet = false;
 let poller = null;
 const gespielt = new Set();  // Audio-URLs, die das Mithoeren schon abgespielt hat
 let spielKette = Promise.resolve();
@@ -188,30 +189,66 @@ function chipsBauen() {
     ["halbsatz", "zwischenfragePreis", "readbackFehler", "pzr"], wahl.extras);
 }
 
+function eigen(id) {
+  const el = $(id);
+  return el ? String(el.value || "").trim() : "";
+}
+
 function storyBauen() {
   const s = { nr: storyNr };
   if (wahl.stimme) s.stimme = wahl.stimme;
   if (wahl.stimme) s.vorname = KATALOG.vornamen[wahl.stimme];
   if (wahl.nachname) s.nachname = wahl.nachname;
+  const vorFrei = eigen("eigen-vorname");
+  const nachFrei = eigen("eigen-nachname");
+  if (vorFrei) s.vorname = vorFrei;
+  if (nachFrei) s.nachname = nachFrei;
   if (wahl.anliegen) s.anliegen = wahl.anliegen;
+  const eroeff = eigen("eigen-eroeffnung");
+  if (eroeff) s.eroeffnungText = eroeff;
   if (wahl.grund) s.grund = wahl.grund;
+  const grundFrei = eigen("eigen-grund");
+  if (grundFrei) {
+    s.grundText = grundFrei;
+    if (!s.grund) s.grund = "frei";
+  }
   if (wahl.behandler !== null && wahl.behandler !== "") {
     s.behandler = wahl.behandler === "egal" ? "" : wahl.behandler;
   }
+  const arztFrei = eigen("eigen-behandler");
+  if (arztFrei) s.behandler = arztFrei;
   if (wahl.versicherung) s.versicherung = wahl.versicherung;
+  const versFrei = eigen("eigen-versicherung");
+  if (versFrei) s.versicherungText = versFrei;
+  const wunschFrei = eigen("eigen-wunsch");
+  if (wunschFrei) s.wunschText = wunschFrei;
   if (wahl.slotAnnahme) s.slotAnnahme = wahl.slotAnnahme;
   if (wahl.slotRichtung) s.slotRichtung = wahl.slotRichtung;
+  const slotFrei = eigen("eigen-slot");
+  if (slotFrei) s.slotText = slotFrei;
   if (wahl.abschweifer.size) {
     const anker = KATALOG.anker;
     s.abschweifer = [...wahl.abschweifer].map((t, i) => [anker[i % anker.length], t]);
   } else {
     s.abschweifer = [];
   }
+  const abFrei = eigen("eigen-abschweifer");
+  if (abFrei) s.abschweiferText = abFrei;
   s.halbsatz = wahl.extras.has("halbsatz");
   s.zwischenfragePreis = wahl.extras.has("zwischenfragePreis");
   s.readbackFehler = wahl.extras.has("readbackFehler");
   s.pzr = wahl.extras.has("pzr");
   return s;
+}
+
+function telefonKnopfZeichnen() {
+  const el = $("knopf-telefon");
+  if (!el) return;
+  el.classList.toggle("an", telefonQualitaet);
+  el.setAttribute("aria-pressed", telefonQualitaet ? "true" : "false");
+  el.textContent = telefonQualitaet
+    ? "Telefonqualität an (8 kHz / 8 bit)"
+    : "Telefonqualität aus";
 }
 
 function automatik() {
@@ -240,6 +277,7 @@ async function laufStarten(anzahl) {
   const body = {
     anzahl, ab: storyNr, tag: wahl.tag || "Mittwoch",
     mithoeren: true,
+    telefonQualitaet,
   };
   if (anzahl === 1) body.story = storyBauen();
   const r = await fetch("api/lauf", {
@@ -314,8 +352,14 @@ async function pollen() {
   if (d.fehler) $("fehler").textContent = d.fehler;
   $("knopf-start").disabled = d.laeuft;
   $("knopf-batch").disabled = d.laeuft;
+  if ($("knopf-telefon")) $("knopf-telefon").disabled = d.laeuft;
 
-  if (d.story) $("live-story").textContent = d.story;
+  if (d.warm && d.warm.n) {
+    const t = String(d.warm.text || "");
+    $("live-story").textContent = `Audio ${d.warm.i}/${d.warm.n}: ${t}`;
+  } else if (d.story) {
+    $("live-story").textContent = d.story + (telefonQualitaet ? " · Telefonqualität" : "");
+  }
   const dialog = $("live-dialog");
   if (d.zuege && d.zuege.length) {
     // Nur fehlende Bubbles anhaengen (kein Flackern beim Poll).
@@ -342,6 +386,11 @@ async function boot() {
   KATALOG = await (await fetch("api/katalog")).json();
   chipsBauen();
   $("knopf-automatik").addEventListener("click", automatik);
+  $("knopf-telefon").addEventListener("click", () => {
+    telefonQualitaet = !telefonQualitaet;
+    telefonKnopfZeichnen();
+  });
+  telefonKnopfZeichnen();
   $("knopf-start").addEventListener("click", () => laufStarten(1));
   $("knopf-batch").addEventListener("click", () => laufStarten(10));
   $("anruf-zu").addEventListener("click", popupZu);

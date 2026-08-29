@@ -10,8 +10,10 @@ die TTS-Basis im Schluessel steckt).
 
 from __future__ import annotations
 
+import array
 import hashlib
 import re
+import struct
 import sys
 import time
 from pathlib import Path
@@ -28,13 +30,16 @@ AUDIO_DIR = Path(__file__).resolve().parent / "audio"
 PCM_RATE = 24000
 
 
+TEL_RATE = 8000  # Schmalband-Telefon (G.711)
+TEL_BITS = 8     # Telefon-Bitrate: 8 kHz × 8 bit = 64 kbit/s
+
+
 def wav_schliessen(blob: bytes) -> bytes:
     """Offenen Stream-WAV-Header (0xFFFFFFFF) auf die echte PCM-Laenge setzen.
 
     Biancas /api/audio-stream liefert einen wachsenden WAV mit unbekannter
     Groesse — Chrome spielt die gespeicherte Datei sonst nicht (Play-Knopf
     da, kein Ton). Standard-44-Byte-Header wie kern.tts.wav_header_offen."""
-    import struct
     if not blob or blob[:4] != b"RIFF" or len(blob) < 44:
         return blob
     pcm = len(blob) - 44
@@ -111,13 +116,65 @@ def audio_holen(stimme: str, text: str, *, timeout: float = 180.0) -> Path:
     return pfad
 
 
+def _wav_pcm16_header(data_len: int, rate: int) -> bytes:
+    return struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + data_len, b"WAVE",
+        b"fmt ", 16, 1, 1, rate, rate * 2, 2, 16,
+        b"data", data_len,
+    )
+
+
+def telefon_wav(blob: bytes, *, src_rate: int = PCM_RATE) -> bytes:
+    """24 kHz/16 bit Studio-WAV -> Telefonqualitaet: 8 kHz, 8-bit-Quantisierung
+    (64 kbit/s), wieder als PCM16-WAV damit STT/Browser das File fressen."""
+    if not blob or blob[:4] != b"RIFF" or len(blob) < 44:
+        return blob
+    rate = struct.unpack_from("<I", blob, 24)[0] or src_rate
+    pcm = blob[44:]
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not samples:
+        return blob
+    step = max(1, int(round(rate / TEL_RATE)))
+    out = array.array("h")
+    for i in range(0, len(samples) - step + 1, step):
+        acc = sum(samples[i:i + step]) // step
+        # 8-bit linear (Telefon-Bitrate), als PCM16 gespeichert
+        q = max(-128, min(127, acc // 256))
+        out.append(q * 256)
+    data = out.tobytes()
+    return _wav_pcm16_header(len(data), TEL_RATE) + data
+
+
+def telefon_datei(pfad: Path) -> Path:
+    """Downsample-Cache neben der Studio-WAV (*.tel.wav)."""
+    ziel = pfad.with_name(pfad.stem + ".tel.wav")
+    if ziel.is_file() and ziel.stat().st_size > 44:
+        return ziel
+    blob = telefon_wav(pfad.read_bytes())
+    tmp = ziel.with_suffix(".tmp")
+    tmp.write_bytes(blob)
+    tmp.replace(ziel)
+    return ziel
+
+
 def dauer_s(pfad: Path) -> float:
-    """Spieldauer eines eigenen PCM16-WAV (44-Byte-Header, 24 kHz mono)."""
+    """Spieldauer eines PCM16-WAV; Rate steht im Header (24 kHz oder 8 kHz)."""
+    try:
+        raw = pfad.read_bytes()[:44]
+    except OSError:
+        return 0.0
+    if len(raw) < 44 or raw[:4] != b"RIFF":
+        return 0.0
+    rate = struct.unpack_from("<I", raw, 24)[0] or PCM_RATE
+    bits = struct.unpack_from("<H", raw, 34)[0] or 16
     try:
         groesse = pfad.stat().st_size
     except OSError:
         return 0.0
-    return max(0.0, (groesse - 44) / (PCM_RATE * 2))
+    byte_ps = max(1, rate * max(1, bits // 8))
+    return max(0.0, (groesse - 44) / byte_ps)
 
 
 def vorwaermen(stimme: str, texte: list[str]) -> list[Path]:

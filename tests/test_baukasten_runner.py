@@ -236,6 +236,34 @@ def test_bewerten_sammelt_waechter_und_latenz():
     assert erg["waechter"] == ["wiederholung-variante"]
 
 
+def test_frei_texte_ueberschreiben_katalog():
+    story = geschichten.automatik(1)
+    story["halbsatz"] = False
+    story["abschweifer"] = []
+    story["eroeffnungText"] = "Hallo, hier ist Martin Berger, ich brauche einen Termin."
+    story["grundText"] = "Mir tut der Weisheitszahn weh."
+    story["wunschText"] = "Am liebsten nächsten Dienstag nachmittags."
+    story["versicherungText"] = "Ich bin privat versichert."
+    story["slotText"] = "Den ersten nehmen wir."
+    story["abschweiferText"] = "Ach, und wie teuer ist das eigentlich?"
+    lage = geschichten.lage_neu()
+    assert geschichten.naechster_baustein(story, lage)["baustein"] == "eroeffnung_frei"
+    lage["frage"] = "schonmal"
+    stoer = geschichten.naechster_baustein(story, lage)
+    assert stoer["baustein"] == "abschweifer_frei"
+    assert stoer["text"] == story["abschweiferText"]
+    lage["frage"] = "grund"
+    assert geschichten.naechster_baustein(story, lage)["text"] == story["grundText"]
+    lage["frage"] = "wunsch"
+    assert geschichten.naechster_baustein(story, lage)["baustein"] == "wunsch_frei"
+    lage["frage"] = "versicherung"
+    assert geschichten.naechster_baustein(story, lage)["baustein"] == "versicherung_frei"
+    saetze_audio = geschichten.saetze_fuer_audio(story)
+    assert story["eroeffnungText"] in saetze_audio
+    assert story["grundText"] in saetze_audio
+    assert story["abschweiferText"] in saetze_audio
+
+
 def test_ziel_datum_ist_der_tag_der_kommenden_woche():
     freitag = datetime.date(2026, 8, 28)
     assert ziel_datum("Mittwoch", ab=freitag) == "2026-09-02"

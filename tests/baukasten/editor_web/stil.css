@@ -92,7 +92,28 @@ button.gross {
 
 button.gross.primaer { background: var(--akzent); color: #08121f; border-color: var(--akzent); }
 button.gross.batch { background: var(--gelb); color: #221a02; border-color: var(--gelb); }
+button.gross.tel.an { background: #3d2a12; border-color: var(--gelb); color: var(--gelb); }
 button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.eigen-zeile { display: flex; gap: 8px; margin-top: 8px; }
+.eigen-zeile .eigen { margin-top: 0; }
+input.eigen, textarea.eigen {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px dashed #354152;
+  background: #141a22;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+input.eigen:focus, textarea.eigen:focus {
+  outline: none;
+  border-color: var(--akzent);
+  border-style: solid;
+}
 
 .schalter { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); cursor: pointer; }
 .schalter input { accent-color: var(--akzent); width: 17px; height: 17px; }

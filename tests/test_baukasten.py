@@ -147,6 +147,40 @@ def test_wav_schliessen_macht_stream_header_abspielbar():
     assert klang.wav_schliessen(fest) == fest
 
 
+def test_telefon_wav_downsample_8khz_8bit():
+    """Studio 24 kHz/16 bit -> Telefon 8 kHz, 8-bit-Quantisierung in PCM16."""
+    import struct
+
+    from tests.baukasten import klang
+
+    n = 24000  # 1 s
+    pcm = b"".join(struct.pack("<h", 12000 if (i // 80) % 2 == 0 else -12000)
+                   for i in range(n))
+    studio = klang._wav_pcm16_header(len(pcm), 24000) + pcm
+    tel = klang.telefon_wav(studio)
+    assert tel[:4] == b"RIFF"
+    assert struct.unpack_from("<I", tel, 24)[0] == 8000
+    assert struct.unpack_from("<H", tel, 34)[0] == 16
+    samples = (len(tel) - 44) // 2
+    assert 7900 <= samples <= 8100
+    first = struct.unpack_from("<h", tel, 44)[0]
+    assert first % 256 == 0
+
+
+def test_dauer_s_liest_8khz_header():
+    import tempfile
+    from pathlib import Path
+
+    from tests.baukasten import klang
+
+    pcm = b"\x00\x00" * 8000  # 1 s bei 8 kHz
+    wav = klang._wav_pcm16_header(len(pcm), 8000) + pcm
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "tel.wav"
+        p.write_bytes(wav)
+        assert 0.95 <= klang.dauer_s(p) <= 1.05
+
+
 if __name__ == "__main__":
     fehler = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

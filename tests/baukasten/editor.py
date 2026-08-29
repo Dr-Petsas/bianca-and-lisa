@@ -46,6 +46,7 @@ _zustand: dict[str, Any] = {
     "aktiv": None,       # runner.Anruf des laufenden Anrufs
     "fertig": [],        # Kurz-Ergebnisse der abgeschlossenen Stories
     "fehler": "",
+    "warm": None,        # {story, i, n, text} waehrend TTS-Vorwaermen
 }
 
 
@@ -60,23 +61,49 @@ def _wochentage_naechste_woche() -> list[dict[str, str]]:
     return out
 
 
+def _audio_vorwaermen(story: dict) -> None:
+    """Eigene und Katalog-Saetze VOR dem Anruf rendern (und ggf. downsamplen)."""
+    texte = geschichten.saetze_fuer_audio(story)
+    stimme = str(story.get("stimme") or "markus")
+    n = len(texte)
+    for i, t in enumerate(texte):
+        with _lock:
+            _zustand["warm"] = {
+                "story": story.get("id") or "",
+                "i": i + 1, "n": n, "text": t,
+            }
+        try:
+            pfad = klang.audio_holen(stimme, t)
+            if story.get("telefonQualitaet"):
+                klang.telefon_datei(pfad)
+        except Exception as e:
+            print(f"baukasten-warm: {type(e).__name__}: {e}", flush=True)
+    with _lock:
+        _zustand["warm"] = None
+
+
 def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
     lauf_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     lauf_dir = BERICHTE_DIR / lauf_id
     lauf_dir.mkdir(parents=True, exist_ok=True)
     with _lock:
         _zustand.update({"laeuft": True, "laufId": lauf_id, "storyIdx": 0,
-                         "storiesGesamt": len(stories), "fertig": [], "fehler": ""})
+                         "storiesGesamt": len(stories), "fertig": [], "fehler": "",
+                         "warm": None})
     try:
         import json as _json
         import time as _time
         berichte = []
         for i, story in enumerate(stories):
+            with _lock:
+                _zustand["storyIdx"] = i + 1
+                _zustand["aktiv"] = None
+            _audio_vorwaermen(story)
             anruf = runner.Anruf(story, basis=BIANCA_BASIS, lauf_dir=lauf_dir,
                                  echtzeit=True, mithoeren=False)
             with _lock:
-                _zustand["storyIdx"] = i + 1
                 _zustand["aktiv"] = anruf
+                _zustand["warm"] = None
             b = anruf.fuehren()
             erg = b.get("ergebnis") or {}
             kurz = {"id": b.get("id"), "ok": bool(erg.get("ok")),
@@ -99,6 +126,7 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
         with _lock:
             _zustand["laeuft"] = False
             _zustand["aktiv"] = None
+            _zustand["warm"] = None
 
 
 # ------------------------------------------------------------------------- API
@@ -125,6 +153,7 @@ class LaufWunsch(BaseModel):
     ab: int = 1
     tag: str = "Mittwoch"
     mithoeren: bool = False
+    telefonQualitaet: bool = False  # 8 kHz / 8 bit Anrufer-Audio
     story: dict[str, Any] | None = None  # manuell gebaute Story (Chips)
 
 
@@ -144,6 +173,9 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
     else:
         stories = [geschichten.automatik(nr, tag=w.tag)
                    for nr in range(w.ab, w.ab + max(1, w.anzahl))]
+    if w.telefonQualitaet:
+        for s in stories:
+            s["telefonQualitaet"] = True
     t = threading.Thread(target=_lauf_thread, args=(stories, w.mithoeren), daemon=True)
     t.start()
     return JSONResponse({"ok": True, "stories": [s["id"] for s in stories]})
@@ -162,6 +194,7 @@ def live() -> dict[str, Any]:
             "fehler": _zustand["fehler"],
             "story": "",
             "zuege": [],
+            "warm": _zustand.get("warm"),
         }
         if anruf is not None:
             out["story"] = str(anruf.story.get("id") or "")

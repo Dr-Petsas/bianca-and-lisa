@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="web/stil.css?v=5">
+<link rel="stylesheet" href="web/stil.css?v=6">
 </head>
 <body>
 <header>
@@ -22,10 +22,15 @@
       <div class="chips" id="chips-stimme"></div>
       <div style="height:8px"></div>
       <div class="chips" id="chips-nachname"></div>
+      <div class="eigen-zeile">
+        <input class="eigen" id="eigen-vorname" placeholder="eigener Vorname" autocomplete="off">
+        <input class="eigen" id="eigen-nachname" placeholder="eigener Nachname" autocomplete="off">
+      </div>
     </div>
     <div class="block">
       <h2>Anliegen</h2>
       <div class="chips" id="chips-anliegen"></div>
+      <textarea class="eigen" id="eigen-eroeffnung" rows="2" placeholder="eigener Eröffnungssatz — wird vor dem Start gerendert"></textarea>
     </div>
   </div>
   <div style="height:14px"></div>
@@ -33,12 +38,15 @@
     <div class="block">
       <h2>Grund (bei Terminwunsch)</h2>
       <div class="chips" id="chips-grund"></div>
+      <textarea class="eigen" id="eigen-grund" rows="2" placeholder="eigener Grund — überschreibt den Chip"></textarea>
     </div>
     <div class="block">
       <h2>Behandler &amp; Versicherung</h2>
       <div class="chips" id="chips-behandler"></div>
+      <input class="eigen" id="eigen-behandler" placeholder="eigener Behandlername" autocomplete="off">
       <div style="height:8px"></div>
       <div class="chips" id="chips-versicherung"></div>
+      <textarea class="eigen" id="eigen-versicherung" rows="2" placeholder="eigene Versicherungs-Antwort"></textarea>
     </div>
   </div>
   <div style="height:14px"></div>
@@ -46,22 +54,26 @@
     <div class="block">
       <h2>Wunschtag (n&auml;chste Woche)</h2>
       <div class="chips" id="chips-tag"></div>
+      <textarea class="eigen" id="eigen-wunsch" rows="2" placeholder="eigener Wunschtag-Satz"></textarea>
     </div>
     <div class="block">
       <h2>Slot-Verhalten</h2>
       <div class="chips" id="chips-slot"></div>
+      <textarea class="eigen" id="eigen-slot" rows="2" placeholder="eigene Slot-Annahme (wenn genommen wird)"></textarea>
     </div>
   </div>
   <div style="height:14px"></div>
   <div class="block">
     <h2>Absch&shy;weifer &amp; St&ouml;rungen (mehrfach w&auml;hlbar)</h2>
     <div class="chips" id="chips-abschweifer"></div>
+    <textarea class="eigen" id="eigen-abschweifer" rows="2" placeholder="eigener Abschweifer — einmal, an der ersten Ankerfrage"></textarea>
     <div style="height:8px"></div>
     <div class="chips" id="chips-extras"></div>
   </div>
 
   <div class="knoepfe">
     <button class="gross" id="knopf-automatik">W&uuml;rfeln (Automatik)</button>
+    <button class="gross tel" id="knopf-telefon" type="button" aria-pressed="false">Telefonqualit&auml;t aus</button>
     <button class="gross primaer" id="knopf-start">Anruf starten</button>
     <button class="gross batch" id="knopf-batch">10 Tests generieren</button>
     <span class="klein" id="lauf-hinweis"></span>
@@ -84,6 +96,6 @@
     <div class="dialog" id="live-dialog"></div>
   </div>
 </div>
-<script src="web/app.js?v=5"></script>
+<script src="web/app.js?v=6"></script>
 </body>
 </html>

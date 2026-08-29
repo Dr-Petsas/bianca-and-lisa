@@ -102,6 +102,8 @@ class Anruf:
     def _anrufer_audio(self, text: str) -> tuple[Path, str, float]:
         """Anrufer-WAV aus dem Klang-Cache holen und im Bericht ablegen."""
         pfad = klang.audio_holen(self.story["stimme"], text)
+        if self.story.get("telefonQualitaet"):
+            pfad = klang.telefon_datei(pfad)
         self._audio_nr += 1
         name = f"a{self._audio_nr:02d}.wav"
         ziel = self.audio_dir / name
@@ -428,8 +430,13 @@ def main() -> None:
     p.add_argument("--tenant", default="")
     p.add_argument("--schnell", action="store_true", help="ohne Echtzeit-Taktung")
     p.add_argument("--mithoeren", action="store_true", help="Audio lokal abspielen")
+    p.add_argument("--telefon", action="store_true",
+                   help="Anrufer-Audio auf 8 kHz / 8 bit (Telefonqualitaet)")
     a = p.parse_args()
     stories = [geschichten.automatik(nr, tag=a.tag) for nr in range(a.ab, a.ab + a.anzahl)]
+    if a.telefon:
+        for s in stories:
+            s["telefonQualitaet"] = True
     ergebnis = lauf(stories, basis=a.basis, echtzeit=not a.schnell,
                     mithoeren=a.mithoeren, tenant=a.tenant)
     sys.exit(0 if ergebnis["gruen"] == ergebnis["gesamt"] else 1)

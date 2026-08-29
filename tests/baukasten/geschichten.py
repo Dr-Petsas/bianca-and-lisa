@@ -144,6 +144,9 @@ def _wahl(story: dict, lage: dict, key: str, liste: list[str]) -> str:
 
 def _eroeffnung(story: dict, lage: dict) -> dict[str, Any]:
     lage["eroeffnet"] = True
+    frei = str(story.get("eroeffnungText") or "").strip()
+    if frei:
+        return {"text": frei, "baustein": "eroeffnung_frei"}
     art = story.get("anliegen") or TERMIN
     if art == TERMIN and story.get("halbsatz"):
         teil1, teil2 = saetze.HALBSATZ_PAARE[(story.get("seed") or 0) % len(saetze.HALBSATZ_PAARE)]
@@ -162,6 +165,10 @@ def _eroeffnung(story: dict, lage: dict) -> dict[str, Any]:
 def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
     """Ist an der gerade offenen Frage ein Abschweifer geplant und noch offen?"""
     fid = lage["frage"]
+    frei = str(story.get("abschweiferText") or "").strip()
+    if frei and fid in ABSCHWEIF_ANKER and "abschweif:frei" not in lage["gemacht"]:
+        lage["gemacht"].add("abschweif:frei")
+        return {"text": frei, "baustein": "abschweifer_frei"}
     for anker, thema in story.get("abschweifer") or []:
         schluessel = f"abschweif:{thema}"
         if anker == fid and schluessel not in lage["gemacht"]:
@@ -172,7 +179,13 @@ def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
 
 
 def _grund_text(story: dict, lage: dict) -> str:
-    varianten, _erwartet = saetze.GRUENDE[story.get("grund") or "kontrolle"]
+    frei = str(story.get("grundText") or "").strip()
+    if frei:
+        return frei
+    key = story.get("grund") or "kontrolle"
+    if key not in saetze.GRUENDE:
+        return str(key)
+    varianten, _erwartet = saetze.GRUENDE[key]
     return _wahl(story, lage, "grund", varianten)
 
 
@@ -229,6 +242,9 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if fid == "grund":
         return {"text": _grund_text(story, lage), "baustein": f"grund_{story.get('grund')}"}
     if fid == "wunsch":
+        frei = str(story.get("wunschText") or "").strip()
+        if frei:
+            return {"text": frei, "baustein": "wunsch_frei"}
         nr = lage["zaehler"].get("wunsch_m", 0)
         lage["zaehler"]["wunsch_m"] = nr + 1
         return {"text": saetze.wunsch_satz(story["tag"], (story.get("seed") or 0) + nr), "baustein": "wunsch"}
@@ -246,6 +262,9 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if fid == "telefon_alt":
         return {"text": _wahl(story, lage, "telefon_alt", saetze.TELEFON_ALT_NEU), "baustein": "telefon_alt"}
     if fid == "versicherung":
+        frei = str(story.get("versicherungText") or "").strip()
+        if frei:
+            return {"text": frei, "baustein": "versicherung_frei"}
         nr = lage["zaehler"].get("vers_m", 0)
         lage["zaehler"]["vers_m"] = nr + 1
         return {"text": saetze.versicherung_satz(story.get("versicherung") == "privat",
@@ -277,6 +296,9 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
             return {"text": _wahl(story, lage, "terminwahl", saetze.TERMINWAHL_ERSTER),
                     "baustein": "terminwahl"}
         lage["gemacht"].add("slot_angenommen")
+        frei = str(story.get("slotText") or "").strip()
+        if frei:
+            return {"text": frei, "baustein": "slot_frei"}
         return {"text": _wahl(story, lage, "slot_annahme", saetze.SLOT_ANNAHME), "baustein": "slot_annahme"}
     if fid == "bestaetigung":
         return {"text": _wahl(story, lage, "bestaetigung", saetze.BESTAETIGUNG_JA), "baustein": "bestaetigung"}
@@ -321,3 +343,41 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
                 "baustein": "ja_generisch"}
     lage["gemacht"].add("abschied")
     return {"text": _wahl(story, lage, "abschied", saetze.ABSCHIED), "baustein": "abschied", "auflegen": True}
+
+
+def saetze_fuer_audio(story: dict) -> list[str]:
+    """Alle Anrufer-Saetze, die dieser Story wahrscheinlich spricht —
+    zum Vorwaermen (TTS) BEVOR der Anruf startet."""
+    out: list[str] = []
+
+    def add(t: Any) -> None:
+        s = " ".join(str(t or "").split())
+        if s and s not in out:
+            out.append(s)
+
+    for feld in ("eroeffnungText", "grundText", "wunschText",
+                 "versicherungText", "slotText", "abschweiferText"):
+        add(story.get(feld))
+
+    lg = lage_neu()
+    add(_eroeffnung(story, lg).get("text"))
+    for fid in ("schonmal", "arzt", "name", "vorname", "nachname", "grund",
+                "wunsch", "buchstabieren", "telefon", "telefon_check",
+                "versicherung", "pzr", "bestaetigung", "wann", "behandlung"):
+        lg = lage_neu()
+        lg["eroeffnet"] = True
+        lg["frage"] = fid
+        try:
+            add(naechster_baustein(story, lg).get("text"))
+        except (KeyError, TypeError):
+            continue
+    lg = lage_neu()
+    lg["eroeffnet"] = True
+    lg["frage"] = "slotwahl"
+    lg["biancaText"] = "Frei ist morgen um neun oder um zehn."
+    try:
+        add(naechster_baustein(story, lg).get("text"))
+        add(naechster_baustein(story, lg).get("text"))
+    except (KeyError, TypeError):
+        pass
+    return out
