@@ -421,6 +421,8 @@ def test_absage_im_angebot_bleibt_buchung():
 
 
 def test_absage_fluss_komplett():
+    """Chef 29.08.2026, Variante A: WANN-Frage zuerst, klare Antwort ->
+    Name -> Treffer bestaetigen MIT Anrede -> bei Ja loeschen."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_cancel = verwalten.kal.cancel_by_id
     echt_anstossen = verwalten.hintergrund.anstossen
@@ -434,23 +436,64 @@ def test_absage_fluss_komplett():
     try:
         sit = _sit()
         z1 = flow.zug(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
-        assert z1 and "name" in z1["text"].lower()
+        assert z1 and "wann ist der termin" in z1["text"].lower()
+        assert gehirn.sammler(sit)["frage"] == "wann"
 
-        z2 = flow.zug(sit, "Martin Berger.")
-        assert z2 and "wirklich absagen" in z2["text"].lower()
+        z2 = flow.zug(sit, "Am Donnerstag um zehn.")
+        assert z2 and "vor- und nachname" in z2["text"].lower()
+        assert sit.get("verwWann") == "klar"
+
+        z3 = flow.zug(sit, "Martin Berger.")
+        assert z3 and "wirklich absagen" in z3["text"].lower()
+        assert "Herr Berger" in z3["text"]  # Anrede: "… Herr Berger?"
         assert gehirn.sammler(sit)["phase"] == "absage_bestaetigen"
 
-        z3 = flow.zug(sit, "Ja, bitte.")
-        assert z3 and "abgesagt" in z3["text"].lower()
+        z4 = flow.zug(sit, "Ja, bitte.")
+        assert z4 and "abgesagt" in z4["text"].lower()
         assert aufrufe["aid"] == "apt-1"
-        assert "neuen termin" in z3["text"].lower()
+        assert "neuen termin" in z4["text"].lower()
 
-        z4 = flow.zug(sit, "Nein, danke.")
-        assert z4 and "sonst noch" in z4["text"].lower()
+        z5 = flow.zug(sit, "Nein, danke.")
+        assert z5 and "sonst noch" in z5["text"].lower()
     finally:
         verwalten.kal.find_patient_appointments = echt_find
         verwalten.kal.cancel_by_id = echt_cancel
         verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_absage_hinweis_im_einstiegssatz_ueberspringt_wann():
+    """'Termin am Donnerstag absagen' traegt das WANN schon im Satz —
+    keine Wann-Frage, die Zeitangabe filtert den Treffer."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich muss meinen Termin am Donnerstag absagen.")
+        assert z1 and "vor- und nachname" in z1["text"].lower()
+        assert sit.get("verwWann") == "klar"
+        assert (sit.get("verwHinweis") or {}).get("weekday") == 4  # Donnerstag
+        s = gehirn.sammler(sit)
+        assert not s["wunsch"]  # die Zeitangabe ist KEIN Neubuchungs-Wunsch
+
+        z2 = flow.zug(sit, "Martin Berger.")
+        assert z2 and "wirklich absagen" in z2["text"].lower()
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_absage_name_statt_wann_antwort():
+    """Antwortet der Anrufer auf die Wann-Frage gleich mit dem Namen,
+    wird nicht nachgebohrt — direkt suchen (kein Behandler-Verhoer)."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        z = flow.zug(sit, "Mein Name ist Martin Berger.")
+        assert z and "wirklich absagen" in z["text"].lower()
+        assert sit.get("verwWann") == "uebergangen"
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
 
 
 def test_absage_dann_neubuchung():
@@ -463,6 +506,7 @@ def test_absage_dann_neubuchung():
     try:
         sit = _sit()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        flow.zug(sit, "Donnerstag Vormittag.")
         flow.zug(sit, "Martin Berger.")
         flow.zug(sit, "Ja.")
         z = flow.zug(sit, "Ja, gerne einen neuen.")
@@ -520,6 +564,8 @@ def test_auskunft_und_folgeabsage():
 
 
 def test_verschieben_fluss_komplett():
+    """Verschieben: GLEICHE Sammel-Prozedur (Chef: wann -> name -> suchen),
+    dann Bestaetigung des Fundes und die Neu-Wunsch-Strecke."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_slots = verwalten.kal.find_slots
     echt_move = verwalten.kal.move_appointment
@@ -539,22 +585,25 @@ def test_verschieben_fluss_komplett():
     try:
         sit = _sit()
         z1 = flow.zug(sit, "Ich würde meinen Termin gern verschieben.")
-        assert z1 and "name" in z1["text"].lower()
+        assert z1 and "wann ist der termin" in z1["text"].lower()
 
-        z2 = flow.zug(sit, "Martin Berger.")
-        assert z2 and "besser" in z2["text"].lower()
+        z2 = flow.zug(sit, "Der ist am Donnerstag um zehn.")
+        assert z2 and "vor- und nachname" in z2["text"].lower()
+
+        z3 = flow.zug(sit, "Martin Berger.")
+        assert z3 and "gefunden" in z3["text"].lower() and "besser" in z3["text"].lower()
         assert gehirn.sammler(sit)["phase"] == "verschieb_wunsch"
 
-        z3 = flow.zug(sit, "Lieber nachmittags.")
-        assert z3 and sit.get("offered"), z3
+        z4 = flow.zug(sit, "Lieber nachmittags.")
+        assert z4 and sit.get("offered"), z4
         # Der eigene Bestandstermin (10:00) darf NICHT angeboten werden:
         assert all(not o["iso"].startswith("2026-09-03T10:00") for o in sit["offered"])
 
-        z4 = flow.zug(sit, "Der erste bitte.")
-        assert z4 and "passt das so" in z4["text"].lower()
+        z5 = flow.zug(sit, "Der erste bitte.")
+        assert z5 and "passt das so" in z5["text"].lower()
 
-        z5 = flow.zug(sit, "Ja.")
-        assert z5 and "sonst noch" in z5["text"].lower()
+        z6 = flow.zug(sit, "Ja.")
+        assert z6 and "sonst noch" in z6["text"].lower()
         assert aufrufe["aid"] == "apt-1"
         assert aufrufe["iso"] and aufrufe["iso"] != "2026-09-03T10:00"
     finally:
@@ -563,15 +612,155 @@ def test_verschieben_fluss_komplett():
         verwalten.kal.move_appointment = echt_move
 
 
-def test_verwaltung_kein_termin_gefunden():
+def test_verschieben_alt_neu_trennung():
+    """'Termin AM Donnerstag AUF Freitag verschieben': das am-Stueck ist der
+    Bestandstermin (Hinweis), das auf-Stueck bleibt der Neu-Wunsch."""
     echt_find = verwalten.kal.find_patient_appointments
-    verwalten.kal.find_patient_appointments = lambda t, c: {"ok": True, "patient": {}, "appointments": []}
+    echt_slots = verwalten.kal.find_slots
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    verwalten.kal.find_slots = lambda t, c, **k: {
+        "ok": True,
+        "slots": ["2026-09-08T14:30", "2026-09-11T09:30", "2026-09-11T15:00"],
+        "doctorName": "Dr. Petsas",
+    }
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich möchte meinen Termin am Donnerstag auf Freitag verschieben.")
+        assert z1 and "vor- und nachname" in z1["text"].lower()  # WANN ist schon klar
+        assert (sit.get("verwHinweis") or {}).get("weekday") == 4   # alt: Donnerstag
+        s = gehirn.sammler(sit)
+        assert (s["wunsch"] or {}).get("weekday") == 5              # neu: Freitag
+
+        z2 = flow.zug(sit, "Martin Berger.")
+        # Wunsch liegt vor -> direkt Angebot, gefiltert auf Freitag (11.09.).
+        assert z2 and sit.get("offered"), z2
+        assert all(o["iso"].startswith("2026-09-11") for o in sit["offered"])
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.kal.find_slots = echt_slots
+
+
+def test_verwaltung_kein_termin_gefunden():
+    """Chef 29.08.2026, Variante B: 'weiss nicht mehr' -> Behandler-Frage
+    (nicht alle Kalender), dann Name; nicht gefunden -> ehrlich + ECHTE
+    Notiz 'die wird Doktor X vorgelegt'."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: {"ok": True, "notFound": True, "patient": {}, "appointments": []}
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        assert z1 and "wann ist der termin" in z1["text"].lower()
+
+        z2 = flow.zug(sit, "Keine Ahnung, weiß ich nicht mehr.")
+        assert z2 and "behandler" in z2["text"].lower()
+        assert sit.get("verwWann") == "unklar"
+        assert gehirn.sammler(sit)["frage"] == "arzt"
+
+        z3 = flow.zug(sit, "Ich glaube bei Doktor Petsas.")
+        assert z3 and "vor- und nachname" in z3["text"].lower()
+        assert "Petsas" in ((gehirn.sammler(sit)["arzt"] or {}).get("calendarName") or "")
+
+        z4 = flow.zug(sit, "Martin Berger.")
+        assert z4, "Antwort fehlt"
+        tl = z4["text"].lower()
+        assert "ehrlich" in tl and "notiz" in tl and "vorgelegt" in tl
+        assert "Doktor Petsas" in z4["text"]  # dem Behandler XY wird das vorgelegt
+        assert "neuen termin" in tl  # Ausweg bleibt offen
+        # Die Notiz ist ECHT (Sitzung + praxis_notizen.jsonl), kein Versprechen:
+        assert "Martin Berger" in (sit.get("praxisNotiz") or "")
+        assert "nicht gefunden" in (sit.get("praxisNotiz") or "")
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_verwaltung_hinweis_passt_nicht_ehrliche_rueckfrage():
+    """Hinweis (Dienstag) passt auf keinen Termin: ehrlich zeigen, was es
+    gibt — 'Meinen Sie den?'; ein 'Ja' waehlt den einzigen Treffer, ein
+    'Nein' fuehrt zur ehrlichen Notiz."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich muss meinen Termin am Dienstag absagen.")
+        z = flow.zug(sit, "Martin Berger.")
+        assert z and "meinen sie den" in z["text"].lower()
+        assert gehirn.sammler(sit)["phase"] == "wahl"
+
+        z2 = flow.zug(sit, "Ja, genau den.")
+        assert z2 and "wirklich absagen" in z2["text"].lower()
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_verwaltung_wahl_nein_fuehrt_zu_notiz():
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich muss meinen Termin am Dienstag absagen.")
+        flow.zug(sit, "Martin Berger.")
+        z = flow.zug(sit, "Nein, den meine ich nicht.")
+        assert z and "notiz" in z["text"].lower() and "vorgelegt" in z["text"].lower()
+        assert "Martin Berger" in (sit.get("praxisNotiz") or "")
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+GEFUNDEN_ZWEI = {
+    "ok": True,
+    "patient": {"id": "pat-1", "firstName": "Martin", "lastName": "Berger"},
+    "appointments": [
+        {
+            "id": "apt-1", "iso": "2026-09-03T10:00", "date": "2026-09-03",
+            "calendarId": "zex5bmv5jfIHWVW6zHbg", "doctorName": "Dr. Petsas",
+            "motivId": "vm-1", "motivName": "01 Kontrolluntersuchung",
+            "spoken": "am Donnerstag, den dritten September um zehn Uhr bei Dr. Petsas",
+        },
+        {
+            "id": "apt-2", "iso": "2026-09-08T14:30", "date": "2026-09-08",
+            "calendarId": "kal-niko", "doctorName": "Dr. Nikolaou",
+            "motivId": "vm-7", "motivName": "PZR / Professionelle Zahnreinigung",
+            "spoken": "am Dienstag, den achten September um vierzehn Uhr dreißig bei Dr. Nikolaou",
+        },
+    ],
+}
+
+
+def test_verwaltung_behandlung_grenzt_ein():
+    """Chef: hilfsweise die BEHANDLUNG erfragen — 'Zahnreinigung' trifft
+    den PZR-Termin, ohne dass der Anrufer die Liste durchgehen muss."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN_ZWEI)
     try:
         sit = _sit()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        flow.zug(sit, "Das weiß ich leider nicht mehr.")
+        flow.zug(sit, "Weiß ich auch nicht.")  # Behandler unbekannt -> hilfsweise weiter
         z = flow.zug(sit, "Martin Berger.")
-        assert z and "keinen kommenden termin" in z["text"].lower()
-        assert "neuen termin" in z["text"].lower()
+        assert z and "für welche behandlung" in z["text"].lower()
+        assert gehirn.sammler(sit)["frage"] == "behandlung"
+
+        z2 = flow.zug(sit, "Das war für die Zahnreinigung.")
+        assert z2 and "wirklich absagen" in z2["text"].lower()
+        assert sit.get("verwaltenTermin") == "apt-2"
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_verwaltung_behandler_filtert_kalender():
+    """Wann unklar, aber Behandler genannt: gesucht wird nur im Kalender
+    des Behandlers (Chef: 'um nicht in allen kalendern zu suchen')."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN_ZWEI)
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        flow.zug(sit, "Keine Ahnung.")
+        z = flow.zug(sit, "Bei Doktor Petsas war der.")
+        assert z and "vor- und nachname" in z["text"].lower()
+        z2 = flow.zug(sit, "Martin Berger.")
+        assert z2 and "wirklich absagen" in z2["text"].lower()
+        assert sit.get("verwaltenTermin") == "apt-1"  # nur der Petsas-Termin
     finally:
         verwalten.kal.find_patient_appointments = echt_find
 

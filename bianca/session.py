@@ -85,6 +85,9 @@ def _mit_sammler(sit: dict[str, Any]) -> dict[str, Any]:
         "arzt": (s.get("arzt") or {}).get("calendarName") or (s.get("arzt") or {}).get("typ") or "",
         "phase": s.get("phase") or "",
     }
+    if sit.get("praxisNotiz"):
+        # Rueckruf-Notiz (Termin nicht gefunden) — sichtbar im Dock/Letzter Anruf.
+        out["praxisNotiz"] = sit["praxisNotiz"]
     return out
 
 

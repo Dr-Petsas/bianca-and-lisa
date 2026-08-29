@@ -439,6 +439,59 @@ Frage nach dem BESTEHENDEN Termin. Der Anrufer setzte dreimal an und legte auf.
  nie — die W-TEMPO-Schwellen (350/650) kamen im Stream-Pfad still nicht an.
  Jetzt kopiert der reply-Zweig das Feld (beide Docks, Cache-Buster b14/call31).
 
+## Termin-Suche Absagen/Verschieben (W-SAMMELN 29.08.2026 — nicht rückbauen)
+
+Chef: "darin liegt die kunst erstmal alle daten pö a pö aufzusammeln und dann
+zu suchen." Vorher fragte Bianca bei absagen/verschieben sofort den Namen und
+las bei mehreren Treffern stur die Liste vor. Jetzt sammelt
+`bianca/verwalten.py -> _sammeln` (gleiche Prozedur für BEIDE Anliegen):
+
+1. **WANN ist der Termin?** (frage=wann). Klare Antwort (Wochentag, Uhrzeit,
+ "nächste Woche", Datum — `parse_slot_wish`) wird `verwHinweis` und filtert
+ die Treffer (`_hinweis_passt`: Datum/Wochentag/Stunde ±1 h/Tageszeit).
+ Zeitangabe schon im Einstiegssatz ("Termin am Donnerstag absagen") =
+ Frage übersprungen; beim Verschieben trennt `_ALT_REF_RE` das am/vom-Stück
+ (alter Termin) vom auf/zu-Stück (Neu-Wunsch), und die Wann-Antwort läuft
+ über einen Schnappschuss (`verwWunschAlt`) NIE in den Neu-Wunsch.
+ Antwortet der Anrufer stattdessen mit dem Namen -> kein Nachbohren
+ (verwWann=uebergangen, direkt weiter).
+2. **"Weiß nicht mehr"** (`_UNKLAR_RE`) -> **Behandler-Frage** (frage=arzt,
+ einmal, nur bei >= 2 Kalendern): "um nicht in allen kalendern zu suchen" —
+ der genannte Behandler filtert über calendarId. "Weiß auch nicht" ist ok,
+ dann geht es hilfsweise ohne weiter.
+3. **NAME** (bestehende Frage) -> erst DANN `agentFindPatientAppointments`.
+4. **Treffer bestätigen mit Anrede** (Chef: "Herr/Frau xy, ja?"):
+ "Gefunden — {Termin}. Soll ich den Termin wirklich absagen, Herr Berger?"
+ (gehirn.anrede; Vornamen-Wächter/Kartei). Bei Ja löscht
+ agentCancelAppointmentById; verschieben bestätigt den Fund und fragt dann
+ den Neu-Wunsch (bzw. bietet direkt an, wenn der Wunsch schon fiel).
+5. **Mehrere Treffer trotz Hinweisen** -> hilfsweise BEHANDLUNGS-Frage
+ (frage=behandlung, einmal, nur wenn die Motive sich unterscheiden;
+ `_behandlung_passt` gegen motivName/gemappte motivId) -> danach die
+ bekannte Auswahl-Liste (phase=wahl). Bei EINEM Termin, der die Hinweise
+ verfehlt: "Zu diesen Angaben finde ich nichts — ich sehe: {…}. Meinen Sie
+ den?" (Ja wählt ihn, phase=wahl).
+6. **Nicht gefunden** (notFound, keine kommenden Termine oder "Nein" auf die
+ Rückfrage) -> ehrlich + ECHTE Notiz: Zeile in `.data/praxis_notizen.jsonl`
+ (Zeit, Anliegen, Name, Telefon, Wann-/Behandler-/Behandlungs-Hinweis),
+ `sit["praxisNotiz"]` (Dock "Letzter Anruf" zeigt sie, session._mit_sammler),
+ merke_tool `praxis_notiz`. Gesprochen: "keine Sorge — ich schreibe eine
+ Notiz, und die wird Doktor XY vorgelegt" (arzt_sprechname, sonst "dem
+ Praxisteam") + Angebot Neubuchung (frage=neubuchung wie gehabt).
+
+Ein im Anruf schon bestimmter Termin (Auskunft davor, frische Buchung mit
+booking.appointmentId, Wahl-Liste) überspringt das Sammeln — nie den Anrufer
+ausfragen, was schon klar ist. Die AUSKUNFT bleibt beim alten Weg (Name ->
+vorlesen): wer fragt "wann ist mein Termin?", dem beantwortet man das Wann,
+statt es zu erfragen. Sammel-Stand räumt `_verw_reset` (nach Storno/Move/
+Notiz). Tests: `test_absage_fluss_komplett`, `test_absage_hinweis_im_
+einstiegssatz_ueberspringt_wann`, `test_absage_name_statt_wann_antwort`,
+`test_verwaltung_kein_termin_gefunden`, `test_verwaltung_hinweis_passt_
+nicht_ehrliche_rueckfrage`, `test_verwaltung_wahl_nein_fuehrt_zu_notiz`,
+`test_verwaltung_behandlung_grenzt_ein`, `test_verwaltung_behandler_
+filtert_kalender`, `test_verschieben_alt_neu_trennung`,
+`test_verschieben_fluss_komplett` (Dock-Buster b15).
+
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 
 Chef: "es darf NIE zum Schweigen kommen … nie länger als 1,5 Sekunden …
