@@ -140,6 +140,30 @@ def test_fortsetzen_verwirft_bei_buchung():
     assert S2 not in out
 
 
+def test_ist_abbruch_erkennung():
+    for t in ("Stopp.", "Stop!", "Halt", "Hör auf!", "Hören Sie bitte auf.",
+              "Sei still!", "Seien Sie bitte leise.", "Lass das.",
+              "Schluss jetzt.", "Genug davon.", "Stopp mal kurz"):
+        assert unterbrechung.ist_abbruch(t), t
+    for t in ("Moment, wie teuer ist das?", "Ich halte das für eine gute Idee",
+              "Das ist halt so bei uns in der Familie", "Nein danke",
+              "Können wir weitermachen?", ""):
+        assert not unterbrechung.ist_abbruch(t), t
+
+
+def test_fortsetzen_verwirft_bei_stopp():
+    """Live 29.08.2026: auf 'Stopp.' sagte Bianca 'Alles klar, ich höre auf …
+    Also, wo war ich: …' und wiederholte die komplette Ansage. Ein
+    Abbruch-Befehl verwirft den Rest."""
+    sit = _sit()
+    unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1800)
+    out = unterbrechung.fortsetzen(sit, "Alles klar, ich höre auf. Ich bin ganz Ohr.",
+                                   None, gesagt="Stopp.")
+    assert out == "Alles klar, ich höre auf. Ich bin ganz Ohr."
+    assert S2 not in out and S3 not in out
+    assert "unterbrochen" not in sit, "Rest ist verworfen, nicht aufgehoben"
+
+
 def test_fortsetzen_filtert_wortgleiche_saetze():
     sit = _sit()
     unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1800)

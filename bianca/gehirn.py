@@ -372,6 +372,20 @@ def _relatives_datum(t: str) -> str:
     return ""
 
 
+# "Das ist mir egal" auf die Zeitfrage IST eine Antwort (keine Präferenz —
+# die nächsten freien Termine zählen). Live 29.08.2026: ohne diese Erkennung
+# ging der Satz ans LLM, das eine Kalender-Störung erfand und die Frage
+# wiederholte; erst die Eskalation beim zweiten "egal" löste korrekt auf.
+_WUNSCH_EGAL_RE = re.compile(
+    r"\begal\b|\bganz\s+gleich\b|\bgleichg(?:ü|ue)ltig\b|"
+    r"\b(?:ist|is|wär\w*|waer\w*)\s+mir\s+(?:gleich|wurst|wurscht|latte)\b|"
+    r"\bwann\s+(?:auch\s+)?immer\b|\bspielt\s+keine\s+rolle\b|"
+    r"\bkeine\s+pr(?:ä|ae)ferenz\b|\bhauptsache\b|"
+    r"\bwie\s+(?:sie|es)\s+(?:wollen|meinen|passt)\b|\bwei(?:ß|ss)\s+(?:ich\s+)?nicht\b",
+    re.I,
+)
+
+
 def _wunsch_deuten(text: str) -> dict | None:
     """parse_slot_wish plus relative Tage — None, wenn der Satz nichts Zeitliches hat."""
     wish = parse_slot_wish(text) or {}
@@ -679,6 +693,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if wish:
         s["wunsch"] = _wunsch_mischen(s["wunsch"], wish)
         s["wunschText"] = _s(f"{s['wunschText']} {t}") if s["wunschText"] else t
+        neu.add("wunsch")
+    elif (s["frage"] == "wunsch" and s["wunsch"] is None
+          and _WUNSCH_EGAL_RE.search(_ohne_anlauf(t))
+          and not _ARZT_KONTEXT_RE.search(t)):
+        # "Egal" auf die Zeitfrage: keine Präferenz — nächste freie Termine.
+        s["wunsch"] = {}
+        s["wunschText"] = t
         neu.add("wunsch")
 
     # Buchstabierung schlägt den frei gehörten Nachnamen — auch wenn sie ihm

@@ -11,7 +11,8 @@ from kern.wissen import wissen_block
 
 def system_prompt(*, praxis: str, behandler: str, sprache: str = "de",
                   status: str = "", termine_text: str = "", slots_text: str = "",
-                  wissen: dict | None = None, plan: str = "") -> str:
+                  wissen: dict | None = None, plan: str = "",
+                  behandler_alle: str = "") -> str:
     historie = f"\nBEKANNTE TERMINE DES ANRUFERS\n{termine_text}\n" if termine_text else ""
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
     stand = f"\nSTAND DER BUCHUNG\n{status}\n" if status else ""
@@ -79,5 +80,5 @@ HEUTE
 {heute_zeile()} Danach richten sich „heute", „morgen" und Wochentage.
 {stand}{historie}{frei}{lage}
 PRAXIS: {praxis}
-BEHANDLER: {behandler or "—"}
+BEHANDLER: {behandler_alle or behandler or "—"}
 """

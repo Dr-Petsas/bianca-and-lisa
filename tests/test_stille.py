@@ -51,6 +51,22 @@ def test_zaehler_cap_und_reset():
     assert stille.stups_zaehlen(sit) == 1, "nach echtem Gehoertem beginnt es von vorn"
 
 
+def test_kurzlaut_stupst_statt_llm():
+    """Live 29.08.2026: 'Hm.' und 'Well.' (STT-Artefakt) gingen als volle
+    Zuege ans LLM und ergaben zwei fast identische ~4-s-Meta-Reden. Kurz-Laute
+    laufen jetzt als Stille-Stups — gedeckelt, offline, nie durchs LLM."""
+    sit = _buchungs_sit(frage="telefon")
+    z1 = bianca_agent.user_turn(sit, "Hm.")
+    assert z1["text"], "erster Kurz-Laut: Stups mit Stand und offener Frage"
+    z2 = bianca_agent.user_turn(sit, "Well.")
+    assert z2["text"], "zweiter Kurz-Laut: kurzer Frage-Stups"
+    z3 = bianca_agent.user_turn(sit, "Ähm...")
+    assert z3["text"] == "", "nach MAX_STUPSE Stupsen ist Schweigen"
+    # Echte Kurz-Antworten bleiben unberuehrt (kein Match).
+    for echt in ("Ja.", "Nein.", "Okay.", "Stopp."):
+        assert not bianca_agent._NUR_LAUT_RE.match(echt), echt
+
+
 def test_letzte_frage_nur_aus_juengster_antwort():
     msgs = [
         {"role": "assistant", "content": "Wie ist Ihr Name?"},

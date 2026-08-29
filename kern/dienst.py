@@ -347,7 +347,8 @@ class Dienst:
         text = sprech.sanitize(reply.get("text") or "")
         # W-BARGE: war der vorige Zug unterbrochen und dieser Einwand hat den
         # Zustand nicht bewegt, kommt der ungesprochene Rest mit Bruecke dran.
-        text = unterbrechung.fortsetzen(sit, text, reply)
+        # Ein Abbruch-Befehl ("Stopp.") verwirft den Rest (29.08.2026).
+        text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
         # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
         gesprochen = _s(sit.pop("_vorabText", ""))
         vorab_url = _s(sit.pop("_vorabUrl", ""))

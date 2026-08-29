@@ -51,6 +51,30 @@ ABGEBROCHEN = "(vom Anrufer unterbrochen)"
 
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
+# Abbruch-Befehl im Einwand ("Stopp.", "Hör auf!"): der Anrufer will die
+# Ansage NICHT zu Ende hören — der Rest wird verworfen, nie fortgesetzt.
+# Live 29.08.2026: auf "Stopp." sagte Bianca "Alles klar, ich höre auf …
+# Also, wo war ich: …" und wiederholte die komplette Ansage.
+_ABBRUCH_RE = re.compile(
+    r"\b(?:aufh(?:ö|oe)r(?:en|st)?|h(?:ö|oe)r(?:en)?\s+(?:sie\s+)?(?:bitte\s+)?auf|"
+    r"sei(?:en\s+sie)?\s+(?:bitte\s+)?(?:still|leise|ruhig)|"
+    r"ruhe\s+(?:bitte|jetzt)|schluss\s+(?:jetzt|damit)|lass(?:en\s+sie)?\s+das|"
+    r"nicht\s+weiter(?:reden|sprechen)|genug\s+(?:jetzt|davon))\b",
+    re.I,
+)
+_ABBRUCH_KURZ = {"stopp", "stop", "halt", "schluss", "genug", "ruhe", "still", "leise"}
+
+
+def ist_abbruch(text: str) -> bool:
+    """Will der Anrufer die Wiedergabe beenden (nicht nur einwenden)?"""
+    t = _s(text)
+    if not t:
+        return False
+    if _ABBRUCH_RE.search(t):
+        return True
+    toks = _norm(t).split()
+    return 0 < len(toks) <= 3 and any(tok in _ABBRUCH_KURZ for tok in toks)
+
 
 def enabled() -> bool:
     return os.environ.get("BARGE_WEITER", "1").strip().lower() not in ("0", "false", "no")
@@ -180,13 +204,16 @@ def ist_echo(sit: dict, gesagt: str) -> bool:
     return bool(gespr) and g in gespr
 
 
-def fortsetzen(sit: dict, text: str, reply: dict | None = None) -> str:
+def fortsetzen(sit: dict, text: str, reply: dict | None = None,
+               gesagt: str = "") -> str:
     """Nach dem Einwand-Zug: unterbrochenen Rest anhängen — oder verwerfen.
 
     Verworfen wird, wenn der Einwand den Zustand bewegt hat: eine Buchung/
     Schreibaktion lief (reply["book"]) oder die Antwort stellt schon eine
     Frage (dann treibt die Maschine neu — der alte Rest wäre doppelt oder
-    veraltet). Wortgleich in der Antwort enthaltene Rest-Sätze fallen weg.
+    veraltet). Ebenso bei einem Abbruch-Befehl ("Stopp.", "Hör auf!"):
+    wer stoppt, will den Rest NICHT hören. Wortgleich in der Antwort
+    enthaltene Rest-Sätze fallen weg.
     """
     u = sit.pop("unterbrochen", None)
     t = _s(text)
@@ -194,6 +221,8 @@ def fortsetzen(sit: dict, text: str, reply: dict | None = None) -> str:
         return t
     rest = [s for s in (u.get("rest") or []) if _s(s)]
     if not t or not rest:
+        return t
+    if ist_abbruch(gesagt):
         return t
     if (reply or {}).get("book"):
         return t

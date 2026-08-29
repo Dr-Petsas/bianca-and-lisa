@@ -32,6 +32,17 @@ _ANGEBOT_VERB_RE = re.compile(
     r"\bbiete|\banbieten|\bhätte\b|\bhaette\b|\bfrei\b|\bvorschlag|\bschlage\b|\bpasst\s+ihnen",
     re.I,
 )
+# Kurz-Laut ohne Inhalt ("Hm.", "Ähm", "Well." als STT-Artefakt): kein
+# Gesprächszug — statt einer langen LLM-Grundsatzrede kommt der Stille-Stups
+# (Stand + offene Frage, gedeckelt). Live 29.08.2026: zwei "Hm."/"Well."
+# ergaben zwei fast identische ~4-s-Meta-Reden. "Ja"/"Nein"/"Okay" bleiben
+# echte Antworten und stehen hier bewusst NICHT drin.
+_NUR_LAUT_RE = re.compile(
+    r"^\s*(?:hm+|mhm+|hmm+|ähm*|aehm*|äh+|aeh+|ehm+|öhm*|oehm*|"
+    r"tja+|na\s*ja|well|puh+|hach+|oh(?:je)?)"
+    r"[\s.,!?…]*$",
+    re.I,
+)
 _ANGEBOT_ZEIT_RE = re.compile(
     r"\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b|"
     r"\b\d{1,2}\.\s?(?:\d{1,2}\.|januar|februar|märz|maerz|april|mai|juni|juli|"
@@ -379,11 +390,25 @@ def _offene_frage(sit: dict) -> str:
     return _kanonische_frage(sit, fid) if fid else ""
 
 
+def _behandler_alle(tenant: dict) -> str:
+    """Alle Behandler des Standorts (Kalender-Namen), Haupt-Behandler zuerst —
+    fuer Auskunftsfragen ("Welche Ärzte arbeiten da?"). Live 29.08.2026:
+    das LLM kannte nur den einen behandler-Eintrag und verschwieg den Rest."""
+    haupt = _s(tenant.get("behandler"))
+    namen = [haupt] if haupt else []
+    for k in tenant.get("calendars") or []:
+        n = _s((k or {}).get("name"))
+        if n and n not in namen:
+            namen.append(n)
+    return ", ".join(namen)
+
+
 def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
     tenant = sit["tenant"]
     return system_prompt(
         praxis=_s(tenant.get("praxisName")),
         behandler=_s(tenant.get("behandler")),
+        behandler_alle=_behandler_alle(tenant),
         sprache=_s(tenant.get("sprache")) or "de",
         status=flow.status_zeile(sit),
         termine_text=_termine_zeile(sit),
@@ -408,6 +433,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
+    if _NUR_LAUT_RE.match(text_in):
+        # Kurz-Laut ohne Inhalt: wie Funkstille behandeln (Stups statt
+        # LLM-Rede) — bewusst VOR stille.reset, damit der Stups-Deckel
+        # (MAX_STUPSE) auch eine "Hm."-Serie beendet.
+        return stille_zug(sit)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
     msgs = list(sit.get("messages") or [])
     if not msgs:

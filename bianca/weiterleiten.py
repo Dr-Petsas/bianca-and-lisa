@@ -77,6 +77,16 @@ _MENSCH_RE = re.compile(
     re.I,
 )
 
+# Info-/Bestandsfrage ("Gibt es auch Doktor Patrikis bei euch?", "Welche
+# Ärzte arbeiten da?"): der Anrufer will eine AUSKUNFT, kein Durchstellen.
+# Live 29.08.2026: der blosse Namens-Treffer gewann vor der Frage-Erkennung
+# und Bianca "verband" mitten in der Frage. Solche Saetze gehen ans LLM.
+_INFOFRAGE_RE = re.compile(
+    r"\b(?:gibt\s+es|gibts|habt\s+ihr|haben\s+sie|arbeite[tn]|"
+    r"wer\s+(?:ist|sind)|welche[rsnm]?)\b",
+    re.I,
+)
+
 # Direkter Behandlerwunsch: "Kann ich mit Doktor Petsas sprechen?"
 _ARZT_SPRECHEN_RE = re.compile(
     r"mit\s+(?:dem\s+|der\s+|herrn\s+|frau\s+)?(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b"
@@ -193,6 +203,9 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if w.get("frage") == "anbieten":
         if gehirn.ist_ja(t):
             return zaluma_weiterleitung(sit, w.get("ziel") or {}, melde)
+        if _INFOFRAGE_RE.search(t) and not erkannt(t):
+            # Auskunftsfrage statt Zielangabe — LLM antwortet, Angebot bleibt.
+            return None
         d = arztmod.deute(t, sit.get("tenant") or {})
         if d and d.get("typ") == "genannt":
             # "Nein, lieber zu Doktor Nikolaou" — namentlich genannt heisst
@@ -208,6 +221,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     # Offene Arzt-Rueckfrage ("Zu welchem unserer Ärzte darf ich Sie verbinden?")
     elif w.get("frage") == "arzt":
+        if _INFOFRAGE_RE.search(t) and not erkannt(t):
+            # "Gibt es auch Doktor X?" ist eine Auskunftsfrage, keine
+            # Zielangabe — nicht verbinden, das LLM beantwortet sie.
+            return None
         d = arztmod.deute(t, sit.get("tenant") or {})
         if d and d.get("typ") == "genannt":
             # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.

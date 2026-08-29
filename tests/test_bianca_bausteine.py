@@ -1580,3 +1580,30 @@ def test_bestaetigung_unklar_bleibt_deterministisch():
     r = flow.zug(sit, "Hmpf, von mir aus halt")
     # "von mir aus" ist eine Kurz-Zustimmung — sonst deterministische Rückfrage.
     assert r is not None
+
+
+def test_egal_auf_die_zeitfrage_ist_eine_antwort():
+    """Live 29.08.2026: 'Das ist mir egal.' auf die Wunschzeit-Frage ging ans
+    LLM, das eine Kalender-Störung erfand — erst das zweite 'egal' löste über
+    die Eskalation auf. 'Egal' zählt jetzt sofort als 'keine Präferenz'."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False,
+              "grund": "akute Beschwerden/Notfall", "frage": "wunsch"})
+    neu = gehirn.einsammeln(sit, "Das ist mir egal.")
+    assert "wunsch" in neu and s["wunsch"] == {}
+
+    # Mit Arzt-Bezug ("Egal welcher Arzt") bleibt die Zeitfrage offen —
+    # das Egal gehört dem Behandler-Deuter.
+    sit2 = _sit()
+    s2 = gehirn.sammler(sit2)
+    s2.update({"modus": "buchen", "warSchonMal": True, "frage": "wunsch"})
+    gehirn.einsammeln(sit2, "Egal welcher Arzt.")
+    assert s2["wunsch"] is None
+
+    # Ohne offene Zeitfrage bleibt "egal" folgenlos für den Wunsch.
+    sit3 = _sit()
+    s3 = gehirn.sammler(sit3)
+    s3.update({"modus": "buchen", "frage": "grund"})
+    gehirn.einsammeln(sit3, "Das ist mir egal.")
+    assert s3["wunsch"] is None

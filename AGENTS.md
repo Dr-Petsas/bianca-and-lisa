@@ -17,6 +17,15 @@ Jede Sitzung trägt `clientId`. Keine Praxis-IDs im Kernel.
 Dev-Default: `tenants/meddent.json`. Schreiben: `WRITE_LIVE=1`
 (Chef 26.08.2026: echter Kalender — buchen, absagen, verschieben).
 
+**Sprechformen des Praxisnamens (29.08.2026):** meddent heißt jetzt
+"Zahnärzte im Medical Center Düsseldorf". Weil Plural-Namen sich nicht
+nach "von der …" beugen lassen, trägt der Mandant die Formen selbst:
+`praxisNameMelde` (Biancas Meldung, Nominativ, gern ohne Stadt) und
+`praxisNameVon` (gebeugt inkl. Artikel: "den Zahnärzten im Medical Center
+Düsseldorf" — Lisas "hier ist Lisa von …", auch in Prompt-Regie und
+Einwand-Zeile). Helfer: `kern/tenants.praxis_melde()` / `praxis_von()`;
+ohne Felder gilt wie früher `praxisName` bzw. "der {praxisName}".
+
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.
@@ -56,10 +65,21 @@ ersetzen (erst Lisa/Bianca, bei Erfolg Demo-Clara + Clara V7 in DEREN Repos).
  — jede Engine-Basis hat ihren eigenen Cache).
  Dienststart damit ~2 s statt ~60 s; Stimmen-/Engine-Wechsel rendert neu,
  weil der Key wechselt. Cache leeren = Ordner löschen.
+- **Pausen-Straffung** (29.08.2026 — nicht rückbauen): Qwen3 würfelt in
+  Ein-Block-Renders teils weit über eine Sekunde Stille zwischen die Sätze —
+  die Begrüßung klang "sehr langsam gesprochen mit zu langen Pausen" (Chef).
+  `kern/tts.pausen_straffen()` kappt in FRISCHEN `speak_dauerhaft`-Renders
+  (Begrüßung, Füller, feste Fragen) Anlauf-Stille auf 120 ms, Satz-Pausen
+  auf 350 ms, Ausklang auf 250 ms — nur Fenster unter der Aktiv-Schwelle
+  fallen weg, die Sprache bleibt Sample-identisch. Gesprächs-Antworten
+  (Stream, Ziffern-Readbacks) laufen NICHT hindurch. Straffung sitzt VOR
+  Längen-Deckel/Gegenhören in `warm()` — abgenommen wird das Audio, das
+  später spielt. Notaus: `TTS_PAUSEN=0`. Tests: `tests/test_tts_pausen.py`;
+  frisch rendern + nachmessen: `tests/ansage_probe.py`.
 - **Satz-Pinning** (28.08.2026 spät — nicht rückbauen): dauerhaft gewarmte
- Sätze liegen im gepinnten RAM-Bereich (`kern/tts.py -> _FEST`), den das
- 48er-LRU nie verdrängt. Bianca wärmt beim Start zusätzlich ALLE festen
- Maschinen-Fragen (`bianca/gehirn.py -> feste_saetze()`, in Sanitize-Form).
+  Sätze liegen im gepinnten RAM-Bereich (`kern/tts.py -> _FEST`), den das
+  48er-LRU nie verdrängt. Bianca wärmt beim Start zusätzlich ALLE festen
+  Maschinen-Fragen (`bianca/gehirn.py -> feste_saetze()`, in Sanitize-Form).
  `Dienst.stimme()` spricht mehrsätzige Antworten satzweise und fügt die
  Teile zu EINEM WAV (`tts.wav_fuegen`, kein Streaming, keine Naht im Wort):
  gewarmte Fragen kosten ~0,0 s statt ~1-2 s Synthese, Quittungen landen
@@ -315,8 +335,12 @@ reine Textarbeit, kein LLM, kein Netz.
   ("Also, wo war ich: …", rotierend) + Rest an die Antwort — NUR wenn der
   Einwand den Zustand nicht bewegt hat: keine Buchung (`reply.book`) und
   keine Frage in der Antwort (fragt die Maschine neu, wäre der alte Rest
-  doppelt oder veraltet). Wortgleich enthaltene Rest-Sätze fallen weg;
-  der gesprochene Anhang wird ins Protokoll NACHGETRAGEN.
+  doppelt oder veraltet). Ein ABBRUCH-Befehl als Einwand ("Stopp.",
+  "Hör auf", "Sei still" — `ist_abbruch`) verwirft den Rest IMMER
+  (live 29.08.2026: auf "Stopp." kam "Alles klar, ich höre auf … Also,
+  wo war ich:" und die komplette Ansage lief erneut). Wortgleich
+  enthaltene Rest-Sätze fallen weg; der gesprochene Anhang wird ins
+  Protokoll NACHGETRAGEN.
 - **Fehlalarm:** nichts/zu wenig gehört => Dock ruft `POST /api/weiter`
   (`weiter_sprechen`): der Rest wird an der Unterbrechungsstelle
   weitergesprochen — deterministisch, ohne LLM, ohne Brücke. Ein

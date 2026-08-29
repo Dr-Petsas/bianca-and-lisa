@@ -153,6 +153,29 @@ def test_weiterleiten_ohne_namen_fragt_nur_nach_arzt():
     assert weiterleiten.JINGLE_EVENT in events
 
 
+def test_infofrage_verbindet_nicht():
+    """Live 29.08.2026: 'Nein, gibt es auch Doktor Patrikis ist bei euch?'
+    (Auskunftsfrage auf die Arzt-Rueckfrage) wurde als Zielangabe gedeutet —
+    Bianca 'verband' mitten in der Frage. Info-Fragen gehen ans LLM, eine
+    echte Zielangabe danach verbindet weiter."""
+    sit = _sit()
+    sit["weiterleiten"] = {"frage": "arzt"}
+    assert weiterleiten.zug(sit, "Nein, gibt es auch Doktor Patrikis ist bei euch?") is None
+    assert weiterleiten.zug(sit, "Welche Ärzte haben Sie denn?") is None
+    z = weiterleiten.zug(sit, "Dann zu Doktor Patrikis, bitte.")
+    assert z and "Kirri" in z["text"]
+
+
+def test_infofrage_beim_angebot_verbindet_nicht():
+    sit = _sit()
+    sit["weiterleiten"] = {"frage": "anbieten",
+                           "ziel": {"calendarId": "zex5bmv5jfIHWVW6zHbg",
+                                    "calendarName": "Dr. Petsas"}}
+    assert weiterleiten.zug(sit, "Gibt es auch Doktor Patrikis bei Ihnen?") is None
+    z = weiterleiten.zug(sit, "Ja, gerne.")
+    assert z and "Kirri" in z["text"]
+
+
 def test_mensch_ohne_arzt_fragt_nach_arzt():
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit einem Menschen sprechen?")
