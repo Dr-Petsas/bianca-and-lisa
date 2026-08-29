@@ -8,8 +8,11 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg curl && \
     rm -rf /var/lib/apt/lists/*
 
+# Gepinnt auf den abgenommenen Stand vom 28.08.2026 (aus dem laufenden
+# Container gelesen) — ein Rebuild zieht sonst still andere Versionen.
 RUN pip install --no-cache-dir \
-      onnx-asr onnxruntime numpy fastapi uvicorn python-multipart
+      onnx-asr==0.12.0 onnxruntime==1.29.0 numpy==2.4.6 \
+      fastapi==0.141.1 uvicorn==0.52.4 python-multipart==0.0.32
 
 ENV STT_MODELL_PFAD=/modell \
     STT_PORT=8100

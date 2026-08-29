@@ -8,6 +8,15 @@ Whitespace-Normalisierung + Fuzzy-Hotword-Nachkorrektur (postcorrect.py,
 Kopie von Claras stt_postcorrect). KEIN Torch, KEINE GPU — das qwen-vLLM
 und der TTS-Container auf der 5090 bleiben unberuehrt.
 
+Stille-Trim (W-STT-TRIM 29.08.2026): Vor- und Nachlauf-Stille wird VOR der
+Inferenz energie-basiert abgeschnitten (Rand 160/320 ms). Grund: Parakeet-TDT
+normalisiert die Log-Mel-Features ueber das GANZE Segment — dominiert Stille
+(das Dock schickt Zoeger-Vorlauf + ~0,7 s Nachlauf mit), wird ein kurzes "Ja"
+wegnormalisiert (NeMo #15757: leeres oder erfundenes Transkript). Reine
+Stille-Blobs werden verworfen statt halluziniert. Notaus: STT_TRIM=0 =>
+byte-identisches Alt-Verhalten. Dazu ein Retry-Guard fuer onnx-asr #138
+(AssertionError bei bestimmten Eingabelaengen). Abnahme: tests/stt_kurz_probe.py.
+
 Vertrag (stt_serve/api.md):
   POST /transcribe  multipart: file=<webm|m4a|wav>, keywords="Petsas,Tzannis"
                     -> {"text": "...", "korrekturen": [["Betsas","Petsas"]],
@@ -29,6 +38,17 @@ from postcorrect import assess_name_certainty, correct_transcript
 MODELL_PFAD = os.environ.get("STT_MODELL_PFAD", "/modell")
 PORT = int(os.environ.get("STT_PORT", "8100"))
 SAMPLE_RATE = 16000
+
+# Stille-Trim (W-STT-TRIM): Notaus + Tuning. Die Schwellen sind bewusst
+# Konstanten (kein Env-Wildwuchs) — nur der Notaus ist eine Umgebungsvariable.
+_TRIM_AN = os.environ.get("STT_TRIM", "1").strip() != "0"
+_TRIM_FENSTER_MS = 20       # RMS-Fenster
+_TRIM_RAND_VORN = 8         # 160 ms Rand vor der Sprache (Plosive nicht koepfen)
+_TRIM_RAND_HINTEN = 16      # 320 ms Rand danach (TDT-Decoder braucht Auslauf)
+_TRIM_REL_SCHWELLE = 0.05   # aktiv = lauter als 5 % vom Peak ...
+_TRIM_ABS_SCHWELLE = 0.003  # ... aber nie unter dem Grundrausch-Boden
+_TRIM_STILLE_PEAK = 0.001   # Peak darunter = reine Stille (z. B. Opus-Leerlauf)
+_TRIM_MIN_SPRACHE = 5       # < 5 laute Fenster (100 ms) = Knackser, keine Sprache
 
 app = FastAPI()
 _LOCK = threading.Lock()
@@ -70,6 +90,39 @@ def _normalisieren(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip())
 
 
+def _stille_trimmen(audio):
+    """Schneidet Vor-/Nachlauf-Stille energie-basiert ab (W-STT-TRIM).
+
+    Rueckgabe: (audio, grund) — grund ist None, wenn nichts zu schneiden war,
+    sonst die Log-Zeile ("2960ms->760ms" bzw. "verworfen: ..."). Verworfene
+    Segmente (reine Stille, Brummen, Knackser) kommen als leeres Array zurueck,
+    damit das Nach-Trim-Gate sauber "" liefert statt zu halluzinieren.
+    """
+    import numpy as np
+
+    fenster = SAMPLE_RATE * _TRIM_FENSTER_MS // 1000
+    n = audio.size // fenster
+    if n < 3:
+        return audio, None
+    rms = np.sqrt(np.mean(audio[: n * fenster].reshape(n, fenster) ** 2, axis=1))
+    peak = float(rms.max())
+    if peak < _TRIM_STILLE_PEAK:
+        return audio[:0], "verworfen: reine stille"
+    schwelle = max(peak * _TRIM_REL_SCHWELLE, _TRIM_ABS_SCHWELLE)
+    laut = np.flatnonzero(rms > schwelle)
+    if laut.size == 0:
+        return audio[:0], "verworfen: nur grundrauschen"
+    if laut.size < _TRIM_MIN_SPRACHE:
+        return audio[:0], f"verworfen: transient {laut.size * _TRIM_FENSTER_MS}ms"
+    a = max(0, int(laut[0]) - _TRIM_RAND_VORN) * fenster
+    b = min(n, int(laut[-1]) + 1 + _TRIM_RAND_HINTEN) * fenster
+    if a == 0 and b >= n * fenster:
+        return audio, None
+    vorher_ms = audio.size * 1000 // SAMPLE_RATE
+    audio = audio[a:b]
+    return audio, f"{vorher_ms}ms->{audio.size * 1000 // SAMPLE_RATE}ms"
+
+
 def _transkribieren(pcm: bytes, keywords: list[str]) -> tuple[str, list, dict]:
     import numpy as np
 
@@ -77,8 +130,26 @@ def _transkribieren(pcm: bytes, keywords: list[str]) -> tuple[str, list, dict]:
     if len(pcm) < SAMPLE_RATE * 2 // 5:
         return "", [], {"unsicher": False, "wort": "", "grund": "", "kandidaten": []}
     audio = np.frombuffer(pcm, dtype="<i2").astype("float32") / 32768.0
+    if _TRIM_AN:
+        audio, trim_grund = _stille_trimmen(audio)
+        if trim_grund:
+            print(f"trim: {trim_grund}", flush=True)
+        # Nach-Trim-Gate: was nach dem Schnitt unter 200 ms liegt, war keine
+        # Sprache — leer zurueck, bevor das Modell etwas erfinden kann.
+        if audio.size < SAMPLE_RATE // 5:
+            return "", [], {"unsicher": False, "wort": "", "grund": "", "kandidaten": []}
     with _LOCK:
-        text = str(_MODEL.recognize(audio, sample_rate=SAMPLE_RATE) or "").strip()
+        try:
+            text = str(_MODEL.recognize(audio, sample_rate=SAMPLE_RATE) or "").strip()
+        except AssertionError:
+            # onnx-asr #138: bestimmte Eingabelaengen kippen die Laengen-
+            # Arithmetik des TDT-Decoders (AssertionError statt Ergebnis).
+            # 40 ms Stille hinten dran verschieben die Laenge — ein zweiter
+            # Wurf genuegt, statt den ganzen Zug zu verlieren.
+            print("recognize: AssertionError (onnx-asr #138), retry +40ms", flush=True)
+            audio = np.concatenate(
+                [audio, np.zeros(SAMPLE_RATE // 25, dtype=audio.dtype)])
+            text = str(_MODEL.recognize(audio, sample_rate=SAMPLE_RATE) or "").strip()
     text = _normalisieren(text)
     text, korrekturen = correct_transcript(text, keywords)
     zweifel = assess_name_certainty(text, keywords)
@@ -92,6 +163,7 @@ def health():
         "model": "parakeet-primeline-onnx",
         "device": "cpu",
         "loadSeconds": _LADEZEIT,
+        "trim": _TRIM_AN,
     }
 
 

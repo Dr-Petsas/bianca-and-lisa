@@ -13,6 +13,15 @@ Entwicklungsstufen von Clara V7 und Demo Clara"):
   Token-Paare fuer zerhackte Namen, Namens-Zweifel fuer Buchungs-Wachen).
   Phrasen-Fixes (Heads-up/Teleskopkrone/Kons) sind Marker-gated — Lisa/Bianca
   senden keine Marker und bleiben davon unberuehrt (wie Claras Bianca).
+- Stille-Trim (W-STT-TRIM 29.08.2026): Vor-/Nachlauf-Stille wird VOR der
+  Inferenz energie-basiert abgeschnitten (20-ms-RMS-Fenster, Schwelle
+  max(5 % vom Peak, 0.003), Rand 160 ms vorn / 320 ms hinten). Kurze
+  Antworten ("Ja", "Nein") ueberleben so die Feature-Normalisierung des
+  TDT-Modells (NeMo #15757); reine Stille-/Brumm-Blobs werden verworfen
+  (`{"text": ""}`) statt halluziniert. Dazu ein Retry-Guard fuer onnx-asr
+  #138 (AssertionError -> ein Wurf mit +40 ms Stille). Notaus: `STT_TRIM=0`
+  (compose reicht die Variable durch) => Alt-Verhalten ohne Trim; `/health`
+  zeigt `"trim"`. Abnahme: `tests/stt_kurz_probe.py`.
 
 ## Endpunkte
 
@@ -46,7 +55,7 @@ Antwort:
 ### GET /health
 
 ```json
-{"ok": true, "model": "parakeet-primeline-onnx", "device": "cpu", "loadSeconds": 9.1}
+{"ok": true, "model": "parakeet-primeline-onnx", "device": "cpu", "loadSeconds": 9.1, "trim": true}
 ```
 
 ## Client (Lisa/Bianca)

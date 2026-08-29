@@ -9,3 +9,4 @@ _posteingang/
 *.log
 tts_serve-5090.zip
 app-5090.zip
+tests/daten/

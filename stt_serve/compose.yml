@@ -15,6 +15,9 @@ services:
       - "8212:8100"
     volumes:
       - ./modell:/modell:ro
+    environment:
+      # Stille-Trim-Notaus (W-STT-TRIM): STT_TRIM=0 => Alt-Verhalten ohne Trim.
+      STT_TRIM: "${STT_TRIM:-1}"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",

@@ -97,6 +97,22 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
   gegen Referenztranskript), E2E im Bianca-Dienst `timings.stt` = 0,44 s —
   Scribe lag bei 0,8-2,0 s. Messwerkzeuge: `tests/latenz_e2e.py`,
   `tests/timing_bericht.py`, `stt_serve/latenz_probe.sh`.
+- **Stille-Trim im Container (W-STT-TRIM 29.08.2026 — nicht rückbauen):**
+  Parakeet-TDT normalisiert die Log-Mel-Features über das GANZE Segment —
+  die Dock-Blobs (Zöger-Vorlauf + ~0,7 s Nachlauf-Stille) drückten kurze
+  Antworten weg: "Ja"/"Nein" gepolstert -> leeres Transkript, bei "Ja,
+  gerne." fraß der Nachlauf sogar das zweite Wort (NeMo #15757; Baseline
+  29.08.: 5/13 Proben rot). `stt_serve/server.py -> _stille_trimmen()`
+  schneidet Vor-/Nachlauf-Stille VOR der Inferenz energie-basiert ab
+  (20-ms-RMS, Schwelle max(5 % vom Peak, 0.003), Rand 160 ms vorn /
+  320 ms hinten); reine Stille-/Brumm-Blobs werden verworfen statt
+  halluziniert (4 s Stille: 49 ms statt Voll-Decode). Dazu Retry-Guard
+  für onnx-asr #138 (AssertionError -> ein Wurf mit +40 ms Stille).
+  Notaus: `STT_TRIM=0` (compose reicht durch) = byte-identisches
+  Alt-Verhalten; `/health` zeigt `trim`. Image-Versionen seit 29.08.
+  gepinnt (onnx-asr 0.12.0, onnxruntime 1.29.0, numpy 2.4.6). Abnahme:
+  `tests/stt_kurz_probe.py` (13/13 grün; Referenzsatz lisa.wav wortgenau,
+  Latenz 140-215 ms unverändert).
 - Health-/Dock-Anzeige: `kern/stt.py -> engine_anzeige()` ("Ohr: Parakeet
   (lokal)" neben "Stimme: Chatterbox (lokal)").
 - **Clara-Schutz:** Claras laufender Parakeet, Clara V7/dev, Demo-Clara und
