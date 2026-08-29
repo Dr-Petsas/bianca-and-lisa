@@ -79,6 +79,13 @@ ELEVENLABS_TTS_MODEL = _s("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 
 CF_BASE = _s("PICKADOC_CF_BASE", "https://europe-west3-docgenda.cloudfunctions.net").rstrip("/")
 MAS_URL = _s("MAS_URL", "http://127.0.0.1:4000").rstrip("/")
+# Praxisgedächtnis (W-GEDAECHTNIS 29.08.2026): Gesprächs-Reports an
+# POST {MAS_URL}/brain/events, Anrufer-Kontext von /brain/caller-context.
+# Der Service-Token wird nur gebraucht, wenn das MAS Auth erzwingt — dann
+# (wie beim ElevenLabs-Key) direkt aus der MAS-.env gelesen. Die Client-Id
+# ist der Firebase-Mandant der Praxis (MAS-Default, siehe MAS /health).
+MAS_TOKEN = _s("MAS_TOKEN") or _peek_key(Path(r"F:\MAS-2\backend\.env"), "MAS_SERVICE_TOKEN")
+MAS_CLIENT_ID = _s("MAS_CLIENT_ID", "MEe4ZQHEzOPzLcexyhdT")
 
 TENANTS_DIR = ROOT / "tenants"
 DATA_DIR = ROOT / ".data"

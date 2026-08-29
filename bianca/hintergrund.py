@@ -17,7 +17,7 @@ from typing import Any
 
 from bianca import arzt as arztmod
 from bianca import gehirn
-from kern import calendar, motive, patients
+from kern import calendar, gedaechtnis, motive, patients
 from kern.patients import arzt_sprechname
 
 
@@ -197,6 +197,9 @@ def anstossen(sit: dict) -> None:
     motive.anstossen(sit)
     kartei_anstossen(sit)
     vorrat_anstossen(sit)
+    # W-GEDAECHTNIS: sobald Name/Telefon feststehen, im Praxisgedaechtnis
+    # (MAS) nachsehen, ob etwas zu diesem Anrufer vorliegt — parallel.
+    gedaechtnis.kontext_anstossen(sit)
 
 
 def kartei_laeuft(sit: dict) -> bool:

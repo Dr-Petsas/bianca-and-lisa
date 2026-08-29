@@ -14,7 +14,7 @@ from typing import Any
 from bianca import flow, gehirn, session, telefon
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
-from kern import gespraech, llm, stille, tenants, wiederholung, zuege
+from kern import gedaechtnis, gespraech, llm, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
@@ -419,6 +419,7 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
         slots_text=slots_zeile(sit.get("offered") or []),
         wissen=tenant.get("wissen"),
         plan=plan,
+        kontext=gedaechtnis.kontext_block(sit),
     )
 
 
@@ -443,6 +444,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # (MAX_STUPSE) auch eine "Hm."-Serie beendet.
         return stille_zug(sit)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
+    # W-GEDAECHTNIS: falls inzwischen Name/Nummer bekannt sind, parallel im
+    # Praxisgedaechtnis nachsehen (key-gesichert, no-op ohne neue Fakten).
+    gedaechtnis.kontext_anstossen(sit)
     msgs = list(sit.get("messages") or [])
     if not msgs:
         return start_reply(sit)
@@ -472,6 +476,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         msgs.append({"role": "assistant", "content": fl["text"]})
         sit["messages"] = msgs
         gespraech.nach_antwort(sit)
+        # W-GEDAECHTNIS: der Zug kann Name/Nummer geerntet haben (Sammler,
+        # Verwaltung) — jetzt nachsehen, damit der Kontext im NAECHSTEN Zug
+        # schon im Prompt steht.
+        gedaechtnis.kontext_anstossen(sit)
         aus = {"text": fl["text"], "book": fl.get("book")}
         if fl.get("hangup"):
             # Weiterleitung (Jingle + Kirri-Zettel): das Dock legt danach auf.
@@ -519,6 +527,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         text = bewacht
     sit["messages"] = msgs
     gespraech.nach_antwort(sit)
+    # W-GEDAECHTNIS: auch LLM-Zuege koennen Fakten geerntet haben.
+    gedaechtnis.kontext_anstossen(sit)
     return {"text": text, "book": book}
 
 

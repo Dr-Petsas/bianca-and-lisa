@@ -9,7 +9,9 @@ Lena-Voice und MAS-2 nicht anfassen, nicht neustarten, nicht umbauen.
 - Kein Kill fremder Python-Worker.
 - Kein Import aus `Clara-Voice*`, `Pickadoc-Demo` oder `MAS-2`.
 - Kalender und Patientensuche gehen an Pickadoc-Cloud-Functions.
-- MAS ist optional und nur lesend (`MAS_URL`).
+- MAS (`MAS_URL`): Kalender-Lese-Fallback + Praxisgedächtnis (W-GEDAECHTNIS
+  29.08.2026: Gesprächs-Reports an `/brain/events` schreiben, Anrufer-Kontext
+  von `/brain/caller-context` lesen — sonst nichts, kein Prozess-Eingriff).
 
 ## Mandanten
 
@@ -491,6 +493,46 @@ nicht_ehrliche_rueckfrage`, `test_verwaltung_wahl_nein_fuehrt_zu_notiz`,
 `test_verwaltung_behandlung_grenzt_ein`, `test_verwaltung_behandler_
 filtert_kalender`, `test_verschieben_alt_neu_trennung`,
 `test_verschieben_fluss_komplett` (Dock-Buster b15).
+
+## Praxisgedächtnis (W-GEDAECHTNIS 29.08.2026 — nicht rückbauen)
+
+Chef: "schreiben bianca und lisa reports in das MAS gedächtnis? die müssen
+geschrieben werden als Gesprächszusammenfassung ähnlich wie in dem
+terminpopup ... das muss sichergestellt sein ab jetzt und bianca muss prüfen
+ob irgendetwas im kontext vorliegt während sie mit dem user spricht ... im
+Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
+
+- **Report am Gesprächsende:** die hangup-Nacharbeit (läuft schon als
+  Daemon-Thread) postet EIN Event an `POST {MAS_URL}/brain/events` — Kanal
+  `bianca_call`/`lisa_call` (im MAS-Schema vorgesehen), idempotente Id
+  `telefonki:<kanal>:<sessionId>`, Zusammenfassung im Terminpopup-Stil
+  ("Laut Anruf (Bianca): Martin Berger — Termin vereinbart am 02.09. um
+  09:00 Uhr bei Dr. Patrikis wegen Zahnschmerzen." + `notes.besondere_zeilen`).
+  Eine offene Rückruf-Notiz (W-SAMMELN) macht das Event `open` +
+  `callbackRequested` → das MAS legt daraus einen VORGANG an und legt ihn
+  der Praxis vor ("die Notiz wird Doktor XY vorgelegt" ist damit echt);
+  erledigte Anrufe sind `status=none` (kein Ticket). Leere Gespräche (kein
+  Anrufer-Wort, kein Werkzeug) schreiben nichts.
+- **Kontext während des Gesprächs:** sobald Name oder Telefon feststehen
+  (`kontext_anstossen`, key-gesichert — Bianca: `hintergrund.anstossen` +
+  `agent.user_turn`; Lisa: `start_reply` + `user_turn`), fragt ein
+  Daemon-Thread `GET /brain/caller-context?phone=` (dafür gebauter,
+  sprechfertiger Text, 14-Tage-Fenster) bzw. hilfsweise
+  `GET /brain/karteikarte?name=` (Events zu max. 3 Zeilen gefaltet) ab →
+  `sit["gedaechtnis"]` → Block "PRAXISGEDÄCHTNIS (frühere Kontakte)" in
+  beiden System-Prompts. So erkennt Bianca z. B. den Rückrufer, den Lisa
+  gestern nicht erreicht hat, statt bei Null anzufangen.
+- **Ziel/Auth:** `MAS_URL` (Default `http://127.0.0.1:4000`), Header
+  `X-Client-Id` = `MAS_CLIENT_ID` (Firebase-Mandant der Praxis, Default
+  `MEe4ZQHEzOPzLcexyhdT`), optional `X-Service-Token` aus `MAS_TOKEN`
+  (peek auf die MAS-.env `MAS_SERVICE_TOKEN` — nur nötig, wenn das MAS
+  Auth erzwingt). `/health` beider Dienste zeigt `gedaechtnis`.
+- **Nie blockierend:** Report im hangup-Thread, Kontext in eigenen
+  Daemon-Threads; Fehler werden geloggt und verschluckt — das Telefonat
+  leidet nie. Das lokale Sitzungs-Gedächtnis (`.data/*_sessions`,
+  last_call, praxis_notizen.jsonl) bleibt unverändert bestehen.
+- **Notaus:** `MAS_GEDAECHTNIS=0` (oder leere `MAS_URL`) => kein Netz,
+  Verhalten wie vor W-GEDAECHTNIS. Tests: `tests/test_gedaechtnis.py`.
 
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 

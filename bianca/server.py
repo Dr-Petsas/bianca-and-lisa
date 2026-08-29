@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import halbsatz, llm, sprech, stt, tenants, tts, unterbrechung
+from kern import gedaechtnis, halbsatz, llm, sprech, stt, tenants, tts, unterbrechung
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -94,6 +94,7 @@ def health():
         "stt": stt.engine_anzeige() if stt.bereit() else "live",
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
+        "gedaechtnis": gedaechtnis.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -249,6 +250,8 @@ def api_hangup(body: HangupIn):
             print(f"bianca-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
+        # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
+        gedaechtnis.report_senden(sit)
 
     threading.Thread(target=_nacharbeit, daemon=True).start()
     return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}

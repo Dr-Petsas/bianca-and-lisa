@@ -10,7 +10,7 @@ from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
                   sprache: str = "de", termine_text: str = "", slots_text: str = "",
                   wissen: dict | None = None, plan: str = "",
-                  praxis_von: str = "") -> str:
+                  praxis_von: str = "", kontext: str = "") -> str:
     # Gebeugte Sprechform ("den Zahnärzten im Medical Center Düsseldorf") —
     # ohne Angabe wie frueher "der {praxisName}".
     von = praxis_von or (f"der {praxis}" if praxis else "der Praxis")
@@ -92,7 +92,7 @@ Nur die Kalender-Werkzeuge unten. IDs kommen aus der Sitzung — du erfindest ke
 {termin_logik}
 HEUTE
 {heute_zeile()} Danach richten sich „heute", „morgen" und Wochentage.
-{historie}{frei}{lage}
+{kontext}{historie}{frei}{lage}
 GESPRÄCHSPARTNER: {patient or "der Patient"}
 PRAXIS: {praxis}
 BEHANDLER (nur wenn nötig): {behandler or "—"}

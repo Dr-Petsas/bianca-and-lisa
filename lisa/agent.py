@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kern import gespraech, stille, tenants, wiederholung, zuege
+from kern import gedaechtnis, gespraech, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
@@ -25,6 +25,9 @@ def _termine_zeile(past: list, upcoming: list) -> str:
 def start_reply(session_doc: dict) -> dict[str, Any]:
     tenant = session_doc["tenant"]
     patient = session_doc.get("patient") or {}
+    # W-GEDAECHTNIS: Lisa weiss schon beim Waehlen, WEN sie anruft — das
+    # Praxisgedaechtnis (MAS) parallel abfragen, bevor der erste Zug faellt.
+    gedaechtnis.kontext_anstossen(session_doc)
     text = begruessung(
         tenants.praxis_von(tenant),
         _s(session_doc.get("auftrag")),
@@ -44,6 +47,7 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
                 termine_text=_termine_zeile(session_doc.get("past") or [], session_doc.get("upcoming") or []),
                 slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
                 wissen=tenant.get("wissen"),
+                kontext=gedaechtnis.kontext_block(session_doc),
             ),
         },
         {
@@ -94,6 +98,8 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     if not text_in:
         return {"text": "", "book": None}
     stille.reset(session_doc)  # es wird wieder gesprochen — Stupse von vorn
+    # W-GEDAECHTNIS: key-gesichert — laeuft nur, wenn neue Fakten da sind.
+    gedaechtnis.kontext_anstossen(session_doc)
     msgs = list(session_doc.get("messages") or [])
     if not msgs:
         return start_reply(session_doc)
@@ -153,6 +159,8 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
             msgs[-1]["content"] = text
     session_doc["messages"] = msgs
     gespraech.nach_antwort(session_doc)
+    # W-GEDAECHTNIS: Werkzeuge koennen den Patienten nachgeladen haben.
+    gedaechtnis.kontext_anstossen(session_doc)
     return {"text": text, "book": book}
 
 
@@ -170,6 +178,7 @@ def system_prompt_aktuell(session_doc: dict, plan: str = "") -> str:
         slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
         wissen=tenant.get("wissen"),
         plan=plan,
+        kontext=gedaechtnis.kontext_block(session_doc),
     )
 
 

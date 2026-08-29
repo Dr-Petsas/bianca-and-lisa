@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from kern import halbsatz, sprech, unterbrechung
+from kern import gedaechtnis, halbsatz, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
@@ -170,6 +170,7 @@ def health():
         "stt": stt.engine_anzeige() if stt.bereit() else "live",
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
+        "gedaechtnis": gedaechtnis.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -384,6 +385,8 @@ def api_hangup(body: HangupIn):
             print(f"lisa-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
+        # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
+        gedaechtnis.report_senden(sit)
 
     threading.Thread(target=_nacharbeit, daemon=True).start()
     return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}
