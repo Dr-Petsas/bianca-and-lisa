@@ -51,7 +51,7 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
                 r"|schlaflabor|schlafklinik|gr(?:ü|ue)ger|(?:dr\.?|doktor)\s+lange\b", re.I),
      "Schiene/Schnarchen", [r"slm\s+besprechung", r"schien\w*\s+besprech", r"\bslm\b", r"schien", r"schnarch", r"narval", r"knirsch"]),
     (re.compile(r"zahnspange|spange|kieferorthop|\bkfo\b"
-                r"|schief\w*[^.!?]{0,24}z(?:ä|ae)hn|z(?:ä|ae)hn\w*[^.!?]{0,24}(?:schief|gerade|richten)", re.I),
+                r"|schief\w*[^.!?]{0,24}z(?:ä|ae)hn|z(?:ä|ae)hn\w*[^.!?]{0,24}(?:schief|gerade|richten|begradig|verschoben)", re.I),
      "Zahnspange/KFO", [r"kfo\s+besprechung", r"kfo\s+kontroll", r"\bkfo\b", r"spange", r"kieferorthop"]),
     (re.compile(r"erstuntersuchung|erstbesuch|neupatient", re.I),
      "Erstuntersuchung/Neupatient", [r"erstuntersuchung", r"neupatient", r"\berst"]),
@@ -60,7 +60,7 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
      "Zahnersatz-Beratung", [r"ze\s+besprechung", r"zahnersatz\w*\s+(?:besprechung|beratung)", r"prothetik", r"zahnersatz"]),
     (re.compile(r"abgebrochen|abgeplatzt|ecke\s+ab|stück\s+ab|stueck\s+ab", re.I),
      "akute Beschwerden/Notfall", [r"akut", r"notfall", r"repar"]),
-    (re.compile(r"kontroll|vorsorge|check|routine|durchsicht|nachschauen|halbjahr|jahresuntersuchung", re.I),
+    (re.compile(r"kontroll|vorsorge|check|routine|durchsicht|nachschauen|nachsehen|nachgucken|halbjahr|jahresuntersuchung", re.I),
      "Kontrolluntersuchung", [r"kch\s+kontroll", r"kontrolluntersuchung", r"kontroll", r"vorsorge", r"check"]),
 ]
 
@@ -68,6 +68,19 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
 # "KCH Kontroll…" zuerst (Allgemein-Zahnheilkunde) — sonst gewann im grossen
 # Katalog der KUERZESTE Kontroll-Name, und das war "VID OP Kontrolle" (Video).
 FALLBACK_MUSTER = [r"kch\s+kontroll", r"kontrolluntersuchung", r"kontroll", r"besprechung"]
+
+# Verneinte Erwaehnungen zaehlen nicht als Konzept-Treffer: "es ist NICHTS
+# Akutes, nur die normale Kontrolle" lief sonst auf Notfall (Baukasten-Fund
+# 29.08.2026). Die Phrase wird vor dem Matching entfernt — der Rest des
+# Satzes ("normale Kontrolle") traegt die echte Aussage.
+_VERNEINT_RE = re.compile(
+    r"(nichts|nix|nicht|kein\w*)\s+(akut\w*|notfall\w*|schlimm\w*|dringend\w*)",
+    re.I,
+)
+
+
+def _ohne_verneintes(text: str) -> str:
+    return _VERNEINT_RE.sub(" ", text or "")
 
 
 def _s(v: Any) -> str:
@@ -115,6 +128,7 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
     die Buchung auf Kontrolle/Besprechung zurück — der Kern bleibt trotzdem
     der erkannte (für Rückfrage und Notiz-Wortlaut).
     """
+    text = _ohne_verneintes(text)
     for cre, kern, muster in KONZEPTE:
         if cre.search(text):
             vm = (motiv_suchen(tenant, muster, katalog=katalog, calendar_id=calendar_id)
@@ -134,6 +148,7 @@ def konzept_muster(text: str) -> list[str]:
 
     Für die behandlerspezifische NEU-Auflösung beim Kontext-Bau: derselbe
     gesprochene Grund, aber gegen den Katalog des ZIEL-Kalenders gesucht."""
+    text = _ohne_verneintes(text)
     for cre, _kern, muster in KONZEPTE:
         if cre.search(text):
             return muster
