@@ -167,6 +167,53 @@ def test_telefon_wav_downsample_8khz_8bit():
     assert first % 256 == 0
 
 
+def test_testtermine_werden_erst_nach_2_stunden_reif():
+    """Frisch gebuchter Testtermin bleibt 2 Stunden, danach ist er loeschreif."""
+    import tempfile
+    from datetime import datetime, timedelta
+    from pathlib import Path
+
+    from tests.baukasten import aufraeumen
+
+    t0 = datetime(2026, 8, 29, 10, 0, 0)
+    with tempfile.TemporaryDirectory() as d:
+        basis = Path(d)
+        schlange = basis / "autoloesch.json"
+        merkliste = basis / "aufgeraeumt.json"
+        aufraeumen.vormerken(
+            [{"id": "apt-1", "story": "s01", "slotIso": "2026-09-02T09:00:00",
+              "gebuchtUm": t0.isoformat(timespec="seconds")}],
+            jetzt=t0, pfad=schlange)
+        assert aufraeumen.reife(jetzt=t0 + timedelta(hours=1, minutes=59),
+                                pfad=schlange, merkliste=merkliste) == []
+        reif = aufraeumen.reife(jetzt=t0 + timedelta(hours=2),
+                                pfad=schlange, merkliste=merkliste)
+        assert [e["id"] for e in reif] == ["apt-1"]
+        geraeumt = []
+        erg = aufraeumen.reife_ausfuehren(
+            jetzt=t0 + timedelta(hours=2), pfad=schlange, merkliste=merkliste,
+            cancel_fn=lambda tid: geraeumt.append(tid) or {"cancelled": True})
+        assert geraeumt == ["apt-1"] and erg["abgesagt"] == 1
+        assert aufraeumen.reife(jetzt=t0 + timedelta(hours=3),
+                                pfad=schlange, merkliste=merkliste) == []
+
+
+def test_vormerken_aus_bericht_nimmt_lastbook():
+    from tests.baukasten import aufraeumen
+
+    bericht = {
+        "id": "s01-markus-kontrolle",
+        "start": "2026-08-29T10:00:00",
+        "lastCall": {"lastBook": {
+            "booked": True, "appointmentId": "xyz",
+            "slotIso": "2026-09-02T09:00:00",
+        }},
+    }
+    funde = aufraeumen.funde_aus_bericht(bericht)
+    assert funde[0]["id"] == "xyz"
+    assert funde[0]["gebuchtUm"] == "2026-08-29T10:00:00"
+
+
 def test_dauer_s_liest_8khz_header():
     import tempfile
     from pathlib import Path

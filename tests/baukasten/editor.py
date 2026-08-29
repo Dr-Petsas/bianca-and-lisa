@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from tests.baukasten import geschichten, klang, runner, saetze  # noqa: E402
+from tests.baukasten import aufraeumen, geschichten, klang, runner, saetze  # noqa: E402
 
 WEB_DIR = Path(__file__).resolve().parent / "editor_web"
 BERICHTE_DIR = runner.BERICHTE_DIR
@@ -264,6 +264,12 @@ def bericht(lauf_id: str, story_id: str) -> dict[str, Any]:
         return _json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"id": story_id, "zuege": [], "fehler": "Bericht nicht gefunden"}
+
+
+@app.on_event("startup")
+def _autoloesch_start() -> None:
+    """Testtermine aus dem Studio nach 2 Stunden wieder aus dem Kalender."""
+    aufraeumen.waechter_starten()
 
 
 @app.get("/")

@@ -77,6 +77,17 @@ class HangupIn(BaseModel):
     sessionId: str = ""
 
 
+@app.on_event("startup")
+def _testtermin_autoloesch() -> None:
+    """Test-Studio-Buchungen bleiben 2 Stunden, dann Autoloesch — nur IDs
+    aus der Baukasten-Schlange, nie ein fremder Patiententermin."""
+    try:
+        from tests.baukasten import aufraeumen
+        aufraeumen.waechter_starten()
+    except Exception as e:
+        print(f"autoloesch-start: {type(e).__name__}: {e}", flush=True)
+
+
 @app.get("/health")
 def health():
     h = llm.health()

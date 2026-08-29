@@ -30,7 +30,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tests.baukasten import geschichten, klang, saetze  # noqa: E402
+from tests.baukasten import aufraeumen, geschichten, klang, saetze  # noqa: E402
 
 BASIS = "http://127.0.0.1:8096"
 BERICHTE_DIR = Path(__file__).resolve().parent / "berichte"
@@ -287,6 +287,11 @@ class Anruf:
         }
         (self.dir / "bericht.json").write_text(
             json.dumps(bericht, ensure_ascii=False, indent=1), encoding="utf-8")
+        # Nicht sofort stornieren — 2 Stunden im Kalender, dann Autoloesch.
+        try:
+            aufraeumen.vormerken_aus_bericht(bericht)
+        except Exception as e:
+            print(f"runner: autoloesch-vormerken {type(e).__name__}: {e}", flush=True)
         return bericht
 
     def _auflegen(self) -> dict[str, Any]:
