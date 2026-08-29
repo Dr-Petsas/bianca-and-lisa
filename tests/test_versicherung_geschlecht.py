@@ -22,7 +22,8 @@ def _neu_komplett(sit: dict) -> dict:
     """Sammler eines Neupatienten bis einschließlich Telefon füllen."""
     s = gehirn.sammler(sit)
     s.update({
-        "modus": "buchen", "warSchonMal": False, "grund": "Kontrolluntersuchung",
+        "modus": "buchen", "warSchonMal": False, "arzt": {"typ": "egal"},
+        "grund": "Kontrolluntersuchung",
         "wunsch": {}, "vorname": "Peter", "nachname": "Berger",
         "buchstabiert": True, "telefon": "01776004600", "telefonOk": True,
     })

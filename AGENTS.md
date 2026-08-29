@@ -255,6 +255,29 @@ geschlechtsspezifisch angesprochen.
 - Neue Akten bekommen das Geschlecht (m/f) über masCreatePatient registriert.
 - Tests: `tests/test_versicherung_geschlecht.py` (Teil von lauf_bianca).
 
+## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
+
+Chef: "es gibt dr petsas dr patrikis und dr nikolaou … es muss zu beginn
+geklärt werden in welchem kalender und bei welchem arzt du suchen sollst."
+Jeder Behandler hat seinen eigenen Kalender samt Id; Neupatienten wurden nie
+gefragt und die Suche lief stumm ohne Behandler-Klärung.
+
+- **Neupatienten** (warSchonMal=False) bekommen direkt nach der
+  Schonmal-Frage die Behandler-WAHL mit allen Namen aus den Tenant-Kalendern
+  (`gehirn.arztwahl_frage`, Sprechform ohne Vorname via
+  `kern.patients.arzt_sprechname`) — nur bei >= 2 Kalendern, ein einziger
+  Kalender bleibt fraglos.
+- **Bestand** behält die Akten-Frage "bei welchem Behandler waren Sie
+  zuletzt?" (anderer Zweck: Kartei-Auflösung).
+- **"Egal" bleibt gültig** (typ=egal): Slot-Suche läuft ohne calendarId,
+  die Cloud Function wählt global den schnellsten Arzt (wie gehabt).
+- **Wiederholungs-Wächter** tauscht bei Neupatienten auf eigene Formen
+  (`gehirn.ARZTWAHL_VARIANTEN`) — nie "bei wem waren Sie zuletzt?" an
+  jemanden, der nie da war. Kern-Wort-Regel gilt: jede Form trägt "Behandler".
+- `feste_saetze(tenant)` wärmt die Wahl-Frage mit den echten Namen vor
+  (bianca/server ruft sie MIT Tenant).
+- Tests: Behandler-Wahl-Block in `tests/test_bianca_bausteine.py`.
+
 ## Lisa zuerst
 
 Bianca-Ordner bleibt leer, bis der Lisa-Kernel Anrufe hält.

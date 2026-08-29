@@ -228,7 +228,7 @@ def _warm_start():
         # aus dem Platten-Cache fragt die Maschine in ~0,2 s statt ~1,2 s
         # lokaler Synthese. Gewarmt wird die SANITIZE-Form — genau die
         # spricht der Zug später (Cache-Key muss treffen).
-        for satz in gehirn.feste_saetze():
+        for satz in gehirn.feste_saetze(t):
             tts.warm(sprech.sanitize(satz))
         print("bianca-warm: feste Fragen im Cache", flush=True)
     threading.Thread(target=_run, daemon=True).start()

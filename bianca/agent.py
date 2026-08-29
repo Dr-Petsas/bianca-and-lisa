@@ -140,12 +140,17 @@ def _wiederholungs_wache(sit: dict, text: str) -> str:
     dort ist also wirklich der vorige Zug."""
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
+    varianten = gehirn.FRAGE_VARIANTEN
+    if fid == "arzt" and s.get("warSchonMal") is False:
+        # Neupatient: die Behandler-WAHL wiederholen, nicht "bei wem waren
+        # Sie zuletzt?" — der Anrufer war ja noch nie da.
+        varianten = {**varianten, "arzt": gehirn.ARZTWAHL_VARIANTEN}
     return wiederholung.pruefen(
         sit, text,
         frueher=wiederholung.letzte_antworten(sit.get("messages") or []),
         frage_id=fid,
         frage_kern=_FRAGE_KERN.get(fid, ""),
-        varianten=gehirn.FRAGE_VARIANTEN,
+        varianten=varianten,
     )
 
 

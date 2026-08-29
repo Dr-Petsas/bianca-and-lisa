@@ -1388,6 +1388,7 @@ def test_einzelner_vorname_wird_vorname():
     # Es fehlt jetzt der NACHNAME — nicht noch einmal der volle Name.
     assert s["warSchonMal"] is None or fid  # naechste_frage läuft
     s["warSchonMal"] = False
+    s["arzt"] = {"typ": "egal"}
     s["grund"] = "Kontrolluntersuchung"
     s["wunsch"] = {}
     fid, frage = gehirn.naechste_frage(sit)
@@ -1607,3 +1608,87 @@ def test_egal_auf_die_zeitfrage_ist_eine_antwort():
     s3.update({"modus": "buchen", "frage": "grund"})
     gehirn.einsammeln(sit3, "Das ist mir egal.")
     assert s3["wunsch"] is None
+
+
+# --- Behandler-Wahl fuer Neupatienten (Chef 29.08.2026) ---------------------
+
+def test_neupatient_bekommt_behandler_wahl():
+    """Chef 29.08.2026: 'es muss zu beginn geklärt werden in welchem kalender
+    und bei welchem arzt du suchen sollst' — Neupatienten wurden nie gefragt,
+    die Suche lief stumm ohne Behandler-Klärung."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "arzt"
+    for name in ("Petsas", "Nikolaou", "Patrikis"):
+        assert name in frage, f"alle Behandler zur Wahl anbieten: {frage}"
+    assert "zuletzt" not in frage.lower(), "Neupatient war nie da"
+
+    # Antwort mit Namen: Kalender des Genannten, dann weiter zum Anliegen.
+    s["frage"] = "arzt"
+    neu = gehirn.einsammeln(sit, "Am liebsten zu Doktor Nikolaou.")
+    assert "arzt" in neu and "Nikolaou" in (s["arzt"] or {}).get("calendarName", "")
+    assert s["warSchonMal"] is False, "Behandler-Wunsch macht niemanden zum Bestandspatienten"
+    fid2, _ = gehirn.naechste_frage(sit)
+    assert fid2 == "grund"
+
+
+def test_neupatient_egal_laesst_global_suchen():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "frage": "arzt"})
+    neu = gehirn.einsammeln(sit, "Das ist mir egal.")
+    assert "arzt" in neu and (s["arzt"] or {}).get("typ") == "egal"
+    fid, _ = gehirn.naechste_frage(sit)
+    assert fid == "grund", "nach 'egal' geht es normal weiter"
+
+
+def test_bestand_behandlerfrage_bleibt_zuletzt():
+    """Regression: Bestandspatienten behalten die Akten-Frage nach dem
+    LETZTEN Behandler — nur Neupatienten bekommen die Wahl-Frage."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "arzt" and "zuletzt" in frage
+
+
+def test_arztwahl_formen_tragen_kernwort():
+    """Kern-Wort-Regel wie fuer FRAGE_VARIANTEN: Anker und Wachen muessen
+    die offene Frage an 'Behandler' erkennen (agent._FRAGE_KERN['arzt'])."""
+    import re
+
+    from bianca import agent as bianca_agent
+
+    kern = bianca_agent._FRAGE_KERN["arzt"]
+    tenant = laden("meddent")
+    formen = list(gehirn.ARZTWAHL_VARIANTEN) + [
+        gehirn.arztwahl_frage(tenant), gehirn.arztwahl_frage(None),
+    ]
+    for form in formen:
+        assert re.search(kern, form, re.I), f"Form ohne Kern-Wort: {form}"
+
+
+def test_wiederholte_arztwahl_nimmt_wahl_variante():
+    """Muss die Wahl-Frage wiederholt werden, kommt eine WAHL-Formulierung —
+    nie 'bei wem waren Sie zuletzt?' (der Anrufer war nie da)."""
+    from bianca import agent as bianca_agent
+
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "frage": "arzt"})
+    frage = gehirn.arztwahl_frage(sit["tenant"])
+    sit["messages"].append({"role": "assistant", "content": f"Gern. {frage}"})
+    raus = bianca_agent._wiederholungs_wache(sit, f"Alles klar. {frage}")
+    assert frage not in raus, "nie zweimal wortgleich"
+    assert "zuletzt" not in raus.lower(), "Bestand-Formulierung waere sachlich falsch"
+    assert "ehandler" in raus, "die Frage muss hoerbar bleiben (Kern-Wort)"
+
+
+def test_feste_saetze_waermen_die_arztwahl():
+    tenant = laden("meddent")
+    saetze = gehirn.feste_saetze(tenant)
+    assert gehirn.arztwahl_frage(tenant) in saetze
+    for v in gehirn.ARZTWAHL_VARIANTEN:
+        assert v in saetze

@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
 from kern import motive, vornamen
+from kern.patients import arzt_sprechname
 from kern.slots import parse_slot_wish
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -933,8 +934,38 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Behandler-WAHL fuer Neupatienten (Chef 29.08.2026: "es muss zu beginn
+# geklaert werden in welchem kalender und bei welchem arzt du suchen sollst").
+# Eigene Formen, weil die "arzt"-Varianten oben nach dem LETZTEN Behandler
+# fragen — das waere bei jemandem, der noch nie da war, sachlich falsch.
+# agent._wiederholungs_wache tauscht sie bei warSchonMal=False ein.
+# Kern-Wort-Regel gilt auch hier: jede Form traegt "Behandler" (_FRAGE_KERN).
+ARZTWAHL_VARIANTEN: tuple[str, ...] = (
+    "Zu welchem unserer Behandler darf ich den Termin legen?",
+    "Haben Sie einen Wunsch-Behandler — oder soll ich einfach schauen, wo der nächste freie Termin ist?",
+)
 
-def feste_saetze() -> list[str]:
+
+def arztwahl_frage(tenant: dict | None) -> str:
+    """Behandler-Frage fuer Neupatienten MIT den Namen zur Auswahl.
+
+    Die Namen kommen aus den Tenant-Kalendern (jeder Behandler hat seinen
+    eigenen Kalender samt Id) in Sprechform ("Doktor Petsas" — Vorname faellt
+    weg, kern.patients.arzt_sprechname). "Egal" bleibt eine gueltige Antwort:
+    einsammeln setzt dann typ=egal und die Slot-Suche nimmt den Praxis-Default.
+    """
+    namen: list[str] = []
+    for c in (tenant or {}).get("calendars") or []:
+        n = arzt_sprechname(_s((c or {}).get("name")))
+        if n and n not in namen:
+            namen.append(n)
+    if len(namen) < 2:
+        return ARZTWAHL_VARIANTEN[0]
+    liste = ", ".join(namen[:-1]) + " oder " + namen[-1]
+    return f"Zu welchem unserer Behandler möchten Sie — {liste}?"
+
+
+def feste_saetze(tenant: dict | None = None) -> list[str]:
     """Alle festen Maschinen-Sätze für den TTS-Platten-Cache (28.08.2026).
 
     Die Buchungs-Maschine spricht diese Fragen wörtlich (naechste_frage
@@ -969,6 +1000,11 @@ def feste_saetze() -> list[str]:
          "direkt eine professionelle Zahnreinigung mit dazu buchen?"),
     ]
     out = list(erstformen)
+    # Behandler-Wahl fuer Neupatienten: die Erstform traegt die Namen aus
+    # dem Tenant (nur mit Tenant baubar), die Varianten sind statisch.
+    if tenant:
+        out.append(arztwahl_frage(tenant))
+    out.extend(ARZTWAHL_VARIANTEN)
     for varianten in FRAGE_VARIANTEN.values():
         for v in varianten:
             if v not in out:
@@ -1056,7 +1092,15 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             return fid_v, frage_v
         return "", ""
 
-    # Neu bei uns: erst Anliegen und Zeit, dann sauber aufnehmen.
+    # Neu bei uns: erst den Behandler klaeren (Chef 29.08.2026 — sonst
+    # landet alles still im Default-Kalender von Doktor Petsas), dann
+    # Anliegen und Zeit, dann sauber aufnehmen. Bei nur EINEM Kalender
+    # gibt es nichts zu waehlen — dann bleibt der Default richtig.
+    if not s["arzt"]:
+        cals = [c for c in (sit.get("tenant") or {}).get("calendars") or []
+                if _s((c or {}).get("id"))]
+        if len(cals) >= 2:
+            return "arzt", arztwahl_frage(sit.get("tenant"))
     if not s["grund"]:
         return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
     if s["wunsch"] is None:
