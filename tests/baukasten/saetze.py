@@ -648,6 +648,17 @@ HALBSATZ_FRAGMENTE = [
     "Ich rufe an wegen der",
 ]
 
+# Halbsatz-PAARE fuer den Story-Runner: Teil 1 klingt unfertig (Denkpause),
+# Teil 2 kommt nach Biancas "warte" — serverseitig gefuegt ergeben beide
+# einen normalen Eroeffnungssatz (W-HALBSATZ-Probe im echten Anruf).
+HALBSATZ_PAARE = [
+    ("Guten Tag, ich hätte gerne einen", "Termin bei Ihnen, am besten bald."),
+    ("Hallo, ich rufe an wegen einem", "Termin, den ich gern ausmachen würde."),
+    ("Guten Tag, ich wollte fragen, ob", "ich bei Ihnen einen Termin bekommen kann."),
+    ("Hallo, ich bräuchte mal wieder einen", "Termin in Ihrer Praxis."),
+    ("Guten Tag, es geht um einen", "Termin, den ich vereinbaren möchte."),
+]
+
 # ---------------------------------------------------------------- Neue Anliegen
 
 ANLIEGEN_REZEPT = [
@@ -718,6 +729,64 @@ FUER_WEN = [
     "Es geht um meine Tochter.",
     "Ich rufe für meine Mutter an.",
     "Der Termin wäre für meinen Mann.",
+]
+
+# ------------------------------------------------ Kurzantworten fuer den Runner
+
+VORNAME_NUR = [
+    "{vorname}.",
+    "Der Vorname ist {vorname}.",
+    "{vorname}, wie gesagt.",
+]
+
+NACHNAME_NUR = [
+    "{nachname}.",
+    "Der Nachname ist {nachname}.",
+    "{nachname} hinten.",
+]
+
+# "Soll ich den Termin wirklich absagen/verschieben?" (absage_ok/verschieb_ok)
+VERWALTEN_JA = [
+    "Ja, bitte absagen.",
+    "Ja, genau den meine ich.",
+    "Ja, bitte.",
+    "Ja, den bitte.",
+    "Ja, richtig.",
+    "Ja, machen Sie das bitte.",
+]
+
+# Auswahl aus einer vorgelesenen Terminliste (terminwahl/slot-Listen).
+TERMINWAHL_ERSTER = [
+    "Den ersten, bitte.",
+    "Der erste passt.",
+    "Nehmen wir den ersten.",
+    "Der zuerst genannte, bitte.",
+]
+
+# "Möchten Sie direkt einen neuen Termin vereinbaren?" nach einer Absage.
+NEUBUCHUNG_NEIN = [
+    "Nein danke, erst mal nicht.",
+    "Nein, das war's dann schon.",
+    "Nein, ich melde mich dann wieder.",
+    "Nein danke, im Moment nicht.",
+]
+
+# "Kann ich sonst noch etwas für Sie tun?" — Abschluss ohne neues Anliegen.
+NICHTS_MEHR = [
+    "Nein danke, das war alles.",
+    "Nein, das war's. Vielen Dank!",
+    "Nein, danke — Sie haben mir sehr geholfen.",
+    "Das war schon alles, danke.",
+    "Nein, alles erledigt. Danke!",
+    "Nein danke, mehr brauche ich nicht.",
+]
+
+# telefon_alt (Akte traegt andere Nummer): neue Nummer soll gelten.
+TELEFON_ALT_NEU = [
+    "Bitte tragen Sie die neue Nummer ein.",
+    "Die alte können Sie löschen, die neue gilt.",
+    "Nehmen Sie bitte die neue Nummer.",
+    "Die neue bitte — die alte stimmt nicht mehr.",
 ]
 
 # ================================================================== Werkzeuge
