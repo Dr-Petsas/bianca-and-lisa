@@ -75,6 +75,21 @@ def test_versicherung_saetze_bauen():
         assert p != g
 
 
+def test_schonmal_saetze_ernten_keinen_namen():
+    """Live 29.08.2026: "ich bin gerade erst hergezogen" wurde als Name
+    "Gerade Hergezogen" verbucht — kein Schonmal-Satz darf Namen setzen."""
+    from bianca import gehirn
+    tenant = tenants.laden("meddent")
+    for satz in saetze.SCHONMAL_JA + saetze.SCHONMAL_NEIN:
+        sit = {"tenant": tenant, "messages": [{"role": "system", "content": "x"}]}
+        s = gehirn.sammler(sit)
+        s["modus"] = "buchen"
+        s["frage"] = "schonmal"
+        gehirn.einsammeln(sit, satz)
+        assert not s["vorname"] and not s["nachname"], \
+            f"{satz!r} -> Name {s['vorname']!r} {s['nachname']!r}"
+
+
 if __name__ == "__main__":
     fehler = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

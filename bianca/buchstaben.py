@@ -113,6 +113,7 @@ def deute(text: str) -> dict[str, Any] | None:
         return None
     letters: list[str] = []
     woerter: list[str] = []  # zusammenhängende Nicht-Buchstabier-Wörter
+    anschluss: list[str] = []  # Wörter DIREKT hinter der Buchstabier-Kette
     fremd = 0
     kette = False   # sind wir gerade IN einer Buchstabier-Folge?
     fuell_folge = 0  # wie viele Füllwörter seit dem letzten Buchstaben?
@@ -155,6 +156,15 @@ def deute(text: str) -> dict[str, Any] | None:
             fuell_folge = 0
             i += 1
             continue
+        # STT klebt Einzelbuchstaben gern zu Clustern zusammen ("F-E-LD-Kamp"
+        # kam live 29.08.2026 statt F-E-L-D-K-A-M-P). Ein kurzes vokalloses
+        # Token INNERHALB der Kette ist kein Wort, sondern zusammengezogene
+        # Buchstaben: aufspalten.
+        if (kette and fuell_folge == 0 and 2 <= len(tok) <= 4 and tok.isalpha()
+                and not any(v in tok for v in "aeiouäöüy")):
+            letters.extend(tok)
+            i += 1
+            continue
         if tok in _TAFEL and len(tok) > 1:
             # Ein Tafel-Wort OHNE "wie" zählt nur INNERHALB einer
             # Buchstabier-Kette ("Anton Berta Cäsar") oder wenn direkt das
@@ -179,6 +189,8 @@ def deute(text: str) -> dict[str, Any] | None:
             continue
         if tok.isalpha() and len(tok) >= 2:
             woerter.append(tok)
+            if kette and fuell_folge == 0:
+                anschluss.append(tok)
         fremd += 1
         kette = False
         fuell_folge = 0
@@ -189,6 +201,22 @@ def deute(text: str) -> dict[str, Any] | None:
     zusammen = "".join(letters)
     if len(zusammen) < 2:
         return None
+    # Wort-Anker: Beginnt ein mitgesprochenes Wort mit GENAU den buchstabierten
+    # Buchstaben (mind. 3, sonst Zufallstreffer), ist das Wort der Name — egal
+    # wie STT den Rest der Buchstabierung verstümmelt hat ("Feldkamp, also
+    # F-E-LD-Kamp", live 29.08.2026: deute lieferte None, die Frage loopte).
+    if len(zusammen) >= 3:
+        for w in woerter:
+            if len(w) > len(zusammen) and w.startswith(zusammen):
+                return {"name": w[0].upper() + w[1:], "sicher": True}
+    # Suffix-Fuge: STT hat das ENDE der Buchstabierung zu einem Wort
+    # zusammengezogen ("F-E-L-D-Kamp"). Genau ein Wort direkt hinter der
+    # Kette ohne Füller dazwischen => anfügen — ausser das Wort ist die
+    # Buchstabierung selbst ("M-E-I-E-R, Meier") oder steckt schon am Ende.
+    if (len(zusammen) >= 3 and len(anschluss) == 1 and 2 <= len(anschluss[0]) <= 15
+            and anschluss[0] != zusammen and not zusammen.endswith(anschluss[0])):
+        voll = zusammen + anschluss[0]
+        return {"name": voll[0].upper() + voll[1:], "sicher": False}
     # Dominanz: eine echte Buchstabierung besteht überwiegend aus Buchstaben.
     if fremd > len(letters):
         return None

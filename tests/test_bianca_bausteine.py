@@ -673,6 +673,98 @@ def test_verwaltung_kein_termin_gefunden():
         verwalten.kal.find_patient_appointments = echt_find
 
 
+def test_absage_varianten_erkannt():
+    """Chef 29.08. (Peter-Müller-Gespräch): 'meinen Termin absagen /
+    stornieren / löschen' — die sprachlichen Varianten muessen ALLE in den
+    Absage-Modus fuehren (die Wann-Frage ist der Beleg)."""
+    for satz in [
+        "Ich möchte meinen Termin stornieren.",
+        "Bitte löschen Sie meinen Termin.",
+        "Können Sie den Termin streichen?",
+        "Ich muss den Termin leider canceln.",
+        "Mein Termin fällt aus.",
+        "Ich möchte den Termin rückgängig machen.",
+        "Nehmen Sie den Termin bitte aus dem Kalender, also entfernen.",
+        "Ich muss den Termin platzen lassen.",
+        "Ich kann den Termin nicht wahrnehmen.",
+    ]:
+        sit = _sit()
+        z = flow.zug(sit, satz)
+        assert gehirn.sammler(sit)["modus"] == "absagen", satz
+        assert z and "wann ist der termin" in z["text"].lower(), f"{satz}: {z}"
+    # Zeitangabe schon im Einstiegssatz: Wann-Frage wird uebersprungen,
+    # direkt die Namens-Frage (W-SAMMELN).
+    sit = _sit()
+    z = flow.zug(sit, "Der Termin morgen fällt leider aus.")
+    assert gehirn.sammler(sit)["modus"] == "absagen"
+    assert z and "vor- und nachname" in z["text"].lower(), z
+
+
+def test_absage_verben_ohne_termin_bezug_zuenden_nicht():
+    """Allerwelts-Verben ohne Termin-Bezug sind KEINE Absage."""
+    for satz in [
+        "Können Sie meine alte Nummer löschen?",
+        "Mir fällt ständig die Füllung raus, ich brauche einen Termin.",
+    ]:
+        sit = _sit()
+        flow.zug(sit, satz)
+        assert gehirn.sammler(sit)["modus"] != "absagen", satz
+
+
+def test_absage_neustart_nach_notfound_mit_namenskorrektur():
+    """Live 29.08. 08:47 (Peter Müller): STT hoerte 'Peter Möbel', die Suche
+    scheiterte ehrlich — dann wurde 'Nein, ich möchte meinen Termin absagen,
+    Peter Müller.' vom Nein-Zweig der Neubuchungs-Frage verschluckt ('Alles
+    klar.') und das nackte 'Ich möchte meinen Termin absagen.' fiel ans LLM
+    ('Welchen Termin soll ich absagen?'). Jetzt: die Sammel-Prozedur startet
+    neu, und der verhoerte Name wird frisch erfragt."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: {"ok": True, "notFound": True, "patient": {}, "appointments": []}
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich würde gerne meinen Termin absagen.")
+        assert z1 and "wann ist der termin" in z1["text"].lower()
+        z2 = flow.zug(sit, "Ähm, ich glaube, das war Dienstag, aber ich weiss nicht mehr wie viel Uhr.")
+        assert z2 and "vor- und nachname" in z2["text"].lower()
+        z3 = flow.zug(sit, "Peter Möbel.")
+        assert z3 and "ehrlich" in z3["text"].lower() and "notiz" in z3["text"].lower()
+        # Anrufer verneint die Neubuchung UND wiederholt das Anliegen im
+        # selben Satz — das darf NICHT im Nein-Zweig verschluckt werden:
+        z4 = flow.zug(sit, "Nein, ich möchte meinen Termin absagen, Peter Müller.")
+        assert z4, "Zug darf nicht ans LLM fallen"
+        assert "sonst noch etwas" not in z4["text"].lower()
+        assert "wann ist der termin" in z4["text"].lower()
+        s = gehirn.sammler(sit)
+        assert not s["nachname"], "verhoerter Name muss raus sein"
+        # Nach der Wann-Antwort kommt die Namens-Frage — frischer Anlauf:
+        z5 = flow.zug(sit, "Am Dienstag.")
+        assert z5 and "vor- und nachname" in z5["text"].lower()
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
+def test_absage_wiederholt_nach_abschluss_startet_neu():
+    """Nach 'Alles klar.' (bares Nein auf die Neubuchungs-Frage) muss ein
+    erneutes 'Ich möchte meinen Termin absagen.' die Prozedur NEU starten —
+    frueher klebte modus auf 'absagen' und nichts passierte."""
+    echt_find = verwalten.kal.find_patient_appointments
+    verwalten.kal.find_patient_appointments = lambda t, c: {"ok": True, "notFound": True, "patient": {}, "appointments": []}
+    try:
+        sit = _sit()
+        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        flow.zug(sit, "Keine Ahnung, weiß ich nicht mehr.")
+        flow.zug(sit, "Bei Doktor Petsas.")
+        z = flow.zug(sit, "Kasimir Probefall.")
+        assert z and "notiz" in z["text"].lower()
+        z2 = flow.zug(sit, "Nein.")
+        assert z2 and "sonst noch etwas" in z2["text"].lower()
+        z3 = flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        assert z3, "Neustart fehlt (fiel frueher ans LLM)"
+        assert "wann ist der termin" in z3["text"].lower()
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+
+
 def test_verwaltung_hinweis_passt_nicht_ehrliche_rueckfrage():
     """Hinweis (Dienstag) passt auf keinen Termin: ehrlich zeigen, was es
     gibt — 'Meinen Sie den?'; ein 'Ja' waehlt den einzigen Treffer, ein
@@ -1683,6 +1775,44 @@ def test_buchstabieren_nachgesprochen_in_silben():
     s["nachname"] = "Pidoq"
     gehirn.einsammeln(sit, "MATTA VATTA")
     assert s["nachname"] == "Mattavatta" and s["buchstabiert"]
+
+
+def test_buchstabieren_stt_cluster_und_wortanker():
+    """STT klebte live (29.08.2026) "F-E-L-D-K-A-M-P" zu "F-E-LD-Kamp" —
+    deute lieferte None, buchstabiert blieb False, die Frage loopte endlos."""
+    # Wort-Anker: das mitgesprochene "Feldkamp" bestätigt die Anfangsbuchstaben.
+    d = buchstaben.deute("Feldkamp, also F-E-LD-Kamp.")
+    assert d and d["name"] == "Feldkamp" and d["sicher"]
+    # Ohne Namenswort: Cluster-Split + Suffix-Fuge setzen die Kette zusammen.
+    d2 = buchstaben.deute("F-E-LD-Kamp")
+    assert d2 and d2["name"] == "Feldkamp"
+    # Bestätigendes Wort NACH der Kette darf nicht doppeln.
+    d3 = buchstaben.deute("M-E-I-E-R, Meier")
+    assert d3 and d3["name"] == "Meier"
+    # Bewährte Formen bleiben unverändert.
+    d4 = buchstaben.deute("Also der Nachname ist Panzer. P-A-N-Z-E-R. Der Vorname ist Paul")
+    assert d4 and d4["name"] == "Panzer"
+
+
+def test_buchstabieren_cluster_beendet_den_loop_im_sammler():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    s["nachname"] = "Feldkamp"
+    gehirn.einsammeln(sit, "Feldkamp, also F-E-LD-Kamp.")
+    assert s["nachname"] == "Feldkamp" and s["buchstabiert"]
+
+
+def test_hergezogen_ist_kein_name():
+    """"Nein, noch nie, ich bin gerade erst hergezogen" wurde live
+    (29.08.2026) als Name "Gerade Hergezogen" geerntet."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "schonmal"
+    gehirn.einsammeln(sit, "Nein, noch nie, ich bin gerade erst hergezogen.")
+    assert not s["vorname"] and not s["nachname"]
 
 
 def test_name_korrektur_heisse_x_nicht_y():

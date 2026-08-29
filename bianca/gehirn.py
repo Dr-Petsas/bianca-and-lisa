@@ -117,8 +117,17 @@ _TERMIN_RE = re.compile(
     re.I,
 )
 _ABSAGE_RE = re.compile(
-    r"absagen|abzusagen|stornieren|storniert|abbestellen|canceln|"
+    r"absagen|abzusagen|abgesagt|\babsage\b|stornieren|storniert|stornierung|"
+    r"abbestellen|\w*cancel\w*|"
     r"nicht\s+(kommen|wahrnehmen|schaffen|einhalten)|"
+    # "der Termin (morgen) fällt aus" / "den Termin platzen lassen" — aber
+    # NICHT "mir fällt ein Zahn aus" (Subjekt muss der Termin sein).
+    r"termin\w*[^.!?]{0,30}?(?:fällt|faellt)\s+(?:leider\s+|doch\s+)?aus\b|"
+    r"ausfallen\s+lassen|platzen\s+lassen|"
+    # löschen/streichen/aufheben/rückgängig/entfernen sind Allerwelts-Verben:
+    # nur MIT Termin-Bezug im selben Satz ("Nummer löschen" ist keine Absage).
+    r"termin\w*[^.!?]{0,50}?(?:löschen|loeschen|gelöscht|geloescht|streichen|gestrichen|aufheben|aufzuheben|rückgängig|rueckgaengig|entfernen|rausnehmen|raus\s+nehmen)|"
+    r"(?:löschen|loeschen|streichen|aufheben|rückgängig|rueckgaengig|entfernen)[^.!?]{0,50}?termin\w*|"
     # Trennbares Verb: "ich sage den Termin ab" / "sag ihn bitte ab" — aber
     # NICHT "können Sie mir sagen, ab wann ..." (Auskunftsfrage).
     r"\bsag\w*\s+(?:ich\s+|wir\s+|sie\s+)?(?:den\s+|meinen\s+|diesen\s+|ihn\s+|sie\s+|bitte\s+|doch\s+|wieder\s+|einfach\s+|lieber\s+|gerne\s+|gleich\s+|sofort\s+)*(?:termin\s+)?(?:doch\s+|wieder\s+|bitte\s+|einfach\s+|lieber\s+|gerne\s+|gleich\s+|sofort\s+)*ab\b(?!\s*(?:wann|wie|welch))",
@@ -175,7 +184,12 @@ _FUER_WEN_RE = re.compile(
     r"für\s+mein(?:e|en)?\s+(tochter|sohn|mann|frau|mutter|vater|kind|oma|opa)", re.I
 )
 _NAME_LEADIN_RE = re.compile(
-    r"(?:mein\s+name\s+ist|ich\s+heiße|ich\s+heisse|hier\s+(?:ist|spricht)|ich\s+bin)\s+([A-Za-zÄÖÜäöüß' -]{2,60})",
+    # Nach dem Leadin folgt bei einem NAMEN nie eine Präposition — "ich bin
+    # bei Ihnen in Behandlung" erntete live (29.08.2026) "Bei Behandlung".
+    r"(?:mein\s+name\s+ist|ich\s+heiße|ich\s+heisse|hier\s+(?:ist|spricht)|ich\s+bin)\s+"
+    r"(?!(?:bei|in|im|an|am|auf|aus|mit|seit|unter|vor|zu|zum|zur|nach|ohne|"
+    r"gegen|für|fuer|über|ueber|durch|um)\b)"
+    r"([A-Za-zÄÖÜäöüß' -]{2,60})",
     re.I,
 )
 _NAME_STOP = {
@@ -254,8 +268,12 @@ _KEIN_NAME_RE = re.compile(
     r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+"
     r"(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+|ja\s+|gerade\s+|heute\s+)*"
     r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+|sehr\s+|so\s+|total\s+|"
-    r"richtig\s+|echt\s+|etwas\s+|schon\s+|wirklich\s+)*"
+    r"richtig\s+|echt\s+|etwas\s+|schon\s+|wirklich\s+|erst\s+|frisch\s+|"
+    r"kürzlich\s+|kuerzlich\s+|neulich\s+|lange\s+|länger\s+|laenger\s+|"
+    r"seit\s+\S+\s+)*"
     r"(?:neu\b|noch\s+nie\b|zum\s+ersten\s+mal\b|das\s+erste\s+mal\b|"
+    r"hergezogen|umgezogen|zugezogen|hierhergezogen|"
+    r"patient(?:in)?\b|kunde\b|kundin\b|stammpatient(?:in)?\b|"
     r"aufgeregt|nervös|nervoes|gespannt|begeistert|erleichtert|verzweifelt|"
     r"durcheinander|erkältet|erkaeltet|müde|muede|erschöpft|erschoepft|"
     r"gestresst|genervt|verwirrt|unterwegs|beschäftigt|beschaeftigt|"
@@ -618,20 +636,27 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # "verschieben" auf das Angebot, nicht auf einen Bestandstermin.
     im_angebot = s["modus"] == "buchen" and s["phase"] in {"angebot", "bestaetigen"}
     if not im_angebot:
+        # phase "fertig" = das vorige Anliegen ist abgeschlossen (Storno
+        # erledigt ODER ehrlich nicht gefunden). Ein WIEDERHOLTER Wunsch im
+        # selben Modus muss dann neu bewaffnen — live 29.08. 08:47 klebte
+        # modus auf "absagen" und "Ich möchte meinen Termin absagen." fiel
+        # wortlos ans LLM ("Welchen Termin soll ich absagen?").
         if _VERSCHIEBEN_RE.search(t):
-            if s["modus"] != "verschieben":
+            if s["modus"] != "verschieben" or s["phase"] == "fertig":
                 s["modus"] = "verschieben"
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
         elif _ABSAGE_RE.search(t):
-            if s["modus"] != "absagen":
+            if s["modus"] != "absagen" or s["phase"] == "fertig":
                 s["modus"] = "absagen"
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
         elif _AUSKUNFT_RE.search(t):
-            if s["modus"] in {"", "buchen"} and s["phase"] in {"", "gebucht", "fertig"}:
+            if (s["modus"] in {"", "buchen"} and s["phase"] in {"", "gebucht", "fertig"}) or (
+                s["modus"] in {"absagen", "verschieben"} and s["phase"] == "fertig"
+            ):
                 s["modus"] = "auskunft"
                 s["phase"] = ""
                 s["frage"] = ""
