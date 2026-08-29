@@ -288,6 +288,47 @@ Zaluma/SIP hängt ein Kollege später an denselben Sitzungs-Umschlag.
 - **Notaus:** `TALK_SCHICHT=0` (Umgebungsvariable) => Verhalten wie vor dem
   27.08.2026 — jeder Zug job, Anker feuert wie früher.
 
+## Barge-in mit Fortsetzung (W-BARGE 29.08.2026 — nicht rückbauen)
+
+Chef: "wenn sich unsere sprachen kreuzen, muss die KI-Assistentin aufhören,
+mit hmm oder okay konkret auf den Einwand reagieren und dann erst nach
+Klärung fortfahren, wo sie stehengeblieben ist." Gilt für BEIDE Stimmen;
+Logik in `kern/unterbrechung.py`, eingehängt in `kern/dienst.py` —
+reine Textarbeit, kein LLM, kein Netz.
+
+- **Sofort-Quittung:** Docks laden beim Boot `GET /api/quittung` ("Hm."/
+  "Okay.", beim Start vorgewärmt, Platten-Cache) und spielen beim
+  Reinsprech-Stopp SOFORT eine ab — noch vor Aufnahme und Einwand-Zug;
+  rotierend, nie zweimal dieselbe in Folge.
+- **Satz-Karte:** `stimme`/`_sprech_blob`/`stimme_stream` schreiben je
+  Äußerung die Sätze + End-Zeitpunkte (ms im Audio) mit; beim Stream füllt
+  der Feeder die Karte WÄHREND des Sprechens (Listen referenziert, nicht
+  kopiert). ElevenLabs-MP3 trägt keine Zeiten => Barge dort = ganze
+  Äußerung ist Rest.
+- **Eingang:** Docks melden `bargeUrl`+`bargeMs` (Abspielposition beim
+  Stopp) im nächsten `/api/turn` bzw. `/api/listen`. `eingang()` bestimmt
+  den ungesprochenen Rest (angespielter Satz zählt als ungesprochen) und
+  STUTZT das Protokoll auf das wirklich Gesagte — LLM und Wiederholungs-
+  Wächter dürfen nicht glauben, der Anrufer hätte Ungespieltes gehört.
+  Fremde/verbrauchte URLs (Füller, Stups, alter Zug) => kein Rest.
+- **Fortsetzen:** Nach dem Einwand-Zug hängt `fortsetzen()` Brücke
+  ("Also, wo war ich: …", rotierend) + Rest an die Antwort — NUR wenn der
+  Einwand den Zustand nicht bewegt hat: keine Buchung (`reply.book`) und
+  keine Frage in der Antwort (fragt die Maschine neu, wäre der alte Rest
+  doppelt oder veraltet). Wortgleich enthaltene Rest-Sätze fallen weg;
+  der gesprochene Anhang wird ins Protokoll NACHGETRAGEN.
+- **Fehlalarm:** nichts/zu wenig gehört => Dock ruft `POST /api/weiter`
+  (`weiter_sprechen`): der Rest wird an der Unterbrechungsstelle
+  weitergesprochen — deterministisch, ohne LLM, ohne Brücke. Ein
+  Lautsprecher-Echo der eigenen Stimme (ab 3 Wörtern, wortgleich im gerade
+  Gesagten; kurze echte Antworten "ja/nein/stopp" NIE) wird verworfen und
+  ebenso fortgesetzt (Claras Echo-Regel, aufs Dock übersetzt).
+- Tests: `tests/test_unterbrechung.py` (18 Fälle, offline). Live-Probe
+  29.08.: Zwei-Satz-Zug (4,9 s), Barge 1,5 s vor Ende => nur der
+  Schlusssatz kam als Rest, "Gut." zählte als gesprochen.
+- **Notaus:** `BARGE_WEITER=0` (Umgebungsvariable) => Eingang/Fortsetzen
+  stumm, `/api/quittung` liefert keine URLs — Verhalten wie vor W-BARGE.
+
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).

@@ -24,6 +24,22 @@ let hoerNr = 0;
 // warten. Max. 2 Stupse in Folge; echtes Gehörtes setzt den Zähler zurück.
 const STILLE_MS = 4000;
 let stilleStupse = 0;
+// Barge-in mit Fortsetzung (W-BARGE 29.08.2026): beim Reinsprechen merkt sich
+// das Dock, WELCHES Audio bei WIE VIEL ms gestoppt wurde, spielt sofort eine
+// vorgewärmte Quittung ("Hm."/"Okay.") und meldet beides mit dem nächsten Zug
+// an den Server — der reagiert auf den Einwand und fährt danach fort, wo
+// Bianca stehengeblieben ist. Fehlalarm (nichts gesagt) => api/weiter.
+let bargeInfo = null;
+let quittungen = [];
+let quittungNr = 0;
+
+function bargeMerken(url, ms) {
+  bargeInfo = { url, ms: Math.max(0, Math.round(ms || 0)) };
+  // Sofort-Quittung: hörbar aufhören und den Floor abgeben.
+  if (!quittungen.length) return;
+  const a = quittungen[quittungNr++ % quittungen.length];
+  try { a.currentTime = 0; a.play().catch(() => {}); } catch { /* */ }
+}
 
 function bubble(role, text) {
   if (!text) return;
@@ -115,7 +131,7 @@ function micWacheStarten() {
   } catch { micWache = null; }
 }
 
-function bargeOderCap(dauerMs) {
+function bargeOderCap(dauerMs, barge) {
   // Nebengeräusch-Schutz (Chef 27.08.): Pegel allein bricht NICHT mehr ab.
   // Bei Pegel-Verdacht wird nur PAUSIERT; kommen binnen ~1,4 s echte Wörter
   // (Live-STT), ist es ein Einwurf => Stopp. Sonst spricht sie an derselben
@@ -139,6 +155,7 @@ function bargeOderCap(dauerMs) {
       const jetzt = performance.now();
       if (!pauseSeit && jetzt - start > dauerMs) return done("cap");
       if (hatOhr() && liveOhr.text().length >= 2) {
+        if (barge) bargeMerken(barge.url, barge.pos ? barge.pos() : 0);
         stopVoice();
         return done("barge");
       }
@@ -155,6 +172,8 @@ function bargeOderCap(dauerMs) {
           pauseSeit = jetzt; // nur anhalten — Abbruch erst bei echten Wörtern
           pausieren();
         } else if (!hatOhr() && laut >= 8) {
+          // Position VOR dem Stopp ablesen — stopVoice() leert die Quelle.
+          if (barge) bargeMerken(barge.url, barge.pos ? barge.pos() : 0);
           stopVoice();
           return done("barge");
         }
@@ -166,7 +185,13 @@ function bargeOderCap(dauerMs) {
 }
 
 async function playUrl(url) {
-  if (!url || !callOn) return;
+  // Nach einem Barge nichts mehr abspielen (auch keine nachlaufende
+  // Füller-Kette oder frisch eingetroffene Antwort) — erst wenn der
+  // nächste Zug die Unterbrechung an den Server gemeldet hat.
+  if (!url || !callOn || bargeInfo) return;
+  // Für die Barge-Meldung zählt der ORIGINAL-Pfad aus der Server-Antwort —
+  // der Server vergleicht ihn mit seiner Satz-Karte.
+  const urlOrig = url;
   url = apiUrl(url);
   await unlockAudio();
   kiSpricht = true;
@@ -193,8 +218,10 @@ async function playUrl(url) {
       src.connect(g).connect(ctx.destination);
       playUrl._src = src;
       const ended = new Promise((done) => { src.onended = () => done("end"); });
+      const t0 = ctx.currentTime;
       src.start();
-      await Promise.race([ended, bargeOderCap((decoded.duration || 12) * 1000 + 200)]);
+      await Promise.race([ended, bargeOderCap((decoded.duration || 12) * 1000 + 200,
+        { url: urlOrig, pos: () => (ctx.currentTime - t0) * 1000 })]);
       try { src.stop(); } catch { /* */ }
       playUrl._src = null;
       kiSpricht = false;
@@ -222,7 +249,7 @@ async function playUrl(url) {
   // Stream-WAV meldet keine Dauer (Infinity) — Deckel weiter fassen, sonst
   // schneidet der Cap lange Angebots-Sätze nach 12 s ab.
   const limit = (d && isFinite(d) && d > 0) ? d * 1000 + 200 : (streamend ? 30000 : 12000);
-  await Promise.race([ended, bargeOderCap(limit)]);
+  await Promise.race([ended, bargeOderCap(limit, { url: urlOrig, pos: () => (a.currentTime || 0) * 1000 })]);
   kiSpricht = false;
 }
 
@@ -369,6 +396,10 @@ async function stilleStups(nr) {
 async function sendeZug({ text, blob, nr }) {
   if (!callOn || nr !== hoerNr || zugBusy) return;
   zugBusy = true;
+  // W-BARGE: die gemerkte Unterbrechung wandert mit DIESEM Zug zum Server
+  // (der stutzt sein Protokoll und hält den ungesprochenen Rest bereit).
+  const barge = bargeInfo;
+  bargeInfo = null;
   const hatLive = (text || "").split(/\s+/).filter(Boolean).length >= 1 && (text || "").length >= 2;
   phase("warte", hatLive ? "Bianca antwortet …" : "Bianca hört zu …");
   let fillerLauf = null;
@@ -387,18 +418,26 @@ async function sendeZug({ text, blob, nr }) {
       const r = await fetch("api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, text }),
+        body: JSON.stringify({ sessionId, text, bargeUrl: barge ? barge.url : "", bargeMs: barge ? barge.ms : 0 }),
       });
       data = await leseZug(r, spielFiller);
     } else {
       const fd = new FormData();
       fd.append("sessionId", sessionId);
+      fd.append("bargeUrl", barge ? barge.url : "");
+      fd.append("bargeMs", String(barge ? barge.ms : 0));
       fd.append("audio", blob, blob.type.includes("mp4") ? "turn.m4a" : "turn.webm");
       const r = await fetch("api/listen", { method: "POST", body: fd });
       data = await leseZug(r, spielFiller);
     }
     if (fillerLauf) { try { await fillerLauf; } catch { /* */ } }
     if (!callOn || nr !== hoerNr) { zugBusy = false; return; }
+    if (bargeInfo && data.audioUrl && bargeInfo.url !== data.audioUrl) {
+      // Reinsprecher während Füller/Vorab: die frische Antwort NICHT mehr
+      // abspielen — sie gilt als bei null unterbrochen, der Server holt sie
+      // im nächsten Zug als Rest zurück (bargeMs 0).
+      bargeInfo = { url: data.audioUrl, ms: 0 };
+    }
     if (data.empty || (!data.textIn && !hatLive && !data.text)) {
       phase("du", "Nichts gehört — bitte nochmal");
       zugBusy = false;
@@ -421,6 +460,29 @@ async function sendeZug({ text, blob, nr }) {
   }
 }
 
+async function bargeWeiter(nr) {
+  // W-BARGE-Fehlalarm: reingesprochen, aber nichts Verwertbares gesagt —
+  // Bianca spricht an der Unterbrechungsstelle weiter (Server: api/weiter,
+  // deterministisch, ohne LLM). false = nichts fortzusetzen.
+  const b = bargeInfo;
+  bargeInfo = null;
+  if (!callOn || nr !== hoerNr || zugBusy || !b) return false;
+  try {
+    const r = await fetch("api/weiter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, bargeUrl: b.url, bargeMs: b.ms }),
+    });
+    const d = await r.json();
+    if (!callOn || nr !== hoerNr) return true;
+    if (d.empty || !d.audioUrl) return false;
+    if (d.text) bubble("ki", d.text);
+    phase("ki", "Bianca spricht …");
+    await playUrl(d.audioUrl);
+    return true;
+  } catch { return false; }
+}
+
 async function hoeren() {
   const nr = hoerNr;
   if (!callOn || !micStream || !sessionId || zugBusy) return;
@@ -435,6 +497,11 @@ async function hoeren() {
   }
   if (!callOn || nr !== hoerNr) return;
   if (!blob || blob.size < 1200) {
+    // W-BARGE-Fehlalarm: Unterbrechung ohne Einwand — weiterreden.
+    if (bargeInfo && await bargeWeiter(nr)) {
+      if (callOn && nr === hoerNr) hoeren();
+      return;
+    }
     // Stille-Wächter: nichts gehört — erst anstupsen.
     if (await stilleStups(nr)) {
       if (callOn && nr === hoerNr) hoeren();
@@ -452,6 +519,7 @@ function auflegen() {
   callOn = false;
   hoerNr += 1;
   zugBusy = false;
+  bargeInfo = null;
   if (sid) {
     fetch("api/hangup", {
       method: "POST",
@@ -494,6 +562,12 @@ async function boot() {
   } catch {
     meld("Biancas Dienst antwortet nicht.", true);
   }
+  try {
+    // W-BARGE: Sofort-Quittungen vorladen, damit sie beim Stopp ohne
+    // Netz-Umweg spielen.
+    const q = await (await fetch("api/quittung")).json();
+    quittungen = (q.urls || []).map((u) => { const a = new Audio(apiUrl(u)); a.preload = "auto"; return a; });
+  } catch { /* */ }
   const t = await (await fetch("api/tenants")).json();
   $("tenant").innerHTML = (t.tenants || []).map((x) =>
     `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`

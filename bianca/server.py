@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import llm, sprech, stt, tenants, tts
+from kern import llm, sprech, stt, tenants, tts, unterbrechung
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -58,6 +58,15 @@ class StartIn(BaseModel):
 class TurnIn(BaseModel):
     sessionId: str = ""
     text: str = ""
+    # W-BARGE: welches Audio wurde bei wie viel ms unterbrochen?
+    bargeUrl: str = ""
+    bargeMs: float = 0.0
+
+
+class WeiterIn(BaseModel):
+    sessionId: str = ""
+    bargeUrl: str = ""
+    bargeMs: float = 0.0
 
 
 class HangupIn(BaseModel):
@@ -107,7 +116,29 @@ def api_turn(body: TurnIn):
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
     print(f"bianca-turn session={body.sessionId} text={body.text!r}", flush=True)
-    return ndjson(DIENST.zug_stream(sit, art="turn", text_in=body.text))
+    return ndjson(DIENST.zug_stream(sit, art="turn", text_in=body.text,
+                                    barge_url=body.bargeUrl, barge_ms=body.bargeMs))
+
+
+@app.post("/api/weiter")
+def api_weiter(body: WeiterIn):
+    """W-BARGE: Reinsprecher ohne verwertbaren Einwand (Fehlalarm) — die
+    Stimme spricht an der Unterbrechungsstelle weiter, ohne LLM."""
+    sit = session.holen(body.sessionId)
+    if not sit:
+        raise HTTPException(404, "sitzung unbekannt")
+    if body.bargeUrl:
+        unterbrechung.eingang(sit, body.bargeUrl, body.bargeMs)
+    out = DIENST.weiter_sprechen(sit, {"sessionId": sit.get("id") or ""})
+    if not out:
+        return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
+    return out
+
+
+@app.get("/api/quittung")
+def api_quittung():
+    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock."""
+    return {"ok": True, "urls": DIENST.quittung_urls if unterbrechung.enabled() else []}
 
 
 @app.post("/api/stille")
@@ -129,7 +160,8 @@ def api_stille(body: HangupIn):
 
 
 @app.post("/api/listen")
-async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: UploadFile = File(...)):
+async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: UploadFile = File(...),
+                     bargeUrl: str = Form(""), bargeMs: float = Form(0.0)):
     sit = session.holen(sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
@@ -139,8 +171,10 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     live = " ".join((text or "").split()).strip()
     if live:
         print(f"bianca-listen live session={sessionId} text={live!r}", flush=True)
-        return ndjson(DIENST.zug_stream(sit, art="turn", text_in=live))
-    return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name))
+        return ndjson(DIENST.zug_stream(sit, art="turn", text_in=live,
+                                        barge_url=bargeUrl, barge_ms=bargeMs))
+    return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name,
+                                    barge_url=bargeUrl, barge_ms=bargeMs))
 
 
 @app.post("/api/transcribe")
@@ -187,6 +221,7 @@ def _warm_start():
     def _run():
         # Füller zuerst: ohne sie entsteht genau die Stille, die weg soll.
         DIENST.filler_vorbereiten()
+        DIENST.quittungen_vorbereiten()
         t = tenants.laden(DEFAULT_TENANT)
         tts.warm(begruessung(t.get("praxisName") or ""))
         # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
