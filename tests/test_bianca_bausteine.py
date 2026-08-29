@@ -1825,6 +1825,84 @@ def test_buchstabieren_cluster_beendet_den_loop_im_sammler():
     assert s["nachname"] == "Feldkamp" and s["buchstabiert"]
 
 
+def test_buchstabieren_verhoerer_haelt_gesagten_namen():
+    """Live 29.08.2026: "W wie Wilhelm" kam als "B. Wilhelm" an — die
+    unsichere Kette "Grunebwald" darf den gesagten Namen nicht verdraengen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    s["nachname"] = "Grunewald"
+    gehirn.einsammeln(sit, "Ich buchstabiere G. wie Gustav, R. wie Richard, "
+                           "U wie Ulrich, N. wie Nordpol, E. wie Emil, "
+                           "B. Wilhelm, A. wie Anton, L. wie Ludwig, D. wie Dora.")
+    assert s["nachname"] == "Grunewald" and s["buchstabiert"]
+
+
+def test_buchstabieren_kette_verliert_buchstaben_gegen_gesagten_namen():
+    """Live 29.08.2026 (s09): Kette kam als "Stinfurt" an (E verschluckt),
+    der Anrufer hatte "Steinfurt" gesagt — der laengere gesagte Name gewinnt."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    s["nachname"] = "Steinfurt"
+    gehirn.einsammeln(sit, "Ich buchstabiere SW Samuel, T. wie Theodor, Ew Emil, "
+                           "Ew Ida, N. wie Nordpol, F. wie Friedrich, Uwi Ulrich, "
+                           "R. wie Richard, T. wie Theodor.")
+    assert s["nachname"] == "Steinfurt" and s["buchstabiert"]
+
+
+def test_buchstabieren_echte_korrektur_bleibt():
+    """Weit entfernte Buchstabierung KORRIGIERT weiterhin (MATTA-VATTA-Regel):
+    wer einen anderen Namen buchstabiert, meint ihn auch."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    s["nachname"] = "Pidoq"
+    gehirn.einsammeln(sit, "M wie Martha, A wie Anton, T wie Theodor, "
+                           "T wie Theodor, A wie Anton.")
+    assert s["nachname"] == "Matta"
+
+
+def test_buchstabieren_kurzkette_als_wort_gehoert():
+    """Live 29.08.2026: "Q-U-A-N-D-T" kam als "Quant also Quandt" an —
+    das Token nahe am gespeicherten Namen ist die Praezisierung."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "buchstabieren"
+    s["nachname"] = "Quand"
+    gehirn.einsammeln(sit, "Quant also Quandt.")
+    assert s["nachname"] == "Quandt" and s["buchstabiert"]
+
+
+def test_verschoben_worden_ist_kein_verschiebe_wunsch():
+    """Beschwerde "zweimal von Ihnen verschoben worden" darf die laufende
+    Buchung nicht in den Verwaltungs-Modus kippen (Batch 29.08.2026)."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["frage"] = "grund"
+    gehirn.einsammeln(sit, "Mein letzter Termin ist übrigens zweimal von "
+                           "Ihnen verschoben worden.")
+    assert s["modus"] == "buchen"
+    # Ein echter Wunsch bewaffnet weiterhin:
+    sit2 = _sit()
+    s2 = gehirn.sammler(sit2)
+    s2["modus"] = ""
+    gehirn.einsammeln(sit2, "Ich möchte meinen Termin gern verschieben.")
+    assert s2["modus"] == "verschieben"
+    # Auch mit Passiv-Vorgeschichte im selben Satz:
+    sit3 = _sit()
+    s3 = gehirn.sammler(sit3)
+    s3["modus"] = ""
+    gehirn.einsammeln(sit3, "Der Termin wurde schon zweimal verschoben, "
+                            "aber jetzt muss ich ihn selbst verschieben.")
+    assert s3["modus"] == "verschieben"
+
+
 def test_hergezogen_ist_kein_name():
     """"Nein, noch nie, ich bin gerade erst hergezogen" wurde live
     (29.08.2026) als Name "Gerade Hergezogen" geerntet."""

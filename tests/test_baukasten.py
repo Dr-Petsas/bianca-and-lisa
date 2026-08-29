@@ -29,6 +29,21 @@ def test_gruende_mappen_aufs_erwartete_motiv():
                 f"{gid}: {satz!r} -> {vm['name']!r}, erwartet {erwartet!r}"
 
 
+def test_stt_verhoerer_treffen_das_motiv():
+    """Reale Parakeet-Verhoerer aus Testlaeufen muessen aufs Motiv mappen
+    (live 29.08.2026: "Aligner-Behandlung mit Invisalign" kam als
+    "Alleinerbehandlung in Wissalein" an)."""
+    tenant = tenants.laden("meddent")
+    for satz, erwartet in [
+        ("Es geht um eine Alleinerbehandlung in Wissalein.", "KFO"),
+        ("Ich interessiere mich für Wissalein.", "KFO"),
+        ("Ich hätte gern eine Invisalin-Beratung.", "KFO"),
+    ]:
+        _, vm = besuchsgrund.deute(tenant, satz)
+        assert vm and erwartet.lower() in vm["name"].lower(), \
+            f"{satz!r} -> {vm and vm['name']!r}"
+
+
 def test_wunsch_saetze_werden_als_slotwunsch_verstanden():
     for tag in ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"):
         for nr in range(len(saetze.WUNSCH_MUSTER)):
@@ -73,6 +88,31 @@ def test_versicherung_saetze_bauen():
         g = saetze.versicherung_satz(False, nr)
         assert "{" not in p and "{" not in g
         assert p != g
+
+
+def test_abschweifer_ernten_keinen_grund():
+    """Batch 29.08.2026: Meinungs-/Beschwerde-Saetze ("Zahngesundheit ist
+    Luxus geworden", "Die letzte Zahnreinigung war nicht gut") wurden auf
+    die Grund-Frage als Besuchsgrund verbucht. Kein Abschweifer darf einen
+    Grund setzen — und JEDER echte Katalog-Grund muss weiter durchkommen."""
+    from bianca import gehirn
+    tenant = tenants.laden("meddent")
+
+    def _ernte(satz: str) -> str:
+        sit = {"tenant": tenant, "messages": [{"role": "system", "content": "x"}]}
+        s = gehirn.sammler(sit)
+        s["modus"] = "buchen"
+        s["frage"] = "grund"
+        gehirn.einsammeln(sit, satz)
+        return s["grund"]
+
+    for thema, varianten in saetze.ABSCHWEIFER.items():
+        for satz in varianten:
+            g = _ernte(satz)
+            assert not g, f"Abschweifer {thema}: {satz!r} -> Grund {g!r}"
+    for gid, (varianten, _erwartet) in saetze.GRUENDE.items():
+        for satz in varianten:
+            assert _ernte(satz), f"Katalog-Grund {gid}: {satz!r} kam nicht durch"
 
 
 def test_schonmal_saetze_ernten_keinen_namen():

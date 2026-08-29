@@ -42,8 +42,11 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
      "Implantat-Beratung", [r"imp\w*\s+besprechung", r"implantat\w*\s+(?:besprechung|beratung)", r"imp\w*\s+kontroll"]),
     # Invisalign VOR dem Schienen-Konzept: "Invisalign-Schienen" ist KFO,
     # nicht Schlafschiene (Baukasten-Test 29.08.2026). Parakeet hoert das
-    # Markenwort oft ohne g ("Invisalin", live 29.08.) — tolerant matchen.
-    (re.compile(r"invisali\w*|invizali\w*|inwisali\w*|aligner", re.I),
+    # Markenwort oft ohne g ("Invisalin") oder als "Wissalein", und
+    # "Aligner-Behandlung" kam als "Alleinerbehandlung" an (live 29.08.)
+    # — alle realen Verhoerer tolerant matchen.
+    (re.compile(r"invisali\w*|invizali\w*|inwisali\w*|wissal[ei]\w*|aligner"
+                r"|alleinerbehandlung", re.I),
      "Invisalign-Beratung", [r"kfo\s+besprechung", r"kfo\s+kontroll", r"\bkfo\b", r"spange", r"kieferorthop"]),
     # Ueberweiser-Wissen (Chef 29.08.2026): Doktor Grüger und Doktor Lange
     # ueberweisen aus dem Schlaflabor fuer die Narval-Schiene. "lange" NUR

@@ -321,7 +321,17 @@ def bewerten(story: dict, zuege: list[dict], last_call: dict, ziel_iso: str,
 
     if art == geschichten.TERMIN:
         gebucht = bool(book.get("booked"))
-        check("gebucht", gebucht)
+        # Leerer Kalender ist Realitaet, kein Bianca-Fehler: sagt sie
+        # "keinen freien Termin" und hinterlaesst die Rueckruf-Notiz,
+        # zaehlt das als korrekt behandelt.
+        kein_slot = any("keinen freien termin" in (z.get("text") or "").lower()
+                        for z in zuege if z.get("wer") == "bianca")
+        if not gebucht and kein_slot:
+            check("gebucht", bool(last_call.get("praxisNotiz")),
+                  "Rueckruf-Notiz statt Buchung (kein Slot frei)",
+                  str(last_call.get("praxisNotiz") or ""))
+        else:
+            check("gebucht", gebucht)
         slot_iso = str(book.get("slotIso") or "")
         if gebucht and slot_iso:
             # Ausweichtermin ist KEIN Fehler, wenn Bianca ehrlich gesagt
@@ -333,9 +343,15 @@ def bewerten(story: dict, zuege: list[dict], last_call: dict, ziel_iso: str,
             check("Zieltag", am_ziel or voll, ziel_iso,
                   slot_iso[:10] + ("" if am_ziel else " (Wunschtag ausgebucht)" if voll else ""))
         erwartet = saetze.GRUENDE.get(story.get("grund") or "", (None, ""))[1] or ""
+        # Das ERWARTETE ist das gebuchte Tenant-Motiv (motivName) — der
+        # Sammler-grund traegt nur den Konzeptnamen ("Invisalign-Beratung"),
+        # der aufs Motiv ("KFO Besprechung") gemappt wird.
+        motiv_ist = str(sammler.get("motivName") or "")
         grund_ist = str(sammler.get("grund") or "")
         if erwartet:
-            check("Motiv", erwartet.lower() in grund_ist.lower(), erwartet, grund_ist)
+            check("Motiv", erwartet.lower() in motiv_ist.lower()
+                  or erwartet.lower() in grund_ist.lower(),
+                  erwartet, motiv_ist or grund_ist)
         telefon_ist = "".join(c for c in str(sammler.get("telefon") or "") if c.isdigit())
         check("Telefon", telefon_ist.endswith(saetze.TESTNUMMER[1:]) or telefon_ist == saetze.TESTNUMMER,
               saetze.TESTNUMMER, telefon_ist)

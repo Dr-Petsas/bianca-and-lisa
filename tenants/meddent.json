@@ -8,7 +8,7 @@
   "locationName": "Zahnärzte im Medical Center (Düsseldorf)",
   "telefon": "",
   "sprache": "de",
-  "sttHotwords": ["Grüger", "Lange", "Schlaflabor", "Narval", "Invisalign"],
+  "sttHotwords": ["Grüger", "Lange", "Schlaflabor", "Narval", "Invisalign", "Aligner"],
   "defaultCalendarId": "zex5bmv5jfIHWVW6zHbg",
   "calendars": [
     { "id": "GVyoyXqCYof1QrGaNNnG", "name": "Dr. Nikolaou" },

@@ -316,20 +316,21 @@ def _kein_termin(sit: dict, modus: str) -> dict:
     )}
 
 
-def _notiz_schreiben(sit: dict) -> None:
+def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
+                     dock_text: str = "") -> None:
     """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock."""
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     eintrag = {
         "zeit": datetime.now(gehirn.TZ).isoformat(timespec="seconds"),
         "stimme": _s(sit.get("stimme")) or "Bianca",
-        "anliegen": s["modus"],
+        "anliegen": anliegen or s["modus"],
         "name": name,
         "telefon": s["telefon"] or s["aktePhone"] or "",
         "behandler": _s((s["arzt"] or {}).get("calendarName")),
-        "wann": _s(sit.get("verwHinweisText")),
-        "behandlung": _s(sit.get("verwBehandlung")),
-        "status": "Termin nicht gefunden — bitte pruefen und zurueckrufen",
+        "wann": _s(sit.get("verwHinweisText")) or _s(s.get("wunschText")),
+        "behandlung": _s(sit.get("verwBehandlung")) or _s(s.get("grundWortlaut") or s.get("grund")),
+        "status": status or "Termin nicht gefunden — bitte pruefen und zurueckrufen",
     }
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -343,11 +344,26 @@ def _notiz_schreiben(sit: dict) -> None:
         f"Behandlung: {eintrag['behandlung']}" if eintrag["behandlung"] else "",
         f"Tel: {eintrag['telefon']}" if eintrag["telefon"] else "",
     ) if x)
-    sit["praxisNotiz"] = _s(
+    sit["praxisNotiz"] = _s(dock_text or (
         f"{name} wollte einen Termin {s['modus']} — im Kalender nicht gefunden"
         + (f" ({hinweise})" if hinweise else "") + ". Bitte pruefen und zurueckrufen."
-    )
+    ))
+    if dock_text and hinweise:
+        sit["praxisNotiz"] = _s(f"{dock_text} ({hinweise})")
     merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True, "notiz": sit["praxisNotiz"]})
+
+
+def rueckruf_notiz(sit: dict) -> None:
+    """Kein freier Slot im Buchungs-Angebot: 'die Praxis meldet sich' MUSS
+    eine echte Spur hinterlassen (Batch s09 29.08.2026 — leeres Versprechen,
+    frage klebte auf slotwahl)."""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    _notiz_schreiben(
+        sit, anliegen="neubuchung",
+        status="Kein freier Termin im Angebot — bitte zurueckrufen",
+        dock_text=f"{name} wollte neu buchen — kein freier Termin im Angebot. Bitte zurueckrufen.",
+    )
 
 
 def _nicht_gefunden(sit: dict) -> dict:

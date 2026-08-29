@@ -80,6 +80,7 @@ def _mit_sammler(sit: dict[str, Any]) -> dict[str, Any]:
         "nachname": s.get("nachname") or "",
         "buchstabiert": bool(s.get("buchstabiert")),
         "grund": s.get("grund") or "",
+        "motivName": s.get("motivName") or "",
         "telefon": s.get("telefon") or "",
         "warSchonMal": s.get("warSchonMal"),
         "arzt": (s.get("arzt") or {}).get("calendarName") or (s.get("arzt") or {}).get("typ") or "",

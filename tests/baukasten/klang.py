@@ -11,6 +11,7 @@ die TTS-Basis im Schluessel steckt).
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,31 @@ from tests.baukasten import saetze  # noqa: E402
 
 AUDIO_DIR = Path(__file__).resolve().parent / "audio"
 PCM_RATE = 24000
+
+# Qwen3-TTS bricht lange Renders nach ~8 s ab (Modell-Deckel) — der
+# Grunewald-Buchstabier-Satz endete live bei "L wie" und Bianca lief in
+# den Frage-Loop. Texte ueber dieser Laenge werden deshalb an Komma-/
+# Satz-Fugen gestueckelt, einzeln gerendert und mit kurzer Pause gefuegt.
+_HAPPEN_ZEICHEN = 80
+_PAUSE_S = 0.22
+
+
+def _happen(text: str) -> list[str]:
+    """Langen Text an Satz-/Komma-Fugen in TTS-sichere Haeppchen teilen."""
+    if len(text) <= _HAPPEN_ZEICHEN:
+        return [text]
+    teile = re.split(r"(?<=[.!?,;:])\s+", text)
+    out: list[str] = []
+    akt = ""
+    for t in teile:
+        if akt and len(akt) + 1 + len(t) > _HAPPEN_ZEICHEN:
+            out.append(akt)
+            akt = t
+        else:
+            akt = f"{akt} {t}".strip()
+    if akt:
+        out.append(akt)
+    return out
 
 
 def _schluessel(stimme: str, text: str) -> str:
@@ -45,10 +71,16 @@ def audio_holen(stimme: str, text: str, *, timeout: float = 180.0) -> Path:
         return pfad
     pfad.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
-    r = httpx.post(f"{TTS_BASE}/speak", json={"text": text, "voice": stimme},
-                   timeout=timeout)
-    r.raise_for_status()
-    wav = pcm16_wav(r.content)
+    pcm = b""
+    pause = b"\x00\x00" * int(PCM_RATE * _PAUSE_S)
+    for i, teil in enumerate(_happen(text)):
+        r = httpx.post(f"{TTS_BASE}/speak", json={"text": teil, "voice": stimme},
+                       timeout=timeout)
+        r.raise_for_status()
+        if i:
+            pcm += pause
+        pcm += r.content
+    wav = pcm16_wav(pcm)
     if len(wav) <= 44:
         raise RuntimeError(f"leerer Render fuer {stimme}: {text!r}")
     tmp = pfad.with_suffix(".tmp")

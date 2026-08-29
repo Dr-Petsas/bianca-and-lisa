@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -138,6 +139,65 @@ _VERSCHIEBEN_RE = re.compile(
     r"nach\s+hinten\s+schieben|anderen\s+tag\s+.{0,16}(statt|als)\b",
     re.I,
 )
+# Beschwerde ueber VERGANGENES Verschieben ("mein Termin ist zweimal von
+# Ihnen verschoben worden", Baukasten-Abschweifer 29.08.2026) ist KEIN
+# Verschiebe-Wunsch. Greift nur, wenn im Satz kein aktives Wunsch-Verb
+# (verschieben/umbuchen/verlegen) steht.
+_VERSCHOBEN_PASSIV_RE = re.compile(
+    r"(?:wurde|worden|von\s+(?:ihnen|euch|der\s+praxis))[^.!?]{0,40}?verschoben|"
+    r"verschoben\s+(?:worden|wurde)",
+    re.I,
+)
+_VERSCHIEBEN_AKTIV_RE = re.compile(
+    r"verschieben|umbuchen|umzubuchen|verlegen|umlegen|vorverlegen", re.I,
+)
+# Meinungs-, Beschwerde- und Smalltalk-Saetze auf die Grund-Frage sind KEIN
+# Besuchsgrund (Batch 29.08.2026: "Zahngesundheit ist Luxus geworden, sage
+# ich Ihnen" wurde als Wortlaut-Grund verbucht und die Grund-Frage kam nie
+# wieder; "Die letzte Zahnreinigung war nicht gut" setzte das PZR-Motiv).
+_KEIN_GRUND_RE = re.compile(
+    r"finden\s+sie\s+nicht|sage\s+ich\s+ihnen|meiner\s+meinung|"
+    r"zu\s+teuer|teurer\s+als|explodier|luxus|unbezahlbar|alles\s+wird\s+teurer|"
+    r"unversch(?:ä|ae)mt|kaum\s+noch\s+leisten|wahnsinn|nicht\s+mehr\s+normal|"
+    r"\btrump\b|\biran\b|krieg|politik|wahlen|fu(?:ß|ss)ball|bundesliga|fortuna|"
+    r"hartz|b(?:ü|ue)rgergeld|vom\s+amt|letzte\s+rechnung|"
+    r"verschoben\s+worden|wurde\s+[^.!?]{0,20}(?:verschoben|verlegt)|umgeschmissen|"
+    r"raten\s*zahl\w*|in\s+raten|\btaxi\w*|wartezeit|wartezimmer|lange\s+gewartet|"
+    r"ewig\s+warten|zufrieden|kompliment|\blob\b|wehgetan|entt(?:ä|ae)usch\w*|"
+    r"geschludert|oberfl(?:ä|ae)chlich",
+    re.I,
+)
+# Rueckblick auf FRUEHERE Besuche ("die letzte Zahnreinigung", "beim letzten
+# Mal") — ein Konzept-Treffer darin ist Beschwerde-Kontext, kein Anliegen.
+_GRUND_RUECKBLICK_RE = re.compile(
+    r"letzt\w+|neulich|damals|diesmal|beim\s+letzten|vor\s+\w+\s+(?:wochen|monaten|tagen)",
+    re.I,
+)
+# Wunsch-/Gegenwarts-Signal rettet den Treffer ("die letzte PZR ist lange
+# her, ich haette gern WIEDER eine" bleibt ein Grund).
+_GRUND_WUNSCH_RE = re.compile(
+    r"wieder|jetzt|gerade|aktuell|seit|brauch\w*|br(?:ä|ae)ucht\w*|"
+    r"m(?:ö|oe)cht\w*|h(?:ä|ae)tt\w*\s+gern|will\b|bitte",
+    re.I,
+)
+# Frei formulierter WORTLAUT-Grund (kein Konzept-Treffer): lange Saetze
+# brauchen ein Anliegen-Signal — sonst ist es Meinung/Erzaehlung und die
+# Grund-Frage bleibt offen.
+_ANLIEGEN_SIGNAL_RE = re.compile(
+    r"es\s+geht\s+um|wegen\b|deshalb|darum\s+geht|"
+    r"ich\s+(?:brauche|br(?:ä|ae)uchte|m(?:ö|oe)chte|will|wollte|h(?:ä|ae)tte\s+gern)|"
+    r"\blassen\b|termin\s+f(?:ü|ue)r|tut\s+[^.!?]{0,12}weh|schmerzt|abgebrochen|"
+    r"rausgefallen|ausgefallen|verloren|blutet|entz(?:ü|ue)ndet|geschwollen|"
+    r"dr(?:ü|ue)ckt|wackelt|kaputt|locker|gebrochen",
+    re.I,
+)
+
+
+def _grund_unglaubwuerdig(text: str) -> bool:
+    """Beschwerde/Meinung statt Anliegen? Dann keinen Grund ernten."""
+    if not (_GRUND_RUECKBLICK_RE.search(text) or _KEIN_GRUND_RE.search(text)):
+        return False
+    return not _GRUND_WUNSCH_RE.search(text)
 # Woerter, die im "ich habe ... Termin"-Fenster einen WUNSCH verraten
 # (dann ist es eine Neubuchung, keine Bestands-Auskunft).
 _KEIN_WUNSCH_TOKEN = (
@@ -483,6 +543,26 @@ def _nachgesprochen(text: str) -> str:
     return zusammen.capitalize()
 
 
+def _buchstabier_anker(s: dict, text: str) -> str:
+    """Token im Buchstabier-Zug, das dem gespeicherten Nachnamen stark
+    aehnelt ("Quant also Quandt" gegen "Quand" -> "Quandt"). Liefert das
+    aehnlichste Token oder "" — Uebernahme entscheidet der Aufrufer."""
+    ziel = (s.get("nachname") or "").lower()
+    if len(ziel) < 4:
+        return ""
+    raw = re.sub(r"[^\wäöüßÄÖÜ-]+", " ", _s(text))
+    best, best_r = "", 0.0
+    for tok in raw.split():
+        tl = tok.lower()
+        if (len(tok) < 4 or tl in _NACHSPRECH_STOP or tok.isdigit()
+                or tl.startswith("buchstabier")):
+            continue
+        r = SequenceMatcher(None, tl, ziel).ratio()
+        if r > best_r:
+            best, best_r = tok, r
+    return best.capitalize() if best_r >= 0.75 else ""
+
+
 def _kartei_zuruecksetzen(s: dict) -> None:
     """Nach einer Namens-Korrektur ist der Kartei-Treffer hinfällig —
     die Hintergrund-Suche läuft mit dem richtigen Namen neu an."""
@@ -641,7 +721,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         # selben Modus muss dann neu bewaffnen — live 29.08. 08:47 klebte
         # modus auf "absagen" und "Ich möchte meinen Termin absagen." fiel
         # wortlos ans LLM ("Welchen Termin soll ich absagen?").
-        if _VERSCHIEBEN_RE.search(t):
+        nur_passiv = (_VERSCHOBEN_PASSIV_RE.search(t)
+                      and not _VERSCHIEBEN_AKTIV_RE.search(t))
+        if _VERSCHIEBEN_RE.search(t) and not nur_passiv:
             if s["modus"] != "verschieben" or s["phase"] == "fertig":
                 s["modus"] = "verschieben"
                 s["phase"] = ""
@@ -713,6 +795,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # spezifische Aufloesung macht flow._ctx_bauen vor Suche und Buchung.
     if not s["grund"]:
         kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
+        if kern_name and _grund_unglaubwuerdig(t):
+            # "Die letzte Zahnreinigung war nicht gut" traegt das PZR-Wort,
+            # ist aber Beschwerde ueber FRUEHER — kein Anliegen ernten.
+            kern_name, vm = "", None
         if kern_name:
             s["grund"] = kern_name
             s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
@@ -720,7 +806,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
             neu.add("grund")
-        elif s["frage"] == "grund" and len(t) >= 3 and not ist_ja(t) and not ist_nein(t):
+        elif (s["frage"] == "grund" and len(t) >= 3 and not ist_ja(t)
+              and not ist_nein(t) and not _KEIN_GRUND_RE.search(t)
+              and not _grund_unglaubwuerdig(t)
+              and (len(t.split()) <= 5 or _ANLIEGEN_SIGNAL_RE.search(t))):
             # Frei formulierter Grund ("Holzbein absägen"): Wortlaut behalten,
             # gebucht wird der Zweifelsfall-Grund (Kontrolle/Besprechung).
             s["grund"] = t if len(t) <= 90 else t[:87] + "…"
@@ -754,7 +843,19 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if "name" in neu:
         pass  # Korrektur hat Vorrang — nichts erneut ernten.
     elif buch and (s["frage"] in {"buchstabieren", "name", "nachname"} or not s["nachname"]):
-        s["nachname"] = buch["name"]
+        name = buch["name"]
+        # Deutung gegen den schon GESAGTEN Nachnamen halten: hat STT nur
+        # einen Buchstaben verhoert ("W wie Wilhelm" kam als "B. Wilhelm"
+        # an -> "Grunebwald") oder in der Kette einen verschluckt
+        # ("Stinfurt" statt Steinfurt, beide live 29.08.2026), gewinnt der
+        # gesagte Name — die Buchstabierung BESTAETIGT ihn dann. Echte
+        # Korrekturen (MATTA VATTA vs Pidoq) liegen weit auseinander.
+        if s["nachname"]:
+            r = SequenceMatcher(None, name.lower(), s["nachname"].lower()).ratio()
+            if ((not buch.get("sicher") and r >= 0.8)
+                    or (r >= 0.85 and len(s["nachname"]) > len(name))):
+                name = s["nachname"]
+        s["nachname"] = name
         s["buchstabiert"] = True
         s["bekannt"] = False if s["frage"] == "buchstabieren" and not s["patientId"] else s["bekannt"]
         neu.add("nachname")
@@ -777,6 +878,18 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             # "Der Nachname ist Panzer. P-A-N-Z-E-R. Der Vorname ist Paul":
             # explizite Zuweisungen zählen auch auf die Buchstabier-Frage.
             neu.add("name")
+        else:
+            # STT liest kurze Buchstabier-Ketten oft als WORT ("Q-U-A-N-D-T"
+            # kam als "Quant also Quandt" an, live 29.08.2026) — ein Token,
+            # das dem gespeicherten Nachnamen stark aehnelt, ist dann die
+            # Bestaetigung bzw. Praezisierung. Ohne diese Ernte fragte
+            # Bianca in den Loop.
+            tok = _buchstabier_anker(s, t)
+            if tok:
+                if len(tok) >= len(s["nachname"]):
+                    s["nachname"] = tok
+                s["buchstabiert"] = True
+                neu.add("nachname")
     elif s["frage"] in {"name", "vorname", "nachname"}:
         if _name_aufnehmen(s, t, erzwungen=True):
             neu.add("name")

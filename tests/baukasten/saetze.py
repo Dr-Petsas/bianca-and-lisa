@@ -528,7 +528,7 @@ ABSCHWEIFER = {
         "Trump hin oder her, Hauptsache die Zähne halten, oder?",
         "Finden Sie Trump eigentlich auch so schlimm wie ich?",
         "Die Weltlage mit Trump macht mir Sorgen, da vergisst man glatt die Zähne.",
-        "Erst Trump in den Nachrichten und jetzt auch noch Zahnschmerzen — was ein Tag.",
+        "Erst Trump in den Nachrichten und jetzt auch noch Zahnarzt — was ein Tag.",
         "Sagen Sie mal ehrlich: Trump — Wahnsinn, oder?",
     ],
     "iran": [
@@ -537,7 +537,7 @@ ABSCHWEIFER = {
         "Haben Sie das vom Iran gehört? Schreckliche Zeiten.",
         "Der Krieg da unten im Iran, das macht einem schon zu schaffen.",
         "Ich schaue kaum noch Nachrichten, dieser Iran-Konflikt ist so bedrückend.",
-        "Erst der Krieg im Iran und dann noch Zahnschmerzen, das Leben ist schon hart.",
+        "Erst der Krieg im Iran und dann noch der Zahnarzt, das Leben ist schon hart.",
         "Meine Nachbarin kommt aus dem Iran, die ist ganz verzweifelt wegen des Kriegs.",
         "Was sagen Sie zum Iran? Ich finde das alles sehr beunruhigend.",
         "Bei dem Kriegsgerede um den Iran vergisst man fast die normalen Sorgen.",

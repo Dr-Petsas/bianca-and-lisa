@@ -258,6 +258,12 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         liste = saetze.PZR_JA if story.get("pzr") else saetze.PZR_NEIN
         return {"text": _wahl(story, lage, "pzr", liste), "baustein": "pzr"}
     if fid == "slotwahl":
+        if "keinen freien termin" in (lage["biancaText"] or "").lower():
+            # Leeres Angebot ("die Praxis meldet sich"): nichts zu waehlen,
+            # nicht schieben — sauber abschliessen (Batch s09 29.08.2026).
+            lage["gemacht"].add("nichts_mehr")
+            return {"text": _wahl(story, lage, "nichts_mehr", saetze.NICHTS_MEHR),
+                    "baustein": "nichts_mehr"}
         lage["slotZuege"] += 1
         if lage["slotZuege"] < min(int(story.get("slotAnnahme") or 1), MAX_SLOT_ZUEGE):
             liste = saetze.SLOT_FRUEHER if story.get("slotRichtung") == "frueher" else saetze.SLOT_SPAETER

@@ -408,6 +408,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     zuletzt = sit.pop("angebotZuletzt", None)
     sit["offered"] = offered
+    if not offered:
+        # KEIN Slot im Angebot: nie in die Slotwahl zwingen — dort haengt
+        # sonst jede Folgeaeusserung ohne waehlbare Termine (Batch s09
+        # 29.08.2026, LLM erfand "Welcher der genannten Termine?"). Das
+        # Versprechen "die Praxis meldet sich" bekommt eine ECHTE Notiz.
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        verwalten.rueckruf_notiz(sit)
+        return {"text": spoken_offer([], wish_matched=True)
+                + " Kann ich sonst noch etwas für Sie tun?"}
     s["phase"] = "angebot"
     s["frage"] = "slotwahl"
     vor = ""
