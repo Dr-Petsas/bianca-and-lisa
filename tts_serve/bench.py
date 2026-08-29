@@ -51,6 +51,24 @@ VOICE_IDS = {
     "quizmaster": "pNInz6obpgDQGcFmaJgB",
 }
 
+# Anrufer-Klone fuer den Baukasten-Test (Chef 29.08.2026): acht ElevenLabs-
+# Stimmen mit menschlichen Namen — die Test-"Patienten" am Telefon. thomas
+# ist dieselbe ID wie "mann" (bewusst: die Referenz existiert doppelt unter
+# beiden Namen, der Baukasten spricht nur die Menschen-Namen an).
+ANRUFER_IDS = {
+    # maennlich
+    "thomas": "isKDUCXg28Ua3lIGHC0k",
+    "markus": "aYjXhF7kZXskZc5G6PV2",
+    "stefan": "SMQKgThKQvXmuAzjIP2x",
+    "juergen": "JNpQqni9iUx1Jxy9h0P1",
+    "andreas": "FTNCalFNG5bRnkkaP5Ug",
+    # weiblich
+    "sabine": "1iF3vHdwHKuVKSPDK23Z",
+    "petra": "dCnu06FiOZma2KVNUoPZ",
+    "julia": "uM8iMoqaSe1eDaJiWfxf",
+}
+VOICE_IDS.update(ANRUFER_IDS)
+
 # Klon-Referenz: ~17 s natuerlicher Praxiston mit Fragen, Zahlen, Ausrufen.
 # WORTGETREU — die .txt daneben ist CosyVoices Prompt-Transkript.
 REF_TEXT = (
@@ -71,7 +89,20 @@ REF_TEXT_QUIZ = (
     "Fantastisch, weiter geht die wilde Fahrt!"
 )
 
+# Anrufer-Referenz aus PATIENTEN-Sicht: Klone erben den Duktus der Referenz —
+# der Praxiston von REF_TEXT waere fuer Test-Anrufer falsch. Frage-Intonation
+# und einzeln gesprochene Ziffern (die Testnummer!) sind Absicht: genau diese
+# Prosodie brauchen die Nummern-Bausteine des Baukasten-Tests.
+REF_TEXT_ANRUFER = (
+    "Guten Tag, ich rufe an, weil ich gern einen Termin hätte. Am liebsten "
+    "nächste Woche, vormittags ginge es bei mir am besten. Ach so, meine "
+    "Nummer gebe ich Ihnen auch gleich durch: null eins sieben sieben, sechs "
+    "null null, vier sechs, null null. Haben Sie da vielleicht noch etwas "
+    "frei? Das wäre wirklich schön. Vielen Dank schon mal, und bis dann!"
+)
+
 REF_TEXTE = {"quizmaster": REF_TEXT_QUIZ}
+REF_TEXTE.update({name: REF_TEXT_ANRUFER for name in ANRUFER_IDS})
 
 
 def _wav_roh(pcm: bytes, rate: int = RATE) -> bytes:
@@ -108,12 +139,16 @@ def _lokal_pcm(text: str, voice: str, url: str) -> bytes:
     return r.content
 
 
-def ref_erzeugen() -> None:
+def ref_erzeugen(nur: set[str] | None = None) -> None:
     if not ELEVENLABS_API_KEY:
         raise SystemExit("ELEVENLABS_API_KEY fehlt — Referenzen brauchen die heutigen Stimmen.")
     ziel = HIER / "stimmen"
     ziel.mkdir(exist_ok=True)
     for name, vid in VOICE_IDS.items():
+        # --ref-nur: nur die genannten Stimmen rendern — bewaehrte Referenzen
+        # (bianca/lisa) nie ungefragt neu wuerfeln, der Klon wuerde driften.
+        if nur and name not in nur:
+            continue
         text = REF_TEXTE.get(name, REF_TEXT)
         print(f"rendere Referenz {name} (Voice {vid}) ...", flush=True)
         pcm = _eleven_pcm(text, vid)
@@ -183,10 +218,15 @@ def main() -> None:
     p.add_argument("--url", default="", help="TTS-Container, z. B. http://192.168.0.246:8210")
     p.add_argument("--korpus", default=str(HIER / "korpus.jsonl"))
     p.add_argument("--ref-erzeugen", action="store_true", help="Klon-Referenzen aus ElevenLabs rendern")
+    p.add_argument("--ref-nur", default="", help="Komma-Liste: nur diese Stimmen rendern (z. B. thomas,sabine)")
     a = p.parse_args()
 
     if a.ref_erzeugen:
-        ref_erzeugen()
+        nur = {s.strip().lower() for s in a.ref_nur.split(",") if s.strip()}
+        unbekannt = nur - set(VOICE_IDS)
+        if unbekannt:
+            raise SystemExit(f"unbekannte Stimmen in --ref-nur: {', '.join(sorted(unbekannt))}")
+        ref_erzeugen(nur or None)
         return
     if not a.engine:
         raise SystemExit("--engine eleven|lokal angeben (oder --ref-erzeugen)")

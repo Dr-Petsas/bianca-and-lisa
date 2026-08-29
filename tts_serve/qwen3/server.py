@@ -35,6 +35,14 @@ SPRACHE = os.environ.get("TTS_SPRACHE", "German")
 ZIEL_RATE = 24000
 # Nur die produktiven Stimmen — quizmaster/mann wuerden nur Warmlauf fressen.
 _STIMMEN = ("bianca", "lisa")
+# Zusatz-Stimmen (Baukasten-Test 29.08.2026): werden gescannt und sind per
+# /speak nutzbar, bekommen aber KEINEN Start-Warmlauf — ihr Klon-Prompt
+# entsteht lazy beim ersten Aufruf. Leer = Verhalten wie vorher.
+_STIMMEN_EXTRA = tuple(
+    s.strip().lower()
+    for s in os.environ.get("TTS_STIMMEN_EXTRA", "").split(",")
+    if s.strip()
+)
 
 app = FastAPI(title="tts-qwen3")
 
@@ -62,7 +70,7 @@ def _stimmen_scannen() -> None:
     for ordner in (STIMMEN_DIR / "cosyvoice", STIMMEN_DIR):
         if not ordner.is_dir():
             continue
-        for name in _STIMMEN:
+        for name in _STIMMEN + _STIMMEN_EXTRA:
             if name in _VOICES:
                 continue
             wav = ordner / f"{name}.wav"
@@ -149,19 +157,30 @@ def _laden() -> None:
           f"hybrid={_HYBRID} stimmen={list(_VOICES)}, aliase={_ALIASE}",
           flush=True)
     for name in _VOICES:
+        # Zusatz-Stimmen (TTS_STIMMEN_EXTRA) nicht vorwaermen — Prompt lazy.
+        if name not in _STIMMEN:
+            continue
         try:
             t1 = time.time()
-            ref = str(_VOICES[name])
-            txt = _TRANSKRIPT[name]
-            if hasattr(_MODEL, "create_voice_clone_prompt") and txt:
-                _PROMPTS[name] = _MODEL.create_voice_clone_prompt(
-                    ref_audio=ref, ref_text=txt,
-                )
+            _prompt_laden(name)
             _synthese("Guten Tag, einen kleinen Moment bitte.", name)
             print(f"qwen3-tts warm {name} in {time.time() - t1:.1f}s", flush=True)
         except Exception as e:
             print(f"qwen3-tts warmlauf {name} fehlgeschlagen: {e}", flush=True)
     _WARM = True
+
+
+def _prompt_laden(name: str) -> None:
+    """Klon-Prompt einmalig aus der Referenz bauen (unter _LOCK aufrufen)."""
+    if name in _PROMPTS or _MODEL is None:
+        return
+    txt = _TRANSKRIPT.get(name) or ""
+    if hasattr(_MODEL, "create_voice_clone_prompt") and txt:
+        t1 = time.time()
+        _PROMPTS[name] = _MODEL.create_voice_clone_prompt(
+            ref_audio=str(_VOICES[name]), ref_text=txt,
+        )
+        print(f"qwen3-tts prompt {name} in {time.time() - t1:.1f}s", flush=True)
 
 
 def _synthese(text: str, voice: str) -> bytes:
@@ -234,6 +253,12 @@ def _stream_faehig() -> bool:
 
 
 def _synthese_kwargs(text: str, voice: str) -> dict:
+    # Zusatz-Stimmen bekommen ihren Klon-Prompt beim ersten Aufruf (Aufrufer
+    # haelt _LOCK); scheitert das, bleibt der ref_audio/ref_text-Weg unten.
+    try:
+        _prompt_laden(voice)
+    except Exception as e:
+        print(f"qwen3-tts prompt {voice} fehlgeschlagen: {e}", flush=True)
     kw: dict = {"text": text, "language": SPRACHE}
     if voice in _PROMPTS:
         kw["voice_clone_prompt"] = _PROMPTS[voice]
