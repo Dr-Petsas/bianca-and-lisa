@@ -618,6 +618,18 @@ nichts Abgehacktes, Werkzeug-Züge unangetastet. Abkürzungen/Uhrzeiten
 (Dr., 13:00) zählen nicht als Satzende. Notaus: `LLM_SATZ_DECKEL=0`.
 Tests: `tests/test_llm_deckel.py`.
 
+## Schaufenster „Das kann ich" (29.08.2026)
+
+Biancas Dock (8096) trägt neben dem Anruf-Knopf den Knopf **„Das kann ich"**:
+Overlay mit zwei Reitern — „Können" (alle Fähigkeiten in Klartext: Termine,
+Akte/Versicherung/Geschlecht, MAS-Gedächtnis, Gesprächsführung) und „Technik"
+(Ohr/Hirn/Mund-Pipelines inkl. Zero-Shot-Voice-Cloning, Live-Zeile aus
+`/health`, ALLE Patches/Fixes/Upgrades tabellarisch mit exakten Kürzeln).
+Reine Anzeige, kein Einfluss auf den Anruf-Pfad; beim Anruf-Start schließt
+sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
+`PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
+Schaufenster.
+
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).

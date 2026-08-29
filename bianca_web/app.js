@@ -732,6 +732,7 @@ async function boot() {
 
 function starteAnruf() {
   meld("");
+  $("koennen").hidden = true; // Schaufenster zu, sobald es ernst wird
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     meld("Dieser Browser gibt das Mikrofon nicht frei. Chrome oder Safari.", true);
     return;
@@ -837,6 +838,167 @@ function zeigeLetzten(call) {
   if (call.lastNote) teile.push(call.lastNote.dryRun ? "Notiz nur Test" : "Notiz im Termin");
   if (call.praxisNotiz) teile.push(`NOTIZ an Praxis: ${call.praxisNotiz}`);
   el.textContent = `Letzter Anruf: ${call.patientName || "ohne Name"} · ${teile.join(" · ") || "kein Kalender-Werkzeug"}`;
+}
+
+// ---------------------------------------------------------------------------
+// "Das kann ich" (Chef 29.08.2026): Schaufenster mit zwei Reitern — Koennen
+// (alles, was Bianca fachlich kann) und Technik (Ohr/Hirn/Mund-Pipelines plus
+// ALLE Patches/Fixes/Upgrades tabellarisch, exakte Kuerzel). Reine Anzeige,
+// kein Einfluss auf den Anruf-Pfad. Bei neuen Features/Patches HIER mitpflegen.
+
+const KOENNEN = [
+  { t: "Terminverwaltung — der Kern", p: [
+    "<b>Buchen:</b> Termine fest in den echten Praxiskalender (Neupatient wie Bestand), inklusive Bestätigungs-SMS der Praxis.",
+    "<b>Behandler-Wahl zu Beginn:</b> Dr. Petsas, Dr. Patrikis oder Dr. Nikolaou — „egal“ sucht global den schnellsten Termin.",
+    "<b>Finden &amp; ansagen:</b> „Wann ist mein Termin?“ → Bianca liest ihn vor und bietet gleich Verschieben oder Absagen an.",
+    "<b>Absagen (Sammel-Prozedur):</b> erst „Wann ist der Termin?“, bei „weiß nicht mehr“ die Behandler-Frage, dann der Name — bestätigt wird mit Anrede: „Soll ich den Termin wirklich absagen, Herr Berger?“",
+    "<b>Verschieben:</b> gleiche Such-Prozedur; alter Termin und neuer Wunsch werden sauber getrennt.",
+    "<b>Mehrere Treffer:</b> Eingrenzen über die Behandlung, dann klare Auswahl-Liste.",
+    "<b>Nicht gefunden:</b> ehrliche Ansage plus echte Praxis-Notiz — „das wird Doktor X vorgelegt“ — und im MAS entsteht ein Rückruf-Vorgang.",
+    "<b>Behandlungsgrund erkennen:</b> Schmerzen/Notfall, Kontrolle, PZR, Füllung, Überweisung … — Dringend-Fälle bekommen den nächstmöglichen Platz.",
+    "<b>PZR-Zusatzangebot</b> bei passender Gelegenheit — nie bei Schmerzpatienten.",
+  ]},
+  { t: "Patientenakte & Kartei", p: [
+    "<b>Akte anlegen:</b> Vorname, Nachname, Handynummer, Geschlecht und Versichertenstatus gehen als neue Patientenakte ins System.",
+    "<b>Geschlecht am Vornamen erkennen</b> (Vornamen-Wächter mit kuratierten Listen) und <b>geschlechtsspezifisch ansprechen:</b> „Frau Müller“ / „für Herrn Müller“ — grammatisch gebeugt.",
+    "<b>Kartei schlägt Schätzung:</b> steht das Geschlecht in der Akte, gilt die Akte; bleibt ein Vorname unklar, kommt die Termin-Notiz „Bitte Geschlecht aktualisieren“.",
+    "<b>Versichertenstatus (privat/gesetzlich)</b> erfragen und in die Kartei eintragen: Neupatienten als Pflichtfrage, Bestand nach über sechs Monaten als kurze Rückfrage — ein Wechsel geht sofort in die Akte.",
+    "<b>Handynummer mit Ziffern-Rückbestätigung:</b> das Readback ist immer deterministisch — nie „aus dem Bauch“.",
+    "<b>Buchstabierte Namen</b> verstehen und festhalten.",
+    "<b>Kartei-Suche im Hintergrund,</b> während das Gespräch normal weiterläuft: schon Patient? Letzter Besuch? Bei welchem Behandler?",
+  ]},
+  { t: "Praxisgedächtnis (MAS-Brain) & Notizen", p: [
+    "<b>Gesprächs-Report nach jedem Anruf:</b> Zusammenfassung im Terminpopup-Stil ins MAS-Praxisgedächtnis („Laut Anruf (Bianca): …“).",
+    "<b>Kontext aus Vorbehandlung holen — im Hintergrund:</b> frühere Anrufe und Kontakte werden während des Gesprächs abgefragt; Rückrufer werden erkannt, statt bei Null anzufangen.",
+    "<b>Terminnotiz im Termin:</b> „telefonisch Termin vereinbart wegen … // Bianca“ — direkt im Terminpopup sichtbar.",
+    "<b>Besonderes automatisch heraushören</b> und notieren: Angst, Allergie, Begleitung, „bitte nur vormittags“ …",
+    "<b>Offene Anliegen als Vorgang:</b> nicht gefundene Termine oder Rückruf-Wünsche landen als offenes Ticket bei der Praxis.",
+  ]},
+  { t: "Gesprächsführung", p: [
+    "<b>Smalltalk &amp; Abschweifen:</b> Nebenthemen bekommen Raum (Talk-Schicht) — danach führt genau EINE Brücke zurück zur offenen Frage.",
+    "<b>Unterbrechen erlaubt (Barge-in):</b> sofort „Hm.“/„Okay.“, auf den Einwand eingehen — und dann weitersprechen, wo sie stehen geblieben ist. „Stopp“ gilt sofort.",
+    "<b>Halbsätze:</b> klingt ein Satz unfertig, wartet Bianca kurz und fügt die Teile zusammen, statt Halbes zu beantworten.",
+    "<b>Stille-Stups:</b> nach ~4 Sekunden Funkstille meldet sie sich selbst — mit dem Stand und der offenen Frage.",
+    "<b>Nie-Stille-Garantie:</b> nie mehr als ~1,5 Sekunden Schweigen (Füller, Nachschub, lokale Notfall-Ansagen im Dock).",
+    "<b>Wiederholungs-Wächter:</b> nie zweimal wortgleich dieselbe Frage.",
+    "<b>Praxiswissen:</b> Öffnungszeiten, Anfahrt, Leistungen und Preise — nur aus dem hinterlegten Wissen, nichts wird erfunden.",
+    "<b>Einwände souverän:</b> „Sind Sie ein Mensch?“, „Ich will einen Menschen sprechen“ — inklusive Weiterleitung an die Praxis mit Verbinden-Jingle.",
+    "<b>Anrufer-Tempo:</b> die Hör-Schwelle passt sich der Frage an — Ja/Nein: flott, Nummern-Diktat: geduldig.",
+    "<b>Sprech-Qualität:</b> Uhrzeiten und Daten in gesprochenen Worten („morgen, Mittwoch, um neun Uhr fünfzehn“) — nie Datums-Kürzel.",
+  ]},
+];
+
+const TECHNIK = [
+  { t: "Ohr — STT-Pipeline (hören)", p: [
+    "<b>Engine:</b> primeline-parakeet — deutsches Parakeet-TDT-Finetune (2,95 % Wort-Fehlerrate) als ONNX, CPU-only im eigenen Container (5090:8212). Gemessen: 0,34–0,44 s je Zug.",
+    "<b>Stille-Trim (W-STT-TRIM):</b> Vor-/Nachlauf-Stille wird vor der Inferenz energie-basiert abgeschnitten — „Ja“/„Nein“ gehen nicht mehr unter, reine Stille wird verworfen statt halluziniert.",
+    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Behandler-Namen als Hotwords („Betsas“ → „Petsas“).",
+    "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle 350/500/650 ms je Fragetyp.",
+    "<b>Echo-Wache:</b> das Lautsprecher-Echo der eigenen Stimme wird erkannt und verworfen — kurze echte Antworten („ja“, „nein“, „stopp“) nie.",
+  ]},
+  { t: "Hirn — LLM-Pipeline (verstehen & entscheiden)", p: [
+    "<b>Modell:</b> Qwen 3.6 35B-A3B auf vLLM (5090:8000, Prefix-Cache) — ein Container für alle Stimmen des Hauses.",
+    "<b>Zwei Schichten:</b> die deterministische Job-Maschine hält Termine, Namen und Nummern; die Talk-Schicht redet frei bei Nebenthemen (Gravity + Rückweg-Brücke).",
+    "<b>Satz-Deckel (P2):</b> der Stream schließt hart nach zwei Sätzen plus Frage — nichts Abgehacktes.",
+    "<b>Satzweises Streaming (P5):</b> jeder fertige Satz wird sofort vertont, während das Modell weiterschreibt.",
+    "<b>Wachen um jeden Zug:</b> Fakten kommen aus Werkzeugen (Kalender, Kartei, Wissen), nie aus dem Bauch — Halbsatz-, Wiederholungs-, Buchungs- und Nachbesserungs-Wachen.",
+  ]},
+  { t: "Mund — TTS-Pipeline (sprechen)", p: [
+    "<b>Engine:</b> Qwen3-TTS 0.6B-Base Hybrid — Triton-Kerne + CUDA-Graph (5090:8213), mit <b>Zero-Shot-Voice-Cloning:</b> Biancas Stimme entsteht aus EINER Referenz-Aufnahme, ohne Training.",
+    "<b>Audio-Chunk-Streaming (Phase 2):</b> der ganze Satz geht ans TTS, PCM-Stücke kommen sofort zurück — erster Ton nach ~0,2 s statt 0,6–2,3 s Voll-Render. Kein Text-Schnitt (Genuschel-Verbot).",
+    "<b>Ziffern-Sicherheit:</b> Zahlwort-Ketten gehen als Einzelziffern an die Engine; der Nachhör-Wächter (Parakeet) hört jedes Nummern-Readback gegen, BEVOR es der Anrufer hört.",
+    "<b>Warm-Kette:</b> Füller-Platten-Cache (Dienststart ~2 s statt ~60 s), Satz-Pinning im RAM (feste Fragen ~0,0 s), Warm-Abnahme per Gegenhören, Pausen-Straffung, RMS-Pegel-Angleich.",
+  ]},
+  { t: "Gedächtnis & Kalender (Werkzeuge)", p: [
+    "<b>MAS-Praxisgedächtnis:</b> Gesprächs-Reports (/brain/events) + Anrufer-Kontext (/brain/caller-context) — im Hintergrund, nie blockierend.",
+    "<b>Pickadoc-Cloud-Functions:</b> Patientensuche, Terminsuche, Buchung, Absage, Verschieben, Versichertenstatus, Terminnotizen — echter Kalender (WRITE_LIVE).",
+    "<b>Alles Wesentliche lokal:</b> STT, LLM und TTS laufen auf eigener Hardware (5090) — keine Cloud-Sprachdienste im Gesprächspfad.",
+  ]},
+];
+
+// Exakte Kuerzel wie in AGENTS.md — [Patch/Fix, Stand, Bereich, Wirkung].
+const PATCHES = [
+  ["Job+Talk-Schichten", "27.08.", "Gespräch", "Deterministische Termin-Maschine + freie Talk-Schicht mit Gravity; zurück führt genau eine Brücke."],
+  ["Wiederholungs-Wächter", "27.08.", "Gespräch", "Pflichtfragen nie wortgleich doppelt; Varianten tragen die Kern-Wörter, Readbacks bleiben unangetastet."],
+  ["Stille-Wächter (Stups)", "27.08.", "Gespräch", "~4 s Funkstille → Bianca meldet Stand + offene Frage; max. 2 Stupse in Folge."],
+  ["Lokales TTS (Shootout)", "27.08.", "Mund", "Umschalten per TTS_BASE, bewusst OHNE Cloud-Rückfall — Fehler müssen in der Testphase hörbar sein."],
+  ["Füller-Platten-Cache", "28.08.", "Mund", "Statische Sätze als WAV auf Platte; Dienststart ~2 s statt ~60 s."],
+  ["Satz-Pinning", "28.08.", "Mund", "Feste Fragen im gepinnten RAM (~0,0 s statt 1–2 s); mehrsätzige Antworten satzweise gefügt — ein WAV, keine Naht."],
+  ["Lokales STT (Parakeet)", "28.08.", "Ohr", "primeline-parakeet ONNX/CPU im Container (8212): 0,34–0,44 s je Zug statt 0,8–2,0 s Cloud-STT."],
+  ["Ziffern-Transformation", "28.08.", "Mund", "Zahlwort-Ketten gehen als Einzelziffern an die Engine — Readback 5/5 statt 1/5."],
+  ["Nachhör-Wächter", "28.08.", "Mund", "Parakeet hört jedes Ziffern-Audio gegen (max. 3 Würfe); nur Verifiziertes erreicht den Anrufer."],
+  ["Warm-Abnahme", "28.08.", "Mund", "Gegenhören beim Vorwärmen: Babble fliegt raus, der bessere Wurf wird gepinnt."],
+  ["Neustart Mitternacht", "28.08.", "Alle", "Rücksetzer auf den Gesprächs-Stand 02:18 („weltklasse“); Genuschel-Ära ausgebaut."],
+  ["Qwen3-TTS Hybrid", "29.08.", "Mund", "0.6B-Base mit Triton-Kernen + CUDA-Graph (8213); Ziffern-Probe 5/5."],
+  ["Audio-Chunk-Streaming (Phase 2)", "29.08.", "Mund", "PCM-Stücke ab dem Codec: erster Ton ~0,2 s statt 0,6–2,3 s Voll-Render; Readbacks bleiben blocking."],
+  ["W-STT-TRIM", "29.08.", "Ohr", "Stille-Trim vor der Inferenz: „Ja“/„Nein“ gehen nicht mehr unter (Probe 13/13); Retry-Guard für onnx-asr."],
+  ["W-TEMPO", "29.08.", "Ohr", "Adaptive Ruhe-Schwelle (350/650 ms) + Vorab-STT ab 200 ms Ruhe: −150 bis −550 ms je Zug."],
+  ["W-HALBSATZ", "29.08.", "Gespräch", "Unfertige Sätze halten und serverseitig fügen; Termin-Auskunft statt Zwangs-Buchung."],
+  ["W-BARGE", "29.08.", "Gespräch", "Sofort-Quittung, Einwand beantworten, dann fortsetzen an der Unterbrechungsstelle; „Stopp“ verwirft."],
+  ["W-SAMMELN", "29.08.", "Termine", "Absagen/Verschieben: erst Wann → Behandler → Name sammeln, DANN suchen; ehrliche Praxis-Notiz mit Rückruf-Vorgang."],
+  ["W-STILLE", "29.08.", "Gespräch", "Nie länger als ~1,5 s still: Füller-Nachschub + Dock-Watchdog mit lokalen Blob-Ansagen."],
+  ["W-GEDAECHTNIS", "29.08.", "Gedächtnis", "Gesprächs-Reports ins MAS-Brain + Anrufer-Kontext im Hintergrund; offene Anliegen als Vorgang."],
+  ["Versicherung + Vornamen-Wächter", "29.08.", "Akte", "privat/gesetzlich in die Kartei (Wechsel sofort); Geschlecht am Vornamen, Anrede gebeugt."],
+  ["Behandler-Wahl", "29.08.", "Termine", "Kalender-Klärung zu Gesprächsbeginn; „egal“ = global schnellster Termin."],
+  ["P1 Readback-Parallelisierung", "29.08.", "Mund", "Dreisatz-Readback: Vorsatz sofort aus dem Pin-Cache, Ziffern-Satz parallel gerendert und verifiziert."],
+  ["P2 Satz-Deckel", "29.08.", "Hirn", "LLM-Stream schließt hart nach zwei Sätzen plus Frage — nichts Abgehacktes."],
+  ["P5 Satzweises LLM→TTS", "29.08.", "Hirn/Mund", "Jeder fertige Satz wird sofort vertont, während der Stream weiterliest — URLs in Reihenfolge."],
+  ["P4 Speculative Decoding", "29.08.", "Hirn", "Geprüft und bewusst NICHT aktiv: kein freier VRAM neben TTS (30,5/32,6 GB belegt)."],
+  ["Pausen-Straffung", "29.08.", "Mund", "Gewärmte Renders: Anlauf 120 ms, Satzpausen 350 ms, Ausklang 250 ms — Sprache bleibt Sample-identisch."],
+  [".env-BOM-Fix", "29.08.", "Betrieb", "PowerShell-BOM schaltete WRITE_LIVE still aus; Config liest jetzt utf-8-sig."],
+];
+
+let kTab = "faehig";
+
+function kListe(bloecke) {
+  return bloecke.map((b) =>
+    `<div class="k-block"><h3>${b.t}</h3><ul>${b.p.map((x) => `<li>${x}</li>`).join("")}</ul></div>`
+  ).join("");
+}
+
+function kTabelle() {
+  const zeilen = PATCHES.map((z) =>
+    `<tr><td class="kz">${z[0]}</td><td class="st">${z[1]}</td><td class="br">${z[2]}</td><td>${z[3]}</td></tr>`
+  ).join("");
+  return `<div class="k-block"><h3>Patches, Fixes &amp; Upgrades — komplett</h3>` +
+    `<div class="k-tabelle-wrap"><table class="k-tabelle">` +
+    `<thead><tr><th>Patch / Fix</th><th>Stand</th><th>Bereich</th><th>Wirkung</th></tr></thead>` +
+    `<tbody>${zeilen}</tbody></table></div></div>`;
+}
+
+function kRender() {
+  const el = $("kInhalt");
+  if (!el) return;
+  el.innerHTML = kTab === "technik"
+    ? `<div class="k-live" id="kLive">Live-Stand wird geladen …</div>` + kListe(TECHNIK) + kTabelle()
+    : kListe(KOENNEN);
+  for (const b of document.querySelectorAll(".k-tab")) b.classList.toggle("aktiv", b.dataset.tab === kTab);
+  el.scrollTop = 0;
+  if (kTab === "technik") kLive();
+}
+
+async function kLive() {
+  // Live-Zeile aus /health — zeigt, was JETZT wirklich läuft.
+  try {
+    const h = await (await fetch("health")).json();
+    const teile = [];
+    if (h.stt) teile.push("Ohr: " + h.stt);
+    if (h.ttsEngine) teile.push("Stimme: " + h.ttsEngine);
+    teile.push("Hirn: " + (h.llmModel || "LLM") + (h.llm && h.llm.ok ? "" : " — OFFLINE"));
+    if (h.gedaechtnis && h.gedaechtnis !== "aus") teile.push("Gedächtnis: an");
+    teile.push(h.writeLive ? "Kalender: ECHT (WRITE_LIVE)" : "Kalender: Testmodus");
+    const el = $("kLive");
+    if (el) el.textContent = "Live: " + teile.join(" · ");
+  } catch {
+    const el = $("kLive");
+    if (el) el.textContent = "Live-Stand nicht abrufbar.";
+  }
+}
+
+$("koennenBtn").onclick = () => { $("koennen").hidden = false; kRender(); };
+$("koennenZu").onclick = () => { $("koennen").hidden = true; };
+for (const b of document.querySelectorAll(".k-tab")) {
+  b.onclick = () => { kTab = b.dataset.tab; kRender(); };
 }
 
 boot();

@@ -58,6 +58,50 @@ select {
   display: flex; gap: 8px; align-items: center;
 }
 .dock .btn { flex: 1; min-height: 46px; }
+.dock .btn.neben { flex: 0 0 auto; background: #211a20; border: 1px solid var(--line); color: var(--text); font-weight: 600; }
+/* "Das kann ich" (Chef 29.08.2026): Schaufenster-Overlay mit zwei Reitern —
+   Koennen (alles, was Bianca fachlich kann) und Technik (Pipelines + alle
+   Patches/Fixes/Upgrades als Tabelle). Liegt UNTER dem Anruf-Vollbild (40). */
+.koennen {
+  position: fixed; inset: 0; z-index: 35; display: flex; flex-direction: column;
+  background: rgba(16, 11, 14, .97);
+  padding: calc(14px + env(safe-area-inset-top)) 16px calc(14px + env(safe-area-inset-bottom));
+}
+.koennen[hidden] { display: none !important; }
+.k-kopf { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; width: 100%; max-width: 980px; margin: 0 auto 10px; }
+.k-titel { font-size: 22px; font-weight: 700; }
+.k-zu {
+  appearance: none; border: 1px solid var(--line); background: #211a20; color: var(--text);
+  border-radius: 10px; padding: 8px 14px; font: inherit; font-size: 14px; cursor: pointer;
+}
+.k-tabs { display: flex; gap: 8px; width: 100%; max-width: 980px; margin: 0 auto 12px; }
+.k-tab {
+  appearance: none; border: 1px solid var(--line); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 8px 18px; font: inherit; font-size: 14px; font-weight: 650; cursor: pointer;
+}
+.k-tab.aktiv { background: var(--accent); border-color: var(--accent); color: #fff; }
+.k-inhalt { flex: 1; overflow: auto; width: 100%; max-width: 980px; margin: 0 auto; padding-bottom: 8px; -webkit-overflow-scrolling: touch; }
+.k-live { color: var(--warn); font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+.k-block { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px 13px; margin-bottom: 10px; }
+.k-block h3 { margin: 0 0 9px; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--ki); }
+.k-block ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.k-block li { font-size: 14px; line-height: 1.5; color: var(--text); }
+.k-block li b { color: var(--ki); font-weight: 650; }
+.k-tabelle-wrap { overflow-x: auto; }
+table.k-tabelle { width: 100%; border-collapse: collapse; font-size: 13px; }
+.k-tabelle th {
+  text-align: left; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.k-tabelle td { padding: 7px 8px; border-bottom: 1px solid #2a2128; vertical-align: top; line-height: 1.45; min-width: 0; }
+.k-tabelle tr:last-child td { border-bottom: 0; }
+.k-tabelle td.kz { color: var(--ki); font-weight: 650; white-space: nowrap; }
+.k-tabelle td.st { color: var(--muted); white-space: nowrap; }
+.k-tabelle td.br { color: var(--warn); white-space: nowrap; }
+@media (max-width: 860px) {
+  .k-titel { font-size: 19px; }
+  .k-tabelle td.kz, .k-tabelle td.br { white-space: normal; }
+}
 .call {
   position: fixed; inset: 0; z-index: 40; display: none; flex-direction: column;
   background: #100b0e; padding: calc(18px + env(safe-area-inset-top)) 16px calc(18px + env(safe-area-inset-bottom));
