@@ -14,50 +14,91 @@ const gespielt = new Set();  // Audio-URLs, die das Mithoeren schon abgespielt h
 let spielKette = Promise.resolve();
 const lautsprecher = new Audio();
 lautsprecher.preload = "auto";
+lautsprecher.playsInline = true;
+let ohrOffen = false;
 
 const $ = (id) => document.getElementById(id);
+
+// 44-Byte-Stille: entsperrt HTMLAudio im Klick-Zug — AudioContext allein
+// reicht nicht, spaeteres play() aus dem Poller waere sonst Autoplay-blockiert.
+const STILLE_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+
+function studioWurzel() {
+  const p = location.pathname.replace(/\/+$/, "") || "";
+  if (p.endsWith("/ergebnisse")) return p.slice(0, -"/ergebnisse".length) + "/";
+  return p ? p + "/" : "/";
+}
 
 function tonUrl(rel) {
   if (!rel) return "";
   if (/^(https?:|blob:|data:)/i.test(rel)) return rel;
-  return new URL(rel, location.href).href;
+  return new URL(rel.replace(/^\//, ""), location.origin + studioWurzel()).href;
 }
 
 function ohrOeffnen() {
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) {
-      const ctx = new AC();
-      if (ctx.state === "suspended") ctx.resume();
-      const buf = ctx.createBuffer(1, 1, 22050);
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(ctx.destination);
-      src.start(0);
-    }
-  } catch { /* */ }
+  if (ohrOffen) return Promise.resolve();
+  lautsprecher.src = STILLE_WAV;
+  return lautsprecher.play().then(() => {
+    lautsprecher.pause();
+    ohrOffen = true;
+  }).catch(() => { /* Autoplay weiter dicht — naechster Klick versucht erneut */ });
+}
+
+function tonHinweis(text) {
+  const el = $("ton-hinweis");
+  if (el) el.textContent = text || "";
 }
 
 function spielen(rel) {
   const url = tonUrl(rel);
   if (!url) return Promise.resolve();
-  return new Promise((fertig) => {
-    try { lautsprecher.pause(); } catch { /* */ }
-    lautsprecher.src = url;
-    const ende = () => {
-      lautsprecher.removeEventListener("ended", ende);
-      lautsprecher.removeEventListener("error", ende);
-      fertig();
-    };
-    lautsprecher.addEventListener("ended", ende);
-    lautsprecher.addEventListener("error", ende);
-    const p = lautsprecher.play();
-    if (p && p.catch) p.catch(ende);
-  });
+  return (async () => {
+    let blob = null;
+    for (let i = 0; i < 5; i++) {
+      try {
+        const r = await fetch(url, { cache: "no-store" });
+        if (r.ok) {
+          blob = await r.blob();
+          if (blob && blob.size > 44) break;
+        }
+      } catch { /* Datei evtl. noch nicht geschrieben */ }
+      await new Promise((w) => setTimeout(w, 180));
+    }
+    if (!blob || blob.size < 44) {
+      tonHinweis("Audio fehlt — Play nochmal tippen.");
+      return;
+    }
+    const obj = URL.createObjectURL(blob);
+    try {
+      try { lautsprecher.pause(); } catch { /* */ }
+      lautsprecher.src = obj;
+      await lautsprecher.play();
+      tonHinweis("");
+      await new Promise((fertig) => {
+        const ende = () => {
+          lautsprecher.removeEventListener("ended", ende);
+          lautsprecher.removeEventListener("error", ende);
+          fertig();
+        };
+        lautsprecher.addEventListener("ended", ende);
+        lautsprecher.addEventListener("error", ende);
+      });
+    } catch (e) {
+      ohrOffen = false;
+      tonHinweis("Mithören startet nach einem Klick ins Fenster.");
+      console.warn("studio-ton", url, e);
+    } finally {
+      try { URL.revokeObjectURL(obj); } catch { /* */ }
+    }
+  })();
 }
 
 function mithoerenAn() {
-  return !!($("mithoeren-popup") || $("mithoeren")).checked;
+  const a = $("mithoeren-popup");
+  const b = $("mithoeren");
+  if (a && a.checked) return true;
+  if (b && b.checked) return true;
+  return false;
 }
 
 function mithoerenSetzen(an) {
@@ -72,7 +113,6 @@ function popupAuf() {
 
 function popupZu() {
   $("anruf-popup").hidden = true;
-  try { lautsprecher.pause(); } catch { /* */ }
 }
 
 function chip(text, an, klick, wert) {
@@ -192,7 +232,7 @@ function automatik() {
 
 async function laufStarten(anzahl) {
   $("fehler").textContent = "";
-  ohrOeffnen();
+  await ohrOeffnen();
   mithoerenSetzen(true);
   popupAuf();
   $("live-dialog").innerHTML = "";
@@ -293,7 +333,9 @@ async function pollen() {
 }
 
 function pollerStarten() {
-  if (!poller) poller = setInterval(pollen, 1000);
+  if (poller) return;
+  pollen();
+  poller = setInterval(pollen, 350);
 }
 
 async function boot() {
@@ -304,7 +346,11 @@ async function boot() {
   $("knopf-batch").addEventListener("click", () => laufStarten(10));
   $("anruf-zu").addEventListener("click", popupZu);
   $("mithoeren").addEventListener("change", () => mithoerenSetzen($("mithoeren").checked));
-  $("mithoeren-popup").addEventListener("change", () => mithoerenSetzen($("mithoeren-popup").checked));
+  $("mithoeren-popup").addEventListener("change", () => {
+    mithoerenSetzen($("mithoeren-popup").checked);
+    if ($("mithoeren-popup").checked) ohrOeffnen();
+  });
+  $("anruf-popup").addEventListener("pointerdown", () => { ohrOeffnen(); });
   pollen();
 }
 

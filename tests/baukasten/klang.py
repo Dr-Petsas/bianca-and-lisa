@@ -27,6 +27,25 @@ from tests.baukasten import saetze  # noqa: E402
 AUDIO_DIR = Path(__file__).resolve().parent / "audio"
 PCM_RATE = 24000
 
+
+def wav_schliessen(blob: bytes) -> bytes:
+    """Offenen Stream-WAV-Header (0xFFFFFFFF) auf die echte PCM-Laenge setzen.
+
+    Biancas /api/audio-stream liefert einen wachsenden WAV mit unbekannter
+    Groesse — Chrome spielt die gespeicherte Datei sonst nicht (Play-Knopf
+    da, kein Ton). Standard-44-Byte-Header wie kern.tts.wav_header_offen."""
+    import struct
+    if not blob or blob[:4] != b"RIFF" or len(blob) < 44:
+        return blob
+    pcm = len(blob) - 44
+    data_size = struct.unpack_from("<I", blob, 40)[0]
+    if data_size == pcm:
+        return blob
+    out = bytearray(blob)
+    struct.pack_into("<I", out, 4, 36 + pcm)
+    struct.pack_into("<I", out, 40, pcm)
+    return bytes(out)
+
 # Qwen3-TTS bricht lange Renders nach ~8 s ab (Modell-Deckel) — der
 # Grunewald-Buchstabier-Satz endete live bei "L wie" und Bianca lief in
 # den Frage-Loop. Texte ueber dieser Laenge werden deshalb an Komma-/

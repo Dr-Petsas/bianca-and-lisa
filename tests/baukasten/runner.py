@@ -91,6 +91,8 @@ class Anruf:
         except httpx.HTTPError as e:
             print(f"runner: bianca-audio fehlt ({e})", flush=True)
             return "", 0.0
+        if blob[:4] == b"RIFF":
+            blob = klang.wav_schliessen(blob)
         self._audio_nr += 1
         name = f"b{self._audio_nr:02d}.wav" if blob[:4] == b"RIFF" else f"b{self._audio_nr:02d}.mp3"
         (self.audio_dir / name).write_bytes(blob)

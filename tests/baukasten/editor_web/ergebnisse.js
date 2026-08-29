@@ -7,29 +7,53 @@ let aktuellerLauf = "";
 let spielListe = [];
 const lautsprecher = new Audio();
 lautsprecher.preload = "auto";
+lautsprecher.playsInline = true;
+
+function studioWurzel() {
+  const p = location.pathname.replace(/\/+$/, "") || "";
+  if (p.endsWith("/ergebnisse")) return p.slice(0, -"/ergebnisse".length) + "/";
+  return p ? p + "/" : "/";
+}
 
 function tonUrl(rel) {
   if (!rel) return "";
   if (/^(https?:|blob:|data:)/i.test(rel)) return rel;
-  return new URL(rel, location.href).href;
+  return new URL(rel.replace(/^\//, ""), location.origin + studioWurzel()).href;
 }
 
 function spielen(rel) {
   const url = tonUrl(rel);
   if (!url) return Promise.resolve();
-  return new Promise((fertig) => {
-    try { lautsprecher.pause(); } catch { /* */ }
-    lautsprecher.src = url;
-    const ende = () => {
-      lautsprecher.removeEventListener("ended", ende);
-      lautsprecher.removeEventListener("error", ende);
-      fertig();
-    };
-    lautsprecher.addEventListener("ended", ende);
-    lautsprecher.addEventListener("error", ende);
-    const p = lautsprecher.play();
-    if (p && p.catch) p.catch(ende);
-  });
+  return (async () => {
+    let blob = null;
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (r.ok) blob = await r.blob();
+    } catch { /* */ }
+    if (!blob || blob.size < 44) {
+      console.warn("studio-ton fehlt", url);
+      return;
+    }
+    const obj = URL.createObjectURL(blob);
+    try {
+      try { lautsprecher.pause(); } catch { /* */ }
+      lautsprecher.src = obj;
+      await lautsprecher.play();
+      await new Promise((fertig) => {
+        const ende = () => {
+          lautsprecher.removeEventListener("ended", ende);
+          lautsprecher.removeEventListener("error", ende);
+          fertig();
+        };
+        lautsprecher.addEventListener("ended", ende);
+        lautsprecher.addEventListener("error", ende);
+      });
+    } catch (e) {
+      console.warn("studio-ton play", url, e);
+    } finally {
+      try { URL.revokeObjectURL(obj); } catch { /* */ }
+    }
+  })();
 }
 
 async function laeufeLaden() {
@@ -104,7 +128,7 @@ function bubbleBauen(z, basis) {
       `<span class="tag" style="color:var(--gruen)">GEBUCHT ${String(z.book.slotIso || "").slice(0, 16)}</span>`);
   }
   if (z.audio) {
-    const url = `${basis}/${z.audio}`;
+    const url = `${basis}/${String(z.audio).split("/").pop()}`;
     const knopf = document.createElement("button");
     knopf.textContent = "▶";
     knopf.addEventListener("click", () => {
@@ -138,7 +162,7 @@ function allesAbspielen() {
 async function storyOeffnen(laufId, storyId) {
   const b = await (await fetch(`api/bericht/${laufId}/${storyId}`)).json();
   $("story-id").textContent = storyId;
-  const basis = `berichte/${laufId}/${storyId}`;
+  const basis = `api/ton/${laufId}/${storyId}`;
   const erg = b.ergebnis || {};
   $("story-checks").innerHTML = (erg.checks || []).map((c) =>
     `<span class="check ${c.ok ? "ok" : "rot"}"><span class="punkt"></span>${c.name}` +

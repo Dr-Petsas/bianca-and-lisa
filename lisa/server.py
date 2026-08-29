@@ -507,7 +507,8 @@ def index():
     index = WEB_DIR / "index.html"
     if not index.is_file():
         raise HTTPException(404, "web/index.html fehlt")
-    return FileResponse(index, headers={"Cache-Control": "no-store"})
+    return FileResponse(index, media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/{name}")

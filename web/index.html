@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <title>Bianca &amp; Lisa ? Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call20" />
+  <title>Bianca &amp; Lisa — Telefon-KI</title>
+  <link rel="stylesheet" href="/styles.css?v=call21" />
 </head>
 <body>
   <nav class="tabs" id="tabs">
@@ -35,7 +35,7 @@
           <label for="tenant">Mandant</label>
           <select id="tenant"></select>
           <label for="prompt">Was Lisa ausrichten soll</label>
-          <textarea id="prompt" placeholder="z. B. Wir m?chten Ihren Kontrolltermin vorverlegen ? n?chste Woche ist ein Platz frei."></textarea>
+          <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
           <div class="row" style="margin-top:10px">
             <button class="btn ghost mic" id="micPrompt" type="button">Prompt diktieren</button>
             <span class="sub" id="promptLive"></span>
@@ -60,7 +60,7 @@
                 <ul id="past"></ul>
               </div>
               <div>
-                <strong>N?chste Termine</strong>
+                <strong>Nächste Termine</strong>
                 <ul id="upcoming"></ul>
               </div>
             </div>
@@ -74,7 +74,7 @@
     <div id="call" class="call">
       <div class="call-top">
         <div class="call-name" id="callName">Lisa</div>
-        <div class="call-phase" id="phase">verbindet?</div>
+        <div class="call-phase" id="phase">verbindet…</div>
       </div>
       <div class="call-pulse" id="pulse"></div>
       <div class="live call-live" id="live"></div>
@@ -88,10 +88,10 @@
   </div>
 
   <div id="tab-bianca">
-    <iframe id="biancaFrame" class="tab-frame" title="Bianca ? Patiententelefon"
+    <iframe id="biancaFrame" class="tab-frame" title="Bianca — Patiententelefon"
             allow="microphone; autoplay"></iframe>
     <div class="tab-frame-hinweis" id="biancaHinweis" hidden>
-      Bianca antwortet nicht. L?uft ihr Dienst? <code>start-bianca.ps1</code> (Port 8096)
+      Bianca antwortet nicht. Läuft ihr Dienst? <code>start-bianca.ps1</code> (Port 8096)
     </div>
   </div>
 
@@ -111,7 +111,7 @@
         }
         if (tab === "bianca" && !geladen) {
           geladen = true;
-          // Bianca laeuft hinter Lisas Durchreiche (/bianca/ -> Port 8096) ?
+          // Bianca laeuft hinter Lisas Durchreiche (/bianca/ -> Port 8096) —
           // so funktioniert sie auch durch den Cloudflare-Tunnel, wo :8096
           // von aussen nicht erreichbar ist.
           fetch("/bianca/health")
@@ -138,7 +138,7 @@
         if (location.hash === "#lisa") zeige("lisa");
       });
 
-      // Startseite ist BIANCA (Chef 27.08.2026) ? #lisa oder eine zuvor
+      // Startseite ist BIANCA (Chef 27.08.2026) — #lisa oder eine zuvor
       // bewusst gewaehlte Lisa-Ansicht (neuer Speicher-Schluessel) gewinnt.
       var start = "bianca";
       if (location.hash === "#lisa") start = "lisa";
@@ -148,6 +148,6 @@
       zeige(start);
     })();
   </script>
-  <script src="/app.js?v=call31"></script>
+  <script src="/app.js?v=call32"></script>
 </body>
 </html>

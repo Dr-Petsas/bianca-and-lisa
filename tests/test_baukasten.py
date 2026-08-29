@@ -130,6 +130,23 @@ def test_schonmal_saetze_ernten_keinen_namen():
             f"{satz!r} -> Name {s['vorname']!r} {s['nachname']!r}"
 
 
+def test_wav_schliessen_macht_stream_header_abspielbar():
+    """Stream-WAVs (0xFFFFFFFF) muss der Browser als echte Datei spielen koennen."""
+    import struct
+
+    from kern import tts
+    from tests.baukasten import klang
+
+    pcm = b"\x00\x00" * 80
+    offen = tts.wav_header_offen() + pcm
+    assert struct.unpack_from("<I", offen, 40)[0] == 0xFFFFFFFF
+    fest = klang.wav_schliessen(offen)
+    assert fest[:4] == b"RIFF"
+    assert struct.unpack_from("<I", fest, 4)[0] == 36 + len(pcm)
+    assert struct.unpack_from("<I", fest, 40)[0] == len(pcm)
+    assert klang.wav_schliessen(fest) == fest
+
+
 if __name__ == "__main__":
     fehler = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

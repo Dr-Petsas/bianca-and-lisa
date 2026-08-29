@@ -23,11 +23,11 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import FileResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from tests.baukasten import geschichten, runner, saetze  # noqa: E402
+from tests.baukasten import geschichten, klang, runner, saetze  # noqa: E402
 
 WEB_DIR = Path(__file__).resolve().parent / "editor_web"
 BERICHTE_DIR = runner.BERICHTE_DIR
@@ -165,17 +165,35 @@ def live() -> dict[str, Any]:
         }
         if anruf is not None:
             out["story"] = str(anruf.story.get("id") or "")
-            # Relativ (ohne fuehrenden Slash): funktioniert direkt auf 8097
-            # UND hinter der /studio/-Durchreiche des Bianca-Servers.
-            basis = f"berichte/{_zustand['laufId']}/{out['story']}"
+            # api/ton schliesst offene Stream-Header und laeuft relativ
+            # sowohl auf 8097 als auch hinter /studio/ auf 8096.
             zuege = []
             for z in list(anruf.zuege):
                 z2 = dict(z)
-                if z2.get("audio"):
-                    z2["audioUrl"] = f"{basis}/{z2['audio']}"
+                name = Path(str(z2.get("audio") or "")).name
+                if name:
+                    z2["audioUrl"] = f"api/ton/{_zustand['laufId']}/{out['story']}/{name}"
                 zuege.append(z2)
             out["zuege"] = zuege
     return out
+
+
+@app.get("/api/ton/{lauf_id}/{story_id}/{name}")
+def ton(lauf_id: str, story_id: str, name: str) -> Response:
+    """Abspielbares Audio einer Bubble: Stream-WAV-Header wird geschlossen,
+    damit der Browser wirklich Toene macht (nicht nur den Play-Knopf zeigt)."""
+    if "/" in name or "\\" in name or name in {".", ".."}:
+        return Response(status_code=404)
+    p = BERICHTE_DIR / lauf_id / story_id / "audio" / name
+    if not p.is_file():
+        return Response(status_code=404)
+    blob = p.read_bytes()
+    if blob[:4] == b"RIFF":
+        blob = klang.wav_schliessen(blob)
+        return Response(blob, media_type="audio/wav",
+                        headers={"Cache-Control": "no-store", "Accept-Ranges": "bytes"})
+    return Response(blob, media_type="audio/mpeg",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/laeufe")
