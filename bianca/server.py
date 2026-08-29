@@ -4,8 +4,9 @@ Clara (8091/8092/8093) und DemoClara (8094) bleiben unberührt."""
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -299,6 +300,79 @@ def api_audio_stream(name: str):
 
 if BIANCA_WEB_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(BIANCA_WEB_DIR)), name="static")
+
+
+# --- Test-Studio (29.08.2026): HTML/CSS/JS kommen AUS DIESEM Prozess, damit
+# die Seite auch hinter Lisas /bianca/-Tunnel sofort da ist (kein zweites
+# Fenster, kein zweiter Port, kein Redirect auf /studio/ — der wuerde hinter
+# Lisa auf 8095/studio landen und weiss bleiben). API und Berichte gehen
+# intern an den Editor auf 8097.
+_STUDIO_WEB = Path(__file__).resolve().parent.parent / "tests" / "baukasten" / "editor_web"
+_STUDIO_BASIS = "http://127.0.0.1:8097"
+
+
+def _studio_seite(name: str) -> FileResponse:
+    p = _STUDIO_WEB / name
+    if not p.is_file():
+        raise HTTPException(404, "Test-Studio-Datei fehlt")
+    return FileResponse(p, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/studio")
+@app.get("/studio/")
+def studio_index():
+    return _studio_seite("index.html")
+
+
+@app.get("/studio/ergebnisse")
+def studio_ergebnisse():
+    return _studio_seite("ergebnisse.html")
+
+
+@app.get("/studio/web/{name}")
+def studio_web(name: str):
+    erlaubt = {"app.js", "stil.css", "ergebnisse.js"}
+    if name not in erlaubt:
+        raise HTTPException(404)
+    return _studio_seite(name)
+
+
+@app.api_route("/studio/api/{pfad:path}", methods=["GET", "POST"])
+async def studio_api(request: Request, pfad: str):
+    import urllib.error
+    import urllib.request
+
+    from starlette.concurrency import run_in_threadpool
+
+    ziel = f"{_STUDIO_BASIS}/api/{pfad}"
+    if request.url.query:
+        ziel += f"?{request.url.query}"
+    body = await request.body() if request.method == "POST" else None
+    kopf = {}
+    if request.headers.get("content-type"):
+        kopf["Content-Type"] = request.headers["content-type"]
+
+    def _holen():
+        req = urllib.request.Request(ziel, data=body, headers=kopf, method=request.method)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, r.read(), r.headers.get("content-type")
+
+    try:
+        status, inhalt, mime = await run_in_threadpool(_holen)
+    except urllib.error.HTTPError as e:
+        return Response(e.read(), status_code=e.code,
+                        media_type=e.headers.get("content-type") if e.headers else None,
+                        headers={"Cache-Control": "no-store"})
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise HTTPException(502, "Test-Studio (8097) antwortet nicht — laeuft der Editor?")
+    return Response(inhalt, status_code=status, media_type=mime,
+                    headers={"Cache-Control": "no-store"})
+
+
+# WAVs direkt aus dem Berichte-Ordner — kein urllib-Proxy (Play-Buttons).
+_BERICHTE = Path(__file__).resolve().parent.parent / "tests" / "baukasten" / "berichte"
+_BERICHTE.mkdir(parents=True, exist_ok=True)
+app.mount("/studio/berichte", StaticFiles(directory=str(_BERICHTE)), name="studio-berichte")
 
 
 @app.get("/")

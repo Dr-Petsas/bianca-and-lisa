@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="/web/stil.css?v=1">
+<link rel="stylesheet" href="web/stil.css?v=3">
 </head>
 <body>
 <header>
   <h1>Baukasten-Teststudio</h1>
   <span class="status" id="status">bereit</span>
   <div class="rechts">
-    <label class="schalter"><input type="checkbox" id="mithoeren"> Mith&ouml;ren</label>
-    <a href="/ergebnisse">Ergebnisse &rarr;</a>
+    <label class="schalter"><input type="checkbox" id="mithoeren" checked> Mith&ouml;ren</label>
+    <a href="ergebnisse">Ergebnisse &rarr;</a>
   </div>
 </header>
 <main>
@@ -68,12 +68,21 @@
   </div>
 
   <div class="fehlerbox" id="fehler"></div>
+</main>
 
-  <div class="block" id="live-block" style="display:none">
-    <h2>Laufender Anruf: <span id="live-story"></span></h2>
+<div id="anruf-popup" class="anruf-popup" hidden>
+  <div class="anruf-karte">
+    <div class="anruf-kopf">
+      <div>
+        <div class="anruf-titel">Live-Anruf</div>
+        <div class="klein" id="live-story">startet …</div>
+      </div>
+      <label class="schalter"><input type="checkbox" id="mithoeren-popup" checked> Mithören</label>
+      <button class="gross" id="anruf-zu" type="button">Schließen</button>
+    </div>
     <div class="dialog" id="live-dialog"></div>
   </div>
-</main>
-<script src="/web/app.js?v=1"></script>
+</div>
+<script src="web/app.js?v=3"></script>
 </body>
 </html>

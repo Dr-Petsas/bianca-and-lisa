@@ -1006,6 +1006,17 @@ async function kLive() {
 
 $("koennenBtn").onclick = () => { $("koennen").hidden = false; kRender(); };
 $("koennenZu").onclick = () => { $("koennen").hidden = true; };
+function studioAuf(titel, pfad) {
+  $("studioTitel").textContent = titel;
+  $("studioRahmen").src = pfad;
+  $("studio").hidden = false;
+}
+$("studioBtn").onclick = () => studioAuf("Test-Studio", "studio/");
+$("ergebnisseBtn").onclick = () => studioAuf("Ergebnisse", "studio/ergebnisse");
+$("studioZu").onclick = () => {
+  $("studio").hidden = true;
+  $("studioRahmen").src = "about:blank";
+};
 for (const b of document.querySelectorAll(".k-tab")) {
   b.onclick = () => { kTab = b.dataset.tab; kRender(); };
 }

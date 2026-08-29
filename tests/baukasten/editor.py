@@ -165,7 +165,9 @@ def live() -> dict[str, Any]:
         }
         if anruf is not None:
             out["story"] = str(anruf.story.get("id") or "")
-            basis = f"/berichte/{_zustand['laufId']}/{out['story']}"
+            # Relativ (ohne fuehrenden Slash): funktioniert direkt auf 8097
+            # UND hinter der /studio/-Durchreiche des Bianca-Servers.
+            basis = f"berichte/{_zustand['laufId']}/{out['story']}"
             zuege = []
             for z in list(anruf.zuege):
                 z2 = dict(z)

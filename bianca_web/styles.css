@@ -19,6 +19,19 @@ body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-botto
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .header-status { text-align: right; min-width: 0; }
+/* Links zum Test-Studio (8097) — Button-Optik, aber klein und dezent im Kopf. */
+.studio-links { display: flex; gap: 8px; justify-content: flex-end; }
+.studio-link {
+  appearance: none; display: inline-block; padding: 8px 12px; border-radius: 10px;
+  background: #211a20; border: 1px solid var(--line); color: var(--text);
+  font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; font: inherit;
+}
+.studio-overlay { z-index: 36; }
+.studio-rahmen {
+  flex: 1; width: 100%; border: 0; border-radius: 12px; background: #10141a;
+}
+.studio-link:hover { background: #2a2128; }
+@media (max-width: 860px) { .studio-links { justify-content: flex-start; } }
 h1 { font-size: 22px; font-weight: 650; margin: 0; }
 .sub { color: var(--muted); font-size: 13px; }
 .last-call { margin-top: 4px; color: var(--warn); }

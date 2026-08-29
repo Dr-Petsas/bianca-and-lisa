@@ -168,3 +168,33 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .klein { font-size: 12px; color: var(--dim); }
 .fehlerbox { color: var(--rot); font-size: 13px; margin: 8px 0; white-space: pre-wrap; }
+
+.anruf-popup {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(6, 8, 12, .72);
+  display: flex; align-items: center; justify-content: center;
+  padding: 18px;
+}
+.anruf-popup[hidden] { display: none !important; }
+.anruf-karte {
+  width: min(720px, 100%);
+  max-height: 90vh;
+  background: var(--panel);
+  border: 1px solid #2a3442;
+  border-radius: 16px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.anruf-kopf {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #2a3442;
+  background: #151b24;
+}
+.anruf-titel { font-size: 16px; font-weight: 650; }
+.anruf-karte .dialog {
+  padding: 14px 16px 20px;
+  overflow: auto;
+  min-height: 220px;
+  max-height: calc(90vh - 80px);
+}

@@ -4,11 +4,36 @@
 
 const $ = (id) => document.getElementById(id);
 let aktuellerLauf = "";
-let spieler = null;
 let spielListe = [];
+const lautsprecher = new Audio();
+lautsprecher.preload = "auto";
+
+function tonUrl(rel) {
+  if (!rel) return "";
+  if (/^(https?:|blob:|data:)/i.test(rel)) return rel;
+  return new URL(rel, location.href).href;
+}
+
+function spielen(rel) {
+  const url = tonUrl(rel);
+  if (!url) return Promise.resolve();
+  return new Promise((fertig) => {
+    try { lautsprecher.pause(); } catch { /* */ }
+    lautsprecher.src = url;
+    const ende = () => {
+      lautsprecher.removeEventListener("ended", ende);
+      lautsprecher.removeEventListener("error", ende);
+      fertig();
+    };
+    lautsprecher.addEventListener("ended", ende);
+    lautsprecher.addEventListener("error", ende);
+    const p = lautsprecher.play();
+    if (p && p.catch) p.catch(ende);
+  });
+}
 
 async function laeufeLaden() {
-  const d = await (await fetch("/api/laeufe")).json();
+  const d = await (await fetch("api/laeufe")).json();
   const box = $("laeufe");
   box.innerHTML = "";
   (d.laeufe || []).forEach((l) => {
@@ -28,7 +53,7 @@ async function laeufeLaden() {
 async function laufOeffnen(laufId) {
   aktuellerLauf = laufId;
   location.hash = laufId;
-  const d = await (await fetch(`/api/lauf/${laufId}`)).json();
+  const d = await (await fetch(`api/lauf/${laufId}`)).json();
   $("lauf-id").textContent = laufId;
   const box = $("stories");
   box.innerHTML = "";
@@ -84,8 +109,7 @@ function bubbleBauen(z, basis) {
     knopf.textContent = "▶";
     knopf.addEventListener("click", () => {
       stoppen();
-      spieler = new Audio(url);
-      spieler.play();
+      spielen(url);
     });
     meta.appendChild(knopf);
     div.dataset.audio = url;
@@ -95,7 +119,7 @@ function bubbleBauen(z, basis) {
 }
 
 function stoppen() {
-  if (spieler) { spieler.pause(); spieler = null; }
+  try { lautsprecher.pause(); } catch { /* */ }
   spielListe = [];
 }
 
@@ -106,18 +130,15 @@ function allesAbspielen() {
   const weiter = () => {
     const url = spielListe.shift();
     if (!url) return;
-    spieler = new Audio(url);
-    spieler.addEventListener("ended", weiter);
-    spieler.addEventListener("error", weiter);
-    spieler.play().catch(weiter);
+    spielen(url).then(weiter);
   };
   weiter();
 }
 
 async function storyOeffnen(laufId, storyId) {
-  const b = await (await fetch(`/api/bericht/${laufId}/${storyId}`)).json();
+  const b = await (await fetch(`api/bericht/${laufId}/${storyId}`)).json();
   $("story-id").textContent = storyId;
-  const basis = `/berichte/${laufId}/${storyId}`;
+  const basis = `berichte/${laufId}/${storyId}`;
   const erg = b.ergebnis || {};
   $("story-checks").innerHTML = (erg.checks || []).map((c) =>
     `<span class="check ${c.ok ? "ok" : "rot"}"><span class="punkt"></span>${c.name}` +

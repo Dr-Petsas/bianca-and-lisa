@@ -11,6 +11,7 @@ Sicher-Kennzeichen, wenn ein mitgesprochenes Wort die Buchstabierung bestätigt.
 
 from __future__ import annotations
 
+import difflib
 import re
 from typing import Any
 
@@ -66,7 +67,8 @@ _FUELL = {
     "und", "dann", "also", "genau", "bitte", "noch", "einmal", "nochmal",
     "der", "die", "das", "mein", "name", "nachname", "vorname", "ist",
     "heißt", "heisst", "sich", "schreibt", "man", "so", "ja", "okay",
-    "buchstabiere", "buchstabiert", "ich",
+    "buchstabiere", "buchstabiert", "ich", "gerne", "gern",
+    "äh", "ähm", "eh", "ehm", "hm", "mhm",
 }
 
 # Für das Rückwärts-Buchstabieren (Bianca liest vor): eine feste, klare Tafel.
@@ -99,6 +101,30 @@ def _als_buchstabe(tok: str) -> str:
     if len(tok) == 1 and tok in _EINZEL:
         return tok
     return _LAUT.get(tok, "")
+
+
+_TAFEL_KEYS = sorted(_TAFEL)
+
+
+def _tafel_anlaute(toks: list[str]) -> list[str]:
+    """Buchstabiertafel-Woerter im Satz (auch verhoert: "Nordpool", "Bertha")
+    -> ihre Anlaute in Sprechreihenfolge.
+
+    STT zerlegt "K wie Kaufmann, A wie Anton" live gern zu "Kavi Kaufmann,
+    Avi Anton" (Batch s14/s17 29.08.2026) — die Tafel-Woerter selbst kommen
+    aber fast immer durch. Fuzzy-Abgleich ab 4 Zeichen, konservativ 0.8."""
+    anlaute: list[str] = []
+    for tok in toks:
+        if tok in _FUELL or tok == "wie" or not tok.isalpha():
+            continue
+        if tok in _TAFEL:
+            anlaute.append(_TAFEL[tok])
+            continue
+        if len(tok) >= 4:
+            m = difflib.get_close_matches(tok, _TAFEL_KEYS, n=1, cutoff=0.8)
+            if m:
+                anlaute.append(_TAFEL[m[0]])
+    return anlaute
 
 
 def deute(text: str) -> dict[str, Any] | None:
@@ -147,6 +173,8 @@ def deute(text: str) -> dict[str, Any] | None:
                 l = _TAFEL.get(wort, "") or (wort[:1] if wort[:1] in _EINZEL else "")
             if l:
                 letters.append(l)
+                kette = True
+                fuell_folge = 0
                 i += 3
                 continue
         l = _als_buchstabe(tok)
@@ -159,12 +187,28 @@ def deute(text: str) -> dict[str, Any] | None:
         # STT klebt Einzelbuchstaben gern zu Clustern zusammen ("F-E-LD-Kamp"
         # kam live 29.08.2026 statt F-E-L-D-K-A-M-P). Ein kurzes vokalloses
         # Token INNERHALB der Kette ist kein Wort, sondern zusammengezogene
-        # Buchstaben: aufspalten.
+        # Buchstaben: aufspalten. Vokalhaltige Kurz-Tokens ("Kam" statt
+        # K-A-M, Batch s11 29.08.2026) nur, wenn die Buchstabierung danach
+        # sichtbar WEITERGEHT — sonst wäre jedes Alltagswort ein Cluster.
         if (kette and fuell_folge == 0 and 2 <= len(tok) <= 4 and tok.isalpha()
-                and not any(v in tok for v in "aeiouäöüy")):
-            letters.extend(tok)
-            i += 1
-            continue
+                and tok not in _TAFEL):
+            nxt_tafel = nxt in _TAFEL and len(nxt) > 1
+            # Verschliffenes "X wie" VOR einem Tafel-Wort ("Ew Emil",
+            # "Uwi Ulrich", "SW Samuel" — Batch s09 29.08.2026): das
+            # Kurz-Token ist der kaputte "X wie"-Rest, NICHT zusammen-
+            # gezogene Buchstaben. Ueberspringen — das Tafel-Wort danach
+            # traegt den Buchstaben. Erkennbar am passenden Anlaut oder
+            # der verschluckten wie-Endung (…w/…wi).
+            if nxt_tafel and (tok[0] == _TAFEL[nxt] or tok.endswith(("w", "wi"))):
+                i += 1
+                continue
+            vokallos = not any(v in tok for v in "aeiouäöüy")
+            nxt2 = toks[i + 2] if i + 2 < len(toks) else ""
+            weiter = bool(_als_buchstabe(nxt)) or nxt2 == "wie"
+            if vokallos or weiter:
+                letters.extend(tok)
+                i += 1
+                continue
         if tok in _TAFEL and len(tok) > 1:
             # Ein Tafel-Wort OHNE "wie" zählt nur INNERHALB einer
             # Buchstabier-Kette ("Anton Berta Cäsar") oder wenn direkt das
@@ -196,10 +240,18 @@ def deute(text: str) -> dict[str, Any] | None:
         fuell_folge = 0
         i += 1
 
-    if len(letters) < 2:
-        return None
     zusammen = "".join(letters)
-    if len(zusammen) < 2:
+    # Tafel-Rettung: hat STT die "X wie Y"-Paare verstuemmelt ("Kavi Kaufmann,
+    # Iwi Emil …", Batch s14/s17 29.08.2026), tragen die TAFEL-WOERTER selbst
+    # mehr Signal als die zerhackten Buchstaben — ihre Anlaute sind der Name.
+    # Bei nur 3 Treffern braucht es ein Buchstabier-Signal (Kette oder "wie"),
+    # sonst wuerde "Emil Richard Otto" als Namensangabe zu "Ero".
+    tafel = _tafel_anlaute(toks)
+    if (len(tafel) >= 3 and len(tafel) > len(letters)
+            and (len(tafel) >= 4 or letters or "wie" in toks)):
+        name = "".join(tafel)
+        return {"name": name[0].upper() + name[1:], "sicher": False}
+    if len(letters) < 2 or len(zusammen) < 2:
         return None
     # Wort-Anker: Beginnt ein mitgesprochenes Wort mit GENAU den buchstabierten
     # Buchstaben (mind. 3, sonst Zufallstreffer), ist das Wort der Name — egal
@@ -213,7 +265,10 @@ def deute(text: str) -> dict[str, Any] | None:
     # zusammengezogen ("F-E-L-D-Kamp"). Genau ein Wort direkt hinter der
     # Kette ohne Füller dazwischen => anfügen — ausser das Wort ist die
     # Buchstabierung selbst ("M-E-I-E-R, Meier") oder steckt schon am Ende.
+    # NUR wenn die Kette dominiert: aus "acwc" + fremdem Muell entstand sonst
+    # der Phantasiename "Acwchabi" (Batch s14 29.08.2026).
     if (len(zusammen) >= 3 and len(anschluss) == 1 and 2 <= len(anschluss[0]) <= 15
+            and fremd <= len(letters)
             and anschluss[0] != zusammen and not zusammen.endswith(anschluss[0])):
         voll = zusammen + anschluss[0]
         return {"name": voll[0].upper() + voll[1:], "sicher": False}

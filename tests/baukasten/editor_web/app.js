@@ -12,8 +12,68 @@ let storyNr = 1;
 let poller = null;
 const gespielt = new Set();  // Audio-URLs, die das Mithoeren schon abgespielt hat
 let spielKette = Promise.resolve();
+const lautsprecher = new Audio();
+lautsprecher.preload = "auto";
 
 const $ = (id) => document.getElementById(id);
+
+function tonUrl(rel) {
+  if (!rel) return "";
+  if (/^(https?:|blob:|data:)/i.test(rel)) return rel;
+  return new URL(rel, location.href).href;
+}
+
+function ohrOeffnen() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) {
+      const ctx = new AC();
+      if (ctx.state === "suspended") ctx.resume();
+      const buf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+    }
+  } catch { /* */ }
+}
+
+function spielen(rel) {
+  const url = tonUrl(rel);
+  if (!url) return Promise.resolve();
+  return new Promise((fertig) => {
+    try { lautsprecher.pause(); } catch { /* */ }
+    lautsprecher.src = url;
+    const ende = () => {
+      lautsprecher.removeEventListener("ended", ende);
+      lautsprecher.removeEventListener("error", ende);
+      fertig();
+    };
+    lautsprecher.addEventListener("ended", ende);
+    lautsprecher.addEventListener("error", ende);
+    const p = lautsprecher.play();
+    if (p && p.catch) p.catch(ende);
+  });
+}
+
+function mithoerenAn() {
+  return !!($("mithoeren-popup") || $("mithoeren")).checked;
+}
+
+function mithoerenSetzen(an) {
+  if ($("mithoeren")) $("mithoeren").checked = an;
+  if ($("mithoeren-popup")) $("mithoeren-popup").checked = an;
+}
+
+function popupAuf() {
+  $("anruf-popup").hidden = false;
+  mithoerenSetzen(true);
+}
+
+function popupZu() {
+  $("anruf-popup").hidden = true;
+  try { lautsprecher.pause(); } catch { /* */ }
+}
 
 function chip(text, an, klick, wert) {
   const el = document.createElement("button");
@@ -132,12 +192,17 @@ function automatik() {
 
 async function laufStarten(anzahl) {
   $("fehler").textContent = "";
+  ohrOeffnen();
+  mithoerenSetzen(true);
+  popupAuf();
+  $("live-dialog").innerHTML = "";
+  $("live-story").textContent = "startet …";
   const body = {
     anzahl, ab: storyNr, tag: wahl.tag || "Mittwoch",
-    mithoeren: $("mithoeren").checked,
+    mithoeren: true,
   };
   if (anzahl === 1) body.story = storyBauen();
-  const r = await fetch("/api/lauf", {
+  const r = await fetch("api/lauf", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -145,8 +210,7 @@ async function laufStarten(anzahl) {
   if (!d.ok) { $("fehler").textContent = d.fehler || "Start fehlgeschlagen"; return; }
   storyNr += anzahl;
   gespielt.clear();
-  $("live-block").style.display = "";
-  $("live-dialog").innerHTML = "";
+  spielKette = Promise.resolve();
   pollerStarten();
 }
 
@@ -175,10 +239,13 @@ function bubbleBauen(z) {
     meta.insertAdjacentHTML("beforeend", `<span class="tag gehoert">gehört: ${z.gehoert}</span>`);
   }
   if (z.book && z.book.booked) meta.insertAdjacentHTML("beforeend", `<span class="tag" style="color:var(--gruen)">GEBUCHT ${String(z.book.slotIso || "").slice(0, 16)}</span>`);
-  if (z.audioUrl) {
+  if (z.audioUrl || z.audio) {
     const knopf = document.createElement("button");
     knopf.textContent = "▶";
-    knopf.addEventListener("click", () => new Audio(z.audioUrl).play());
+    knopf.addEventListener("click", () => {
+      ohrOeffnen();
+      spielen(z.audioUrl || z.audio);
+    });
     meta.appendChild(knopf);
   }
   if (meta.children.length) div.appendChild(meta);
@@ -186,20 +253,16 @@ function bubbleBauen(z) {
 }
 
 function mithoerenSpielen(z) {
-  if (!$("mithoeren").checked || !z.audioUrl || gespielt.has(z.audioUrl)) return;
-  gespielt.add(z.audioUrl);
-  spielKette = spielKette.then(() => new Promise((fertig) => {
-    const a = new Audio(z.audioUrl);
-    a.addEventListener("ended", fertig);
-    a.addEventListener("error", fertig);
-    a.play().catch(fertig);
-  }));
+  const rel = z.audioUrl || z.audio;
+  if (!mithoerenAn() || !rel || gespielt.has(rel)) return;
+  gespielt.add(rel);
+  spielKette = spielKette.then(() => spielen(rel));
 }
 
 async function pollen() {
   let d;
   try {
-    const r = await fetch("/api/live");
+    const r = await fetch("api/live");
     d = await r.json();
   } catch { return; }
   const idx = d.storyIdx || 0;
@@ -207,7 +270,7 @@ async function pollen() {
     ? `Lauf ${d.laufId}: Story ${idx}/${d.storiesGesamt} ${d.story || ""}`
     : (d.laufId ? `Lauf ${d.laufId} fertig — ${(d.fertig || []).filter((x) => x.ok).length}/${(d.fertig || []).length} grün` : "bereit");
   $("lauf-hinweis").innerHTML = d.laufId
-    ? `<a href="/ergebnisse#${d.laufId}" style="color:var(--akzent)">Ergebnisse des Laufs ansehen</a>` : "";
+    ? `<a href="ergebnisse#${d.laufId}" style="color:var(--akzent)">Ergebnisse des Laufs ansehen</a>` : "";
   if (d.fehler) $("fehler").textContent = d.fehler;
   $("knopf-start").disabled = d.laeuft;
   $("knopf-batch").disabled = d.laeuft;
@@ -234,13 +297,15 @@ function pollerStarten() {
 }
 
 async function boot() {
-  KATALOG = await (await fetch("/api/katalog")).json();
+  KATALOG = await (await fetch("api/katalog")).json();
   chipsBauen();
   $("knopf-automatik").addEventListener("click", automatik);
   $("knopf-start").addEventListener("click", () => laufStarten(1));
   $("knopf-batch").addEventListener("click", () => laufStarten(10));
+  $("anruf-zu").addEventListener("click", popupZu);
+  $("mithoeren").addEventListener("change", () => mithoerenSetzen($("mithoeren").checked));
+  $("mithoeren-popup").addEventListener("change", () => mithoerenSetzen($("mithoeren-popup").checked));
   pollen();
-  pollerStarten();
 }
 
 boot();
