@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baukasten-Ergebnisse</title>
+<link rel="stylesheet" href="/web/stil.css?v=1">
+</head>
+<body>
+<header>
+  <h1>Ergebnisse</h1>
+  <span class="status" id="status"></span>
+  <div class="rechts"><a href="/">&larr; Teststudio</a></div>
+</header>
+<main>
+  <div class="block" id="block-laeufe">
+    <h2>L&auml;ufe</h2>
+    <div id="laeufe"></div>
+  </div>
+  <div class="block" id="block-stories" style="display:none">
+    <h2>Stories im Lauf <span id="lauf-id"></span></h2>
+    <div id="stories"></div>
+  </div>
+  <div class="block" id="block-dialog" style="display:none">
+    <h2>
+      <span id="story-id"></span>
+      <button class="chip" id="knopf-alles" style="margin-left:12px">&#9654; ganzen Anruf abspielen</button>
+      <button class="chip" id="knopf-stopp">&#9632; Stopp</button>
+    </h2>
+    <div id="story-checks" style="margin-bottom:10px"></div>
+    <div class="dialog" id="dialog"></div>
+  </div>
+</main>
+<script src="/web/ergebnisse.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baukasten-Teststudio</title>
+<link rel="stylesheet" href="/web/stil.css?v=1">
+</head>
+<body>
+<header>
+  <h1>Baukasten-Teststudio</h1>
+  <span class="status" id="status">bereit</span>
+  <div class="rechts">
+    <label class="schalter"><input type="checkbox" id="mithoeren"> Mith&ouml;ren</label>
+    <a href="/ergebnisse">Ergebnisse &rarr;</a>
+  </div>
+</header>
+<main>
+  <div class="zeile">
+    <div class="block">
+      <h2>Stimme &amp; Name</h2>
+      <div class="chips" id="chips-stimme"></div>
+      <div style="height:8px"></div>
+      <div class="chips" id="chips-nachname"></div>
+    </div>
+    <div class="block">
+      <h2>Anliegen</h2>
+      <div class="chips" id="chips-anliegen"></div>
+    </div>
+  </div>
+  <div style="height:14px"></div>
+  <div class="zeile">
+    <div class="block">
+      <h2>Grund (bei Terminwunsch)</h2>
+      <div class="chips" id="chips-grund"></div>
+    </div>
+    <div class="block">
+      <h2>Behandler &amp; Versicherung</h2>
+      <div class="chips" id="chips-behandler"></div>
+      <div style="height:8px"></div>
+      <div class="chips" id="chips-versicherung"></div>
+    </div>
+  </div>
+  <div style="height:14px"></div>
+  <div class="zeile">
+    <div class="block">
+      <h2>Wunschtag (n&auml;chste Woche)</h2>
+      <div class="chips" id="chips-tag"></div>
+    </div>
+    <div class="block">
+      <h2>Slot-Verhalten</h2>
+      <div class="chips" id="chips-slot"></div>
+    </div>
+  </div>
+  <div style="height:14px"></div>
+  <div class="block">
+    <h2>Absch&shy;weifer &amp; St&ouml;rungen (mehrfach w&auml;hlbar)</h2>
+    <div class="chips" id="chips-abschweifer"></div>
+    <div style="height:8px"></div>
+    <div class="chips" id="chips-extras"></div>
+  </div>
+
+  <div class="knoepfe">
+    <button class="gross" id="knopf-automatik">W&uuml;rfeln (Automatik)</button>
+    <button class="gross primaer" id="knopf-start">Anruf starten</button>
+    <button class="gross batch" id="knopf-batch">10 Tests generieren</button>
+    <span class="klein" id="lauf-hinweis"></span>
+  </div>
+
+  <div class="fehlerbox" id="fehler"></div>
+
+  <div class="block" id="live-block" style="display:none">
+    <h2>Laufender Anruf: <span id="live-story"></span></h2>
+    <div class="dialog" id="live-dialog"></div>
+  </div>
+</main>
+<script src="/web/app.js?v=1"></script>
+</body>
+</html>
