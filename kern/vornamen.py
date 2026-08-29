@@ -46,6 +46,7 @@ kemal konstantinos kostas laurin levent luka marek mateusz mert milos mirco
 murat mihail michalis nikolaos nikos omar osman panagiotis pavel pawel petar
 petros piotr sergej spiros stavros stefanos taner tarik theodoros vassilis
 vasilis yannis yusuf
+hamza illia idrissa kiriakos kyriakos musa
 """.split())
 
 _F = frozenset("""
@@ -78,6 +79,7 @@ elif eleftheria emine esra fatima fatma georgia hatice irini ivana jelena
 katerina konstantina leyla ludmilla melek meltem merve milica mirjana nazan
 oksana olena panagiota paraskevi selin semra sevim songül songuel svetlana
 tugba vasiliki zeynep zoe
+olivia alisa beata luljeta
 """.split())
 
 # Im Deutschen wirklich UNEINDEUTIGE Vornamen: nie raten, Default regelt
@@ -99,16 +101,31 @@ def _norm(name: str) -> str:
     return t
 
 
+def aus_liste(vorname: str) -> str:
+    """'m'/'f' NUR aus den kuratierten Listen — ohne Endungs-Heuristik.
+
+    Fuer den Kartei-Sweep (30.08.2026): ein bereits GESETZTES Geschlecht
+    wird nur umgedreht, wenn der Vorname kuratiert eindeutig ist; die
+    -a-Heuristik darf nur LEERE Felder fuellen, nie Eintraege kippen."""
+    n = _norm(vorname)
+    if not n or n in _AMBIG:
+        return ""
+    if n in _M and n not in _F:
+        return "m"
+    if n in _F and n not in _M:
+        return "f"
+    return ""
+
+
 def geschlecht(vorname: str) -> str:
     """'m', 'f' oder '' (unklar). Nie raten bei mehrdeutigen Namen."""
     n = _norm(vorname)
     if not n or n in _AMBIG:
         return ""
     # Listen zuerst — auch für den umlaut-normalisierten Vergleich.
-    if n in _M and n not in _F:
-        return "m"
-    if n in _F and n not in _M:
-        return "f"
+    g = aus_liste(vorname)
+    if g:
+        return g
     if n in _M and n in _F:
         return ""
     # Konservative Endungs-Heuristik NUR für ungelistete Namen: -a ist im

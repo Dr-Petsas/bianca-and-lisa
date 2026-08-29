@@ -268,3 +268,35 @@ def test_buchen_haengt_geschlecht_notiz_an():
         flow.kal.note_appointment = echt_note
     assert res["book"]["booked"]
     assert notizen and "Geschlecht aktualisieren" in notizen[0]
+
+
+# --- Kartei-Sweep (Chef 30.08.2026) -----------------------------------------
+
+def test_aus_liste_ohne_heuristik():
+    # Kuratierte Liste liefert, die -a-Heuristik gehoert NICHT dazu.
+    assert vornamen.aus_liste("Peter") == "m"
+    assert vornamen.aus_liste("Anna") == "f"
+    assert vornamen.aus_liste("Warlia") == ""   # ungelistet: nur Heuristik
+    assert vornamen.aus_liste("Kim") == ""      # mehrdeutig bleibt leer
+    # geschlecht() selbst bleibt unveraendert (Heuristik fuellt weiter).
+    assert vornamen.geschlecht("Warlia") == "f"
+    assert vornamen.geschlecht("Joshua") == "m"
+
+
+def test_sweep_entscheidungen():
+    from tools.geschlecht_sweep import entscheiden
+    # Default-female-Falle: Akte f, Vorname kuratiert maennlich -> umdrehen.
+    assert entscheiden("f", "Peter") == ("korrigieren", "m")
+    assert entscheiden("m", "Anna") == ("korrigieren", "f")
+    # Leeres Feld darf auch die Heuristik fuellen.
+    assert entscheiden("", "Peter") == ("setzen", "m")
+    assert entscheiden("", "Warlia") == ("setzen", "f")
+    # Heuristik kippt NIE einen gesetzten Eintrag — nur Bericht.
+    assert entscheiden("m", "Warlia") == ("verdacht", "f")
+    assert entscheiden("f", "Warlia") == ("stimmt", "")
+    # Divers ist eine bewusste Eintragung: nie anfassen.
+    assert entscheiden("d", "Peter") == ("divers", "")
+    # Unklare Namen: leer lassen bzw. Eintrag belassen.
+    assert entscheiden("", "Kim") == ("unklar", "")
+    assert entscheiden("f", "Kim") == ("belassen", "")
+    assert entscheiden("m", "Peter") == ("stimmt", "")
