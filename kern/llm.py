@@ -170,6 +170,29 @@ def _deckel_an() -> bool:
     return os.environ.get("LLM_SATZ_DECKEL", "1").strip() != "0"
 
 
+def _neue_stream_saetze(text: str, n_schon: int) -> tuple[list[str], int]:
+    """P5: neue abgeschlossene Sätze nach n_schon bereits gemeldeten.
+
+    Der erste Block folgt der 25-Zeichen-Regel von _erster_satz_von
+    (ein bloßes „Ja." allein ist kein Vorab — der Block darf mehrere
+    Kurz-Sätze enthalten). Danach jeder weitere bestätigte Satz —
+    ganze Sätze, nichts Abgehacktes (Genuschel-Lektion 28.08.2026).
+    Rückgabe: (neue_bloecke, neuer_zaehler)."""
+    if n_schon <= 0:
+        erster = _erster_satz_von(text)
+        if not erster:
+            return [], 0
+        return [erster], max(1, len(_saetze_bis(erster)))
+    alle = _saetze_bis(text)
+    neu = alle[n_schon:]
+    return neu, n_schon + len(neu)
+
+
+def _satz_stream_an() -> bool:
+    import os
+    return os.environ.get("LLM_SATZ_STREAM", "1").strip() != "0"
+
+
 def chat_stream(
     messages: list[dict],
     tools: list[dict] | None = None,
@@ -178,12 +201,16 @@ def chat_stream(
     max_tokens: int = 90,
     erster_satz: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Wie chat(), aber per Stream: erster_satz(satz) feuert genau einmal,
-    sobald der erste Satz steht UND bis dahin kein Werkzeug-Aufruf kam."""
+    """Wie chat(), aber per Stream: erster_satz(satz) feuert je fertigem
+    Satz (P5, 29.08.2026 — satzweises LLM→TTS), sobald kein Werkzeug-
+    Aufruf kam. Der erste Block hält die alte 25-Zeichen-Regel; weitere
+    Sätze folgen, sobald sie bestätigt sind. Notaus LLM_SATZ_STREAM=0
+    => nur der erste Satz wie vor P5."""
     body = _body(messages, tools, temperature, max_tokens)
     body["stream"] = True
     text = ""
     vorab = ""
+    n_saetze = 0
     calls: dict[int, dict] = {}
     tool_gesehen = False
     try:
@@ -217,14 +244,26 @@ def chat_stream(
                 stueck = delta.get("content")
                 if stueck:
                     text += stueck
-                    if erster_satz and not vorab and not tool_gesehen and "<think" not in text:
-                        satz = _erster_satz_von(text)
-                        if satz:
-                            vorab = _sauber(satz)
-                            try:
-                                erster_satz(vorab)
-                            except Exception:
-                                pass
+                    if erster_satz and not tool_gesehen and "<think" not in text:
+                        # P5: jeden fertigen Satz sofort an die Stimme —
+                        # Satz 2 spricht, während Satz 3 noch generiert.
+                        # Notaus LLM_SATZ_STREAM=0: nur der erste Block.
+                        neu, n_neu = _neue_stream_saetze(text, n_saetze)
+                        if neu and not _satz_stream_an() and n_saetze > 0:
+                            neu = []
+                        elif neu:
+                            n_saetze = n_neu
+                            if not _satz_stream_an():
+                                neu = neu[:1]
+                            for satz in neu:
+                                sauber = _sauber(satz)
+                                if not sauber:
+                                    continue
+                                vorab = (vorab + " " + sauber).strip() if vorab else sauber
+                                try:
+                                    erster_satz(sauber)
+                                except Exception:
+                                    pass
                     # P2 Satz-Deckel: sobald zwei Sätze plus Frage (sonst
                     # drei Sätze) stehen, den Stream schließen — der Rest
                     # würde nur Tokens und ~1 s je Satz kosten. Werkzeug-

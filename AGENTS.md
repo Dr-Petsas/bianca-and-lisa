@@ -456,6 +456,28 @@ bleibt der bewährte Blocking-Pfad. Sicherheit unverändert (Ziffern nie
 am Wächter vorbei). Tests: `test_readback_text_ist_dreisatzform`,
 `test_stimme_stream_readback_vorsatz_spielt_sofort`.
 
+## Speculative Decoding (P4 29.08.2026 — geprüft, nicht umgesetzt)
+
+Gemessen auf der 5090: vLLM 25,6 GB + Qwen3-TTS 4,9 GB = 30,5 / 32,6 GB.
+Ein Draft-Modell (Qwen 0,6B, ~1,5–2 GB) passt neben TTS nicht, ohne das
+35B-Fenster oder den Hybrid-Mund zu gefährden. Die 3060 trägt Claras
+Ollama — dort kein zweites 35B, Isolation bleibt. N-Gram-Spekulation
+bräuchte einen vLLM-Neustart (läuft seit 08.08. mit Prefix-Cache und
+`--gpu-memory-utilization 0.70`); ohne Extra-VRAM-Gewinn und mit
+Restart-Risiko bewusst gelassen. Wieder aufmachen, wenn TTS von der
+5090 weg ist oder vLLM ohnehin neu startet.
+
+## Satzweises LLM→TTS (P5 29.08.2026 — nicht rückbauen)
+
+`chat_stream` meldet JEDEN fertigen Satz (erster Block: 25-Zeichen-Regel,
+danach jeder bestätigte Satz) an `erster_satz`. `dienst.vorab` vertont
+jeden Satz im eigenen Faden, während der Stream weiterliest — URLs gehen
+IN REIHENFOLGE an das Dock (Füller-Kette). Der Rest nach dem gesprochenen
+Prefix wird wie bisher als reply-Audio gerendert. Ganze Sätze, kein
+Text-Schnitt (Genuschel-Lektion 28.08.). Nur wo Vorab schon erlaubt war
+(kein Buchungs-Umbau durch `_nachbessern`). Notaus: `LLM_SATZ_STREAM=0`
+=> nur der erste Block wie vor P5. Tests: `test_neue_stream_saetze_*`.
+
 ## Satz-Deckel im LLM-Stream (P2 29.08.2026 — nicht rückbauen)
 
 Prompt sagt „höchstens zwei kurze Sätze plus EINE Frage" — Qwen hält sich

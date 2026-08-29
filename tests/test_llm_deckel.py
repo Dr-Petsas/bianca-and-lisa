@@ -63,3 +63,22 @@ def test_erster_satz_von_bleibt_25_zeichen():
     assert llm._erster_satz_von("Ja. ") == ""
     assert llm._erster_satz_von("Ja. Das mache ich sehr gerne. ") == \
         "Ja. Das mache ich sehr gerne."
+
+
+def test_neue_stream_saetze_erster_dann_rest():
+    """P5: erster Block nach 25-Zeichen-Regel, danach jeder weitere Satz."""
+    t = ("Das verstehe ich wirklich gut. Ihre Nummer habe ich. "
+         "Wann passt es Ihnen? ")
+    neu, n = llm._neue_stream_saetze(t, 0)
+    assert neu == ["Das verstehe ich wirklich gut."]
+    assert n == 1
+    neu2, n2 = llm._neue_stream_saetze(t, n)
+    assert neu2 == ["Ihre Nummer habe ich.", "Wann passt es Ihnen?"]
+    assert n2 == 3
+
+
+def test_neue_stream_saetze_unfertig_bleibt_leer():
+    neu, n = llm._neue_stream_saetze("Das verstehe ich wirklich gut", 0)
+    assert neu == [] and n == 0
+    neu, n = llm._neue_stream_saetze("Das verstehe ich wirklich gut. Ihre Nummer", 1)
+    assert neu == [] and n == 1

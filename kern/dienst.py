@@ -393,6 +393,7 @@ class Dienst:
         extra = extra or {}
         sit.pop("_vorabText", None)
         sit.pop("_vorabUrl", None)
+        sit.pop("_satzJobs", None)
         t0 = time.perf_counter()
         if art == "start":
             reply = self.start_fn(sit)
@@ -401,6 +402,13 @@ class Dienst:
                 reply = self.turn_fn(sit, text_in, melde=melde, vorab=vorab)
             except TypeError:
                 reply = self.turn_fn(sit, text_in, melde=melde)
+        # P5: Satz-TTS-Fäden abwarten, bevor der Rest gerendert wird —
+        # sonst spricht das Dock den Schluss vor Satz 2.
+        for t in sit.pop("_satzJobs", []) or []:
+            try:
+                t.join(timeout=12)
+            except Exception:
+                pass
         llm_s = round(time.perf_counter() - t0, 2)
         # Sprech-Filter: Uhrzeiten/Daten als Worte, Fachbegriffe und Regie raus.
         text = sprech.sanitize(reply.get("text") or "")
@@ -507,18 +515,44 @@ class Dienst:
         def melde(tool: str) -> None:
             q.put(("tool", tool))
 
+        satz_lock = threading.Lock()
+        satz_urls: list[str | None] = []
+        satz_raus = 0
+
         def vorab(satz: str) -> None:
-            # Erster Satz aus dem LLM-Stream: sofort vertonen und rausgeben,
-            # während das Modell den Rest schreibt — DAS drückt die gefühlte
-            # Antwortzeit unter die reine Modell-Laufzeit.
+            # P5 satzweises LLM→TTS (29.08.2026): jeder fertige Satz wird
+            # im eigenen Faden vertont, während der Stream den nächsten
+            # schreibt — ganze Sätze, kein Text-Schnitt (Genuschel-Lektion
+            # 28.08.). URLs gehen IN REIHENFOLGE an das Dock (wer zuerst
+            # fertig ist, wartet auf den Vorgänger). Jobs werden VOR dem
+            # Rest-TTS abgewartet.
             san = sprech.sanitize(satz)
             if not san:
                 return
-            url, _ = self.stimme(san)
-            if url:
-                sit["_vorabText"] = san
-                sit["_vorabUrl"] = url
-                q.put(("vorab", url))
+            alt = _s(sit.get("_vorabText"))
+            sit["_vorabText"] = (alt + " " + san).strip() if alt else san
+            jobs: list = sit.setdefault("_satzJobs", [])
+            with satz_lock:
+                idx = len(satz_urls)
+                satz_urls.append(None)
+
+            def _arbeit(i: int = idx, s: str = san) -> None:
+                nonlocal satz_raus
+                url, _ = self.stimme(s)
+                with satz_lock:
+                    if i < len(satz_urls):
+                        satz_urls[i] = url or ""
+                    if i == 0 and url:
+                        sit.setdefault("_vorabUrl", url)
+                    while satz_raus < len(satz_urls) and satz_urls[satz_raus] is not None:
+                        fertig_url = satz_urls[satz_raus]
+                        if fertig_url:
+                            q.put(("vorab", fertig_url))
+                        satz_raus += 1
+
+            t = threading.Thread(target=_arbeit, daemon=True)
+            jobs.append(t)
+            t.start()
 
         def arbeit() -> None:
             try:
