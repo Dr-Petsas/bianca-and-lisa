@@ -223,7 +223,7 @@ def _warm_start():
         DIENST.filler_vorbereiten()
         DIENST.quittungen_vorbereiten()
         t = tenants.laden(DEFAULT_TENANT)
-        tts.warm(begruessung(t.get("praxisName") or ""))
+        tts.warm(begruessung(tenants.praxis_melde(t)))
         # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
         # aus dem Platten-Cache fragt die Maschine in ~0,2 s statt ~1,2 s
         # lokaler Synthese. Gewarmt wird die SANITIZE-Form — genau die

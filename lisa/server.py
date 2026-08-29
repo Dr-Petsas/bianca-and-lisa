@@ -279,7 +279,7 @@ def _warm_start():
         DIENST.quittungen_vorbereiten()
         t = tenants.laden(DEFAULT_TENANT)
         tts.warm(begruessung(
-            t.get("praxisName") or "",
+            tenants.praxis_von(t),
             "Kontrolltermin vorverlegen",
             behandler=t.get("behandler") or "",
         ))

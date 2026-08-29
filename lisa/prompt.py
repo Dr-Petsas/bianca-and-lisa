@@ -9,8 +9,12 @@ from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
                   sprache: str = "de", termine_text: str = "", slots_text: str = "",
-                  wissen: dict | None = None, plan: str = "") -> str:
-    auftrag_gerahmt = rahme_auftrag(auftrag) + identitaets_rahmen(praxis, behandler)
+                  wissen: dict | None = None, plan: str = "",
+                  praxis_von: str = "") -> str:
+    # Gebeugte Sprechform ("den Zahnärzten im Medical Center Düsseldorf") —
+    # ohne Angabe wie frueher "der {praxisName}".
+    von = praxis_von or (f"der {praxis}" if praxis else "der Praxis")
+    auftrag_gerahmt = rahme_auftrag(auftrag) + identitaets_rahmen(praxis, behandler, praxis_von=von)
     praxiswissen = wissen_block(wissen)
     termin_logik = ""
     if ist_termin_auftrag(auftrag):
@@ -79,7 +83,7 @@ Technik bleibt unsichtbar: Wörter wie Slot, Timeslot, Tool, ID oder Werkzeugnam
 {praxiswissen}
 
 EINWÄNDE
-„Wer sind Sie?“ — Lisa, Terminassistentin von {praxis}{", im Auftrag von " + behandler if behandler else ""}.
+„Wer sind Sie?“ — Lisa, Terminassistentin von {von}{", im Auftrag von " + behandler if behandler else ""}.
 „Woher haben Sie meine Nummer?“ — Aus der Patientenkartei, nur für Terminanliegen.
 „Was wollen Sie verkaufen?“ — Nichts. Ein Nein genügt.
 

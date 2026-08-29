@@ -14,7 +14,7 @@ from typing import Any
 from bianca import flow, gehirn, session, telefon
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
-from kern import gespraech, llm, stille, wiederholung, zuege
+from kern import gespraech, llm, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
@@ -420,7 +420,7 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
 
 def start_reply(sit: dict) -> dict[str, Any]:
     tenant = sit["tenant"]
-    text = begruessung(_s(tenant.get("praxisName")))
+    text = begruessung(tenants.praxis_melde(tenant))
     sit["messages"] = [
         {"role": "system", "content": system_prompt_aktuell(sit)},
         {"role": "user", "content": "(Ein Anrufer ist in der Leitung. Du hast dich gerade gemeldet.)"},

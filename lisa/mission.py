@@ -31,8 +31,11 @@ def rahme_auftrag(prompt: str) -> str:
     )
 
 
-def identitaets_rahmen(praxis: str, behandler: str = "") -> str:
+def identitaets_rahmen(praxis: str, behandler: str = "", praxis_von: str = "") -> str:
     praxis = " ".join(str(praxis or "").split()).strip() or "der Praxis"
+    # Gebeugte Sprechform inkl. Artikel ("den Zahnärzten im Medical Center
+    # Düsseldorf") — ohne Angabe wie frueher "der {praxis}".
+    von = " ".join(str(praxis_von or "").split()).strip() or f"der {praxis}"
     arzt = " ".join(str(behandler or "").split()).strip()
     arzt_teil = (
         f'Du rufst im Auftrag von "{arzt}" an. Fragt jemand, wer dich schickt, '
@@ -43,7 +46,7 @@ def identitaets_rahmen(praxis: str, behandler: str = "") -> str:
     return (
         f'\n\n[Identitaet fuer dieses Gespraech, Regieanweisung — NICHT vorlesen: '
         f'Du rufst fuer die Praxis "{praxis}" an. Stelle dich mit GENAU dieser '
-        f'Praxis vor ("hier ist Lisa von der {praxis}"). {arzt_teil} '
+        f'Praxis vor ("hier ist Lisa von {von}"). {arzt_teil} '
         f"Nenne NIE eine andere Praxis und keinen anderen Arzt, auch wenn im "
         f"Prompt ein Beispiel mit einem anderen Namen steht — dieser Auftrag gilt.]"
     )

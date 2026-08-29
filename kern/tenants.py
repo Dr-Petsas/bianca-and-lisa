@@ -37,6 +37,29 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
     return raw
 
 
+def praxis_melde(tenant: dict[str, Any]) -> str:
+    """Name, mit dem sich Bianca beim Abheben meldet (Nominativ, gern kurz).
+
+    Feld ``praxisNameMelde`` — fehlt es, gilt ``praxisName`` wie bisher.
+    """
+    return _sauber(tenant.get("praxisNameMelde")) or _sauber(tenant.get("praxisName"))
+
+
+def praxis_von(tenant: dict[str, Any]) -> str:
+    """Gebeugte Form fuer "hier ist Lisa von ..." (Chef 29.08.2026).
+
+    Plural-Namen ("Zahnärzte im Medical Center Düsseldorf") brauchen
+    "von DEN ZahnärztEN ..." — das kann kein Code raten, darum traegt der
+    Mandant die Sprechform selbst (``praxisNameVon``, inkl. Artikel).
+    Ohne Feld gilt der alte Weg: "der {praxisName}".
+    """
+    von = _sauber(tenant.get("praxisNameVon"))
+    if von:
+        return von
+    p = _sauber(tenant.get("praxisName"))
+    return f"der {p}" if p else ""
+
+
 def stt_keywords(tenant: dict[str, Any]) -> list[str]:
     """Einwort-Namen fuer die STT-Nachkorrektur (Behandler des Mandanten).
 

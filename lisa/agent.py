@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kern import gespraech, stille, wiederholung, zuege
+from kern import gespraech, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
@@ -26,7 +26,7 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
     tenant = session_doc["tenant"]
     patient = session_doc.get("patient") or {}
     text = begruessung(
-        _s(tenant.get("praxisName")),
+        tenants.praxis_von(tenant),
         _s(session_doc.get("auftrag")),
         patient=patient,
         behandler=_s(tenant.get("behandler")),
@@ -36,6 +36,7 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
             "role": "system",
             "content": system_prompt(
                 praxis=_s(tenant.get("praxisName")),
+                praxis_von=tenants.praxis_von(tenant),
                 behandler=_s(tenant.get("behandler")),
                 auftrag=_s(session_doc.get("auftrag")),
                 patient=_s(patient.get("name")),
@@ -160,6 +161,7 @@ def system_prompt_aktuell(session_doc: dict, plan: str = "") -> str:
     patient = session_doc.get("patient") or {}
     return system_prompt(
         praxis=_s(tenant.get("praxisName")),
+        praxis_von=tenants.praxis_von(tenant),
         behandler=_s(tenant.get("behandler")),
         auftrag=_s(session_doc.get("auftrag")),
         patient=_s(patient.get("name")),

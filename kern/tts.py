@@ -276,6 +276,85 @@ def _ist_mp3(blob: bytes) -> bool:
     return bool(blob) and (blob[:3] == b"ID3" or blob[:2] in (b"\xff\xfb", b"\xff\xfa", b"\xff\xf3", b"\xff\xf2"))
 
 
+# Pausen-Straffung fuer gewarmte Ansagen (Chef 29.08.2026: die Begruessung
+# klang "sehr langsam gesprochen mit zu langen Pausen"). Qwen3 wuerfelt
+# zwischen den Saetzen eines Ein-Block-Renders teils weit ueber eine Sekunde
+# Stille. Gestrafft werden NUR dauerhaft gecachte Saetze (Begruessung,
+# Fueller, feste Maschinen-Fragen — speak_dauerhaft): Anlauf-Stille auf
+# max. 120 ms, Satz-Pausen auf max. 350 ms, Ausklang auf max. 250 ms.
+# Die Sprache selbst bleibt Sample-identisch — es fallen nur Fenster unter
+# der Aktiv-Schwelle weg. Gespraechs-Antworten (Stream, Ziffern-Readbacks)
+# laufen NICHT hier durch. Notaus: TTS_PAUSEN=0.
+_PAUSE_FENSTER_MS = 10
+_PAUSE_ANLAUF_MS = 120
+_PAUSE_INNEN_MS = 350
+_PAUSE_AUSKLANG_MS = 250
+
+
+def _pausen_aktiv() -> bool:
+    import os
+
+    return os.environ.get("TTS_PAUSEN", "1").strip() != "0"
+
+
+def pausen_straffen(blob: bytes) -> bytes:
+    """Lange Stille in eigenen PCM16-WAVs (24 kHz mono) kuerzen.
+
+    Fremdformate (ElevenLabs-MP3) und zu kurze Stuecke gehen unveraendert
+    zurueck — im Zweifel NICHT anfassen."""
+    if (not _pausen_aktiv() or not blob or len(blob) <= 44
+            or blob[:4] != b"RIFF" or blob[36:40] != b"data"):
+        return blob
+    fenster = PCM_RATE * _PAUSE_FENSTER_MS // 1000
+    daten = blob[44:]
+    n = len(daten) // 2
+    anzahl = n // fenster
+    if anzahl < 4:
+        return blob
+    samples = array.array("h")
+    samples.frombytes(daten[: n * 2])
+    still = [
+        max((abs(s) for s in samples[i * fenster:(i + 1) * fenster]), default=0) < AKTIV_SCHWELLE
+        for i in range(anzahl)
+    ]
+    behalten = [True] * anzahl
+    i = 0
+    while i < anzahl:
+        if not still[i]:
+            i += 1
+            continue
+        j = i
+        while j < anzahl and still[j]:
+            j += 1
+        if i == 0 and j < anzahl:
+            # Anlauf: nur das ENDE der Stille behalten (Atemzug vorm 1. Wort).
+            deckel = _PAUSE_ANLAUF_MS // _PAUSE_FENSTER_MS
+            vorn, hinten = 0, deckel
+        elif j == anzahl:
+            # Ausklang: nur den ANFANG behalten (Ausklang des letzten Worts).
+            deckel = _PAUSE_AUSKLANG_MS // _PAUSE_FENSTER_MS
+            vorn, hinten = deckel, 0
+        else:
+            deckel = _PAUSE_INNEN_MS // _PAUSE_FENSTER_MS
+            vorn = deckel // 2
+            hinten = deckel - vorn
+        if j - i > max(1, deckel):
+            for k in range(i + vorn, j - hinten):
+                behalten[k] = False
+        i = j
+    if all(behalten):
+        return blob
+    neu = array.array("h")
+    for i in range(anzahl):
+        if behalten[i]:
+            neu.extend(samples[i * fenster:(i + 1) * fenster])
+    neu.extend(samples[anzahl * fenster:])
+    out = neu.tobytes()
+    if not out:
+        return blob
+    return _wav_header(len(out), PCM_RATE) + out
+
+
 class TtsEngine(Protocol):
     name: str
 
@@ -560,7 +639,10 @@ def speak_dauerhaft(text: str) -> bytes:
                 return blob
     except OSError:
         pass
-    blob = eng.speak(sauber)
+    # Frischer Render: lange Satz-Pausen straffen, BEVOR gepinnt und auf die
+    # Platte geschrieben wird — Laengen-Deckel und Gegenhoeren in warm()
+    # pruefen danach genau das Audio, das spaeter gespielt wird.
+    blob = pausen_straffen(eng.speak(sauber))
     if blob:
         _ram_merken(schluessel, blob, fest=True)
         try:

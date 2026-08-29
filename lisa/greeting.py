@@ -52,34 +52,38 @@ def anrede(patient: dict | None) -> str:
     return name or last
 
 
-def vorstellung(praxis: str, behandler: str = "") -> str:
-    haus = _s(praxis)
+def vorstellung(praxis_von: str, behandler: str = "") -> str:
+    """``praxis_von`` ist die GEBEUGTE Sprechform inkl. Artikel (Mandanten-Feld
+    ``praxisNameVon`` bzw. tenants.praxis_von): "der med dent Zahnklinik",
+    "den Zahnärzten im Medical Center Düsseldorf" — Vorlage sagt nur "von"."""
+    haus = _s(praxis_von)
     arzt = _s(behandler)
-    kern = f"hier ist Lisa von der {haus}" if haus else "hier ist Lisa"
+    kern = f"hier ist Lisa von {haus}" if haus else "hier ist Lisa"
     if arzt:
         kern += f", ich rufe im Auftrag von {arzt} an"
     return kern
 
 
-def begruessung(praxis: str, auftrag: str = "", *, patient: dict | None = None,
+def begruessung(praxis_von: str, auftrag: str = "", *, patient: dict | None = None,
                 behandler: str = "") -> str:
     """Erster Zug. Mit bekanntem Namen: Vorstellung + Identitaetsfrage.
 
     Chef 27.08.2026: Lisa vergewissert sich zuerst, WER am Telefon ist. Anrede,
     Behandler und Anliegen kommen erst nach der Bestaetigung (lisa/identitaet.py)
     — sonst erzaehlt sie einem Fremden das Anliegen.
+    ``praxis_von`` wie in vorstellung(): gebeugte Form inkl. Artikel.
     """
     from lisa.identitaet import frage_satz, moeglich
 
-    haus = _s(praxis)
-    kopf = f"Guten Tag, hier ist Lisa von der {haus}." if haus else "Guten Tag, hier ist Lisa."
+    haus = _s(praxis_von)
+    kopf = f"Guten Tag, hier ist Lisa von {haus}." if haus else "Guten Tag, hier ist Lisa."
     if moeglich(patient):
         return f"{kopf} {frage_satz(patient)}"
 
     # Ohne vollstaendigen Namen gibt es nichts zu bestaetigen: alter Ablauf.
     wen = anrede(patient)
     gruss = f"Guten Tag, {wen}," if wen else "Guten Tag,"
-    kopf = f"{gruss} {vorstellung(praxis, behandler)}."
+    kopf = f"{gruss} {vorstellung(praxis_von, behandler)}."
     if ist_termin_auftrag(auftrag):
         return (
             f"{kopf} Es geht um Ihren Termin. "

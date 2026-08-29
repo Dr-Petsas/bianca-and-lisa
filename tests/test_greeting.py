@@ -17,21 +17,40 @@ def test_anrede_raet_nicht():
 
 
 def test_vorstellung_mit_behandler():
-    v = vorstellung("med dent Zahnklinik", "Dr. Petsas")
+    v = vorstellung("der med dent Zahnklinik", "Dr. Petsas")
     assert v == "hier ist Lisa von der med dent Zahnklinik, ich rufe im Auftrag von Dr. Petsas an"
 
 
 def test_vorstellung_ohne_behandler():
-    v = vorstellung("med dent Zahnklinik", "")
+    v = vorstellung("der med dent Zahnklinik", "")
     assert "im Auftrag" not in v
     assert v == "hier ist Lisa von der med dent Zahnklinik"
+
+
+def test_vorstellung_plural_name():
+    # Chef 29.08.2026: Praxisname im Plural — die gebeugte Form kommt fertig
+    # aus dem Mandanten (praxisNameVon), die Vorlage sagt nur noch "von".
+    v = vorstellung("den Zahnärzten im Medical Center Düsseldorf", "")
+    assert v == "hier ist Lisa von den Zahnärzten im Medical Center Düsseldorf"
+
+
+def test_meddent_sprechformen():
+    from kern.tenants import laden, praxis_melde, praxis_von
+
+    t = laden("meddent")
+    assert praxis_melde(t) == "Zahnärzte im Medical Center"
+    assert praxis_von(t) == "den Zahnärzten im Medical Center Düsseldorf"
+    # Ohne Sonderfelder gilt der alte Weg ("der {praxisName}").
+    alt = {"praxisName": "Demo-Praxis"}
+    assert praxis_melde(alt) == "Demo-Praxis"
+    assert praxis_von(alt) == "der Demo-Praxis"
 
 
 def test_termin_begruessung_prueft_zuerst_die_person():
     # Chef 27.08.2026: Erst klaeren, WER dran ist. Anrede, Behandler und
     # Anliegen folgen erst nach der Bestaetigung (lisa/identitaet.py).
     t = begruessung(
-        "med dent Zahnklinik",
+        "der med dent Zahnklinik",
         "Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei.",
         patient=FRAU,
         behandler="Dr. Petsas",
@@ -43,7 +62,7 @@ def test_termin_begruessung_prueft_zuerst_die_person():
 
 
 def test_begruessung_ohne_patient_bleibt_hoeflich():
-    t = begruessung("Demo-Praxis", "Termin bestätigen", behandler="")
+    t = begruessung("der Demo-Praxis", "Termin bestätigen", behandler="")
     assert t.startswith("Guten Tag, hier ist Lisa von der Demo-Praxis.")
 
 
