@@ -8,6 +8,12 @@
   "locationName": "Zahnärzte im Medical Center (Düsseldorf)",
   "telefon": "",
   "sprache": "de",
+  "dids": [],
+  "aussprache": {
+    "Petsas": "Pet-sas",
+    "Patrikis": "Pa-tri-kis",
+    "Nikolaou": "Ni-ko-la-u"
+  },
   "sttHotwords": ["Grüger", "Lange", "Schlaflabor", "Narval", "Invisalign", "Aligner"],
   "defaultCalendarId": "zex5bmv5jfIHWVW6zHbg",
   "calendars": [

@@ -23,7 +23,7 @@ def test_vertiefen_ohne_gedaechtnis_schreibt_trotzdem():
     from lisa import vorbereitung as vorb
     echt_g = vorb._gedaechtnis_stand
     echt_t = vorb._termine
-    vorb._gedaechtnis_stand = lambda n, p: ([], "nichts")
+    vorb._gedaechtnis_stand = lambda n, p, c="": ([], "nichts")
     vorb._termine = lambda tid, pat: ([], [])
     try:
         out = vertiefen.vertiefen("Recall nächste Woche")
@@ -52,7 +52,7 @@ def test_abwegiges_wird_nicht_dazuerfunden():
     from lisa import vorbereitung as vorb
     echt_g = vorb._gedaechtnis_stand
     echt_t = vorb._termine
-    vorb._gedaechtnis_stand = lambda n, p: ([
+    vorb._gedaechtnis_stand = lambda n, p, c="": ([
         {"summary": "Zweck: Recall und professionelle Zahnreinigung.",
          "ts": 1, "status": "", "quelle": "kartei"},
     ], "ok")

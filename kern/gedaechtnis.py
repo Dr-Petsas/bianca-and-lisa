@@ -115,11 +115,21 @@ def erreichbar() -> bool:
         return False
 
 
-def _headers() -> dict[str, str]:
-    h = {"X-Client-Id": MAS_CLIENT_ID}
+def _headers(client_id: str = "") -> dict[str, str]:
+    # W-MANDANT-4: Der Mandant kommt aus der SITZUNG (tenants/<id>.json),
+    # nicht mehr fest aus der Prozess-Umgebung — sonst schriebe eine zweite
+    # Praxis ihre Reports ins Gedaechtnis von meddent. Ohne Angabe bleibt
+    # MAS_CLIENT_ID der Fallback (alter Weg, z. B. Health-Ping).
+    h = {"X-Client-Id": _s(client_id) or MAS_CLIENT_ID}
     if MAS_TOKEN:
         h["X-Service-Token"] = MAS_TOKEN
     return h
+
+
+def _mandant(sit: dict | None) -> str:
+    """clientId der Sitzung — aus dem Tenant-JSON; Fallback Prozess-Env."""
+    t = (sit or {}).get("tenant") or {}
+    return _s(t.get("clientId")) or MAS_CLIENT_ID
 
 
 def _wer(sit: dict) -> tuple[str, str]:
@@ -290,7 +300,7 @@ def report_senden(sit: dict) -> dict | None:
     try:
         body = _event(sit)
         r = httpx.post(f"{MAS_URL}/brain/events", json=body,
-                       headers=_headers(), timeout=WARTE_S)
+                       headers=_headers(_mandant(sit)), timeout=WARTE_S)
         d = r.json() if r.status_code in (200, 201) else {}
         sit["gedaechtnisReport"] = {"ok": bool(d.get("ok")), "created": bool(d.get("created")),
                                     "id": body["id"], "status": r.status_code}
@@ -302,13 +312,13 @@ def report_senden(sit: dict) -> dict | None:
         return None
 
 
-def _kontext_holen(telefon: str, name: str) -> str:
+def _kontext_holen(telefon: str, name: str, client_id: str = "") -> str:
     """Synchroner Abruf: erst der Rufnummern-Endpunkt (sprechfertig),
     hilfsweise die Gedächtnis-Suche nach der Nummer und die Karteikarte
     nach Name (Events selbst zu Zeilen gefaltet)."""
     if telefon:
         r = httpx.get(f"{MAS_URL}/brain/caller-context",
-                      params={"phone": telefon}, headers=_headers(), timeout=KONTEXT_WARTE_S)
+                      params={"phone": telefon}, headers=_headers(client_id), timeout=KONTEXT_WARTE_S)
         d = r.json()
         if d.get("found") and _s(d.get("context")):
             ctx = str(d.get("context")).strip()
@@ -319,13 +329,13 @@ def _kontext_holen(telefon: str, name: str) -> str:
         # (live 29.08.2026: frisches Event unauffindbar). Die Suche laeuft
         # ueber queryLatest (neueste zuerst) und traegt counterparty.ref im
         # Suchtext — der robuste Rueckweg fuer die Rufnummer.
-        text = _suche_nach_nummer(telefon)
+        text = _suche_nach_nummer(telefon, client_id)
         if text:
             return text
     if name:
         r = httpx.get(f"{MAS_URL}/brain/karteikarte",
                       params={"name": name, "sinceDays": _KARTEI_TAGE},
-                      headers=_headers(), timeout=KONTEXT_WARTE_S)
+                      headers=_headers(client_id), timeout=KONTEXT_WARTE_S)
         d = r.json()
         events = sorted(d.get("events") or [], key=lambda e: e.get("ts") or 0, reverse=True)
         zeilen: list[str] = []
@@ -344,11 +354,11 @@ def _kontext_holen(telefon: str, name: str) -> str:
     return ""
 
 
-def _suche_nach_nummer(telefon: str) -> str:
+def _suche_nach_nummer(telefon: str, client_id: str = "") -> str:
     """GET /brain/search?q=<ziffern>&kind=event — Zeilen im caller-context-Stil."""
     r = httpx.get(f"{MAS_URL}/brain/search",
                   params={"q": telefon, "kind": "event", "sinceDays": 14, "limit": 10},
-                  headers=_headers(), timeout=KONTEXT_WARTE_S)
+                  headers=_headers(client_id), timeout=KONTEXT_WARTE_S)
     d = r.json()
     hits = sorted((d.get("results") or []), key=lambda h: h.get("ts") or 0, reverse=True)
     zeilen: list[str] = []
@@ -375,7 +385,7 @@ def _suche_nach_nummer(telefon: str) -> str:
             + "\nNutze das aktiv: erkenne den Zusammenhang an, statt bei Null anzufangen.")
 
 
-def ereignisse_holen(telefon: str, name: str) -> list[dict]:
+def ereignisse_holen(telefon: str, name: str, client_id: str = "") -> list[dict]:
     """Rohe Events zum Kontakt (Mail + Anruf rein/raus). Kein Zahn-Filter.
 
     Lisa filtert in der Vorbereitung selbst nach Auftrag. Biancas Live-Pfad
@@ -402,7 +412,7 @@ def ereignisse_holen(telefon: str, name: str) -> list[dict]:
             r = httpx.get(
                 f"{MAS_URL}/brain/search",
                 params={"q": telefon, "kind": "event", "sinceDays": 90, "limit": 20},
-                headers=_headers(), timeout=KONTEXT_WARTE_S,
+                headers=_headers(client_id), timeout=KONTEXT_WARTE_S,
             )
             for h in (r.json().get("results") or []):
                 if h.get("kind") != "event":
@@ -410,7 +420,7 @@ def ereignisse_holen(telefon: str, name: str) -> list[dict]:
                 _add(h.get("snippet") or h.get("summary"), h.get("ts"), h.get("status"), "suche")
             r2 = httpx.get(
                 f"{MAS_URL}/brain/caller-context",
-                params={"phone": telefon}, headers=_headers(), timeout=KONTEXT_WARTE_S,
+                params={"phone": telefon}, headers=_headers(client_id), timeout=KONTEXT_WARTE_S,
             )
             d = r2.json()
             if d.get("found") and _s(d.get("context")):
@@ -425,7 +435,7 @@ def ereignisse_holen(telefon: str, name: str) -> list[dict]:
             r = httpx.get(
                 f"{MAS_URL}/brain/karteikarte",
                 params={"name": name, "sinceDays": _KARTEI_TAGE},
-                headers=_headers(), timeout=KONTEXT_WARTE_S,
+                headers=_headers(client_id), timeout=KONTEXT_WARTE_S,
             )
             for e in (r.json().get("events") or []):
                 _add(e.get("summary"), e.get("ts"), e.get("status"), "kartei")
@@ -438,7 +448,7 @@ def ereignisse_holen(telefon: str, name: str) -> list[dict]:
 def _kontext_arbeit(sit: dict, telefon: str, name: str, key: str) -> None:
     stimme = notes.stimme_von(sit).lower()
     try:
-        text = _kontext_holen(telefon, name)
+        text = _kontext_holen(telefon, name, _mandant(sit))
         if sit.get("gedaechtnisKey") != key:
             return  # inzwischen ist mehr bekannt — der neuere Lauf gewinnt
         sit["gedaechtnis"] = text

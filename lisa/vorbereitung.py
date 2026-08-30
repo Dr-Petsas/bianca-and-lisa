@@ -92,7 +92,7 @@ def _filter_event(ev: dict, auftrag: str) -> bool:
         text, streng=False, muell_erlaubt=bool(_MUELL_THEMA_RE.search(auftrag)))
 
 
-def _gedaechtnis_stand(name: str, phone: str) -> tuple[list[dict], str]:
+def _gedaechtnis_stand(name: str, phone: str, client_id: str = "") -> tuple[list[dict], str]:
     if not gedaechtnis.enabled():
         return [], "aus"
     if not gedaechtnis.erreichbar():
@@ -100,7 +100,8 @@ def _gedaechtnis_stand(name: str, phone: str) -> tuple[list[dict], str]:
     if not name and not phone:
         return [], "nichts"
     try:
-        return gedaechtnis.ereignisse_holen(phone, name), "ok"
+        # W-MANDANT-4: Abfrage im Gedaechtnis DES Mandanten des Auftrags.
+        return gedaechtnis.ereignisse_holen(phone, name, client_id), "ok"
     except Exception as e:
         print(f"lisa-vorbereitung gedaechtnis fail {e}", flush=True)
         return [], "tot"
@@ -252,7 +253,8 @@ def sammeln(auftrag: str, *, tenant_id: str = "", patient: dict | None = None) -
         if phone in {"01776004600", "1776004600"}:
             phone = ""
     past, upcoming = _termine(tenant_id, pat)
-    events, stand = _gedaechtnis_stand(name, phone)
+    cid = str(tenants.laden(tenant_id).get("clientId") or "") if tenant_id else ""
+    events, stand = _gedaechtnis_stand(name, phone, cid)
     if stand == "ok" and not events:
         stand = "nichts"
     unterlage = _unterlage(past, upcoming, events, auftrag)

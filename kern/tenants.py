@@ -37,6 +37,43 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
     return raw
 
 
+def von_did(nummer: str) -> dict[str, Any] | None:
+    """Mandant zur ANGERUFENEN Nummer (DID) — Vorbereitung fuer das
+    SIP-Routing Nummer->Mandant (W-MANDANT-4, 30.08.2026).
+
+    Jeder Tenant kann unter "dids" seine Rufnummern tragen. Verglichen wird
+    auf Ziffern (ohne +, Leerzeichen, Klammern) und mit gefalteter deutscher
+    Vorwahl: "+49 211 555" und "0211 555" meinen dieselbe Leitung. Kein
+    Treffer => None, der Aufrufer faellt auf DEFAULT_TENANT zurueck."""
+
+    def _ziffern(v: Any) -> str:
+        return "".join(c for c in str(v or "") if c.isdigit())
+
+    def _kern(z: str) -> str:
+        # 00-Prefix (internationale Waehlform) und Landeskennung 49 falten;
+        # das len-Guard schuetzt Ortsnetze wie 0491 (Leer) vor Fehlfaltung.
+        if z.startswith("00"):
+            z = z[2:]
+        if z.startswith("49") and len(z) > 9:
+            z = z[2:]
+        return z.lstrip("0")
+
+    ziffern = _ziffern(nummer)
+    if not ziffern:
+        return None
+    kern = _kern(ziffern)
+    for info in liste():
+        d = laden(info["id"])
+        dids = d.get("dids") if isinstance(d.get("dids"), list) else []
+        for did in dids:
+            dz = _ziffern(did)
+            if not dz:
+                continue
+            if dz == ziffern or (kern and _kern(dz) == kern):
+                return d
+    return None
+
+
 def praxis_melde(tenant: dict[str, Any]) -> str:
     """Name, mit dem sich Bianca beim Abheben meldet (Nominativ, gern kurz).
 

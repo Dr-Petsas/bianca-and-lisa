@@ -107,7 +107,7 @@ def test_stufe2_nimmt_fenster_von_der_seite():
     from lisa import vorbereitung as vorb
     echt_g = vorb._gedaechtnis_stand
     echt_t = vorb._termine
-    vorb._gedaechtnis_stand = lambda n, p: ([], "nichts")
+    vorb._gedaechtnis_stand = lambda n, p, c="": ([], "nichts")
     vorb._termine = lambda tid, pat: ([], [])
     try:
         out = kampagne.sammeln_patient(
@@ -134,7 +134,7 @@ def test_stufe2_liste_zaehlt_offen():
     from lisa import vorbereitung as vorb
     echt_g = vorb._gedaechtnis_stand
     echt_t = vorb._termine
-    vorb._gedaechtnis_stand = lambda n, p: ([], "nichts")
+    vorb._gedaechtnis_stand = lambda n, p, c="": ([], "nichts")
     vorb._termine = lambda tid, pat: ([], [])
     try:
         out = kampagne.sammeln_liste(

@@ -860,7 +860,7 @@ function zeigeLetzten(call) {
 const KOENNEN = [
   { t: "Terminverwaltung — der Kern", p: [
     "<b>Buchen:</b> Termine fest in den echten Praxiskalender (Neupatient wie Bestand), inklusive Bestätigungs-SMS der Praxis.",
-    "<b>Behandler-Wahl zu Beginn:</b> Dr. Petsas, Dr. Patrikis oder Dr. Nikolaou — „egal“ sucht global den schnellsten Termin.",
+    "<b>Behandler-Wahl zu Beginn:</b> die Behandler der Praxis (Kalender-Liste des Mandanten) — „egal“ sucht global den schnellsten Termin.",
     "<b>Finden &amp; ansagen:</b> „Wann ist mein Termin?“ → Bianca liest ihn vor und bietet gleich Verschieben oder Absagen an.",
     "<b>Absagen (Sammel-Prozedur):</b> erst „Wann ist der Termin?“, bei „weiß nicht mehr“ die Behandler-Frage, dann der Name — bestätigt wird mit Anrede: „Soll ich den Termin wirklich absagen, Herr Berger?“ Versteht alle Sprech-Formen: absagen, stornieren, löschen, streichen, canceln, „fällt aus“, „nicht wahrnehmen“ — und startet nach einem Fehlversuch sauber neu, statt am alten Stand zu kleben.",
     "<b>Verschieben:</b> gleiche Such-Prozedur; alter Termin und neuer Wunsch werden sauber getrennt.",
@@ -894,7 +894,7 @@ const KOENNEN = [
     "<b>Nie-Stille-Garantie:</b> SIE ist dran (denkt/sucht) — nie mehr als ~1,5 s tot: Füller, Nachschub, lokale Notfall-Ansagen. Zwei Uhren, kein Widerspruch.",
     "<b>Wiederholungs-Wächter:</b> nie zweimal wortgleich dieselbe Frage.",
     "<b>Praxiswissen:</b> Öffnungszeiten, Anfahrt, Leistungen und Preise — nur aus dem hinterlegten Wissen, nichts wird erfunden.",
-    "<b>Weiterleiten ans Behandlungsteam:</b> „Kann ich Doktor Petsas sprechen?“ / „Ich möchte verbunden werden“ — Ansage, Verbinden-Jingle, durchstellen; versteht auch Hörfehler („Petzers“) und Formen ohne Titel („Herrn Petsas sprechen“). Mitarbeiter-Wünsche (Empfang, Buchhaltung, Chef) bekommen ehrlich die Personalfrei-Auskunft plus Arzt-Angebot.",
+    "<b>Weiterleiten ans Behandlungsteam:</b> „Kann ich den Doktor sprechen?“ / „Ich möchte verbunden werden“ — Ansage, Verbinden-Jingle, durchstellen; versteht auch Hörfehler und Formen ohne Titel (Behandler-Namen kommen aus dem Mandanten). Mitarbeiter-Wünsche (Empfang, Buchhaltung, Chef) bekommen ehrlich die Personalfrei-Auskunft plus Arzt-Angebot.",
     "<b>Anrufer-Tempo:</b> die Hör-Schwelle passt sich der Frage an — Ja/Nein: flott, Nummern-Diktat: geduldig.",
     "<b>Sprech-Qualität:</b> Uhrzeiten und Daten in gesprochenen Worten („morgen, Mittwoch, um neun Uhr fünfzehn“) — nie Datums-Kürzel.",
   ]},
@@ -904,7 +904,7 @@ const TECHNIK = [
   { t: "Ohr — STT-Pipeline (hören)", p: [
     "<b>Engine:</b> primeline-parakeet — deutsches Parakeet-TDT-Finetune (2,95 % Wort-Fehlerrate) als ONNX, CPU-only im eigenen Container (5090:8212). Gemessen: 0,34–0,44 s je Zug.",
     "<b>Stille-Trim (W-STT-TRIM):</b> Vor-/Nachlauf-Stille wird vor der Inferenz energie-basiert abgeschnitten — „Ja“/„Nein“ gehen nicht mehr unter, reine Stille wird verworfen statt halluziniert.",
-    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Behandler-Namen als Hotwords („Betsas“ → „Petsas“).",
+    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Behandler-Namen des Mandanten als Hotwords (Beispiel: „Betsas“ → „Petsas“).",
     "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle 350/500/650 ms je Fragetyp.",
     "<b>Echo-Wache:</b> das Lautsprecher-Echo der eigenen Stimme wird erkannt und verworfen — kurze echte Antworten („ja“, „nein“, „stopp“) nie.",
   ]},

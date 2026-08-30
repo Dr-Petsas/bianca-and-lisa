@@ -285,6 +285,21 @@ def _warm_start():
         for satz in gehirn.feste_saetze(t):
             tts.warm(sprech.sanitize(satz))
         print("bianca-warm: feste Fragen im Cache", flush=True)
+        # W-MANDANT-4: die uebrigen Mandanten NACH dem Default anwärmen —
+        # deren erste Anrufer sollen ebenso wenig auf die Synthese warten.
+        # Gleiche Saetze dedupliziert der Cache; ein kaputtes Tenant-JSON
+        # darf den Rest nicht stoppen.
+        for info in tenants.liste():
+            if info["id"] == DEFAULT_TENANT:
+                continue
+            try:
+                andere = tenants.laden(info["id"])
+                tts.warm(begruessung(tenants.praxis_melde(andere)))
+                for satz in gehirn.feste_saetze(andere):
+                    tts.warm(sprech.sanitize(satz))
+                print(f"bianca-warm: tenant {info['id']} im Cache", flush=True)
+            except Exception as e:
+                print(f"bianca-warm: tenant {info['id']} fail {e}", flush=True)
     threading.Thread(target=_run, daemon=True).start()
 
 

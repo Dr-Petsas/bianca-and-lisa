@@ -222,7 +222,7 @@ def test_kontext_anstossen_key_gesichert():
 
 def test_kontext_arbeit_schreibt_in_sitzung():
     echt = ged._kontext_holen
-    ged._kontext_holen = lambda t, n: "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
+    ged._kontext_holen = lambda t, n, c="": "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
     try:
         sit = _sit_bianca()
         sit["gedaechtnisKey"] = "01771234567|martin berger"

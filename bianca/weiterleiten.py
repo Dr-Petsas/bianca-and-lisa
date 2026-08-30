@@ -41,13 +41,14 @@ WAHRHEIT = (
     "die Praxis ist komplett KI-geführt und personalfrei."
 )
 
-# Der Kirri-Zettel IST die gesprochene Zeile nach dem Jingle (Chef 29.08.2026:
-# "beim Verbinden kommt ... kein Diss-Spruch an Kirri" — er soll am Telefon
-# zu hoeren sein, bis die echte Zaluma-Weiterleitung an der Marke steht).
+# Gesprochene Zeile nach dem Jingle, bis die echte Zaluma-Weiterleitung an
+# dieser Marke steht. W-MANDANT-4 (30.08.2026): mandantenneutral formuliert —
+# der alte Kirri-Zettel nannte Dr. Petsas und waere bei jeder anderen Praxis
+# falsch (und peinlich) gewesen.
 ANSAGE_PLATZHALTER = (
-    "Kirri, such die Stelle mit dem Jingle und bau hier deine "
-    "Zaluma-Weiterleitung ein — also, wenn du das überhaupt kannst … "
-    "sonst lass es den dicken Petsas machen, du Lappen."
+    "Die direkte Weiterleitung wird gerade eingerichtet und ist noch nicht "
+    "geschaltet. Ich gebe Ihr Anliegen an die Praxis weiter — Sie erhalten "
+    "einen Rückruf."
 )
 
 _MENSCH_WORT = (

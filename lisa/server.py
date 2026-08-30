@@ -394,6 +394,21 @@ def _warm_start():
             "Kontrolltermin vorverlegen",
             behandler=t.get("behandler") or "",
         ))
+        # W-MANDANT-4: die uebrigen Mandanten NACH dem Default anwärmen;
+        # ein kaputtes Tenant-JSON darf den Rest nicht stoppen.
+        for info in tenants.liste():
+            if info["id"] == DEFAULT_TENANT:
+                continue
+            try:
+                andere = tenants.laden(info["id"])
+                tts.warm(begruessung(
+                    tenants.praxis_von(andere),
+                    "Kontrolltermin vorverlegen",
+                    behandler=andere.get("behandler") or "",
+                ))
+                print(f"lisa-warm: tenant {info['id']} im Cache", flush=True)
+            except Exception as e:
+                print(f"lisa-warm: tenant {info['id']} fail {e}", flush=True)
     threading.Thread(target=_run, daemon=True).start()
 
 

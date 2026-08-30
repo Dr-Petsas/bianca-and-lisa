@@ -25,14 +25,51 @@ from kern.config import (
 # trotz language_code=de gern englisch ("Maikl"). Der Bindestrich erzwingt die
 # deutsche Silbentrennung. Logs, Kalender und Transkript behalten die echte
 # Schreibweise — nur der Text an die Stimme wird umgeschrieben.
-_AUSSPRACHE = (
+#
+# W-MANDANT-4 (30.08.2026): Die BEHANDLER-Namen kommen aus den Tenant-JSONs
+# (Feld "aussprache": {"Petsas": "Pet-sas", ...}) — vereinigt ueber alle
+# Mandanten, denn ein Name klingt gleich, egal welche Praxis ihn traegt.
+# Traegt KEIN Tenant das Feld, gilt die alte eingebaute Liste. Die
+# Vornamen-Regeln (Michael/David) sind praxisunabhaengig und bleiben im Code.
+_GENERISCH = (
     (re.compile(r"\bMichael\b"), "Micha-el"),
     (re.compile(r"\bDavid\b"), "Dah-vid"),
-    # Behandler-Namen: Qwen3 liest sie sonst englisch/lateinisch an.
+)
+_BEHANDLER_FALLBACK = (
+    # Qwen3 liest die Namen sonst englisch/lateinisch an.
     (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
     (re.compile(r"\bPatrikis\b", re.I), "Pa-tri-kis"),
     (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
+_AUSSPRACHE_CACHE: tuple | None = None
+
+
+def _aussprache() -> tuple:
+    global _AUSSPRACHE_CACHE
+    if _AUSSPRACHE_CACHE is None:
+        regeln: dict[str, tuple] = {}
+        try:
+            from kern import tenants as _tenants
+            for info in _tenants.liste():
+                d = _tenants.laden(info["id"])
+                feld = d.get("aussprache")
+                if not isinstance(feld, dict):
+                    continue
+                for wort, sprech in feld.items():
+                    w = " ".join(str(wort or "").split()).strip()
+                    s = " ".join(str(sprech or "").split()).strip()
+                    if w and s and w.lower() not in regeln:
+                        regeln[w.lower()] = (re.compile(rf"\b{re.escape(w)}\b", re.I), s)
+        except Exception as e:
+            print(f"tts-aussprache: tenants nicht lesbar ({e}), Fallback-Liste", flush=True)
+        _AUSSPRACHE_CACHE = _GENERISCH + (tuple(regeln.values()) if regeln else _BEHANDLER_FALLBACK)
+    return _AUSSPRACHE_CACHE
+
+
+def aussprache_zuruecksetzen() -> None:
+    """Nur fuer Tests: Regel-Cache verwerfen (z. B. nach Tenant-Aenderung)."""
+    global _AUSSPRACHE_CACHE
+    _AUSSPRACHE_CACHE = None
 
 # Lautheit — RMS-Angleichung auf Clara-/ElevenLabs-Niveau (28.08.2026).
 # Das Demo-Clara-Peak-Rezept (Ziel 0,82 FS, max 1,8, nie absenken) macht
@@ -103,7 +140,7 @@ def _lokal_client() -> httpx.Client:
 
 def _normalisieren(text: str) -> str:
     sauber = " ".join(str(text or "").split()).strip()
-    for cre, ersatz in _AUSSPRACHE:
+    for cre, ersatz in _aussprache():
         sauber = cre.sub(ersatz, sauber)
     return sauber
 

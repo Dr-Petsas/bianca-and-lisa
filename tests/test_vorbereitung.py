@@ -14,7 +14,7 @@ def test_ohne_auftrag_scheitert():
 def test_recall_ohne_historie_fragt_den_chef():
     echt_g = v._gedaechtnis_stand
     echt_t = v._termine
-    v._gedaechtnis_stand = lambda n, p: ([], "nichts")
+    v._gedaechtnis_stand = lambda n, p, c="": ([], "nichts")
     v._termine = lambda tid, pat: ([], [])
     try:
         out = v.sammeln("Recall nächste Woche", patient={"name": "Anna Test"})
@@ -31,7 +31,7 @@ def test_recall_ohne_historie_fragt_den_chef():
 def test_kommender_termin_wird_einwand():
     echt_g = v._gedaechtnis_stand
     echt_t = v._termine
-    v._gedaechtnis_stand = lambda n, p: ([], "nichts")
+    v._gedaechtnis_stand = lambda n, p, c="": ([], "nichts")
     v._termine = lambda tid, pat: ([], [
         {"label": "Dienstag 8.9. um 09:00", "iso": "2026-09-08T09:00:00", "date": "2026-09-08"},
     ])
@@ -49,7 +49,7 @@ def test_kommender_termin_wird_einwand():
 def test_pizza_kein_recall_kein_termin_einwand():
     echt_g = v._gedaechtnis_stand
     echt_t = v._termine
-    v._gedaechtnis_stand = lambda n, p: ([], "nichts")
+    v._gedaechtnis_stand = lambda n, p, c="": ([], "nichts")
     v._termine = lambda tid, pat: (
         [{"label": "Kontrolle letzte Woche", "iso": "2026-08-23T09:00:00", "date": "2026-08-23"}],
         [{"label": "Dienstag 8.9.", "iso": "2026-09-08T09:00:00", "date": "2026-09-08"}],
@@ -68,7 +68,7 @@ def test_pizza_kein_recall_kein_termin_einwand():
 def test_mail_und_anruf_kommen_in_die_unterlage():
     echt_g = v._gedaechtnis_stand
     echt_t = v._termine
-    v._gedaechtnis_stand = lambda n, p: ([
+    v._gedaechtnis_stand = lambda n, p, c="": ([
         {"summary": "Laut E-Mail (Nadine): Bestellung Labor 12er, Lieferung KW36.",
          "ts": 1767100000000, "status": "none", "quelle": "kartei"},
         {"summary": "Laut Anruf (Lisa): Labor nicht erreicht, Rückruf offen.",

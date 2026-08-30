@@ -1465,12 +1465,15 @@ def test_arzt_sprechname_ohne_vornamen():
 
 
 def test_tts_aussprache_umschrift():
-    """'Michael' wird fuer den Mund zu 'Micha-el' — Logs bleiben unveraendert."""
+    """'Michael' wird fuer den Mund zu 'Micha-el' — Logs bleiben unveraendert.
+    Seit W-MANDANT-4 kommen die Behandler-Regeln aus den Tenant-JSONs
+    (Feld "aussprache"), darum laeuft der Test ueber _aussprache()."""
     from kern import tts as ttsmod
     text = "Dann halte ich fest: für Michael Peters bei Doktor Petsas."
-    for cre, ersatz in ttsmod._AUSSPRACHE:
+    for cre, ersatz in ttsmod._aussprache():
         text = cre.sub(ersatz, text)
     assert "Micha-el Peters" in text and "Michael" not in text
+    assert "Pet-sas" in text
 
 
 def test_wunsch_uhrzeit_in_worten_und_statt():
