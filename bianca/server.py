@@ -340,9 +340,14 @@ def studio_ergebnisse():
     return _studio_seite("ergebnisse.html")
 
 
+@app.get("/studio/uebergabe")
+def studio_uebergabe():
+    return _studio_seite("uebergabe.html")
+
+
 @app.get("/studio/web/{name}")
 def studio_web(name: str):
-    erlaubt = {"app.js", "stil.css", "ergebnisse.js"}
+    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js"}
     if name not in erlaubt:
         raise HTTPException(404)
     return _studio_seite(name)

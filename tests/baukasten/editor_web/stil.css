@@ -337,6 +337,12 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
   margin: 0 0 8px;
 }
 .auftrag-aktionen { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+
+body.uebergabe { padding-bottom: 24px; }
+.uebergabe-main { max-width: 920px; padding: 16px; }
+.uebergabe-main h2 { font-size: 14px; margin: 22px 0 8px; }
+.uebergabe-text { min-height: 240px; max-height: 70vh; overflow: auto; }
+.uebergabe-kopierleiste { margin: 16px 0 0; }
 .auftrag-dialog #auftrag-hinweis { width: 100%; min-height: 88px; }
 
 .marke-box { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }

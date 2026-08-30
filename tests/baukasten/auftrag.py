@@ -248,6 +248,7 @@ def _ablegen(paket: dict, basis: Path) -> None:
     sid = re.sub(r"[^\w.-]+", "_", str(paket.get("storyId") or "story"))[:60]
     archiv = basis / "archiv" / f"{paket.get('laufId') or 'lauf'}-{sid}.md"
     archiv.write_text(paket["markdown"], encoding="utf-8")
+    liste_schreiben(basis)
 
 
 def schreiben(bericht: dict, lauf_id: str, *, hinweis: str = "",
@@ -260,6 +261,125 @@ def schreiben(bericht: dict, lauf_id: str, *, hinweis: str = "",
         vorschlag_schreiben("", ordner=basis)
     _ablegen(paket, basis)
     return paket
+
+
+def _archiv_kurz(text: str) -> str:
+    for zeile in (text or "").splitlines():
+        t = zeile.strip()
+        if t.startswith("#") or t.startswith("- Lauf:") or t.startswith("- Story:"):
+            continue
+        if t.startswith("Im Chat") or t.startswith("Nur `"):
+            continue
+        if t and t not in {"## Dein Verbesserungsvorschlag"}:
+            if t.startswith("## "):
+                continue
+            if t.startswith("(noch leer") or t.startswith("(Hier eintragen"):
+                continue
+            return t[:160]
+    return ""
+
+
+def _vorfall_koerper(text: str) -> str:
+    """Einzelgespräch ohne den sich wiederholenden Seitenkopf."""
+    out: list[str] = []
+    kopf = True
+    for z in (text or "").splitlines():
+        t = z.strip()
+        if kopf:
+            if (not t or t.startswith("# Übergabe") or t.startswith("Im Chat")
+                    or t.startswith("Nur `") or t.startswith("- Lauf:")
+                    or t.startswith("- Story:") or t.startswith("- Ergebnis:")
+                    or t.startswith("- Ordner:") or t.startswith("- Geschrieben:")):
+                continue
+            kopf = False
+        out.append(z)
+    return "\n".join(out).strip()
+
+
+def archiv_liste(ordner: Path | None = None) -> list[dict[str, str]]:
+    """Alle Vorfälle, neueste zuerst — voller Text für die eine Liste."""
+    basis = _basis(ordner)
+    out: list[dict[str, str]] = []
+    for p in sorted((basis / "archiv").glob("*.md"), reverse=True):
+        m = re.match(r"^(\d{8}-\d{6})-(.+)\.md$", p.name)
+        try:
+            roh = p.read_text(encoding="utf-8")
+        except OSError:
+            roh = ""
+        out.append({
+            "name": p.name,
+            "laufId": m.group(1) if m else "",
+            "storyId": m.group(2) if m else p.stem,
+            "pfad": str(p),
+            "kurz": _archiv_kurz(roh),
+            "text": roh,
+        })
+    return out
+
+
+def archiv_lesen(name: str, *, ordner: Path | None = None) -> str:
+    basis = _basis(ordner)
+    n = Path(str(name or "")).name
+    if not n.endswith(".md") or n in {".", ".."}:
+        return ""
+    p = (basis / "archiv" / n).resolve()
+    if basis.resolve() not in p.parents or not p.is_file():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def liste_bauen(ordner: Path | None = None) -> str:
+    """Eine Liste: alle Vorfälle nacheinander, klar getrennt."""
+    basis = _basis(ordner)
+    vorfaelle = archiv_liste(basis)
+    n = len(vorfaelle)
+    kopf = (
+        f"# Übergabe-Liste — {n} Vorfall{'e' if n != 1 else ''}\n\n"
+        f"Eine Liste, alle Gespräche. In den Cursor-Chat kopieren.\n"
+        f"Nur `F:\\Bianca&Lisa TelefonKI`. Clara, MAS-2, Lena-Voice, "
+        f"pickadoc-live-base nicht anfassen.\n\n"
+        f"Stand: {datetime.now().isoformat(timespec='seconds')} · "
+        f"Ordner: `{basis}`\n"
+    )
+    if not vorfaelle:
+        return kopf + "\n(noch kein Einzellauf — zuerst anrufen oder Selbst-Anruf.)\n"
+    bloecke = [kopf]
+    for i, a in enumerate(vorfaelle, 1):
+        koerper = _vorfall_koerper(a.get("text") or "") or "(leer)"
+        bloecke.append(
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"## Vorfall {i} von {n} — `{a.get('laufId') or '—'}` · "
+            f"`{a.get('storyId') or a.get('name')}`\n\n"
+            f"{koerper}\n"
+        )
+    return "\n".join(bloecke)
+
+
+def liste_schreiben(ordner: Path | None = None) -> Path:
+    basis = _basis(ordner)
+    p = basis / "liste.md"
+    p.write_text(liste_bauen(basis), encoding="utf-8")
+    return p
+
+
+def seite(ordner: Path | None = None) -> dict[str, Any]:
+    """Eine Kopierseite: genau eine Liste mit allen Vorfällen."""
+    basis = _basis(ordner)
+    aktuell = lesen(basis)
+    archiv = archiv_liste(basis)
+    markdown = liste_bauen(basis)
+    liste_schreiben(basis)
+    return {
+        "ok": bool(archiv),
+        "chatSatz": CHAT_SATZ,
+        "ordner": str(basis),
+        "vorschlag": vorschlag_lesen(basis),
+        "aktuell": aktuell,
+        "archiv": [{k: a[k] for k in ("name", "laufId", "storyId", "pfad", "kurz")}
+                   for a in archiv],
+        "anzahl": len(archiv),
+        "markdown": markdown,
+    }
 
 
 def lesen(ordner: Path | None = None) -> dict[str, Any] | None:

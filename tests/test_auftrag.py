@@ -86,3 +86,25 @@ def test_marke_landet_im_markdown(tmp_path=None):
     assert "Markierte Antworten" in neu["markdown"]
     assert "sucht nicht später" in neu["markdown"]
     assert "Zug 0" in neu["markdown"]
+
+
+def test_seite_eine_liste_aller_vorfaelle(tmp_path=None):
+    ordner = Path(tempfile.mkdtemp()) if tmp_path is None else Path(tmp_path)
+    auftrag.schreiben(_bericht(), "20260830-071200",
+                      hinweis="Später am Tag suchen.", ordner=ordner)
+    zwei = _bericht(id="s02-zweites-gespraech")
+    auftrag.schreiben(zwei, "20260830-071500",
+                      hinweis="Name nochmal fragen.", ordner=ordner)
+    s = auftrag.seite(ordner)
+    assert s["ok"] and s["anzahl"] == 2
+    md = s["markdown"]
+    assert "Übergabe-Liste" in md
+    assert "Vorfall 1 von 2" in md and "Vorfall 2 von 2" in md
+    assert "20260830-071500" in md and "20260830-071200" in md
+    assert "Später am Tag" in md and "Name nochmal fragen" in md
+    assert "━━━━━━━━" in md
+    assert (ordner / "liste.md").is_file()
+    assert "diese Datei kopieren" not in md
+    name = s["archiv"][0]["name"]
+    assert "Guten Tag" in auftrag.archiv_lesen(name, ordner=ordner)
+    assert auftrag.archiv_lesen("../secret.md", ordner=ordner) == ""

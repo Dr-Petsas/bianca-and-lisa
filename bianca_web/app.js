@@ -968,6 +968,7 @@ const PATCHES = [
   ["Konkretes Datum", "30.08.", "Termine", "„am 15.09“ / „am 3.9.“ sucht an dem Tag, sonst ±2 Tage in der Region — nicht irgendwelche Vormittage."],
   ["Also-Name + Papa", "30.08.", "Akte", "„also Papagrigoriou“ schlägt das STT-Bruchstück Gregoriu; Papa+Name bleibt ein Nachname; Eythymios = Herr."],
   ["Geschlecht Neuaufnahme", "30.08.", "Akte", "Neue Akte: Vornamen-Wächter bestimmt m/f und schreibt es immer mit — nie Gender.none."],
+  ["Übergabe-Seite", "30.08.", "Technik", "Studio /uebergabe: eine Liste aller Vorfälle, klar getrennt, Kopierknopf in die Zwischenablage."],
 ];
 
 let kTab = "faehig";

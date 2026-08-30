@@ -4,6 +4,7 @@ Eine kleine FastAPI-App neben dem Bianca-Dienst (8098 fuer Tests):
   - /            Editor: Chips fuer alle Story-Attribute, Automatik-Knopf,
                  Wunschtag der kommenden Woche, Stumm/Mithoeren, 10er-Batch.
   - /ergebnisse  Ergebnisseite: Laeufe -> Stories (gruen/rot) -> Bubble-Dialog
+  - /uebergabe   Eine Liste aller Vorfälle, Kopierknopf in die Zwischenablage.
                  mit Latenz und Waechter je Antwort, jede Bubble abspielbar.
   - /api/*       Katalog, Lauf-Start, Live-Zustand, Berichte.
 
@@ -334,6 +335,19 @@ def auftrag_lesen() -> dict[str, Any]:
     return auftrag.lesen() or {"ok": False, "tickets": [], "markdown": ""}
 
 
+@app.get("/api/uebergabe")
+def uebergabe_seite() -> dict[str, Any]:
+    return auftrag.seite()
+
+
+@app.get("/api/uebergabe/archiv/{name}")
+def uebergabe_archiv(name: str) -> dict[str, Any]:
+    text = auftrag.archiv_lesen(name)
+    if not text:
+        return {"ok": False, "name": name, "markdown": ""}
+    return {"ok": True, "name": name, "markdown": text}
+
+
 class AuftragHinweis(BaseModel):
     hinweis: str = ""
     marken: list[dict[str, Any]] | None = None
@@ -495,6 +509,11 @@ def index() -> FileResponse:
 @app.get("/ergebnisse")
 def ergebnisse() -> FileResponse:
     return FileResponse(WEB_DIR / "ergebnisse.html")
+
+
+@app.get("/uebergabe")
+def uebergabe() -> FileResponse:
+    return FileResponse(WEB_DIR / "uebergabe.html")
 
 
 BERICHTE_DIR.mkdir(parents=True, exist_ok=True)

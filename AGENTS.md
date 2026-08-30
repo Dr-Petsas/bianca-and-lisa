@@ -746,12 +746,15 @@ liest — Gespräch plus Chef-Vorschlag, ohne Copy-Paste:
 
 `F:\Bianca&Lisa TelefonKI\uebergabe\`
 
-- `aktuell.md` — letzter Einzellauf oder Selbst-Anruf (Dialog, Checks, Markierungen, Vorschlag)
+- `liste.md` — **eine** Übertragungs-Liste: alle Vorfälle, klar getrennt
+- `aktuell.md` — letzter Einzellauf oder Selbst-Anruf
 - `vorschlag.md` — **dein** Text (Studio-Popup oder direkt diese Datei)
-- `archiv/` — ältere Läufe
+- `archiv/` — Rohdateien je Gespräch (Quelle für die eine Liste)
 - `LIESMICH.md` — Kurz-Anleitung
 
 Nach einem manuellen Einzellauf **oder Selbst-Anruf** (nicht 10er-Batch) schreibt 8097 dorthin.
+Seite: `/studio/uebergabe` — eine Liste aller Vorfälle, Kopierknopf in die Zwischenablage.
+Chef fügt ab und zu in Cursor ein. Kein Automatismus.
 Im Verlauf: Bianca-Antwort **Stimmt nicht** + Kommentar. Popup am Ende für den Gesamteindruck.
 Clara, MAS-2, Lena-Voice und pickadoc-live-base nicht anfassen.
 

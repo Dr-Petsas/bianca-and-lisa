@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Übergabe</title>
+<link rel="stylesheet" href="web/stil.css?v=13">
+</head>
+<body class="uebergabe">
+<header class="kopf">
+  <div class="kopf-links">
+    <h1>Übergabe</h1>
+    <span class="status" id="status">eine Liste, alle Vorfälle</span>
+  </div>
+  <div class="rechts">
+    <a href="./">Teststudio</a>
+    <a href="ergebnisse">Ergebnisse</a>
+    <button class="gross primaer" id="knopf-kopieren" type="button">In Zwischenablage kopieren</button>
+  </div>
+</header>
+<main class="uebergabe-main">
+  <p class="klein" id="anleitung">
+    Eine Übertragungs-Liste: jedes Gespräch ein eigener Block, klar getrennt.
+    Keine zehn Listen. Ab und zu <strong>kopieren</strong> und in den Cursor-Chat einfügen.
+    Qwen ändert nichts.
+  </p>
+  <p class="klein" id="pfade"></p>
+  <p class="klein" id="kopier-status"></p>
+  <h2>Liste für den Chat</h2>
+  <pre class="auftrag-dialogtext uebergabe-text" id="text"></pre>
+  <p class="uebergabe-kopierleiste">
+    <button class="gross primaer" id="knopf-kopieren-unten" type="button">In Zwischenablage kopieren</button>
+  </p>
+</main>
+<script src="web/uebergabe.js?v=13"></script>
+</body>
+</html>
