@@ -1,0 +1,22 @@
+{
+  "clientId": "praxis2",
+  "praxisName": "Praxis 2 Testpraxis",
+  "praxisNameMelde": "Praxis 2",
+  "praxisNameVon": "der Praxis 2 Testpraxis",
+  "behandler": "Dr. Vlachos",
+  "locationId": "praxis2loc",
+  "locationName": "Praxis 2 Testpraxis (Teststadt)",
+  "telefon": "",
+  "sprache": "de",
+  "dids": ["+49 999 0000002"],
+  "aussprache": {
+    "Vlachos": "Wla-chos"
+  },
+  "defaultCalendarId": "praxis2cal1",
+  "calendars": [
+    { "id": "praxis2cal1", "name": "Dr. Vlachos" }
+  ],
+  "visitMotives": [
+    { "id": "praxis2-kontrolle", "name": "Kontrolluntersuchung", "duration": 15 }
+  ]
+}

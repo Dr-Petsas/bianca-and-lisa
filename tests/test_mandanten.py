@@ -148,3 +148,44 @@ def test_platzhalter_ansage_ohne_behandler_namen():
     t = weiterleiten.ANSAGE_PLATZHALTER.lower()
     assert "petsas" not in t and "kirri" not in t
     assert "weiterleitung" in t
+
+
+def test_alle_tenant_dateien_vollstaendig():
+    """W-MANDANT-7: Jede Datei in tenants/ ist ein fahrbarer Mandant.
+
+    Die Suite prueft ALLE Tenant-JSONs (nicht nur meddent) — eine kaputte oder
+    unvollstaendige Mandanten-Datei faellt so im Gate auf, bevor ein Anruf sie
+    laedt. Der Testmandant praxis2 laeuft hier automatisch mit."""
+    dateien = sorted(tenants.TENANTS_DIR.glob("*.json"))
+    assert dateien, "tenants/ darf nicht leer sein"
+    alle_dids: dict[str, str] = {}
+    for pfad in dateien:
+        t = json.loads(pfad.read_text(encoding="utf-8"))
+        for pflicht in ("clientId", "praxisName", "locationId"):
+            assert str(t.get(pflicht) or "").strip(), f"{pfad.name}: Feld {pflicht} fehlt"
+        assert isinstance(t.get("dids", []), list), f"{pfad.name}: dids muss Liste sein"
+        assert isinstance(t.get("calendars", []), list), f"{pfad.name}: calendars muss Liste sein"
+        if t.get("aussprache") is not None:
+            assert isinstance(t["aussprache"], dict), f"{pfad.name}: aussprache muss Objekt sein"
+        for did in t.get("dids") or []:
+            ziffern = "".join(c for c in str(did) if c.isdigit())
+            assert ziffern, f"{pfad.name}: leere DID"
+            assert ziffern not in alle_dids, (
+                f"DID {did} doppelt: {pfad.name} und {alle_dids[ziffern]}"
+            )
+            alle_dids[ziffern] = pfad.name
+
+
+def test_praxis2_testmandant_laedt():
+    """Der stehende Testmandant praxis2 (W-MANDANT-7) verhaelt sich wie ein
+    echter Mandant: laden(), von_did() und die Aussprache-Vereinigung greifen."""
+    t = tenants.laden("praxis2")
+    assert t["clientId"] == "praxis2"
+    assert t["behandler"] == "Dr. Vlachos"
+    hit = tenants.von_did("+49 999 0000002")
+    assert hit and hit["clientId"] == "praxis2"
+    tts.aussprache_zuruecksetzen()
+    try:
+        assert tts._normalisieren("Dr. Vlachos") == "Dr. Wla-chos"
+    finally:
+        tts.aussprache_zuruecksetzen()
