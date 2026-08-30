@@ -775,10 +775,11 @@ async function hoeren() {
   // der Antwort dürfen nie mehr als ~1,4 s vergehen, sonst spricht die
   // lokale Warte-Ansage.
   wachtStart(nr);
-  // W-TEMPO: liegt das Vorab-Transkript rechtzeitig vor, geht der Zug als
-  // TEXT raus (STT ist dann schon bezahlt); sonst wie bisher als Audio.
+  // W-TEMPO: Vorab-Text nicht beim Diktat (Nummern/Buchstaben) — sonst
+  // fehlen oft Anfang oder Ende. Dann volle Aufnahme an /api/listen.
   let vorabText = "";
-  if (vorab) {
+  const diktat = stilleSoll >= 650;
+  if (vorab && !diktat) {
     vorabText = await Promise.race([
       vorab,
       new Promise((r) => setTimeout(() => r(""), 700)),
@@ -893,6 +894,41 @@ $("who").addEventListener("keydown", (e) => {
 
 const recP = { current: null };
 $("micPrompt").onclick = () => toggleMic($("micPrompt"), recP, $("promptLive"), $("prompt"));
+
+$("knopf-vertiefen").onclick = async () => {
+  const auftrag = $("prompt").value.trim();
+  if (!auftrag) { meld("Erst einen Auftrag eintragen — auch ein Einzeiler reicht.", true); return; }
+  const knopf = $("knopf-vertiefen");
+  knopf.disabled = true;
+  knopf.textContent = "vertieft …";
+  try {
+    const r = await fetch("/api/auftrag/vertiefen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        auftrag,
+        tenant: $("tenant").value,
+        patient: patient || ($("who").value.trim() ? { name: $("who").value.trim() } : {}),
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok || !d.auftrag) {
+      throw new Error((d && (d.detail || d.error)) || "vertiefen fehlgeschlagen");
+    }
+    $("prompt").value = d.auftrag;
+    if (d.gedaechtnis === "tot") {
+      meld("Praxisgedächtnis antwortet nicht — Auftrag aus dem Einzeiler vertieft.", false);
+    } else if (d.gedaechtnis === "nichts" || d.gedaechtnis === "aus") {
+      meld("Kein praxisrelevanter Gedächtnisstand — Auftrag trotzdem vertieft.", false);
+    } else {
+      meld("Auftrag vertieft. Kurz gegenlesen, dann anrufen.", false);
+    }
+  } catch (e) {
+    meld(String(e.message || e), true);
+  }
+  knopf.disabled = false;
+  knopf.textContent = "Auftrag vertiefen";
+};
 
 function starteAnruf() {
   meld("");

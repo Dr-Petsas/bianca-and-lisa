@@ -971,6 +971,30 @@ def test_englische_ziffern():
     assert telefon.aus_satz("null eins sieben sieben sechshundert vier sechshundert") == "01776004600"
 
 
+def test_handy_ohne_fuehrende_null():
+    """STT verschluckt oft das erste 'null' — 177… ist trotzdem die 0177…"""
+    assert telefon.aus_satz("eins sieben sieben sechs null null vier sechs null null") == "01776004600"
+    assert telefon.aus_satz("177 600 46 00") == "01776004600"
+    assert telefon.mit_fuehrender_null("1776004600") == "01776004600"
+    assert telefon.aus_satz("zwei zwei eins eins zwei drei") == ""
+
+
+def test_telefon_komplett_nach_fetzen_ohne_null():
+    """Nach zu frühem Schnitt sagt der Anrufer die ganze Nummer nochmal —
+    auch ohne hörbare Null nicht an den Fetzen kleben."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "arzt": {"typ": "genannt", "calendarId": "x", "calendarName": "Dr. Petsas"},
+              "vorname": "Martin", "nachname": "Berger", "buchstabiert": True,
+              "grund": "Kontrolluntersuchung", "wunsch": {}, "frage": "telefon"})
+    gehirn.einsammeln(sit, "sechs null null vier sechs")
+    assert s["telefonTeil"] == "60046" and not s["telefonOffen"]
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "telefon" and "von vorn" in frage.lower()
+    gehirn.einsammeln(sit, "eins sieben sieben sechs null null vier sechs null null")
+    assert s["telefonOffen"] == "01776004600" and not s["telefonTeil"]
+
+
 def test_telefon_stueckweise_diktiert():
     """Nummer in Etappen: Fragmente sammeln, bis die Kette plausibel ist."""
     sit = _sit()
@@ -981,7 +1005,7 @@ def test_telefon_stueckweise_diktiert():
     gehirn.einsammeln(sit, "null eins sieben sieben")
     assert s["telefonTeil"] == "0177" and not s["telefonOffen"]
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "telefon" and "fehlt" in frage.lower()
+    assert fid == "telefon" and "weiter" in frage.lower() and "nummer" in frage.lower()
     gehirn.einsammeln(sit, "sechs null null vier sechs null null")
     assert s["telefonOffen"] == "01776004600" and not s["telefonTeil"]
     fid2, _ = gehirn.naechste_frage(sit)
@@ -2460,12 +2484,12 @@ def test_feste_saetze_waermen_die_arztwahl():
 
 def test_stille_ms_nach_fragetyp():
     """Ja/Nein-/Wahlfragen erwarten kurze Antworten (350 ms Ruhe reichen),
-    Ziffern-/Buchstabier-Diktate brauchen Denkpausen (650 ms), sonst 500."""
+    Nummern-Diktat 1300 ms, Buchstabieren 650 ms, sonst 500."""
     assert gehirn.stille_ms({"frage": "schonmal"}) == 350
     assert gehirn.stille_ms({"frage": "arzt"}) == 350
     assert gehirn.stille_ms({"frage": "telefon_check"}) == 350
     assert gehirn.stille_ms({"frage": "pzr"}) == 350
-    assert gehirn.stille_ms({"frage": "telefon"}) == 650
+    assert gehirn.stille_ms({"frage": "telefon"}) == 1300
     assert gehirn.stille_ms({"frage": "buchstabieren"}) == 650
     assert gehirn.stille_ms({"frage": "grund"}) == 500
     assert gehirn.stille_ms({"frage": "name"}) == 500

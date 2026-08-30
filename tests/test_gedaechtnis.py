@@ -245,6 +245,39 @@ def test_notaus_schaltet_alles_ab():
     assert ged.enabled() is True
 
 
+def test_zeile_inhaltlich_filtert_muell_und_lehre():
+    assert ged.zeile_inhaltlich("Lisa hat gestern angerufen, Recall offen.")
+    assert ged.zeile_inhaltlich("Termin verschoben auf nächsten Dienstag.")
+    assert not ged.zeile_inhaltlich("")
+    assert not ged.zeile_inhaltlich("Gespräch ohne Kalenderänderung")
+    assert not ged.zeile_inhaltlich(
+        "Adressbuch der Praxis: Demo-Interessent. Zollabfertigung mit AWB 1, Onlinekauf."
+    )
+
+
+def test_fachfremder_caller_context_wird_verworfen():
+    def fake_get(url, params=None, **kw):
+        class _R:
+            @staticmethod
+            def json():
+                if "caller-context" in url:
+                    return {"ok": True, "found": True, "name": "Demo",
+                            "context": "Demo-Interessent (Rechnung). Zollabfertigung AWB Onlinekauf."}
+                if "/brain/search" in url:
+                    return {"ok": True, "results": []}
+                if "karteikarte" in url:
+                    return {"ok": True, "events": []}
+                raise AssertionError(url)
+        return _R()
+
+    echt = ged.httpx.get
+    ged.httpx.get = fake_get
+    try:
+        assert ged._kontext_holen("01776004600", "Demo") == ""
+    finally:
+        ged.httpx.get = echt
+
+
 def test_prompt_block_beide_stimmen():
     sit = _sit_bianca(gedaechtnis="Praxisgedächtnis zu Martin Berger:\n- 28.08.: Rückruf erbeten.")
     block = ged.kontext_block(sit)

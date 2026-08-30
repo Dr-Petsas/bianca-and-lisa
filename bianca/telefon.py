@@ -126,15 +126,30 @@ def normaliert(nummer: str) -> str:
     return d.replace("+", "")
 
 
-def plausibel(nummer: str) -> bool:
+# Handy ohne hörbare Null am Anfang (STT verschluckt oft das erste "null"):
+# 1776004600 → 01776004600. Nur Mobilfunk-Vorwahlen 15/16/17.
+_HANDY_OHNE_NULL = re.compile(r"^1[567]\d{7,10}$")
+
+
+def mit_fuehrender_null(nummer: str) -> str:
+    """Deutsche Handynummer: fehlende führende 0 nachziehen."""
     d = normaliert(nummer)
+    if d.startswith("0"):
+        return d
+    if _HANDY_OHNE_NULL.match(d):
+        return "0" + d
+    return d
+
+
+def plausibel(nummer: str) -> bool:
+    d = mit_fuehrender_null(nummer)
     return d.startswith("0") and 10 <= len(d) <= 13
 
 
 def aus_satz(text: str) -> str:
     """Beste Telefonnummer aus dem Satz — '' wenn nichts Plausibles."""
     kette = ziffern(text)
-    d = normaliert(kette)
+    d = mit_fuehrender_null(kette)
     if plausibel(d):
         return d
     return ""

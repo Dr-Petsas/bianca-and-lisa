@@ -437,8 +437,10 @@ Chef: "ich will 300 ms schneller werden." Zwei Bausteine, beide Docks:
   Weiter-Antwort (`kern/dienst._stille_feld`, Hook `stille_fn` im
   Konstruktor). Bianca: `gehirn.stille_ms` — 350 ms nach Ja/Nein-/Wahlfragen
   (schonmal, arzt, slotwahl, bestaetigung, versicherung*, pzr, telefon_alt,
-  telefon_check, rueckblick), 650 ms beim telefon-/buchstabieren-Diktat
-  (NIE mitten in der Nummer schneiden), sonst die bewährten 500 ms.
+  telefon_check, rueckblick), 1300 ms beim Nummern-Diktat (Pause zwischen
+  Gruppen), 650 ms beim Buchstabieren, sonst die bewährten 500 ms.
+  Vorab-STT als TEXT-Zug gilt NICHT beim Diktat — volle Aufnahme an /listen.
+  Fehlende führende 0 bei Handy 15/16/17 wird nachgezogen.
   Lisa hat keinen Hook => Feld fehlt => ihr Dock bleibt bei 500.
 - **Vorab-STT:** ab 200 ms Ruhe schickt das Dock den Aufnahme-Stand an
   `POST /api/hoeren` (reines Ohr: Session-Hotwords wie der echte Zug,
@@ -612,6 +614,10 @@ Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
   last_call, praxis_notizen.jsonl) bleibt unverändert bestehen.
 - **Notaus:** `MAS_GEDAECHTNIS=0` (oder leere `MAS_URL`) => kein Netz,
   Verhalten wie vor W-GEDAECHTNIS. Tests: `tests/test_gedaechtnis.py`.
+- **Filter:** nur praxisrelevante Zeilen (Termin, Recall, Anruf, Rückruf …).
+  Fachfremdes aus dem MAS (Zoll, AWB, Demo-Interessent) wird verworfen.
+- Lisa-UI: Knopf **Auftrag vertiefen** (`POST /api/auftrag/vertiefen`) macht
+  aus einem Einzeiler Gesprächsschichten; Gedächtnis nur wenn inhaltlich.
 
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 
@@ -757,6 +763,15 @@ Seite: `/studio/uebergabe` — eine Liste aller Vorfälle, Kopierknopf in die Zw
 Chef fügt ab und zu in Cursor ein. Kein Automatismus.
 Im Verlauf: Bianca-Antwort **Stimmt nicht** + Kommentar. Popup am Ende für den Gesamteindruck.
 Clara, MAS-2, Lena-Voice und pickadoc-live-base nicht anfassen.
+
+## Start-Protokoll (30.08.2026 — nicht rückbauen)
+
+`start-protokoll.ps1` / Doppelklick `start-protokoll.cmd`:
+startet und überwacht **nur** Lisa 8095, Bianca 8096, Studio 8097, Test-Bianca 8098.
+Abgestürzte werden neu gehoben. Health tot + unser Prozess = Neustart.
+Clara 8091–8094, MAS-Prozess, Lena, pickadoc-live-base: nur Status, nie Start/Kill.
+WRITE_LIVE bleibt das der `.env`. Stand: `.run/wachter-stand.txt`.
+`powershell -File .\start-protokoll.ps1 -Status` zeigt den Tisch ohne Loop.
 
 ## Fernsteuerung
 

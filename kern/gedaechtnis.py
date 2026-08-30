@@ -33,6 +33,7 @@ Netz, byte-identisches Verhalten wie vor W-GEDAECHTNIS.
 from __future__ import annotations
 
 import os
+import re
 import threading
 from datetime import datetime
 from typing import Any
@@ -64,6 +65,44 @@ def enabled() -> bool:
 
 def anzeige() -> str:
     return f"MAS {MAS_URL}" if enabled() else "aus"
+
+
+# Praxisrelevanz: MAS-2 mischt oft fachfremde Demo-Zeilen ein (Zoll, AWB).
+# Die darf keine Stimme zitieren — lieber schweigen als Unsinn.
+_PRAXIS_RE = re.compile(
+    r"termin|recall|kontrolle|zahn|pzr|prophylaxe|schmerz|implant|krone|"
+    r"füll|fuell|behandlung|praxis|anruf|nicht erreicht|rückruf|rueckruf|"
+    r"absag|verschieb|versicherung|akte|behandler|doktor|lisa|bianca|"
+    r"sprechstunde|nachsorge|patient",
+    re.I,
+)
+_MUELL_RE = re.compile(
+    r"zollabfert|zoll\b|\bawb\b|onlinekauf|demo-interessent|paketversand|"
+    r"tracking|lieferdienst",
+    re.I,
+)
+_LEER_RE = re.compile(
+    r"gespräch ohne kalenderänderung|keine (?:daten|einträge|events)|nichts bekannt",
+    re.I,
+)
+
+
+def zeile_inhaltlich(text: str) -> bool:
+    """True nur bei praxisrelevantem Inhalt — keine leeren oder fachfremden Zeilen."""
+    t = _s(text)
+    if len(t) < 12 or _LEER_RE.search(t) or _MUELL_RE.search(t):
+        return False
+    return bool(_PRAXIS_RE.search(t))
+
+
+def erreichbar() -> bool:
+    if not enabled():
+        return False
+    try:
+        r = httpx.get(f"{MAS_URL}/health", headers=_headers(), timeout=1.2)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 def _headers() -> dict[str, str]:
@@ -262,7 +301,9 @@ def _kontext_holen(telefon: str, name: str) -> str:
                       params={"phone": telefon}, headers=_headers(), timeout=KONTEXT_WARTE_S)
         d = r.json()
         if d.get("found") and _s(d.get("context")):
-            return str(d.get("context")).strip()
+            ctx = str(d.get("context")).strip()
+            if zeile_inhaltlich(ctx):
+                return ctx
         # caller-context liest intern queryRecent (aufsteigend, Limit): bei
         # vielen Events im 14-Tage-Fenster fallen genau die NEUESTEN raus
         # (live 29.08.2026: frisches Event unauffindbar). Die Suche laeuft
@@ -280,7 +321,7 @@ def _kontext_holen(telefon: str, name: str) -> str:
         zeilen: list[str] = []
         for e in events:
             summ = _s(e.get("summary"))
-            if not summ:
+            if not summ or not zeile_inhaltlich(summ):
                 continue
             wann = _wann_zeile(e.get("ts"))
             offen = " (noch offen)" if e.get("status") == "open" else ""
@@ -306,7 +347,7 @@ def _suche_nach_nummer(telefon: str) -> str:
         if h.get("kind") != "event":
             continue
         summ = _s(h.get("snippet"))
-        if not summ:
+        if not summ or not zeile_inhaltlich(summ):
             continue
         wann = _wann_zeile(h.get("ts"))
         offen = " (noch offen)" if h.get("status") == "open" else ""

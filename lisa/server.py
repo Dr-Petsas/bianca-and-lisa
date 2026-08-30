@@ -13,7 +13,7 @@ from starlette.background import BackgroundTask
 
 from kern import gedaechtnis, halbsatz, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
-from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
+from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts, vertiefen
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
@@ -62,6 +62,12 @@ class WeiterIn(BaseModel):
 class AuftragIn(BaseModel):
     sessionId: str = ""
     auftrag: str = ""
+
+
+class VertiefenIn(BaseModel):
+    auftrag: str = ""
+    tenant: str = ""
+    patient: dict | None = None
 
 
 class HangupIn(BaseModel):
@@ -171,6 +177,7 @@ def health():
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "gedaechtnis": gedaechtnis.anzeige(),
+        "gedaechtnisOk": gedaechtnis.erreichbar(),
         "lastCall": session.last_call(),
     }
 
@@ -349,6 +356,16 @@ async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
         return {"ok": False, "text": "", "error": str(e)}
     print(f"lisa-vorab-stt bytes={len(blob)} text={gesagt!r}", flush=True)
     return {"ok": True, "text": gesagt}
+
+
+@app.post("/api/auftrag/vertiefen")
+def api_auftrag_vertiefen(body: VertiefenIn):
+    auftrag = (body.auftrag or "").strip()
+    if not auftrag:
+        raise HTTPException(400, "auftrag fehlt")
+    return vertiefen.vertiefen(
+        auftrag, tenant_id=body.tenant or DEFAULT_TENANT, patient=body.patient or {},
+    )
 
 
 @app.post("/api/auftrag")

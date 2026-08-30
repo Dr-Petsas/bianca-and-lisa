@@ -1029,7 +1029,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
         stueck = telefon.ziffern(t).replace("+", "")
         if 2 <= len(stueck) <= 13:
-            if stueck.startswith("0") and len(stueck) >= 4:
+            # Fast-komplette Kette (auch ohne hörbare Null): nicht an den
+            # alten Fetzen kleben — der Anrufer hat neu angesetzt.
+            if telefon.plausibel(stueck) and len(telefon.mit_fuehrender_null(stueck)) >= 10:
+                zusammen = telefon.mit_fuehrender_null(stueck)
+            elif stueck.startswith("0") and len(stueck) >= 4:
                 # Neue Nummer beginnt — der Anrufer setzt neu an.
                 zusammen = stueck
             else:
@@ -1269,7 +1273,8 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Wann passt es Ihnen am besten — eher vormittags oder nachmittags? Und ab welchem Tag?",
         "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
         "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?",
-        "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer.",
+        "Ja, ich habe den Anfang der Nummer — diktieren Sie bitte weiter, Ziffer für Ziffer.",
+        "Die Nummer ist noch nicht vollständig. Einmal von vorn, Ziffer für Ziffer — die Null am Anfang bitte mit.",
         "Und unter welcher Handynummer erreichen wir Sie?",
         "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung.",
         "Und sind Sie privat oder gesetzlich versichert?",
@@ -1341,13 +1346,14 @@ def telefon_alt_frage(s: dict) -> str:
 # Adaptive Stille-Schwelle fuers Dock (W-TEMPO 29.08.2026, Chef: "ich will
 # 300 ms schneller werden"): Die Maschine WEISS, was sie gefragt hat — nach
 # einer Ja/Nein- oder Wahlfrage kommt eine kurze Antwort (350 ms Ruhe
-# reichen als Zugende), beim Ziffern-/Buchstabier-Diktat sind Denkpausen
-# normal (650 ms, NIE mitten in der Nummer abschneiden). Default bleiben
-# die bewaehrten 500 ms (27.08.2026: "nicht in Denkpausen hineinreden").
+# reichen als Zugende). Beim Nummern-Diktat Pause zwischen Gruppen (1300 ms,
+# sonst schneidet 650 ms mitten in der Nummer). Buchstabieren 650 ms.
+# Default bleiben die bewaehrten 500 ms (27.08.2026).
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
                 "versicherung_check", "pzr", "telefon_alt", "telefon_check",
                 "rueckblick"}
-_STILLE_DIKTAT = {"telefon", "buchstabieren"}
+_STILLE_TELEFON = 1300
+_STILLE_BUCHSTABIEREN = 650
 
 
 def stille_ms(s: dict) -> int:
@@ -1355,9 +1361,22 @@ def stille_ms(s: dict) -> int:
     fid = _s((s or {}).get("frage"))
     if fid in _STILLE_KURZ:
         return 350
-    if fid in _STILLE_DIKTAT:
-        return 650
+    if fid == "telefon":
+        return _STILLE_TELEFON
+    if fid == "buchstabieren":
+        return _STILLE_BUCHSTABIEREN
     return 500
+
+
+def telefon_teil_frage(s: dict) -> str:
+    """Nachfrage, wenn erst ein Nummern-Fetzen da ist — nicht vorschnell
+    'unvollständig', wenn nur die Pause zwischen den Gruppen zu kurz war."""
+    teil = _s(s.get("telefonTeil"))
+    if teil.startswith("0") and 2 <= len(teil) <= 5:
+        return ("Ja, ich habe den Anfang der Nummer — diktieren Sie bitte weiter, "
+                "Ziffer für Ziffer.")
+    return ("Die Nummer ist noch nicht vollständig. Einmal von vorn, "
+            "Ziffer für Ziffer — die Null am Anfang bitte mit.")
 
 
 def naechste_frage(sit: dict) -> tuple[str, str]:
@@ -1399,7 +1418,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             return "buchstabieren", "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?"
         if not s["telefonOk"] and not s["telefonAkte"] and not (s["bekannt"] and s["aktePhone"]):
             if s["telefonTeil"]:
-                return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
+                return "telefon", telefon_teil_frage(s)
             return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
         fid_v, frage_v = _versicherung_frage(s)
         if fid_v:
@@ -1430,7 +1449,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         return "buchstabieren", "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?"
     if not s["telefonOk"] and not s["telefonAkte"]:
         if s["telefonTeil"]:
-            return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
+            return "telefon", telefon_teil_frage(s)
         return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
     fid_v, frage_v = _versicherung_frage(s)
     if fid_v:

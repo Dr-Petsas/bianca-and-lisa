@@ -24,8 +24,8 @@ let hoerNr = 0;
 // warten. Max. 2 Stupse in Folge; echtes Gehörtes setzt den Zähler zurück.
 const STILLE_MS = 4000; // Anrufer-Zug: so lange ohne Sprache → Stups
 // W-TEMPO (29.08.2026): Ruhe-Schwelle fürs Zugende — der Server sagt nach
-// jedem Zug, was er erwartet (350 ms nach Ja/Nein-/Wahlfragen, 650 ms beim
-// Ziffern-Diktat, sonst 500). Ohne Ansage bleibt der bewährte Default.
+// jedem Zug, was er erwartet (350 ms nach Ja/Nein-/Wahlfragen, 1300 ms beim
+// Nummern-Diktat, 650 ms beim Buchstabieren, sonst 500).
 let stilleSoll = 500;
 let stilleStupse = 0;
 // Barge-in mit Fortsetzung (W-BARGE 29.08.2026): beim Reinsprechen merkt sich
@@ -656,9 +656,11 @@ async function hoeren() {
   // lokale Warte-Ansage.
   wachtStart(nr);
   // W-TEMPO: liegt das Vorab-Transkript rechtzeitig vor, geht der Zug als
-  // TEXT raus (STT ist dann schon bezahlt); sonst wie bisher als Audio.
+  // TEXT raus — außer beim Diktat: der Schnitt bei 200 ms Ruhe verschluckt
+  // oft den Nummern-Anfang oder das Ende; dann volle Aufnahme an /api/listen.
   let vorabText = "";
-  if (vorab) {
+  const diktat = stilleSoll >= 650;
+  if (vorab && !diktat) {
     vorabText = await Promise.race([
       vorab,
       new Promise((r) => setTimeout(() => r(""), 700)),
@@ -969,6 +971,7 @@ const PATCHES = [
   ["Also-Name + Papa", "30.08.", "Akte", "„also Papagrigoriou“ schlägt das STT-Bruchstück Gregoriu; Papa+Name bleibt ein Nachname; Eythymios = Herr."],
   ["Geschlecht Neuaufnahme", "30.08.", "Akte", "Neue Akte: Vornamen-Wächter bestimmt m/f und schreibt es immer mit — nie Gender.none."],
   ["Übergabe-Seite", "30.08.", "Technik", "Studio /uebergabe: eine Liste aller Vorfälle, klar getrennt, Kopierknopf in die Zwischenablage."],
+  ["Nummern-Diktat", "30.08.", "Ohr", "Handy: Pause 1,3 s, volle Aufnahme statt Vorab-Text, fehlende Null am Anfang nachziehen — nicht mehr vorschnell „unvollständig“."],
 ];
 
 let kTab = "faehig";
