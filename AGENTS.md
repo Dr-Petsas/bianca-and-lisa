@@ -334,9 +334,25 @@ Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
   5×Teppich) bei 280 ms Mindestdauer. Außerdem sendet die Brücke in
   Sprechpausen DAUER-STILLE-Rahmen Richtung Asterisk (der Medienstrom darf
   nie abreißen — RTP-Timeout beendet sonst den Anruf, sobald Bianca
-  zuhört), und der Stups-Timer zählt erst ab dem ÜBERGANG spielen→leer
-  (vorher wurde `fertig_seit` jeden Tick überschrieben, der 4-s-Stups
-  feuerte nie). Barge-/Zug-Logs tragen rms+floor für die Feld-Diagnose.
+ zuhört), und der Stups-Timer zählt erst ab dem ÜBERGANG spielen→leer
+ (vorher wurde `fertig_seit` jeden Tick überschrieben, der 4-s-Stups
+ feuerte nie). Barge-/Zug-Logs tragen rms+floor für die Feld-Diagnose.
+- **Kurze Antworten zählen (W-SIP-KURZJA 30.08.2026 — nicht rückbauen):**
+ Live 16:23: Anrufer sagte mehrfach "Ja" auf die Schonmal-Frage — die
+ Brücke verwarf alles ("zug verworfen (5 Sprach-Frames)"), zwei Stupse,
+ Auflegen. Zwei Ursachen, zwei Fixes in `sip_bridge/server.py`:
+ (1) Ein gesprochenes "Ja" hat nur ~100-200 ms Stimmanteil, der
+ Knacser-Filter verlangte 240 ms (`MIN_SPRACHE_FRAMES=12`) — jetzt
+ Kurz-aber-laut-Ausnahme: ab `KURZ_FRAMES` (4 = 80 ms) reicht ein
+ Spitzenpegel >= `KURZ_PEAK` (1200); echte Knackser (1-3 Frames) bleiben
+ draußen, Rest fängt der Stille-Trim im STT-Container. (2) Der 800-ms-
+ Echo-Sperr-Schwanz nach Biancas Sprechende blockte schnelle Antworten
+ (Wortanfang galt als Echo, Rest schaffte die 3 Start-Frames nicht) —
+ die Echo-Referenz klingt jetzt AB (`echo_pegel`: voll bis `ECHO_VOLL_S`
+ 0,3 s, dann linear auf 0 bis 800 ms). Während der Wiedergabe bleibt die
+ Halbduplex-Wache unverändert (volles 2-s-Fenster, Barge braucht weiter
+ 280 ms). Zug-Logs tragen jetzt auch `peak=`. Tests:
+ `tests/test_sip_vad.py` (offline, Fake-Uhr gegen die VAD-Rahmenlogik).
 - **Probe:** `tests/sip_bridge_probe.py` simuliert Asterisk (UUID + PCM-
   Rahmen, echtes deutsches TTS-Audio als Anrufer) gegen eine laufende
   Brücke; Kettentest vom Asterisk: `channel originate

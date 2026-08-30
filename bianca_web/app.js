@@ -971,6 +971,7 @@ const PATCHES = [
   ["W-SIP (AudioSocket-Brücke)", "29.08.", "Telefon", "Echte Anrufe: Zaluma → Asterisk → AudioSocket über SSH-Rücktunnel → sip_bridge (pickadoc1) → Bianca-API; Barge-in, Stille-Stups und Auflegen wie im Dock."],
   ["W-SIP-RAUSCH (Leitungs-VAD)", "29.08.", "Telefon", "Adaptiver Rauschteppich statt starrer RMS-Schwelle: Telefon-Grundrauschen löst keinen falschen Barge mehr aus; Dauer-Stille-Rahmen halten den Medienstrom am Leben."],
   ["W-MITSCHNITT (Anrufliste)", "30.08.", "Betrieb", "Jeder Anruf als Ordner unter .data/anrufe (Manifest + Audio je Zug, sofort geschrieben); Browser-Seite /anrufe mit Transkript, Abspiel-Knöpfen und allen Zeiten. Notaus: MITSCHNITT=0."],
+  ["W-SIP-KURZJA (kurze Antworten)", "30.08.", "Telefon", "Ein kurzes lautes \"Ja\" zählt jetzt als Zug (Kurz-aber-laut-Ausnahme statt 240-ms-Deckel), und die Echo-Sperre klingt nach Biancas Sprechende ab statt 800 ms hart zu blocken."],
 ];
 
 let kTab = "faehig";
