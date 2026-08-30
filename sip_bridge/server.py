@@ -51,6 +51,31 @@ BIANCA_BASE = (os.environ.get("BIANCA_BASE") or "http://127.0.0.1:8096").rstrip(
 BRIDGE_PORT = int(os.environ.get("BRIDGE_PORT") or "40101")
 BRIDGE_TENANT = (os.environ.get("BRIDGE_TENANT") or "").strip()
 
+# W-SIP-PEGEL (30.08.2026): Biancas Renders fahren mit Sprach-RMS -14 dBFS
+# und Peaks am 0,95-Deckel — im Dock richtig (Chef-Abnahme 28.08.), auf der
+# G.711-Strecke klang das "sehr uebersteuert" (Kollege 30.08.). Darum wird
+# NUR Richtung Asterisk gedaempft, an der einen Sende-Stelle in
+# Wiedergabe.lauf() VOR der Echo-Referenz (Halbduplex-Wache bleibt
+# konsistent, das echte Leitungsecho ist ja ebenso leiser). 0.5 = -6 dB.
+# 1.0 = Alt-Verhalten. Docks und TTS-Pegel-Schicht unangetastet.
+try:
+    BRIDGE_GAIN = float(os.environ.get("BRIDGE_GAIN") or "0.5")
+except ValueError:
+    BRIDGE_GAIN = 0.5
+if BRIDGE_GAIN <= 0:
+    BRIDGE_GAIN = 1.0
+
+# W-SIP-ECHO-RAUS (30.08.2026, Chef: "schmeiss das echo gedöhns raus fürs
+# stt"): die Halbduplex-Echo-Sperre (Eingang zaehlt nur als Sprache, wenn
+# er 30 % ueber dem juengst Gesendeten liegt) hielt echte Antworten vom
+# STT fern — Kollegen-Test 17:0x: Sprache mit rms 8000-9000 bei echoRef
+# 12000-15000 wurde komplett verschluckt. Die Sperre ist DEFAULT AUS;
+# das echte Leitungsecho ist seit W-SIP-PEGEL 6 dB leiser, und faellt
+# doch ein Echo-Transkript durch, faengt es die Text-Echo-Wache im Dienst
+# (unterbrechung.ist_echo: verwerfen + weitersprechen). Rueckweg fuer den
+# Notfall: BRIDGE_ECHO=1 = Alt-Verhalten (W-SIP-RAUSCH-Halbduplex).
+BRIDGE_ECHO = (os.environ.get("BRIDGE_ECHO") or "0").strip() == "1"
+
 # AudioSocket-Rahmentypen
 K_ENDE = 0x00
 K_UUID = 0x01
@@ -85,6 +110,7 @@ BARGE_DECKEL = 6000     # Obergrenze der Barge-Schwelle (lautes Reinsprechen)
 # VERZOEGERT (Mobilfunk) und traf in die Satzpause der Begruessung — darum
 # langes Fenster waehrend der Wiedergabe, kurzer Nachlauf danach (sonst
 # sperrt der Begruessungs-Schwanz die echte Antwort des Anrufers aus).
+# SEIT W-SIP-ECHO-RAUS (30.08.2026) DEFAULT AUS — nur mit BRIDGE_ECHO=1:
 ECHO_FAKTOR = 1.3       # Anrufer muss 30 % ueber dem Sende-Pegel liegen
 ECHO_FENSTER = 100      # 2 s Sende-Historie, solange Bianca spricht
 ECHO_NACHLAUF = 40      # 800 ms Sperr-Schwanz nach dem Sprechende
@@ -93,7 +119,10 @@ FLOOR_MIN = 60.0
 FLOOR_MAX = 4000.0
 START_FRAMES = 3        # 60 ms Sprache = Zugbeginn
 BARGE_FRAMES = 14       # 280 ms Sprache waehrend Bianca spricht = Barge
-VORLAUF_FRAMES = 15     # 300 ms Ringpuffer vor dem Zugbeginn
+# W-STT-SCHWANZ (30.08.2026): 500 ms Vorlauf wie der phone_agent
+# (VAD_PREROLL_MS=500, dort gegen abgeschnittene Wortanfaenge wie
+# "gesetzlich" -> "ersetzlich") statt vorher 300 ms.
+VORLAUF_FRAMES = 25     # 500 ms Ringpuffer vor dem Zugbeginn
 MIN_SPRACHE_FRAMES = 12 # unter 240 ms Sprachanteil: verwerfen (Knacser)
 # W-SIP-KURZJA (30.08.2026): ein gesprochenes "Ja" hat nur ~100-200 ms
 # Stimmanteil — der 240-ms-Deckel verwarf echte Antworten ("zug verworfen
@@ -110,6 +139,18 @@ KURZ_PEAK = 1200        # ... wenn der Spitzenpegel klar Sprache ist
 # Echo-Referenz nach dem Sprechende ab: volle Sperre ECHO_VOLL_S, dann
 # linear auf 0 bis zum Ende des Nachlauf-Fensters (800 ms wie bisher).
 ECHO_VOLL_S = 0.3       # so lange gilt die volle Echo-Referenz
+# W-STT-SCHWANZ (30.08.2026): Hysterese fuers Zugende. Am Satzende senkt
+# sich die Stimme um 10-20 dB — leise Schluss-Ziffern lagen unter der
+# Ein-Schwelle, still_seit lief mitten im Wort los und der Zug endete,
+# waehrend der Anrufer noch aussprach ("letzte Ziffern verschluckt",
+# Kollegen-Befund 30.08.). Vorbild phone_agent (VAD_ON 600 / VAD_OFF 320):
+# Sprache bleibt "an", solange der Pegel ueber der niedrigeren
+# Aus-Schwelle liegt. Der leise Auslauf haelt das Zugende hoechstens
+# HALTE_MAX_S ueber den letzten klar lauten Rahmen hinaus offen —
+# Dauerrauschen zwischen den Schwellen kann die Aufnahme nie endlos
+# aufhalten (Deckel MAX_ZUG_S bleibt daneben bestehen).
+HALTE_FAKTOR = 0.45     # Aus-Schwelle = 45 % der Ein-Schwelle
+HALTE_MAX_S = 1.0       # leiser Auslauf verlaengert hoechstens so lange
 STILLE_MS_DEFAULT = 500 # wie das Dock; Bianca sagt je Frage ihre Schwelle an
 MAX_ZUG_S = 20.0        # Deckel je Aeusserung
 STUPS_NACH_S = 4.0      # Funkstille bis /api/stille (wie Dock)
@@ -219,6 +260,8 @@ class Wiedergabe:
                         continue
                     break  # Posten laedt noch — auf Daten warten
             if rahmen:
+                if BRIDGE_GAIN != 1.0:
+                    rahmen = audioop.mul(rahmen, 2, BRIDGE_GAIN)
                 self._sende_rms.append(audioop.rms(rahmen, 2))
                 await self._schreib(rahmen)
                 self.zuletzt_ton = time.monotonic()
@@ -263,6 +306,7 @@ class Anruf:
         self._peak_run = 0         # Spitzenpegel des laufenden Sprach-Laufs
         self._rec_peak = 0         # Spitzenpegel der laufenden Aufnahme
         self._letzte_sprache = time.monotonic()
+        self._letzte_laut = time.monotonic()  # letzter Rahmen UEBER der Ein-Schwelle
         self._rest = bytearray()
         self._floor = FLOOR_START  # Rauschteppich der Leitung (adaptiv)
         self._audio_format = ""    # "", "slin" oder "alaw" (Erst-Erkennung)
@@ -395,11 +439,12 @@ class Anruf:
 
     def _vad_rahmen(self, rahmen: bytes) -> None:
         rms = audioop.rms(rahmen, 2)
-        # Leitungsecho-Sperre: kam in den letzten ~600 ms eigener Ton raus,
-        # gilt Eingang nur als Sprache, wenn er DEUTLICH lauter ist als das
-        # Gesendete — sonst ist es Biancas eigene Stimme auf dem Rueckweg.
+        # Leitungsecho-Sperre (nur mit BRIDGE_ECHO=1, s. W-SIP-ECHO-RAUS):
+        # kam juengst eigener Ton raus, gilt Eingang nur als Sprache, wenn
+        # er DEUTLICH lauter ist als das Gesendete. echo_ref laeuft fuer
+        # die Pegel-Diagnose immer mit.
         echo_ref = self.wiedergabe.echo_pegel()
-        echo = echo_ref >= SPRECH_RMS and rms < echo_ref * ECHO_FAKTOR
+        echo = BRIDGE_ECHO and echo_ref >= SPRECH_RMS and rms < echo_ref * ECHO_FAKTOR
         if not echo:
             # Rauschteppich: schnell runter auf leise Rahmen, langsam
             # (~+50 %/s) hoch — Dauerrauschen waechst in die Schwelle hinein,
@@ -428,10 +473,17 @@ class Anruf:
         if laut:
             self._sprech_run += 1
             self._peak_run = max(self._peak_run, rms)
+            self._letzte_laut = jetzt
             self._letzte_sprache = jetzt
         else:
             self._sprech_run = 0
             self._peak_run = 0
+            # W-STT-SCHWANZ: leiser Sprach-Auslauf (Hysterese) haelt das
+            # Zugende offen — aber nur waehrend einer laufenden Aufnahme
+            # und hoechstens HALTE_MAX_S nach dem letzten lauten Rahmen.
+            if (self._rec_an and not echo and rms >= schwelle * HALTE_FAKTOR
+                    and jetzt - self._letzte_laut <= HALTE_MAX_S):
+                self._letzte_sprache = jetzt
 
         if not self._rec_an:
             self._ring.append(rahmen)

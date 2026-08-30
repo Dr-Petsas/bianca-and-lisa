@@ -93,6 +93,10 @@ curl http://127.0.0.1:8096/health     # Bianca
 - `tenants/` ist read-only in den Container gemountet: neue Praxis = JSON-Datei
   dazulegen, kein Rebuild.
 - Sitzungsdaten liegen im Volume `telefonki-data` (`/app/.data`).
+- **Test-Studio** (W-STUDIO-5090): `http://<server>:8096/studio` — die Services
+  `studio` (8097) und `bianca-test` (8098) starten mit, bleiben aber im
+  Compose-Netz (kein Host-Port). Berichte/Autolösch-Schlange im Volume
+  `telefonki-berichte`, Anrufer-Audio-Cache in `telefonki-klang`.
 - vLLM/TTS erreichen die App-Container ueber `host.docker.internal`
   (host-gateway, in `compose.yml` verdrahtet).
 

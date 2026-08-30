@@ -2210,13 +2210,14 @@ def test_feste_saetze_waermen_die_arztwahl():
 
 def test_stille_ms_nach_fragetyp():
     """Ja/Nein-/Wahlfragen erwarten kurze Antworten (350 ms Ruhe reichen),
-    Ziffern-/Buchstabier-Diktate brauchen Denkpausen (650 ms), sonst 500."""
+    Ziffern-/Buchstabier-Diktate brauchen Diktat-Geduld (W-STT-SCHWANZ:
+    1500 ms — Gruppen-Pausen nie als Zugende), sonst 500."""
     assert gehirn.stille_ms({"frage": "schonmal"}) == 350
     assert gehirn.stille_ms({"frage": "arzt"}) == 350
     assert gehirn.stille_ms({"frage": "telefon_check"}) == 350
     assert gehirn.stille_ms({"frage": "pzr"}) == 350
-    assert gehirn.stille_ms({"frage": "telefon"}) == 650
-    assert gehirn.stille_ms({"frage": "buchstabieren"}) == 650
+    assert gehirn.stille_ms({"frage": "telefon"}) == 1500
+    assert gehirn.stille_ms({"frage": "buchstabieren"}) == 1500
     assert gehirn.stille_ms({"frage": "grund"}) == 500
     assert gehirn.stille_ms({"frage": "name"}) == 500
     assert gehirn.stille_ms({"frage": ""}) == 500

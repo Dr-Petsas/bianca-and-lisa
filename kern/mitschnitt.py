@@ -16,12 +16,15 @@ Grundsätze:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import struct
+import subprocess
 import threading
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -333,6 +336,68 @@ def audio_pfad(stimme: str, sid: str, datei: str) -> Path | None:
         return None
     p = _wurzel() / (stimme or "").strip().lower() / sid / datei
     return p if p.is_file() else None
+
+
+# Download-Zusammenschnitt: ein WAV je Anruf, PCM16 mono 24 kHz (Biancas
+# Render-Rate — Anrufer-Audio wird darauf gezogen), kurze Pause je Segment.
+_MISCH_RATE = 24000
+_MISCH_PAUSE_MS = 250
+
+
+def _pcm_datei(pfad: Path) -> bytes | None:
+    """Eine Mitschnitt-Datei -> rohes PCM16 mono 24 kHz. Eigene WAVs gehen
+    direkt, Fremdformate (webm/m4a/mp3/ogg) dekodiert ffmpeg (im App-Image
+    vorhanden, gleiches Muster wie kern/stt._pcm16k)."""
+    try:
+        blob = pfad.read_bytes()
+    except OSError:
+        return None
+    if blob[:4] == b"RIFF":
+        try:
+            with wave.open(io.BytesIO(blob)) as w:
+                if (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, _MISCH_RATE):
+                    return w.readframes(w.getnframes())
+        except Exception:
+            pass
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+             "-f", "s16le", "-ac", "1", "-ar", str(_MISCH_RATE), "pipe:1"],
+            input=blob, capture_output=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 and proc.stdout else None
+
+
+def anruf_wav(stimme: str, sid: str) -> bytes | None:
+    """Der komplette Anruf als EIN WAV in Gesprächsreihenfolge (je Zug erst
+    Anrufer, dann Stimme — wie 'Anruf abspielen' im Dock). Für den
+    Download-Knopf der Anrufe-Seite; None, wenn kein Audio vorliegt."""
+    m = laden(stimme, sid)
+    if not m:
+        return None
+    basis = _wurzel() / (stimme or "").strip().lower() / (sid or "").strip()
+    pause = b"\x00\x00" * (_MISCH_RATE * _MISCH_PAUSE_MS // 1000)
+    teile: list[bytes] = []
+    for z in m.get("zuege") or []:
+        for ein in list(z.get("audioIn") or []) + list(z.get("audioOut") or []):
+            datei = str(ein.get("datei") or "")
+            if not _DATEI_RE.fullmatch(datei):
+                continue
+            pcm = _pcm_datei(basis / datei)
+            if pcm:
+                teile.append(pcm)
+    if not teile:
+        return None
+    pcm = pause.join(teile)
+    kopf = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + len(pcm), b"WAVE",
+        b"fmt ", 16, 1, 1, _MISCH_RATE, _MISCH_RATE * 2, 2, 16,
+        b"data", len(pcm),
+    )
+    return kopf + pcm
 
 
 def loeschen(stimme: str, sid: str) -> bool:

@@ -14,11 +14,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY kern/ kern/
+# Nachkorrektur-Kopie fuer den Whisper-Pfad (W-STT-WHISPER): dieselbe
+# Fuzzy-Hotword-Schicht, die der Parakeet-Container serverseitig nutzt.
+COPY stt_serve/postcorrect.py stt_serve/postcorrect.py
 COPY lisa/ lisa/
 COPY bianca/ bianca/
 COPY sip_bridge/ sip_bridge/
 COPY web/ web/
 COPY bianca_web/ bianca_web/
+# Test-Studio (Baukasten): Biancas /studio-Seiten + Editor-Container.
+# .dockerignore laesst nur Code und editor_web durch, keine Render-Caches.
+COPY tests/ tests/
 # Basis-Mandanten liegen im Image; der Tenant-Mount in compose.yml legt sich
 # darueber und macht neue Praxen ohne Rebuild moeglich.
 COPY tenants/ tenants/

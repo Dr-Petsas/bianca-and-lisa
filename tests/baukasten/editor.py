@@ -14,6 +14,7 @@ Bianca laufen unveraendert in Echtzeit-Taktung.
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from datetime import date, datetime, timedelta
@@ -31,7 +32,9 @@ from tests.baukasten import aufraeumen, geschichten, klang, runner, saetze  # no
 
 WEB_DIR = Path(__file__).resolve().parent / "editor_web"
 BERICHTE_DIR = runner.BERICHTE_DIR
-BIANCA_BASIS = "http://127.0.0.1:8098"
+# Im Compose-Netz auf der 5090 heisst die Test-Bianca "bianca-test" —
+# lokal bleibt es die 8098 auf demselben Rechner.
+BIANCA_BASIS = os.environ.get("STUDIO_BIANCA_BASE", "").strip().rstrip("/") or "http://127.0.0.1:8098"
 
 app = FastAPI(title="Baukasten-Teststudio")
 

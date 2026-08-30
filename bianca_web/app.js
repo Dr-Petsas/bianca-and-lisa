@@ -905,9 +905,10 @@ const KOENNEN = [
 const TECHNIK = [
   { t: "Ohr — STT-Pipeline (hören)", p: [
     "<b>Engine:</b> primeline-parakeet — deutsches Parakeet-TDT-Finetune (2,95 % Wort-Fehlerrate) als ONNX, CPU-only im eigenen Container (5090:8212). Gemessen: 0,34–0,44 s je Zug.",
+    "<b>Whisper-GPU-Vorstufe (W-STT-WHISPER):</b> ist STT_WHISPER_BASE gesetzt, hört zuerst Whisper large-v3 auf der Dev-GPU (Stream-Container über Tailscale); fällt der Dev-Rechner aus, übernimmt Parakeet automatisch (30-s-Pause statt Connect-Timeout je Zug) — nie ElevenLabs.",
     "<b>Stille-Trim (W-STT-TRIM):</b> Vor-/Nachlauf-Stille wird vor der Inferenz energie-basiert abgeschnitten — „Ja“/„Nein“ gehen nicht mehr unter, reine Stille wird verworfen statt halluziniert.",
     "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Behandler-Namen als Hotwords („Betsas“ → „Petsas“).",
-    "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle 350/500/650 ms je Fragetyp.",
+    "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle je Fragetyp: 350 ms nach Ja/Nein-Fragen, 1500 ms Diktat-Geduld bei Nummern (W-STT-SCHWANZ), sonst 500 ms.",
     "<b>Echo-Wache:</b> das Lautsprecher-Echo der eigenen Stimme wird erkannt und verworfen — kurze echte Antworten („ja“, „nein“, „stopp“) nie.",
   ]},
   { t: "Hirn — LLM-Pipeline (verstehen & entscheiden)", p: [
@@ -971,7 +972,13 @@ const PATCHES = [
   ["W-SIP (AudioSocket-Brücke)", "29.08.", "Telefon", "Echte Anrufe: Zaluma → Asterisk → AudioSocket über SSH-Rücktunnel → sip_bridge (pickadoc1) → Bianca-API; Barge-in, Stille-Stups und Auflegen wie im Dock."],
   ["W-SIP-RAUSCH (Leitungs-VAD)", "29.08.", "Telefon", "Adaptiver Rauschteppich statt starrer RMS-Schwelle: Telefon-Grundrauschen löst keinen falschen Barge mehr aus; Dauer-Stille-Rahmen halten den Medienstrom am Leben."],
   ["W-MITSCHNITT (Anrufliste)", "30.08.", "Betrieb", "Jeder Anruf als Ordner unter .data/anrufe (Manifest + Audio je Zug, sofort geschrieben); Browser-Seite /anrufe mit Transkript, Abspiel-Knöpfen und allen Zeiten. Notaus: MITSCHNITT=0."],
+  ["Anruf-Download (ein WAV)", "30.08.", "Betrieb", "Knopf \"Audio herunterladen\" auf /anrufe: der Server fügt alle Züge (Anrufer + Bianca, Gesprächsreihenfolge, 250 ms Pause) zu EINER WAV-Datei — api/anrufe/<sid>/download."],
   ["W-SIP-KURZJA (kurze Antworten)", "30.08.", "Telefon", "Ein kurzes lautes \"Ja\" zählt jetzt als Zug (Kurz-aber-laut-Ausnahme statt 240-ms-Deckel), und die Echo-Sperre klingt nach Biancas Sprechende ab statt 800 ms hart zu blocken."],
+  ["W-STUDIO-5090 (Test-Studio auf dem Server)", "30.08.", "Technik", "Das Baukasten-Studio läuft auch auf pickadoc1 (…:8096/studio): eigener Editor- und Test-Bianca-Container, Testläufe stören nie die Live-Bianca; Testtermine löschen sich nach 2 h selbst."],
+  ["W-SIP-PEGEL (Telefon-Lautheit)", "30.08.", "Telefon", "Biancas Studio-Pegel (−14 dBFS, Peaks am Deckel) klang auf der G.711-Strecke übersteuert — die Brücke dämpft jetzt nur Richtung Asterisk um 6 dB (BRIDGE_GAIN, 1.0 = aus); Docks unverändert."],
+  ["W-SIP-ECHO-RAUS (Echo-Sperre aus)", "30.08.", "Telefon", "Die Halbduplex-Echo-Sperre verschluckte echte Antworten (Sprache leiser als die Echo-Referenz) — jetzt default aus; Echo-Transkripte fängt die Text-Wache im Dienst. Rückweg: BRIDGE_ECHO=1."],
+  ["W-STT-WHISPER (GPU-Ohr mit Rückfall)", "30.08.", "Ohr", "Whisper large-v3 auf der Dev-GPU hört zuerst (WebSocket-Stream über Tailscale, gleiche Fuzzy-Nachkorrektur); ist der Dev-Rechner weg, übernimmt Parakeet automatisch — nie ElevenLabs. Leer = Parakeet wie bisher."],
+  ["W-STT-SCHWANZ (nichts mehr verschluckt)", "30.08.", "Ohr", "Leise Satz-Enden (letzte Ziffern) gingen verloren: Diktat-Geduld 650 → 1500 ms, Hysterese in der Brücken-VAD (leiser Auslauf hält das Zugende offen), Trim-Grenzen im STT-Container über eine zartere Schwelle, Brücken-Vorlauf 300 → 500 ms."],
 ];
 
 let kTab = "faehig";

@@ -113,6 +113,35 @@ def test_echo_referenz_klingt_ab(monkeypatch):
     assert voll_frames >= 1                            # Konstanten-Sanity
 
 
+# --- W-STT-SCHWANZ (30.08.2026): Hysterese fuers Zugende ---------------------
+
+def test_leiser_auslauf_haelt_zugende_offen(anruf):
+    """Am Satzende senkt sich die Stimme unter die Ein-Schwelle (400),
+    bleibt aber ueber der Aus-Schwelle (45 %) — frueher lief still_seit
+    mitten im leisen Nummern-Ende los und schnitt die letzten Ziffern ab.
+    Jetzt haelt der Auslauf das Zugende offen, bis echte Stille kommt."""
+    _fuettern(anruf, [_frame(0)] * 20)                 # Leitung ruhig
+    _fuettern(anruf, [_frame(2000)] * 20)              # laute Sprache
+    _fuettern(anruf, [_frame(300)] * 40)               # 800 ms leiser Auslauf
+    assert anruf.zuege.qsize() == 0                    # Zug laeuft noch
+    _fuettern(anruf, [_frame(0)] * 40)                 # echte Stille => Ende
+    assert anruf.zuege.qsize() == 1
+    pcm = anruf.zuege.get_nowait()
+    # Der leise Auslauf steckt mit in der Aufnahme (Vorlauf + laut + Auslauf).
+    assert len(pcm) >= (20 + 40) * srv.FRAME_B
+
+
+def test_auslauf_deckel_beendet_trotz_zwischenpegel(anruf):
+    """Dauerpegel ZWISCHEN den Schwellen (z. B. Rauschen) darf die Aufnahme
+    nicht endlos offen halten: nach HALTE_MAX_S ab dem letzten lauten
+    Rahmen friert _letzte_sprache ein, stille_ms spaeter endet der Zug."""
+    _fuettern(anruf, [_frame(0)] * 20)
+    _fuettern(anruf, [_frame(2000)] * 20)
+    # 2 s Zwischenpegel: Deckel (1,0 s) + stille_ms (0,5 s) => Ende mittendrin
+    _fuettern(anruf, [_frame(300)] * 100)
+    assert anruf.zuege.qsize() == 1
+
+
 def test_schnelle_antwort_nach_sprechende(anruf):
     """Der Klassiker: Bianca hat gerade zu Ende gesprochen (lauter
     Sende-Schwanz in der Echo-Historie), der Anrufer antwortet ~700 ms

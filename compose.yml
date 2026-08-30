@@ -42,11 +42,59 @@ services:
   bianca:
     <<: *app
     command: python -m uvicorn bianca.server:app --host 0.0.0.0 --port 8096
+    environment:
+      <<: *app-env
+      # /studio-Proxy zeigt auf den Editor-Container (statt 127.0.0.1:8097)
+      STUDIO_BASE: http://studio:8097
+    volumes:
+      - ./tenants:/app/tenants:ro
+      - telefonki-data:/app/.data
+      # Studio-Berichte + Autoloesch-Schlange teilt sich Bianca mit dem
+      # Editor (Play-Buttons unter /studio/berichte, Testtermin-Waechter).
+      - telefonki-berichte:/app/tests/baukasten/berichte
     ports:
       - "8096:8096"
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8096/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Test-Studio (W-STUDIO-5090 30.08.2026): Test-Bianca, gegen die der
+  # Editor seine Story-Anrufe fuehrt — NICHT die Live-Bianca (8096), damit
+  # Testlaeufe nie einen echten Anruf stoeren. Nur im Compose-Netz erreichbar.
+  bianca-test:
+    <<: *app
+    command: python -m uvicorn bianca.server:app --host 0.0.0.0 --port 8098
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8098/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Editor des Test-Studios (8097): fuehrt die Baukasten-Anrufe, rendert
+  # Anrufer-Audio ueber TTS_BASE. Erreichbar NUR ueber Biancas /studio-Proxy.
+  studio:
+    <<: *app
+    command: python -m uvicorn tests.baukasten.editor:app --host 0.0.0.0 --port 8097
+    environment:
+      <<: *app-env
+      STUDIO_BIANCA_BASE: http://bianca-test:8098
+    volumes:
+      - ./tenants:/app/tenants:ro
+      - telefonki-data:/app/.data
+      - telefonki-berichte:/app/tests/baukasten/berichte
+      # Anrufer-Audio-Cache: einmal gerendert, fuer immer wiederverwendbar
+      - telefonki-klang:/app/tests/baukasten/audio
+    depends_on:
+      - bianca-test
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8097/api/laeufe', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -63,6 +111,10 @@ services:
       BIANCA_BASE: http://bianca:8096
       # 1 = Anrufer-Zuege als WAV nach /tmp mitschneiden (Feld-Diagnose)
       BRIDGE_DUMP: ${BRIDGE_DUMP:-0}
+      # Daempfung Richtung Asterisk (W-SIP-PEGEL): 0.5 = -6 dB, 1.0 = aus
+      BRIDGE_GAIN: ${BRIDGE_GAIN:-0.5}
+      # Halbduplex-Echo-Sperre (W-SIP-ECHO-RAUS): 0 = aus (Default), 1 = an
+      BRIDGE_ECHO: ${BRIDGE_ECHO:-0}
     depends_on:
       - bianca
     ports:
@@ -99,3 +151,5 @@ services:
 
 volumes:
   telefonki-data:
+  telefonki-berichte:
+  telefonki-klang:

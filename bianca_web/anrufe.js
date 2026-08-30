@@ -127,6 +127,13 @@ function maleDetail(a) {
     b.textContent = "\u25B6 Anruf abspielen";
     b.onclick = () => spieleKette(alle, b);
     knoepfe.appendChild(b);
+    // Download: Server fügt alle Züge zu EINEM WAV (api/anrufe/<sid>/download).
+    const dl = document.createElement("a");
+    dl.className = "knopf";
+    dl.href = `api/anrufe/${sid}/download`;
+    dl.setAttribute("download", "");
+    dl.textContent = "\u2B07 Audio herunterladen";
+    knoepfe.appendChild(dl);
   }
   const del = document.createElement("button");
   del.className = "knopf rot";

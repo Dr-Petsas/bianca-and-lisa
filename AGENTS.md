@@ -151,6 +151,80 @@ Telefon-Strecke als eigenen Container auf der 5090, Port **8212**
   ist verworfen: 13,9-GB-Image, brauchte GPU (OOM — 5090 war voll belegt)
   bzw. träge CPU-Torch-Inferenz. Parakeet-ONNX: 1,07-GB-Image, CPU reicht.
 
+## Whisper-GPU-Ohr mit Parakeet-Rückfall (W-STT-WHISPER 30.08.2026 — nicht rückbauen)
+
+Chef 30.08.2026: der Whisper-Container auf dem Dev-Rechner (Projekt
+pickadoc-stt, faster-whisper **large-v3** auf der Dev-GPU, `int8_float16`)
+soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
+(gemessen: 1,4 GB frei, Whisper braucht ~4,5 GB). Kein DynDNS, keine
+öffentliche Domain: beide Rechner sind im selben Tailscale-Netz.
+
+- **Weg:** Windows-Portproxy `100.81.214.94:8092 -> 127.0.0.1:8092` +
+  Firewall-Regel "STT Whisper (nur Tailscale)" (eingehend NUR 100.64.0.0/10)
+  auf dem Dev-Rechner; der Container selbst (fremdes Projekt, läuft auf
+  `127.0.0.1:8092`) bleibt unangetastet — nie neu starten.
+- **Adapter** (`kern/stt.py`): der Container spricht WebSocket-Streaming
+  (Bearer-Auth, `begin`/PCM16-16-kHz-Frames/`end` -> `final`), kein
+  Datei-Upload. `_pcm16k()` dekodiert Zug-Audio (webm/m4a) über ffmpeg
+  (im App-Image vorhanden), passendes WAV geht direkt; Keywords biasen
+  als `initial_prompt` den Decoder, danach läuft DIESELBE Fuzzy-
+  Nachkorrektur wie bei Parakeet im Prozess (`stt_serve/postcorrect.py`,
+  wird jetzt ins App-Image kopiert — Dockerfile/.dockerignore).
+- **Umschalten:** `STT_WHISPER_BASE` in der `.env` (z. B.
+  `ws://100.81.214.94:8092`, `STT_WHISPER_KEY` Default pickadoc-stt-dev-key).
+  GESETZT = Whisper hört ZUERST; Fehlschlag (Dev-Rechner aus, Tunnel weg)
+  = automatischer Rückfall auf `STT_BASE` (Parakeet, Chef 30.08.2026)
+  und 30 s Whisper-Pause (`WHISPER_PAUSE_S`), damit nicht jeder Zug den
+  2-s-Connect-Timeout bezahlt. NIE still auf ElevenLabs: ohne STT_BASE
+  fliegt der RuntimeError hörbar. Leer = alles wie vor W-STT-WHISPER.
+- **Gemessen 30.08.:** Whisper über Tailscale 1,4 s je Zug (Testsatz
+  wortgenau inkl. "Petsas" per Hotword-Bias), Rückfall-Zug 2,75 s
+  (einmalig, danach 0,33 s Parakeet-direkt), webm-Pfad grün.
+  Parakeet bleibt die schnellere Engine — Whisper ist der Qualitäts-Test.
+- Health-/Dock-Anzeige: `engine_anzeige()` zeigt "Whisper large-v3
+  (Dev-GPU) + Parakeet-Rueckfall" bzw. "(…, Whisper pausiert)".
+- Tests: `tests/test_stt_whisper.py` (offline: Vorrang, Rückfall+Pause,
+  nie Scribe, WAV-Direktspur, Nachkorrektur); Live-Probe:
+  `tests/stt_whisper_probe.py` (echter Container + echter Rückfall).
+
+## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
+
+Kollegen-Befund 30.08.: beim Transkribieren wurden manchmal die letzten
+Ziffern verschluckt. Vorbild ist die abgesicherte STT-Strecke des
+phone_agent (NUR gelesen, nichts dort angefasst): 500 ms Pre-Roll
+(`VAD_PREROLL_MS`), Diktat-Geduld `SMART_ENDPOINT_DICTATION_HANG_MS=1800`
+und die Lektion aus `providers/stt/streaming.py` (Final-Pass-VAD
+min_silence 2000 ms, weil Diktier-Pausen sonst als Segmentende galten und
+die Sprache DANACH verworfen wurde). Vier Bausteine bei uns:
+
+1. **Diktat-Geduld** (`bianca/gehirn.stille_ms`): telefon/buchstabieren
+ 650 → **1500 ms** — wer vor der letzten Ziffern-Gruppe zögert, dem wird
+ der Zug nicht mehr mitten in der Nummer geschnitten. Kurz-/Default-
+ Schwellen (350/500) unverändert; Brücke und Docks übernehmen den Wert
+ wie gehabt über das `stilleMs`-Feld.
+2. **Hysterese in der Brücken-VAD** (`sip_bridge/server.py`): am Satzende
+ senkt sich die Stimme um 10–20 dB — leise Schluss-Ziffern lagen unter
+ der Ein-Schwelle und `still_seit` lief mitten im Wort los. Jetzt hält
+ ein leiser Auslauf (>= 45 % der Ein-Schwelle, `HALTE_FAKTOR`) das
+ Zugende offen, gedeckelt auf `HALTE_MAX_S` (1 s) nach dem letzten klar
+ lauten Rahmen — Dauerpegel zwischen den Schwellen kann die Aufnahme nie
+ endlos aufhalten.
+3. **Trim-Grenzen im STT-Container** (`stt_serve/server.py`): die strenge
+ 5-%-vom-Peak-Schwelle bestimmte auch die SCHNITT-Grenzen — ein leise
+ ausklingendes Nummern-Ende länger als die 320-ms-Marge wurde
+ weggeschnitten, bevor Parakeet es sah. Schnitt-Grenzen laufen jetzt
+ über die zarte Schwelle (`_TRIM_REL_ZART` 1,5 %, nie unter dem
+ Grundrausch-Boden); die Verwerfen-Gates (Stille/Transient) urteilen
+ weiter streng. Braucht einen Rebuild des stt-Containers auf der 5090.
+4. **Brücken-Vorlauf** 300 → **500 ms** (`VORLAUF_FRAMES` 25) — wie der
+ phone_agent gegen abgeschnittene weiche Anlaute ("gesetzlich" →
+ "ersetzlich").
+
+Der Whisper-Pfad (W-STT-WHISPER) hat die Final-Pass-Lektion bereits im
+Container (min_silence 2000, hotwords statt initial_prompt-Echo). Tests:
+`tests/test_stt_trim.py` (Trim-Grenzen offline), Hysterese-Block in
+`tests/test_sip_vad.py`, 1500er-Werte in `test_stille_ms_nach_fragetyp`.
+
 ## Ziel-Pipeline Lisa/Bianca (Stand 28.08.2026 spät)
 
 **Parakeet (STT, 8212) -> bewährte Guards/Wächter -> Qwen 3.6 (vLLM, 8000)
@@ -359,6 +433,31 @@ Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
  Halbduplex-Wache unverändert (volles 2-s-Fenster, Barge braucht weiter
  280 ms). Zug-Logs tragen jetzt auch `peak=`. Tests:
  `tests/test_sip_vad.py` (offline, Fake-Uhr gegen die VAD-Rahmenlogik).
+- **Echo-Sperre raus (W-SIP-ECHO-RAUS 30.08.2026, Chef: „schmeiss das echo
+ gedöhns raus fürs stt"):** Die Halbduplex-Echo-Sperre aus W-SIP-RAUSCH
+ (Eingang zählt nur als Sprache, wenn er 30 % über dem juengst Gesendeten
+ liegt) hielt beim Kollegen-Test echte Antworten vom STT fern (Sprache
+ rms 8000–9000 bei echoRef 12000–15000 → verschluckt, Barge-in während
+ Biancas Sprechen praktisch unmöglich). Sie ist jetzt DEFAULT AUS
+ (`BRIDGE_ECHO=0`); der Rest von W-SIP-RAUSCH (adaptiver Rauschteppich,
+ Dauer-Stille-Rahmen, Stups-Timer) bleibt unverändert. Absicherung:
+ das Leitungsecho ist seit W-SIP-PEGEL 6 dB leiser, und ein doch
+ durchgerutschtes Echo-Transkript fängt die Text-Echo-Wache im Dienst
+ (`unterbrechung.ist_echo`: verwerfen + weitersprechen). Rückweg:
+ `BRIDGE_ECHO=1` = Alt-Verhalten. `echo_pegel()` läuft für die
+ Pegel-Diagnose (echoRef im Log) weiter mit.
+- **Telefon-Pegel gedämpft (W-SIP-PEGEL 30.08.2026 — nicht rückbauen):**
+ Biancas Renders fahren mit Sprach-RMS −14 dBFS und Peaks am 0,95-Deckel
+ (Chef-Abnahme 28.08. für die Docks) — auf der G.711-Strecke klang das
+ „sehr übersteuert" (Kollege 30.08., gemessen: jeder Zug am Peak-Deckel,
+ 0,2–0,3 % geclippte Samples). Die Brücke dämpft deshalb NUR Richtung
+ Asterisk um 6 dB: `BRIDGE_GAIN` (Default 0.5, 1.0 = Alt-Verhalten),
+ angewendet an der einen Sende-Stelle in `Wiedergabe.lauf()` VOR der
+ Echo-Referenz — Halbduplex-Wache bleibt konsistent, weil das echte
+ Leitungsecho ebenso leiser wird. Docks und die TTS-Pegel-Schicht
+ (`kern/tts.py`) sind unangetastet. Nebenbefund: auch das ANRUFER-Audio
+ kommt von der Zaluma-Strecke heiß an (~1 % Clipping, A-law-Vollausschlag)
+ — das erklärt STT-Verhörer wie „Zermin"; liegt vor unserer Kette.
 - **Probe:** `tests/sip_bridge_probe.py` simuliert Asterisk (UUID + PCM-
   Rahmen, echtes deutsches TTS-Audio als Anrufer) gegen eine laufende
   Brücke; Kettentest vom Asterisk: `channel originate
@@ -474,8 +573,9 @@ Chef: "ich will 300 ms schneller werden." Zwei Bausteine, beide Docks:
   Weiter-Antwort (`kern/dienst._stille_feld`, Hook `stille_fn` im
   Konstruktor). Bianca: `gehirn.stille_ms` — 350 ms nach Ja/Nein-/Wahlfragen
   (schonmal, arzt, slotwahl, bestaetigung, versicherung*, pzr, telefon_alt,
-  telefon_check, rueckblick), 650 ms beim telefon-/buchstabieren-Diktat
-  (NIE mitten in der Nummer schneiden), sonst die bewährten 500 ms.
+  telefon_check, rueckblick), Diktat-Geduld beim telefon-/buchstabieren-
+  Diktat (NIE mitten in der Nummer schneiden; seit W-STT-SCHWANZ 1500 ms
+  statt 650), sonst die bewährten 500 ms.
   Lisa hat keinen Hook => Feld fehlt => ihr Dock bleibt bei 500.
 - **Vorab-STT:** ab 200 ms Ruhe schickt das Dock den Aufnahme-Stand an
   `POST /api/hoeren` (reines Ohr: Session-Hotwords wie der echte Zug,
@@ -801,6 +901,27 @@ Fake-Verbinden ohne Jingle. Seitdem gilt:
 - Tests: Live-Sätze wortgleich in `tests/test_weiterleiten.py`; Live-Probe
   `.data/verbinden_probe.py` (Jingle-URL + Kirri-Zeile + hangup, Preisfrage
   bleibt beim LLM).
+
+## Test-Studio auf der 5090 (W-STUDIO-5090 30.08.2026 — nicht rückbauen)
+
+Chef: „das muss auch auf den server." Das Baukasten-Studio läuft jetzt auch
+auf pickadoc1 — Aufruf: `http://100.82.122.62:8096/studio` (durch die
+Live-Bianca, KEIN eigener öffentlicher Port; die 8015 aus dem alten
+Browser-Tab war nie ein Port dieses Projekts).
+
+- **Image trägt `tests/`** (Dockerfile + .dockerignore: nur Code und
+  `editor_web`, die Render-Caches `audio/`/`berichte/` bleiben draußen).
+- **Zwei neue Compose-Services** (nur im Compose-Netz, keine Host-Ports):
+  `studio` (Editor 8097, `STUDIO_BIANCA_BASE=http://bianca-test:8098`) und
+  `bianca-test` (8098) — Testläufe stören NIE die Live-Bianca (8096).
+  Die Live-Bianca proxied `/studio/api` über `STUDIO_BASE=http://studio:8097`;
+  lokal auf dem Dev-Rechner bleiben beide Defaults 127.0.0.1 (8097/8098).
+- **Volumes:** `telefonki-berichte` (Berichte + Autolösch-Schlange, geteilt
+  von bianca/bianca-test/studio — der Testtermin-Wächter der Live-Bianca
+  sieht die Schlange), `telefonki-klang` (Anrufer-Audio-Cache, Key trägt
+  die TTS-Basis — Server rendert eigene WAVs über den 8213-Container).
+- Abnahme 30.08.: Story s01-julia-invisalign lief auf dem Server komplett
+  durch (gebucht, Motiv/Telefon/Nachname grün, Autolösch-Eintrag 19:05).
 
 ## Schaufenster „Das kann ich" (29.08.2026)
 

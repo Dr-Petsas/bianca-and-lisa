@@ -3,6 +3,7 @@ Clara (8091/8092/8093) und DemoClara (8094) bleiben unberührt."""
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
@@ -277,6 +278,21 @@ def api_anruf_audio(sid: str, datei: str):
     return FileResponse(p, media_type=mime)
 
 
+@app.get("/api/anrufe/{sid}/download")
+def api_anruf_download(sid: str):
+    """Kompletter Anruf als eine WAV-Datei (Download-Knopf der Anrufe-Seite)."""
+    m = mitschnitt.laden(_MITSCHNITT_STIMME, sid)
+    if not m:
+        raise HTTPException(404, "anruf unbekannt")
+    blob = mitschnitt.anruf_wav(_MITSCHNITT_STIMME, sid)
+    if not blob:
+        raise HTTPException(404, "kein Audio in diesem Mitschnitt")
+    stempel = str(m.get("startedAt") or "")[:16].replace(":", "-").replace("T", "_")
+    name = f"bianca-anruf-{stempel or sid[:8]}.wav"
+    return Response(blob, media_type="audio/wav",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.post("/api/anrufe/{sid}/loeschen")
 def api_anruf_loeschen(sid: str):
     return {"ok": mitschnitt.loeschen(_MITSCHNITT_STIMME, sid)}
@@ -367,7 +383,9 @@ if BIANCA_WEB_DIR.is_dir():
 # Lisa auf 8095/studio landen und weiss bleiben). API und Berichte gehen
 # intern an den Editor auf 8097.
 _STUDIO_WEB = Path(__file__).resolve().parent.parent / "tests" / "baukasten" / "editor_web"
-_STUDIO_BASIS = "http://127.0.0.1:8097"
+# Im Compose-Netz auf der 5090 laeuft der Editor als eigener Container
+# (STUDIO_BASE=http://studio:8097) — lokal bleibt es 127.0.0.1.
+_STUDIO_BASIS = os.environ.get("STUDIO_BASE", "").strip().rstrip("/") or "http://127.0.0.1:8097"
 
 
 def _studio_seite(name: str) -> FileResponse:

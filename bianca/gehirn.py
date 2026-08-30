@@ -1242,8 +1242,13 @@ def telefon_alt_frage(s: dict) -> str:
 # 300 ms schneller werden"): Die Maschine WEISS, was sie gefragt hat — nach
 # einer Ja/Nein- oder Wahlfrage kommt eine kurze Antwort (350 ms Ruhe
 # reichen als Zugende), beim Ziffern-/Buchstabier-Diktat sind Denkpausen
-# normal (650 ms, NIE mitten in der Nummer abschneiden). Default bleiben
+# normal (NIE mitten in der Nummer abschneiden). Default bleiben
 # die bewaehrten 500 ms (27.08.2026: "nicht in Denkpausen hineinreden").
+# W-STT-SCHWANZ (30.08.2026): 650 ms Diktat-Geduld war zu knapp — wer vor
+# der letzten Ziffern-Gruppe zoegert, dem wurde der Zug mitten in der
+# Nummer geschnitten ("letzte Ziffern verschluckt"). Der phone_agent
+# wartet im Diktat 1800 ms (SMART_ENDPOINT_DICTATION_HOLD); wir nehmen
+# 1500 ms — traege genug fuer Gruppen-Pausen, ohne das Gespraech zu laehmen.
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
                 "versicherung_check", "pzr", "telefon_alt", "telefon_check",
                 "rueckblick"}
@@ -1256,7 +1261,7 @@ def stille_ms(s: dict) -> int:
     if fid in _STILLE_KURZ:
         return 350
     if fid in _STILLE_DIKTAT:
-        return 650
+        return 1500
     return 500
 
 

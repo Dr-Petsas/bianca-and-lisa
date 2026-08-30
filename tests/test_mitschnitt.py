@@ -154,6 +154,26 @@ def test_liste_laden_loeschen(monkeypatch, tmp_path):
     assert mit.loeschen("bianca", a["id"]) is False
 
 
+def test_anruf_wav_fuegt_alle_zuege_in_reihenfolge(monkeypatch, tmp_path):
+    """Download-Knopf: ein WAV je Anruf — je Zug erst Anrufer, dann Stimme,
+    250 ms Pause zwischen den Segmenten (eigene 24-kHz-WAVs ohne ffmpeg)."""
+    _umleiten(monkeypatch, tmp_path)
+    d = _dienst()
+    sit = _sit()
+    mit.eingang(sit, _wav(100), "audio/wav")
+    mit.zug(sit, d, art="turn", text_in="Hallo", text="Guten Tag!",
+            timings={}, audio_url=d.audio_legen(_wav(200)))
+    mit.zug(sit, d, art="turn", text_in="", text="Noch da?",
+            timings={}, audio_url=d.audio_legen(_wav(150)))
+
+    blob = mit.anruf_wav("bianca", sit["id"])
+    assert blob[:4] == b"RIFF"
+    je_ms = 24000 * 2 // 1000  # Bytes je Millisekunde (PCM16 mono 24 kHz)
+    assert len(blob) == 44 + (100 + 200 + 150 + 2 * 250) * je_ms
+
+    assert mit.anruf_wav("bianca", "ffff9999ffff9999") is None
+
+
 def test_notaus_mitschnitt_null(monkeypatch, tmp_path):
     _umleiten(monkeypatch, tmp_path)
     monkeypatch.setenv("MITSCHNITT", "0")

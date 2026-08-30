@@ -10,8 +10,18 @@
 .cursor/
 __pycache__/
 **/__pycache__/
-tests/
+# Test-Studio faehrt mit ins Image (30.08.2026): nur Baukasten-Code + Web,
+# Render-Caches (audio/berichte) kommen als Volumes dazu.
+tests/*
+!tests/baukasten
+tests/baukasten/audio/
+tests/baukasten/berichte/
+tests/baukasten/__pycache__/
 tts_serve/
+# stt_serve bleibt draussen bis auf die Nachkorrektur (Whisper-Pfad im App-
+# Image); das Parakeet-Modell (stt_serve/modell/) gehoert NIE in den Kontext.
+stt_serve/*
+!stt_serve/postcorrect.py
 tools/
 *.ps1
 *.md

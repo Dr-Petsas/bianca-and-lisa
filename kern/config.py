@@ -68,6 +68,14 @@ TTS_BASE = _s("TTS_BASE").rstrip("/")
 # Transkription geht an den Container, OHNE ElevenLabs-Rueckfall
 # (Chef 28.08.2026: "es geht nichts mehr zu elevenlabs"). Leer = Scribe.
 STT_BASE = _s("STT_BASE").rstrip("/")
+# Whisper-GPU-STT auf dem Dev-Rechner (W-STT-WHISPER 30.08.2026): GESETZT =
+# Transkription laeuft ZUERST ueber den Whisper-Stream-Container (WebSocket,
+# pickadoc-stt, large-v3 auf der Dev-GPU, via Tailscale). Ist er nicht
+# erreichbar, faellt der Zug automatisch auf STT_BASE (Parakeet) zurueck —
+# Chef 30.08.2026. NIE auf ElevenLabs. Leer = Verhalten wie vorher.
+#   vom pickadoc1-App-Container: STT_WHISPER_BASE=ws://100.81.214.94:8092
+STT_WHISPER_BASE = _s("STT_WHISPER_BASE").rstrip("/")
+STT_WHISPER_KEY = _s("STT_WHISPER_KEY", "pickadoc-stt-dev-key")
 # Stimmname im Container (Referenz-WAV in tts_serve/stimmen/). Leer = "lisa";
 # der Bianca-Prozess setzt sich beim Start selbst auf "bianca".
 TTS_VOICE = _s("TTS_VOICE")

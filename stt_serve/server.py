@@ -47,6 +47,14 @@ _TRIM_RAND_VORN = 8         # 160 ms Rand vor der Sprache (Plosive nicht koepfen
 _TRIM_RAND_HINTEN = 16      # 320 ms Rand danach (TDT-Decoder braucht Auslauf)
 _TRIM_REL_SCHWELLE = 0.05   # aktiv = lauter als 5 % vom Peak ...
 _TRIM_ABS_SCHWELLE = 0.003  # ... aber nie unter dem Grundrausch-Boden
+# W-STT-SCHWANZ (30.08.2026): die 5-%-Schwelle bestimmte auch die
+# SCHNITT-Grenzen — ein leise ausklingendes Nummern-Ende (Stimme senkt
+# sich am Satzende um 10-20 dB) unter 5 % vom Peak wurde mitsamt der
+# letzten Ziffer weggeschnitten, bevor Parakeet es je sah. Die Raender
+# nimmt jetzt eine ZARTE Schwelle (1,5 % vom Peak, nie unter dem
+# Grundrausch-Boden); ob ueberhaupt Sprache da ist (Verwerfen-Gates),
+# entscheidet weiter die strenge 5-%-Schwelle.
+_TRIM_REL_ZART = 0.015      # Schnitt-Grenzen: leiser Sprach-Auslauf bleibt drin
 _TRIM_STILLE_PEAK = 0.001   # Peak darunter = reine Stille (z. B. Opus-Leerlauf)
 _TRIM_MIN_SPRACHE = 5       # < 5 laute Fenster (100 ms) = Knackser, keine Sprache
 
@@ -114,8 +122,12 @@ def _stille_trimmen(audio):
         return audio[:0], "verworfen: nur grundrauschen"
     if laut.size < _TRIM_MIN_SPRACHE:
         return audio[:0], f"verworfen: transient {laut.size * _TRIM_FENSTER_MS}ms"
-    a = max(0, int(laut[0]) - _TRIM_RAND_VORN) * fenster
-    b = min(n, int(laut[-1]) + 1 + _TRIM_RAND_HINTEN) * fenster
+    # W-STT-SCHWANZ: Schnitt-Grenzen ueber die zarte Schwelle — leise
+    # An-/Auslaeufe (weiche Anlaute, ausklingende Schluss-Ziffern) bleiben
+    # im Segment. zart <= streng, also nur je MEHR Audio, nie weniger.
+    zart = np.flatnonzero(rms > max(peak * _TRIM_REL_ZART, _TRIM_ABS_SCHWELLE))
+    a = max(0, int(zart[0]) - _TRIM_RAND_VORN) * fenster
+    b = min(n, int(zart[-1]) + 1 + _TRIM_RAND_HINTEN) * fenster
     if a == 0 and b >= n * fenster:
         return audio, None
     vorher_ms = audio.size * 1000 // SAMPLE_RATE
