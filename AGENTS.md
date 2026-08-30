@@ -298,7 +298,13 @@ gefragt und die Suche lief stumm ohne Behandler-Klärung.
 
 ## SIP-Telefonie: AudioSocket-Brücke (W-SIP 29.08.2026 — nicht rückbauen)
 
-Bianca ist unter **+49 211 54244101** echt anrufbar. Kette:
+Bianca ist unter **+49 211 54244101** und **+49 211 54244110** echt
+anrufbar (W-SIP-110 30.08.2026: die 4110 zeigte vorher auf den alten
+lokalen phone_agent via LiveKit-Trunk; ihr Eintrag steht jetzt ebenfalls
+in `extensions_bianca.conf` mit eigener Dialplan-UUID `…4110` — die Datei
+wird VOR `extensions_numbers.conf` eingebunden, der erste Treffer gewinnt,
+die Number-API darf ihren livekit-Eintrag behalten, er greift nur nicht
+mehr; Backup: `extensions_bianca.conf.bak-20260830`). Kette:
 Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
 `Dial(AudioSocket/127.0.0.1:40101/<uuid>)` → **SSH-Rücktunnel** →
 `sip_bridge/` auf pickadoc1 → Bianca (8096) über ihre normale Dock-API.
