@@ -44,6 +44,17 @@ Der Client (`kern/tts.py`) macht daraus `RuntimeError` — in der Testphase gibt
 es KEINEN ElevenLabs-Rueckfall (Chef 27.08.2026): ein kaputter Container ist
 sofort hoerbar (Zug erscheint im Dock ohne Audio).
 
+## POST /clone-speak
+
+ClonR: beliebige Stimmprobe, kein vorregistrierter Name.
+
+```json
+{ "text": "Guten Tag, hier ist Dr. Petsas.", "ref_audio_url": "https://...", "language": "German" }
+```
+
+Optional: `ref_audio_b64` statt URL, `ref_text` (Transkript der Probe).
+Ohne `ref_text` gilt `x_vector_only_mode`. Antwort wie `/speak`: PCM16 LE mono 24 kHz.
+
 ## Stimmen (/stimmen, read-only Volume)
 
 - `<name>.wav` — Referenz fuers Klonen: 10-20 s, mono, sauber, >= 16 kHz.

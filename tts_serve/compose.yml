@@ -86,8 +86,10 @@ services:
       # Bewusst KEIN Streaming (Genuschel 28.08.) und KEIN TurboQuant.
       TTS_HYBRID: "${TTS_HYBRID:-1}"
       # Anrufer-Klone fuer den Baukasten-Test (29.08.2026): gescannt, aber
-      # ohne Start-Warmlauf — bianca/lisa bleiben die einzigen Warm-Stimmen.
-      TTS_STIMMEN_EXTRA: "thomas,markus,stefan,juergen,andreas,sabine,petra,julia"
+      # ohne Start-Warmlauf — Warm-Stimmen stehen in server.py `_STIMMEN`.
+      # quizmaster/mann (30.08.2026): Demo-Sonderstimmen — ElevenLabs ist
+      # zahlungsblockiert, die Demo holt beide jetzt aus dem Container.
+      TTS_STIMMEN_EXTRA: "thomas,markus,stefan,juergen,andreas,sabine,petra,julia,quizmaster,mann"
     deploy:
       resources:
         reservations:
