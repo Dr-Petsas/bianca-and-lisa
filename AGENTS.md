@@ -28,6 +28,17 @@ Düsseldorf" — Lisas "hier ist Lisa von …", auch in Prompt-Regie und
 Einwand-Zeile). Helfer: `kern/tenants.praxis_melde()` / `praxis_von()`;
 ohne Felder gilt wie früher `praxisName` bzw. "der {praxisName}".
 
+**W-MANDANT (30.08.2026):** Gedächtnis-Aufrufe tragen den `X-Client-Id`
+der SITZUNG (`sit["tenant"]["clientId"]`), nie die Prozess-Env (die bleibt
+nur Fallback). Tenant-JSON-Felder: `aussprache` (TTS-Umschrift je Praxis,
+vereinigt über alle Mandanten; eingebaute Liste nur Fallback) und `dids`
+(Rufnummern für das spätere SIP-Routing, Lookup `tenants.von_did()`).
+Warm-Start wärmt ALLE Tenants (Default zuerst, Fehler je Tenant isoliert).
+Ansagen/Prompts nennen keine Behandler fest im Code. Der Testmandant
+`tenants/praxis2.json` (Dr. Vlachos) ist der stehende Beweis und läuft in
+`tests/test_mandanten.py` mit — die Suite prüft ALLE Tenant-Dateien
+(Pflichtfelder, DID-Eindeutigkeit). Nicht löschen.
+
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.
