@@ -116,7 +116,8 @@ def test_slot_verhandlung_deckel_bei_drei():
         lage["frage"] = "slotwahl"
     assert bausteine[:2] == ["slot_schieben", "slot_schieben"]
     assert bausteine[2] == "slot_annahme"
-    assert bausteine[3] == "slot_annahme"  # nie wieder schieben
+    assert bausteine[3] != "slot_schieben"  # Deckel: nie wieder schieben
+    assert bausteine[3] in ("slot_annahme", "terminwahl")
 
 
 def test_abschweifer_verdraengt_die_antwort_genau_einmal():
@@ -262,6 +263,33 @@ def test_frei_texte_ueberschreiben_katalog():
     assert story["eroeffnungText"] in saetze_audio
     assert story["grundText"] in saetze_audio
     assert story["abschweiferText"] in saetze_audio
+    frei = geschichten.frei_saetze(story)
+    assert story["eroeffnungText"] in frei
+    assert story["grundText"] in frei
+    assert story["wunschText"] in frei
+    assert story["versicherungText"] in frei
+    assert story["slotText"] in frei
+    assert story["abschweiferText"] in frei
+
+
+def test_frei_saetze_normiert_und_ohne_katalog_leer():
+    story = geschichten.automatik(2)
+    assert geschichten.frei_saetze(story) == []
+    story["eroeffnungText"] = "  Hallo,   hier ist   ein Freifeld.  "
+    frei = geschichten.frei_saetze(story)
+    assert frei[0] == "Hallo, hier ist ein Freifeld."
+    assert story["eroeffnungText"] == "Hallo, hier ist ein Freifeld."
+
+
+def test_frei_saetze_eigener_name_und_behandler():
+    story = geschichten.automatik(3)
+    story["vorname"] = "Xanthippe"
+    story["nachname"] = "Quendel"
+    story["behandler"] = "Sonderlich"
+    frei = geschichten.frei_saetze(story)
+    assert any("Xanthippe" in t and "Quendel" in t for t in frei)
+    assert any("Quendel" in t for t in frei)
+    assert any("Sonderlich" in t for t in frei)
 
 
 def test_ziel_datum_ist_der_tag_der_kommenden_woche():

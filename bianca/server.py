@@ -365,7 +365,7 @@ async def studio_api(request: Request, pfad: str):
 
     def _holen():
         req = urllib.request.Request(ziel, data=body, headers=kopf, method=request.method)
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=180) as r:
             return r.status, r.read(), r.headers.get("content-type")
 
     try:

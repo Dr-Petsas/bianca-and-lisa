@@ -239,6 +239,26 @@ _SCHONMAL_NEIN_RE = re.compile(
     r"noch\s+kein\s+patient|noch\s+nicht\s+bei\s+(ihnen|euch)",
     re.I,
 )
+# "letzten Besuch in 2023 bei Ihnen" / "Implantate bei Ihnen bekommen" —
+# widerspricht einem vorherigen "erstes Mal" (live 30.08.2026).
+_BESUCH_SPUR_RE = re.compile(
+    r"letzten?\s+besuch|"
+    r"letzte[ns]?\s+mal|"
+    r"(?:besuch|da|bei\s+(?:ihnen|euch)|in\s+der\s+praxis).{0,24}\b20\d{2}\b|"
+    r"\b20\d{2}\b.{0,40}(?:besuch|bei\s+(?:ihnen|euch)|in\s+der\s+praxis)|"
+    r"bei\s+(?:ihnen|euch)\s+(?:bekommen|gesetzt|gemacht|gewesen)|"
+    r"habt?\s+(?:ihr|sie)\s+mir|"
+    r"war\s+ich\s+(?:schon|bereits|letztes?\s+jahr|20\d{2})",
+    re.I,
+)
+_BESUCH_JAHR_RE = re.compile(r"\b(20\d{2})\b")
+_LETZTER_GRUND_HINT = (
+    (re.compile(r"implantat", re.I), "Implantat"),
+    (re.compile(r"weisheit", re.I), "Weisheitszahn"),
+    (re.compile(r"wurzel", re.I), "Wurzelbehandlung"),
+    (re.compile(r"krone|brück|brueck", re.I), "Zahnersatz"),
+    (re.compile(r"füllung|fuellung", re.I), "Füllung"),
+)
 _ARZT_KONTEXT_RE = re.compile(r"arzt|ärztin|aerztin|behandler|doktor|dr\.|bei\s+wem|zu\s+wem", re.I)
 _FUER_WEN_RE = re.compile(
     r"für\s+mein(?:e|en)?\s+(tochter|sohn|mann|frau|mutter|vater|kind|oma|opa)", re.I
@@ -418,6 +438,9 @@ FELDER_START = {
     "letzterGrund": "",
     "rueckblick": "",
     "pzr": "",
+    # Vom Anrufer ERZAEHLTER Vortermin (ohne Kartei-Treffer): "letzter
+    # Besuch 2023" macht aus einem 'erstes Mal' trotzdem Bestand + PZR.
+    "besuchErzaehlt": False,
 }
 
 
@@ -490,7 +513,8 @@ def _wunsch_deuten(text: str) -> dict | None:
         wish["date"] = rel
     gehaltvoll = any([
         wish.get("date"), wish.get("weekday") is not None, wish.get("hour") is not None,
-        wish.get("hourMin") is not None, wish.get("minDaysAhead"),
+        wish.get("hourMin") is not None, wish.get("minutenMin") is not None,
+        wish.get("minDaysAhead"),
     ])
     return wish if gehaltvoll else None
 
@@ -498,12 +522,49 @@ def _wunsch_deuten(text: str) -> dict | None:
 def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
     """Mehrturnig: 'nächste Woche' + später 'vormittags' ergibt EINEN Wunsch."""
     out = dict(alt or {})
+    if neu.get("schub"):
+        for k in ("hourMin", "hourMax", "hour"):
+            out.pop(k, None)
+        out["minDaysAhead"] = 0
+    if neu.get("date"):
+        # Konkretes Datum schlägt Wochentag und 'nächste Woche'.
+        out["weekday"] = None
+        out["minDaysAhead"] = 0
+        out.pop("tage", None)
     for k, v in neu.items():
         if v not in (None, 0, ""):
             out[k] = v
-    for k in ("weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date"):
+    for k in ("weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date",
+              "minutenMin", "minutenMax"):
         out.setdefault(k, None if k not in ("minDaysAhead",) else 0)
     return out
+
+
+def _besuch_aus_satz(s: dict, text: str) -> bool:
+    """Erzaehlter Vortermin: warSchonMal=True, Jahr/Grund merken.
+
+    Live 30.08.2026: 'Nein, erstes Mal' und spaeter 'letzten Besuch in 2023
+    bei Ihnen Implantate bekommen' — ohne diese Spur blieb die Buchung
+    Neupatient und die Zahnreinigung wurde nicht angeboten.
+    """
+    t = _s(text)
+    if not t or not _BESUCH_SPUR_RE.search(t):
+        return False
+    geaendert = s["warSchonMal"] is not True
+    s["warSchonMal"] = True
+    s["besuchErzaehlt"] = True
+    jetzt = datetime.now(TZ).year
+    jahre = [int(y) for y in _BESUCH_JAHR_RE.findall(t) if 1990 <= int(y) < jetzt]
+    if jahre and not _s(s.get("letzterBesuch"))[:10]:
+        s["letzterBesuch"] = f"{max(jahre)}-06-15"
+        geaendert = True
+    if not _s(s.get("letzterGrund")):
+        for cre, name in _LETZTER_GRUND_HINT:
+            if cre.search(t):
+                s["letzterGrund"] = name
+                geaendert = True
+                break
+    return geaendert
 
 
 def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) -> tuple[str, dict | None]:
@@ -513,6 +574,19 @@ def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) ->
 def _name_tokens(text: str) -> list[str]:
     raw = re.sub(r"[^\wäöüßÄÖÜ' -]+", " ", _s(text))
     return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
+
+
+def _nachname_aus_tokens(toks: list[str]) -> str:
+    """Letztes Token; 'Papa' + Folgewort bleibt ein griechischer Nachname.
+
+    Live 30.08.2026: STT zerlegte Papagrigoriou zu 'Papa Gregorio' — der
+    letzte Token allein wurde 'Gregorio' / 'Gregoriu'.
+    """
+    if not toks:
+        return ""
+    if len(toks) >= 2 and toks[-2].lower() == "papa":
+        return "Papa" + toks[-1].lower()
+    return toks[-1].capitalize()
 
 
 _NACHSPRECH_STOP = _NAME_STOP | {
@@ -546,21 +620,39 @@ def _nachgesprochen(text: str) -> str:
 def _buchstabier_anker(s: dict, text: str) -> str:
     """Token im Buchstabier-Zug, das dem gespeicherten Nachnamen stark
     aehnelt ("Quant also Quandt" gegen "Quand" -> "Quandt"). Liefert das
-    aehnlichste Token oder "" — Uebernahme entscheidet der Aufrufer."""
+    aehnlichste Token oder "" — Uebernahme entscheidet der Aufrufer.
+
+    'also NAME' gewinnt, wenn der volle Name das gespeicherte Bruchstück
+    enthält (live 30.08.: 'Papa Gregoriu, also Papagrigoriou').
+    """
     ziel = (s.get("nachname") or "").lower()
     if len(ziel) < 4:
         return ""
     raw = re.sub(r"[^\wäöüßÄÖÜ-]+", " ", _s(text))
-    best, best_r = "", 0.0
-    for tok in raw.split():
+    toks = raw.split()
+    also = ""
+    for i, tok in enumerate(toks):
+        if tok.lower() in {"also", "genau"} and i + 1 < len(toks):
+            nxt = toks[i + 1]
+            if nxt.isalpha() and len(nxt) >= 6:
+                also = nxt
+                break
+    if also:
+        tl = also.lower()
+        kern = ziel[4:] if ziel.startswith("papa") else ziel
+        if (ziel in tl or tl in ziel or kern and kern in tl
+                or SequenceMatcher(None, tl, ziel).ratio() >= 0.55):
+            return also[0].upper() + also[1:]
+    best, best_r, best_len = "", 0.0, 0
+    for tok in toks:
         tl = tok.lower()
         if (len(tok) < 4 or tl in _NACHSPRECH_STOP or tok.isdigit()
                 or tl.startswith("buchstabier")):
             continue
         r = SequenceMatcher(None, tl, ziel).ratio()
-        if r > best_r:
-            best, best_r = tok, r
-    return best.capitalize() if best_r >= 0.75 else ""
+        if r > best_r or (r >= 0.75 and r >= best_r - 0.02 and len(tok) > best_len):
+            best, best_r, best_len = tok, r, len(tok)
+    return (best[0].upper() + best[1:]) if best_r >= 0.75 else ""
 
 
 def _kartei_zuruecksetzen(s: dict) -> None:
@@ -612,7 +704,7 @@ def _name_korrektur(s: dict, text: str) -> bool:
                 if len(toks) >= 2:
                     s["vorname"] = toks[0].capitalize()
                     alt_nach = s["nachname"]
-                    s["nachname"] = toks[-1].capitalize()
+                    s["nachname"] = _nachname_aus_tokens(toks)
                 else:
                     alt_nach = s["nachname"]
                     s["nachname"] = toks[0].capitalize()
@@ -682,21 +774,24 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         s["vorname"] = toks[0].capitalize()
         return True
     if s["frage"] == "nachname" and erzwungen:
-        s["nachname"] = toks[-1].capitalize()
+        s["nachname"] = _nachname_aus_tokens(toks)
         s["buchstabiert"] = False
         return True
     if len(toks) >= 2:
         s["vorname"] = toks[0].capitalize()
-        s["nachname"] = toks[-1].capitalize()
+        s["nachname"] = _nachname_aus_tokens(toks)
         return True
     if erzwungen:
         # Nur EIN Wort auf die Namensfrage: gängige Vornamen (Paul, Anna …)
-        # sind der VORNAME — alles andere führen wir als Nachnamen. Live
-        # 27.08.2026 wurde "Paul?" als Nachname geführt ("Herr Paul").
-        if toks[0].lower() in _VORNAMEN and not s["vorname"]:
-            s["vorname"] = toks[0].capitalize()
+        # und alles, was der Vornamen-Wächter als Vorname kennt (Listen +
+        # -a-Heuristik, live 30.08.2026: "Haila" wurde Nachname → LLM riet
+        # "Herr Haila", obwohl geschlecht("Haila") == "f"), sind der
+        # VORNAME — alles andere führen wir als Nachnamen.
+        wort = toks[0]
+        if not s["vorname"] and (wort.lower() in _VORNAMEN or vornamen.geschlecht(wort)):
+            s["vorname"] = wort.capitalize()
         else:
-            s["nachname"] = toks[0].capitalize()
+            s["nachname"] = wort.capitalize()
         return True
     return False
 
@@ -768,6 +863,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         elif ist_nein(t):
             s["warSchonMal"] = False
             neu.add("warSchonMal")
+
+    # Erzaehlter Vortermin schlaegt ein vorheriges "erstes Mal".
+    if _besuch_aus_satz(s, t):
+        neu.add("warSchonMal")
+        neu.add("besuch")
 
     # Behandler: ein Name zählt immer; "egal"/"weiß nicht" nur im Arzt-Kontext.
     tenant = sit.get("tenant") or {}
@@ -1462,7 +1562,9 @@ def rueckblick_faellig(s: dict) -> bool:
     Nur Bestandsakte mit Historie (Datum + Grund), nur im Sammel-Teil der
     Buchung, nie bei akuten Beschwerden (Schmerzpatienten plaudert man
     nicht voll) und nie, wenn der Besuch erst wenige Tage her ist."""
-    if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("rueckblick"):
+    if s.get("modus") != "buchen" or s.get("rueckblick"):
+        return False
+    if not (s.get("bekannt") or s.get("besuchErzaehlt")):
         return False
     if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
         return False
@@ -1520,7 +1622,9 @@ def pzr_faellig(s: dict) -> bool:
     Termin, EINMAL pro Anruf. Einzige Zeitschranke: war der LETZTE Besuch
     selbst eine Zahnreinigung und liegt er keine 6 Monate zurueck, ist die
     Reinigung frisch — dann nicht noch eine anbieten."""
-    if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("pzr"):
+    if s.get("modus") != "buchen" or s.get("pzr"):
+        return False
+    if not (s.get("bekannt") or s.get("besuchErzaehlt")):
         return False
     if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
         return False

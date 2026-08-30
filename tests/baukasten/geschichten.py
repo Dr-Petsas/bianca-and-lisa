@@ -34,6 +34,74 @@ BEHANDLER = ("Petsas", "Nikolaou", "Patrikis")
 
 MAX_SLOT_ZUEGE = 3  # Verhandlungs-Deckel: spaetestens das dritte Angebot wird genommen
 
+FREI_FELDER = ("eroeffnungText", "grundText", "wunschText",
+               "versicherungText", "slotText", "abschweiferText")
+
+
+def _norm_satz(t: Any) -> str:
+    return " ".join(str(t or "").split())
+
+
+def story_frei_normieren(story: dict) -> dict:
+    """Freifelder auf eine Cache-identische Form bringen (Leerzeichen/Zeilen)."""
+    for feld in FREI_FELDER:
+        s = _norm_satz(story.get(feld))
+        if s:
+            story[feld] = s
+        elif feld in story:
+            story[feld] = ""
+    for k in ("vorname", "nachname", "behandler"):
+        if story.get(k):
+            story[k] = _norm_satz(story[k])
+    return story
+
+
+def _name_ist_frei(story: dict) -> bool:
+    vn = _norm_satz(story.get("vorname"))
+    nn = _norm_satz(story.get("nachname"))
+    if vn and vn not in set(saetze.VORNAMEN.values()):
+        return True
+    if nn and nn not in saetze.NACHNAMEN:
+        return True
+    return False
+
+
+def _arzt_ist_frei(story: dict) -> bool:
+    a = _norm_satz(story.get("behandler"))
+    return bool(a) and a not in BEHANDLER
+
+
+def frei_saetze(story: dict) -> list[str]:
+    """Nur die vom Nutzer getippten Freifelder plus daraus folgende Namenssaetze.
+
+    Die muessen VOR dem Anruf als Audio liegen — sonst haengt der Runner
+    mitten im Zug am frischen TTS-Render.
+    """
+    story_frei_normieren(story)
+    out: list[str] = []
+
+    def add(t: Any) -> None:
+        s = _norm_satz(t)
+        if s and s not in out:
+            out.append(s)
+
+    for feld in FREI_FELDER:
+        add(story.get(feld))
+    extra: list[str] = []
+    if _name_ist_frei(story):
+        extra.extend(("name", "vorname", "nachname", "buchstabieren"))
+    if _arzt_ist_frei(story):
+        extra.append("arzt")
+    for fid in extra:
+        lg = lage_neu()
+        lg["eroeffnet"] = True
+        lg["frage"] = fid
+        try:
+            add(naechster_baustein(story, lg).get("text"))
+        except (KeyError, TypeError):
+            continue
+    return out
+
 
 # ------------------------------------------------------------------ Story-Bau
 
@@ -144,7 +212,7 @@ def _wahl(story: dict, lage: dict, key: str, liste: list[str]) -> str:
 
 def _eroeffnung(story: dict, lage: dict) -> dict[str, Any]:
     lage["eroeffnet"] = True
-    frei = str(story.get("eroeffnungText") or "").strip()
+    frei = _norm_satz(story.get("eroeffnungText"))
     if frei:
         return {"text": frei, "baustein": "eroeffnung_frei"}
     art = story.get("anliegen") or TERMIN
@@ -165,7 +233,7 @@ def _eroeffnung(story: dict, lage: dict) -> dict[str, Any]:
 def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
     """Ist an der gerade offenen Frage ein Abschweifer geplant und noch offen?"""
     fid = lage["frage"]
-    frei = str(story.get("abschweiferText") or "").strip()
+    frei = _norm_satz(story.get("abschweiferText"))
     if frei and fid in ABSCHWEIF_ANKER and "abschweif:frei" not in lage["gemacht"]:
         lage["gemacht"].add("abschweif:frei")
         return {"text": frei, "baustein": "abschweifer_frei"}
@@ -179,7 +247,7 @@ def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
 
 
 def _grund_text(story: dict, lage: dict) -> str:
-    frei = str(story.get("grundText") or "").strip()
+    frei = _norm_satz(story.get("grundText"))
     if frei:
         return frei
     key = story.get("grund") or "kontrolle"
@@ -242,7 +310,7 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if fid == "grund":
         return {"text": _grund_text(story, lage), "baustein": f"grund_{story.get('grund')}"}
     if fid == "wunsch":
-        frei = str(story.get("wunschText") or "").strip()
+        frei = _norm_satz(story.get("wunschText"))
         if frei:
             return {"text": frei, "baustein": "wunsch_frei"}
         nr = lage["zaehler"].get("wunsch_m", 0)
@@ -262,7 +330,7 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if fid == "telefon_alt":
         return {"text": _wahl(story, lage, "telefon_alt", saetze.TELEFON_ALT_NEU), "baustein": "telefon_alt"}
     if fid == "versicherung":
-        frei = str(story.get("versicherungText") or "").strip()
+        frei = _norm_satz(story.get("versicherungText"))
         if frei:
             return {"text": frei, "baustein": "versicherung_frei"}
         nr = lage["zaehler"].get("vers_m", 0)
@@ -296,7 +364,7 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
             return {"text": _wahl(story, lage, "terminwahl", saetze.TERMINWAHL_ERSTER),
                     "baustein": "terminwahl"}
         lage["gemacht"].add("slot_angenommen")
-        frei = str(story.get("slotText") or "").strip()
+        frei = _norm_satz(story.get("slotText"))
         if frei:
             return {"text": frei, "baustein": "slot_frei"}
         return {"text": _wahl(story, lage, "slot_annahme", saetze.SLOT_ANNAHME), "baustein": "slot_annahme"}
@@ -355,9 +423,8 @@ def saetze_fuer_audio(story: dict) -> list[str]:
         if s and s not in out:
             out.append(s)
 
-    for feld in ("eroeffnungText", "grundText", "wunschText",
-                 "versicherungText", "slotText", "abschweiferText"):
-        add(story.get(feld))
+    for t in frei_saetze(story):
+        add(t)
 
     lg = lage_neu()
     add(_eroeffnung(story, lg).get("text"))

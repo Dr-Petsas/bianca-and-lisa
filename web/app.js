@@ -17,7 +17,7 @@ let hoerNr = 0;
 // Stille-Wächter (Chef 27.08.2026): ~4 s Funkstille => Lisa stupst selbst an
 // — mit Stand (Auftrag, offene Frage) statt stumm zu warten. Max. 2 Stupse
 // in Folge; echtes Gehörtes setzt den Zähler zurück.
-const STILLE_MS = 4000;
+const STILLE_MS = 4000; // Anrufer-Zug: so lange ohne Sprache → Stups
 let stilleStupse = 0;
 // W-TEMPO (29.08.2026): Ruhe-Schwelle fürs Zugende — sagt der Server nach
 // einem Zug etwas anderes an (stilleMs), gilt das; sonst der Default.
@@ -45,7 +45,7 @@ function bargeMerken(url, ms) {
 // lokale, beim Boot als BLOB geladene Warte-Ansagen. Sie spielen über ein
 // EIGENES Audio-Objekt (die playUrl-Kette bleibt unberührt) und verstummen,
 // sobald die echte Antwort loslegt. Blobs spielen auch bei hängendem Server.
-const WACHT_MS = 1400;
+const WACHT_MS = 1400; // KI-Zug: so lange ohne Ton → lokale Notfall-Ansage
 const WACHT_MAX = 3;
 let notfall = [];
 let wachtTimer = null;
@@ -534,6 +534,7 @@ function recordUntilSilence(stream) {
       resolve({
         blob: new Blob(chunks, { type: blobTyp() }),
         vorab: vorabWunsch ? vorabLauf : null,
+        heard,
       });
     };
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -611,6 +612,7 @@ async function stilleStups(nr) {
   // läuft das normale "Nichts gehört"-Verhalten.
   if (!callOn || nr !== hoerNr || zugBusy || stilleStupse >= 2) return false;
   stilleStupse += 1;
+  wachtStart(nr);
   try {
     const r = await fetch("/api/stille", {
       method: "POST",
@@ -620,15 +622,16 @@ async function stilleStups(nr) {
     const d = await r.json();
     if (!callOn || nr !== hoerNr) return true;
     if (d && d.stilleMs) stilleSoll = d.stilleMs;
-    if (d.empty || !d.audioUrl) return false;
+    if (d.empty || !d.audioUrl) { wachtStopp(); return false; }
     // Halbsatz-Flush: der Stups beantwortet ein gehaltenes Satz-Fragment —
     // dann gehört der Anrufer-Satz auch in den Verlauf.
     if (d.textIn) bubble("user", d.textIn);
     if (d.text) bubble("lisa", d.text);
     phase("lisa", "Lisa spricht …");
     await playUrl(d.audioUrl);
+    wachtStopp();
     return true;
-  } catch { return false; }
+  } catch { wachtStopp(); return false; }
 }
 
 async function sendeZug({ text, blob, nr }) {
@@ -741,8 +744,9 @@ async function hoeren() {
   phase("du", "Sie sind dran — einfach reden");
   let blob;
   let vorab = null;
+  let auf = { heard: false };
   try {
-    const auf = await recordUntilSilence(micStream);
+    auf = await recordUntilSilence(micStream);
     blob = auf.blob;
     vorab = auf.vorab;
   } catch (e) {
@@ -751,7 +755,8 @@ async function hoeren() {
     return;
   }
   if (!callOn || nr !== hoerNr) return;
-  if (!blob || blob.size < 1200) {
+  const nichtsGesagt = !auf.heard || !blob || blob.size < 1200;
+  if (nichtsGesagt) {
     // W-BARGE-Fehlalarm: Unterbrechung ohne Einwand — weiterreden.
     if (bargeInfo && await bargeWeiter(nr)) {
       if (callOn && nr === hoerNr) hoeren();

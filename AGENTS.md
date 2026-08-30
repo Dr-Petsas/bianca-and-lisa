@@ -254,7 +254,12 @@ geschlechtsspezifisch angesprochen.
   Anrede: `gehirn.anrede()` ("Frau Müller" / gebeugt "Herrn Müller") im
   Readback ("für Frau Müller"); Lisa rät weiterhin NICHT (voller Name bei
   mehrdeutigen Vornamen), nutzt den Wächter nur bei eindeutigen.
-- Neue Akten bekommen das Geschlecht (m/f) über masCreatePatient registriert.
+- Neue Akten: der Wächter **muss** das Geschlecht anhand des Vornamens
+  bestimmen und festlegen (`vornamen.festlegen` in `akte_anlegen` /
+  `_cf_create` / `_ctx_bauen` / createAppointment-Fallback). Nie leer
+  an die Cloud Function — sonst landet Gender.none in der Kartei.
+  Tests: `test_festlegen_*`, `test_akte_anlegen_setzt_geschlecht_*`,
+  `test_ctx_bauen_legt_geschlecht_*`.
 - Tests: `tests/test_versicherung_geschlecht.py` (Teil von lauf_bianca).
 
 ## Rückblick + Zahnreinigung-Mitbuchung (29.08.2026 — nicht rückbauen)
@@ -272,6 +277,33 @@ Besuch war selbst eine PZR und liegt unter 6 Monaten zurück (frisch
 gereinigt). Der Zeitbezug in der Frage ("schon eine Weile her") wird nur
 gesprochen, wenn er stimmt. Zusage landet als "PLUS PZR heute" in der
 Termin-Notiz. Tests: `tests/test_rueckblick_pzr.py`.
+
+**Erzaehlter Vortermin (30.08.2026 — nicht rückbauen):** Sagt der Anrufer
+erst „zum ersten Mal“ und später „letzter Besuch 2023 / Implantate bei
+Ihnen bekommen“, gilt das als Bestand (`besuchErzaehlt`): `warSchonMal`
+wird korrigiert, Jahr/Grund merken, Rückblick + Zahnreinigung im selben
+Termin anbieten — auch ohne Kartei-Treffer. Tests: `test_letzter_besuch_2023_*`.
+
+**Später/früher im Angebot (30.08.2026 — nicht rückbauen):** „Gibt es einen
+späteren Termin?“ sucht deterministisch ±3 Stunden um den angebotenen Slot
+(dicht, ohne 2,5-h-Streuung), statt das LLM dieselben Vormittagsslots
+wiederholen zu lassen. Nichts im Fenster → ehrlich, altes Angebot halten.
+Tests: `test_spaeter_*`, `test_frueher_dreistunden_fenster`.
+
+**Konkretes Datum (30.08.2026 — nicht rückbauen):** „am 15.09“ / „am 3.9.“ /
+„am 15. September“ (Punkt nach dem Monat optional) sucht an genau dem Tag;
+ist der Tag leer, in der Region (±2 Tage) — nicht irgendwelche Vormittage.
+Vergangene Kalendertage ohne Jahr rollen aufs nächste Jahr. „um 9.15 Uhr“
+bleibt Uhrzeit. Nichts in der Region → ehrlich, altes Angebot halten.
+Tests: `test_wunsch_datum_*`, `test_angebot_sucht_konkretes_datum`,
+`test_angebot_datum_region_wenn_tag_leer`.
+
+**Nachname nach „also“ / Papa-Präfix (30.08.2026 — nicht rückbauen):**
+STT „Papa Gregoriu, also Papagrigoriou“ speichert den vollen Namen nach
+„also“, nicht das Bruchstück. „Papa“ + Folgewort bleibt ein Nachname
+(Papagregorio). Eythymios/Aethymius und ungelistete -ios/-ius-Namen sind
+männlich. Tests: `test_buchstabieren_also_*`, `test_papa_plus_*`,
+`test_eythymios_ist_herr`.
 
 ## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
 
@@ -327,10 +359,12 @@ Zaluma/SIP hängt ein Kollege später an denselben Sitzungs-Umschlag.
   Sätze mit Ziffern/Ziffern-Wörtern (Readbacks), kurze Quittungen.
   Nie stumm: bleibt nichts übrig, greift der Original- bzw. Rückfalltext.
   Tests: `tests/test_wiederholung.py`.
-- **Stille-Wächter** (`kern/stille.py`, 27.08.2026 — nicht rückbauen): meldet
-  das Dock ~4 s Funkstille (`STUPS_NACH_S`, gemessen in `web/app.js` und
-  `bianca_web/app.js` nach dem eigenen Sprech-Ende), ergreift die Stimme
-  selbst das Wort: `POST /api/stille` -> `agent.stille_zug` (deterministisch,
+- **Stille-Wächter** (`kern/stille.py`, 27.08.2026 — nicht rückbauen):
+  gilt NUR im Anrufer-Zug (nach Biancas/Lisas Sprech-Ende, bevor jemand
+  redet). ~4 s ohne Sprache (`STUPS_NACH_S`, Docks messen `heard`, nicht
+  die WAV-Dateigröße — 4 s Stille-WebM ist >1200 Byte und landete sonst
+  in der STT). Die 1,5-s-Uhr (W-STILLE) läuft hier NICHT. Dann
+  `POST /api/stille` -> `agent.stille_zug` (deterministisch,
   ohne LLM, ohne Kalender). Gehirn an, nie bei null: auf der Job-Spur kommt
   der STAND (Auftrag, was schon eingesammelt ist, offene Frage — Bianca
   `_stand_ansage` aus dem Sammler, Lisa Auftrag + zuletzt gestellte Frage
@@ -583,7 +617,9 @@ Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
 
 Chef: "es darf NIE zum Schweigen kommen … nie länger als 1,5 Sekunden …
 es darf nie das Gefühl gegeben werden, dass die KI abgestürzt ist."
-Zwei Verteidigungslinien, beide Stimmen:
+Gilt NUR im KI-Zug (Anrufer hat gesprochen, Antwort steht aus). Die
+4-s-Stups-Uhr (Anrufer denkt nach) ist eine andere Phase — kein
+Gegeneinander. Zwei Verteidigungslinien, beide Stimmen:
 
 - **Server-Füller nur bei Kalender/Werkzeug** (29.08. abends, Chef: auf
   „wie heißt du" kam „einen Moment, ich schaue eben nach"): Der 0,9-s-
@@ -702,6 +738,22 @@ Reine Anzeige, kein Einfluss auf den Anruf-Pfad; beim Anruf-Start schließt
 sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
 `PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
 Schaufenster.
+
+## Übergabe-Ordner (30.08.2026 — nicht rückbauen)
+
+Fester Ordner, den Grok bei **„Übergabe“** / **„letzter Teststudio-Auftrag“**
+liest — Gespräch plus Chef-Vorschlag, ohne Copy-Paste:
+
+`F:\Bianca&Lisa TelefonKI\uebergabe\`
+
+- `aktuell.md` — letzter Einzellauf oder Selbst-Anruf (Dialog, Checks, Markierungen, Vorschlag)
+- `vorschlag.md` — **dein** Text (Studio-Popup oder direkt diese Datei)
+- `archiv/` — ältere Läufe
+- `LIESMICH.md` — Kurz-Anleitung
+
+Nach einem manuellen Einzellauf **oder Selbst-Anruf** (nicht 10er-Batch) schreibt 8097 dorthin.
+Im Verlauf: Bianca-Antwort **Stimmt nicht** + Kommentar. Popup am Ende für den Gesamteindruck.
+Clara, MAS-2, Lena-Voice und pickadoc-live-base nicht anfassen.
 
 ## Fernsteuerung
 

@@ -22,7 +22,7 @@ let hoerNr = 0;
 // Stille-Wächter (Chef 27.08.2026): ~4 s Funkstille => Bianca stupst selbst
 // an — mit Stand (Auftrag, was schon da ist, was fehlt) statt stumm zu
 // warten. Max. 2 Stupse in Folge; echtes Gehörtes setzt den Zähler zurück.
-const STILLE_MS = 4000;
+const STILLE_MS = 4000; // Anrufer-Zug: so lange ohne Sprache → Stups
 // W-TEMPO (29.08.2026): Ruhe-Schwelle fürs Zugende — der Server sagt nach
 // jedem Zug, was er erwartet (350 ms nach Ja/Nein-/Wahlfragen, 650 ms beim
 // Ziffern-Diktat, sonst 500). Ohne Ansage bleibt der bewährte Default.
@@ -51,7 +51,7 @@ function bargeMerken(url, ms) {
 // beim Boot als BLOB geladene Warte-Ansagen. Sie spielen über ein EIGENES
 // Audio-Objekt (die playUrl-Kette bleibt unberührt) und verstummen, sobald
 // die echte Antwort loslegt. Blobs spielen auch bei hängendem Server.
-const WACHT_MS = 1400;
+const WACHT_MS = 1400; // KI-Zug: so lange ohne Ton → lokale Notfall-Ansage
 const WACHT_MAX = 3;
 let notfall = [];
 let wachtTimer = null;
@@ -405,6 +405,7 @@ function recordUntilSilence(stream) {
       resolve({
         blob: new Blob(chunks, { type: blobTyp() }),
         vorab: vorabWunsch ? vorabLauf : null,
+        heard,
       });
     };
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -482,6 +483,9 @@ async function stilleStups(nr) {
   // dann läuft das normale "Nichts gehört"-Verhalten.
   if (!callOn || nr !== hoerNr || zugBusy || stilleStupse >= 2) return false;
   stilleStupse += 1;
+  // Ab hier ist die KI am Zug: TTS-Wartezeit deckt der 1,4-s-Watchdog,
+  // nicht noch einmal 4 s Schweigen.
+  wachtStart(nr);
   try {
     const r = await fetch("api/stille", {
       method: "POST",
@@ -491,15 +495,16 @@ async function stilleStups(nr) {
     const d = await r.json();
     if (!callOn || nr !== hoerNr) return true;
     if (d && d.stilleMs) stilleSoll = d.stilleMs;
-    if (d.empty || !d.audioUrl) return false;
+    if (d.empty || !d.audioUrl) { wachtStopp(); return false; }
     // Halbsatz-Flush: der Stups beantwortet ein gehaltenes Satz-Fragment —
     // dann gehört der Anrufer-Satz auch in den Verlauf.
     if (d.textIn) bubble("user", d.textIn);
     if (d.text) bubble("ki", d.text);
     phase("ki", "Bianca spricht …");
     await playUrl(d.audioUrl);
+    wachtStopp();
     return true;
-  } catch { return false; }
+  } catch { wachtStopp(); return false; }
 }
 
 async function sendeZug({ text, blob, nr }) {
@@ -617,8 +622,9 @@ async function hoeren() {
   phase("du", "Sie sind dran — einfach reden");
   let blob;
   let vorab = null;
+  let auf = { heard: false };
   try {
-    const auf = await recordUntilSilence(micStream);
+    auf = await recordUntilSilence(micStream);
     blob = auf.blob;
     vorab = auf.vorab;
   } catch (e) {
@@ -627,7 +633,10 @@ async function hoeren() {
     return;
   }
   if (!callOn || nr !== hoerNr) return;
-  if (!blob || blob.size < 1200) {
+  // 4 s Stille-WebM ist leicht >1200 Byte — ohne `heard` ging der Stups
+  // nie, die Stille landete in der STT (30.08.2026).
+  const nichtsGesagt = !auf.heard || !blob || blob.size < 1200;
+  if (nichtsGesagt) {
     // W-BARGE-Fehlalarm: Unterbrechung ohne Einwand — weiterreden.
     if (bargeInfo && await bargeWeiter(nr)) {
       if (callOn && nr === hoerNr) hoeren();
@@ -879,8 +888,8 @@ const KOENNEN = [
     "<b>Smalltalk &amp; Abschweifen:</b> Nebenthemen bekommen Raum (Talk-Schicht) — danach führt genau EINE Brücke zurück zur offenen Frage.",
     "<b>Unterbrechen erlaubt (Barge-in):</b> sofort „Hm.“/„Okay.“, auf den Einwand eingehen — und dann weitersprechen, wo sie stehen geblieben ist. „Stopp“ gilt sofort.",
     "<b>Halbsätze:</b> klingt ein Satz unfertig, wartet Bianca kurz und fügt die Teile zusammen, statt Halbes zu beantworten.",
-    "<b>Stille-Stups:</b> nach ~4 Sekunden Funkstille meldet sie sich selbst — mit dem Stand und der offenen Frage.",
-    "<b>Nie-Stille-Garantie:</b> nie mehr als ~1,5 Sekunden Schweigen (Füller, Nachschub, lokale Notfall-Ansagen im Dock).",
+    "<b>Stille-Stups:</b> DU bist dran, sagst aber nichts — nach ~4 s meldet sie sich mit Stand und offener Frage (max. 2×).",
+    "<b>Nie-Stille-Garantie:</b> SIE ist dran (denkt/sucht) — nie mehr als ~1,5 s tot: Füller, Nachschub, lokale Notfall-Ansagen. Zwei Uhren, kein Widerspruch.",
     "<b>Wiederholungs-Wächter:</b> nie zweimal wortgleich dieselbe Frage.",
     "<b>Praxiswissen:</b> Öffnungszeiten, Anfahrt, Leistungen und Preise — nur aus dem hinterlegten Wissen, nichts wird erfunden.",
     "<b>Weiterleiten ans Behandlungsteam:</b> „Kann ich Doktor Petsas sprechen?“ / „Ich möchte verbunden werden“ — Ansage, Verbinden-Jingle, durchstellen; versteht auch Hörfehler („Petzers“) und Formen ohne Titel („Herrn Petsas sprechen“). Mitarbeiter-Wünsche (Empfang, Buchhaltung, Chef) bekommen ehrlich die Personalfrei-Auskunft plus Arzt-Angebot.",
@@ -921,7 +930,7 @@ const TECHNIK = [
 const PATCHES = [
   ["Job+Talk-Schichten", "27.08.", "Gespräch", "Deterministische Termin-Maschine + freie Talk-Schicht mit Gravity; zurück führt genau eine Brücke."],
   ["Wiederholungs-Wächter", "27.08.", "Gespräch", "Pflichtfragen nie wortgleich doppelt; Varianten tragen die Kern-Wörter, Readbacks bleiben unangetastet."],
-  ["Stille-Wächter (Stups)", "27.08.", "Gespräch", "~4 s Funkstille → Bianca meldet Stand + offene Frage; max. 2 Stupse in Folge."],
+  ["Stille-Wächter (Stups)", "27.08.", "Gespräch", "Anrufer-Zug: ~4 s ohne Sprache → Stand + offene Frage; max. 2 Stupse. Nicht die 1,5-s-Uhr."],
   ["Lokales TTS (Shootout)", "27.08.", "Mund", "Umschalten per TTS_BASE, bewusst OHNE Cloud-Rückfall — Fehler müssen in der Testphase hörbar sein."],
   ["Füller-Platten-Cache", "28.08.", "Mund", "Statische Sätze als WAV auf Platte; Dienststart ~2 s statt ~60 s."],
   ["Satz-Pinning", "28.08.", "Mund", "Feste Fragen im gepinnten RAM (~0,0 s statt 1–2 s); mehrsätzige Antworten satzweise gefügt — ein WAV, keine Naht."],
@@ -937,7 +946,7 @@ const PATCHES = [
   ["W-HALBSATZ", "29.08.", "Gespräch", "Unfertige Sätze halten und serverseitig fügen; Termin-Auskunft statt Zwangs-Buchung."],
   ["W-BARGE", "29.08.", "Gespräch", "Sofort-Quittung, Einwand beantworten, dann fortsetzen an der Unterbrechungsstelle; „Stopp“ verwirft."],
   ["W-SAMMELN", "29.08.", "Termine", "Absagen/Verschieben: erst Wann → Behandler → Name sammeln, DANN suchen; ehrliche Praxis-Notiz mit Rückruf-Vorgang."],
-  ["W-STILLE", "29.08.", "Gespräch", "Nie länger als ~1,5 s still: Füller-Nachschub + Dock-Watchdog mit lokalen Blob-Ansagen."],
+  ["W-STILLE", "29.08.", "Gespräch", "KI-Zug: nie länger als ~1,5 s tot (Füller + Dock-Watchdog). Anrufer-Stille bleibt die 4-s-Stups-Uhr."],
   ["W-GEDAECHTNIS", "29.08.", "Gedächtnis", "Gesprächs-Reports ins MAS-Brain + Anrufer-Kontext im Hintergrund; offene Anliegen als Vorgang."],
   ["Versicherung + Vornamen-Wächter", "29.08.", "Akte", "privat/gesetzlich in die Kartei (Wechsel sofort); Geschlecht am Vornamen, Anrede gebeugt."],
   ["Behandler-Wahl", "29.08.", "Termine", "Kalender-Klärung zu Gesprächsbeginn; „egal“ = global schnellster Termin."],
@@ -955,6 +964,10 @@ const PATCHES = [
   ["P4 Speculative Decoding", "29.08.", "Hirn", "Geprüft und bewusst NICHT aktiv: kein freier VRAM neben TTS (30,5/32,6 GB belegt)."],
   ["Pausen-Straffung", "29.08.", "Mund", "Gewärmte Renders: Anlauf 120 ms, Satzpausen 350 ms, Ausklang 250 ms — Sprache bleibt Sample-identisch."],
   [".env-BOM-Fix", "29.08.", "Betrieb", "PowerShell-BOM schaltete WRITE_LIVE still aus; Config liest jetzt utf-8-sig."],
+  ["Slot-Fenster ±3 h", "30.08.", "Termine", "„Später“/„früher“ sucht ±3 Stunden um den angebotenen Slot (dicht); nichts Neues → altes Angebot halten."],
+  ["Konkretes Datum", "30.08.", "Termine", "„am 15.09“ / „am 3.9.“ sucht an dem Tag, sonst ±2 Tage in der Region — nicht irgendwelche Vormittage."],
+  ["Also-Name + Papa", "30.08.", "Akte", "„also Papagrigoriou“ schlägt das STT-Bruchstück Gregoriu; Papa+Name bleibt ein Nachname; Eythymios = Herr."],
+  ["Geschlecht Neuaufnahme", "30.08.", "Akte", "Neue Akte: Vornamen-Wächter bestimmt m/f und schreibt es immer mit — nie Gender.none."],
 ];
 
 let kTab = "faehig";

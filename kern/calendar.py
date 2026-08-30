@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from kern.config import CF_BASE, WRITE_LIVE
-from kern import notes, patients
+from kern import notes, patients, vornamen
 from kern.slots import REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
 from kern.sprech import slot_wort
 from kern.tenants import kalender_von, motiv_von
@@ -404,13 +404,7 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
         vm = {"id": ctx["visitMotiveId"]}
     else:
         vm = motiv_von(tenant, _s(ctx.get("visitMotiveName")))
-    gender = _s(ctx.get("gender")).lower()
-    if gender in {"herr", "m", "male"}:
-        gender = "m"
-    elif gender in {"diverse", "d"}:
-        gender = "d"
-    else:
-        gender = "f"
+    gender = vornamen.festlegen(first, ctx.get("gender"))
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),

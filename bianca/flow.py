@@ -16,8 +16,9 @@ from kern import calendar as kal
 from kern import gespraech
 from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_aktualisieren
 from kern.sitzung import merke_tool
-from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
+from kern.slots import WEEKDAYS, _weekday_of, datum_aus_text, pick_slots, spoken_offer, spoken_slot
 from kern.tenants import motiv_von
+from kern import vornamen
 
 Melde = Callable[[str], None] | None
 
@@ -67,6 +68,23 @@ def _minuten_von(wort: str) -> int | None:
         return _M_ZEHNER[m.group(2)] + _H_WORT[m.group(1)]
     return None
 _ABLEHNUNG_RE = re.compile(r"passt nicht|passt mir nicht|keiner davon|nichts davon|geht nicht|geht bei mir nicht|anderer termin|was anderes", re.I)
+# Relatives Schieben im Angebot (live 30.08.2026: "späteren Termin an
+# dem Tag" ging ans LLM, das nur die drei Vormittagsslots kannte).
+_SPAETER_RE = re.compile(
+    r"\bspäter(?!stens)\w*|\bspaeter(?!stens)\w*|nach\s+hinten|weiter\s+hinten|"
+    r"gibt\s+es\s+(noch\s+)?(?:was|einen|welche).{0,28}spät",
+    re.I,
+)
+_FRUEHER_RE = re.compile(
+    r"\bfrüher(?!stens)\w*|\bfrueher(?!stens)\w*|nach\s+vorne|vorziehen|vorverlegen|"
+    r"gibt\s+es\s+(noch\s+)?(?:was|einen|welche).{0,28}fr[uü]h(?!estens)",
+    re.I,
+)
+_AM_TAG_RE = re.compile(
+    r"an\s+dem\s+tag|am\s+(?:selben|gleichen)\s+tag|an\s+diesem\s+tag|"
+    r"am\s+tag\s+selbst",
+    re.I,
+)
 # Dringlichkeit (kanonischer Grund aus gehirn._GRUND_MAP): Notfaelle bekommen
 # die naechstmoeglichen Plaetze DICHT angeboten — Streuung gilt dort nicht.
 _DRINGEND_RE = re.compile(r"akut|notfall|schmerz", re.I)
@@ -151,10 +169,8 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         if len(c) == 1:
             return c[0]["iso"]
 
-    dm = re.search(r"\b(\d{1,2})\.\s?(\d{1,2})\.", t)
-    if dm:
-        jahr = offered[0]["iso"][:4]
-        datum = f"{jahr}-{int(dm.group(2)):02d}-{int(dm.group(1)):02d}"
+    datum = datum_aus_text(t)
+    if datum:
         c = [o for o in offered if o["iso"].startswith(datum)]
         if len(c) == 1:
             return c[0]["iso"]
@@ -184,6 +200,97 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
     if len(offered) == 1 and (gehirn.ist_ja(t) or re.search(r"nehm|passt|gerne|gut\b", t)):
         return offered[0]["iso"]
     return ""
+
+
+def _iso_minuten(iso: str) -> int:
+    return int(iso[11:13]) * 60 + int(iso[14:16])
+
+
+SCHUB_FENSTER_MIN = 180
+
+
+def _slot_schub_wunsch(sit: dict, text: str) -> dict | None:
+    """Früher/später relativ zum laufenden Angebot — kein LLM, keine Fantasie.
+
+    Fenster: ±3 Stunden um den angebotenen Slot (Chef 30.08.2026), minuten-
+    genau — nicht 'ab 10 Uhr bis abends' und nicht über 2,5-h-Streuung.
+    """
+    t = _s(text)
+    spaeter = bool(_SPAETER_RE.search(t))
+    frueher = bool(_FRUEHER_RE.search(t))
+    if not spaeter and not frueher:
+        return None
+    offered = list(sit.get("offered") or [])
+    if not offered:
+        return None
+    wish = dict(gehirn._wunsch_deuten(t) or {})
+    if _AM_TAG_RE.search(t) and not wish.get("date") and not wish.get("weekday"):
+        wish["date"] = offered[0]["iso"][:10]
+    if not wish.get("date") and not wish.get("weekday"):
+        wish["tage"] = list(dict.fromkeys(o["iso"][:10] for o in offered))
+    refs = [o for o in offered if not wish.get("date") or o["iso"][:10] == wish["date"]]
+    refs = refs or offered
+    hat_zeit = wish.get("hourMin") is not None or wish.get("hour") is not None
+    if spaeter and not hat_zeit:
+        ref = max(_iso_minuten(o["iso"]) for o in refs)
+        wish["minutenMin"] = ref + 1
+        wish["minutenMax"] = ref + SCHUB_FENSTER_MIN
+        wish["hourMin"] = wish["hourMax"] = wish["hour"] = None
+        wish["schub"] = True
+    if frueher and not spaeter and not hat_zeit:
+        ref = min(_iso_minuten(o["iso"]) for o in refs)
+        wish["minutenMin"] = max(0, ref - SCHUB_FENSTER_MIN)
+        wish["minutenMax"] = max(0, ref - 1)
+        wish["hourMin"] = wish["hourMax"] = wish["hour"] = None
+        wish["schub"] = True
+    wish.setdefault("weekday", None)
+    wish.setdefault("minDaysAhead", 0)
+    wish.setdefault("date", None)
+    return wish
+
+
+def _slot_verschieben(sit: dict, text: str, melde: Melde = None) -> dict | None:
+    """Angebot neu bauen: früher/später ODER konkretes Datum (am 15.09.)."""
+    wish = _slot_schub_wunsch(sit, text)
+    richtung = ""
+    if wish:
+        richtung = "spaeter" if _SPAETER_RE.search(text) else "frueher"
+    else:
+        gedeutet = gehirn._wunsch_deuten(text)
+        if gedeutet and gedeutet.get("date"):
+            wish = gedeutet
+            richtung = "datum"
+    if not wish:
+        return None
+    s = gehirn.sammler(sit)
+    alt = [o["iso"] for o in sit.get("offered") or []]
+    s["wunsch"] = gehirn._wunsch_mischen(s["wunsch"], wish)
+    sit["angebotZuletzt"] = alt
+    sit["slotAusschluss"] = list(dict.fromkeys(list(sit.get("slotAusschluss") or []) + alt))
+    sit["slotSchub"] = richtung
+    s["phase"] = ""
+    s["slotIso"] = ""
+    sit["offered"] = []
+    sit.pop("angebotKalender", None)
+    ang = _angebot(sit, melde)
+    if ang and _s(ang.get("text")):
+        return ang
+    # Nichts Neues: altes Angebot halten, ehrlich sagen.
+    sit["offered"] = [{"iso": iso, "spoken": spoken_slot(iso)} for iso in alt]
+    s["phase"] = "angebot"
+    s["frage"] = "slotwahl"
+    liste = "; oder ".join(spoken_slot(iso) for iso in alt)
+    if richtung == "datum":
+        return {"text": (
+            f"An dem Tag und in der Nähe habe ich leider nichts frei. "
+            f"Es bleibt bei {liste}. Soll ich an einem anderen Tag schauen, "
+            "oder passt einer davon?"
+        )}
+    wort = "späteres" if richtung == "spaeter" else "früher"
+    return {"text": (
+        f"Leider habe ich dazu nichts {wort} frei. Es bleibt bei {liste}. "
+        "Soll ich an einem anderen Tag schauen, oder passt einer davon?"
+    )}
 
 
 def _kalender_strikt(tenant: dict, name: str) -> dict | None:
@@ -266,10 +373,17 @@ def _ctx_bauen(sit: dict) -> dict:
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
-    # Fuer eine NEUE Akte (book_slot -> akte_anlegen): Geschlecht aus dem
-    # Vornamen-Waechter und der erfragte Versichertenstatus (29.08.2026).
-    if s["geschlecht"]:
-        ctx["gender"] = s["geschlecht"]
+    # Neuaufnahme: Geschlecht IMMER in den Buchungskontext — fehlt es im
+    # Sammler, bestimmt der Wächter es jetzt anhand des Vornamens.
+    if s["vorname"] and s.get("geschlechtQuelle") != "akte":
+        if not s["geschlecht"]:
+            s["geschlecht"] = vornamen.festlegen(s["vorname"])
+            s["geschlechtUnklar"] = not bool(vornamen.geschlecht(s["vorname"]))
+            s["geschlechtQuelle"] = "rate"
+            s["geschlechtVon"] = s["vorname"]
+        ctx["gender"] = vornamen.festlegen(s["vorname"], s["geschlecht"])
+    elif s["geschlecht"]:
+        ctx["gender"] = vornamen.festlegen("", s["geschlecht"])
     if s["versicherung"]:
         ctx["privateInsurance"] = s["versicherung"] == "privat"
     if sit.get("slotVorrat"):
@@ -349,6 +463,10 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     vorrat = list(sit.get("slotVorrat") or [])
     wish = s["wunsch"]
     egal = not a.get("calendarId")
+    aus = {str(x)[:16] for x in (sit.get("slotAusschluss") or [])}
+
+    def _ohne_alt(liste: list) -> list:
+        return [v for v in liste if str(v)[:16] not in aus]
 
     def _laden() -> dict:
         if melde:
@@ -369,8 +487,14 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         return found
 
     nachladen = not vorrat
+    if sit.get("slotSchub"):
+        nachladen = True
     if wish and wish.get("date") and vorrat and not any(str(v).startswith(str(wish["date"])) for v in vorrat):
         nachladen = True
+    if wish and vorrat and not nachladen:
+        probe = pick_slots(_ohne_alt(vorrat), wish=wish, dringend=False)
+        if not probe["wishMatched"] or not probe["slots"]:
+            nachladen = True
     if nachladen:
         found = _laden()
         vorrat = list(sit.get("slotVorrat") or [])
@@ -382,13 +506,14 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             )}
 
     dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
-    picked = pick_slots(vorrat, wish=wish, dringend=dringend)
+    schieben = sit.get("slotSchub") in {"spaeter", "frueher"} or bool(wish and wish.get("schub"))
+    picked = pick_slots(_ohne_alt(vorrat), wish=wish, dringend=dringend, schub=schieben)
     if wish and not picked["wishMatched"] and not nachladen:
         # Der Vorrat passt nicht zum Wunsch (z. B. "nächste Woche"): einmal
         # gezielt ab Wunschdatum nachladen, bevor wir Ausweichzeiten anbieten.
         _laden()
         vorrat = list(sit.get("slotVorrat") or [])
-        picked = pick_slots(vorrat, wish=wish, dringend=dringend)
+        picked = pick_slots(_ohne_alt(vorrat), wish=wish, dringend=dringend, schub=schieben)
 
     # Merken, aus WELCHEM Kalender dieses Angebot kommt: die Buchung bindet
     # sich daran, nicht an spätere Sammler-Umbauten (Vorfall 27.08.2026:
@@ -408,6 +533,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     zuletzt = sit.pop("angebotZuletzt", None)
     sit["offered"] = offered
+    if offered:
+        sit.pop("slotSchub", None)
+    if not offered and sit.get("slotSchub"):
+        # Schieben ohne neuen Treffer: der Aufrufer (_slot_verschieben)
+        # haelt das alte Angebot und sagt das ehrlich — kein Rueckruf.
+        sit.pop("slotSchub", None)
+        return {"text": ""}
     if not offered:
         # KEIN Slot im Angebot: nie in die Slotwahl zwingen — dort haengt
         # sonst jede Folgeaeusserung ohne waehlbare Termine (Batch s09
@@ -721,6 +853,9 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if iso:
             s["slotIso"] = iso
             return _readback(sit)
+        schub = _slot_verschieben(sit, t, melde)
+        if schub:
+            return schub
 
     neu = gehirn.einsammeln(sit, t)
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
@@ -842,7 +977,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if (fid not in {"telefon_check", "telefon_alt"}
             and (neu or not s["frage"])
             and not gehirn.ist_zwischenfrage(t)
-            and not gespraech.traegt_thema(sit, t)):
+            and ("besuch" in neu or not gespraech.traegt_thema(sit, t))):
         ein = _einschub(sit, _quittung(s, neu))
         if ein is not None:
             return ein
@@ -932,6 +1067,11 @@ def status_zeile(sit: dict) -> str:
         f"Telefon={_s(s.get('telefon')) or '?'}",
         f"Phase={_s(s.get('phase')) or 'sammeln'}",
     ]
+    # Anrede aus dem Vornamen-Wächter — das LLM darf Herr/Frau nicht raten
+    # (live 30.08.2026: Haila ist weiblich, das Modell sagte Herr).
+    wen = gehirn.anrede(s, sit.get("patient"))
+    if wen:
+        teile.append(f"Anrede={wen}")
     if s.get("pzr") == "ja":
         teile.append("Zahnreinigung=kommt mit dazu")
     offen = ""

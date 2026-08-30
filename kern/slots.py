@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -100,11 +100,89 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
                 stunde = h
     if stunde is not None:
         wish["hour"] = stunde
-    dm = re.search(r"\b(\d{1,2})\.\s?(\d{1,2})\.(?:\s?(\d{4}))?", t)
-    if dm:
-        year = dm.group(3) or str(datetime.now(TZ).year)
-        wish["date"] = f"{year}-{int(dm.group(2)):02d}-{int(dm.group(1)):02d}"
+    datum = datum_aus_text(raw)
+    if datum:
+        wish["date"] = datum
     return wish
+
+
+_MONAT_NAME = {
+    "januar": 1, "jan": 1, "februar": 2, "feb": 2,
+    "märz": 3, "maerz": 3, "mär": 3, "marz": 3,
+    "april": 4, "apr": 4, "mai": 5, "juni": 6, "jun": 6,
+    "juli": 7, "jul": 7, "august": 8, "aug": 8,
+    "september": 9, "sept": 9, "sep": 9,
+    "oktober": 10, "okt": 10, "november": 11, "nov": 11,
+    "dezember": 12, "dez": 12,
+}
+_MONAT_RE = re.compile(
+    r"\b(\d{1,2})\.?\s+("
+    + "|".join(sorted(_MONAT_NAME, key=len, reverse=True))
+    + r")(?:\s+(\d{4}))?\b",
+    re.I,
+)
+# "am 15.09" / "15.09." / "3.9.2026" — der Punkt nach dem Monat ist optional.
+# "um 9.15" und "9.15 Uhr" bleiben Uhrzeiten, kein Datum.
+_DATUM_ZAHL_RE = re.compile(r"\b(\d{1,2})\.\s*(\d{1,2})(?:\.(\d{4})?)?")
+
+
+def _kalendertag(jahr: int, monat: int, tag: int):
+    try:
+        return datetime(jahr, monat, tag, tzinfo=TZ).date()
+    except ValueError:
+        return None
+
+
+def _jahr_rollen(d):
+    """Vergangene Kalendertage ohne Jahr → nächstes Jahr (am 15.03. im August)."""
+    heute = datetime.now(TZ).date()
+    if d < heute:
+        try:
+            return d.replace(year=d.year + 1)
+        except ValueError:
+            return d
+    return d
+
+
+def datum_aus_text(text: str) -> str:
+    """Deutsches Datum aus dem Satz: 'am 15.09', 'am 3.9.', '15. September'."""
+    raw = _s(text)
+    if not raw:
+        return ""
+    t = f" {raw.lower()} "
+    m = _MONAT_RE.search(t)
+    if m:
+        tag, monat = int(m.group(1)), _MONAT_NAME[m.group(2).lower()]
+        jahr = int(m.group(3)) if m.group(3) else datetime.now(TZ).year
+        d = _kalendertag(jahr, monat, tag)
+        if d:
+            if not m.group(3):
+                d = _jahr_rollen(d)
+            return d.isoformat()
+    for dm in _DATUM_ZAHL_RE.finditer(t):
+        davor = t[max(0, dm.start() - 8):dm.start()]
+        danach = t[dm.end():dm.end() + 8]
+        if re.search(r"uhr", danach):
+            continue
+        if re.search(r"\bum\s+$", davor):
+            continue
+        tag, monat = int(dm.group(1)), int(dm.group(2))
+        if not (1 <= monat <= 12 and 1 <= tag <= 31):
+            continue
+        jahr_roh = dm.group(3)
+        jahr = int(jahr_roh) if jahr_roh else datetime.now(TZ).year
+        d = _kalendertag(jahr, monat, tag)
+        if not d:
+            continue
+        if not jahr_roh:
+            d = _jahr_rollen(d)
+        return d.isoformat()
+    return ""
+
+
+def _region_tage(iso_date: str, radius: int = 2) -> list[str]:
+    d = date.fromisoformat(iso_date)
+    return [(d + timedelta(days=i)).isoformat() for i in range(-radius, radius + 1)]
 
 
 def spoken_slot(iso: str) -> str:
@@ -120,6 +198,8 @@ def _weekday_of(date_str: str) -> int:
 # Nie benachbarte Leer-Slots anbieten (Chef 27.08.2026, live: 12:15/12:45/13:15
 # bzw. 09:30/09:45/10:00): am selben Tag mindestens 2,5 Stunden Abstand.
 MIN_ABSTAND_MS = 150 * 60000
+# Früher/später im ±3-h-Fenster: 30 Minuten reichen, sonst passt nur ein Slot.
+SCHUB_ABSTAND_MS = 30 * 60000
 
 
 def _vertraegt(kand: dict, gewaehlt: list[dict]) -> bool:
@@ -175,8 +255,22 @@ def _streuen(pool: list[dict], parsed: list[dict], wish: dict | None, max_n: int
     return [anker] + rest
 
 
+def _schub_dicht(pool: list[dict], max_n: int) -> list[dict]:
+    """Nächste freie Plätze im Fenster, 30-Minuten-Abstand — kein Tages-Streu."""
+    if not pool:
+        return []
+    out: list[dict] = []
+    for p in pool:
+        if all(p["date"] != g["date"] or abs(p["ms"] - g["ms"]) >= SCHUB_ABSTAND_MS for g in out):
+            out.append(p)
+        if len(out) >= max_n:
+            break
+    return out
+
+
 def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | None = None,
-               exclude_iso: str = "", max_n: int = 3, dringend: bool = False) -> dict[str, Any]:
+               exclude_iso: str = "", max_n: int = 3, dringend: bool = False,
+               schub: bool = False) -> dict[str, Any]:
     now = now_ms if now_ms is not None else int(datetime.now(TZ).timestamp() * 1000)
     parsed = []
     for iso in iso_slots or []:
@@ -197,36 +291,66 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
         })
     parsed.sort(key=lambda p: p["ms"])
 
-    def apply(pool: list) -> list:
-        if not wish:
+    def apply(pool: list, w: dict | None = None) -> list:
+        w = wish if w is None else w
+        if not w:
             return pool
         out = pool
-        if wish.get("date"):
-            out = [p for p in out if p["date"] == wish["date"]]
-        if wish.get("weekday") is not None:
-            out = [p for p in out if _weekday_of(p["date"]) == wish["weekday"]]
-        if wish.get("minDaysAhead"):
+        if w.get("tage"):
+            erlaubt = {str(d) for d in w["tage"] if d}
+            if erlaubt:
+                out = [p for p in out if p["date"] in erlaubt]
+        elif w.get("date"):
+            out = [p for p in out if p["date"] == w["date"]]
+        if w.get("weekday") is not None:
+            out = [p for p in out if _weekday_of(p["date"]) == w["weekday"]]
+        if w.get("minDaysAhead"):
             # "Nächste Woche" meint den TAG in einer Woche ab Mitternacht —
             # nicht "mindestens 168 Stunden ab jetzt". Sonst fehlen am Zieltag
             # alle Zeiten VOR der aktuellen Uhrzeit (live 27.08.2026: Angebot
             # begann um 10:55 statt 09:55, weil der Anruf um 10:41 lief).
-            ziel = datetime.fromtimestamp(now / 1000, TZ) + timedelta(days=wish["minDaysAhead"])
+            ziel = datetime.fromtimestamp(now / 1000, TZ) + timedelta(days=w["minDaysAhead"])
             mitternacht = ziel.replace(hour=0, minute=0, second=0, microsecond=0)
             out = [p for p in out if p["ms"] >= int(mitternacht.timestamp() * 1000)]
-        if wish.get("hour") is not None:
-            out = [p for p in out if abs(p["hour"] - wish["hour"]) <= 1]
-        elif wish.get("hourMin") is not None:
-            out = [p for p in out if wish["hourMin"] <= p["hour"] < wish["hourMax"]]
+        if w.get("hour") is not None:
+            out = [p for p in out if abs(p["hour"] - w["hour"]) <= 1]
+        elif w.get("minutenMin") is not None:
+            lo = int(w["minutenMin"])
+            hi = int(w.get("minutenMax") if w.get("minutenMax") is not None else 24 * 60)
+            out = [p for p in out if lo <= (p["hour"] * 60 + int(p["time"][3:5])) <= hi]
+        elif w.get("hourMin") is not None:
+            out = [p for p in out if w["hourMin"] <= p["hour"] < w["hourMax"]]
         return out
 
     pool = apply(parsed)
     matched = not wish or bool(pool)
+    schieben = bool(schub or (wish and wish.get("schub")))
+    if not pool and wish and wish.get("date") and not schieben and not wish.get("tage"):
+        # Konkretes Datum ohne Treffer: ±2 Tage in der Region, nicht irgendwo.
+        nachbarn = [d for d in _region_tage(str(wish["date"]), 2) if d != wish["date"]]
+        w2 = dict(wish)
+        w2.pop("date", None)
+        w2["tage"] = nachbarn
+        pool = apply(parsed, w2)
+        if pool:
+            ziel = str(wish["date"])
+
+            def _nahe(p: dict) -> tuple:
+                return (abs((date.fromisoformat(p["date"]) - date.fromisoformat(ziel)).days), p["ms"])
+
+            pool = sorted(pool, key=_nahe)
     if not pool:
+        if schieben or (wish and (wish.get("date") or wish.get("tage") or wish.get("minutenMin") is not None)):
+            # Schub/Datum ohne Treffer: NICHT auf die drei Vormittagsslots
+            # zurückfallen (live 30.08.2026: „keine weiteren“ + dieselben 09:45er).
+            return {"slots": [], "wishMatched": False}
         pool = parsed
     if dringend:
-        # Notfall/akute Beschwerden: die NÄCHSTMÖGLICHEN Plätze dicht anbieten —
-        # Dringlichkeit schlägt Streuung (Chef 27.08.2026).
         auswahl = pool[:max_n]
+    elif schieben or (wish and wish.get("date") and not matched):
+        # Region um ein leeres Wunschdatum: nur die Nachbartage, kein
+        # Streu-Fallback auf Vormittage in drei Wochen.
+        auswahl = _schub_dicht(pool, max_n)
     else:
         auswahl = _streuen(pool, parsed, wish, max_n)
     slots = [{"iso": p["iso"], "date": p["date"], "time": p["time"]} for p in auswahl]

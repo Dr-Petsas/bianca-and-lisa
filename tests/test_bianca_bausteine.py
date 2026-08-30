@@ -1586,6 +1586,223 @@ def _iso_in(tage: int, h: int, m: int = 0) -> str:
     return d.isoformat(timespec="seconds")
 
 
+def test_spaeter_am_tag_nimmt_fenster_aus_vorrat():
+    """'Später an dem Tag' sucht ±3 Stunden, nicht den ganzen Nachmittag."""
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        frueh = _iso_in(10, 9, 45)
+        im_fenster = _iso_in(10, 11, 30)
+        nachmittag = _iso_in(10, 15, 30)
+        anderer = _iso_in(11, 9, 15)
+        flow.kal.find_slots = lambda *a, **k: {
+            "ok": True, "slots": [frueh, im_fenster, nachmittag, anderer]}
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Eva", "nachname": "Berger", "buchstabiert": True,
+                  "grund": "Implantatkronen", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = [frueh, im_fenster, nachmittag, anderer]
+        sit["offered"] = [
+            {"iso": frueh, "spoken": "in zehn Tagen um neun Uhr fünfundvierzig"},
+            {"iso": anderer, "spoken": "in elf Tagen um neun Uhr fünfzehn"},
+        ]
+        z = flow.zug(sit, "Gibt es einen späteren Termin an dem Tag?")
+        assert z and z.get("text"), z
+        isos = [o["iso"] for o in sit.get("offered") or []]
+        assert im_fenster in isos, (z["text"], isos)
+        assert frueh not in isos
+        assert nachmittag not in isos
+        assert "keine weiteren" not in z["text"].lower()
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
+
+
+def test_spaeter_dreistunden_ohne_nachmittag():
+    """9 Uhr + 'später' → 10–12 Uhr, nicht 14 Uhr und nicht andere Tage."""
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        neun = _iso_in(14, 9, 0)
+        zehn = _iso_in(14, 10, 0)
+        elf = _iso_in(14, 11, 0)
+        zwoelf = _iso_in(14, 12, 0)
+        vierzehn = _iso_in(14, 14, 0)
+        anderer = _iso_in(15, 10, 0)
+        vorrat = [neun, zehn, elf, zwoelf, vierzehn, anderer]
+        flow.kal.find_slots = lambda *a, **k: {"ok": True, "slots": vorrat}
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Eva", "nachname": "Berger", "buchstabiert": True,
+                  "grund": "Kontrolle", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = list(vorrat)
+        sit["offered"] = [{"iso": neun, "spoken": "in vierzehn Tagen um neun Uhr"}]
+        z = flow.zug(sit, "Gibt es einen späteren Termin?")
+        assert z and z.get("text"), z
+        isos = [o["iso"] for o in sit.get("offered") or []]
+        assert zehn in isos and vierzehn not in isos, (z["text"], isos)
+        assert neun not in isos
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
+
+
+def test_frueher_dreistunden_fenster():
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        sieben = _iso_in(14, 7, 0)
+        acht = _iso_in(14, 8, 0)
+        neun = _iso_in(14, 9, 0)
+        zehn = _iso_in(14, 10, 0)
+        vorrat = [sieben, acht, neun, zehn]
+        flow.kal.find_slots = lambda *a, **k: {"ok": True, "slots": vorrat}
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Eva", "nachname": "Berger", "buchstabiert": True,
+                  "grund": "Kontrolle", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = list(vorrat)
+        sit["offered"] = [{"iso": neun, "spoken": "in vierzehn Tagen um neun Uhr"}]
+        z = flow.zug(sit, "Geht es auch früher?")
+        assert z and z.get("text"), z
+        isos = [o["iso"] for o in sit.get("offered") or []]
+        assert sieben in isos or acht in isos, (z["text"], isos)
+        assert neun not in isos and zehn not in isos
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
+
+
+def test_wunsch_datum_am_tag_ohne_punkt():
+    """'am 15.09' ohne Punkt nach dem Monat muss als Datum ankommen."""
+    from datetime import date
+    from kern.slots import datum_aus_text, parse_slot_wish
+    heute = date.today()
+    sept15 = date(heute.year, 9, 15)
+    if sept15 < heute:
+        sept15 = sept15.replace(year=heute.year + 1)
+    sept3 = date(heute.year, 9, 3)
+    if sept3 < heute:
+        sept3 = sept3.replace(year=heute.year + 1)
+    maerz = date(heute.year, 3, 15)
+    if maerz < heute:
+        maerz = maerz.replace(year=heute.year + 1)
+    w = parse_slot_wish("Geht am 15.09?")
+    assert w and w.get("date") == sept15.isoformat(), w
+    assert datum_aus_text("am 3.9") == sept3.isoformat()
+    assert datum_aus_text("am 15. September") == sept15.isoformat()
+    assert datum_aus_text("am 15.03") == maerz.isoformat()
+    w2 = parse_slot_wish("um 9.15 Uhr")
+    assert not (w2 and w2.get("date"))
+
+
+def test_angebot_sucht_konkretes_datum():
+    """Angebot liegt, Anrufer sagt 'am 15.09' → dort suchen, nicht LLM."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        jetzt = datetime.now(ZoneInfo("Europe/Berlin"))
+        ziel = (jetzt.replace(hour=10, minute=0, second=0, microsecond=0)
+                + timedelta(days=20))
+        angebot = _iso_in(8, 9, 0)
+        dort = ziel.isoformat(timespec="seconds")
+        vorrat = [angebot, dort]
+        flow.kal.find_slots = lambda *a, **k: {"ok": True, "slots": vorrat}
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Eva", "nachname": "Berger", "buchstabiert": True,
+                  "grund": "Kontrolle", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = list(vorrat)
+        sit["offered"] = [{"iso": angebot, "spoken": "in acht Tagen um neun Uhr"}]
+        z = flow.zug(sit, f"Geht am {ziel.day}.{ziel.month:02d}?")
+        assert z and z.get("text"), z
+        isos = [o["iso"] for o in sit.get("offered") or []]
+        assert dort in isos, (z["text"], isos)
+        assert angebot not in isos
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
+
+
+def test_angebot_datum_region_wenn_tag_leer():
+    """Genannter Tag leer → ±2 Tage, nicht irgendwelche Vormittage."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        jetzt = datetime.now(ZoneInfo("Europe/Berlin"))
+        ziel = jetzt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=20)
+        nachbar = (ziel + timedelta(days=1)).replace(hour=11, minute=0)
+        weit = _iso_in(40, 9, 0)
+        angebot = _iso_in(8, 9, 0)
+        nachbar_iso = nachbar.isoformat(timespec="seconds")
+        vorrat = [angebot, nachbar_iso, weit]
+        flow.kal.find_slots = lambda *a, **k: {"ok": True, "slots": vorrat}
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Eva", "nachname": "Berger", "buchstabiert": True,
+                  "grund": "Kontrolle", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = list(vorrat)
+        sit["offered"] = [{"iso": angebot, "spoken": "in acht Tagen um neun Uhr"}]
+        z = flow.zug(sit, f"Geht am {ziel.day}.{ziel.month:02d}?")
+        assert z and z.get("text"), z
+        isos = [o["iso"] for o in sit.get("offered") or []]
+        assert nachbar_iso in isos, (z["text"], isos)
+        assert weit not in isos
+        assert "nichts frei" in z["text"].lower()
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
+
+
+def test_spaeter_ohne_neuen_slot_bleibt_ehrlich_beim_angebot():
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        nur = _iso_in(12, 9, 15)
+        flow.kal.find_slots = lambda *a, **k: {"ok": True, "slots": [nur]}
+        s.update({"modus": "buchen", "warSchonMal": True,
+                  "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
+                  "vorname": "Eva", "nachname": "Berger", "buchstabiert": True,
+                  "grund": "Kontrolle", "wunsch": {},
+                  "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
+        sit["slotVorrat"] = [nur]
+        sit["offered"] = [{"iso": nur, "spoken": "in zwölf Tagen um neun Uhr fünfzehn"}]
+        z = flow.zug(sit, "Gibt es einen späteren Termin an dem Tag?")
+        assert z and "nichts späteres" in z["text"], z
+        assert s["phase"] == "angebot"
+        assert sit["offered"][0]["iso"] == nur
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
+
+
 def test_wiederhol_wache_sagt_gleiches_angebot_ehrlich_an():
     """Führt ein neuer Wunsch zum SELBEN Angebot, sagt Bianca das ehrlich
     ('es bleibt bei …') statt die Liste wortgleich zu wiederholen."""
@@ -1770,6 +1987,39 @@ def test_explizite_vor_und_nachnamen_ansage():
     gehirn.einsammeln(sit, "Nee, der Vorname ist Paul und der Nachname ist Panzer")
     assert s["vorname"] == "Paul"
     assert s["nachname"] == "Panzer"
+
+
+def test_buchstabieren_also_voller_name_schlaegt_bruchstueck():
+    """Live 30.08.: STT 'Papa Gregoriu, also Papagrigoriou' → Gregoriu."""
+    d = buchstaben.deute("Papa Gregoriu, also Papagrigoriou.")
+    assert d and d["name"] == "Papagrigoriou" and d["sicher"]
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "buchstabieren", "nachname": "Gregorio"})
+    gehirn.einsammeln(sit, "Papa Gregoriu, also Papagrigoriou.")
+    assert s["nachname"] == "Papagrigoriou" and s["buchstabiert"]
+
+
+def test_papa_plus_nachname_bleibt_ein_wort():
+    """STT zerlegt Papagrigoriou zu 'Papa Gregorio' — nicht nur Gregorio."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit, "Ich heiße Aethymius Papa Gregorio.")
+    assert s["vorname"] == "Aethymius"
+    assert s["nachname"] == "Papagregorio"
+
+
+def test_eythymios_ist_herr():
+    from kern import vornamen
+    assert vornamen.geschlecht("Eythymios") == "m"
+    assert vornamen.geschlecht("Aethymius") == "m"
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit, "Eythymios Papagrigoriou")
+    assert s["vorname"] == "Eythymios" and s["nachname"] == "Papagrigoriou"
+    assert gehirn.anrede(s) == "Herr Papagrigoriou"
 
 
 def test_buchstabieren_frisst_keine_nachbarworte():

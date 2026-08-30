@@ -103,6 +103,23 @@ def _als_buchstabe(tok: str) -> str:
     return _LAUT.get(tok, "")
 
 
+def _name_nach_also(toks: list[str]) -> str:
+    """Wort nach 'also'/'genau', das die Schreibweise bestätigt."""
+    skip = _FUELL | {"der", "die", "das", "den", "dem"}
+    for i, tok in enumerate(toks):
+        if tok not in {"also", "genau"}:
+            continue
+        j = i + 1
+        while j < len(toks) and toks[j] in skip:
+            j += 1
+        if j >= len(toks):
+            continue
+        w = toks[j]
+        if w.isalpha() and len(w) >= 6 and w not in _TAFEL:
+            return w
+    return ""
+
+
 _TAFEL_KEYS = sorted(_TAFEL)
 
 
@@ -241,6 +258,12 @@ def deute(text: str) -> dict[str, Any] | None:
         i += 1
 
     zusammen = "".join(letters)
+    # "Papa Gregoriu, also Papagrigoriou" (live 30.08.2026): STT hat die
+    # Buchstabenkette als Woerter gehoert — das Wort NACH "also"/"genau"
+    # ist die gemeinte Schreibweise, nicht das Bruchstueck davor.
+    also_name = _name_nach_also(toks)
+    if also_name and len(letters) < 2:
+        return {"name": also_name[0].upper() + also_name[1:], "sicher": True}
     # Tafel-Rettung: hat STT die "X wie Y"-Paare verstuemmelt ("Kavi Kaufmann,
     # Iwi Emil …", Batch s14/s17 29.08.2026), tragen die TAFEL-WOERTER selbst
     # mehr Signal als die zerhackten Buchstaben — ihre Anlaute sind der Name.
@@ -257,6 +280,9 @@ def deute(text: str) -> dict[str, Any] | None:
     # Buchstaben (mind. 3, sonst Zufallstreffer), ist das Wort der Name — egal
     # wie STT den Rest der Buchstabierung verstümmelt hat ("Feldkamp, also
     # F-E-LD-Kamp", live 29.08.2026: deute lieferte None, die Frage loopte).
+    if also_name and len(also_name) >= max(6, len(zusammen)) and (
+            also_name.startswith(zusammen) or zusammen in also_name):
+        return {"name": also_name[0].upper() + also_name[1:], "sicher": True}
     if len(zusammen) >= 3:
         for w in woerter:
             if len(w) > len(zusammen) and w.startswith(zusammen):

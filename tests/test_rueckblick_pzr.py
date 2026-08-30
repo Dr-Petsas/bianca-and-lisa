@@ -226,7 +226,61 @@ def test_pzr_ernte_ja_nein_und_spontan():
     assert s4["pzr"] == ""
 
 
+def test_letzter_besuch_2023_schlaegt_erstes_mal():
+    """Live 30.08.: 'erstes Mal', danach Implantate 2023 bei Ihnen — Bestand."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "schonmal"})
+    gehirn.einsammeln(sit, "Nein, das wäre das erste Mal.")
+    assert s["warSchonMal"] is False
+    gehirn.einsammeln(sit, (
+        "Ich habe Implantate bei meinem letzten Besuch in 2023 bei Ihnen "
+        "bekommen und möchte nun die Implantatkronen anfertigen lassen."
+    ))
+    assert s["warSchonMal"] is True
+    assert s["besuchErzaehlt"] is True
+    assert s["letzterBesuch"].startswith("2023")
+    assert s["letzterGrund"] == "Implantat"
+    assert gehirn.rueckblick_faellig(s)
+    assert gehirn.pzr_faellig(s)
+
+
+def test_rueckblick_ohne_kartei_wenn_besuch_erzaehlt():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "warSchonMal": True, "bekannt": False,
+        "besuchErzaehlt": True, "grund": "Implantatkronen",
+        "letzterBesuch": "2023-06-15", "letzterGrund": "Implantat",
+    })
+    assert gehirn.rueckblick_faellig(s)
+    assert gehirn.pzr_faellig(s)
+
+
 # --- Gespraechsfluss (flow.zug) ----------------------------------------------
+
+def test_zug_erstes_mal_dann_besuch_2023_greift_vortermin():
+    """Live-Reihenfolge: erstes Mal, Petsas, dann Implantate 2023 → Rückblick."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen"})
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        r1 = flow.zug(sit, "Nein, das wäre das erste Mal.")
+        assert s["warSchonMal"] is False
+        r2 = flow.zug(sit, "Das müsste Doktor Petsas gewesen sein.")
+        assert s.get("arzt")
+        r3 = flow.zug(sit, (
+            "Ich habe Implantate bei meinem letzten Besuch in 2023 bei Ihnen "
+            "bekommen und möchte nun die Implantatkronen anfertigen lassen."
+        ))
+        assert s["warSchonMal"] is True and s["besuchErzaehlt"]
+        assert r3 and ("letzter Besuch" in r3["text"] or "Zahnreinigung" in r3["text"]), r3
+        assert s["frage"] in {"rueckblick", "pzr"}
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
 
 def test_zug_rueckblick_dann_pzr_dann_zwischenfrage():
     sit = _sit()

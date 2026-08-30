@@ -162,6 +162,7 @@ button.gross {
 }
 
 button.gross.primaer { background: var(--akzent); color: #08121f; border-color: var(--akzent); }
+button.gross.selbst { background: #2a3d52; border-color: #4a6a88; }
 button.gross.batch { background: var(--gelb); color: #221a02; border-color: var(--gelb); }
 button.gross.tel.an { background: #3d2a12; border-color: var(--gelb); color: var(--gelb); }
 button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -183,6 +184,7 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
 .bubble.bianca { background: #253243; align-self: flex-start; border-bottom-left-radius: 4px; }
 .bubble.anrufer { background: #2c4a33; align-self: flex-end; border-bottom-right-radius: 4px; }
 .bubble.warte { background: transparent; border: 1px dashed #354152; color: var(--dim); align-self: flex-start; }
+.bubble.bianca.markiert { outline: 2px solid var(--gelb); }
 
 .bubble .meta {
   display: flex;
@@ -303,6 +305,62 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 #ton-hinweis { padding: 0 14px; }
 
+.auftrag-karte h3.auftrag-h {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--dim);
+  margin: 16px 0 8px;
+}
+.auftrag-liste {
+  margin: 10px 0 14px;
+  padding: 0;
+  list-style: none;
+}
+.auftrag-liste li {
+  background: var(--panel2);
+  border: 1px solid #2a3442;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.auftrag-liste li strong { display: block; margin-bottom: 4px; }
+.auftrag-liste li.rot { border-color: #5a2a30; }
+.auftrag-liste li.ok { border-color: #2a4a38; }
+.auftrag-dialogtext {
+  white-space: pre-wrap;
+  font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: #151b24;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0 0 8px;
+}
+.auftrag-aktionen { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+.auftrag-dialog #auftrag-hinweis { width: 100%; min-height: 88px; }
+
+.marke-box { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.marke-box textarea { width: 100%; min-height: 56px; font-size: 13px; }
+button.marke-knopf {
+  align-self: flex-start;
+  background: none;
+  border: 1px solid #4a3d16;
+  color: var(--gelb);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 32px;
+}
+.bubble.markiert button.marke-knopf { background: #3d2a12; }
+
+.selbst-leiste {
+  border-top: 1px solid #2a3442;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: #151b24;
+}
+.selbst-leiste textarea { width: 100%; margin: 8px 0; }
+
 /* ---- Ab Tablet: zwei Spalten, Popup als Karte -------------------------- */
 
 @media (min-width: 720px) {
@@ -376,6 +434,7 @@ button.gross:disabled { opacity: 0.45; cursor: not-allowed; }
     touch-action: manipulation;
   }
   .leiste .klein { grid-column: 1 / -1; }
+  .leiste button.selbst { grid-column: 1 / -1; }
 
   .anruf-kopf {
     display: grid;

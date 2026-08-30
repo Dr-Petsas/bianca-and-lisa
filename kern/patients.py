@@ -9,6 +9,7 @@ import httpx
 
 from kern.config import CF_BASE, DEV_PHONE, MAS_URL, WRITE_LIVE
 from kern.slots import spoken_slot
+from kern import vornamen
 
 PARTICLES = {
     "el", "al", "ale", "ben", "bin", "ibn", "abu", "van", "von", "der", "den",
@@ -294,8 +295,9 @@ def _cf_create(tenant: dict, first: str, last: str, phone: str, *, birth: str = 
     }
     if birth:
         body["birthDate"] = birth
-    if gender:
-        body["gender"] = gender
+    # Neuaufnahme: Geschlecht IMMER mitschicken — sonst speichert die
+    # Cloud Function Gender.none (Chef 30.08.2026: Wächter muss festlegen).
+    body["gender"] = vornamen.festlegen(first, gender)
     if private_insurance is not None:
         body["privateInsurance"] = bool(private_insurance)
     try:
@@ -412,6 +414,7 @@ def akte_anlegen(
             "ok": False,
             "spoken": "Ohne eine echte Handynummer lege ich niemanden an.",
         }
+    gender = vornamen.festlegen(first, gender)
     karte = {
         "id": "",
         "firstName": first,
@@ -420,7 +423,7 @@ def akte_anlegen(
         "birthDate": _s(birth),
         "phone": e164,
         "phoneDisplay": format_de_phone(e164),
-        "gender": _s(gender),
+        "gender": gender,
         "privateInsurance": private_insurance,
     }
     if not WRITE_LIVE:

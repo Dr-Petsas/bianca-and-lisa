@@ -101,6 +101,7 @@ class Anruf:
 
     def _anrufer_audio(self, text: str) -> tuple[Path, str, float]:
         """Anrufer-WAV aus dem Klang-Cache holen und im Bericht ablegen."""
+        text = " ".join((text or "").split())
         pfad = klang.audio_holen(self.story["stimme"], text)
         if self.story.get("telefonQualitaet"):
             pfad = klang.telefon_datei(pfad)
@@ -220,7 +221,7 @@ class Anruf:
                     zug = geschichten.naechster_baustein(self.story, self.lage)
                 if zug.get("auflegen") and not (zug.get("text") or "").strip():
                     break
-                text = str(zug.get("text") or "").strip()
+                text = " ".join(str(zug.get("text") or "").split())
                 if not text:
                     break
                 wav, rel, dauer_a = self._anrufer_audio(text)

@@ -22,12 +22,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from fastapi import FastAPI  # noqa: E402
+import httpx  # noqa: E402
+from fastapi import FastAPI, File, UploadFile  # noqa: E402
 from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from tests.baukasten import aufraeumen, geschichten, klang, runner, saetze  # noqa: E402
+from tests.baukasten import aufraeumen, auftrag, geschichten, klang, runner, saetze, selbst  # noqa: E402
 
 WEB_DIR = Path(__file__).resolve().parent / "editor_web"
 BERICHTE_DIR = runner.BERICHTE_DIR
@@ -47,6 +48,9 @@ _zustand: dict[str, Any] = {
     "fertig": [],        # Kurz-Ergebnisse der abgeschlossenen Stories
     "fehler": "",
     "warm": None,        # {story, i, n, text} waehrend TTS-Vorwaermen
+    "auftrag": None,     # Einzellauf: Punkte fuer Grok (None beim 10er-Batch)
+    "modus": "",         # "lauf" | "selbst"
+    "marken": [],        # [{idx, wer, text, kommentar}] waehrend des Gespraechs
 }
 
 
@@ -61,25 +65,53 @@ def _wochentage_naechste_woche() -> list[dict[str, str]]:
     return out
 
 
-def _audio_vorwaermen(story: dict) -> None:
-    """Eigene und Katalog-Saetze VOR dem Anruf rendern (und ggf. downsamplen)."""
-    texte = geschichten.saetze_fuer_audio(story)
+def _eins_rendern(story: dict, text: str, *, i: int, n: int, art: str) -> None:
     stimme = str(story.get("stimme") or "markus")
-    n = len(texte)
-    for i, t in enumerate(texte):
-        with _lock:
-            _zustand["warm"] = {
-                "story": story.get("id") or "",
-                "i": i + 1, "n": n, "text": t,
-            }
+    with _lock:
+        _zustand["warm"] = {
+            "story": story.get("id") or "",
+            "i": i, "n": n, "text": text, "art": art,
+        }
+    pfad = klang.audio_holen(stimme, text)
+    if story.get("telefonQualitaet"):
+        pfad = klang.telefon_datei(pfad)
+    if not pfad.is_file() or pfad.stat().st_size <= 44:
+        raise RuntimeError(f"kein Audio fuer {text!r}")
+
+
+def _audio_vorwaermen(story: dict) -> None:
+    """Freifelder ZUERST und zwingend, danach Katalog. Ohne Freifeld-WAV kein Anruf."""
+    geschichten.story_frei_normieren(story)
+    frei = geschichten.frei_saetze(story)
+    rest = [t for t in geschichten.saetze_fuer_audio(story) if t not in set(frei)]
+    fehl = []
+    for i, t in enumerate(frei):
         try:
-            pfad = klang.audio_holen(stimme, t)
-            if story.get("telefonQualitaet"):
-                klang.telefon_datei(pfad)
+            _eins_rendern(story, t, i=i + 1, n=len(frei) or 1, art="freifeld")
         except Exception as e:
-            print(f"baukasten-warm: {type(e).__name__}: {e}", flush=True)
+            fehl.append(f"{t!r}: {type(e).__name__}: {e}")
+            print(f"baukasten-warm FREIFELD: {type(e).__name__}: {e}", flush=True)
+    if fehl:
+        raise RuntimeError("Freifeld-Audio vor dem Start fehlgeschlagen — "
+                           + " | ".join(fehl))
+    for i, t in enumerate(rest):
+        try:
+            _eins_rendern(story, t, i=i + 1, n=len(rest) or 1, art="katalog")
+        except Exception as e:
+            print(f"baukasten-warm katalog: {type(e).__name__}: {e}", flush=True)
     with _lock:
         _zustand["warm"] = None
+
+
+def _auftrag_ablegen(bericht: dict, lauf_id: str) -> None:
+    try:
+        with _lock:
+            marken = list(_zustand.get("marken") or [])
+        paket = auftrag.schreiben(bericht, lauf_id, marken=marken)
+        with _lock:
+            _zustand["auftrag"] = paket
+    except Exception as e:
+        print(f"baukasten-auftrag: {type(e).__name__}: {e}", flush=True)
 
 
 def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
@@ -89,22 +121,40 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
     with _lock:
         _zustand.update({"laeuft": True, "laufId": lauf_id, "storyIdx": 0,
                          "storiesGesamt": len(stories), "fertig": [], "fehler": "",
-                         "warm": None})
+                         "warm": None, "auftrag": None, "modus": "lauf",
+                         "marken": []})
     try:
         import json as _json
         import time as _time
         berichte = []
+        letzter_bericht: dict[str, Any] | None = None
         for i, story in enumerate(stories):
             with _lock:
                 _zustand["storyIdx"] = i + 1
                 _zustand["aktiv"] = None
-            _audio_vorwaermen(story)
+            try:
+                _audio_vorwaermen(story)
+                with _lock:
+                    _zustand["fehler"] = ""
+            except Exception as e:
+                kurz = {"id": story.get("id"), "ok": False, "checks": [],
+                        "latenzMaxS": 0, "fehler": str(e), "pfad": ""}
+                berichte.append(kurz)
+                letzter_bericht = auftrag.ersatz(story, str(e))
+                with _lock:
+                    _zustand["fertig"] = list(berichte)
+                    _zustand["fehler"] = str(e)
+                    _zustand["warm"] = None
+                if len(stories) == 1:
+                    _auftrag_ablegen(letzter_bericht, lauf_id)
+                continue
             anruf = runner.Anruf(story, basis=BIANCA_BASIS, lauf_dir=lauf_dir,
                                  echtzeit=True, mithoeren=False)
             with _lock:
                 _zustand["aktiv"] = anruf
                 _zustand["warm"] = None
             b = anruf.fuehren()
+            letzter_bericht = b
             erg = b.get("ergebnis") or {}
             kurz = {"id": b.get("id"), "ok": bool(erg.get("ok")),
                     "checks": erg.get("checks"), "latenzMaxS": erg.get("latenzMaxS"),
@@ -118,6 +168,8 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
                              "gestartet": datetime.now().isoformat(timespec="seconds"),
                              "stories": berichte}, ensure_ascii=False, indent=1),
                 encoding="utf-8")
+            if len(stories) == 1:
+                _auftrag_ablegen(b, lauf_id)
             _time.sleep(2.0)
     except Exception as e:  # Lauf-Thread darf nie still sterben
         with _lock:
@@ -127,6 +179,8 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
             _zustand["laeuft"] = False
             _zustand["aktiv"] = None
             _zustand["warm"] = None
+            if _zustand.get("modus") == "lauf":
+                _zustand["modus"] = ""
 
 
 # ------------------------------------------------------------------------- API
@@ -173,6 +227,8 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
     else:
         stories = [geschichten.automatik(nr, tag=w.tag)
                    for nr in range(w.ab, w.ab + max(1, w.anzahl))]
+    for s in stories:
+        geschichten.story_frei_normieren(s)
     if w.telefonQualitaet:
         for s in stories:
             s["telefonQualitaet"] = True
@@ -195,6 +251,9 @@ def live() -> dict[str, Any]:
             "story": "",
             "zuege": [],
             "warm": _zustand.get("warm"),
+            "auftrag": _zustand.get("auftrag"),
+            "modus": _zustand.get("modus") or "",
+            "marken": list(_zustand.get("marken") or []),
         }
         if anruf is not None:
             out["story"] = str(anruf.story.get("id") or "")
@@ -264,6 +323,162 @@ def bericht(lauf_id: str, story_id: str) -> dict[str, Any]:
         return _json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"id": story_id, "zuege": [], "fehler": "Bericht nicht gefunden"}
+
+
+@app.get("/api/auftrag")
+def auftrag_lesen() -> dict[str, Any]:
+    with _lock:
+        paket = _zustand.get("auftrag")
+    if paket:
+        return paket
+    return auftrag.lesen() or {"ok": False, "tickets": [], "markdown": ""}
+
+
+class AuftragHinweis(BaseModel):
+    hinweis: str = ""
+    marken: list[dict[str, Any]] | None = None
+
+
+class AuftragMarke(BaseModel):
+    idx: int
+    text: str = ""
+    wer: str = "Bianca"
+    kommentar: str = ""
+
+
+class SelbstZug(BaseModel):
+    text: str = ""
+
+
+def _marken_upsert(ein: dict[str, Any]) -> list[dict[str, Any]]:
+    with _lock:
+        marken = [m for m in (_zustand.get("marken") or [])
+                  if int(m.get("idx") or -1) != int(ein.get("idx") or -1)]
+        if str(ein.get("kommentar") or "").strip():
+            marken.append(ein)
+        marken = auftrag._norm_marken(marken)
+        _zustand["marken"] = marken
+        return list(marken)
+
+
+@app.post("/api/auftrag")
+def auftrag_hinweis(w: AuftragHinweis) -> JSONResponse:
+    if w.marken is not None:
+        with _lock:
+            _zustand["marken"] = auftrag._norm_marken(w.marken)
+        paket = auftrag.marken_setzen(w.marken)
+        if paket and w.hinweis.strip():
+            paket = auftrag.hinweis_setzen(w.hinweis)
+    else:
+        paket = auftrag.hinweis_setzen(w.hinweis)
+    if not paket:
+        return JSONResponse({"ok": False, "fehler": "kein Einzellauf-Auftrag da"},
+                            status_code=404)
+    with _lock:
+        _zustand["auftrag"] = paket
+    return JSONResponse(paket)
+
+
+@app.post("/api/auftrag/marke")
+def auftrag_marke(w: AuftragMarke) -> JSONResponse:
+    marken = _marken_upsert({
+        "idx": w.idx, "text": w.text, "wer": w.wer, "kommentar": w.kommentar,
+    })
+    paket = auftrag.marken_setzen(marken)
+    if paket:
+        with _lock:
+            _zustand["auftrag"] = paket
+    return JSONResponse({"ok": True, "marken": marken, "auftrag": paket})
+
+
+@app.post("/api/selbst/start")
+def selbst_start() -> JSONResponse:
+    with _lock:
+        if _zustand["laeuft"]:
+            return JSONResponse({"ok": False, "fehler": "es läuft schon ein Anruf"},
+                                status_code=409)
+        anruf = selbst.LiveAnruf()
+        lauf_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        _zustand.update({
+            "laeuft": True, "laufId": lauf_id, "storyIdx": 1, "storiesGesamt": 1,
+            "fertig": [], "fehler": "", "warm": None, "auftrag": None,
+            "modus": "selbst", "marken": [], "aktiv": anruf,
+        })
+    try:
+        antwort = selbst.start(anruf, basis=BIANCA_BASIS)
+    except Exception as e:
+        with _lock:
+            _zustand.update({"laeuft": False, "aktiv": None, "modus": "",
+                             "fehler": str(e)})
+        anruf.schliessen()
+        return JSONResponse({"ok": False, "fehler": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, "laufId": lauf_id, **antwort})
+
+
+@app.post("/api/selbst/zug")
+def selbst_zug_text(w: SelbstZug) -> JSONResponse:
+    text = str(w.text or "").strip()
+    with _lock:
+        anruf = _zustand.get("aktiv")
+        if _zustand.get("modus") != "selbst" or not isinstance(anruf, selbst.LiveAnruf):
+            return JSONResponse({"ok": False, "fehler": "kein Selbst-Anruf"},
+                                status_code=409)
+    if not text:
+        return JSONResponse({"ok": False, "fehler": "kein Text"}, status_code=400)
+    try:
+        final = selbst.zug_text(anruf, text, basis=BIANCA_BASIS)
+    except Exception as e:
+        return JSONResponse({"ok": False, "fehler": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, **final})
+
+
+@app.post("/api/selbst/hoeren")
+async def selbst_zug_audio(audio: UploadFile = File(...)) -> JSONResponse:
+    with _lock:
+        anruf = _zustand.get("aktiv")
+        if _zustand.get("modus") != "selbst" or not isinstance(anruf, selbst.LiveAnruf):
+            return JSONResponse({"ok": False, "fehler": "kein Selbst-Anruf"},
+                                status_code=409)
+    blob = await audio.read()
+    try:
+        final = selbst.zug_audio(
+            anruf, blob, audio.content_type or "application/octet-stream",
+            audio.filename or "turn.webm", basis=BIANCA_BASIS)
+    except Exception as e:
+        return JSONResponse({"ok": False, "fehler": str(e)}, status_code=502)
+    return JSONResponse({"ok": True, **final})
+
+
+@app.post("/api/selbst/hangup")
+def selbst_hangup() -> JSONResponse:
+    with _lock:
+        anruf = _zustand.get("aktiv")
+        lauf_id = _zustand.get("laufId") or ""
+        if _zustand.get("modus") != "selbst" or not isinstance(anruf, selbst.LiveAnruf):
+            return JSONResponse({"ok": True, "leer": True})
+        _zustand["aktiv"] = None
+    selbst.auflegen(anruf, basis=BIANCA_BASIS)
+    bericht = selbst.bericht_bauen(anruf)
+    _auftrag_ablegen(bericht, lauf_id)
+    with _lock:
+        _zustand.update({"laeuft": False, "modus": "", "aktiv": None})
+        paket = _zustand.get("auftrag")
+    return JSONResponse({"ok": True, "auftrag": paket})
+
+
+@app.get("/api/selbst/ton/{art}/{name}")
+def selbst_ton(art: str, name: str) -> Response:
+    if art not in {"audio", "audio-stream"} or "/" in name or "\\" in name:
+        return Response(status_code=404)
+    try:
+        r = httpx.get(f"{BIANCA_BASIS}/api/{art}/{name}", timeout=90.0)
+    except httpx.HTTPError:
+        return Response(status_code=502)
+    if r.status_code != 200:
+        return Response(status_code=r.status_code)
+    mime = r.headers.get("content-type") or "audio/wav"
+    return Response(r.content, media_type=mime,
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.on_event("startup")

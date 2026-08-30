@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="web/stil.css?v=7">
+<link rel="stylesheet" href="web/stil.css?v=11">
 </head>
 <body class="studio">
 <header class="kopf">
@@ -66,6 +66,7 @@
   <button class="gross" id="knopf-automatik">W&uuml;rfeln</button>
   <button class="gross tel" id="knopf-telefon" type="button" aria-pressed="false">Telefonqualit&auml;t aus</button>
   <button class="gross primaer" id="knopf-start">Anruf starten</button>
+  <button class="gross selbst" id="knopf-selbst" type="button">Selbst anrufen</button>
   <button class="gross batch" id="knopf-batch">10 Tests</button>
   <span class="klein" id="lauf-hinweis"></span>
 </div>
@@ -86,8 +87,45 @@
     </div>
     <div class="klein" id="ton-hinweis"></div>
     <div class="dialog" id="live-dialog"></div>
+    <div id="selbst-leiste" class="selbst-leiste" hidden>
+      <div class="klein" id="selbst-phase">Sie sind dran — einfach reden oder tippen</div>
+      <textarea class="eigen" id="selbst-text" rows="2" placeholder="Oder tippen statt sprechen …"></textarea>
+      <div class="auftrag-aktionen">
+        <button class="gross primaer" id="selbst-sagen" type="button">Sagen</button>
+        <button class="gross" id="selbst-auflegen" type="button">Auflegen</button>
+      </div>
+    </div>
   </div>
 </div>
-<script src="web/app.js?v=7"></script>
+
+<div id="auftrag-popup" class="anruf-popup" hidden>
+  <div class="anruf-karte auftrag-karte">
+    <div class="anruf-kopf">
+      <div class="anruf-kopf-text">
+        <div class="anruf-titel" id="auftrag-titel">Verbesserungen</div>
+        <div class="klein" id="auftrag-meta">Einzellauf</div>
+      </div>
+      <div class="anruf-kopf-aktion">
+        <button class="gross" id="auftrag-kopieren" type="button">Kopieren</button>
+        <button class="gross" id="auftrag-zu" type="button">Schließen</button>
+      </div>
+    </div>
+    <div class="dialog auftrag-dialog">
+      <p class="klein" id="auftrag-anleitung">Im Verlauf eine Bianca-Antwort mit <strong>Stimmt nicht</strong> markieren — plus Gesamteindruck hier. Danach im Chat: <strong>Übergabe</strong>.</p>
+      <ul class="auftrag-liste" id="auftrag-liste"></ul>
+      <h3 class="auftrag-h">Markierte Antworten</h3>
+      <ul class="auftrag-liste" id="auftrag-marken"></ul>
+      <label class="klein" for="auftrag-hinweis">Dein Verbesserungsvorschlag</label>
+      <textarea class="eigen" id="auftrag-hinweis" rows="5" placeholder="Was soll Bianca anders machen? z. B. Vortermin aufgreifen, Zahnreinigung mit anbieten, später am Tag suchen."></textarea>
+      <div class="auftrag-aktionen">
+        <button class="gross primaer" id="auftrag-speichern" type="button">In den Übergabe-Ordner</button>
+      </div>
+      <p class="klein" id="auftrag-status"></p>
+      <h3 class="auftrag-h">Gespräch</h3>
+      <pre class="auftrag-dialogtext" id="auftrag-gespraech"></pre>
+    </div>
+  </div>
+</div>
+<script src="web/app.js?v=11"></script>
 </body>
 </html>

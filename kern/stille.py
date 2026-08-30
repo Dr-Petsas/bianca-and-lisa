@@ -10,8 +10,13 @@ holt auf die Job-Spur. Nach MAX_STUPSE Stupsen ohne Antwort schweigt die
 Stimme, bis der Anrufer wieder spricht — kein Endlos-Genöle.
 
 Die 4 Sekunden misst das Browser-Dock (bianca_web/app.js, web/app.js) nach
-dem Ende der eigenen Wiedergabe; der Dienst liefert auf POST /api/stille nur
-den fertigen Stups-Zug. Hier liegt die stimmen-unabhängige Mechanik:
+dem Ende der eigenen Wiedergabe — NUR solange der ANRUFER dran ist.
+Die 1,5-s-Nie-Stille-Garantie (W-STILLE) gilt auf der anderen Seite:
+nachdem der Anrufer gesprochen hat und die KI antworten muss. Zwei Uhren,
+kein Widerspruch, sie feuern nie dieselbe Stille.
+
+Der Dienst liefert auf POST /api/stille nur den fertigen Stups-Zug.
+Hier liegt die stimmen-unabhängige Mechanik:
 Zähler (JSON-tauglich in der Sitzung), Anreden, Frage-Wiederholung mit
 Präfix (nie wortgleich — Wiederholungs-Wächter-Regel) und das Einhängen in
 das Gesprächsprotokoll.
