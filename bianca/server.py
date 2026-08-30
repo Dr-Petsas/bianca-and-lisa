@@ -14,7 +14,18 @@ from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import gedaechtnis, halbsatz, llm, mitschnitt, sprech, stt, tenants, tts, unterbrechung
+from kern import (
+    agentprofil,
+    gedaechtnis,
+    halbsatz,
+    llm,
+    mitschnitt,
+    sprech,
+    stt,
+    tenants,
+    tts,
+    unterbrechung,
+)
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -58,6 +69,11 @@ if _JINGLE_PFAD.is_file():
 
 class StartIn(BaseModel):
     tenant: str = ""
+    # W-MANDANT: die ANGERUFENE Nummer (DID) — gesetzt von der SIP-Bruecke.
+    # Sie schlaegt das tenant-Feld: erst lokale tenants/*.json (dids-Feld),
+    # dann die Pickadoc-DB (onPickadocPhoneCall, phase=pre).
+    did: str = ""
+    caller: str = ""
 
 
 class TurnIn(BaseModel):
@@ -108,6 +124,7 @@ def health():
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "gedaechtnis": gedaechtnis.anzeige(),
+        "mandant": agentprofil.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -119,11 +136,18 @@ def api_tenants():
 
 @app.post("/api/start")
 def api_start(body: StartIn):
-    t = tenants.laden(body.tenant or DEFAULT_TENANT)
-    sit = session.neu(tenant_id=body.tenant or DEFAULT_TENANT)
+    t = None
+    if body.did:
+        t = agentprofil.fuer_did(body.did, caller=body.caller)
+        if t is None:
+            print(f"bianca-start did={body.did!r} unbekannt -> Default-Mandant", flush=True)
+    if t is None:
+        t = tenants.laden(body.tenant or DEFAULT_TENANT)
+    sit = session.neu(tenant=t)
     return DIENST.json_antwort(
         sit, art="start",
-        extra={"sessionId": sit["id"], "praxis": t.get("praxisName")},
+        extra={"sessionId": sit["id"], "praxis": t.get("praxisName"),
+               "tenantId": t.get("_id") or ""},
     )
 
 

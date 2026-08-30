@@ -86,6 +86,18 @@ BIANCA_VOICE_ID = _s("BIANCA_VOICE_ID", "cgSgspJ2msm6clMCkdW9")
 ELEVENLABS_TTS_MODEL = _s("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 
 CF_BASE = _s("PICKADOC_CF_BASE", "https://europe-west3-docgenda.cloudfunctions.net").rstrip("/")
+# W-MANDANT (30.08.2026): Mandant anhand der ANGERUFENEN Nummer aus der
+# Pickadoc-DB laden — dieselbe Cloud Function wie der alte phone_agent
+# (onPickadocPhoneCall, phase=pre; Auth: Shared Secret als Bearer + x-api-key).
+# Token-Fallback: peek auf die phone_agent-.env, wie beim ElevenLabs-Key.
+PHONE_CALL_URL = _s("PICKADOC_PHONE_CALL_URL").rstrip("/") or f"{CF_BASE}/onPickadocPhoneCall"
+PHONE_CALL_TOKEN = _s("PICKADOC_PHONE_CALL_API_TOKEN") or _peek_key(
+    Path(r"D:\dev\Dr-Petsas\phone_agent\.env"), "PICKADOC_PHONE_CALL_API_TOKEN")
+# Achtung: das echte Secret BEGINNT mit '#' (geprueft 30.08.2026 gegen den
+# Firebase Secret Manager) — in einer env_file fuer Docker Compose muss der
+# Wert deshalb in Anfuehrungszeichen stehen, sonst schneidet Compose ihn
+# als Kommentar ab und die CF antwortet 401 "missing API token".
+PHONE_CALL_TOKEN = PHONE_CALL_TOKEN.strip('"').strip("'")
 MAS_URL = _s("MAS_URL", "http://127.0.0.1:4000").rstrip("/")
 # Praxisgedächtnis (W-GEDAECHTNIS 29.08.2026): Gesprächs-Reports an
 # POST {MAS_URL}/brain/events, Anrufer-Kontext von /brain/caller-context.

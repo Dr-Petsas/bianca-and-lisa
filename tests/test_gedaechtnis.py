@@ -222,14 +222,32 @@ def test_kontext_anstossen_key_gesichert():
 
 def test_kontext_arbeit_schreibt_in_sitzung():
     echt = ged._kontext_holen
-    ged._kontext_holen = lambda t, n: "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
+    gesehen = {}
+
+    def _fake(t, n, client_id=""):
+        gesehen["clientId"] = client_id
+        return "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
+
+    ged._kontext_holen = _fake
     try:
         sit = _sit_bianca()
+        sit["tenant"] = {"clientId": "client-w-mandant"}
         sit["gedaechtnisKey"] = "01771234567|martin berger"
         ged._kontext_arbeit(sit, "01771234567", "Martin Berger", sit["gedaechtnisKey"])
         assert "Rückruf erbeten" in sit["gedaechtnis"]
+        # W-MANDANT: die Abfrage laeuft unter der clientId des Sitzungs-Mandanten.
+        assert gesehen["clientId"] == "client-w-mandant"
     finally:
         ged._kontext_holen = echt
+
+
+def test_client_id_kommt_aus_dem_sitzungs_mandanten():
+    # W-MANDANT: Session-Tenant schlaegt die Prozess-Env; ohne Tenant bleibt
+    # der alte Default (MAS_CLIENT_ID) — byte-identisch fuer meddent.
+    assert ged._client_id({"tenant": {"clientId": "client-xyz"}}) == "client-xyz"
+    assert ged._client_id({}) == ged.MAS_CLIENT_ID
+    assert ged._headers("client-xyz")["X-Client-Id"] == "client-xyz"
+    assert ged._headers()["X-Client-Id"] == ged.MAS_CLIENT_ID
 
 
 def test_notaus_schaltet_alles_ab():

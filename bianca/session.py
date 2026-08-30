@@ -21,8 +21,10 @@ _LAST_PATH = DATA_DIR / "bianca_last_call.json"
 _SESS_DIR = DATA_DIR / "bianca_sessions"
 
 
-def neu(*, tenant_id: str) -> dict[str, Any]:
-    tenant = laden(tenant_id)
+def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None) -> dict[str, Any]:
+    # W-MANDANT: ein fertiges Tenant-Dict (DID -> Pickadoc-DB, kern/agentprofil)
+    # darf direkt einziehen — sonst wie bisher aus tenants/<id>.json laden.
+    tenant = tenant if isinstance(tenant, dict) and tenant else laden(tenant_id)
     sid = secrets.token_hex(8)
     doc = {
         "id": sid,
@@ -50,6 +52,11 @@ def _sichern(sit: dict[str, Any]) -> None:
     try:
         _SESS_DIR.mkdir(parents=True, exist_ok=True)
         roh = {k: v for k, v in sit.items() if k != "tenant"}
+        # W-MANDANT: CF-Mandanten haben keine tenants/<id>.json — ihr Dict
+        # muss mit in die Datei, sonst laedt holen() den falschen Default.
+        t = sit.get("tenant") or {}
+        if str(t.get("_quelle") or "").startswith("cf"):
+            roh["tenant"] = t
         (_SESS_DIR / f"{sid}.json").write_text(json.dumps(roh, ensure_ascii=False), encoding="utf-8")
     except (OSError, TypeError):
         pass
@@ -67,7 +74,8 @@ def holen(sid: str) -> dict[str, Any] | None:
         roh = json.loads(pfad.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    roh["tenant"] = laden(roh.get("tenantId") or "")
+    if not isinstance(roh.get("tenant"), dict) or not roh.get("tenant"):
+        roh["tenant"] = laden(roh.get("tenantId") or "")
     _STORE[sid] = roh
     return roh
 

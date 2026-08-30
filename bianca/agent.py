@@ -430,12 +430,17 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
         wissen=tenant.get("wissen"),
         plan=plan,
         kontext=gedaechtnis.kontext_block(sit),
+        # W-MANDANT: Agent-Prompt aus der Pickadoc-DB (Praxis-Fakten) —
+        # mehrzeilig, deshalb NICHT durch _s (das wuerde die Absaetze platten).
+        db_prompt=str(tenant.get("dbPrompt") or ""),
     )
 
 
 def start_reply(sit: dict) -> dict[str, Any]:
     tenant = sit["tenant"]
-    text = begruessung(tenants.praxis_melde(tenant))
+    # W-MANDANT: CF-Mandanten ohne kuratierte Datei melden sich mit der in
+    # der Pickadoc-DB gepflegten Begruessung (agent.firstMessage).
+    text = _s(tenant.get("begruessungText")) or begruessung(tenants.praxis_melde(tenant))
     sit["messages"] = [
         {"role": "system", "content": system_prompt_aktuell(sit)},
         {"role": "user", "content": "(Ein Anrufer ist in der Leitung. Du hast dich gerade gemeldet.)"},

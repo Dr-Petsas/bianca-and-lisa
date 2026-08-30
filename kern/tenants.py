@@ -37,6 +37,57 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
     return raw
 
 
+def nummer_norm(roh: Any) -> str:
+    """Rufnummer auf eine vergleichbare Ziffernform bringen.
+
+    "+49 211 54244101", "004921154244101" und "0211 54244101" meinen
+    dieselbe Leitung — alle drei werden zu "4921154244101" (W-MANDANT)."""
+    ziffern = "".join(c for c in str(roh or "") if c.isdigit())
+    if ziffern.startswith("00"):
+        return ziffern[2:]
+    if ziffern.startswith("0"):
+        return "49" + ziffern[1:]
+    return ziffern
+
+
+def von_did(did: Any) -> dict[str, Any] | None:
+    """Lokalen Mandanten anhand der ANGERUFENEN Nummer finden (W-MANDANT).
+
+    Ein Tenant-JSON darf ``dids`` (Liste) oder ``did`` (String) tragen —
+    kuratierte Mandanten (meddent) werden so OHNE Netz aufgeloest; erst
+    unbekannte Nummern gehen an die Pickadoc-DB (kern/agentprofil.py)."""
+    ziel = nummer_norm(did)
+    if not ziel or not TENANTS_DIR.is_dir():
+        return None
+    for p in sorted(TENANTS_DIR.glob("*.json")):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        roh = d.get("dids") if isinstance(d.get("dids"), list) else [d.get("did")]
+        if any(nummer_norm(x) == ziel for x in roh if x):
+            d["_id"] = p.stem
+            return d
+    return None
+
+
+def von_client_id(client_id: Any) -> dict[str, Any] | None:
+    """Lokalen Mandanten ueber die Firebase-clientId finden (W-MANDANT):
+    liefert die kuratierte Basis (Sprechformen, Wissen) fuer CF-Treffer."""
+    ziel = _sauber(client_id)
+    if not ziel or not TENANTS_DIR.is_dir():
+        return None
+    for p in sorted(TENANTS_DIR.glob("*.json")):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _sauber(d.get("clientId")) == ziel:
+            d["_id"] = p.stem
+            return d
+    return None
+
+
 def praxis_melde(tenant: dict[str, Any]) -> str:
     """Name, mit dem sich Bianca beim Abheben meldet (Nominativ, gern kurz).
 

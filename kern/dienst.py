@@ -487,6 +487,10 @@ class Dienst:
         }
         if reply.get("hangup"):
             antwort["hangup"] = True
+        # Weitere extra-Felder additiv durchreichen (W-MANDANT: tenantId im
+        # Start — die SIP-Bruecke loggt, welcher Mandant den Anruf traegt).
+        for k, v in extra.items():
+            antwort.setdefault(k, v)
         # Offene Maschinen-Frage (Bianca-Sammler) additiv mitgeben — der
         # Baukasten-Report mappt darueber Frage -> Antwort-Baustein.
         sammler = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}

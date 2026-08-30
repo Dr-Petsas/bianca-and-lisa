@@ -6,6 +6,7 @@
   "behandler": "Dr. Petsas",
   "locationId": "VjdvbRQHH8oTId4f0GiX",
   "locationName": "Zahnärzte im Medical Center (Düsseldorf)",
+  "dids": ["+4921154244101", "+4921154244110"],
   "telefon": "",
   "sprache": "de",
   "sttHotwords": ["Grüger", "Lange", "Schlaflabor", "Narval", "Invisalign", "Aligner"],

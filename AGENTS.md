@@ -28,6 +28,72 @@ Düsseldorf" — Lisas "hier ist Lisa von …", auch in Prompt-Regie und
 Einwand-Zeile). Helfer: `kern/tenants.praxis_melde()` / `praxis_von()`;
 ohne Felder gilt wie früher `praxisName` bzw. "der {praxisName}".
 
+## Mandant per angerufener Nummer (W-MANDANT 30.08.2026 — nicht rückbauen)
+
+Chef: "anhand der angerufenen nummer müssen wir in der db den passenden
+agent laden und somit alle nötigen informationen erhalten" und (später,
+wörtlich): "die Konfig und somit die begrüßung MUSS aus der DB kommen!!"
+— die DB ist die Wahrheit, lokale Dateien sind nur Rückfall. Der Weg ist
+derselbe wie im alten phone_agent: `calledNumber` -> Cloud Function
+`onPickadocPhoneCall` (phase=pre) -> Agent samt clientId/locationId/
+Kalender/Motive/Begrüßung/Keywords/Prompts. Kette bei uns:
+
+- **Brücke** (`sip_bridge/server.py -> did_von_uuid`): der Dialplan trägt
+ je DID eine FESTE AudioSocket-UUID (…4101/…4110); ihr Hex-Ende wird über
+ `BRIDGE_DID_MAP` (Default: beide Live-Nummern) in die E.164-Nummer
+ übersetzt und als `did` an `POST /api/start` gemeldet. Neue DID = neuer
+ Dialplan-Eintrag mit eigener UUID + Map-Eintrag.
+- **Auflösung** (`kern/agentprofil.fuer_did`, in `bianca/server.api_start`)
+ — DB ZUERST (Chef 30.08.2026 abends, davor stand die lokale Datei vorn):
+ 1. Cloud Function (Auth `PICKADOC_PHONE_CALL_API_TOKEN` als Bearer +
+ x-api-key, URL `PICKADOC_PHONE_CALL_URL` oder `{CF_BASE}/onPickadocPhoneCall`,
+ Token-Peek auf die phone_agent-.env; Quelle des Secrets: Firebase
+ `firebase functions:secrets:access PICKADOC_PHONE_CALL_API_TOKEN --project
+ docgenda`). **Token-Falle (30.08.2026, live erlebt):** der Wert BEGINNT
+ mit `#` und enthält ein `$` — in der Server-.env (Compose env_file +
+ Interpolation) MUSS er in EINFACHEN Quotes stehen; doppelt quotiert
+ expandiert Compose das `$…` weg (401), unquotiert schneidet `#` alles ab.
+ `callerPhone` ist CF-Pflicht — die AudioSocket-Brücke kennt die
+ Anrufernummer nicht, gesendet wird `anonymous` (kein Patient matcht,
+ der Agent kommt trotzdem). Passt die clientId der Antwort zu einer
+ lokalen tenants/*.json, dient die Datei nur als BASIS für Felder, die
+ die DB nicht kennt (Sprechformen, wissen; `_quelle=cf+datei`) — die
+ DB GEWINNT immer bei: Begrüßung (`begruessungText` = agent.firstMessage,
+ Vorrang in `bianca/agent.start_reply`), Kalender, Motive, Keywords
+ (gemergt) und dem Agent-Prompt (s. u.). TTL-Cache je Nummer
+ (`AGENT_PROFIL_TTL_S`, 300 s; Fehlschläge 60 s negativ);
+ 2. lokaler Mandant, dessen `dids`-Feld die Nummer trägt — NUR Rückfall
+ (CF aus, CF down, kein Agent zur Nummer);
+ 3. nichts gefunden -> DEFAULT_TENANT, der Anruf wird IMMER angenommen.
+- **Prompt-Merge (Chef 30.08.2026):** `agentprofil.db_prompt_von_agent`
+ baut aus den Agent-Feldern der DB (rolePrompt, tasksPrompt,
+ specialFeaturesPrompt, locationPrompt, patientsPrompt, appointmentPrompt,
+ referrerPrompt, mandatoryPrompt, miscellaneousPrompt; sind alle leer:
+ systemPrompt-Blob) den Praxis-Fakten-Text — gleiche Felder/Überschriften
+ wie phone_agent `assemble_persona_instructions`, aber OHNE dessen
+ Verhaltens-Vorspann/Tool-Schwanz; `{{current_time}}`-artige Platzhalter
+ werden eingelöst. Er landet als `tenant["dbPrompt"]` und wird in
+ `bianca/prompt.system_prompt` als Block "PRAXIS-PROFIL … ENDE
+ PRAXIS-PROFIL" gemerged, samt Leitplanke: bei Widerspruch gelten die
+ Verhaltensregeln des festen Prompts, Tool-/Skript-Namen aus dem Profil
+ nie ausführen/aussprechen. Der FESTE Prompt ist seitdem praxis-neutral
+ (keine echten Behandler-/Orts-Namen mehr — das Petsas/Patrikis-Beispiel
+ ist raus); das VERHALTEN (Buchungsweg, Gesprächsregeln, Wächter) bleibt
+ hart im Code/Prompt, die Praxis-FAKTEN kommen aus der DB.
+- **Session:** `session.neu(tenant=…)` nimmt das fertige Dict; CF-Mandanten
+ werden MIT Tenant-Blob persistiert (kein lokales JSON zum Nachladen).
+ Das MAS-Gedächtnis läuft seitdem unter der clientId des SITZUNGS-Mandanten
+ (`gedaechtnis._client_id`), Fallback bleibt `MAS_CLIENT_ID` (= meddent).
+- Docks unverändert (Dropdown sendet weiter `tenant`); `did` schlägt
+ `tenant`, wenn beides kommt. Health zeigt `mandant`.
+- **Notaus:** `DID_AGENT=0` => kein CF-Lookup (lokale `dids` gelten weiter).
+ Tests: `tests/test_agentprofil.py`.
+- **Nebenbefund 30.08.:** nemo_toolkit (Rest des verworfenen NeMo-Versuchs)
+ legt ein top-level `tests`-Paket in die site-packages und überdeckte
+ unseren `tests/`-Ordner (lauf_bianca und der Autolösch-Import in
+ bianca/server.py liefen auf ModuleNotFoundError). Fix: `tests/__init__.py`
+ macht den Repo-Ordner zum regulären Paket — der gewinnt die Auflösung.
+
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.
@@ -458,6 +524,24 @@ Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
  (`kern/tts.py`) sind unangetastet. Nebenbefund: auch das ANRUFER-Audio
  kommt von der Zaluma-Strecke heiß an (~1 % Clipping, A-law-Vollausschlag)
  — das erklärt STT-Verhörer wie „Zermin"; liegt vor unserer Kette.
+- **Codec-Verzerrer behoben (W-SIP-SLIN 30.08.2026 — nicht rückbauen):**
+ Anrufer über µ-law-Zubringer klangen „richtig übel verzerrt": der
+ AudioSocket-KANALTREIBER (`Dial(AudioSocket/…)`) handelt den nativen
+ Codec aus und reichte G.711 roh durch; die Brücke riet das Format nur
+ über die Frame-Länge (160 B = alaw) — µ-law hat aber GENAUSO 160-Byte-
+ Frames und wurde mit der A-law-Kennlinie dekodiert. Rauchende Pistole
+ in den Logs: konstanter `floor≈880` (µ-law-Stille 0xFF als alaw gelesen
+ = +848; echte A-law-Anrufe hatten floor≈60). Fix an der URSACHE:
+ `extensions_bianca.conf` nutzt für beide DIDs die AudioSocket()-
+ **APPLIKATION** (`AudioSocket(<uuid>,127.0.0.1:40101)`) statt Dial —
+ sie zwingt den Kanal auf slin, Asterisk transkodiert selbst, die Brücke
+ bekommt IMMER slin (320-B-Frames, Log `bruecke-format slin`). Der
+ alaw-Zweig in `_eingang` bleibt nur als Rückfall für einen alten
+ Dialplan. Backup: `extensions_bianca.conf.bak-20260830-slin`. Der
+ Asterisk (Alias `asterisk-strato`) ist vom Dev-Rechner nur über
+ ProxyJump erreichbar: `ssh -J pickadoc1 asterisk-strato` (Port 22 lässt
+ nur pickadoc1 durch). Vermutlich erklärt derselbe Verwechsler auch den
+ früheren „~1 % Clipping"-Nebenbefund und STT-Verhörer wie „Zermin".
 - **Probe:** `tests/sip_bridge_probe.py` simuliert Asterisk (UUID + PCM-
   Rahmen, echtes deutsches TTS-Audio als Anrufer) gegen eine laufende
   Brücke; Kettentest vom Asterisk: `channel originate

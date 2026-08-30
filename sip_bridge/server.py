@@ -51,6 +51,32 @@ BIANCA_BASE = (os.environ.get("BIANCA_BASE") or "http://127.0.0.1:8096").rstrip(
 BRIDGE_PORT = int(os.environ.get("BRIDGE_PORT") or "40101")
 BRIDGE_TENANT = (os.environ.get("BRIDGE_TENANT") or "").strip()
 
+# W-MANDANT (30.08.2026): Der Dialplan (extensions_bianca.conf) traegt je
+# DID eine FESTE AudioSocket-UUID, deren Hex-Ende die Leitung verraet
+# (…4101 / …4110). Die Brücke uebersetzt das UUID-Ende in die angerufene
+# Nummer und meldet sie Bianca beim /api/start — dort laedt
+# kern/agentprofil.py den passenden Mandanten (lokal bzw. Pickadoc-DB).
+# Format: "hexende=+E164,hexende=+E164". Neue DID = neuer Dialplan-Eintrag
+# mit eigener UUID + Eintrag hier (oder in BRIDGE_DID_MAP).
+_DID_MAP_ROH = (os.environ.get("BRIDGE_DID_MAP")
+                or "4101=+4921154244101,4110=+4921154244110").strip()
+DID_MAP: dict[str, str] = {}
+for _paar in _DID_MAP_ROH.split(","):
+    _k, _, _v = _paar.partition("=")
+    if _k.strip() and _v.strip():
+        DID_MAP[_k.strip().lower()] = _v.strip()
+
+
+def did_von_uuid(uuid_bytes: bytes) -> str:
+    """Angerufene Nummer aus der Dialplan-UUID — leer, wenn unbekannt."""
+    hexs = (uuid_bytes or b"").hex().lower()
+    treffer = ""
+    for ende, did in DID_MAP.items():
+        # Der laengste passende Schluessel gewinnt (…244101 schlaegt …4101).
+        if hexs.endswith(ende) and len(ende) > len(treffer):
+            treffer = ende
+    return DID_MAP.get(treffer, "")
+
 # W-SIP-PEGEL (30.08.2026): Biancas Renders fahren mit Sprach-RMS -14 dBFS
 # und Peaks am 0,95-Deckel — im Dock richtig (Chef-Abnahme 28.08.), auf der
 # G.711-Strecke klang das "sehr uebersteuert" (Kollege 30.08.). Darum wird
@@ -286,6 +312,7 @@ class Anruf:
         self.http = httpx.AsyncClient(base_url=BIANCA_BASE,
                                       timeout=httpx.Timeout(60.0, connect=5.0))
         self.session_id = ""
+        self.did = ""  # W-MANDANT: angerufene Nummer aus der Dialplan-UUID
         self.stille_ms = STILLE_MS_DEFAULT
         self.wiedergabe = Wiedergabe(self._audio_raus)
         self.zuege: asyncio.Queue = asyncio.Queue()
@@ -421,6 +448,15 @@ class Anruf:
         Rueckweg braucht die Dekodierung. Erkennung einmal pro Anruf ueber
         die Frame-Laenge (20 ms: alaw=160, slin=320); Local-Channel-Tests
         und die Docker-Probe senden weiterhin echtes slin.
+
+        W-SIP-SLIN 30.08.2026: die Laengen-Heuristik konnte alaw nicht von
+        ULAW unterscheiden (beide 160 B) — ulaw-Anrufer (je nach Zubringer)
+        klangen mit der A-law-Kennlinie uebel verzerrt (Signatur: ulaw-Stille
+        0xFF als alaw gelesen = konstant +848, im Log floor~880). Seitdem
+        nutzt der Asterisk-Dialplan die AudioSocket()-APPLIKATION statt
+        Dial(AudioSocket/...): sie zwingt den Kanal auf slin, Asterisk
+        transkodiert selbst — hier kommt IMMER slin (320 B) an. Der
+        alaw-Zweig bleibt nur als Rueckfall fuer einen alten Dialplan.
         """
         if not self._audio_format:
             self._audio_format = "alaw" if len(nutz) == 160 else "slin"
@@ -535,14 +571,16 @@ class Anruf:
     # ---- Bianca-Dialog ------------------------------------------------------
 
     async def _start(self) -> bool:
-        r = await self.http.post("/api/start", json={"tenant": BRIDGE_TENANT})
+        r = await self.http.post("/api/start",
+                                 json={"tenant": BRIDGE_TENANT, "did": self.did})
         if r.status_code != 200:
             print(f"bruecke-start http {r.status_code}", flush=True)
             return False
         d = r.json()
         self.session_id = d.get("sessionId") or ""
         self.stille_ms = int(d.get("stilleMs") or STILLE_MS_DEFAULT)
-        print(f"bruecke-start session={self.session_id} text={d.get('text', '')[:60]!r}", flush=True)
+        print(f"bruecke-start session={self.session_id} did={self.did or '-'} "
+              f"tenant={d.get('tenantId', '')} text={d.get('text', '')[:60]!r}", flush=True)
         self._spielen(d.get("audioUrl") or "")
         with contextlib.suppress(Exception):
             q = await self.http.get("/api/quittung")
@@ -643,7 +681,8 @@ class Anruf:
             self.writer.close()
             await self.http.aclose()
             return
-        print(f"bruecke-anruf von {peer} uuid={rahmen[1].hex()}", flush=True)
+        self.did = did_von_uuid(rahmen[1])
+        print(f"bruecke-anruf von {peer} uuid={rahmen[1].hex()} did={self.did or '?'}", flush=True)
         if not await self._start():
             await self._ende_raus()
             self.writer.close()

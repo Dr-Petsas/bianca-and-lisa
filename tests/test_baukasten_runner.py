@@ -116,7 +116,10 @@ def test_slot_verhandlung_deckel_bei_drei():
         lage["frage"] = "slotwahl"
     assert bausteine[:2] == ["slot_schieben", "slot_schieben"]
     assert bausteine[2] == "slot_annahme"
-    assert bausteine[3] == "slot_annahme"  # nie wieder schieben
+    # Nie wieder schieben — nach der pauschalen Annahme wird bei erneuter
+    # Frage KONKRET der erste Vorschlag gewaehlt (live 29.08.2026: sonst
+    # las Bianca die Liste erneut vor und der Runner loopte).
+    assert bausteine[3] == "terminwahl"
 
 
 def test_abschweifer_verdraengt_die_antwort_genau_einmal():
