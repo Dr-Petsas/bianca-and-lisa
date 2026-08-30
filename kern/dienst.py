@@ -12,13 +12,14 @@ import json
 import queue
 import re
 import secrets
+import struct
 import threading
 import time
 from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, sprech, spur, stt, tenants, tts, unterbrechung
+from kern import filler, halbsatz, mitschnitt, sprech, spur, stt, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
@@ -191,6 +192,35 @@ class Dienst:
                     return
 
         return gen()
+
+    def audio_bytes_fertig(self, url: str) -> bytes | None:
+        """Bytes zu einer eigenen Audio-URL — nur wenn das Audio KOMPLETT ist
+        (W-MITSCHNITT): Blocking-Ablage sofort, Stream-Slots erst nach
+        fertig(); laufende Streams liefern None (der Mitschnitt probiert es
+        beim nächsten Flush bzw. beim Gesprächs-Ende erneut)."""
+        u = _s(url)
+        if u.startswith("/api/audio/"):
+            return self.audio_holen(u.rsplit("/", 1)[-1])
+        if u.startswith("/api/audio-stream/"):
+            slot = self.audio_streams.get(u.rsplit("/", 1)[-1].rsplit(".", 1)[0])
+            if not slot:
+                return None
+            with slot["cond"]:
+                if not slot["done"]:
+                    return None
+                pcm = b"".join(slot["chunks"])
+            if not pcm:
+                return None
+            # Geschlossener Header (echte Längen) — die Stream-Auslieferung
+            # nutzt den offenen (0xFFFFFFFF), der taugt nicht für Dateien.
+            kopf = struct.pack(
+                "<4sI4s4sIHHIIHH4sI",
+                b"RIFF", 36 + len(pcm), b"WAVE",
+                b"fmt ", 16, 1, 1, tts.PCM_RATE, tts.PCM_RATE * 2, 2, 16,
+                b"data", len(pcm),
+            )
+            return kopf + pcm
+        return None
 
     def stimme(self, text: str, karte: dict | None = None) -> tuple[str, float]:
         if not text or not tts.bereit():
@@ -464,6 +494,16 @@ class Dienst:
             antwort["frage"] = str(sammler.get("frage") or "")
             antwort["modus"] = str(sammler.get("modus") or "")
         antwort.update(self._stille_feld(sit))
+        # W-MITSCHNITT (30.08.2026): Zug samt Audio sofort auf die Platte
+        # (.data/anrufe) — die Anrufliste im Dock lebt davon. Die Vorab-Satz-
+        # URLs (P5) gehören nur dazu, wenn ihr Text wirklich der Anfang der
+        # Antwort war — verworfene Vorabs würden das Audio doppeln.
+        satz_liste = sit.pop("_vorabUrlListe", None) or []
+        vorab_urls = [u for u in satz_liste if u] if (gesprochen and text.startswith(gesprochen)) else []
+        mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
+                       timings=timings, waechter=waechter, audio_url=url,
+                       vorab_urls=vorab_urls, book=reply.get("book"),
+                       frage=str(antwort.get("frage") or ""))
         return antwort
 
     # ---- Barge-Fortsetzung (W-BARGE) ---------------------------------------
@@ -484,6 +524,8 @@ class Dienst:
         waechter = spur.abholen(sit)
         self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings,
                        waechter=waechter)
+        mitschnitt.zug(sit, self, art="weiter", text=text, timings=timings,
+                       waechter=waechter, audio_url=url)
         print(f"{self.name}-weiter (Barge-Fortsetzung): {text[:60]!r}", flush=True)
         extra = extra or {}
         antwort = {
@@ -537,6 +579,9 @@ class Dienst:
         satz_lock = threading.Lock()
         satz_urls: list[str | None] = []
         satz_raus = 0
+        # W-MITSCHNITT: json_antwort liest die Vorab-Satz-URLs am Zug-Ende
+        # über die Sitzung ab (Referenz auf DIESELBE Liste, kein Kopieren).
+        sit["_vorabUrlListe"] = satz_urls
 
         def vorab(satz: str) -> None:
             # P5 satzweises LLM→TTS (29.08.2026): jeder fertige Satz wird
@@ -624,6 +669,9 @@ class Dienst:
                             spur.merken(sit, "barge-echo", gesagt)
                             q.put(("leer", "echo"))
                             return
+                        # W-MITSCHNITT: Anrufer-Audio dieses Zugs sichern —
+                        # bei W-HALBSATZ (Warte) haengt es am naechsten Zug.
+                        mitschnitt.eingang(sit, stt_blob, stt_mime)
                 # W-HALBSATZ (29.08.2026): gemerktes Fragment vor den neuen Zug
                 # setzen; klingt auch das Ergebnis unfertig (Komma-Ende,
                 # haengender Artikel/Konjunktion), wird NICHT geantwortet —

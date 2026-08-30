@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Bianca — Anrufe</title>
+  <style>
+    :root {
+      --bg: #141013; --card: #211a20; --line: #382c35; --text: #efe8ec;
+      --muted: #a38f9c; --accent: #ba3d78; --warn: #e0b15a; --ki: #c87eb0;
+      --user: #d7c9a3; --gut: #7fbf8e;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 40px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+    h1 { font-size: 22px; font-weight: 650; margin: 0; }
+    .sub { color: var(--muted); font-size: 13px; }
+    a.knopf, button.knopf {
+      appearance: none; display: inline-block; padding: 8px 12px; border-radius: 10px;
+      background: var(--card); border: 1px solid var(--line); color: var(--text);
+      font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; font: inherit;
+    }
+    a.knopf:hover, button.knopf:hover { background: #2a2128; }
+    button.knopf.rot { border-color: #6b3440; color: #d99; }
+    .grid { display: grid; grid-template-columns: 340px 1fr; gap: 12px; align-items: start; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+    .card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+    .liste { display: flex; flex-direction: column; gap: 6px; max-height: 78vh; overflow: auto; }
+    .eintrag { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; cursor: pointer; }
+    .eintrag:hover { background: #2a2128; }
+    .eintrag.aktiv { border-color: var(--accent); background: #2a1c26; }
+    .e-kopf { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 600; }
+    .e-meta { color: var(--muted); font-size: 12px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .marke { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+    .marke.gruen { color: var(--gut); border-color: #3c5a46; }
+    .marke.gelb { color: var(--warn); border-color: #6b5a34; }
+    .marke.grau { color: var(--muted); }
+    .detail-kopf { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+    .zeiten { color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .zeiten b { color: var(--text); font-weight: 600; }
+    .zuege { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 62vh; overflow: auto; }
+    .bubble { padding: 9px 12px; border-radius: 12px; max-width: 92%; font-size: 15px; line-height: 1.4; }
+    .bubble.ki { background: #33202c; color: var(--ki); align-self: flex-start; }
+    .bubble.user { background: #2a2618; color: var(--user); align-self: flex-end; }
+    .bubble.sys { color: var(--muted); font-size: 12px; align-self: center; background: none; padding: 2px 0; }
+    .b-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 11px; color: var(--muted); }
+    .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+    .play {
+      appearance: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+      background: #171114; color: var(--text); font: inherit; font-size: 11px; padding: 1px 9px;
+    }
+    .play:hover { background: #2a2128; }
+    .play.laeuft { border-color: var(--accent); color: var(--accent); }
+    .leer { color: var(--muted); font-size: 14px; padding: 20px 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Anrufe</h1>
+        <div class="sub">Bianca — Unterhaltungen mit Audio, Transkript und Zeiten</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="knopf" id="neuLaden" type="button">Neu laden</button>
+        <a class="knopf" href=".">Zum Dock</a>
+      </div>
+    </header>
+    <div class="grid">
+      <section class="card">
+        <h2>Unterhaltungen</h2>
+        <div class="liste" id="liste"><div class="leer">lade …</div></div>
+      </section>
+      <section class="card">
+        <h2>Gespräch</h2>
+        <div id="detail"><div class="leer">links einen Anruf wählen</div></div>
+      </section>
+    </div>
+  </div>
+  <audio id="spieler" hidden></audio>
+  <script src="anrufe.js?v=a1"></script>
+</body>
+</html>

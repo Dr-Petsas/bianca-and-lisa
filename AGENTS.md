@@ -296,6 +296,55 @@ gefragt und die Suche lief stumm ohne Behandler-Klärung.
   (bianca/server ruft sie MIT Tenant).
 - Tests: Behandler-Wahl-Block in `tests/test_bianca_bausteine.py`.
 
+## SIP-Telefonie: AudioSocket-Brücke (W-SIP 29.08.2026 — nicht rückbauen)
+
+Bianca ist unter **+49 211 54244101** echt anrufbar. Kette:
+Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
+`Dial(AudioSocket/127.0.0.1:40101/<uuid>)` → **SSH-Rücktunnel** →
+`sip_bridge/` auf pickadoc1 → Bianca (8096) über ihre normale Dock-API.
+
+- **`sip_bridge/server.py`** ist ein reiner Übersetzer, KEINE Gesprächslogik:
+  Anrufer-PCM (8 kHz) sammeln, Zugende per RMS-Stille (Schwelle kommt je
+  Frage aus `stilleMs`, W-TEMPO), als 16-kHz-WAV an `POST /api/listen`;
+  Biancas NDJSON (filler/transcript/warte/reply) steuert die Wiedergabe
+  (24-kHz-WAVs → 8 kHz, 20-ms-Takt, progressive Stream-URLs spielen beim
+  Laden). Barge-in: Reinsprechen stoppt die Wiedergabe sofort, Quittung
+  („Hm.") spielt, der Zug trägt bargeUrl+bargeMs → W-BARGE arbeitet
+  unverändert. ~4 s Funkstille → `POST /api/stille`. `hangup:true` →
+  ausspielen, Ende-Rahmen, `POST /api/hangup` (Nacharbeit/Gedächtnis wie
+  im Dock). MP3 (Verbinden-Jingle) dekodiert ffmpeg (im App-Image).
+- **Tunnel:** Compose-Service `tunnel` (alpine+ssh, sudo-frei) hält auf dem
+  Asterisk `127.0.0.1:40101` offen (`-R … :sipbridge:40101`). Key
+  `~/.ssh/id_ed25519_asterisk_tunnel` (pickadoc1) ist auf dem Asterisk mit
+  `permitlisten="40101",no-pty,…,command=…` beschnitten — kein Shell-Zugang.
+  Achtung: `restrict` + `permitlisten` verweigert auf OpenSSH 8.9 den
+  Forward — deshalb die Einzel-Optionen.
+- **Asterisk:** Route liegt in `/etc/asterisk/extensions_bianca.conf`
+  (eigene Include-Datei in `[from-zaluma]`, überlebt jede Regenerierung der
+  Number-API; Backup: `extensions.conf.bak-bianca`). Die Number-API führt
+  die DID bewusst NICHT (nur Backends elevenlabs/livekit). Blessing,
+  MedDent und der LiveKit-Test sind unangetastet.
+- **Leitungs-VAD adaptiv (W-SIP-RAUSCH 29.08.2026 spät — nicht rückbauen):**
+  Erste echte Anrufe scheiterten an der starren RMS-Schwelle 400 — das
+  DAUER-Grundrauschen der Telefonleitung löste nach 400 ms einen falschen
+  Barge aus („Zahnarzt… hm… äh"), die Aufnahme fand nie ein Stille-Ende,
+  kein Zug erreichte Bianca. Seitdem: adaptiver Rauschteppich `_floor`
+  (fällt schnell auf leise Rahmen, steigt ~+50 %/s auf laute),
+  Sprech-Schwelle = max(400, 3×Teppich), Barge-Schwelle = max(1100,
+  5×Teppich) bei 280 ms Mindestdauer. Außerdem sendet die Brücke in
+  Sprechpausen DAUER-STILLE-Rahmen Richtung Asterisk (der Medienstrom darf
+  nie abreißen — RTP-Timeout beendet sonst den Anruf, sobald Bianca
+  zuhört), und der Stups-Timer zählt erst ab dem ÜBERGANG spielen→leer
+  (vorher wurde `fertig_seit` jeden Tick überschrieben, der 4-s-Stups
+  feuerte nie). Barge-/Zug-Logs tragen rms+floor für die Feld-Diagnose.
+- **Probe:** `tests/sip_bridge_probe.py` simuliert Asterisk (UUID + PCM-
+  Rahmen, echtes deutsches TTS-Audio als Anrufer) gegen eine laufende
+  Brücke; Kettentest vom Asterisk: `channel originate
+  Local/21154244101@from-zaluma application Wait 10` → Brücken-Log zeigt
+  die Dialplan-UUID `b1a2ca00-…-4101`.
+- Die Browser-Docks (8095/8096) laufen unverändert parallel — die Brücke
+  ist nur ein weiterer Klient derselben API.
+
 ## Lisa zuerst
 
 Bianca-Ordner bleibt leer, bis der Lisa-Kernel Anrufe hält.
@@ -578,6 +627,46 @@ Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
   last_call, praxis_notizen.jsonl) bleibt unverändert bestehen.
 - **Notaus:** `MAS_GEDAECHTNIS=0` (oder leere `MAS_URL`) => kein Netz,
   Verhalten wie vor W-GEDAECHTNIS. Tests: `tests/test_gedaechtnis.py`.
+
+## Anruf-Mitschnitt + Anrufliste (W-MITSCHNITT 30.08.2026 — nicht rückbauen)
+
+Chef: nach Anrufen bei Bianca soll der Browser eine Liste der Unterhaltungen
+zeigen — mit Audio, Transkript und allen Zeiten (wie im phone_agent-Portal).
+Modul `kern/mitschnitt.py`, gilt für BEIDE Stimmen.
+
+- **Ablage:** `.data/anrufe/<stimme>/<sessionId>/` — `anruf.json` (Manifest)
+ plus Audio je Zug: `zNNN_anrufer.*` (Dock-Aufnahme webm/m4a, SIP-WAV) und
+ `zNNN_stimme[_i].wav` (gesprochene Antwort inkl. P5-Vorab-Sätze in
+ Reihenfolge). Jeder Zug wird SOFORT geschrieben (kein 24er-Deckel, Absturz
+ verliert höchstens den laufenden Zug); Kopfdaten (patientName, lastBook/
+ Cancel/Move/Note, praxisNotiz, tools) frischt jeder Flush auf.
+- **Zeiten je Zug:** ISO-Zeitstempel + offsetMs seit Anrufbeginn + die
+ timings (stt/llm/tts/total) des Zugs; Manifest trägt startedAt/endedAt/
+ dauerMs.
+- **Einhängung (kern/dienst.py):** `mitschnitt.eingang()` nach erfolgreichem
+ STT im Zug-Strom (W-HALBSATZ: mehrere Aufnahmen hängen als Liste am EINEN
+ Zug), `mitschnitt.zug()` am Ende von `json_antwort` und `weiter_sprechen`;
+ die Stille-Stupse melden beide Server selbst. Stream-Audio (Phase 2) ist
+ beim Zug-Ende oft noch nicht fertig: der Eintrag hält die URL als "offen",
+ jeder Flush und die Hangup-Nacharbeit (`mitschnitt.ende`, wartet bis 10 s)
+ lösen sie über `Dienst.audio_bytes_fertig()` ein (geschlossener
+ WAV-Header, nicht der offene Stream-Header).
+- **Vorab-TEXT-Züge (W-TEMPO):** das Bianca-Dock schickt den Zug jetzt als
+ text+audio an `/api/listen` statt nackt an `/api/turn` — der Server nutzt
+ weiter den Text (kein zweites STT), archiviert aber das Anrufer-Audio.
+- **Browser:** Biancas Dock trägt den Kopf-Link **„Anrufe"** → `/anrufe`
+ (`bianca_web/anrufe.html` + `anrufe.js`, relative Pfade — läuft auch
+ hinter Lisas `/bianca/`-Durchreiche). Liste (Zeit, Dauer, Name, Ergebnis-
+ Marke) + Gespräch (Blasen mit Abspiel-Knöpfen je Zug, Timing-Chips,
+ „Anruf abspielen" spielt alles in Reihenfolge, Löschen-Knopf).
+- **Routen (bianca/server.py):** `GET /api/anrufe`, `GET /api/anrufe/{sid}`,
+ `GET /api/anrufe/{sid}/audio/{datei}` (Dateinamen-Whitelist, kein
+ Traversal), `POST /api/anrufe/{sid}/loeschen`. Lisa zeichnet über
+ dieselben Kern-Hooks auf (`.data/anrufe/lisa/`), hat aber noch keine
+ eigene Seite.
+- **Nie blockierend:** alle Schreibwege fangen Fehler und verschlucken sie —
+ der Anruf-Pfad leidet nie. Notaus: `MITSCHNITT=0` => kein Ordner, kein
+ Byte. Tests: `tests/test_mitschnitt.py`.
 
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 

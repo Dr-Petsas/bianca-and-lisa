@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import gedaechtnis, halbsatz, llm, sprech, stt, tenants, tts, unterbrechung
+from kern import gedaechtnis, halbsatz, llm, mitschnitt, sprech, stt, tenants, tts, unterbrechung
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -185,6 +185,7 @@ def api_stille(body: HangupIn):
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
     url, tts_s = DIENST.stimme(text)
     session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
+    mitschnitt.zug(sit, DIENST, art="stille", text=text, timings={"tts": tts_s}, audio_url=url)
     print(f"bianca-stille session={body.sessionId} text={text!r}", flush=True)
     return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
@@ -201,6 +202,9 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     live = " ".join((text or "").split()).strip()
     if live:
         print(f"bianca-listen live session={sessionId} text={live!r}", flush=True)
+        # W-MITSCHNITT: beim Vorab-TEXT-Zug (W-TEMPO) kommt das Audio nur
+        # zum Archivieren mit — transkribiert wird nicht mehr.
+        mitschnitt.eingang(sit, blob, mime)
         return ndjson(DIENST.zug_stream(sit, art="turn", text_in=live,
                                         barge_url=bargeUrl, barge_ms=bargeMs))
     return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name,
@@ -245,6 +249,48 @@ def api_last_call():
     return {"ok": True, "writeLive": WRITE_LIVE, "call": session.last_call()}
 
 
+# --- Anrufliste (W-MITSCHNITT 30.08.2026): Unterhaltungen mit Audio,
+# Transkript und allen Zeiten — Daten aus .data/anrufe/bianca/<sid>/.
+_MITSCHNITT_STIMME = "bianca"
+
+
+@app.get("/api/anrufe")
+def api_anrufe():
+    return {"ok": True, "anrufe": mitschnitt.liste(_MITSCHNITT_STIMME)}
+
+
+@app.get("/api/anrufe/{sid}")
+def api_anruf(sid: str):
+    m = mitschnitt.laden(_MITSCHNITT_STIMME, sid)
+    if not m:
+        raise HTTPException(404, "anruf unbekannt")
+    return {"ok": True, "anruf": m}
+
+
+@app.get("/api/anrufe/{sid}/audio/{datei}")
+def api_anruf_audio(sid: str, datei: str):
+    p = mitschnitt.audio_pfad(_MITSCHNITT_STIMME, sid, datei)
+    if p is None:
+        raise HTTPException(404)
+    mime = {"wav": "audio/wav", "mp3": "audio/mpeg", "m4a": "audio/mp4",
+            "ogg": "audio/ogg"}.get(p.suffix.lstrip("."), "audio/webm")
+    return FileResponse(p, media_type=mime)
+
+
+@app.post("/api/anrufe/{sid}/loeschen")
+def api_anruf_loeschen(sid: str):
+    return {"ok": mitschnitt.loeschen(_MITSCHNITT_STIMME, sid)}
+
+
+@app.get("/anrufe")
+def anrufe_seite():
+    p = BIANCA_WEB_DIR / "anrufe.html"
+    if not p.is_file():
+        raise HTTPException(404, "bianca_web/anrufe.html fehlt")
+    return FileResponse(p, media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/hangup")
 def api_hangup(body: HangupIn):
     sit = session.holen(body.sessionId)
@@ -262,6 +308,8 @@ def api_hangup(body: HangupIn):
             print(f"bianca-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
+        # W-MITSCHNITT: offene Stream-Audios einlösen, Ende-Zeit stempeln.
+        mitschnitt.ende(sit, DIENST)
         # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
         gedaechtnis.report_senden(sit)
 
@@ -397,7 +445,7 @@ def index():
 
 @app.get("/{name}")
 def web_file(name: str):
-    erlaubt = {"app.js", "styles.css"}
+    erlaubt = {"app.js", "styles.css", "anrufe.js"}
     if name in erlaubt:
         p = BIANCA_WEB_DIR / name
         if p.is_file():

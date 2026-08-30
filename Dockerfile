@@ -5,12 +5,18 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# ffmpeg nur fuer die SIP-Bruecke (MP3-Jingle -> PCM); haelt das Image klein
+# genug und erspart einen zweiten Basis-Container.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY kern/ kern/
 COPY lisa/ lisa/
 COPY bianca/ bianca/
+COPY sip_bridge/ sip_bridge/
 COPY web/ web/
 COPY bianca_web/ bianca_web/
 # Basis-Mandanten liegen im Image; der Tenant-Mount in compose.yml legt sich

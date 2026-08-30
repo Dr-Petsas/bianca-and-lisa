@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from kern import gedaechtnis, halbsatz, sprech, unterbrechung
+from kern import gedaechtnis, halbsatz, mitschnitt, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
@@ -282,6 +282,7 @@ def api_stille(body: HangupIn):
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
     url, tts_s = DIENST.stimme(text)
     session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
+    mitschnitt.zug(sit, DIENST, art="stille", text=text, timings={"tts": tts_s}, audio_url=url)
     print(f"lisa-stille session={body.sessionId} text={text!r}", flush=True)
     return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
@@ -314,6 +315,9 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     live = " ".join((text or "").split()).strip()
     if live:
         print(f"lisa-listen live session={sessionId} text={live!r}", flush=True)
+        # W-MITSCHNITT: beim Vorab-TEXT-Zug (W-TEMPO) kommt das Audio nur
+        # zum Archivieren mit — transkribiert wird nicht mehr.
+        mitschnitt.eingang(sit, blob, mime)
         return _ndjson(_zug_stream(sit, art="turn", text_in=live,
                                    barge_url=bargeUrl, barge_ms=bargeMs))
     return _ndjson(_zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name,
@@ -385,6 +389,8 @@ def api_hangup(body: HangupIn):
             print(f"lisa-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
+        # W-MITSCHNITT: offene Stream-Audios einlösen, Ende-Zeit stempeln.
+        mitschnitt.ende(sit, DIENST)
         # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
         gedaechtnis.report_senden(sit)
 

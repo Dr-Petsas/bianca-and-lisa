@@ -523,7 +523,19 @@ async function sendeZug({ text, blob, nr }) {
   };
   try {
     let data;
-    if (hatLive) {
+    if (hatLive && blob) {
+      // W-MITSCHNITT: auch der Vorab-TEXT-Zug (W-TEMPO) schickt die
+      // Aufnahme mit — der Server nutzt weiter den Text (kein zweites STT),
+      // archiviert aber das Anrufer-Audio für die Anrufliste (/anrufe).
+      const fd = new FormData();
+      fd.append("sessionId", sessionId);
+      fd.append("text", text);
+      fd.append("bargeUrl", barge ? barge.url : "");
+      fd.append("bargeMs", String(barge ? barge.ms : 0));
+      fd.append("audio", blob, blob.type.includes("mp4") ? "turn.m4a" : "turn.webm");
+      const r = await fetch("api/listen", { method: "POST", body: fd });
+      data = await leseZug(r, spielFiller);
+    } else if (hatLive) {
       const r = await fetch("api/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -874,6 +886,7 @@ const KOENNEN = [
     "<b>Terminnotiz im Termin:</b> „telefonisch Termin vereinbart wegen … // Bianca“ — direkt im Terminpopup sichtbar.",
     "<b>Besonderes automatisch heraushören</b> und notieren: Angst, Allergie, Begleitung, „bitte nur vormittags“ …",
     "<b>Offene Anliegen als Vorgang:</b> nicht gefundene Termine oder Rückruf-Wünsche landen als offenes Ticket bei der Praxis.",
+    "<b>Anrufliste mit Mitschnitt:</b> jedes Gespräch liegt unter „Anrufe“ im Browser — Transkript als Blasen, Audio je Zug (Anrufer UND Bianca), alle Zeiten (Uhrzeit, Offset, stt/llm/tts je Zug), Buchungs-Ergebnis und Praxis-Notiz.",
   ]},
   { t: "Gesprächsführung", p: [
     "<b>Smalltalk &amp; Abschweifen:</b> Nebenthemen bekommen Raum (Talk-Schicht) — danach führt genau EINE Brücke zurück zur offenen Frage.",
@@ -955,6 +968,9 @@ const PATCHES = [
   ["P4 Speculative Decoding", "29.08.", "Hirn", "Geprüft und bewusst NICHT aktiv: kein freier VRAM neben TTS (30,5/32,6 GB belegt)."],
   ["Pausen-Straffung", "29.08.", "Mund", "Gewärmte Renders: Anlauf 120 ms, Satzpausen 350 ms, Ausklang 250 ms — Sprache bleibt Sample-identisch."],
   [".env-BOM-Fix", "29.08.", "Betrieb", "PowerShell-BOM schaltete WRITE_LIVE still aus; Config liest jetzt utf-8-sig."],
+  ["W-SIP (AudioSocket-Brücke)", "29.08.", "Telefon", "Echte Anrufe: Zaluma → Asterisk → AudioSocket über SSH-Rücktunnel → sip_bridge (pickadoc1) → Bianca-API; Barge-in, Stille-Stups und Auflegen wie im Dock."],
+  ["W-SIP-RAUSCH (Leitungs-VAD)", "29.08.", "Telefon", "Adaptiver Rauschteppich statt starrer RMS-Schwelle: Telefon-Grundrauschen löst keinen falschen Barge mehr aus; Dauer-Stille-Rahmen halten den Medienstrom am Leben."],
+  ["W-MITSCHNITT (Anrufliste)", "30.08.", "Betrieb", "Jeder Anruf als Ordner unter .data/anrufe (Manifest + Audio je Zug, sofort geschrieben); Browser-Seite /anrufe mit Transkript, Abspiel-Knöpfen und allen Zeiten. Notaus: MITSCHNITT=0."],
 ];
 
 let kTab = "faehig";

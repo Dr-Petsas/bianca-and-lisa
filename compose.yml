@@ -52,5 +52,50 @@ services:
       retries: 3
       start_period: 30s
 
+  # SIP-Bruecke (W-SIP 29.08.2026): Asterisk AudioSocket -> Bianca.
+  # Der Asterisk erreicht Port 40101 ueber den SSH-Ruecktunnel
+  # (systemd bianca-asterisk-tunnel auf dem Host) — darum nur 127.0.0.1.
+  sipbridge:
+    <<: *app
+    command: python -m sip_bridge.server
+    environment:
+      <<: *app-env
+      BIANCA_BASE: http://bianca:8096
+      # 1 = Anrufer-Zuege als WAV nach /tmp mitschneiden (Feld-Diagnose)
+      BRIDGE_DUMP: ${BRIDGE_DUMP:-0}
+    depends_on:
+      - bianca
+    ports:
+      - "127.0.0.1:40101:40101"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket; socket.create_connection(('127.0.0.1', 40101), timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # SSH-Ruecktunnel zum Asterisk (W-SIP): haelt auf dem Asterisk-Server
+  # 127.0.0.1:40101 offen und leitet zur Bruecke. Der Schluessel ist auf dem
+  # Asterisk mit restrict,permitlisten auf GENAU diesen Port beschraenkt —
+  # keine Shell, kein anderes Forwarding. sudo-frei: Docker statt systemd.
+  tunnel:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on:
+      - sipbridge
+    volumes:
+      - ${TUNNEL_KEY:-/home/cursor/.ssh/id_ed25519_asterisk_tunnel}:/tunnel_key:ro
+    command: >
+      sh -c "apk add --no-cache openssh-client >/dev/null
+      && install -m 600 /tunnel_key /tmp/key
+      && exec ssh -N
+      -o StrictHostKeyChecking=accept-new
+      -o ServerAliveInterval=15 -o ServerAliveCountMax=3
+      -o ExitOnForwardFailure=yes
+      -i /tmp/key
+      -R 127.0.0.1:40101:sipbridge:40101
+      ${ASTERISK_SSH:-root@87.106.34.137}"
+
 volumes:
   telefonki-data:
