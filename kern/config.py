@@ -98,6 +98,18 @@ PHONE_CALL_TOKEN = _s("PICKADOC_PHONE_CALL_API_TOKEN") or _peek_key(
 # Wert deshalb in Anfuehrungszeichen stehen, sonst schneidet Compose ihn
 # als Kommentar ab und die CF antwortet 401 "missing API token".
 PHONE_CALL_TOKEN = PHONE_CALL_TOKEN.strip('"').strip("'")
+# Anruf-Audio ins Portal (W-CALLAUDIO 30.08.2026): das Gespraechs-MP3 geht
+# auf denselben Storage-Pfad wie beim alten ElevenLabs-Weg, die Download-URL
+# als audioRecordingUrl in den PhoneCall (Abspiel-Knopf der CallR-Seite).
+# Key-Suche: 1. FIREBASE_CREDENTIALS (Pfad), 2. secrets/ in diesem Repo
+# (Container-Mount), 3. peek auf die phone_agent-.env (nur Dev-Rechner).
+_fb = _s("FIREBASE_CREDENTIALS")
+if not _fb:
+    _kandidat = ROOT / "secrets" / "docgenda-service-account.json"
+    _fb = str(_kandidat) if _kandidat.is_file() else _peek_key(
+        Path(r"D:\dev\Dr-Petsas\phone_agent\.env"), "PICKADOC_FIREBASE_CREDENTIALS")
+FIREBASE_CREDENTIALS = _fb
+FIREBASE_BUCKET = _s("FIREBASE_STORAGE_BUCKET", "docgenda.appspot.com")
 MAS_URL = _s("MAS_URL", "http://127.0.0.1:4000").rstrip("/")
 # Praxisgedächtnis (W-GEDAECHTNIS 29.08.2026): Gesprächs-Reports an
 # POST {MAS_URL}/brain/events, Anrufer-Kontext von /brain/caller-context.

@@ -20,6 +20,9 @@ x-app: &app
     STT_BASE: ${STT_BASE:-}
   volumes:
     - ./tenants:/app/tenants:ro
+    # Service-Account-Key (W-CALLAUDIO): Anruf-MP3 -> Firebase Storage.
+    # Ordner darf leer sein — dann bleibt der Upload einfach aus.
+    - ./secrets:/app/secrets:ro
     - telefonki-data:/app/.data
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -48,6 +51,7 @@ services:
       STUDIO_BASE: http://studio:8097
     volumes:
       - ./tenants:/app/tenants:ro
+      - ./secrets:/app/secrets:ro
       - telefonki-data:/app/.data
       # Studio-Berichte + Autoloesch-Schlange teilt sich Bianca mit dem
       # Editor (Play-Buttons unter /studio/berichte, Testtermin-Waechter).

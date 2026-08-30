@@ -30,6 +30,7 @@ Notaus: DID_AGENT=0 => kein CF-Lookup (lokale DID-Zuordnung bleibt).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -235,23 +236,17 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     db = db_prompt_von_agent(agent)
     if db:
         t["dbPrompt"] = db
+
+    # W-CALLSTATUS: die pre-Phase hat einen PhoneCall-Datensatz angelegt —
+    # seine Id gehoert zur SITZUNG (call_erfassen), nie in den Cache.
+    pcid = _s(pre.get("phoneCallId"))
+    if pcid:
+        t["_phoneCallId"] = pcid
     return t
 
 
-def _cf_pre(did: str, caller: str = "") -> dict[str, Any] | None:
-    e164 = "+" + tenants.nummer_norm(did)
-    call_id = f"bianca-{tenants.nummer_norm(did)}-{int(time.time())}"
-    body = {
-        "phase": "pre",
-        # Die CF verlangt callerPhone zwingend (Patienten-Zuordnung). Die
-        # AudioSocket-Bruecke kennt die Anrufernummer nicht — "anonymous"
-        # wie bei unterdrueckter Rufnummer: kein Patient matcht, Agent kommt.
-        "callerPhone": _s(caller) or "anonymous",
-        "calledNumber": e164,
-        "callId": call_id,
-        "conversationId": call_id,
-        "roomName": call_id,
-    }
+def _cf_senden(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Ein Wurf an onPickadocPhoneCall (pre/post/analysis) — None bei Fehler."""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {PHONE_CALL_TOKEN}",
@@ -259,10 +254,30 @@ def _cf_pre(did: str, caller: str = "") -> dict[str, Any] | None:
     }
     r = httpx.post(PHONE_CALL_URL, json=body, headers=headers, timeout=WARTE_S)
     if r.status_code < 200 or r.status_code >= 300:
-        print(f"agentprofil cf {e164} -> http {r.status_code}: {r.text[:200]}", flush=True)
+        print(f"agentprofil cf phase={body.get('phase')} -> http {r.status_code}: "
+              f"{r.text[:200]}", flush=True)
         return None
     d = r.json()
     return d if isinstance(d, dict) else None
+
+
+def _cf_pre(did: str, caller: str = "") -> dict[str, Any] | None:
+    e164 = "+" + tenants.nummer_norm(did)
+    call_id = f"bianca-{tenants.nummer_norm(did)}-{int(time.time())}"
+    # W-ANRUFER (30.08.2026): die Bruecke liest die Anrufernummer aus dem
+    # UUID-Kopf des Dialplans (roh, z. B. "004915253904756") — die CF will
+    # +E164 (trimPhoneNumber matcht Patienten ueber "+49…"). Unterdrueckte
+    # Nummer -> "anonymous" wie bisher: kein Patient matcht, der Agent
+    # kommt trotzdem, das Portal zeigt "Unterdrueckte Nummer".
+    caller_norm = tenants.nummer_norm(caller)
+    return _cf_senden({
+        "phase": "pre",
+        "callerPhone": ("+" + caller_norm) if caller_norm else "anonymous",
+        "calledNumber": e164,
+        "callId": call_id,
+        "conversationId": call_id,
+        "roomName": call_id,
+    })
 
 
 def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
@@ -287,7 +302,12 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
                 print(f"agentprofil cf fail did={norm}: {type(e).__name__}: {e}", flush=True)
                 t = None
             with _LOCK:
-                _CACHE[norm] = (time.monotonic(), dict(t) if t else None)
+                # phoneCallId gilt nur fuer DIESEN Anruf — nie mitcachen,
+                # sonst haengen spaetere Anrufe am fremden Datensatz.
+                ablage = dict(t) if t else None
+                if ablage:
+                    ablage.pop("_phoneCallId", None)
+                _CACHE[norm] = (time.monotonic(), ablage)
             if t:
                 print(f"agentprofil did={norm} -> {t.get('_quelle')} {t.get('_id')} "
                       f"clientId={t.get('clientId')}", flush=True)
@@ -306,3 +326,274 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
 def cache_leeren() -> None:
     with _LOCK:
         _CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# W-CALLSTATUS (Chef 30.08.2026): "wenn der call beendet ist muss die
+# entsprechende cloud function aufgerufen werden, dann wird der status auf
+# aufgelegt oder so aehnlich gesetzt und eine zusammenfassung erstellt."
+# pre legt den PhoneCall-Datensatz an (inProgress), post schliesst ihn
+# (status=callCompleted, Transkript, Dauer), analysis traegt die
+# Zusammenfassung nach — gleiche CF, gleiche Auth wie fuer_did.
+# ---------------------------------------------------------------------------
+
+def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
+    """Beim Anrufstart: die phoneCallId dieses Anrufs in die Sitzung holen.
+
+    Kam der Mandant frisch aus der CF, liegt sie schon am Tenant
+    (_phoneCallId). Kam er aus dem TTL-Cache, hat DIESER Anruf noch keinen
+    Datensatz — dann registriert ein Daemon-Thread den Anruf nach (die
+    Begruessung wartet nie auf die CF)."""
+    sit["did"] = _s(did)
+    t = sit.get("tenant") or {}
+    if not isinstance(t, dict):
+        return
+    pcid = _s(t.pop("_phoneCallId", ""))
+    if pcid:
+        sit["phoneCallId"] = pcid
+        return
+    if not enabled() or not str(t.get("_quelle") or "").startswith("cf"):
+        return  # kein DB-Agent zu dieser Nummer -> kein PhoneCall-Datensatz
+    norm = tenants.nummer_norm(did)
+    if not norm:
+        return
+
+    def _lauf() -> None:
+        try:
+            pre = _cf_pre(norm, caller)
+            neu = _s((pre or {}).get("phoneCallId"))
+            if neu:
+                sit["phoneCallId"] = neu
+                print(f"agentprofil call registriert phoneCallId={neu}", flush=True)
+        except Exception as e:
+            print(f"agentprofil call-registrierung fail: {type(e).__name__}: {e}", flush=True)
+
+    threading.Thread(target=_lauf, daemon=True).start()
+
+
+# DocGenda PhoneCallCategory-Namen (String-Form, von der CF akzeptiert).
+_KATEGORIEN_ERLAUBT = {
+    "appointment", "cancellation", "callbackRequest", "prescription",
+    "medicalReferral", "medicalReport", "message", "question",
+}
+_UNZUFRIEDEN_ERLAUBT = {"practice", "agent", "both", "none", "unknown"}
+
+_JSON_ZAUN_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.I)
+
+
+def _json_objekt(text: str) -> dict[str, Any] | None:
+    """JSON-Objekt aus einer LLM-Antwort fischen (mit/ohne Code-Zaun)."""
+    roh = _s(text)
+    zaun = _JSON_ZAUN_RE.search(roh)
+    if zaun:
+        roh = zaun.group(1).strip()
+    treffer = re.search(r"\{[\s\S]*\}", roh)
+    if not treffer:
+        return None
+    try:
+        obj = json.loads(treffer.group(0))
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+def _analyse_llm(transcript: list[dict[str, Any]]) -> dict[str, Any]:
+    """Qualitaets-Analyse wie phone_agent call_analysis (gleiches Schema,
+    gleiche Regeln, unser lokales vLLM): summary, weiche Kategorien,
+    Zufriedenheit, Agent-Fehler, Unzufriedenheits-Zuordnung.
+
+    Leeres Dict bei LLM-Fehler oder ohne Anrufer-Zeile — der Abschluss
+    faellt dann auf die deterministischen Werte zurueck."""
+    if not any(z.get("role") == "user" for z in transcript):
+        return {}
+    zeilen = []
+    for z in transcript:
+        wer = "Assistentin" if z.get("role") == "agent" else "Anrufer"
+        zeilen.append(f"{wer}: {z.get('message')}")
+    text = "\n".join(zeilen)[:12000]
+    system = (
+        "Du bist Qualitätsprüfer einer deutschen Arztpraxis-Telefon-KI. "
+        "Analysiere das Transkript und antworte NUR mit einem JSON-Objekt "
+        "(kein Markdown).\n"
+        "Schema:\n"
+        "{\n"
+        '  "summary": "2-4 Sätze Deutsch: Anliegen, Ergebnis, offene Punkte",\n'
+        '  "categories": ["appointment"|"cancellation"|"callbackRequest"|"prescription"'
+        '|"medicalReferral"|"medicalReport"|"message"|"question"],\n'
+        '  "patientSatisfaction": 1|2|3|4|5,\n'
+        '  "patientSatisfactionReason": "kurz Deutsch: woran man die Stimmung erkennt",\n'
+        '  "agentError": true|false,\n'
+        '  "agentErrorDetails": ["kurz Deutsch, z.B. gleiche Frage 3× wiederholt"],\n'
+        '  "dissatisfactionCause": "practice"|"agent"|"both"|"none"|"unknown",\n'
+        '  "dissatisfactionCauseReason": "kurz Deutsch: warum diese Zuordnung"\n'
+        "}\n"
+        "Regeln:\n"
+        "- summary immer Deutsch.\n"
+        "- agentError=true bei schlechtem Agent-Verhalten: Wiederholungen, "
+        "ignoriertes Anliegen, unsinnige Nachfragen — NICHT bei korrekter "
+        "Nachfrage nach Name/Telefon beim ersten Mal.\n"
+        "- dissatisfactionCause: practice = Unmut wegen Praxis/Terminlage, "
+        "agent = Unmut wegen Agent-Verhalten, both = beides, "
+        "none = Patient wirkt zufrieden, unknown = unklar.\n"
+        "- Satisfaction 5=gelöst/freundlich, 1=eskaliert/sehr verärgert."
+    )
+    try:
+        from kern import llm
+        r = llm.chat(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": f"Transkript:\n{text}"}],
+            temperature=0.1, max_tokens=500,
+        )
+        if not r.get("ok"):
+            return {}
+        return _json_objekt(r.get("text") or "") or {}
+    except Exception as e:
+        print(f"agentprofil analyse-llm fail: {type(e).__name__}: {e}", flush=True)
+        return {}
+
+
+def _cf_evaluation(sit: dict, analyse: dict[str, Any]) -> dict[str, Any]:
+    """Komplettes evaluation-Objekt — JEDES Feld belegt. Die CF baut daraus
+    ungeprueft ihr Firestore-Update; fehlende Felder wuerden dort zu
+    undefined-Werten, der Write wirft und wird still verschluckt
+    (updatePhoneCall faengt und loggt nur) — live erlebt 30.08.2026:
+    analysis meldete success, der Datensatz blieb ohne Summary."""
+    tool_details = [
+        _s(t.get("name")) or "tool"
+        for t in (sit.get("tools") or [])
+        if isinstance(t, dict) and t.get("ok") is False
+    ][:10]
+    try:
+        sat = int(analyse.get("patientSatisfaction"))
+        sat = max(1, min(5, sat))
+        sat_grund = _s(analyse.get("patientSatisfactionReason"))
+    except (TypeError, ValueError):
+        sat, sat_grund = 3, ""
+    grund = str(analyse.get("dissatisfactionCause") or "").strip().lower()
+    if grund not in _UNZUFRIEDEN_ERLAUBT:
+        grund = "unknown"
+    agent_details = [
+        _s(x) for x in (analyse.get("agentErrorDetails") or []) if _s(x)
+    ][:10] if isinstance(analyse.get("agentErrorDetails"), list) else []
+    return {
+        "patientSatisfaction": sat,
+        "patientSatisfactionReason": sat_grund or "keine automatische Bewertung",
+        "toolError": bool(tool_details),
+        "toolErrorDetails": tool_details,
+        "agentError": bool(analyse.get("agentError")),
+        "agentErrorDetails": agent_details,
+        "dissatisfactionCause": grund,
+        "dissatisfactionCauseReason": _s(analyse.get("dissatisfactionCauseReason")),
+    }
+
+
+def _cf_kategorien(sit: dict) -> list[str]:
+    """Harte Kategorien aus der Sitzung (DocGenda PhoneCallCategory-Namen) —
+    deterministisch wie phone_agent hard_categories_from_session."""
+    def _ok(e: Any) -> bool:
+        return isinstance(e, dict) and bool(e.get("ok") or e.get("booked"))
+
+    cats: list[str] = []
+    if _ok(sit.get("lastBook")) or _ok(sit.get("lastMove")):
+        cats.append("appointment")
+    if _ok(sit.get("lastCancel")):
+        cats.append("cancellation")
+    if sit.get("praxisNotiz"):
+        cats.append("callbackRequest")
+    return cats
+
+
+def _cf_transkript(sit: dict) -> tuple[list[dict[str, Any]], int]:
+    """Transkript im DocGenda-TranscriptItem-Format + Dauer in Sekunden.
+
+    Quelle ist der Mitschnitt (traegt offsetMs je Zug und dauerMs);
+    ohne Mitschnitt hilfsweise das LLM-Protokoll (Zeiten dann 0)."""
+    zuege: list[dict[str, Any]] = []
+    dauer = 0
+    try:
+        from kern import mitschnitt
+        m = mitschnitt.laden(_s(sit.get("stimme")).lower() or "bianca",
+                             _s(sit.get("id"))) or {}
+        zuege = m.get("zuege") or []
+        dauer = int(round(float(m.get("dauerMs") or 0) / 1000.0))
+    except Exception:
+        zuege, dauer = [], 0
+
+    out: list[dict[str, Any]] = []
+    for z in zuege:
+        if not isinstance(z, dict):
+            continue
+        secs = int(round(float(z.get("offsetMs") or 0) / 1000.0))
+        if _s(z.get("textIn")):
+            out.append({"role": "user", "message": _s(z.get("textIn")),
+                        "timeInCallSecs": secs})
+        if _s(z.get("text")):
+            out.append({"role": "agent", "message": _s(z.get("text")),
+                        "timeInCallSecs": secs})
+    if not out:
+        for msg in sit.get("messages") or []:
+            rolle = msg.get("role") if isinstance(msg, dict) else ""
+            text = _s(msg.get("content")) if isinstance(msg, dict) else ""
+            # Regie-Zeilen wie "(Ein Anrufer ist in der Leitung. ...)" sind
+            # kein Gespraech.
+            if rolle not in ("user", "assistant") or not text or text.startswith("("):
+                continue
+            out.append({"role": "agent" if rolle == "assistant" else "user",
+                        "message": text, "timeInCallSecs": 0})
+    if not dauer:
+        try:
+            start = datetime.fromisoformat(_s(sit.get("startedAt")))
+            dauer = max(0, int((datetime.now(start.tzinfo) - start).total_seconds()))
+        except (ValueError, TypeError):
+            dauer = 0
+    return out, dauer
+
+
+def call_abschliessen(sit: dict) -> None:
+    """Nach dem Auflegen (hangup-Nacharbeit, laeuft schon im Daemon-Thread):
+    phase=post (Status -> callCompleted, Transkript, Dauer) und
+    phase=analysis (Zusammenfassung im Terminpopup-Stil). Nie werfend —
+    der Anruf-Pfad und die uebrige Nacharbeit leiden nie."""
+    try:
+        pcid = _s(sit.get("phoneCallId"))
+        t = sit.get("tenant") or {}
+        client_id = _s(t.get("clientId"))
+        location_id = _s(t.get("locationId"))
+        if not (enabled() and pcid and client_id and location_id):
+            return
+        transcript, dauer_s = _cf_transkript(sit)
+        kategorien = _cf_kategorien(sit)
+        basis = {"phoneCallId": pcid, "clientId": client_id,
+                 "locationId": location_id}
+        # W-CALLAUDIO: der komplette Anruf als MP3 in den Firebase Storage —
+        # die Download-URL laesst den Abspiel-Knopf der Portal-CallR-Seite
+        # wieder spielen (frueher setzte die ElevenLabs-CF diese URL).
+        from kern import anrufaudio
+        audio_url = anrufaudio.hochladen(sit)
+        post_body = {**basis, "phase": "post", "transcript": transcript,
+                     "callDurationSecs": dauer_s, "endReason": "hangup",
+                     "categories": kategorien}
+        if audio_url:
+            post_body["audioRecordingUrl"] = audio_url
+        post = _cf_senden(post_body)
+        # Zusammenfassung + Bewertung wie beim alten phone_agent: LLM-Analyse
+        # (lokales vLLM), harte + weiche Kategorien gemergt (eigene Kopie —
+        # der post-Payload behaelt die harten), deterministischer Rueckfall.
+        analyse = _analyse_llm(transcript)
+        gemergt = list(kategorien)
+        weich = analyse.get("categories")
+        for k in (weich if isinstance(weich, list) else []):
+            if k in _KATEGORIEN_ERLAUBT and k not in gemergt:
+                gemergt.append(k)
+        from kern import gedaechtnis
+        summary = _s(analyse.get("summary")) or gedaechtnis.zusammenfassung(sit)
+        analysis = _cf_senden({**basis, "phase": "analysis",
+                               "summary": summary,
+                               "categories": gemergt,
+                               "evaluation": _cf_evaluation(sit, analyse)})
+        print(f"agentprofil call abgeschlossen phoneCallId={pcid} "
+              f"post={'ok' if post else 'FEHLER'} "
+              f"analysis={'ok' if analysis else 'FEHLER'} "
+              f"dauer={dauer_s}s kategorien={gemergt}", flush=True)
+    except Exception as e:
+        print(f"agentprofil call-abschluss fail: {type(e).__name__}: {e}", flush=True)

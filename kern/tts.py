@@ -137,10 +137,13 @@ def _ziffern_einzeln(text: str) -> str:
 # Nachhoer-Waechter fuer Ziffern-Saetze (29.08.2026): auch in Ziffern-Form
 # wuerfelt CosyVoice GELEGENTLICH einen Abbruch/Babble-Wurf (E2E-Probe:
 # 14-s-Audio, Nummer riss nach '0 1 7 7 6 0' ab). Eine Nummern-Ansage darf
-# den Anrufer nur erreichen, wenn der lokale Parakeet ALLE Soll-Ziffern in
-# Reihenfolge gegengehoert hat — sonst wird neu gerendert (max. 3 Wuerfe,
-# ~1 s je Pruefung). Ohne lokales STT wird nicht geprueft (ElevenLabs-Pfad
-# bleibt unberuehrt). Notaus: TTS_ZIFFERN_CHECK=0.
+# den Anrufer nur erreichen, wenn der lokale Parakeet GENAU die Soll-Ziffern
+# in Reihenfolge gegengehoert hat — sonst wird neu gerendert (max. 3 Wuerfe,
+# ~1 s je Pruefung). GENAU heisst seit 30.08.2026 auch: keine Extra-Ziffern
+# (live sprach die Engine '0177 600 4600 46' — das angehaengte '46' rutschte
+# durch den alten Substring-Vergleich, der nur FEHLENDE Ziffern sah).
+# Ohne lokales STT wird nicht geprueft (ElevenLabs-Pfad bleibt unberuehrt).
+# Notaus: TTS_ZIFFERN_CHECK=0.
 _ZIFFERN_VERSUCHE = 3
 
 
@@ -166,7 +169,9 @@ def _ziffern_gehoert(blob: bytes, soll: str) -> bool:
         gehoert = _stt.transcribe(blob, mime="audio/wav", name="ziffern.wav")
     except Exception:
         return True
-    return soll in re.sub(r"\D", "", gehoert)
+    # Exakte Gleichheit statt Substring: zu wenig UND zu viel ist falsch
+    # (30.08.2026: halluziniertes '…4600 46' bestand den alten in-Test).
+    return re.sub(r"\D", "", gehoert) == soll
 
 
 def _ram_merken(schluessel: str, blob: bytes, *, fest: bool = False) -> None:
@@ -443,7 +448,7 @@ class LokalTts:
             blob = pcm16_wav(raw)
             if not soll or _ziffern_gehoert(blob, soll):
                 break
-            print(f"tts-ziffern: Wurf {versuch + 1} unvollstaendig ({soll}) — neu", flush=True)
+            print(f"tts-ziffern: Wurf {versuch + 1} weicht vom Soll ab ({soll}) — neu", flush=True)
         _ram_merken(schluessel, blob)
         return blob
 

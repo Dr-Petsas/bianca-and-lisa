@@ -16,6 +16,7 @@ from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
 from kern import (
     agentprofil,
+    anrufaudio,
     gedaechtnis,
     halbsatz,
     llm,
@@ -125,6 +126,7 @@ def health():
         "llmModel": LLM_MODEL,
         "gedaechtnis": gedaechtnis.anzeige(),
         "mandant": agentprofil.anzeige(),
+        "anrufAudio": anrufaudio.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -132,6 +134,15 @@ def health():
 @app.get("/api/tenants")
 def api_tenants():
     return {"ok": True, "tenants": tenants.liste(), "default": DEFAULT_TENANT}
+
+
+@app.post("/api/mandant-cache/leeren")
+def api_mandant_cache_leeren():
+    """W-MANDANT: DID->Agent-Cache (TTL 300 s) sofort verwerfen — nach einer
+    Konfig-Aenderung in der Pickadoc-DB greift der naechste Anruf direkt."""
+    agentprofil.cache_leeren()
+    print("bianca-mandant-cache geleert", flush=True)
+    return {"ok": True}
 
 
 @app.post("/api/start")
@@ -144,6 +155,10 @@ def api_start(body: StartIn):
     if t is None:
         t = tenants.laden(body.tenant or DEFAULT_TENANT)
     sit = session.neu(tenant=t)
+    if body.did:
+        # W-CALLSTATUS: phoneCallId dieses Anrufs in die Sitzung (frisch aus
+        # der pre-Antwort oder per Hintergrund-Registrierung bei Cache-Hit).
+        agentprofil.call_erfassen(sit, did=body.did, caller=body.caller)
     return DIENST.json_antwort(
         sit, art="start",
         extra={"sessionId": sit["id"], "praxis": t.get("praxisName"),
@@ -352,6 +367,10 @@ def api_hangup(body: HangupIn):
         mitschnitt.ende(sit, DIENST)
         # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
         gedaechtnis.report_senden(sit)
+        # W-CALLSTATUS: PhoneCall in der Pickadoc-DB abschließen (Status
+        # callCompleted + Transkript + Zusammenfassung) — NACH mitschnitt.ende,
+        # damit Dauer und Zug-Offsets im Manifest stehen.
+        agentprofil.call_abschliessen(sit)
 
     threading.Thread(target=_nacharbeit, daemon=True).start()
     return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}

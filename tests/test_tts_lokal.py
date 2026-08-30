@@ -139,6 +139,33 @@ def test_ziffern_nachhoeren_rendert_neu_bis_alle_ziffern_da_sind():
     _mit_lokal(fake, lauf)
 
 
+def test_ziffern_nachhoeren_weist_extra_ziffern_ab():
+    """Live 30.08.2026: STT hoerte '0177 600 4600' korrekt, die Engine sprach
+    aber '0177 600 4600 46' — das angehaengte '46' bestand den alten
+    Substring-Vergleich (Soll steckt als Praefix im Gehoerten). Zu VIELE
+    Ziffern muessen genauso zum Neu-Rendern fuehren wie fehlende."""
+    from kern import config as cfg
+    from kern import stt as stt_mod
+
+    leise = (2000).to_bytes(2, "little", signed=True) * (tts.MIN_AKTIV_SAMPLES * 2)
+    fake = _FakeLokal(_Antwort(200, leise))
+    gehoert = iter(["0177 600 4600 46", "0177 600 4600"])
+
+    def lauf():
+        alt_base, alt_tr = cfg.STT_BASE, stt_mod.transcribe
+        cfg.STT_BASE = "http://stt-test:8212"
+        stt_mod.transcribe = lambda *a, **k: next(gehoert)
+        try:
+            wav = tts.LokalTts().speak(
+                "Null eins sieben sieben, sechs null null, vier sechs, null null.")
+        finally:
+            cfg.STT_BASE, stt_mod.transcribe = alt_base, alt_tr
+        assert len(fake.aufrufe) == 2, "Extra-Ziffern -> Wurf verworfen, genau ein zweiter"
+        assert wav[:4] == b"RIFF"
+
+    _mit_lokal(fake, lauf)
+
+
 def test_warm_gegenhoeren_score():
     """Warm-Abnahme (29.08.2026): Parakeet hoert Warm-Renders gegen — Babble
     ('hissio') faellt durch, ein korrekter Render besteht, ohne lokales STT

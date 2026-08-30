@@ -39,10 +39,14 @@ derselbe wie im alten phone_agent: `calledNumber` -> Cloud Function
 Kalender/Motive/Begrüßung/Keywords/Prompts. Kette bei uns:
 
 - **Brücke** (`sip_bridge/server.py -> did_von_uuid`): der Dialplan trägt
- je DID eine FESTE AudioSocket-UUID (…4101/…4110); ihr Hex-Ende wird über
- `BRIDGE_DID_MAP` (Default: beide Live-Nummern) in die E.164-Nummer
+ je DID eine FESTE AudioSocket-UUID (…4101/…4110/…4120); ihr Hex-Ende wird
+ über `BRIDGE_DID_MAP` (Default: alle Live-Nummern) in die E.164-Nummer
  übersetzt und als `did` an `POST /api/start` gemeldet. Neue DID = neuer
- Dialplan-Eintrag mit eigener UUID + Map-Eintrag.
+ Dialplan-Eintrag mit eigener UUID + Map-Eintrag. Seit 30.08.2026 abends
+ auch **+49 211 54244120 = Blessing** (Hautarztpraxis Doktor Blessing,
+ Agent samt Begrüßung kommt komplett aus der DB, clientId UUJnPzoYPa4yYyzcaGlm,
+ kein lokales tenants-JSON; Asterisk-Backup
+ `extensions_bianca.conf.bak-20260830-4120`).
 - **Auflösung** (`kern/agentprofil.fuer_did`, in `bianca/server.api_start`)
  — DB ZUERST (Chef 30.08.2026 abends, davor stand die lokale Datei vorn):
  1. Cloud Function (Auth `PICKADOC_PHONE_CALL_API_TOKEN` als Bearer +
@@ -53,15 +57,18 @@ Kalender/Motive/Begrüßung/Keywords/Prompts. Kette bei uns:
  mit `#` und enthält ein `$` — in der Server-.env (Compose env_file +
  Interpolation) MUSS er in EINFACHEN Quotes stehen; doppelt quotiert
  expandiert Compose das `$…` weg (401), unquotiert schneidet `#` alles ab.
- `callerPhone` ist CF-Pflicht — die AudioSocket-Brücke kennt die
- Anrufernummer nicht, gesendet wird `anonymous` (kein Patient matcht,
- der Agent kommt trotzdem). Passt die clientId der Antwort zu einer
+ `callerPhone` ist CF-Pflicht — seit W-ANRUFER (30.08.2026 spät, s. u.)
+ liefert die Brücke die echte Anrufernummer aus dem UUID-Kopf mit
+ (`_cf_pre` normalisiert auf +E164); nur bei unterdrückter Nummer geht
+ weiter `anonymous` (kein Patient matcht, der Agent kommt trotzdem). Passt die clientId der Antwort zu einer
  lokalen tenants/*.json, dient die Datei nur als BASIS für Felder, die
  die DB nicht kennt (Sprechformen, wissen; `_quelle=cf+datei`) — die
  DB GEWINNT immer bei: Begrüßung (`begruessungText` = agent.firstMessage,
  Vorrang in `bianca/agent.start_reply`), Kalender, Motive, Keywords
  (gemergt) und dem Agent-Prompt (s. u.). TTL-Cache je Nummer
- (`AGENT_PROFIL_TTL_S`, 300 s; Fehlschläge 60 s negativ);
+ (`AGENT_PROFIL_TTL_S`, 300 s; Fehlschläge 60 s negativ) — DB-Änderungen
+ greifen also nach max. 5 min; sofort: `POST /api/mandant-cache/leeren`
+ (auch ein Container-Neustart leert ihn);
  2. lokaler Mandant, dessen `dids`-Feld die Nummer trägt — NUR Rückfall
  (CF aus, CF down, kein Agent zur Nummer);
  3. nichts gefunden -> DEFAULT_TENANT, der Anruf wird IMMER angenommen.
@@ -88,6 +95,75 @@ Kalender/Motive/Begrüßung/Keywords/Prompts. Kette bei uns:
  `tenant`, wenn beides kommt. Health zeigt `mandant`.
 - **Notaus:** `DID_AGENT=0` => kein CF-Lookup (lokale `dids` gelten weiter).
  Tests: `tests/test_agentprofil.py`.
+- **Call-Status + Zusammenfassung (W-CALLSTATUS 30.08.2026):** Chef: "wenn
+ der call beendet ist muss die entsprechende cloud function aufgerufen
+ werden, dann wird der status auf aufgelegt oder so aehnlich gesetzt und
+ eine zusammenfassung erstellt." Die pre-Phase legt je Anruf einen
+ PhoneCall-Datensatz an (inProgress); `agentprofil.call_erfassen` (in
+ api_start) holt dessen phoneCallId in die SITZUNG — bei Cache-Treffern
+ registriert ein Daemon-Thread den Anruf nach (die Begruessung wartet nie
+ auf die CF); die phoneCallId wird NIE mitgecacht. Nach dem Auflegen sendet
+ `agentprofil.call_abschliessen` (hangup-Nacharbeit, NACH mitschnitt.ende)
+ `phase=post` (Status -> callCompleted = "aufgelegt", Transkript aus dem
+ Mitschnitt-Manifest mit timeInCallSecs aus offsetMs, Dauer, endReason,
+ harte Kategorien: appointment/cancellation/callbackRequest aus lastBook/
+ lastMove/lastCancel/praxisNotiz) und `phase=analysis` (summary + weiche
+ Kategorien + Bewertung per LLM-Analyse wie phone_agent call_analysis,
+ lokales vLLM; ohne Anrufer-Zeile oder bei LLM-Fehler deterministischer
+ Rueckfall: `gedaechtnis.zusammenfassung`, Zufriedenheit 3/unknown).
+ **CF-Falle (live erlebt 30.08.2026):** die analysis-Phase baut IMMER ein
+ evaluation-Update; fehlen Bewertungsfelder im Request, stehen dort
+ undefined-Werte, der Firestore-Write wirft und `updatePhoneCall` faengt
+ den Fehler still — die CF meldet trotzdem success und der Datensatz
+ bleibt ohne Summary. Deshalb belegt `_cf_evaluation` JEDES Feld
+ (toolError/Details deterministisch aus sit["tools"]). Nur fuer
+ CF-Mandanten (`_quelle=cf*`) — Dock-Anrufe ohne DID und Datei-Mandanten
+ schreiben nichts. Nie werfend, nie auf dem Anruf-Pfad.
+- **Anrufernummer im Portal (W-ANRUFER 30.08.2026 — nicht rückbauen):**
+ Chef: im Portal stand überall "Unterdrückte Nummer" statt Nummer + Name des
+ Bestandspatienten. Ursache: AudioSocket übergibt der Brücke NUR die UUID —
+ die Anrufernummer (laut Asterisk-CDR sehr wohl da, Zaluma-Format
+ `004915…`) ging verloren, `_cf_pre` sendete pauschal `anonymous`, die
+ CF-Patientensuche lief leer. Fix ohne neuen Kanal: der Dialplan
+ (`extensions_bianca.conf`, Referenzkopie im Repo unter `sip_bridge/`,
+ Backup `.bak-20260830-anrufer`) packt die CALLERID-Ziffern (FILTER 0-9 —
+ Ziffern sind gültige Hex-Zeichen) RECHTSBÜNDIG in die ersten 20 Hex-Zeichen
+ der AudioSocket-UUID, links mit `f` gepolstert; das UUID-ENDE bleibt die
+ feste DID-Kennung (…4101/…4110, `did_von_uuid` unverändert). Die Brücke
+ (`caller_von_uuid`) akzeptiert den Kopf NUR, wenn nach dem f-Polster >= 5
+ reine Ziffern stehen — alte feste UUIDs (`b1a2ca00…`), Zufalls-UUIDs der
+ Proben und reines f-Polster (unterdrückte Nummer) geben "" und damit
+ `anonymous` wie bisher. Weg: UUID -> `/api/start` (Feld `caller`, gab es
+ schon) -> `agentprofil._cf_pre` normalisiert via `tenants.nummer_norm` auf
+ `+E164` (CF trimPhoneNumber matcht Patienten über `+49…`) -> PhoneCall
+ trägt Nummer + Patient (Name/Geschlecht/Geburtsdatum) wie beim alten
+ phone_agent. Gilt für Cache-Treffer genauso (call_erfassen reicht caller
+ an die Hintergrund-Registrierung durch). Tests:
+ `test_bruecke_liest_anrufer_aus_uuid_kopf`,
+ `test_cf_pre_normalisiert_anrufer_auf_e164` (test_agentprofil).
+- **Anruf-Audio im Portal (W-CALLAUDIO 30.08.2026 — nicht rückbauen):**
+ Chef: die Portal-Anrufliste (CallR) muss das Gespräch abspielen können —
+ früher setzte die ElevenLabs-CF `audioRecordingUrl` (MP3 im Firebase
+ Storage), seit Bianca die Anrufe hält, lud niemand mehr Audio hoch.
+ `kern/anrufaudio.py` baut in der hangup-Nacharbeit (NACH mitschnitt.ende,
+ in call_abschliessen) den kompletten Anruf aus dem Mitschnitt
+ (`mitschnitt.anruf_wav`), kodiert per ffmpeg zu MP3 (64 kbit mono; ohne
+ ffmpeg WAV-Rückfall) und lädt ihn auf EXAKT den alten CF-Pfad
+ `clients/{clientId}/locations/{locationId}/phoneCalls/{phoneCallId}.mp3`
+ (Bucket `docgenda.appspot.com`); die Download-URL (getDownloadURL-Form mit
+ firebaseStorageDownloadTokens) geht als `audioRecordingUrl` im post-Payload
+ mit — die CF speichert sie, das Portal-`<audio>` spielt sie. Auth:
+ Service-Account-JSON -> selbstsigniertes RS256-JWT -> OAuth2 (cryptography
+ + httpx, KEIN google-auth-Stack); Key-Suche: `FIREBASE_CREDENTIALS`, dann
+ `secrets/docgenda-service-account.json` (Compose mountet `./secrets` ro,
+ Quelle: docgendaweb/functions/docgenda-635adf3e6507.json), dann Peek auf
+ die phone_agent-.env. Nur für CF-Mandanten (gleiche Gates wie post:
+ phoneCallId+clientId+locationId), nie werfend, nie auf dem Anruf-Pfad.
+ Notaus: `CALL_AUDIO_UPLOAD=0`. Health zeigt `anrufAudio`. Tests:
+ `tests/test_anrufaudio.py`; Live-Probe (echter Bucket, räumt auf):
+ `python -m tests.anrufaudio_probe` — 30.08. grün. ROLLOUT-PFLICHT auf
+ pickadoc1: Key nach `/home/cursor/telefonki/secrets/` kopieren + App-Image
+ neu bauen (requirements trägt jetzt cryptography).
 - **Nebenbefund 30.08.:** nemo_toolkit (Rest des verworfenen NeMo-Versuchs)
  legt ein top-level `tests`-Paket in die site-packages und überdeckte
  unseren `tests/`-Ordner (lauf_bianca und der Autolösch-Import in
@@ -330,7 +406,9 @@ Lisa/Bianca vernünftig funktionieren.
      Cache-Key, Logs und Transkript behalten die Wortform. Uhrzeiten
      ("neun Uhr fuenfzehn") bleiben unberuehrt.
   2. **Nachhoer-Waechter** fuer Saetze mit >= 4 Ziffern: Parakeet hoert
-     jeden frischen Render gegen (~0,4 s); fehlen Ziffern, wird neu
+     jeden frischen Render gegen (~0,4 s); weicht die Ziffernfolge vom Soll
+     ab (fehlende ODER Extra-Ziffern — 30.08.2026 live: Engine haengte
+     '…4600 46' an, der alte Substring-Vergleich liess das durch), wird neu
      gewuerfelt (max. 3 Wuerfe, Log `tts-ziffern:`). Erst der verifizierte
      Wurf erreicht Anrufer und LRU. E2E gemessen: Readback frisch ~1,0-1,2 s
      inkl. Pruefung (Qwen3 brauchte 4,4-5,1 s). Notaus: `TTS_ZIFFERN_CHECK=0`.

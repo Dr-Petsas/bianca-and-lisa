@@ -59,7 +59,8 @@ BRIDGE_TENANT = (os.environ.get("BRIDGE_TENANT") or "").strip()
 # Format: "hexende=+E164,hexende=+E164". Neue DID = neuer Dialplan-Eintrag
 # mit eigener UUID + Eintrag hier (oder in BRIDGE_DID_MAP).
 _DID_MAP_ROH = (os.environ.get("BRIDGE_DID_MAP")
-                or "4101=+4921154244101,4110=+4921154244110").strip()
+                or "4101=+4921154244101,4110=+4921154244110,"
+                   "4120=+4921154244120").strip()
 DID_MAP: dict[str, str] = {}
 for _paar in _DID_MAP_ROH.split(","):
     _k, _, _v = _paar.partition("=")
@@ -76,6 +77,24 @@ def did_von_uuid(uuid_bytes: bytes) -> str:
         if hexs.endswith(ende) and len(ende) > len(treffer):
             treffer = ende
     return DID_MAP.get(treffer, "")
+
+
+def caller_von_uuid(uuid_bytes: bytes) -> str:
+    """Anrufernummer aus dem UUID-Kopf (W-ANRUFER 30.08.2026).
+
+    AudioSocket uebergibt nur die UUID — deshalb packt der Dialplan die
+    CALLERID-Ziffern (FILTER 0-9, Ziffern sind gueltige Hex-Zeichen)
+    rechtsbuendig in die ERSTEN 20 Hex-Zeichen, links mit 'f' gepolstert;
+    das UUID-Ende bleibt die DID-Kennung (did_von_uuid unveraendert).
+    Nur-Ziffern nach dem Polster = Nummer (roh, wie geliefert — z. B.
+    "004915253904756"; normalisiert wird serverseitig). Alles andere
+    (alte feste UUIDs "b1a2ca00…", Zufalls-UUIDs der Proben, reines
+    f-Polster bei unterdrueckter Nummer) -> ""."""
+    hexs = (uuid_bytes or b"").hex().lower()
+    kopf = hexs[:20].lstrip("f")
+    if len(kopf) >= 5 and kopf.isdigit():
+        return kopf
+    return ""
 
 # W-SIP-PEGEL (30.08.2026): Biancas Renders fahren mit Sprach-RMS -14 dBFS
 # und Peaks am 0,95-Deckel — im Dock richtig (Chef-Abnahme 28.08.), auf der
@@ -313,6 +332,7 @@ class Anruf:
                                       timeout=httpx.Timeout(60.0, connect=5.0))
         self.session_id = ""
         self.did = ""  # W-MANDANT: angerufene Nummer aus der Dialplan-UUID
+        self.caller = ""  # W-ANRUFER: Anrufernummer aus dem UUID-Kopf
         self.stille_ms = STILLE_MS_DEFAULT
         self.wiedergabe = Wiedergabe(self._audio_raus)
         self.zuege: asyncio.Queue = asyncio.Queue()
@@ -572,7 +592,8 @@ class Anruf:
 
     async def _start(self) -> bool:
         r = await self.http.post("/api/start",
-                                 json={"tenant": BRIDGE_TENANT, "did": self.did})
+                                 json={"tenant": BRIDGE_TENANT, "did": self.did,
+                                       "caller": self.caller})
         if r.status_code != 200:
             print(f"bruecke-start http {r.status_code}", flush=True)
             return False
@@ -682,7 +703,9 @@ class Anruf:
             await self.http.aclose()
             return
         self.did = did_von_uuid(rahmen[1])
-        print(f"bruecke-anruf von {peer} uuid={rahmen[1].hex()} did={self.did or '?'}", flush=True)
+        self.caller = caller_von_uuid(rahmen[1])
+        print(f"bruecke-anruf von {peer} uuid={rahmen[1].hex()} "
+              f"did={self.did or '?'} caller={self.caller or 'unterdrueckt'}", flush=True)
         if not await self._start():
             await self._ende_raus()
             self.writer.close()
