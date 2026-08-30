@@ -10,7 +10,8 @@ from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
                   sprache: str = "de", termine_text: str = "", slots_text: str = "",
                   wissen: dict | None = None, plan: str = "",
-                  praxis_von: str = "", kontext: str = "") -> str:
+                  praxis_von: str = "", kontext: str = "",
+                  unterlage: str = "") -> str:
     # Gebeugte Sprechform ("den Zahnärzten im Medical Center Düsseldorf") —
     # ohne Angabe wie frueher "der {praxisName}".
     von = praxis_von or (f"der {praxis}" if praxis else "der Praxis")
@@ -39,6 +40,10 @@ Sagt er etwas Besonderes zu einem bestehenden Termin: note_appointment.
 """
 
     historie = f"\nBEKANNTE TERMINE DES PATIENTEN\n{termine_text}\n" if termine_text else ""
+    akte = (
+        f"\nUNTERLAGE (vor dem Anruf gesammelt — nutzen, nicht vorlesen, nichts ergänzen)\n{unterlage}\n"
+        if unterlage else ""
+    )
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
     # Talk-Schicht (kern/gespraech.py): hat gerade ein Nebenthema den Floor,
     # steht hier, wie frei dieser Zug sein darf und wie es zurueckgeht.
@@ -77,8 +82,10 @@ Dann der nächste kleine Schritt. Wieder eine Frage — oder ein klarer Abschlus
 GESPRÄCHSTIEFE
 Der Auftrag darf Schichten haben (Warum, Begründung, Einwand, nächster Schritt).
 Verteile sie über mehrere Züge — nach Zug 2 nicht aufhören, nur weil der erste Satz gesagt ist.
-Recall oder Kontrolle: wenn der Patient zögert oder nach dem Warum fragt, begründe kurz (regelmäßig nachschauen, kleine Befunde früh finden). Keine Krankengeschichte erfinden.
-Praxisgedächtnis nur nutzen, wenn dort ein konkreter, zahnärztlicher Stand steht. Leere oder fachfremde Einträge (Zoll, Paket, Demo) ignorieren.
+Recall oder Kontrolle: wenn der Patient zögert oder nach dem Warum fragt, begründe kurz (regelmäßig nachschauen, kleine Befunde früh finden) — nur wenn der Auftrag das hergibt. Keine Krankengeschichte erfinden.
+Unterlage und Praxisgedächtnis nur nutzen, wenn dort ein konkreter Stand zu DIESEM Auftrag steht. Nichts erfinden. Fachfremdes (Zoll/Demo) ignorieren, außer der Auftrag selbst handelt davon.
+Sagt jemand „ich war doch erst da“ oder „ich komme nächste Woche sowieso“: das steht oft in der Unterlage — bestätigen, nicht widersprechen, keinen zweiten Termin drüberbuchen.
+Rufnummer: wenn die gewählte Nummer falsch ist oder jemand eine neue sagt, nimmt die Nummern-Aufnahme das auf (rückbestätigen, dann Akte oder Notiz). Du erfindest keine Nummer. Ist die neue die des Partners: nicht still die Patientenakte überschreiben. Wer die Nummer sucht (Handy, Zettel), bekommt Zeit — nicht drängeln.
 
 GESPRÄCHSSTIL
 freundlich, ruhig, empathisch, nicht roboterhaft.
@@ -98,7 +105,7 @@ Nur die Kalender-Werkzeuge unten. IDs kommen aus der Sitzung — du erfindest ke
 {termin_logik}
 HEUTE
 {heute_zeile()} Danach richten sich „heute", „morgen" und Wochentage.
-{kontext}{historie}{frei}{lage}
+{kontext}{akte}{historie}{frei}{lage}
 GESPRÄCHSPARTNER: {patient or "der Patient"}
 PRAXIS: {praxis}
 BEHANDLER (nur wenn nötig): {behandler or "—"}

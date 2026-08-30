@@ -13,7 +13,7 @@ from starlette.background import BackgroundTask
 
 from kern import gedaechtnis, halbsatz, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
-from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts, vertiefen
+from lisa import agent, anliegen, calendar, filler, llm, nummer, patients, remote, session, stt, tenants, tts, vorbereitung
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
@@ -29,8 +29,11 @@ DIENST = Dienst(
     turn_fn=agent.user_turn,
     # Solange die Identitätsprüfung läuft, antwortet die Zustandsmaschine
     # sofort — Vorab-Füller wären dort falsch.
-    schnell_fn=lambda sit: sit.get("idCheck") not in (None, "", "fertig"),
+    schnell_fn=lambda sit: (
+        sit.get("idCheck") not in (None, "", "fertig") or nummer.aktiv(sit)
+    ),
     merke_zug=session.merke_zug,
+    stille_fn=lambda sit: nummer.stille_fuer(sit),
 )
 
 
@@ -43,6 +46,8 @@ class StartIn(BaseModel):
     tenant: str = ""
     auftrag: str = ""
     patient: dict | None = None
+    vorbereitung: dict | None = None
+    trotzdem: bool = False
 
 
 class TurnIn(BaseModel):
@@ -115,6 +120,22 @@ def _tok(request: Request, extra: str = "") -> str:
 def _remote_guard(request: Request, token: str = "") -> None:
     if not remote.token_ok(_tok(request, token), _von_hier(request)):
         raise HTTPException(401, "token")
+
+
+def _vorbereitung_einsetzen(sit: dict, vorb: dict) -> None:
+    """Unterlage aus der Sammelphase — bevor der erste Satz fällt."""
+    if not vorb:
+        return
+    sit["vorbereitung"] = vorb
+    raw = (vorb.get("gedaechtnisText") or "").strip()
+    if raw:
+        sit["gedaechtnis"] = raw
+        tel, name = gedaechtnis._wer(sit)
+        sit["gedaechtnisKey"] = f"{tel}|{name}".lower()
+    if vorb.get("past"):
+        sit["past"] = list(vorb.get("past") or [])
+    if vorb.get("upcoming"):
+        sit["upcoming"] = list(vorb.get("upcoming") or [])
 
 
 def _anreichern(sit: dict) -> None:
@@ -223,6 +244,7 @@ def api_start(body: StartIn):
         past=[],
         upcoming=[],
     )
+    _vorbereitung_einsetzen(sit, body.vorbereitung if isinstance(body.vorbereitung, dict) else {})
     threading.Thread(target=_anreichern, args=(sit,), daemon=True).start()
     # Eigener Faden: der Anliegen-Satz soll fertig sein, wenn der Angerufene
     # die Identitaetsfrage bestaetigt — nicht hinter den Kalender-Umlaeufen warten.
@@ -290,7 +312,9 @@ def api_stille(body: HangupIn):
     url, tts_s = DIENST.stimme(text)
     session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
     print(f"lisa-stille session={body.sessionId} text={text!r}", flush=True)
-    return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
+    extra = {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
+    extra.update(nummer.stille_fuer(sit))
+    return extra
 
 
 @app.on_event("startup")
@@ -359,11 +383,12 @@ async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
 
 
 @app.post("/api/auftrag/vertiefen")
+@app.post("/api/auftrag/vorbereiten")
 def api_auftrag_vertiefen(body: VertiefenIn):
     auftrag = (body.auftrag or "").strip()
     if not auftrag:
         raise HTTPException(400, "auftrag fehlt")
-    return vertiefen.vertiefen(
+    return vorbereitung.sammeln(
         auftrag, tenant_id=body.tenant or DEFAULT_TENANT, patient=body.patient or {},
     )
 

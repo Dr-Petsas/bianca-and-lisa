@@ -99,6 +99,10 @@ textarea { min-height: 120px; resize: vertical; }
 .bubble.lisa { background: #163028; color: var(--lisa); align-self: flex-start; }
 .bubble.user { background: #2a2618; color: var(--user); align-self: flex-end; }
 .bubble.sys { color: var(--muted); font-size: 12px; }
+.akte { margin-top: 12px; }
+.akte h3 { margin: 12px 0 6px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.akte ul { margin: 0; padding-left: 18px; color: var(--text); font-size: 14px; line-height: 1.45; }
+.akte .luecke { color: var(--warn); }
 .status { font-size: 13px; color: var(--muted); margin-top: 8px; }
 .status.bad { color: var(--strike); }
 .toast {

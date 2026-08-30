@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Bianca &amp; Lisa — Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call22" />
+  <link rel="stylesheet" href="/styles.css?v=call36" />
 </head>
 <body>
   <nav class="tabs" id="tabs">
@@ -38,7 +38,7 @@
           <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
           <div class="row" style="margin-top:10px">
             <button class="btn ghost mic" id="micPrompt" type="button">Prompt diktieren</button>
-            <button class="btn ghost" id="knopf-vertiefen" type="button">Auftrag vertiefen</button>
+            <button class="btn ghost" id="knopf-vertiefen" type="button">Akte lesen</button>
             <span class="sub" id="promptLive"></span>
           </div>
         </section>
@@ -68,6 +68,16 @@
           </div>
         </section>
       </div>
+      <section class="card akte" id="akteKarte" hidden>
+        <h2>Lisa liest die Akte</h2>
+        <div class="sub" id="akteStand"></div>
+        <div id="akteUnterlage"></div>
+        <div id="akteEinwaende"></div>
+        <div id="akteLuecken"></div>
+        <div class="row" id="akteTor" hidden style="margin-top:12px">
+          <button class="btn ghost" id="knopf-trotzdem" type="button">Trotzdem anrufen</button>
+        </div>
+      </section>
       <div class="status" id="status"></div>
     </div>
     <div class="toast" id="toast" hidden></div>
@@ -149,6 +159,6 @@
       zeige(start);
     })();
   </script>
-  <script src="/app.js?v=call35"></script>
+  <script src="/app.js?v=call37"></script>
 </body>
 </html>

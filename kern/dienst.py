@@ -504,11 +504,22 @@ class Dienst:
         return antwort
 
     def _stille_feld(self, sit: dict) -> dict[str, int]:
-        """W-TEMPO: Stille-Schwelle fuer die naechste Dock-Aufnahme (ms)."""
+        """W-TEMPO: Stille-Schwelle fuer die naechste Dock-Aufnahme (ms).
+
+        stille_fn darf eine Zahl liefern (wie Bianca) oder ein Dict mit
+        stilleMs und optional stilleWarteMs (Lisa: jemand sucht die Nummer)."""
         if not self.stille_fn:
             return {}
         try:
-            return {"stilleMs": int(self.stille_fn(sit))}
+            wert = self.stille_fn(sit)
+            if isinstance(wert, dict):
+                out: dict[str, int] = {}
+                if wert.get("stilleMs"):
+                    out["stilleMs"] = int(wert["stilleMs"])
+                if wert.get("stilleWarteMs"):
+                    out["stilleWarteMs"] = int(wert["stilleWarteMs"])
+                return out
+            return {"stilleMs": int(wert)}
         except Exception:
             return {}
 

@@ -614,10 +614,20 @@ Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
   last_call, praxis_notizen.jsonl) bleibt unverändert bestehen.
 - **Notaus:** `MAS_GEDAECHTNIS=0` (oder leere `MAS_URL`) => kein Netz,
   Verhalten wie vor W-GEDAECHTNIS. Tests: `tests/test_gedaechtnis.py`.
-- **Filter:** nur praxisrelevante Zeilen (Termin, Recall, Anruf, Rückruf …).
+- **Filter:** praxisrelevante Zeilen (Termin, Recall, Anruf, Mail, Rückruf …).
   Fachfremdes aus dem MAS (Zoll, AWB, Demo-Interessent) wird verworfen.
-- Lisa-UI: Knopf **Auftrag vertiefen** (`POST /api/auftrag/vertiefen`) macht
-  aus einem Einzeiler Gesprächsschichten; Gedächtnis nur wenn inhaltlich.
+- Lisa-UI: Knopf **Akte lesen** (`POST /api/auftrag/vorbereiten`, Alias
+  `/api/auftrag/vertiefen`) ist die Sammelphase vor dem Wählen: Kartei +
+  Praxisgedächtnis (Mail und Anrufe rein/raus zum Kontakt). Einwände nur
+  aus der Historie („war letzte Woche da“, „kommt nächste Woche sowieso“).
+  Chef-Auftrag bleibt unverändert. Nichts erfinden — Lücken gehen an den
+  Chef, der Anruf wartet oder „Trotzdem anrufen“. Die Unterlage liegt
+  beim Start in der Sitzung (`vorbereitung`), nicht erst im ersten Satz.
+  Kalender-Werkzeuge (buchen/verschieben/stornieren/Terminnotiz) teilt
+  Lisa weiter mit Bianca über `kern.zuege` / `kern.werkzeuge`.
+  Falsche Rufnummer (`lisa/nummer.py`): nach der richtigen Nummer fragen,
+  Rückbestätigung wie Bianca, Zeit zum Suchen (längere Stille, kein 4-s-
+  Stups). Partner-Nummer → Notiz, nicht still die Akte überschreiben.
 
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 

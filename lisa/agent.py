@@ -4,7 +4,7 @@ from typing import Any
 
 from kern import gedaechtnis, gespraech, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
-from lisa import calendar, identitaet, llm, session
+from lisa import calendar, identitaet, llm, nummer, session
 from lisa.greeting import begruessung
 from lisa.prompt import TOOLS, system_prompt
 
@@ -48,6 +48,7 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
                 slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
                 wissen=tenant.get("wissen"),
                 kontext=gedaechtnis.kontext_block(session_doc),
+                unterlage=_s((session_doc.get("vorbereitung") or {}).get("briefing")),
             ),
         },
         {
@@ -73,9 +74,15 @@ def stille_zug(session_doc: dict) -> dict[str, Any]:
     n = stille.stups_zaehlen(session_doc)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
+    if nummer.sucht(session_doc):
+        text = "Kein Stress — ich warte, bis Sie die Nummer haben."
+        stille.anhaengen(session_doc, text)
+        return {"text": text, "book": None}
     teile = [stille.anrede(n)]
     if _s(session_doc.get("idCheck")) in {identitaet.FRAGE, identitaet.HOLEN, identitaet.WARTEN}:
         teile.append(stille.frage_praefix(identitaet.frage_satz(session_doc.get("patient") or {})))
+    elif nummer.aktiv(session_doc):
+        teile.append("Sagen Sie die Nummer, wenn Sie soweit sind. Ich warte.")
     else:
         auftrag = _s(session_doc.get("auftrag"))
         if auftrag:
@@ -107,6 +114,8 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     # Solange nicht geklaert ist, WER am Telefon sitzt, antwortet die
     # Zustandsmaschine — ohne Modell, also ohne Wartezeit und ohne Abweichen.
     id_zug = identitaet.naechster_zug(session_doc, text_in)
+    if not id_zug:
+        id_zug = nummer.naechster_zug(session_doc, text_in)
     # Talk-Schicht (kern/gespraech.py): hoert jeden Satz ab und entscheidet,
     # wie frei das Modell gleich sprechen darf — der Auftrag bleibt Gesetz.
     route = gespraech.routen(
@@ -179,6 +188,7 @@ def system_prompt_aktuell(session_doc: dict, plan: str = "") -> str:
         wissen=tenant.get("wissen"),
         plan=plan,
         kontext=gedaechtnis.kontext_block(session_doc),
+        unterlage=_s((session_doc.get("vorbereitung") or {}).get("briefing")),
     )
 
 

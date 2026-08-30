@@ -278,6 +278,42 @@ def test_fachfremder_caller_context_wird_verworfen():
         ged.httpx.get = echt
 
 
+def test_zeile_inhaltlich_laesst_mail_durch():
+    assert ged.zeile_inhaltlich("Laut E-Mail (Nadine): Labor hat die Lieferung bestätigt.")
+    assert not ged.zeile_inhaltlich("Zollabfertigung AWB Onlinekauf Demo-Interessent.")
+
+
+def test_ereignisse_holen_mischt_suche_und_kartei():
+    def fake_get(url, params=None, **kw):
+        class _R:
+            @staticmethod
+            def json():
+                if "/brain/search" in url:
+                    return {"ok": True, "results": [
+                        {"kind": "event", "ts": 1767200000000, "status": "open",
+                         "snippet": "Laut Anruf (Lisa): Labor nicht erreicht."},
+                    ]}
+                if "caller-context" in url:
+                    return {"ok": True, "found": False, "context": ""}
+                if "karteikarte" in url:
+                    return {"ok": True, "events": [
+                        {"ts": 1767100000000, "status": "none",
+                         "summary": "Laut E-Mail (Nadine): Bestellung 12er, KW36."},
+                    ]}
+                raise AssertionError(url)
+        return _R()
+
+    echt = ged.httpx.get
+    ged.httpx.get = fake_get
+    try:
+        hits = ged.ereignisse_holen("0177111222", "Labor Nord")
+        texte = " ".join(h["summary"] for h in hits)
+        assert "nicht erreicht" in texte
+        assert "Bestellung 12er" in texte
+    finally:
+        ged.httpx.get = echt
+
+
 def test_prompt_block_beide_stimmen():
     sit = _sit_bianca(gedaechtnis="Praxisgedächtnis zu Martin Berger:\n- 28.08.: Rückruf erbeten.")
     block = ged.kontext_block(sit)

@@ -73,7 +73,7 @@ _PRAXIS_RE = re.compile(
     r"termin|recall|kontrolle|zahn|pzr|prophylaxe|schmerz|implant|krone|"
     r"füll|fuell|behandlung|praxis|anruf|nicht erreicht|rückruf|rueckruf|"
     r"absag|verschieb|versicherung|akte|behandler|doktor|lisa|bianca|"
-    r"sprechstunde|nachsorge|patient",
+    r"sprechstunde|nachsorge|patient|e-?mail|\bmail\b|nadine|\bsms\b|brief",
     re.I,
 )
 _MUELL_RE = re.compile(
@@ -89,10 +89,20 @@ _LEER_RE = re.compile(
 
 def zeile_inhaltlich(text: str) -> bool:
     """True nur bei praxisrelevantem Inhalt — keine leeren oder fachfremden Zeilen."""
+    return zeile_brauchbar(text, streng=True)
+
+
+def zeile_brauchbar(text: str, *, streng: bool = True, muell_erlaubt: bool = False) -> bool:
+    """Inhaltliche Zeile. streng=True: nur Praxis/Anruf/Mail. muell_erlaubt
+    nur wenn der Auftrag selbst von Labor/Lieferung/Zoll handelt."""
     t = _s(text)
-    if len(t) < 12 or _LEER_RE.search(t) or _MUELL_RE.search(t):
+    if len(t) < 12 or _LEER_RE.search(t):
         return False
-    return bool(_PRAXIS_RE.search(t))
+    if _MUELL_RE.search(t) and not muell_erlaubt:
+        return False
+    if streng:
+        return bool(_PRAXIS_RE.search(t))
+    return True
 
 
 def erreichbar() -> bool:
@@ -363,6 +373,66 @@ def _suche_nach_nummer(telefon: str) -> str:
     return (f"Praxisgedächtnis zu dieser Rufnummer{f' (vermutlich {wer})' if wer else ''}:\n"
             + "\n".join(zeilen)
             + "\nNutze das aktiv: erkenne den Zusammenhang an, statt bei Null anzufangen.")
+
+
+def ereignisse_holen(telefon: str, name: str) -> list[dict]:
+    """Rohe Events zum Kontakt (Mail + Anruf rein/raus). Kein Zahn-Filter.
+
+    Lisa filtert in der Vorbereitung selbst nach Auftrag. Biancas Live-Pfad
+    bleibt bei _kontext_holen + zeile_inhaltlich."""
+    hits: list[dict] = []
+    gesehen: set[str] = set()
+
+    def _add(summ: Any, ts: Any = 0, status: str = "", quelle: str = "") -> None:
+        s = _s(summ)
+        if len(s) < 8:
+            return
+        key = s.lower()[:180]
+        if key in gesehen:
+            return
+        gesehen.add(key)
+        try:
+            n = int(ts or 0)
+        except (TypeError, ValueError):
+            n = 0
+        hits.append({"summary": s, "ts": n, "status": _s(status), "quelle": quelle})
+
+    try:
+        if telefon:
+            r = httpx.get(
+                f"{MAS_URL}/brain/search",
+                params={"q": telefon, "kind": "event", "sinceDays": 90, "limit": 20},
+                headers=_headers(), timeout=KONTEXT_WARTE_S,
+            )
+            for h in (r.json().get("results") or []):
+                if h.get("kind") != "event":
+                    continue
+                _add(h.get("snippet") or h.get("summary"), h.get("ts"), h.get("status"), "suche")
+            r2 = httpx.get(
+                f"{MAS_URL}/brain/caller-context",
+                params={"phone": telefon}, headers=_headers(), timeout=KONTEXT_WARTE_S,
+            )
+            d = r2.json()
+            if d.get("found") and _s(d.get("context")):
+                for roh in str(d.get("context")).splitlines():
+                    z = roh.strip().lstrip("- ").strip()
+                    if not z or z.lower().startswith("praxisgedächtnis"):
+                        continue
+                    if z.lower().startswith("nutze das"):
+                        continue
+                    _add(z, 0, "", "nummer")
+        if name:
+            r = httpx.get(
+                f"{MAS_URL}/brain/karteikarte",
+                params={"name": name, "sinceDays": _KARTEI_TAGE},
+                headers=_headers(), timeout=KONTEXT_WARTE_S,
+            )
+            for e in (r.json().get("events") or []):
+                _add(e.get("summary"), e.get("ts"), e.get("status"), "kartei")
+    except Exception as e:
+        print(f"gedaechtnis ereignisse fail {e}", flush=True)
+    hits.sort(key=lambda x: x.get("ts") or 0, reverse=True)
+    return hits[:12]
 
 
 def _kontext_arbeit(sit: dict, telefon: str, name: str, key: str) -> None:
