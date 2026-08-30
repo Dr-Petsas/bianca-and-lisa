@@ -27,18 +27,39 @@ async function laden() {
     : "";
 }
 
+function perAuswahlKopieren() {
+  const pre = $("text");
+  const range = document.createRange();
+  range.selectNodeContents(pre);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  try {
+    return document.execCommand("copy");
+  } catch (e) {
+    return false;
+  }
+}
+
 async function kopieren() {
   const t = $("text").textContent || "";
   if (!t.trim() || t.trim() === "(noch leer)") {
     $("kopier-status").textContent = "Nichts zum Kopieren";
     return;
   }
-  try {
-    await navigator.clipboard.writeText(t);
-    $("kopier-status").textContent = "Kopiert. Im Cursor-Chat einfügen.";
-  } catch (e) {
-    $("kopier-status").textContent = "Zwischenablage blockiert — Text markieren und Strg+C.";
+  let ok = false;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(t);
+      ok = true;
+    } catch (e) {
+      ok = false;
+    }
   }
+  if (!ok) ok = perAuswahlKopieren();
+  $("kopier-status").textContent = ok
+    ? "Kopiert. Im Cursor-Chat einfügen."
+    : "Text ist markiert — Strg+C drücken.";
 }
 
 $("knopf-kopieren").addEventListener("click", kopieren);
