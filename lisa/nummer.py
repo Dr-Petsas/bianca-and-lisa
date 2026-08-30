@@ -192,6 +192,12 @@ def _ablegen(sit: dict) -> str:
     pat = sit.get("patient") or {}
     pid = _s(pat.get("id")) or _s((sit.get("booking") or {}).get("patientId"))
     if pid and rolle in {"patient", "akte", ""}:
+        if sit.get("probe"):
+            n["phase"] = FERTIG
+            return (
+                f"Die Nummer für {name or 'die Akte'} hätte ich jetzt "
+                "umgetragen — der Test schreibt die Kartei noch nicht."
+            )
         res = patients.telefon_aktualisieren(sit.get("tenant") or {}, pid, nummer)
         if res.get("ok"):
             pat["phone"] = nummer

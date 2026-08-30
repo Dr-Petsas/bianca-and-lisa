@@ -15,10 +15,45 @@ from kern.tenants import kalender_von, motiv_von
 
 NO_CONTEXT = "Ich komme hier gerade nicht an den Kalender. Die Praxis meldet sich zeitnah mit Terminvorschlägen."
 NO_CONTEXT_REGIE = "Kein Kalenderkontext in dieser Sitzung. Biete einen Rückruf an, nenne keine erfundenen Zeiten."
+FENSTER_WEG = (
+    "Dieser Termin liegt außerhalb des Zeitfensters der Kampagne. "
+    "Ich biete nur Termine in diesem Fenster an."
+)
 
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
+
+
+def _trocken(ctx: dict | None = None) -> bool:
+    """Kein Kalender-Schreiben: Testmodus oder Kampagnen-Probe."""
+    if not WRITE_LIVE:
+        return True
+    return bool(ctx and ctx.get("probe"))
+
+
+def _fenster(ctx: dict | None) -> tuple[str, str]:
+    ctx = ctx or {}
+    return _s(ctx.get("kampagneVon"))[:10], _s(ctx.get("kampagneBis"))[:10]
+
+
+def _im_fenster(iso: str, ctx: dict | None) -> bool:
+    tag = _s(iso)[:10]
+    if not tag:
+        return True
+    von, bis = _fenster(ctx)
+    if von and tag < von:
+        return False
+    if bis and tag > bis:
+        return False
+    return True
+
+
+def _filter_fenster(isos: list[str], ctx: dict | None) -> list[str]:
+    von, bis = _fenster(ctx)
+    if not von and not bis:
+        return isos
+    return [x for x in isos if _im_fenster(x, ctx)]
 
 
 _CF_CLIENT = httpx.Client(timeout=10.0)
@@ -74,6 +109,8 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = Fa
         body["visitMotiveName"] = _s(ctx.get("visitMotiveName"))
     elif vm and vm.get("name"):
         body["visitMotiveName"] = vm["name"]
+    if not start_date:
+        start_date = _s((ctx or {}).get("kampagneVon"))[:10]
     if start_date:
         body["startDate"] = start_date
     status, data = _cf_post("getFreeTimeSlots", body)
@@ -115,7 +152,7 @@ def vorrat_fuellen(sit: dict) -> list[dict[str, str]]:
             ctx["visitMotiveId"] = _s(vm.get("id"))
             ctx["visitMotiveName"] = _s(vm.get("name")) or ctx.get("visitMotiveName")
     found = find_slots(tenant, ctx)
-    isos = _iso_liste(found.get("slots") or [])
+    isos = _filter_fenster(_iso_liste(found.get("slots") or []), ctx)
     sit["slotVorrat"] = isos
     ctx["slotVorrat"] = isos
     picked = pick_slots(isos)
@@ -146,6 +183,12 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
     if not _s(ctx.get("visitMotiveId")) and not _s(ctx.get("visitMotiveName")):
         ctx["visitMotiveName"] = "Kontrolluntersuchung"
     wish = parse_slot_wish(wish_text) if wish_text else None
+    if wish and wish.get("date") and not _im_fenster(str(wish.get("date")), ctx):
+        return {
+            "ok": False,
+            "spoken": FENSTER_WEG,
+            "regie": "Wunschdatum außerhalb kampagneVon/kampagneBis.",
+        }
     vorrat = list(ctx.get("slotVorrat") or [])
     nachladen = not vorrat
     if wish and wish.get("date") and vorrat:
@@ -161,8 +204,9 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
                 "regie": "Keine Zeiten erfinden. Rückruf anbieten.",
             }
         if found.get("ok"):
-            vorrat = _iso_liste(found.get("slots") or [])
+            vorrat = _filter_fenster(_iso_liste(found.get("slots") or []), ctx)
             ctx["slotVorrat"] = vorrat
+    vorrat = _filter_fenster(vorrat, ctx)
     picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso)
     slots = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     return {
@@ -185,6 +229,21 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     if auftrag and iso[:16] != auftrag[:16]:
         if iso[4:16] == auftrag[4:16]:
             iso = auftrag
+    if iso and not _im_fenster(iso, ctx):
+        return {"ok": False, "spoken": FENSTER_WEG,
+                "regie": "Slot außerhalb kampagneVon/kampagneBis."}
+    if _trocken(ctx):
+        when = spoken_slot(iso)
+        return {
+            "ok": True,
+            "booked": False,
+            "dryRun": True,
+            "slotIso": iso,
+            "spoken": (
+                f"{when} hätte ich jetzt eingetragen — der Test schreibt den Kalender "
+                "noch nicht. Keine Bestätigungs-SMS."
+            ),
+        }
     patient_id = _s(ctx.get("patientId"))
     created_patient = False
     if not patient_id:
@@ -198,18 +257,6 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             ctx["patientId"] = patient_id
             ctx["firstName"] = auf.get("firstName") or ctx.get("firstName")
             ctx["lastName"] = auf.get("lastName") or ctx.get("lastName")
-    if not WRITE_LIVE:
-        when = spoken_slot(iso)
-        return {
-            "ok": True,
-            "booked": False,
-            "dryRun": True,
-            "slotIso": iso,
-            "spoken": (
-                f"{when} hätte ich jetzt eingetragen — der Test schreibt den Kalender "
-                "noch nicht. Keine Bestätigungs-SMS."
-            ),
-        }
     if not patient_id:
         first, last = _name_teile(ctx)
         phone = _s(ctx.get("phone")) or _s((ctx.get("neueAkte") or {}).get("phone"))
@@ -374,6 +421,18 @@ def create_patient(
     phone = _s(phone) or _s(ctx.get("phone"))
     birth = _s(birth) or _s(ctx.get("birthDate"))
     gender = _s(gender) or _s(ctx.get("gender"))
+    if _trocken(ctx) or (sit and sit.get("probe")):
+        name = f"{first} {last}".strip() or _s(ctx.get("patientName")) or "Probe"
+        return {
+            "ok": True,
+            "created": False,
+            "dryRun": True,
+            "patient": {"name": name, "firstName": first, "lastName": last, "phone": phone},
+            "spoken": (
+                f"Die Akte für {name} hätte ich jetzt angelegt — "
+                "der Test schreibt die Kartei noch nicht."
+            ),
+        }
     result = patients.akte_anlegen(
         tenant,
         first=first,
@@ -514,7 +573,7 @@ def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]
     aid = _s(appointment_id)
     if not aid:
         return {"ok": False, "spoken": "Welchen Termin soll ich absagen?"}
-    if not WRITE_LIVE:
+    if _trocken(ctx):
         return {
             "ok": True, "cancelled": False, "dryRun": True, "appointmentId": aid,
             "spoken": "Den Termin hätte ich jetzt abgesagt.",
@@ -616,7 +675,7 @@ def cancel_appointment(tenant: dict, ctx: dict, *, date: str = "") -> dict[str, 
         }
     if not day:
         return {"ok": False, "spoken": "Welchen Termin soll ich absagen?"}
-    if not WRITE_LIVE:
+    if _trocken(ctx):
         return {
             "ok": True,
             "cancelled": False,
@@ -716,7 +775,10 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
             "spoken": "Welchen Termin möchten Sie verschieben?",
             "regie": "appointmentId fehlt. Erst den bestehenden Termin klären (list_appointments oder Datum erfragen).",
         }
-    if not WRITE_LIVE:
+    if iso and not _im_fenster(iso, ctx):
+        return {"ok": False, "spoken": FENSTER_WEG,
+                "regie": "Slot außerhalb kampagneVon/kampagneBis."}
+    if _trocken(ctx):
         return {
             "ok": True,
             "moved": False,
@@ -776,7 +838,7 @@ def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: 
     wer = notes.stimme_von(sit or {})
     zeile = text if "\n" in text else notes.notiz_anhaengen("", text, herkunft=wer)
     kurz = _s(text.splitlines()[0])
-    if not WRITE_LIVE:
+    if _trocken(ctx) or (sit and sit.get("probe")):
         return {
             "ok": True,
             "noted": False,

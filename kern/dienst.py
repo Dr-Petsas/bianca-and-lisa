@@ -440,7 +440,7 @@ class Dienst:
         # Waechter-Spur dieses Zugs (W-BK-3): additiv in Antwort + Protokoll.
         waechter = spur.abholen(sit)
         self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"),
-                       timings=timings, waechter=waechter)
+                       timings=timings, waechter=waechter, audioUrl=url or "")
         antwort = {
             "ok": True,
             "empty": False,
@@ -483,7 +483,7 @@ class Dienst:
         timings = {"llm": 0.0, "tts": tts_s, "total": tts_s}
         waechter = spur.abholen(sit)
         self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings,
-                       waechter=waechter)
+                       waechter=waechter, audioUrl=url or "")
         print(f"{self.name}-weiter (Barge-Fortsetzung): {text[:60]!r}", flush=True)
         extra = extra or {}
         antwort = {

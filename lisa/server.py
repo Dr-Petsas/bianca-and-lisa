@@ -6,6 +6,7 @@ import threading
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -13,11 +14,17 @@ from starlette.background import BackgroundTask
 
 from kern import gedaechtnis, halbsatz, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
-from lisa import agent, anliegen, calendar, filler, llm, nummer, patients, remote, session, stt, tenants, tts, vorbereitung
+from lisa import agent, anliegen, calendar, filler, gespraeche, kampagne, llm, nummer, patients, remote, session, stt, tenants, tts, vorbereitung
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
 app = FastAPI(title="Lisa Telefon-KI", version="0.1")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 remote.token()
 
 # Die komplette Latenz-Maschinerie (Audio-Ablage, Füller, NDJSON-Strom) liegt
@@ -48,6 +55,8 @@ class StartIn(BaseModel):
     patient: dict | None = None
     vorbereitung: dict | None = None
     trotzdem: bool = False
+    probe: bool = False
+    kampagne: dict | None = None
 
 
 class TurnIn(BaseModel):
@@ -73,6 +82,15 @@ class VertiefenIn(BaseModel):
     auftrag: str = ""
     tenant: str = ""
     patient: dict | None = None
+
+
+class KampagneIn(BaseModel):
+    auftrag: str = ""
+    tenant: str = ""
+    kampagne: dict | None = None
+    antworten: dict | list | None = None
+    patienten: list[dict] | None = None
+    briefing: str = ""
 
 
 class HangupIn(BaseModel):
@@ -122,6 +140,41 @@ def _remote_guard(request: Request, token: str = "") -> None:
         raise HTTPException(401, "token")
 
 
+def _s_feld(v) -> str:
+    return " ".join(str(v or "").split()).strip()
+
+
+def _kampagne_einsetzen(sit: dict, *, probe: bool, kampagne: dict | None) -> None:
+    """Kampagnenfenster und Probe-Flag in die Sitzung — buchen nur im Fenster."""
+    sit["probe"] = bool(probe)
+    ctx = sit.setdefault("booking", {})
+    if probe:
+        ctx["probe"] = True
+    km = kampagne if isinstance(kampagne, dict) else {}
+    if not km:
+        return
+    sit["kampagne"] = km
+    von = _s_feld(km.get("zeitraumVon") or km.get("startDate"))[:10]
+    bis = _s_feld(km.get("zeitraumBis") or km.get("endDate"))[:10]
+    if von:
+        ctx["kampagneVon"] = von
+    if bis:
+        ctx["kampagneBis"] = bis
+    motiv = _s_feld(km.get("motiv") or km.get("visitMotiveName") or km.get("termingrund"))
+    if motiv:
+        ctx["visitMotiveName"] = motiv
+        ctx.pop("visitMotiveId", None)
+    mid = _s_feld(km.get("visitMotiveId"))
+    if mid:
+        ctx["visitMotiveId"] = mid
+    behandler = _s_feld(km.get("behandler") or km.get("calendarName"))
+    if behandler:
+        ctx["calendarName"] = behandler
+    cid = _s_feld(km.get("calendarId"))
+    if cid:
+        ctx["calendarId"] = cid
+
+
 def _vorbereitung_einsetzen(sit: dict, vorb: dict) -> None:
     """Unterlage aus der Sammelphase — bevor der erste Satz fällt."""
     if not vorb:
@@ -142,6 +195,12 @@ def _anreichern(sit: dict) -> None:
     """Kartei, Termine, Slots — nie auf dem Mund-Pfad."""
     try:
         t = sit["tenant"]
+        if sit.get("probe"):
+            calendar.vorrat_fuellen(sit)
+            msgs = sit.get("messages") or []
+            if msgs and msgs[0].get("role") == "system":
+                msgs[0]["content"] = agent.system_prompt_aktuell(sit)
+            return
         pat = patients.patient_aufloesen(t, sit.get("patient") or {})
         hist = patients.termine_fuer(t, pat)
         sit["patient"] = pat
@@ -244,12 +303,17 @@ def api_start(body: StartIn):
         past=[],
         upcoming=[],
     )
+    _kampagne_einsetzen(sit, probe=bool(body.probe), kampagne=body.kampagne)
     _vorbereitung_einsetzen(sit, body.vorbereitung if isinstance(body.vorbereitung, dict) else {})
     threading.Thread(target=_anreichern, args=(sit,), daemon=True).start()
     # Eigener Faden: der Anliegen-Satz soll fertig sein, wenn der Angerufene
     # die Identitaetsfrage bestaetigt — nicht hinter den Kalender-Umlaeufen warten.
     threading.Thread(target=anliegen.vorbereiten, args=(sit,), daemon=True).start()
-    return _json_antwort(sit, art="start", extra={"sessionId": sit["id"], "praxis": t.get("praxisName")})
+    extra = {"sessionId": sit["id"], "praxis": t.get("praxisName")}
+    if sit.get("probe"):
+        extra["probe"] = True
+        extra["writeLive"] = False
+    return _json_antwort(sit, art="start", extra=extra)
 
 
 @app.post("/api/turn")
@@ -393,6 +457,49 @@ def api_auftrag_vertiefen(body: VertiefenIn):
     )
 
 
+@app.post("/api/kampagne/vertiefen")
+@app.post("/api/kampagne/antworten")
+def api_kampagne_vertiefen(body: KampagneIn):
+    """Stufe 1: Kampagnenseite falten, Rückfragen nur wenn die Seite lückenhaft ist."""
+    return kampagne.vertiefen(
+        body.auftrag,
+        kampagne=body.kampagne,
+        antworten=body.antworten,
+    )
+
+
+@app.post("/api/kampagne/sammeln")
+def api_kampagne_sammeln(body: KampagneIn):
+    """Stufe 2: Unterlage pro Empfänger, bevor Lisa die Liste anruft."""
+    return kampagne.sammeln_liste(
+        body.auftrag,
+        kampagne=body.kampagne,
+        patienten=body.patienten,
+        tenant_id=body.tenant or DEFAULT_TENANT,
+        briefing=body.briefing,
+    )
+
+
+@app.get("/api/gespraeche")
+def api_gespraeche(patientId: str = "", phone: str = "", campaignId: str = "",
+                   probe: bool = False):
+    return {
+        "ok": True,
+        "calls": gespraeche.liste(
+            patient_id=patientId, phone=phone, campaign_id=campaignId,
+            auch_probe=probe,
+        ),
+    }
+
+
+@app.get("/api/gespraeche/{session_id}")
+def api_gespraech(session_id: str):
+    k = gespraeche.holen(session_id)
+    if not k:
+        raise HTTPException(404, "gespräch unbekannt")
+    return {"ok": True, **k}
+
+
 @app.post("/api/auftrag")
 def api_auftrag(body: AuftragIn):
     sit = session.holen(body.sessionId)
@@ -427,8 +534,11 @@ def api_hangup(body: HangupIn):
             print(f"lisa-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
-        # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
-        gedaechtnis.report_senden(sit)
+        # Eine Karte, ein Event. Probe-Gespräche bleiben außerhalb des Gedächtnisses.
+        sit["gedaechtnisId"] = gespraeche.gedaechtnis_id(sit)
+        if not sit.get("probe"):
+            gedaechtnis.report_senden(sit)
+        session.sichern(sit)
 
     threading.Thread(target=_nacharbeit, daemon=True).start()
     return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}

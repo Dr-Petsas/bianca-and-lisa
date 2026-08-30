@@ -628,6 +628,22 @@ Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
   Falsche Rufnummer (`lisa/nummer.py`): nach der richtigen Nummer fragen,
   Rückbestätigung wie Bianca, Zeit zum Suchen (längere Stille, kein 4-s-
   Stups). Partner-Nummer → Notiz, nicht still die Akte überschreiben.
+- **Kampagne Stufe 1** (`lisa/kampagne.py`, Campaignr-Karte Telefon-KI):
+  kein Patient, keine Kartei. Fakten kommen von der Kampagnenseite
+  (Name, Terminfenster Von/Bis, Besuchsgrund, Behandler, Begrüßung).
+  Das Fenster ist gegeben — nicht nachfragen, wenn Von/Bis da sind.
+  Später nur in diesem Fenster buchen (`kampagneVon`/`kampagneBis` im
+  Booking-Kontext; Slots außerhalb fallen weg). Schwach/fehlend nur das,
+  was die Seite nicht trägt, geht an den Chef. **Mit Lisa sprechen** ist
+  ein Probe-Gespräch (`probe=true`): Dock wie Lisa-Tab, kein Zaluma, kein
+  ElevenLabs, trotz `WRITE_LIVE` kein Kalender-Schreiben. Empfängerliste
+  **Stufe 2** (`POST /api/kampagne/sammeln`) holt pro Empfänger Kartei +
+  Gedächtnis, legt das Seiten-Fenster darunter und muss FERTIG sein,
+  bevor Lisa die Liste abtelefoniert. Gesprächsaufzeichnungen liegen in
+  `GET /api/gespraeche` — Monitor und Lisa-Ausgang zeigen dieselbe Karte.
+  Ins Praxisgedächtnis schreibt nur `report_senden` (Id
+  `telefonki:lisa_call:{sid}`), Probe-Gespräche gar nicht. Live-Start
+  bleibt vorerst ElevenLabs.
 
 ## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
 
