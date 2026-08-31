@@ -156,3 +156,67 @@ def test_schnelle_antwort_nach_sprechende(anruf):
     _fuettern(anruf, [_frame(2400)] * 7)               # "Ja"
     _fuettern(anruf, [_frame(0)] * 40)
     assert anruf.zuege.qsize() == 1
+
+
+# --- W-VERBINDEN-ECHT (31.08.2026): Transfer-Store + HTTP-Peek ---------------
+
+_UUID_HEX = "ffffffffffffffffffff000000004101"          # wie rahmen[1].hex()
+_UUID_DASH = "ffffffff-ffff-ffff-ffff-000000004101"     # wie ${BUUID} im CURL
+
+
+def test_transfer_store_einmal_abholbar():
+    srv._TRANSFERS.clear()
+    srv.transfer_merken(_UUID_HEX, "+49171234567")
+    # Der Dialplan fragt mit der Bindestrich-Form — Normalisierung matcht.
+    assert srv.transfer_holen(_UUID_DASH) == "+49171234567"
+    # Einmal abholbar: der naechste Anruf-Zyklus bekommt nichts Altes.
+    assert srv.transfer_holen(_UUID_DASH) == ""
+    assert srv.transfer_holen("deadbeef" * 4) == ""
+
+
+def test_transfer_store_ttl_raeumt_reste():
+    srv._TRANSFERS.clear()
+    srv.transfer_merken(_UUID_HEX, "+49123")
+    k = next(iter(srv._TRANSFERS))
+    srv._TRANSFERS[k] = (srv.time.monotonic() - srv.TRANSFER_TTL_S - 1, "+49123")
+    assert srv.transfer_holen(_UUID_DASH) == ""
+    assert not srv._TRANSFERS
+
+
+def test_transfer_ohne_nummer_oder_uuid_wird_nicht_gemerkt():
+    srv._TRANSFERS.clear()
+    srv.transfer_merken("", "+49123")
+    srv.transfer_merken(_UUID_HEX, "")
+    assert not srv._TRANSFERS
+
+
+def test_http_peek_beantwortet_dialplan_curl():
+    """Voller Weg wie live: TCP-Verbindung auf den AudioSocket-Port, erste
+    Bytes "GET" => die Bruecke antwortet HTTP mit der vorgemerkten Nummer
+    (einmal), danach leer. AudioSocket-Anrufe stoert der Peek nicht — deren
+    erste Bytes sind der Rahmenkopf."""
+    import asyncio
+
+    async def _abfrage(port: int) -> bytes:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(f"GET /transfer?uuid={_UUID_DASH} HTTP/1.1\r\n"
+                     f"Host: x\r\n\r\n".encode("ascii"))
+        await writer.drain()
+        antwort = await reader.read(1024)
+        writer.close()
+        return antwort
+
+    async def _lauf() -> tuple[bytes, bytes]:
+        srv._TRANSFERS.clear()
+        srv.transfer_merken(_UUID_HEX, "+49555666777")
+        server = await asyncio.start_server(srv._klient, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        erste = await _abfrage(port)
+        zweite = await _abfrage(port)
+        server.close()
+        await server.wait_closed()
+        return erste, zweite
+
+    erste, zweite = asyncio.run(_lauf())
+    assert erste.startswith(b"HTTP/1.1 200 OK") and erste.endswith(b"+49555666777")
+    assert zweite.endswith(b"\r\n\r\n")  # verbraucht: leerer Body

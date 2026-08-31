@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import queue
-import re
 import secrets
 import struct
 import threading
@@ -250,7 +249,9 @@ class Dienst:
             return "", 0.0
         if not tts.stream_bereit() or tts.im_cache(text):
             return self.stimme(text, karte)
-        saetze = [s.strip() for s in re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", text.strip()) if s.strip()] or [text.strip()]
+        # W-TTS-NAHT: geschuetzter Split (nie hinter "3."/"St."/"Nr.") —
+        # sonst rendert der Feeder halbe Phrasen mit Satzende-Prosodie.
+        saetze = sprech.tts_saetze(text) or [text.strip()]
         frisch = [s for s in saetze if not tts.im_cache(s) and not tts.ziffern_satz(s)]
         if not frisch:
             # P1 Readback-Parallelisierung (29.08.2026): Ein Mehr-Satz-Text
@@ -335,7 +336,9 @@ class Dienst:
             blob = tts.engine().speak(text)
             self._karte_ganz(karte, text, blob)
             return blob
-        saetze = [s.strip() for s in re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", text.strip()) if s.strip()]
+        # W-TTS-NAHT: geschuetzter Split — "im 3. Stock" / "St. Martin"
+        # bleiben EIN Render, keine Naht mitten in der Phrase.
+        saetze = sprech.tts_saetze(text)
         if len(saetze) <= 1:
             blob = tts.engine().speak(text)
             self._karte_ganz(karte, text, blob)
@@ -445,7 +448,13 @@ class Dienst:
         # W-BARGE: war der vorige Zug unterbrochen und dieser Einwand hat den
         # Zustand nicht bewegt, kommt der ungesprochene Rest mit Bruecke dran.
         # Ein Abbruch-Befehl ("Stopp.") verwirft den Rest (29.08.2026).
-        text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
+        # W-VERBINDEN-ECHT: nach einem Transfer-Reply wird NIE fortgesetzt —
+        # der Anrufer ist gleich beim Behandler, ein "Also, wo war ich:"
+        # nach dem Jingle waere absurd.
+        if isinstance(reply.get("transfer"), dict) and reply["transfer"].get("nummer"):
+            sit.pop("unterbrochen", None)  # offener Barge-Rest verfaellt
+        else:
+            text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
         # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
         gesprochen = _s(sit.pop("_vorabText", ""))
         vorab_url = _s(sit.pop("_vorabUrl", ""))
@@ -487,6 +496,12 @@ class Dienst:
         }
         if reply.get("hangup"):
             antwort["hangup"] = True
+        # W-VERBINDEN-ECHT (31.08.2026): eingerichtete Client-Weiterleitung —
+        # die SIP-Bruecke merkt sich die Nummer je Anruf-UUID, der Asterisk-
+        # Dialplan waehlt nach dem Jingle wirklich raus (Docks ignorieren das
+        # Feld und legen wie bisher auf).
+        if isinstance(reply.get("transfer"), dict) and reply["transfer"].get("nummer"):
+            antwort["transfer"] = reply["transfer"]
         # Weitere extra-Felder additiv durchreichen (W-MANDANT: tenantId im
         # Start — die SIP-Bruecke loggt, welcher Mandant den Anruf traegt).
         for k, v in extra.items():

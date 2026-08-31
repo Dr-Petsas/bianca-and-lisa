@@ -47,6 +47,31 @@ def test_live_saetze_29_08_verbunden_formen():
         assert weiterleiten.erkannt(satz), satz
 
 
+def test_live_saetze_31_08_imperativ_und_verhoerte_namen():
+    """Live 31.08.2026 14:11: 'Verbinde mich mit Dr. Petzos jetzt.' fiel
+    durch ALLE Erkennungs-Formen (nackter Imperativ ohne 'Sie', 'verbinde'
+    stand nicht in _SPRECH_VERB_RE) — das LLM fragte zum x-ten Mal 'Zu
+    welchem unserer Ärzte darf ich Sie verbinden?', der Anrufer legte auf.
+    Der ganze Zug muss deterministisch bis zum Jingle laufen, auch mit
+    verhörtem Namen (Petzos/Petzl -> Petsas)."""
+    for satz in [
+        "Verbinde mich mit Dr. Petzos jetzt.",
+        "Verbinde mich bitte mit Doktor Petsas.",
+        "Verbinde uns mit der Praxis.",
+    ]:
+        assert weiterleiten.erkannt(satz), satz
+    for satz in [
+        "Verbinde mich mit Dr. Petzos jetzt.",
+        "Ich möchte bitte mit Dr. Petzl sprechen.",
+    ]:
+        sit = _sit()
+        z = flow.zug(sit, satz)
+        assert z and z.get("hangup") is True, satz
+        assert z.get("jingle") == weiterleiten.JINGLE_EVENT, satz
+        s = gehirn.sammler(sit)
+        assert (s["arzt"] or {}).get("calendarName") == "Dr. Petsas", satz
+
+
 def test_kosten_verbunden_ist_kein_weiterleitungswunsch():
     """Preis-/Sachfragen mit 'verbunden' bleiben beim LLM (keine Doktor-Wörter,
     kein 'ich möchte verbunden')."""
@@ -320,6 +345,106 @@ def test_nein_bricht_sauber_ab():
     z = flow.zug(sit, "Nein, lassen Sie mal.")
     assert z and "sonst noch" in z["text"].lower()
     assert not (sit.get("weiterleiten") or {})
+
+
+# --- (f) W-VERBINDEN-ECHT: eingerichtete Client-Weiterleitung -----------------
+
+_WL_KONFIG = [
+    {"name": "Dr. Petsas", "nummer": "+49211111111", "hinweis": ""},
+    {"name": "Praxishandy", "nummer": "+49222222222",
+     "hinweis": "Weiterleitung zu Doktor Nikolaou bei dringenden Faellen"},
+]
+
+
+def _sit_mit_weiterleitung() -> dict:
+    sit = _sit()
+    sit["tenant"] = dict(sit["tenant"])
+    sit["tenant"]["weiterleitungen"] = [dict(e) for e in _WL_KONFIG]
+    return sit
+
+
+def test_weiterleitungs_ziel_matcht_behandler_ueber_name_und_hinweis():
+    t = {"weiterleitungen": [dict(e) for e in _WL_KONFIG]}
+    z1 = weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Petsas"})
+    assert z1 == {"name": "Dr. Petsas", "nummer": "+49211111111"}
+    # Nikolaou steht nur im HINWEIS des Praxishandys — zaehlt trotzdem.
+    z2 = weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Nikolaou"})
+    assert z2 == {"name": "Praxishandy", "nummer": "+49222222222"}
+    # Kein Treffer bei MEHREREN Eintraegen: nichts raten.
+    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Patrikis"}) == {}
+
+
+def test_weiterleitungs_ziel_einzelner_eintrag_gilt_fuer_alle():
+    t = {"weiterleitungen": [{"name": "Praxis", "nummer": "+49333", "hinweis": ""}]}
+    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Patrikis"}) == {
+        "name": "Praxis", "nummer": "+49333"}
+    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": ""}) == {
+        "name": "Praxis", "nummer": "+49333"}
+
+
+def test_weiterleitungs_ziel_ohne_konfig_leer():
+    assert weiterleiten.weiterleitungs_ziel({}, {"calendarName": "Dr. Petsas"}) == {}
+    assert weiterleiten.weiterleitungs_ziel({"weiterleitungen": []}, {}) == {}
+    # Eintraege ohne Nummer zaehlen nicht.
+    t = {"weiterleitungen": [{"name": "Dr. Petsas", "nummer": ""}]}
+    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Petsas"}) == {}
+
+
+def test_echte_weiterleitung_traegt_transfer_und_bleibt_stumm():
+    """W-VERBINDEN-ECHT (31.08.2026): hat der Client eine Weiterleitung
+    eingerichtet, kommt KEIN Kirri-Zettel — die Antwort traegt transfer
+    ({nummer, name}), Ansage + Jingle laufen als Filler, danach waehlt der
+    Asterisk-Dialplan wirklich raus."""
+    sit = _sit_mit_weiterleitung()
+    events: list[str] = []
+    z = flow.zug(sit, "Kann ich bitte mit Doktor Petsas sprechen?", events.append)
+    assert z is not None
+    assert z.get("transfer") == {"nummer": "+49211111111", "name": "Dr. Petsas"}
+    assert z.get("hangup") is True
+    assert z["text"] == ""  # nach dem Jingle klingelt es — kein Zettel
+    assert weiterleiten.JINGLE_EVENT in events
+    sag = [e for e in events if e.startswith("sag:")]
+    assert sag and "Verbindung" in sag[0]
+    assert sit["weiterleitungZiel"] == {"name": "Dr. Petsas", "nummer": "+49211111111"}
+
+
+def test_ohne_passendes_ziel_bleibt_platzhalter():
+    """Mehrere Eintraege, keiner passt zum gewuenschten Behandler:
+    NICHT raten — der Platzhalter-Weg (Kirri-Zettel) bleibt."""
+    sit = _sit_mit_weiterleitung()
+    events: list[str] = []
+    z = flow.zug(sit, "Kann ich bitte mit Doktor Patrikis sprechen?", events.append)
+    assert z is not None and "Kirri" in z["text"]
+    assert "transfer" not in z
+    assert z.get("hangup") is True
+
+
+def test_agent_reicht_transfer_durch_ohne_llm(monkeypatch):
+    """Live erlebt 31.08.2026 (erste Probe): das Transfer-Reply traegt
+    text="" — agent.user_turn wertete das als 'Maschine schweigt' und das
+    LLM uebernahm ('Zu welchem unserer Ärzte...'), die Weiterleitung fiel
+    weg. Ein Reply mit transfer/hangup ZAEHLT als Maschinen-Zug und das
+    transfer-Feld erreicht den Dienst."""
+    from bianca import agent
+    from kern import llm
+
+    def _knall(*a, **k):
+        raise AssertionError("LLM darf beim Transfer-Reply nicht uebernehmen")
+
+    monkeypatch.setattr(llm, "chat", _knall)
+    monkeypatch.setattr(llm, "chat_stream", _knall)
+    sit = _sit_mit_weiterleitung()
+    aus = agent.user_turn(sit, "Ich möchte bitte mit Doktor Petsas sprechen.")
+    assert aus.get("transfer") == {"nummer": "+49211111111", "name": "Dr. Petsas"}
+    assert aus.get("hangup") is True
+    assert aus["text"] == ""
+
+
+def test_meddent_ohne_konfig_bleibt_platzhalter():
+    """meddent.json traegt keine weiterleitungen — Alt-Verhalten unveraendert."""
+    sit = _sit()
+    z = flow.zug(sit, "Kann ich bitte mit Doktor Petsas sprechen?")
+    assert z is not None and "Kirri" in z["text"] and "transfer" not in z
 
 
 # --- Jingle-Infrastruktur ----------------------------------------------------

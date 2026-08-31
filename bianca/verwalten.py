@@ -7,16 +7,21 @@ Termin-ID (agentCancelAppointmentById), das Verschieben laeuft ueber
 postpone mit Termin-ID. Liefert None, wenn der Satz nichts mit dem Anliegen
 zu tun hat — dann uebernimmt das LLM (Status steht im Prompt).
 
-Sammel-Prozedur Absagen/Verschieben (Chef 29.08.2026): "darin liegt die
-kunst erstmal alle daten poe a poe aufzusammeln und dann zu suchen."
-1. WANN ist der Termin? Klare Antwort -> Hinweis merken (filtert spaeter).
-2. "Weiss nicht mehr" -> BEHANDLER erfragen (nicht in allen Kalendern raten).
-3. NAME erfragen (oder den schon genannten nutzen) -> dann erst suchen.
-4. Treffer BESTAETIGEN mit Anrede ("… Frau Mueller, ja?") — bei Ja loeschen
+Prozedur Absagen/Verschieben (W-NACHNAME 31.08.2026, phone_agent-Vorbild —
+loest die Wann-zuerst-Sammelei von W-SAMMELN ab; Chef: "der soll nur nach
+dem nachnamen fragen und dann erstmal sehen ob er einen termin findet"):
+1. NUR den NACHNAMEN erfragen — die Cloud Function
+   agentFindPatientAppointments braucht nichts weiter (lastName reicht,
+   Anrufer-Telefon geht als Bonus mit). Hinweise aus dem Einstiegssatz
+   ("Termin am Donnerstag absagen", Behandler-Name) werden weiter geerntet
+   und filtern die Treffer — es wird nur nichts mehr VORAB abgefragt.
+2. Meldet die CF MEHRERE Patienten mit gleichem Nachnamen (409/ambiguous),
+   grenzt der VORNAME ab: einmal nachfragen, mit firstName erneut suchen.
+3. Treffer BESTAETIGEN mit Anrede ("… Frau Mueller, ja?") — bei Ja loeschen
    bzw. die Verschiebe-Strecke starten.
-5. Mehrere Treffer trotz Hinweisen -> hilfsweise die BEHANDLUNG erfragen,
+4. Mehrere TERMINE des Patienten -> hilfsweise die BEHANDLUNG erfragen,
    danach die Auswahl-Liste.
-6. Nicht gefunden -> ehrlich sagen + ECHTE Notiz (praxis_notizen.jsonl,
+5. Nicht gefunden -> ehrlich sagen + ECHTE Notiz (praxis_notizen.jsonl,
    Dock-Anzeige): "keine Sorge, ich schreibe eine Notiz, und die wird
    Doktor XY vorgelegt."
 """
@@ -96,8 +101,13 @@ def _ctx(sit: dict) -> dict:
     """Minimaler Kontext fuer die Namens-Suche und die Schreib-Aufrufe."""
     s = gehirn.sammler(sit)
     ctx = sit.setdefault("booking", {})
+    # Geraeumte Felder auch im Kontext raeumen (W-NAMESKORREKTUR): nach der
+    # Namens-Korrektur darf kein verworfener Vorname/Kartei-Treffer aus dem
+    # booking-Dict weiter in die Suche kleben.
     if s["vorname"]:
         ctx["firstName"] = s["vorname"]
+    else:
+        ctx.pop("firstName", None)
     if s["nachname"]:
         ctx["lastName"] = s["nachname"]
     name = f"{s['vorname']} {s['nachname']}".strip()
@@ -105,6 +115,8 @@ def _ctx(sit: dict) -> dict:
         ctx["patientName"] = name
     if s["patientId"]:
         ctx["patientId"] = s["patientId"]
+    else:
+        ctx.pop("patientId", None)
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
@@ -128,16 +140,19 @@ def _finden(sit: dict, melde: Melde) -> dict:
     if melde:
         melde("list_appointments")
     res = kal.find_patient_appointments(sit["tenant"], _ctx(sit))
-    if res.get("ok") and not res.get("notFound"):
-        sit["gefunden"] = res.get("appointments") or []
-        sit["gefundenKey"] = key
+    if res.get("ok") and not res.get("notFound") and not res.get("mehrdeutig"):
         pat = res.get("patient") or {}
         if _s(pat.get("id")):
             s["patientId"] = _s(pat.get("id"))
             s["bekannt"] = True
             s["warSchonMal"] = True
-            if not s["vorname"] and _s(pat.get("firstName")):
+            # Kartei schlaegt Verhoer: hat die Suche den gespeicherten
+            # Vornamen verworfen (Treffer kam erst ohne firstName), gilt
+            # der Vorname aus der Akte (W-NAMESKORREKTUR).
+            if _s(pat.get("firstName")) and (not s["vorname"] or res.get("vornameVerworfen")):
                 s["vorname"] = _s(pat.get("firstName"))
+        sit["gefunden"] = res.get("appointments") or []
+        sit["gefundenKey"] = f"{s['vorname']}|{s['nachname']}".lower()
     return res
 
 
@@ -165,10 +180,12 @@ def _liste_sprechbar(termine: list[dict]) -> str:
 def _verw_reset(sit: dict) -> None:
     """Sammel-Stand raeumen (neues Anliegen bzw. Anliegen erledigt)."""
     sit.pop("verwNotFound", None)
+    sit.pop("verwKorrektur", None)        # W-NAMESKORREKTUR: frische Chance
+    sit.pop("verwKorrekturVorname", None)
+    sit.pop("verwWann", None)         # Altlast aus W-SAMMELN-Sitzungen
+    sit.pop("verwArztGefragt", None)  # (Wann-/Behandler-Vorabfrage ist raus)
     sit["verwHinweis"] = {}
     sit["verwHinweisText"] = ""
-    sit["verwWann"] = ""
-    sit["verwArztGefragt"] = False
     sit["verwBehandlungGefragt"] = False
     sit["verwBehandlung"] = ""
     sit["verwAktiv"] = False
@@ -262,34 +279,39 @@ def _filtern(sit: dict, termine: list[dict]) -> list[dict]:
     return out
 
 
-def _wann_frage(sit: dict) -> dict:
+def _korrektur_frage(sit: dict) -> dict:
+    """W-NAMESKORREKTUR (Chef 31.08.2026, Zannes-Anruf 10:33: "der gibt zu
+    schnell auf"): beim ERSTEN 'Patient nicht gefunden' nicht gleich die
+    Notiz schreiben — meist hat STT den Nachnamen verhoert ("Sannes Czannis"
+    statt Tzannes). Der Anrufer bekommt EINE Chance, den Nachnamen zu
+    korrigieren oder zu buchstabieren; erst der zweite Fehlschlag geht den
+    ehrlichen Notiz-Weg."""
     s = gehirn.sammler(sit)
-    # Schnappschuss: die Wann-Antwort beschreibt den ALTEN Termin und darf
-    # den Neu-Wunsch (verschieben: "auf Freitag") nicht ueberschreiben.
-    sit["verwWunschAlt"] = s["wunsch"]
-    sit["verwWunschTextAlt"] = s["wunschText"]
-    s["frage"] = "wann"
-    anlauf = "Das machen wir." if s["modus"] == "absagen" else "Gerne."
+    sit["verwKorrektur"] = True
+    # Schnappschuss: nennt die Korrektur nur den Nachnamen, fliegt ein
+    # Vorname aus derselben (verhoerten) Aeusserung mit raus.
+    sit["verwKorrekturVorname"] = s["vorname"]
+    wer = f"{s['vorname']} {s['nachname']}".strip() or "diesem Namen"
+    s["frage"] = "nachname"
     return {"text": (
-        f"{anlauf} Wann ist der Termin denn — "
-        "zum Beispiel der Wochentag oder die Uhrzeit?"
+        f"Unter {wer} finde ich gerade keinen Termin. "
+        "Vielleicht habe ich den Nachnamen falsch verstanden — "
+        "sagen oder buchstabieren Sie ihn mir bitte noch einmal?"
     )}
 
 
-def _behandler_frage(sit: dict) -> dict:
+def _vorname_frage(sit: dict) -> dict:
+    """Die CF meldet MEHRERE Patienten mit gleichem Nachnamen (409/ambiguous):
+    der Vorname grenzt ab — wie im alten phone_agent (W-NACHNAME 31.08.2026)."""
     s = gehirn.sammler(sit)
-    namen: list[str] = []
-    for c in (sit.get("tenant") or {}).get("calendars") or []:
-        n = arzt_sprechname(_s((c or {}).get("name")))
-        if n and n not in namen:
-            namen.append(n)
-    sit["verwArztGefragt"] = True
-    s["frage"] = "arzt"
-    liste = ", ".join(namen[:-1]) + " oder " + namen[-1] if len(namen) > 1 else (namen[0] if namen else "")
-    zusatz = f" — {liste}" if liste else ""
+    if s["vorname"]:
+        # Auch MIT Vornamen noch mehrdeutig: nicht raten — ehrlich + Notiz.
+        return _kein_termin(sit, s["modus"])
+    s["frage"] = "vorname"
+    wer = f"dem Nachnamen {s['nachname']}" if s["nachname"] else "diesem Nachnamen"
     return {"text": (
-        "Kein Problem, das finden wir zusammen heraus. "
-        f"Wissen Sie noch, bei welchem Behandler der Termin ist{zusatz}?"
+        f"Da haben wir mehrere Patienten mit {wer}. "
+        "Wie ist denn Ihr Vorname?"
     )}
 
 
@@ -610,7 +632,13 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
             "Die Praxis ruft Sie dazu zurück — entschuldigen Sie bitte."
         )}
     if res.get("notFound"):
+        if not sit.get("verwKorrektur"):
+            return _korrektur_frage(sit)
         return _kein_termin(sit, s["modus"])
+    if res.get("mehrdeutig"):
+        if res.get("vornameVerworfen"):
+            s["vorname"] = ""  # der gespeicherte Vorname passte nachweislich nicht
+        return _vorname_frage(sit)
     termine = sit.get("gefunden") or []
     if not termine:
         return _kein_termin(sit, s["modus"])
@@ -642,8 +670,10 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
 
 
 def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
-    """Poe-a-poe-Prozedur fuer Absagen/Verschieben (Chef 29.08.2026):
-    WANN -> (bei "weiss nicht" der BEHANDLER) -> NAME -> suchen."""
+    """Absagen/Verschieben (W-NACHNAME 31.08.2026, phone_agent-Vorbild):
+    NUR den NACHNAMEN erfragen, dann SUCHEN — die CF braucht nichts weiter.
+    Hinweise aus dem Einstiegssatz filtern die Treffer; mehrere Patienten
+    mit gleichem Nachnamen (CF ambiguous) grenzt der Vorname ab."""
     s = gehirn.sammler(sit)
 
     if "modus" in neu and not sit.get("verwAktiv"):
@@ -651,10 +681,12 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         # im Sammeln): alten Stand raeumen, Hinweise aus dem Einstiegssatz.
         notfound_davor = bool(sit.pop("verwNotFound", False))
         _verw_reset(sit)
-        if notfound_davor:
+        if notfound_davor and not ({"name", "nachname"} & neu):
             # Der vorige Anlauf scheiterte an der SUCHE — meist ein verhoerter
             # Name ("Peter Möbel"). Stur denselben Namen wieder zu suchen
-            # waere dieselbe Sackgasse: Name/Kartei frisch erfragen.
+            # waere dieselbe Sackgasse: Name frisch erfragen. Traegt der Satz
+            # den Namen aber schon KORRIGIERT ("… absagen, Peter Müller."),
+            # bleibt der frische Name stehen und wird direkt gesucht.
             s["vorname"] = ""
             s["nachname"] = ""
             s["patientId"] = ""
@@ -665,7 +697,6 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
             if s["wunsch"] and _hinweis_hat(s["wunsch"]):
                 sit["verwHinweis"] = dict(s["wunsch"])
                 sit["verwHinweisText"] = s["wunschText"] or t
-                sit["verwWann"] = "klar"
             s["wunsch"] = None
             s["wunschText"] = ""
         else:
@@ -673,31 +704,32 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
             # ist der alte Termin, der Rest bleibt Neu-Wunsch.
             m = _ALT_REF_RE.search(t)
             if m and _hinweis_merken(sit, m.group(1)):
-                sit["verwWann"] = "klar"
                 rest = f"{t[:m.start(1)]} {t[m.end(1):]}"
                 w = parse_slot_wish(rest)
                 s["wunsch"] = w if _hinweis_hat(w) else None
                 s["wunschText"] = rest if s["wunsch"] else ""
     sit["verwAktiv"] = True
 
-    # Antworten auf offene Sammel-Fragen auswerten.
-    if s["frage"] == "wann":
-        klar = _hinweis_merken(sit, t)
-        unklar = bool(_UNKLAR_RE.search(t))
-        weiter = "name" in neu or "nachname" in neu
-        if not (klar or unklar or weiter):
+    # Antworten auf offene Fragen auswerten.
+    if s["frage"] == "vorname":
+        if not neu:
             return None  # Zwischenfrage/Erzaehlung: LLM, die Frage bleibt offen
-        # Schnappschuss zurueck: die Wann-Antwort gehoert dem ALTEN Termin,
-        # der Neu-Wunsch (verschieben) bleibt unangetastet.
-        s["wunsch"] = sit.pop("verwWunschAlt", None)
-        s["wunschText"] = sit.pop("verwWunschTextAlt", "") or ""
         s["frage"] = ""
-        sit["verwWann"] = "klar" if klar else ("unklar" if unklar else "uebergangen")
-    elif s["frage"] == "arzt" and sit.get("verwArztGefragt"):
-        beantwortet = "arzt" in neu or "name" in neu or "nachname" in neu or _UNKLAR_RE.search(t)
-        if not beantwortet and (gehirn.ist_zwischenfrage(t) or gespraech.traegt_thema(sit, t)):
-            return None
-        s["frage"] = ""  # auch "weiss nicht": hilfsweise geht es ohne weiter
+    elif s["frage"] == "nachname" and sit.get("verwKorrektur"):
+        if not neu:
+            if gehirn.ist_zwischenfrage(t) or gespraech.traegt_thema(sit, t):
+                return None  # Zwischenfrage: LLM, die Korrektur-Frage bleibt offen
+            # "Der stimmt aber" o. ae.: gleicher Name, die Suche unten laeuft
+            # erneut und geht danach den ehrlichen Notiz-Weg.
+        else:
+            # Nur der Nachname wurde korrigiert: ein Vorname aus derselben
+            # verhoerten Aeusserung ("Sannes" zu "Czannis") fliegt mit raus —
+            # die Suche laeuft ueber den Nachnamen, die Kartei liefert den
+            # richtigen Vornamen zurueck (W-NAMESKORREKTUR).
+            alt_vor = _s(sit.pop("verwKorrekturVorname", ""))
+            if s["vorname"] and s["vorname"] == alt_vor:
+                s["vorname"] = ""
+            s["frage"] = ""
     elif s["frage"] == "behandlung":
         if not _UNKLAR_RE.search(t) and not gehirn.ist_ja(t) and not gehirn.ist_nein(t):
             sit["verwBehandlung"] = t if len(t) <= 90 else t[:87] + "…"
@@ -708,35 +740,23 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     if termin:
         return _bestaetigen(sit, termin, melde)
 
-    # Frisch gebuchter Termin im selben Anruf ODER Termine schon geladen:
-    # direkt suchen/filtern statt den Anrufer erneut auszufragen.
-    key = f"{s['vorname']}|{s['nachname']}".lower()
-    if s["nachname"] and (
-        _s((sit.get("booking") or {}).get("appointmentId"))
-        or (sit.get("gefunden") and sit.get("gefundenKey") == key)
-    ):
-        return _dispatch(sit, melde)
-
-    # 1) WANN ist der Termin?
-    if not sit.get("verwWann"):
-        return _wann_frage(sit)
-
-    # 2) "Weiss nicht mehr" -> Behandler eingrenzen (nicht alle Kalender).
-    if (sit.get("verwWann") == "unklar" and not (s["arzt"] or {}).get("calendarId")
-            and not sit.get("verwArztGefragt")
-            and len((sit.get("tenant") or {}).get("calendars") or []) >= 2):
-        return _behandler_frage(sit)
-
-    # 3) NAME — dann erst suchen.
+    # NUR der NACHNAME — dann direkt suchen (Chef 31.08.2026: "erstmal sehen
+    # ob er einen termin findet"; die Wann-/Behandler-Vorabfrage von
+    # W-SAMMELN ist ausgebaut, freiwillig genannte Hinweise filtern weiter).
     if not s["nachname"]:
-        if s["frage"] == "name" and not neu:
+        if s["frage"] in {"name", "nachname"} and not neu:
             return None  # LLM klaert die Zwischenfrage, Status fuehrt zurueck
-        s["frage"] = "name"
+        s["frage"] = "nachname"
         was = {
             "absagen": "Damit ich den richtigen Termin absage",
             "verschieben": "Damit ich den richtigen Termin finde",
         }[s["modus"]]
-        return {"text": f"{was}: Wie ist Ihr Vor- und Nachname?"}
+        # Chef 31.08.2026: direkt zum Buchstabieren einladen — der verhoerte
+        # Nachname ist die haeufigste Ursache fuer die Fehlsuche (Zannes).
+        return {"text": (
+            f"{was}: Wie ist Ihr Nachname? "
+            "Buchstabieren Sie ihn am besten gleich einmal."
+        )}
 
     quittung = ""
     if ("name" in neu or "nachname" in neu) and s["nachname"]:
@@ -833,6 +853,17 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
 
     # 4) Nach erledigter Absage: direkt neu buchen?
     if s["frage"] == "neubuchung":
+        if ("name" in neu or "nachname" in neu) and s["modus"] in {"absagen", "verschieben"} \
+                and s["nachname"] and not gehirn.ist_ja(t):
+            # "Nein, mein Nachname ist Zannes." nach der Fehlsuche ist eine
+            # KORREKTUR, kein blosses Nein (live 31.08.2026: der Nein-Zweig
+            # antwortete "Alles klar." und ignorierte den Namen) — mit dem
+            # frischen Namen direkt neu suchen (W-NAMESKORREKTUR). Ein "Ja"
+            # mit Namen bleibt beim Neubuchungs-Weg darunter.
+            sit.pop("verwNotFound", None)
+            s["phase"] = ""
+            s["frage"] = ""
+            return _dispatch(sit, melde)
         if gehirn.ist_ja(t) or "grund" in neu or "wunsch" in neu:
             s["modus"] = "buchen"
             s["phase"] = ""
@@ -848,26 +879,31 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             return {"text": "Alles klar. Kann ich sonst noch etwas für Sie tun?"}
         return None
 
-    # 5) Absagen/Verschieben: Daten poe a poe einsammeln (WANN -> Behandler ->
-    #    Name), dann erst suchen. Nach ERLEDIGTEM Anliegen (phase fertig) nur
-    #    mit NEUER Info bzw. offener Sammel-Frage wieder los — der geleerte
-    #    Termin-Cache allein ist kein Grund (live 27.08. 15:22: "Das war's,
-    #    danke" loeste sonst ein frisches Slot-Angebot aus).
+    # 5) Absagen/Verschieben: Nachname erfragen und SUCHEN (W-NACHNAME).
+    #    Nach ERLEDIGTEM Anliegen (phase fertig) nur mit NEUER Info bzw.
+    #    offener Frage wieder los — der geleerte Termin-Cache allein ist
+    #    kein Grund (live 27.08. 15:22: "Das war's, danke" loeste sonst
+    #    ein frisches Slot-Angebot aus).
     if s["modus"] in {"absagen", "verschieben"}:
         if s["phase"] in {"", "fertig"} and (
             ("name" in neu or "nachname" in neu or "modus" in neu)
-            or s["frage"] in {"wann", "arzt", "behandlung", "name"}
+            or s["frage"] in {"behandlung", "name", "nachname", "vorname"}
             or (s["phase"] == "" and sit.get("gefundenKey") != f"{s['vorname']}|{s['nachname']}".lower())
         ):
             return _sammeln(sit, t, neu, melde)
         return None
 
-    # 6) Auskunft: Name reicht — Termine holen und vorlesen.
+    # 6) Auskunft: Nachname reicht — Termine holen und vorlesen.
     if not s["nachname"]:
-        if s["frage"] == "name" and not neu:
+        if s["frage"] in {"name", "nachname"} and not neu:
             return None  # LLM klaert die Zwischenfrage, Status fuehrt zurueck
-        s["frage"] = "name"
-        return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Vor- und Nachname?"}
+        s["frage"] = "nachname"
+        return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?"}
+
+    if s["frage"] == "vorname" and not neu:
+        return None  # Zwischenfrage waehrend der Vornamen-Klaerung: LLM
+    if s["frage"] == "vorname" and neu:
+        s["frage"] = ""
 
     if s["phase"] in {"", "fertig"} and (
         ("name" in neu or "nachname" in neu or "modus" in neu)

@@ -95,6 +95,33 @@ def _kalender(pre: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def _weiterleitungen(agent: dict[str, Any]) -> list[dict[str, str]]:
+    """Weiterleitungs-Ziele des DB-Agents (W-VERBINDEN-ECHT 31.08.2026).
+
+    Gleiche Felder wie phone_agent _transfer_from_agent: das Portal pflegt
+    ``callForwardingToolEnabled`` + ``callForwardings`` (name/number, die
+    Routing-Bedingung liegt oft in prompt/condition). Nur mit Schalter AN
+    und echter Nummer; Nummern normalisiert auf +E164."""
+    if not agent.get("callForwardingToolEnabled"):
+        return []
+    roh = agent.get("callForwardings") if isinstance(agent.get("callForwardings"), list) else []
+    out: list[dict[str, str]] = []
+    for item in roh:
+        if not isinstance(item, dict):
+            continue
+        norm = tenants.nummer_norm(
+            item.get("number") or item.get("phone_number") or item.get("phoneNumber"))
+        if not norm:
+            continue
+        out.append({
+            "name": _s(item.get("name")),
+            "nummer": "+" + norm,
+            "hinweis": _s(item.get("prompt") or item.get("condition")
+                          or item.get("description")),
+        })
+    return out
+
+
 def _motive(pre: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     roh = pre.get("visitMotives") if isinstance(pre.get("visitMotives"), list) else []
@@ -236,6 +263,11 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     db = db_prompt_von_agent(agent)
     if db:
         t["dbPrompt"] = db
+
+    # W-VERBINDEN-ECHT: die DB entscheidet die Weiterleitungen KOMPLETT —
+    # auch das AUS (Schalter aus/keine Ziele ueberschreibt eine Datei-Basis,
+    # sonst wuerde ein abgeschalteter Client weiter verbunden).
+    t["weiterleitungen"] = _weiterleitungen(agent)
 
     # W-CALLSTATUS: die pre-Phase hat einen PhoneCall-Datensatz angelegt —
     # seine Id gehoert zur SITZUNG (call_erfassen), nie in den Cache.

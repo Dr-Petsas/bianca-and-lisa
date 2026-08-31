@@ -118,6 +118,65 @@ def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
 
+# --- Satz-Grenz-Wache fuer den TTS-Split (W-TTS-NAHT 31.08.2026) -------------
+# Portiert aus dem alten phone_agent (tts_chunks._splittable_prefix): ein
+# Punkt hinter Ordnungszahl ("im 3. Stock"), Abkuerzung ("St. Martin",
+# "Bahnhofstr. 12") oder Einzelbuchstabe ist KEIN Satzende — ein Split dort
+# schneidet mitten in der Phrase, die Stimme klingt abgehackt.
+
+ABKUERZUNGEN = frozenset({
+    "dr", "prof", "med", "dent", "fr", "hr", "frl",
+    "str", "nr", "tel", "abs", "st",
+    "ca", "bzw", "ggf", "evtl", "inkl", "exkl", "zzgl", "usw", "etc",
+    "min", "std", "mind", "max",
+    "mo", "di", "mi", "do", "sa", "so",
+    "z", "b",
+})
+
+_ABK_WORT_RE = re.compile(r"([A-Za-zÄÖÜäöüß]+)$")
+
+
+def kein_satzende(davor: str) -> bool:
+    """True, wenn der Text VOR einem '.' mit Ziffer, Abkuerzung oder
+    Einzelbuchstabe endet — der Punkt gehoert dann zum Wort, nicht zum Satz.
+    ``davor`` ist der Text OHNE den Punkt selbst."""
+    d = davor.rstrip()
+    if re.search(r"\d$", d):
+        return True
+    m = _ABK_WORT_RE.search(d)
+    if m:
+        w = m.group(1).lower()
+        # endswith("str") faengt Strassennamen ("Bahnhofstr.", "Hauptstr.").
+        return len(w) == 1 or w in ABKUERZUNGEN or w.endswith("str")
+    return False
+
+
+_TTS_SPLIT_RE = re.compile(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])")
+
+
+def tts_saetze(text: str) -> list[str]:
+    """Satz-Split fuer die Stimme (dienst._sprech_blob / stimme_stream):
+    wie der alte Split an [.!?]+Leerraum+Grossbuchstabe, aber NIE hinter
+    Ordnungszahlen/Abkuerzungen — phone_agent-Lektion gegen abgehackte
+    Woerter an der Naht."""
+    t = _s(text)
+    if not t:
+        return []
+    out: list[str] = []
+    start = 0
+    for m in _TTS_SPLIT_RE.finditer(t):
+        vorn = t[start:m.start()]
+        if vorn.endswith(".") and kein_satzende(vorn[:-1]):
+            continue
+        if vorn.strip():
+            out.append(vorn.strip())
+        start = m.end()
+    rest = t[start:].strip()
+    if rest:
+        out.append(rest)
+    return out
+
+
 def _zahl(n: int) -> str:
     n = int(n)
     if n < 20:

@@ -479,7 +479,12 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
-    job_sprach = bool(fl and _s(fl.get("text")))
+    # W-VERBINDEN-ECHT (31.08.2026): eine echte Weiterleitung spricht ihre
+    # Ansage als Filler und traegt text="" — sie ZAEHLT trotzdem als
+    # Maschinen-Zug, sonst wuerfe das LLM das transfer-Reply weg (live
+    # erlebt: "Zu welchem unserer Ärzte..." statt Durchstellen).
+    job_sprach = bool(fl and (_s(fl.get("text")) or fl.get("hangup")
+                              or fl.get("transfer")))
     # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am
     # Sammler/Fluss aendert sie nichts, sie entscheidet nur, wie frei das
     # LLM gleich sprechen darf und ob der Frage-Anker feuert.
@@ -495,20 +500,24 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # beantwortet hat), kommt sie in der nächsten Formulierung — nie
         # zweimal wortgleich (Chef 27.08.2026). Nie stumm: bleibt nichts
         # übrig, spricht der Originaltext.
-        fl["text"] = _wiederholungs_wache(sit, fl["text"]) or fl["text"]
-        if "?" in fl["text"]:
-            sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
-        msgs.append({"role": "assistant", "content": fl["text"]})
+        if _s(fl.get("text")):
+            fl["text"] = _wiederholungs_wache(sit, fl["text"]) or fl["text"]
+            if "?" in fl["text"]:
+                sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
+            msgs.append({"role": "assistant", "content": fl["text"]})
         sit["messages"] = msgs
         gespraech.nach_antwort(sit)
         # W-GEDAECHTNIS: der Zug kann Name/Nummer geerntet haben (Sammler,
         # Verwaltung) — jetzt nachsehen, damit der Kontext im NAECHSTEN Zug
         # schon im Prompt steht.
         gedaechtnis.kontext_anstossen(sit)
-        aus = {"text": fl["text"], "book": fl.get("book")}
+        aus = {"text": _s(fl.get("text")), "book": fl.get("book")}
         if fl.get("hangup"):
             # Weiterleitung (Jingle + Kirri-Zettel): das Dock legt danach auf.
             aus["hangup"] = True
+        if isinstance(fl.get("transfer"), dict) and fl["transfer"].get("nummer"):
+            # W-VERBINDEN-ECHT: das Ziel muss bis zur Bruecke durchreichen.
+            aus["transfer"] = fl["transfer"]
         return aus
 
     # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.

@@ -803,39 +803,79 @@ Frage nach dem BESTEHENDEN Termin. Der Anrufer setzte dreimal an und legte auf.
  nie — die W-TEMPO-Schwellen (350/650) kamen im Stream-Pfad still nicht an.
  Jetzt kopiert der reply-Zweig das Feld (beide Docks, Cache-Buster b14/call31).
 
-## Termin-Suche Absagen/Verschieben (W-SAMMELN 29.08.2026 — nicht rückbauen)
+## Termin-Suche Absagen/Verschieben (W-SAMMELN 29.08. / W-NACHNAME 31.08.2026 — nicht rückbauen)
 
-Chef: "darin liegt die kunst erstmal alle daten pö a pö aufzusammeln und dann
-zu suchen." Vorher fragte Bianca bei absagen/verschieben sofort den Namen und
-las bei mehreren Treffern stur die Liste vor. Jetzt sammelt
-`bianca/verwalten.py -> _sammeln` (gleiche Prozedur für BEIDE Anliegen):
+Chef 31.08.2026 (nach dem Tzannes-Anruf 09:50: "Wie ist Ihr Vor- und
+Nachname?" nervte, die Suche scheiterte, der Fluss rutschte in die
+Neubuchung): "der soll nur nach dem nachnamen fragen und dann erstmal sehen
+ob er einen termin findet. findet er mehrere termine mit gleichem nachnamen
+und unterschiedlichen vornamen dann soll er nach dem vornamen fragen." —
+wie der alte phone_agent (`findPatientAppointments`: required nur lastName).
+Die Wann-zuerst-Sammelei von W-SAMMELN ist damit AUSGEBAUT; geblieben sind
+Hinweis-Filter, Anrede-Bestätigung, Behandlungs-Frage, Auswahl-Liste und
+Notiz-Weg. `bianca/verwalten.py -> _sammeln` (BEIDE Anliegen):
 
-1. **WANN ist der Termin?** (frage=wann). Klare Antwort (Wochentag, Uhrzeit,
- "nächste Woche", Datum — `parse_slot_wish`) wird `verwHinweis` und filtert
- die Treffer (`_hinweis_passt`: Datum/Wochentag/Stunde ±1 h/Tageszeit).
- Zeitangabe schon im Einstiegssatz ("Termin am Donnerstag absagen") =
- Frage übersprungen; beim Verschieben trennt `_ALT_REF_RE` das am/vom-Stück
- (alter Termin) vom auf/zu-Stück (Neu-Wunsch), und die Wann-Antwort läuft
- über einen Schnappschuss (`verwWunschAlt`) NIE in den Neu-Wunsch.
- Antwortet der Anrufer stattdessen mit dem Namen -> kein Nachbohren
- (verwWann=uebergangen, direkt weiter).
-2. **"Weiß nicht mehr"** (`_UNKLAR_RE`) -> **Behandler-Frage** (frage=arzt,
- einmal, nur bei >= 2 Kalendern): "um nicht in allen kalendern zu suchen" —
- der genannte Behandler filtert über calendarId. "Weiß auch nicht" ist ok,
- dann geht es hilfsweise ohne weiter.
-3. **NAME** (bestehende Frage) -> erst DANN `agentFindPatientAppointments`.
-4. **Treffer bestätigen mit Anrede** (Chef: "Herr/Frau xy, ja?"):
+1. **NUR der NACHNAME** (frage=nachname; Absage/Verschieben laden direkt zum
+ Buchstabieren ein: "Wie ist Ihr Nachname? Buchstabieren Sie ihn am besten
+ gleich einmal." — Chef 31.08.2026, der verhoerte Nachname ist die
+ haeufigste Fehlsuchen-Ursache; frage=nachname zaehlt seitdem als Diktat:
+ `_STILLE_DIKTAT` 1500 ms statt 500) -> SOFORT
+ `agentFindPatientAppointments` (lastName reicht; vorhandener Vorname/
+ Anrufer-Telefon gehen mit). Sagt der Anrufer den vollen Namen, erntet
+ `gehirn._name_aufnehmen` auf die Nachnamen-Frage BEIDE Teile. Freiwillige
+ Angaben werden weiter geerntet und filtern die Treffer, nur VORAB gefragt
+ wird nichts mehr: Zeitangabe im Einstiegssatz ("Termin am Donnerstag
+ absagen" — `parse_slot_wish`) wird `verwHinweis` (`_hinweis_passt`:
+ Datum/Wochentag/Stunde ±1 h/Tageszeit), ein genannter Behandler filtert
+ über calendarId; beim Verschieben trennt `_ALT_REF_RE` das am/vom-Stück
+ (alter Termin) vom auf/zu-Stück (Neu-Wunsch). Die Auskunft fragt analog
+ nur noch den Nachnamen ("Damit ich in den Kalender schauen kann: …").
+2. **Mehrere PATIENTEN mit gleichem Nachnamen:** die CF antwortet
+ 409/conflict/ambiguous -> `kern/calendar.find_patient_appointments`
+ liefert `mehrdeutig` (nie gecacht) -> `_vorname_frage` (frage=vorname,
+ "Da haben wir mehrere Patienten mit dem Nachnamen X. Wie ist denn Ihr
+ Vorname?") -> mit firstName erneut suchen. Immer noch mehrdeutig (Vorname
+ lag schon vor) -> ehrlich + Notiz wie "nicht gefunden".
+2b. **Namens-Korrektur-Chance (W-NAMESKORREKTUR 31.08.2026 — nicht
+ rückbauen; Zannes-Anruf 10:33: "der gibt zu schnell auf, der patient muss
+ zumindest einmal die möglichkeit haben den nachnamen zu korrigieren"):
+ der ERSTE `notFound` schreibt KEINE Notiz mehr, sondern fragt
+ `_korrektur_frage` ("Unter X finde ich gerade keinen Termin. Vielleicht
+ habe ich den Nachnamen falsch verstanden — sagen oder buchstabieren Sie
+ ihn mir bitte noch einmal?", frage=nachname, einmal je Anlauf:
+ `verwKorrektur`, geräumt in `_verw_reset`). Nennt die Korrektur nur den
+ Nachnamen, fliegt ein Vorname aus derselben verhörten Äußerung mit raus
+ (Schnappschuss `verwKorrekturVorname` — "Sannes Czannis" hätte sonst als
+ firstName=Sannes die korrigierte Suche vergiftet; `_ctx` räumt geleerte
+ Felder auch aus dem booking-Dict). Dazu drei Netze: (a) `kern/calendar.
+ find_patient_appointments` fasst bei 404 MIT firstName einmal NUR mit dem
+ Nachnamen nach (`vornameVerworfen` in der Antwort: `_finden` nimmt dann
+ den Kartei-Vornamen, bei mehrdeutig leert `_dispatch` den Vornamen vor
+ der Vornamen-Frage); (b) `gehirn.einsammeln` erntet explizite Zuweisungen
+ ("Nein, mein Nachname ist Zannes.", `_TEIL_*_RE`; nach Fehlsuche auch
+ "ich heiße …") IMMER — auch wenn längst ein Nachname steht und keine
+ Namensfrage offen ist (vorher versank die Korrektur im Nein-Zweig der
+ Neubuchungs-Frage: "Alles klar."); (c) der Neubuchungs-Zweig in
+ `verwalten.zug` behandelt einen frischen Namen (ohne Ja) als Korrektur
+ und sucht sofort neu, statt ihn als Nein zu schlucken. Ein voller Name
+ auf die Nachnamen-Frage überschreibt jetzt BEIDE Teile. Zweiter
+ Fehlschlag -> Notiz-Weg wie unter 5. Tests:
+ `test_absage_korrektur_chance_nach_erstem_fehlschlag`,
+ `test_absage_korrektur_am_nein_zweig_vorbei`,
+ `test_vorname_verworfen_kartei_schlaegt_verhoer`,
+ `test_find_patient_appointments_nachfass_ohne_vorname`.
+3. **Treffer bestätigen mit Anrede** (Chef: "Herr/Frau xy, ja?"):
  "Gefunden — {Termin}. Soll ich den Termin wirklich absagen, Herr Berger?"
  (gehirn.anrede; Vornamen-Wächter/Kartei). Bei Ja löscht
  agentCancelAppointmentById; verschieben bestätigt den Fund und fragt dann
  den Neu-Wunsch (bzw. bietet direkt an, wenn der Wunsch schon fiel).
-5. **Mehrere Treffer trotz Hinweisen** -> hilfsweise BEHANDLUNGS-Frage
+4. **Mehrere TERMINE trotz Hinweisen** -> hilfsweise BEHANDLUNGS-Frage
  (frage=behandlung, einmal, nur wenn die Motive sich unterscheiden;
  `_behandlung_passt` gegen motivName/gemappte motivId) -> danach die
  bekannte Auswahl-Liste (phase=wahl). Bei EINEM Termin, der die Hinweise
  verfehlt: "Zu diesen Angaben finde ich nichts — ich sehe: {…}. Meinen Sie
  den?" (Ja wählt ihn, phase=wahl).
-6. **Nicht gefunden** (notFound, keine kommenden Termine oder "Nein" auf die
+5. **Nicht gefunden** (notFound, keine kommenden Termine oder "Nein" auf die
  Rückfrage) -> ehrlich + ECHTE Notiz: Zeile in `.data/praxis_notizen.jsonl`
  (Zeit, Anliegen, Name, Telefon, Wann-/Behandler-/Behandlungs-Hinweis),
  `sit["praxisNotiz"]` (Dock "Letzter Anruf" zeigt sie, session._mit_sammler),
@@ -844,11 +884,10 @@ las bei mehreren Treffern stur die Liste vor. Jetzt sammelt
  Praxisteam") + Angebot Neubuchung (frage=neubuchung wie gehabt).
 
 Ein im Anruf schon bestimmter Termin (Auskunft davor, frische Buchung mit
-booking.appointmentId, Wahl-Liste) überspringt das Sammeln — nie den Anrufer
-ausfragen, was schon klar ist. Die AUSKUNFT bleibt beim alten Weg (Name ->
-vorlesen): wer fragt "wann ist mein Termin?", dem beantwortet man das Wann,
-statt es zu erfragen. Sammel-Stand räumt `_verw_reset` (nach Storno/Move/
-Notiz).
+booking.appointmentId, Wahl-Liste) überspringt das Fragen — nie den Anrufer
+ausfragen, was schon klar ist. Stand räumt `_verw_reset` (nach Storno/Move/
+Notiz; poppt auch die W-SAMMELN-Altlasten verwWann/verwArztGefragt aus alten
+Sitzungen).
 
 **Nachtrag W-ABSAGE-NEUSTART (29.08. 11:51, Peter-Müller-Gespräch — nicht
 rückbauen):** STT hörte "Peter Möbel", die Suche scheiterte ehrlich — dann
@@ -861,8 +900,10 @@ bewaffnete nur bei Modus-WECHSEL neu). Seitdem:
   neu, wenn `phase == "fertig"` (Anliegen war abgeschlossen); eine
   Auskunfts-Frage nach fertigem absagen/verschieben schaltet auf auskunft.
 - `verwalten._nicht_gefunden` setzt `verwNotFound`; der nächste Neustart der
-  Sammel-Prozedur erfragt Name/Kartei FRISCH (haeufigste Fehlerursache ist
-  der verhörte Name) statt stur dieselbe Sackgasse zu suchen.
+  Prozedur erfragt Name/Kartei FRISCH (haeufigste Fehlerursache ist der
+  verhörte Name) statt stur dieselbe Sackgasse zu suchen — AUSSER der
+  Neustart-Satz trägt den Namen schon korrigiert (name/nachname in `neu`,
+  W-NACHNAME): dann wird der frische Name direkt gesucht.
 - `_ABSAGE_RE` versteht die Sprech-Varianten: stornieren, canceln (alle
   Formen), löschen/streichen/aufheben/rückgängig/entfernen (nur MIT
   Termin-Bezug im Satz — "Nummer löschen" ist keine Absage), "Termin fällt
@@ -877,13 +918,15 @@ bewaffnete nur bei Modus-WECHSEL neu). Seitdem:
 - Tests: `test_absage_varianten_erkannt`, `test_absage_verben_ohne_termin_
   bezug_zuenden_nicht`, `test_absage_neustart_nach_notfound_mit_
   namenskorrektur` (Live-Gespräch wortgleich), `test_absage_wiederholt_
-  nach_abschluss_startet_neu`. Tests: `test_absage_fluss_komplett`, `test_absage_hinweis_im_
-einstiegssatz_ueberspringt_wann`, `test_absage_name_statt_wann_antwort`,
+  nach_abschluss_startet_neu`. Tests: `test_absage_fluss_komplett`,
+`test_absage_mehrere_patienten_gleicher_nachname` (W-NACHNAME),
+`test_absage_hinweis_im_einstiegssatz_filtert`,
+`test_absage_name_im_einstiegssatz_sucht_sofort`,
 `test_verwaltung_kein_termin_gefunden`, `test_verwaltung_hinweis_passt_
 nicht_ehrliche_rueckfrage`, `test_verwaltung_wahl_nein_fuehrt_zu_notiz`,
 `test_verwaltung_behandlung_grenzt_ein`, `test_verwaltung_behandler_
 filtert_kalender`, `test_verschieben_alt_neu_trennung`,
-`test_verschieben_fluss_komplett` (Dock-Buster b15).
+`test_verschieben_fluss_komplett` (Dock-Buster b34).
 
 ## Praxisgedächtnis (W-GEDAECHTNIS 29.08.2026 — nicht rückbauen)
 
@@ -1049,6 +1092,35 @@ nichts Abgehacktes, Werkzeug-Züge unangetastet. Abkürzungen/Uhrzeiten
 (Dr., 13:00) zählen nicht als Satzende. Notaus: `LLM_SATZ_DECKEL=0`.
 Tests: `tests/test_llm_deckel.py`.
 
+## Satz-Naht-Wache (W-TTS-NAHT 31.08.2026 — nicht rückbauen)
+
+Chef: „die sätze und wörter werden manchmal mittendrin abgehackt … schau mal
+im alten phone_agent da hatten wir das schon optimiert." Vorbild ist
+`phone_agent/services/llm_inbound_agent/tts_chunks.py` (`_splittable_prefix`
++ `MIN_PIECE_CHARS`) — NUR gelesen, nichts dort angefasst. Zwei Löcher bei uns:
+
+- **Falsche Satzenden im LLM-Stream** (`kern/llm._satz_ende`): die alte
+ Abkürzungsliste war zu klein („Bahnhofstr.", „Tel.", „etc.", Wochentage
+ fehlten, keine Einzelbuchstaben-Regel). Folge: der P5-Vorab vertonte halbe
+ Phrasen, und der P2-Deckel zählte falsche Satzenden mit und KAPPTE die
+ Antwort mitten im Satz — der Rest wurde nie generiert.
+- **Naiver TTS-Split in `kern/dienst.py`** (`_sprech_blob`/`stimme_stream`):
+ `(?<=[.!?]) +(?=[A-ZÄÖÜ])` schnitt „im 3. Stock" und „St. Martin" in zwei
+ Renders — Satzende-Prosodie mitten in der Phrase. `sprech.sanitize` fängt
+ zwar Dr./z. B./Datumsformen, aber nicht Nr./St./Tel./freie Ordnungszahlen.
+
+Fix: EINE gemeinsame Grenz-Wache `kern/sprech.kein_satzende(davor)` (Ziffer,
+Abkürzungsliste des phone_agent, Einzelbuchstabe, `…str`-Straßennamen) plus
+geschützter Splitter `sprech.tts_saetze(text)` — genutzt von BEIDEN
+dienst-Split-Stellen und von `llm._satz_ende` (damit Vorab, Deckel und
+TTS-Split dieselben Grenzen sehen). Dazu `llm.VORAB_MIN` (20 Zeichen,
+phone_agent MIN_PIECE_CHARS): kurze FOLGE-Sätze („Gut.") warten auf den
+Folgesatz statt als Mini-Render in die Füller-Kette zu gehen; ein kurzer
+SCHLUSS-Satz bleibt ungemeldet und läuft im Rest-Render mit (nie doppelt,
+nie verloren). Ganze Sätze bleiben Gesetz — KEIN Komma-Schnitt (Genuschel-
+Lektion 28.08. gilt weiter). Tests: W-TTS-NAHT-Blöcke in
+`tests/test_llm_deckel.py` und `tests/test_sprech.py`.
+
 ## Weiterleitung an die Ärzte (W-VERBINDEN 29.08.2026 — nicht rückbauen)
 
 Chef: „wenn der anrufer mit dr petsas oder dr patrikis sprechen möchte oder
@@ -1060,8 +1132,17 @@ an `bianca/weiterleiten.erkannt()` vorbei — das LLM erfand eine Ablehnung
 Fake-Verbinden ohne Jingle. Seitdem gilt:
 
 - `_VERBINDEN_RE` kennt die „verbunden"-Formen ohne mich/uns („verbunden
-  werden", „ich möchte … verbunden", „mit Doktor X … verbunden"); Preis-/
-  Sachfragen („Ist das mit Kosten verbunden?") bleiben bewusst draussen.
+ werden", „ich möchte … verbunden", „mit Doktor X … verbunden"); Preis-/
+ Sachfragen („Ist das mit Kosten verbunden?") bleiben bewusst draussen.
+ Seit 31.08.2026 (live 14:11: „Verbinde mich mit Dr. Petzos jetzt." fiel
+ durch ALLE Formen, das LLM fragte in jedem Anruf aufs Neue „Zu welchem
+ unserer Ärzte …" — DAS war die „wiederholt sich ständig"-Beschwerde des
+ Chefs) auch der nackte Imperativ `verbinde mich/uns`; `_SPRECH_VERB_RE`
+ matcht `verbind\w*` statt nur „verbinden", damit der Namens-Weg
+ („Verbinde mich mit Dr. Petzos") auch bei verhörtem Namen zieht
+ (arzt.deute faltet Petzos/Petzl -> Petsas). Test:
+ `test_live_saetze_31_08_imperativ_und_verhoerte_namen` (voller Fluss
+ bis Jingle+hangup mit den Live-Transkripten).
 - **Namens-Weg:** Behandler-Name (fuzzy über `arzt.deute`, „Petzers"→Petsas)
   plus Sprech-/Verbinde-Verb zählt auch OHNE Doktor-Titel („Kann ich Herrn
   Petsas sprechen?", „… ans Telefon/an den Apparat"); Sätze mit „Termin"
@@ -1074,8 +1155,78 @@ Fake-Verbinden ohne Jingle. Seitdem gilt:
   Assistentin-Zeile, `_RUECKFRAGE_RE`) den blossen Behandler-Namen als
   Zielangabe.
 - Tests: Live-Sätze wortgleich in `tests/test_weiterleiten.py`; Live-Probe
-  `.data/verbinden_probe.py` (Jingle-URL + Kirri-Zeile + hangup, Preisfrage
-  bleibt beim LLM).
+ `.data/verbinden_probe.py` (Jingle-URL + Kirri-Zeile + hangup, Preisfrage
+ bleibt beim LLM).
+
+## Echte Weiterleitung (W-VERBINDEN-ECHT 31.08.2026 — nicht rückbauen)
+
+Chef: "wenn ein client weiterleitungen eingerichtet hat dann müssen wir zu
+dem entsprechenden arzt weiterleiten. siehe phone_agent repo da hatte das
+schon funktioniert." Der phone_agent transferierte per LiveKit-SIP-REFER
+(`services/phone/sip_transfer.py`), die Ziele kamen aus dem DB-Agent
+(`callForwardingToolEnabled` + `callForwardings`, je Eintrag name/number,
+Routing-Bedingung oft in prompt/condition). Unsere Kette hat kein LiveKit —
+darum eigener Weg, Ende-zu-Ende:
+
+- **Ziele ernten** (`kern/agentprofil._weiterleitungen`): die CF-pre-Antwort
+ traegt die Agent-Felder; nur mit Schalter AN und echter Nummer, Nummern
+ normalisiert auf +E164 -> `tenant["weiterleitungen"]`
+ ([{name, nummer, hinweis}]). Die DB entscheidet KOMPLETT — auch das AUS
+ (leere Liste ueberschreibt eine Datei-Basis). Lokale tenants/*.json
+ duerfen das Feld fuer Dock-Tests selbst tragen (meddent traegt keins).
+- **Ziel aufloesen** (`bianca/weiterleiten.weiterleitungs_ziel`): ein
+ Namens-Wort des Ziel-Kalenders ("Petsas", Titel-/Fuellwoerter gefiltert)
+ muss im Eintrag (name ODER hinweis) vorkommen; ohne Treffer gilt ein
+ EINZELNER Eintrag als Praxis-Ziel fuer alle Behandler, bei mehreren wird
+ NIE geraten (dann Platzhalter-Weg). `zaluma_weiterleitung` liefert bei
+ Treffer `transfer={nummer,name}` + hangup, text="" (Ansage + Jingle
+ liefen als Filler; nach dem Jingle klingelt es) — der Kirri-Zettel kommt
+ NUR noch ohne eingerichtete Weiterleitung. `sit["weiterleitungZiel"]`
+ haelt das Ziel fuer Nacharbeit/Report; `dienst.json_antwort` reicht
+ `transfer` durch (Docks ignorieren es und legen auf wie bisher) und
+ verwirft einen offenen Barge-Rest (nie "Also, wo war ich:" nach Jingle).
+- **Bruecke** (`sip_bridge/server.py`): reply mit `transfer` -> die Nummer
+ wird je Anruf-UUID vorgemerkt (`transfer_merken`, TTL 300 s, EINMAL
+ abholbar). Der Dialplan fragt sie NACH dem AudioSocket-Ende per CURL auf
+ DEMSELBEN Port 40101 ab — die Bruecke unterscheidet an den ersten drei
+ Bytes ("GET" = HTTP-Abfrage, sonst AudioSocket-Rahmenkopf; `_klient`
+ reicht die drei Bytes als vorab an den Anruf weiter). Kein zweiter
+ Tunnel-Port, keine neue Firewall-Regel.
+- **Dialplan** (`extensions_bianca.conf`, Referenzkopie im Repo): Asterisk
+ 18 beendet nach dem AudioSocket-Ende den KANAL (App liefert -1 — 31.08.
+ empirisch gemessen: Zeile hinter der App laeuft NIE). Deshalb laeuft die
+ App jetzt in einem Local-Leg (`[bianca-audiosocket]`, `/n` gegen die
+ Optimierung, UUID vererbt via `__BUUID`); `Dial(Local/...,,g)` kehrt beim
+ Leg-Ende zurueck, dann `CURL(http://127.0.0.1:40101/transfer?uuid=…)` ->
+ leer = `Hangup()` wie bisher; Nummer = `Dial(PJSIP/zaluma-trunk/
+ sip:+49…@vc.zaluma.tel,45,r)` (gleicher Trunk-Weg wie die alten
+ REFER-Transfers, CLI des Anrufers geht mit). Behandler besetzt/geht
+ nicht ran -> `Goto(bianca)`: der Anrufer landet in einer FRISCHEN
+ Bianca-Sitzung statt in Totenstille (der Transfer-Eintrag ist
+ verbraucht, keine Schleife). ACHTUNG: der `[bianca-audiosocket]`-Kontext
+ MUSS am DATEIENDE stehen (alles darunter laege nicht mehr in
+ [from-zaluma]); Backup `extensions_bianca.conf.bak-20260831-wl`.
+- **Hangup-Nacharbeit unveraendert:** die Bruecke schliesst nach dem
+ Ausspielen wie bei jedem hangup (Ende-Rahmen, POST /api/hangup) —
+ Mitschnitt/Report/CF-Abschluss laufen normal, waehrend der Anrufer
+ schon beim Behandler klingelt.
+- **Agent-Falle (31.08. live erlebt, erste Probe):** das Transfer-Reply
+ traegt text="" (Ansage + Jingle liefen als Filler) — `bianca/agent.
+ user_turn` wertete leeren Text als "Maschine schweigt", das LLM
+ uebernahm ("Zu welchem unserer Ärzte …") und der Transfer fiel weg.
+ Seitdem zaehlt ein Reply MIT hangup/transfer immer als Maschinen-Zug,
+ und user_turn reicht das transfer-Feld explizit in die Antwort durch
+ (vorher ueberlebten nur text/book/hangup). Test:
+ `test_agent_reicht_transfer_durch_ohne_llm` (LLM-Aufruf = Testbruch).
+- Tests: W-VERBINDEN-ECHT-Bloecke in `tests/test_weiterleiten.py`
+ (Ziel-Aufloesung, transfer-Reply, Platzhalter-Rueckfall),
+ `tests/test_agentprofil.py` (Ernte + Schalter-aus) und
+ `tests/test_sip_vad.py` (Transfer-Store einmal/TTL, HTTP-Peek
+ Ende-zu-Ende gegen einen echten asyncio-Server). Live-Probe:
+ `.data/transfer_probe.py` (laeuft IM bianca-Container auf pickadoc1
+ gegen die echte Bruecke: DID 4110, "Doktor Petsas", danach die
+ CURL-Abfrage wie der Dialplan) — 31.08. gruen: Nummer +49211302…
+ einmal abholbar, zweite Abfrage leer, Ende-Rahmen kam.
 
 ## Test-Studio auf der 5090 (W-STUDIO-5090 30.08.2026 — nicht rückbauen)
 

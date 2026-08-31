@@ -13,10 +13,17 @@ Zwei Faelle, streng getrennt (Chef 27.08.2026, zweite Fassung):
 
 Doppelte Fragen bleiben verboten: ist der Behandler aus dem Gespraech oder
 der Akte bekannt (Sammler -> Angebots-Kalender -> arzt.letzter_behandler),
-wird er angeboten statt erfragt. Das Verbinden selbst: Ansage, Jingle
-(bianca_web/verbinden.mp3), Abschied, Dock legt auf. Die ECHTE Zaluma-/
-SIP-Weiterleitung baut Kollege Kiriakos an der markierten Stelle ein
-(grep: ZALUMA_TRANSFER_PLATZHALTER) — das ist sein Job.
+wird er angeboten statt erfragt.
+
+Das Verbinden selbst (W-VERBINDEN-ECHT 31.08.2026): Ansage + Jingle, dann
+zwei Wege. Hat der CLIENT eine Weiterleitung eingerichtet (DB-Agent:
+callForwardingToolEnabled + callForwardings -> tenant["weiterleitungen"],
+kern/agentprofil.py), traegt die Antwort ``transfer`` ({nummer, name}) —
+die SIP-Bruecke merkt sich die Nummer je Anruf-UUID, der Asterisk-Dialplan
+holt sie NACH dem AudioSocket-Ende per CURL ab und waehlt selbst zu Zaluma
+raus (extensions_bianca.conf). Ohne eingerichtete Weiterleitung bleibt der
+alte Platzhalter-Weg (Jingle + Kirri-Zettel + hangup, Marke:
+ZALUMA_TRANSFER_PLATZHALTER).
 """
 
 from __future__ import annotations
@@ -67,8 +74,12 @@ _MENSCH_NUR_RE = re.compile(_MENSCH_WORT, re.I)
 # das LLM erfand daraufhin eine Ablehnung ("Hier spricht man nicht mit den
 # Ärzten"). "Ist das mit Kosten/Schmerzen verbunden?" bleibt bewusst draussen
 # (Preisfrage!): die neuen Formen verlangen Doktor-Wort oder "ich möchte/will".
+# Der nackte Imperativ "Verbinde mich mit Dr. X jetzt." (live 31.08.2026
+# 14:11) fiel durch ALLE Formen — das LLM fragte zum x-ten Mal "Zu welchem
+# unserer Ärzte...", der Anrufer legte entnervt auf.
 _VERBINDEN_RE = re.compile(
     r"verbinden?\s+sie\s+(?:mich|uns)|"
+    r"\bverbinde\s+(?:mich|uns)\b|"
     r"(?:mich|uns)\s+(?:[\wäöüß.\-, ]{0,40}?\s+)?(?:verbinden|verbunden|durchstellen|durchgestellt|weiterleiten|weitergeleitet)|"
     r"stell\w*\s+(?:sie\s+)?(?:mich|uns)\s+(?:bitte\s+)?durch\b|"
     r"durchstellen|durchgestellt|weiterleiten|weitergeleitet|weiterverbinden|durchverbinden|"
@@ -112,7 +123,7 @@ _ARZT_SPRECHEN_RE = re.compile(
 # der Behandler-Name (fuzzy ueber arzt.deute) plus so ein Verb zaehlt
 # trotzdem als Weiterleitungs-Wunsch.
 _SPRECH_VERB_RE = re.compile(
-    r"\b(?:sprechen|reden|erreichen|verbinden|verbunden|durchstellen|durchgestellt|"
+    r"\b(?:sprechen|reden|erreichen|verbind\w*|verbunden|durchstellen|durchgestellt|"
     r"weiterleiten|weitergeleitet|durchverbinden|weiterverbinden)\b|"
     r"\ban(?:s|\s+den)\s+(?:telefon|apparat)\b",
     re.I,
@@ -188,12 +199,53 @@ def _angebot_text(ziel: dict) -> str:
     return f"Soll ich Sie zu {wer} weiterleiten?"
 
 
-def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
-    """Anrufer zum Behandler weiterleiten: Ansage, Jingle, Kirri-Zettel.
+# Fuell-/Titelwoerter, die beim Abgleich Kalendername <-> Weiterleitungs-
+# Eintrag nichts beweisen ("Dr." steht in JEDEM Eintrag).
+_TITEL_WORTE = {
+    "doktor", "professor", "prof", "med", "dent", "praxis", "herr", "frau",
+    "zahnarzt", "zahnaerztin", "zahnärztin", "arzt", "aerztin", "ärztin",
+    "kalender", "termin", "sprechstunde",
+}
 
-    Die echte SIP-/Zaluma-Weiterleitung ist Kirris Job — Marke unten.
-    Bis dahin: hoerbare Kette + Dock legt auf (hangup), damit es sich
-    wie ein physisches Verbinden anfuehlt."""
+
+def weiterleitungs_ziel(tenant: dict, ziel: dict) -> dict:
+    """Eingerichtete Weiterleitung des Clients zum Ziel-Behandler.
+
+    tenant["weiterleitungen"] kommt aus der DB (kern/agentprofil.py:
+    callForwardings, nur mit callForwardingToolEnabled) oder aus einer
+    lokalen tenants/*.json. Abgleich: ein Namens-Wort des Kalenders
+    ("Petsas") muss im Eintrag (name/hinweis) vorkommen; ohne Treffer
+    gilt ein EINZELNER Eintrag als Praxis-Ziel fuer alle Behandler.
+    {} = nichts eingerichtet -> Platzhalter-Weg."""
+    eintraege = [
+        e for e in (tenant.get("weiterleitungen") or [])
+        if isinstance(e, dict) and _s(e.get("nummer"))
+    ]
+    if not eintraege:
+        return {}
+    tokens = [
+        w for w in re.split(r"[^\wäöüß]+", _s(ziel.get("calendarName")).lower())
+        if len(w) >= 3 and w not in _TITEL_WORTE
+    ]
+    for e in eintraege:
+        text = f"{_s(e.get('name'))} {_s(e.get('hinweis'))}".lower()
+        if tokens and any(tok in text for tok in tokens):
+            return {"name": _s(e.get("name")), "nummer": _s(e.get("nummer"))}
+    if len(eintraege) == 1:
+        e = eintraege[0]
+        return {"name": _s(e.get("name")), "nummer": _s(e.get("nummer"))}
+    return {}
+
+
+def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
+    """Anrufer zum Behandler weiterleiten: Ansage, Jingle — dann echt oder
+    Platzhalter.
+
+    W-VERBINDEN-ECHT (31.08.2026): hat der Client eine Weiterleitung
+    eingerichtet (weiterleitungs_ziel), traegt die Antwort ``transfer``
+    ({nummer, name}) — die SIP-Bruecke merkt die Nummer je Anruf-UUID,
+    der Asterisk-Dialplan waehlt nach dem AudioSocket-Ende wirklich raus.
+    Ohne Einrichtung: hoerbare Kette + Kirri-Zettel wie bisher."""
     sit["weiterleiten"] = {}  # Anliegen ist bedient
     ziel_arzt = {
         "calendarId": _s(ziel.get("calendarId")),
@@ -206,12 +258,26 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
         zu = f" zu {wer}" if wer else ""
         melde(f"sag:Ok, einen Moment bitte — ich stelle die Verbindung{zu} her.")
         melde(JINGLE_EVENT)
+    wl = weiterleitungs_ziel(sit.get("tenant") or {}, ziel_arzt)
+    if wl:
+        # Echte Weiterleitung: Ansage + Jingle liefen als Filler, die Antwort
+        # selbst bleibt stumm (text="") — nach dem Jingle klingelt es beim
+        # Behandler. Das Ziel steht in der Sitzung fuer Nacharbeit/Report.
+        sit["weiterleitungZiel"] = dict(wl)
+        print(f"bianca-weiterleitung ziel={ziel_arzt!r} nummer={wl['nummer']} "
+              f"sit={sit.get('id')!r}", flush=True)
+        return {
+            "text": "",
+            "jingle": JINGLE_EVENT,
+            "ziel": ziel_arzt,
+            "transfer": {"nummer": wl["nummer"],
+                         "name": wl["name"] or ziel_arzt["calendarName"]},
+            "hangup": True,
+        }
     # =====================================================================
-    # ZALUMA_TRANSFER_PLATZHALTER (Kirri): Hier die echte SIP-/Zaluma-
-    # Weiterleitung einhaengen. Verfuegbar im Sitzungs-Umschlag:
-    #   sit["tenant"] (clientId/locationId), ziel_arzt (calendarId/-Name),
-    #   sit["patient"] / sammler (Name, Telefon), sessionId (sit["id"]).
-    # Der Anrufer hoert Jingle + Kirri-Zettel — das hier ist DEIN Job, Kirri.
+    # ZALUMA_TRANSFER_PLATZHALTER: Rueckfall, wenn der Client KEINE
+    # Weiterleitung eingerichtet hat (DB: callForwardingToolEnabled aus
+    # oder keine callForwardings). Der Anrufer hoert Jingle + Kirri-Zettel.
     # =====================================================================
     print(f"bianca-zaluma-platzhalter ziel={ziel_arzt!r} sit={sit.get('id')!r}",
           flush=True)

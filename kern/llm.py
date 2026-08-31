@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 import httpx
 
+from kern import sprech
 from kern.config import LLM_API_KEY, LLM_BASE, LLM_MODEL
 
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -86,7 +87,11 @@ def chat(messages: list[dict], tools: list[dict] | None = None, *, temperature: 
 # Latenz (Chef 27.08.2026 "speed speed speed"): Der erste fertige Satz wird
 # sofort gemeldet und vertont, während das Modell den Rest noch schreibt.
 
-_ABKUERZ = {"dr", "st", "ca", "bzw", "z", "b", "nr", "inkl", "ggf", "evtl", "usw", "min", "prof", "med"}
+# W-TTS-NAHT (31.08.2026): Abkuerzungs-/Ordnungszahl-Wache liegt jetzt
+# gemeinsam in kern/sprech.py (portiert aus phone_agent tts_chunks) — ein
+# falsch erkanntes Satzende liess hier den P5-Vorab halbe Phrasen vertonen
+# und den P2-Deckel die Antwort MITTEN im Satz kappen ("Bahnhofstr." zaehlte
+# als Satzende, der Rest wurde nie generiert).
 
 # Hart-Deckel (P2, 29.08.2026): Prompt sagt "höchstens zwei kurze Sätze plus
 # EINE Frage", Qwen hält sich nicht immer dran. Nach dem zweiten Satz plus
@@ -110,8 +115,7 @@ def _satz_ende(text: str, start: int = 0) -> int:
             continue
         if m.group() == ".":
             davor = text[start: start + m.start()]
-            wort = re.search(r"([A-Za-zÄÖÜäöüß]+)$", davor)
-            if (wort and wort.group(1).lower() in _ABKUERZ) or re.search(r"\d$", davor):
+            if sprech.kein_satzende(davor):
                 continue
         return i
     return -1
@@ -170,13 +174,21 @@ def _deckel_an() -> bool:
     return os.environ.get("LLM_SATZ_DECKEL", "1").strip() != "0"
 
 
+# Folge-Bloecke unter dieser Laenge warten auf den naechsten Satz
+# (phone_agent MIN_PIECE_CHARS, tts_chunks.py): winzige Einzel-Renders
+# ("Gut.") erzeugen nahtanfaellige Mini-Stuecke in der Fueller-Kette.
+# Ein kurzer SCHLUSS-Satz bleibt ungemeldet und laeuft im Rest-Render mit.
+VORAB_MIN = 20
+
+
 def _neue_stream_saetze(text: str, n_schon: int) -> tuple[list[str], int]:
     """P5: neue abgeschlossene Sätze nach n_schon bereits gemeldeten.
 
     Der erste Block folgt der 25-Zeichen-Regel von _erster_satz_von
     (ein bloßes „Ja." allein ist kein Vorab — der Block darf mehrere
-    Kurz-Sätze enthalten). Danach jeder weitere bestätigte Satz —
-    ganze Sätze, nichts Abgehacktes (Genuschel-Lektion 28.08.2026).
+    Kurz-Sätze enthalten). Danach jeder weitere bestätigte Satz ab
+    VORAB_MIN Zeichen; kürzere warten auf den Folgesatz — ganze Sätze,
+    nichts Abgehacktes (Genuschel-Lektion 28.08.2026).
     Rückgabe: (neue_bloecke, neuer_zaehler)."""
     if n_schon <= 0:
         erster = _erster_satz_von(text)
@@ -184,8 +196,18 @@ def _neue_stream_saetze(text: str, n_schon: int) -> tuple[list[str], int]:
             return [], 0
         return [erster], max(1, len(_saetze_bis(erster)))
     alle = _saetze_bis(text)
-    neu = alle[n_schon:]
-    return neu, n_schon + len(neu)
+    bloecke: list[str] = []
+    puffer = ""
+    verbraucht = 0
+    offen = 0
+    for satz in alle[n_schon:]:
+        puffer = (puffer + " " + satz).strip() if puffer else satz
+        offen += 1
+        if len(puffer) >= VORAB_MIN:
+            bloecke.append(puffer)
+            verbraucht += offen
+            puffer, offen = "", 0
+    return bloecke, n_schon + verbraucht
 
 
 def _satz_stream_an() -> bool:

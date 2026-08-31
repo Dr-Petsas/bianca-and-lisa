@@ -41,6 +41,7 @@ import audioop
 import contextlib
 import json
 import os
+import re
 import struct
 import time
 from collections import deque
@@ -213,6 +214,63 @@ STUPS_NACH_S = 4.0      # Funkstille bis /api/stille (wie Dock)
 MAX_ANRUF_S = 1800.0
 
 
+# W-VERBINDEN-ECHT (31.08.2026): meldet Bianca im reply ein transfer-Ziel
+# ({nummer, name} — der Client hat eine Weiterleitung eingerichtet), merkt
+# sich die Bruecke die Nummer je Anruf-UUID. Der Asterisk-Dialplan fragt sie
+# NACH dem AudioSocket-Ende per CURL auf DEMSELBEN Port ab (HTTP-Peek:
+# erste Bytes "GET") und waehlt selbst zu Zaluma raus — kein zweiter
+# Tunnel-Port, keine neue Firewall-Regel. Eintraege sind EINMAL abholbar
+# (der Dialplan fragt nach jedem Anruf) und verfallen nach TRANSFER_TTL_S.
+TRANSFER_TTL_S = 300.0
+_TRANSFERS: dict[str, tuple[float, str]] = {}
+_HTTP_UUID_RE = re.compile(r"uuid=([0-9a-fA-F\-]+)")
+
+
+def _uuid_norm(u: str) -> str:
+    return "".join(c for c in (u or "").lower() if c in "0123456789abcdef")
+
+
+def transfer_merken(uuid_hex: str, nummer: str) -> None:
+    u, n = _uuid_norm(uuid_hex), " ".join(str(nummer or "").split())
+    if u and n:
+        _TRANSFERS[u] = (time.monotonic(), n)
+
+
+def transfer_holen(uuid_roh: str) -> str:
+    """Weiterleitungs-Nummer zum Anruf — einmal abholbar, TTL raeumt Reste."""
+    jetzt = time.monotonic()
+    for k in [k for k, (t, _) in _TRANSFERS.items() if jetzt - t > TRANSFER_TTL_S]:
+        _TRANSFERS.pop(k, None)
+    hit = _TRANSFERS.pop(_uuid_norm(uuid_roh), None)
+    return hit[1] if hit else ""
+
+
+async def _http_transfer(reader: asyncio.StreamReader,
+                         writer: asyncio.StreamWriter) -> None:
+    """CURL des Dialplans: ``GET /transfer?uuid=<uuid>`` -> Nummer (text/plain).
+
+    Das fuehrende "GET" hat _klient schon konsumiert — hier kommt der Rest
+    der Request-Zeile. Unbekannte/verbrauchte UUID => leerer Body, der
+    Dialplan legt dann normal auf."""
+    try:
+        roh = await asyncio.wait_for(reader.read(1024), timeout=2.0)
+    except Exception:
+        roh = b""
+    zeile = roh.split(b"\r\n", 1)[0].decode("ascii", "replace")
+    m = _HTTP_UUID_RE.search(zeile)
+    nummer = transfer_holen(m.group(1)) if m else ""
+    body = nummer.encode("ascii", "ignore")
+    with contextlib.suppress(Exception):
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                     b"Content-Length: " + str(len(body)).encode("ascii") +
+                     b"\r\nConnection: close\r\n\r\n" + body)
+        await writer.drain()
+        writer.close()
+    if m:
+        print(f"bruecke-transfer-abfrage uuid={m.group(1)} -> "
+              f"{nummer or 'leer'}", flush=True)
+
+
 def _wav(pcm: bytes, rate: int) -> bytes:
     return struct.pack(
         "<4sI4s4sIHHIIHH4sI",
@@ -336,9 +394,12 @@ class Wiedergabe:
 
 
 class Anruf:
-    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                 vorab: bytes = b"") -> None:
         self.reader = reader
         self.writer = writer
+        self._vorab = vorab       # von _klient schon gelesene Kopf-Bytes
+        self.uuid_hex = ""        # Anruf-UUID (Schluessel fuer W-VERBINDEN-ECHT)
         self.http = httpx.AsyncClient(base_url=BIANCA_BASE,
                                       timeout=httpx.Timeout(60.0, connect=5.0))
         self.session_id = ""
@@ -386,7 +447,10 @@ class Anruf:
 
     async def _rahmen_lesen(self) -> tuple[int, bytes] | None:
         try:
-            kopf = await self.reader.readexactly(3)
+            if self._vorab:
+                kopf, self._vorab = self._vorab, b""
+            else:
+                kopf = await self.reader.readexactly(3)
         except (asyncio.IncompleteReadError, ConnectionError):
             return None
         typ, laenge = kopf[0], struct.unpack(">H", kopf[1:3])[0]
@@ -668,6 +732,14 @@ class Anruf:
                             self.stille_ms = int(ev["stilleMs"])
                         if ev.get("hangup"):
                             auflegen = True
+                        # W-VERBINDEN-ECHT: Weiterleitungs-Ziel VOR dem
+                        # Ende-Rahmen vormerken — der Dialplan fragt sofort
+                        # nach dem AudioSocket-Ende per CURL nach.
+                        tr = ev.get("transfer") if isinstance(ev.get("transfer"), dict) else {}
+                        if tr.get("nummer"):
+                            transfer_merken(self.uuid_hex, str(tr["nummer"]))
+                            print(f"bruecke-transfer vorgemerkt "
+                                  f"{tr.get('name', '')!r} {tr['nummer']}", flush=True)
                         print(f"bruecke-antwort {ev.get('text', '')[:80]!r}"
                               f"{' [hangup]' if auflegen else ''}", flush=True)
         except Exception as e:
@@ -721,6 +793,7 @@ class Anruf:
             return
         self.did = did_von_uuid(rahmen[1])
         self.caller = caller_von_uuid(rahmen[1])
+        self.uuid_hex = rahmen[1].hex()
         print(f"bruecke-anruf von {peer} uuid={rahmen[1].hex()} "
               f"did={self.did or '?'} caller={self.caller or 'unterdrueckt'}", flush=True)
         if not await self._start():
@@ -752,8 +825,21 @@ class Anruf:
 
 
 async def _klient(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    # W-VERBINDEN-ECHT: HTTP-Peek — der Dialplan-CURL (GET /transfer?uuid=…)
+    # teilt sich den Port mit AudioSocket. Erste 3 Bytes entscheiden:
+    # "GET" = Transfer-Abfrage, alles andere = AudioSocket-Rahmenkopf
+    # (wandert als vorab-Bytes in den Anruf).
     try:
-        await Anruf(reader, writer).lauf()
+        kopf = await reader.readexactly(3)
+    except (asyncio.IncompleteReadError, ConnectionError, OSError):
+        with contextlib.suppress(Exception):
+            writer.close()
+        return
+    if kopf == b"GET":
+        await _http_transfer(reader, writer)
+        return
+    try:
+        await Anruf(reader, writer, vorab=kopf).lauf()
     except Exception as e:
         print(f"bruecke-anruf crash {type(e).__name__}: {e}", flush=True)
         with contextlib.suppress(Exception):

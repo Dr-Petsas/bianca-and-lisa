@@ -139,6 +139,39 @@ def test_cf_mapping_bekannte_clientid_nutzt_lokale_basis():
     assert "Grüger" in t["sttHotwords"] and "Narval" in t["sttHotwords"]
 
 
+def test_cf_mapping_erntet_weiterleitungen():
+    """W-VERBINDEN-ECHT (31.08.2026): callForwardings des DB-Agents landen
+    normalisiert im Tenant — nur mit callForwardingToolEnabled."""
+    pre = copy.deepcopy(CF_PRE)
+    pre["agent"]["callForwardingToolEnabled"] = True
+    pre["agent"]["callForwardings"] = [
+        {"name": "Doktor Beispiel", "number": "0171 234 5678",
+         "prompt": "Bei dringenden Faellen"},
+        {"name": "ohne Nummer", "number": ""},
+        "kaputt",
+    ]
+    t = agentprofil.tenant_von_pre(pre, did="4930111222")
+    assert t is not None
+    assert t["weiterleitungen"] == [{
+        "name": "Doktor Beispiel", "nummer": "+491712345678",
+        "hinweis": "Bei dringenden Faellen",
+    }]
+
+
+def test_cf_mapping_weiterleitungen_schalter_aus():
+    """Schalter aus (oder keine Ziele) => leere Liste — und die DB
+    ueberschreibt damit auch eine Datei-Basis (abgeschalteter Client
+    wird nie weiter verbunden)."""
+    pre = copy.deepcopy(CF_PRE)
+    pre["agent"]["callForwardingToolEnabled"] = False
+    pre["agent"]["callForwardings"] = [{"name": "X", "number": "+49171111222"}]
+    t = agentprofil.tenant_von_pre(pre, did="4930111222")
+    assert t is not None and t["weiterleitungen"] == []
+    ohne = copy.deepcopy(CF_PRE)
+    t2 = agentprofil.tenant_von_pre(ohne, did="4930111222")
+    assert t2 is not None and t2["weiterleitungen"] == []
+
+
 def test_cf_mapping_lehnt_disabled_und_leere_antwort_ab():
     aus = copy.deepcopy(CF_PRE)
     aus["enabled"] = False

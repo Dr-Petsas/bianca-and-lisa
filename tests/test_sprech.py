@@ -91,6 +91,47 @@ def test_heute_zeile_fuer_den_prompt():
     assert "Morgen ist Freitag, der 1. Januar." in heute_zeile(datetime(2026, 12, 31, 23, 59))
 
 
+# --- W-TTS-NAHT (31.08.2026): Satz-Split mit Grenz-Wache ---------------------
+# Portiert aus phone_agent tts_chunks: nie hinter Ordnungszahl/Abkuerzung
+# splitten — sonst rendert die Stimme halbe Phrasen ("im 3." | "Stock").
+
+
+def test_tts_saetze_normal_split():
+    from kern.sprech import tts_saetze
+
+    assert tts_saetze("Das passt gut. Wann koennen Sie?") == \
+        ["Das passt gut.", "Wann koennen Sie?"]
+    assert tts_saetze("") == []
+    assert tts_saetze("Ein Satz ohne Ende") == ["Ein Satz ohne Ende"]
+
+
+def test_tts_saetze_ordnungszahl_kein_schnitt():
+    from kern.sprech import tts_saetze
+
+    assert tts_saetze("Wir sind im 3. Stock. Kommen Sie hoch.") == \
+        ["Wir sind im 3. Stock.", "Kommen Sie hoch."]
+
+
+def test_tts_saetze_abkuerzung_kein_schnitt():
+    from kern.sprech import tts_saetze
+
+    # "St."/"Nr." und Strassennamen auf "-str." sind kein Satzende.
+    assert tts_saetze("Die Praxis am St. Martins-Platz. Bis morgen.") == \
+        ["Die Praxis am St. Martins-Platz.", "Bis morgen."]
+    assert tts_saetze("Die Bahnhofstr. Zwoelf kennen Sie ja. Bis dann.") == \
+        ["Die Bahnhofstr. Zwoelf kennen Sie ja.", "Bis dann."]
+
+
+def test_kein_satzende_wache():
+    from kern.sprech import kein_satzende
+
+    assert kein_satzende("Wir sind im 3")            # Ordnungszahl
+    assert kein_satzende("am St")                    # Abkuerzung
+    assert kein_satzende("in der Bahnhofstr")        # Strassenname
+    assert kein_satzende("wie z")                    # Einzelbuchstabe
+    assert not kein_satzende("Das passt gut")        # echtes Satzende
+
+
 def test_prompts_tragen_das_datum():
     from bianca.prompt import system_prompt as bianca_prompt
     from lisa.prompt import system_prompt as lisa_prompt

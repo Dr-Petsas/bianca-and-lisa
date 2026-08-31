@@ -682,6 +682,13 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         s["vorname"] = toks[0].capitalize()
         return True
     if s["frage"] == "nachname" and erzwungen:
+        # Voller Name auf die Nachnamen-Frage ("Martin Berger"): den Vornamen
+        # mitnehmen — er grenzt bei mehreren Patienten gleichen Nachnamens ab
+        # (W-NACHNAME 31.08.2026), statt ihn gleich nochmal zu erfragen. Ein
+        # schon gespeicherter Vorname wird dabei ÜBERSCHRIEBEN: wer auf die
+        # Korrektur-Frage den vollen Namen sagt, korrigiert beide Teile.
+        if len(toks) >= 2:
+            s["vorname"] = toks[0].capitalize()
         s["nachname"] = toks[-1].capitalize()
         s["buchstabiert"] = False
         return True
@@ -895,6 +902,19 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             neu.add("name")
     elif not s["nachname"] and _name_aufnehmen(s, t, erzwungen=False):
         neu.add("name")
+    elif (_TEIL_NACH_RE.search(t) or _TEIL_NACH_UMGEKEHRT_RE.search(t)
+          or _TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
+          or ((sit.get("verwNotFound") or sit.get("verwKorrektur"))
+              and _NAME_LEADIN_RE.search(t))):
+        # Explizite Zuweisung ("Nein, mein Nachname ist Zannes.") ist IMMER
+        # eine Korrektur — auch wenn laengst ein Nachname gespeichert ist und
+        # gerade keine Namensfrage offen steht. Live 31.08.2026: nach der
+        # Fehlsuche verschluckte der Nein-Zweig der Neubuchungs-Frage die
+        # Korrektur, weil sie hier nie geerntet wurde (W-NAMESKORREKTUR).
+        # erzwungen=True, weil der Satz nachweislich ein Namens-Signal traegt
+        # (sonst ginge "ich heiße Zannes" mit nur einem Token wieder leer aus).
+        if _name_aufnehmen(s, t, erzwungen=True):
+            neu.add("name")
 
     # Akten-Nummer-Konflikt: Entscheidung des Anrufers deuten (Chef 29.08.2026).
     # Diktiert der Satz zugleich eine NEUE Nummer ("die neue ist falsch,
@@ -1186,6 +1206,13 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         # sofort, während der Ziffern-Satz rendert und nachgehört wird.
         "Ich wiederhole die Nummer.",
         "Stimmt das so?",
+        # W-NACHNAME (31.08.2026): die Nachnamen-Fragen der Termin-Verwaltung
+        # (Absage/Verschieben laden direkt zum Buchstabieren ein — Chef).
+        "Damit ich den richtigen Termin absage: Wie ist Ihr Nachname? "
+        "Buchstabieren Sie ihn am besten gleich einmal.",
+        "Damit ich den richtigen Termin finde: Wie ist Ihr Nachname? "
+        "Buchstabieren Sie ihn am besten gleich einmal.",
+        "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?",
     ]
     out = list(erstformen)
     # Kirri-Zettel (gesprochene Zeile nach dem Verbinden-Jingle) mitwaermen —
@@ -1252,7 +1279,10 @@ def telefon_alt_frage(s: dict) -> str:
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
                 "versicherung_check", "pzr", "telefon_alt", "telefon_check",
                 "rueckblick"}
-_STILLE_DIKTAT = {"telefon", "buchstabieren"}
+# "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
+# Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
+# dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.
+_STILLE_DIKTAT = {"telefon", "buchstabieren", "nachname"}
 
 
 def stille_ms(s: dict) -> int:

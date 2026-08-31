@@ -474,6 +474,17 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     status, data = _cf_post("agentFindPatientAppointments", body)
     if not isinstance(data, dict):
         data = {}
+    vorname_verworfen = False
+    if status == 404 and _s(data.get("status")) != "no_upcoming" and body.get("firstName"):
+        # W-NAMESKORREKTUR (31.08.2026): der Vorname kann selbst verhoert
+        # sein ("Sannes" statt Georgios) und die Suche allein deshalb leer
+        # ausgehen — einmal NUR mit dem Nachnamen nachfassen. Meldet die CF
+        # dann ambiguous, fragt die Prozedur den Vornamen ohnehin sauber nach.
+        body = {k: v for k, v in body.items() if k != "firstName"}
+        status, data = _cf_post("agentFindPatientAppointments", body)
+        if not isinstance(data, dict):
+            data = {}
+        vorname_verworfen = True
     pat = data.get("patient") or {}
     patient = {
         "id": _s(pat.get("id")),
@@ -503,11 +514,20 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
                 "motivName": _s(vm.get("name")),
                 "spoken": gesprochen,
             })
-        return {"ok": True, "patient": patient, "appointments": termine}
+        return {"ok": True, "patient": patient, "appointments": termine,
+                "vornameVerworfen": vorname_verworfen}
     if status == 404 and data.get("status") == "no_upcoming":
-        return {"ok": True, "patient": patient, "appointments": []}
+        return {"ok": True, "patient": patient, "appointments": [],
+                "vornameVerworfen": vorname_verworfen}
     if status == 404:
         return {"ok": True, "notFound": True, "patient": {}, "appointments": []}
+    if status == 409 or _s(data.get("status")).lower() in {"conflict", "ambiguous"}:
+        # Mehrere Patienten mit gleichem Nachnamen (W-NACHNAME 31.08.2026,
+        # phone_agent-Vorbild): der Anrufer muss den Vornamen nachliefern,
+        # dann wird mit firstName erneut gesucht. vornameVerworfen sagt dem
+        # Aufrufer: der GESPEICHERTE Vorname passte nicht — leeren und fragen.
+        return {"ok": True, "mehrdeutig": True, "patient": {}, "appointments": [],
+                "vornameVerworfen": vorname_verworfen}
     msg = _s(data.get("message")) or f"http_{status}"
     return {"ok": False, "appointments": [], "error": msg}
 

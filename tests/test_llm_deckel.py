@@ -82,3 +82,43 @@ def test_neue_stream_saetze_unfertig_bleibt_leer():
     assert neu == [] and n == 0
     neu, n = llm._neue_stream_saetze("Das verstehe ich wirklich gut. Ihre Nummer", 1)
     assert neu == [] and n == 1
+
+
+# --- W-TTS-NAHT (31.08.2026): Grenz-Wache + Mindestlaenge --------------------
+# Vorbild phone_agent tts_chunks: ein Punkt hinter Abkuerzung/Ordnungszahl
+# ist KEIN Satzende (sonst kappte der Deckel die Antwort mitten im Satz und
+# der Vorab vertonte halbe Phrasen); Folge-Bloecke unter 20 Zeichen warten
+# auf den naechsten Satz (keine Mini-Renders in der Fueller-Kette).
+
+
+def test_strassenname_zaehlt_nicht_als_satzende():
+    t = ("Die Praxis liegt in der Bahnhofstr. Fuenf in Duesseldorf. "
+         "Kommen Sie einfach vorbei. Wir freuen uns auf Sie. Und noch was. ")
+    out = llm._deckel_text(t)
+    # "Bahnhofstr." darf nicht als Satzende zaehlen — sonst kappt der
+    # Deckel die Antwort mitten in der Adresse.
+    assert out.startswith("Die Praxis liegt in der Bahnhofstr. Fuenf in Duesseldorf.")
+    assert "Und noch was" not in out
+
+
+def test_ordnungszahl_zaehlt_nicht_als_satzende():
+    saetze = llm._saetze_bis("Wir sind im 3. Stock. Der Aufzug ist rechts. ")
+    assert saetze == ["Wir sind im 3. Stock.", "Der Aufzug ist rechts."]
+
+
+def test_neue_stream_saetze_kurzer_folgesatz_wartet():
+    t = "Das verstehe ich wirklich gut. Gut. Ich trage das gleich ein. "
+    neu, n = llm._neue_stream_saetze(t, 0)
+    assert neu == ["Das verstehe ich wirklich gut."] and n == 1
+    # "Gut." (unter 20 Zeichen) wartet und kommt MIT dem Folgesatz.
+    neu2, n2 = llm._neue_stream_saetze(t, n)
+    assert neu2 == ["Gut. Ich trage das gleich ein."]
+    assert n2 == 3
+
+
+def test_neue_stream_saetze_kurzer_schlusssatz_bleibt_offen():
+    t = "Das verstehe ich wirklich gut. Gut. "
+    neu, n = llm._neue_stream_saetze(t, 1)
+    # Haengt nur ein Kurz-Satz am Ende, bleibt er ungemeldet — er laeuft
+    # spaeter im Rest-Render mit (nie doppelt, nie verloren).
+    assert neu == [] and n == 1
