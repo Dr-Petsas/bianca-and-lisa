@@ -351,6 +351,74 @@ def test_call_erfassen_lokaler_mandant_ohne_datensatz(monkeypatch):
     assert "phoneCallId" not in sit
 
 
+def test_anrufer_von_pre_felder_und_fullname_rueckfall():
+    """W-ANRUFER-CHECK: pre.patient (phone_agent-Format) wird geerntet;
+    ohne Nachnamen ist der Treffer wertlos (nichts vorzulesen)."""
+    pat = agentprofil._anrufer_von_pre({"patient": {
+        "id": "pat-7", "firstName": "Julia", "lastName": "Berger",
+        "gender": "female", "birthDate": "1990-01-02",
+    }})
+    assert pat == {"vorname": "Julia", "nachname": "Berger", "patientId": "pat-7",
+                   "geschlecht": "female", "geburtsdatum": "1990-01-02"}
+    # Nur fullName gepflegt: letztes Wort ist der Nachname.
+    pat2 = agentprofil._anrufer_von_pre({"patient": {"fullName": "Anna Maria Schulz"}})
+    assert pat2["vorname"] == "Anna Maria" and pat2["nachname"] == "Schulz"
+    assert agentprofil._anrufer_von_pre({"patient": {"firstName": "Julia"}}) == {}
+    assert agentprofil._anrufer_von_pre({}) == {}
+    assert agentprofil._anrufer_von_pre(None) == {}
+
+
+def test_anrufer_landet_in_der_sitzung_nie_im_cache(monkeypatch):
+    """W-ANRUFER-CHECK: der ueber die Rufnummer gematchte Patient gehoert
+    zur SITZUNG (sit["anrufer"], Telefon +E164) — nie in den TTL-Cache
+    (der naechste Anrufer auf derselben DID ist ein anderer Mensch)."""
+    agentprofil.cache_leeren()
+    pre = copy.deepcopy(CF_PRE)
+    pre["patient"] = {"id": "pat-7", "firstName": "Julia", "lastName": "Berger",
+                      "gender": "female"}
+    monkeypatch.setattr(agentprofil, "_cf_pre", lambda did, caller="": copy.deepcopy(pre))
+    monkeypatch.setattr(agentprofil, "enabled", lambda: True)
+    t = agentprofil.fuer_did("+4930111222", caller="015253904756")
+    assert t["_anrufer"]["nachname"] == "Berger"
+    sit = session.neu(tenant=t)
+    agentprofil.call_erfassen(sit, did="+4930111222", caller="015253904756")
+    a = sit["anrufer"]
+    assert a["vorname"] == "Julia" and a["nachname"] == "Berger"
+    assert a["telefon"] == "+4915253904756"
+    assert a["patientId"] == "pat-7" and a["geschlecht"] == "female"
+    assert "_anrufer" not in sit["tenant"]  # nie persistieren
+    # Cache-Treffer traegt den fremden Patienten NICHT mit.
+    t2 = agentprofil.fuer_did("+4930111222", caller="017600000000")
+    assert "_anrufer" not in t2
+    agentprofil.cache_leeren()
+
+
+def test_anrufer_cache_hit_wird_nachgereicht(monkeypatch):
+    """Cache-Treffer: die Hintergrund-Registrierung (call_erfassen) holt
+    den Patienten zur Anrufernummer nach — ohne echte Nummer nie."""
+    monkeypatch.setattr(agentprofil, "enabled", lambda: True)
+    monkeypatch.setattr(agentprofil.threading, "Thread", _SofortThread)
+    monkeypatch.setattr(agentprofil, "_cf_pre", lambda did, caller="": {
+        "phoneCallId": "pc-neu",
+        "patient": {"id": "pat-9", "firstName": "Peter", "lastName": "Schmidt"},
+    })
+    t = agentprofil.tenant_von_pre(copy.deepcopy(CF_PRE), did="4930111222")
+    t.pop("_phoneCallId", None)  # wie ein Cache-Treffer
+    t.pop("_anrufer", None)
+    sit = session.neu(tenant=t)
+    agentprofil.call_erfassen(sit, did="+4930111222", caller="015253904756")
+    assert sit["anrufer"]["nachname"] == "Schmidt"
+    assert sit["anrufer"]["telefon"] == "+4915253904756"
+    # Unterdrueckte Nummer: kein Anrufer-Kontext, selbst wenn die CF
+    # wider Erwarten einen Patienten liefern sollte.
+    t2 = agentprofil.tenant_von_pre(copy.deepcopy(CF_PRE), did="4930111222")
+    t2.pop("_phoneCallId", None)
+    t2.pop("_anrufer", None)
+    sit2 = session.neu(tenant=t2)
+    agentprofil.call_erfassen(sit2, did="+4930111222", caller="")
+    assert "anrufer" not in sit2
+
+
 def test_cf_kategorien_aus_der_sitzung():
     assert agentprofil._cf_kategorien({}) == []
     assert agentprofil._cf_kategorien({"lastBook": {"ok": True}}) == ["appointment"]

@@ -13,6 +13,7 @@ an — hier wird nur Zustand gehalten und die nächste Frage bestimmt.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -418,6 +419,11 @@ FELDER_START = {
     "letzterGrund": "",
     "rueckblick": "",
     "pzr": "",
+    # W-ANRUFER-CHECK (31.08.2026): die CF hat den Anrufer ueber seine
+    # Rufnummer in der Kartei gefunden (sit["anrufer"]). "" = noch nicht
+    # rueckbestaetigt, "ja" = Name+Nummer uebernommen, "nein" = Treffer
+    # verworfen (klassisch nach Name und Nummer fragen).
+    "anruferCheck": "",
 }
 
 
@@ -775,6 +781,35 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         elif ist_nein(t):
             s["warSchonMal"] = False
             neu.add("warSchonMal")
+
+    # W-ANRUFER-CHECK: Antwort auf das vorgelesene Name+Nummer-Paar. Ein Ja
+    # uebernimmt BEIDES (Kartei-Schreibweise, nichts zu buchstabieren, Nummer
+    # gilt als rueckbestaetigt); ein Nein verwirft den DB-Treffer komplett —
+    # danach fragt der Fluss klassisch nach Name und Nummer.
+    if s["frage"] == "anrufer_check" and not s["anruferCheck"]:
+        a = anrufer_bekannt(sit)
+        if a and ist_ja(t) and not ist_nein(t):
+            s["anruferCheck"] = "ja"
+            s["warSchonMal"] = True  # steht in der Kartei => Bestand
+            s["vorname"] = _s(a.get("vorname")) or s["vorname"]
+            s["nachname"] = _s(a.get("nachname"))
+            s["buchstabiert"] = True
+            s["bekannt"] = True
+            if _s(a.get("patientId")):
+                s["patientId"] = _s(a.get("patientId"))
+            s["telefon"] = telefon.normaliert(a.get("telefon") or "")
+            s["telefonOk"] = True
+            s["telefonOffen"] = ""
+            s["telefonTeil"] = ""
+            g = _s(a.get("geschlecht")).lower()
+            if g in _HERR or g in _FRAU:
+                s["geschlecht"] = "m" if g in _HERR else "f"
+                s["geschlechtQuelle"] = "akte"
+                s["geschlechtUnklar"] = False
+            neu.update({"anruferCheck", "name", "warSchonMal"})
+        elif ist_nein(t):
+            s["anruferCheck"] = "nein"
+            neu.add("anruferCheck")
 
     # Behandler: ein Name zählt immer; "egal"/"weiß nicht" nur im Arzt-Kontext.
     tenant = sit.get("tenant") or {}
@@ -1168,6 +1203,39 @@ def readback_text(nummer: str) -> str:
     return f"Ich wiederhole die Nummer. {z}. Stimmt das so?"
 
 
+# --- Anrufer ueber die Rufnummer erkannt (W-ANRUFER-CHECK 31.08.2026) ------
+# Chef: "wenn jemand anruft und seine nummer mitsendet und wir den dann in
+# unserer db finden als patient, dann waere es besser den namen und die
+# telefonnummer bei der buchung oder beim absagen vorzulesen als kontrolle
+# anstatt das nochmal zu erfragen." Die Daten legt kern/agentprofil beim
+# Anrufstart in sit["anrufer"] (nur SIP mit uebermittelter Nummer; Docks
+# und unterdrueckte Nummern haben das Feld nie).
+
+def anrufer_bekannt(sit: dict) -> dict:
+    """DB-Patient zur Anrufernummer — {} wenn keiner da oder Notaus an."""
+    if os.environ.get("ANRUFER_CHECK", "1").strip() == "0":
+        return {}
+    a = sit.get("anrufer")
+    if not isinstance(a, dict):
+        return {}
+    if not (_s(a.get("nachname")) and _s(a.get("telefon"))):
+        return {}
+    return a
+
+
+def anrufer_check_frage(sit: dict) -> str:
+    """Name + Nummer VORLESEN statt erfragen — der Anrufer bestaetigt nur.
+
+    Traegt Ziffern: der Wiederholungs-Waechter fasst den Satz nie an, und
+    der TTS-Ziffern-Waechter verifiziert den Render wie jedes Readback.
+    'Stimmt das so?' ist als fester Satz vorgewaermt (satzweises TTS)."""
+    a = anrufer_bekannt(sit)
+    name = f"{_s(a.get('vorname'))} {_s(a.get('nachname'))}".strip()
+    z = telefon.sprechbar(a.get("telefon") or "")
+    return (f"Ich habe Sie an Ihrer Rufnummer erkannt: {name}, "
+            f"unter {z}. Stimmt das so?")
+
+
 def feste_saetze(tenant: dict | None = None) -> list[str]:
     """Alle festen Maschinen-Sätze für den TTS-Platten-Cache (28.08.2026).
 
@@ -1278,7 +1346,7 @@ def telefon_alt_frage(s: dict) -> str:
 # 1500 ms — traege genug fuer Gruppen-Pausen, ohne das Gespraech zu laehmen.
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
                 "versicherung_check", "pzr", "telefon_alt", "telefon_check",
-                "rueckblick"}
+                "rueckblick", "anrufer_check"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.
@@ -1310,6 +1378,16 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             and not s["telefonAlt"]
             and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
         return "telefon_alt", telefon_alt_frage(s)
+
+    # W-ANRUFER-CHECK (31.08.2026): die Rufnummer hat einen Kartei-Patienten
+    # getroffen — EINMAL Name + Nummer vorlesen statt sie zu erfragen. Nur
+    # solange noch kein Name gefallen ist, nie fuer Dritte ("Termin fuer
+    # meine Tochter") und nie, wenn sich der Anrufer schon als Neupatient
+    # zu erkennen gegeben hat (dann ist der Treffer wohl ein Angehoeriger
+    # am selben Anschluss).
+    if (not s["anruferCheck"] and not s["nachname"] and not s["fuerWen"]
+            and s["warSchonMal"] is not False and anrufer_bekannt(sit)):
+        return "anrufer_check", anrufer_check_frage(sit)
 
     if s["warSchonMal"] is None:
         return "schonmal", "Waren Sie denn schon einmal bei uns in der Praxis?"

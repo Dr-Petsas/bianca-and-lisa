@@ -419,25 +419,31 @@ def test_ohne_passendes_ziel_bleibt_platzhalter():
     assert z.get("hangup") is True
 
 
-def test_agent_reicht_transfer_durch_ohne_llm(monkeypatch):
+def test_agent_reicht_transfer_durch_ohne_llm():
     """Live erlebt 31.08.2026 (erste Probe): das Transfer-Reply traegt
     text="" — agent.user_turn wertete das als 'Maschine schweigt' und das
     LLM uebernahm ('Zu welchem unserer Ärzte...'), die Weiterleitung fiel
     weg. Ein Reply mit transfer/hangup ZAEHLT als Maschinen-Zug und das
-    transfer-Feld erreicht den Dienst."""
+    transfer-Feld erreicht den Dienst. (Ohne pytest-Fixture gestubbt —
+    lauf_bianca ruft Testfunktionen argumentlos auf.)"""
     from bianca import agent
     from kern import llm
 
     def _knall(*a, **k):
         raise AssertionError("LLM darf beim Transfer-Reply nicht uebernehmen")
 
-    monkeypatch.setattr(llm, "chat", _knall)
-    monkeypatch.setattr(llm, "chat_stream", _knall)
-    sit = _sit_mit_weiterleitung()
-    aus = agent.user_turn(sit, "Ich möchte bitte mit Doktor Petsas sprechen.")
-    assert aus.get("transfer") == {"nummer": "+49211111111", "name": "Dr. Petsas"}
-    assert aus.get("hangup") is True
-    assert aus["text"] == ""
+    echt_chat, echt_stream = llm.chat, llm.chat_stream
+    llm.chat = _knall
+    llm.chat_stream = _knall
+    try:
+        sit = _sit_mit_weiterleitung()
+        aus = agent.user_turn(sit, "Ich möchte bitte mit Doktor Petsas sprechen.")
+        assert aus.get("transfer") == {"nummer": "+49211111111", "name": "Dr. Petsas"}
+        assert aus.get("hangup") is True
+        assert aus["text"] == ""
+    finally:
+        llm.chat = echt_chat
+        llm.chat_stream = echt_stream
 
 
 def test_meddent_ohne_konfig_bleibt_platzhalter():

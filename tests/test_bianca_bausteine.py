@@ -2424,3 +2424,189 @@ def test_readback_text_ist_dreisatzform():
     assert saetze[1].startswith("Null eins sieben sieben")
     fest = gehirn.feste_saetze()
     assert saetze[0] in fest and saetze[-1] in fest
+
+
+# --- W-ANRUFER-CHECK (31.08.2026): erkannten Anrufer vorlesen statt fragen --
+
+def _sit_mit_anrufer() -> dict:
+    """Sitzung, in der kern/agentprofil den Kartei-Patienten zur
+    Anrufernummer hinterlegt hat (SIP mit uebermittelter Nummer)."""
+    sit = _sit()
+    sit["anrufer"] = {
+        "vorname": "Julia", "nachname": "Berger", "patientId": "pat-7",
+        "geschlecht": "female", "telefon": "+4915253904756",
+    }
+    return sit
+
+
+def test_anrufer_check_buchung_ja_uebernimmt_name_und_nummer():
+    """Chef 31.08.2026: 'den namen und die telefonnummer bei der buchung …
+    vorzulesen als kontrolle anstatt das nochmal zu erfragen.' Ein Ja
+    uebernimmt BEIDES — danach fragt der Fluss NIE wieder nach Name,
+    Buchstabierung oder Handynummer."""
+    from bianca import agent as bianca_agent
+
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        z1 = flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
+        assert z1 and "Julia Berger" in z1["text"]
+        assert "null eins fünf zwei" in z1["text"]  # Nummer wird VORGELESEN
+        assert re.search(bianca_agent._FRAGE_KERN["anrufer_check"], z1["text"], re.I)
+        s = gehirn.sammler(sit)
+        assert s["frage"] == "anrufer_check"
+        assert gehirn.stille_ms(s) == 350  # Ja/Nein-Frage: kurze Ruhe reicht
+
+        z2 = flow.zug(sit, "Ja, genau.")
+        s = gehirn.sammler(sit)
+        assert s["anruferCheck"] == "ja"
+        assert s["warSchonMal"] is True  # steht in der Kartei => Bestand
+        assert s["vorname"] == "Julia" and s["nachname"] == "Berger"
+        assert s["patientId"] == "pat-7" and s["bekannt"] and s["buchstabiert"]
+        assert s["telefonOk"] and s["telefon"] == "015253904756"
+        assert s["geschlecht"] == "f" and s["geschlechtQuelle"] == "akte"
+        assert z2 and "Danke, Julia Berger" in z2["text"]
+        assert s["frage"] == "arzt"  # weiter im Bestand-Fluss
+        # Name/Buchstabieren/Telefon kommen NIE wieder:
+        s["arzt"] = {"typ": "genannt", "calendarId": "cal-1", "calendarName": "Dr. Petsas"}
+        s["grund"] = "Kontrolle"
+        s["wunsch"] = {}
+        fid, _ = gehirn.naechste_frage(sit)
+        assert fid not in {"name", "nachname", "vorname", "buchstabieren",
+                           "telefon", "telefon_check", "anrufer_check"}
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_anrufer_check_nein_fragt_klassisch():
+    """Bestaetigt der Anrufer den Kartei-Treffer NICHT, wird er verworfen —
+    der Fluss fragt klassisch (schonmal/Name/Nummer) und bietet den
+    Treffer nie wieder an."""
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        flow.zug(sit, "Ich möchte einen Termin vereinbaren.")
+        z2 = flow.zug(sit, "Nein, das bin ich nicht.")
+        s = gehirn.sammler(sit)
+        assert s["anruferCheck"] == "nein"
+        assert not s["nachname"] and not s["telefonOk"] and not s["patientId"]
+        assert z2 and "frisch auf" in z2["text"]
+        assert s["frage"] == "schonmal"
+        fid, _ = gehirn.naechste_frage(sit)
+        assert fid == "schonmal"  # der verworfene Treffer kommt nie wieder
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_anrufer_check_nicht_bei_neupatient_oder_drittem():
+    """Kein Vorlesen, wenn sich der Anrufer als Neupatient bekannt hat
+    (Kartei-Treffer ist dann wohl ein Angehoeriger am selben Anschluss)
+    oder der Termin fuer einen Dritten ist ('fuer meine Tochter')."""
+    sit = _sit_mit_anrufer()
+    s = gehirn.sammler(sit)
+    s["modus"] = "buchen"
+    s["warSchonMal"] = False
+    fid, _ = gehirn.naechste_frage(sit)
+    assert fid != "anrufer_check"
+
+    sit2 = _sit_mit_anrufer()
+    s2 = gehirn.sammler(sit2)
+    s2["modus"] = "buchen"
+    s2["fuerWen"] = "tochter"
+    fid2, _ = gehirn.naechste_frage(sit2)
+    assert fid2 != "anrufer_check"
+
+    # Ohne Anrufer-Daten (Dock, unterdrueckte Nummer): alles wie immer.
+    sit3 = _sit()
+    gehirn.sammler(sit3)["modus"] = "buchen"
+    fid3, _ = gehirn.naechste_frage(sit3)
+    assert fid3 == "schonmal"
+
+
+def test_absage_mit_erkanntem_anrufer_sucht_direkt():
+    """Beim Absagen wird der erkannte Anrufer vorgelesen statt der
+    Nachnamen-Frage; ein Ja sucht SOFORT mit Kartei-Name, patientId und
+    Anrufernummer."""
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_anstossen = verwalten.hintergrund.anstossen
+    gesucht: list[dict] = []
+
+    def _find(t, c):
+        gesucht.append(dict(c))
+        return dict(GEFUNDEN)
+
+    verwalten.kal.find_patient_appointments = _find
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        z1 = flow.zug(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
+        assert z1 and "Julia Berger" in z1["text"]
+        assert "nachname" not in z1["text"].lower()  # NICHT nochmal erfragen
+        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+
+        z2 = flow.zug(sit, "Ja.")
+        assert z2 and "wirklich absagen" in z2["text"].lower(), z2
+        assert "Frau Berger" in z2["text"]  # Kartei-Geschlecht traegt die Anrede
+        assert gesucht[-1].get("lastName") == "Berger"
+        assert gesucht[-1].get("patientId") == "pat-7"
+        assert gesucht[-1].get("phone") == "015253904756"
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_absage_anrufer_check_nein_fragt_nachnamen():
+    """Nein auf den vorgelesenen Treffer: die bewaehrte Nachnamen-Frage
+    (mit Buchstabier-Einladung) kommt wie vor W-ANRUFER-CHECK."""
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        z2 = flow.zug(sit, "Nein.")
+        assert z2 and "wie ist ihr nachname" in z2["text"].lower()
+        s = gehirn.sammler(sit)
+        assert s["frage"] == "nachname" and s["anruferCheck"] == "nein"
+    finally:
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_auskunft_mit_erkanntem_anrufer():
+    """Auch die Termin-Auskunft liest den erkannten Anrufer vor, statt den
+    Nachnamen zu erfragen."""
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
+        assert z1 and "Julia Berger" in z1["text"]
+        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+        z2 = flow.zug(sit, "Ja, richtig.")
+        assert z2 and "dritten September" in z2["text"]  # Termin wird vorgelesen
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_anrufer_check_eskalation_verwirft_treffer():
+    """Zweimal keine klare Antwort auf die Identitaets-Kontrolle: NICHTS
+    uebernehmen (Sicherheit vor Tempo) — weiter mit der schonmal-Frage."""
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        flow.zug(sit, "Ich hätte gern einen Termin.")
+        z2 = flow.zug(sit, "Äh, Moment, der Hund bellt gerade.")
+        # Erster Leerlauf: deterministische Kurz-Nachfrage, nie ans LLM.
+        assert z2 and "richtig erkannt" in z2["text"].lower()
+        z3 = flow.zug(sit, "Der Hund bellt immer noch.")
+        s = gehirn.sammler(sit)
+        assert s["anruferCheck"] == "nein"
+        assert not s["nachname"] and not s["telefonOk"]
+        assert z3 and "schon einmal bei uns" in z3["text"]
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen

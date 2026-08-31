@@ -141,6 +141,38 @@ def _motive(pre: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _anrufer_von_pre(pre: dict[str, Any] | None) -> dict[str, str]:
+    """Kartei-Patient, den die CF ueber die ANRUFER-Nummer gematcht hat
+    (W-ANRUFER-CHECK 31.08.2026). Gleiche Felder wie phone_agent
+    patient_from_pre: pre.patient traegt id/firstName/lastName/fullName/
+    gender/birthDate, wenn trimPhoneNumber die callerPhone einem Patienten
+    zuordnen konnte. Ohne Nachnamen ist der Treffer fuers Vorlesen wertlos."""
+    if not isinstance(pre, dict):
+        return {}
+    raw = pre.get("patient")
+    if not isinstance(raw, dict):
+        return {}
+    vor = _s(raw.get("firstName") or raw.get("first_name"))
+    nach = _s(raw.get("lastName") or raw.get("last_name"))
+    if not nach:
+        voll = _s(raw.get("fullName") or raw.get("full_name"))
+        if voll and " " in voll:
+            vor, _, nach = voll.rpartition(" ")
+            vor = _s(vor)
+            nach = _s(nach)
+    if not nach:
+        return {}
+    out = {"vorname": vor, "nachname": nach}
+    if _s(raw.get("id")):
+        out["patientId"] = _s(raw.get("id"))
+    if _s(raw.get("gender")):
+        out["geschlecht"] = _s(raw.get("gender")).lower()
+    geb = _s(raw.get("birthDate") or raw.get("birth_date"))
+    if geb and geb.lower() not in {"none", "null"}:
+        out["geburtsdatum"] = geb
+    return out
+
+
 # Prompt-Fragmente des DB-Agents — dieselben Felder/Ueberschriften wie
 # phone_agent assemble_persona_instructions (Agent.getFullSystemPrompt),
 # aber OHNE dessen Verhaltens-Vorspann und Tool-Ausfall-Schwanz: das
@@ -274,6 +306,12 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     pcid = _s(pre.get("phoneCallId"))
     if pcid:
         t["_phoneCallId"] = pcid
+    # W-ANRUFER-CHECK: der ueber die Rufnummer gematchte Patient gehoert
+    # ebenfalls zur SITZUNG — nie in den Cache (der naechste Anrufer auf
+    # derselben DID ist ein anderer Mensch).
+    pat = _anrufer_von_pre(pre)
+    if pat:
+        t["_anrufer"] = pat
     return t
 
 
@@ -339,6 +377,7 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
                 ablage = dict(t) if t else None
                 if ablage:
                     ablage.pop("_phoneCallId", None)
+                    ablage.pop("_anrufer", None)
                 _CACHE[norm] = (time.monotonic(), ablage)
             if t:
                 print(f"agentprofil did={norm} -> {t.get('_quelle')} {t.get('_id')} "
@@ -380,6 +419,15 @@ def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
     t = sit.get("tenant") or {}
     if not isinstance(t, dict):
         return
+    # W-ANRUFER-CHECK: Kartei-Treffer zur Anrufernummer in die Sitzung —
+    # nur mit ECHTER Nummer (bei "anonymous" matcht die CF ohnehin nie).
+    caller_norm = tenants.nummer_norm(caller)
+    pat = t.pop("_anrufer", None)
+    if isinstance(pat, dict) and pat and caller_norm:
+        sit["anrufer"] = {**pat, "telefon": "+" + caller_norm}
+        print(f"agentprofil anrufer erkannt: {pat.get('vorname','')} "
+              f"{pat.get('nachname','')}".strip() + f" id={pat.get('patientId','-')}",
+              flush=True)
     pcid = _s(t.pop("_phoneCallId", ""))
     if pcid:
         sit["phoneCallId"] = pcid
@@ -397,6 +445,15 @@ def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
             if neu:
                 sit["phoneCallId"] = neu
                 print(f"agentprofil call registriert phoneCallId={neu}", flush=True)
+            # Cache-Treffer: der frische pre-Wurf traegt auch den Patienten
+            # zur Anrufernummer — nachreichen, solange das Gespraech den
+            # Namen noch nicht anders geklaert hat (W-ANRUFER-CHECK).
+            pat2 = _anrufer_von_pre(pre)
+            if pat2 and caller_norm and not sit.get("anrufer"):
+                sit["anrufer"] = {**pat2, "telefon": "+" + caller_norm}
+                print(f"agentprofil anrufer erkannt (nachgereicht): "
+                      f"{pat2.get('vorname','')} {pat2.get('nachname','')}".strip(),
+                      flush=True)
         except Exception as e:
             print(f"agentprofil call-registrierung fail: {type(e).__name__}: {e}", flush=True)
 

@@ -292,6 +292,10 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if s["vorname"] and s["nachname"]:
             return f"Danke, {s['vorname']} {s['nachname']}. "
         return "Danke. "
+    if "anruferCheck" in neu and s.get("anruferCheck") == "nein":
+        # DB-Treffer verworfen (W-ANRUFER-CHECK): kurz entschuldigen, dann
+        # kommt direkt die klassische Frage (schonmal/Name) hinterher.
+        return "Entschuldigen Sie bitte — dann nehme ich Ihre Daten frisch auf. "
     if "telefon" in neu:
         return "Prima, die Nummer habe ich. "
     if "telefonAkte" in neu:
@@ -648,6 +652,12 @@ def _eskalieren(sit: dict, fid: str) -> str:
     if fid == "buchstabieren":
         s["buchstabiert"] = True
         return ""
+    if fid == "anrufer_check":
+        # Zweimal keine klare Antwort auf das vorgelesene Name+Nummer-Paar:
+        # NICHTS uebernehmen (Sicherheit vor Tempo — falsche Identitaet waere
+        # fatal), klassisch nach Name und Nummer fragen (W-ANRUFER-CHECK).
+        s["anruferCheck"] = "nein"
+        return "Dann gehen wir auf Nummer sicher und nehmen Ihre Daten einfach frisch auf. "
     if fid == "telefon_check" and s["telefonOffen"]:
         # Zweimal keine klare Antwort auf die Rückbestätigung, aber auch kein
         # Nein: die vorgelesene Nummer gilt — nicht zum dritten Mal fragen
@@ -855,7 +865,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # LLM: das kennt die Ziffern aus der Akte nicht.
             return {"text": gehirn.telefon_alt_frage(s)}
         if gehirn.ist_zwischenfrage(t) or (
-            not neu and fid != "telefon_check" and gespraech.traegt_thema(sit, t)
+            not neu and fid not in {"telefon_check", "anrufer_check"}
+            and gespraech.traegt_thema(sit, t)
         ):
             # Echte Zwischenfrage/Abschweifung ("Was kostet das?") ODER ein
             # erzaehltes Nebenthema OHNE Ernte ("Meine Tochter heiratet!"):
@@ -879,6 +890,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                     # hier "die Nummer habe ich notiert" UND der Anker fragte
                     # danach erneut — die Doppelfrage vom 27.08.2026.
                     return {"text": "Entschuldigung, kurz zur Sicherheit: Stimmt die Nummer so? Ein kurzes Ja oder Nein genügt."}
+                if fid == "anrufer_check":
+                    # Identitaets-Kontrolle bleibt ebenfalls deterministisch —
+                    # das LLM darf hier nie "erkannt" erfinden (W-ANRUFER-CHECK).
+                    return {"text": "Entschuldigung, kurz zur Kontrolle: Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt."}
                 if fid == "telefon_alt":
                     # Auch die Akten-Nummer-Frage bleibt deterministisch —
                     # mit der Nummer im Ohr faellt die Wahl leichter.

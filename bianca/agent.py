@@ -72,6 +72,8 @@ _FRAGE_KERN = {
     "buchstabieren": r"buchstabier",
     "telefon": r"nummer|handy|telefon",
     "telefon_check": r"nummer|stimmt",
+    # W-ANRUFER-CHECK: das vorgelesene Name+Nummer-Paar zur Rufnummer.
+    "anrufer_check": r"rufnummer|erkannt|stimmt",
     "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",

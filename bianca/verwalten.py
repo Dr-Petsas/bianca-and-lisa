@@ -734,6 +734,10 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         if not _UNKLAR_RE.search(t) and not gehirn.ist_ja(t) and not gehirn.ist_nein(t):
             sit["verwBehandlung"] = t if len(t) <= 90 else t[:87] + "…"
         s["frage"] = ""
+    elif s["frage"] == "anrufer_check" and s["anruferCheck"]:
+        # W-ANRUFER-CHECK beantwortet: Ja hat Name/patientId/Telefon gefuellt
+        # (Suche laeuft unten direkt), Nein faellt auf die Nachnamen-Frage.
+        s["frage"] = ""
 
     # Ein schon bestimmter Termin (Auskunft/Wahl davor) braucht kein Sammeln.
     termin = _gewaehlt(sit)
@@ -744,8 +748,15 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     # ob er einen termin findet"; die Wann-/Behandler-Vorabfrage von
     # W-SAMMELN ist ausgebaut, freiwillig genannte Hinweise filtern weiter).
     if not s["nachname"]:
-        if s["frage"] in {"name", "nachname"} and not neu:
+        if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
             return None  # LLM klaert die Zwischenfrage, Status fuehrt zurueck
+        # W-ANRUFER-CHECK: die Rufnummer hat einen Kartei-Patienten getroffen
+        # — Name + Nummer vorlesen statt den Nachnamen zu erfragen. Ein Ja
+        # (einsammeln) fuellt Name/patientId/Telefon, die Suche laeuft dann
+        # direkt; ein Nein faellt hierher zurueck auf die Nachnamen-Frage.
+        if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
+            s["frage"] = "anrufer_check"
+            return {"text": gehirn.anrufer_check_frage(sit)}
         s["frage"] = "nachname"
         was = {
             "absagen": "Damit ich den richtigen Termin absage",
@@ -887,7 +898,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     if s["modus"] in {"absagen", "verschieben"}:
         if s["phase"] in {"", "fertig"} and (
             ("name" in neu or "nachname" in neu or "modus" in neu)
-            or s["frage"] in {"behandlung", "name", "nachname", "vorname"}
+            or s["frage"] in {"behandlung", "name", "nachname", "vorname", "anrufer_check"}
             or (s["phase"] == "" and sit.get("gefundenKey") != f"{s['vorname']}|{s['nachname']}".lower())
         ):
             return _sammeln(sit, t, neu, melde)
@@ -895,8 +906,12 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
 
     # 6) Auskunft: Nachname reicht — Termine holen und vorlesen.
     if not s["nachname"]:
-        if s["frage"] in {"name", "nachname"} and not neu:
+        if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
             return None  # LLM klaert die Zwischenfrage, Status fuehrt zurueck
+        # W-ANRUFER-CHECK: erkannten Anrufer vorlesen statt erfragen.
+        if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
+            s["frage"] = "anrufer_check"
+            return {"text": gehirn.anrufer_check_frage(sit)}
         s["frage"] = "nachname"
         return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?"}
 

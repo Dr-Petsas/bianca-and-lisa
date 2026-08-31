@@ -170,6 +170,54 @@ Kalender/Motive/Begrüßung/Keywords/Prompts. Kette bei uns:
  bianca/server.py liefen auf ModuleNotFoundError). Fix: `tests/__init__.py`
  macht den Repo-Ordner zum regulären Paket — der gewinnt die Auflösung.
 
+## Erkannten Anrufer vorlesen statt erfragen (W-ANRUFER-CHECK 31.08.2026 — nicht rückbauen)
+
+Chef: "wenn jemand anruft und seine nummer mitsendet und wir den dann in
+unserer db finden als patient, dann wäre es besser den namen und die
+telefonnummer bei der buchung oder beim absagen vorzulesen als kontrolle
+anstatt das nochmal zu erfragen. nur wenn der patient das nicht bestätigt,
+dann erst nach namen und nummer fragen."
+
+- **Ernte** (`kern/agentprofil._anrufer_von_pre`): die CF-pre-Antwort trägt
+ `patient` (id/firstName/lastName/fullName/gender/birthDate — gleiche Felder
+ wie phone_agent `patient_from_pre`), wenn trimPhoneNumber die callerPhone
+ einem Patienten zuordnen konnte. Der Treffer liegt transient als
+ `t["_anrufer"]` am Tenant und wird wie `_phoneCallId` NIE gecacht (der
+ nächste Anrufer auf der DID ist ein anderer Mensch); `call_erfassen` holt
+ ihn samt +E164-Anrufernummer in die Sitzung (`sit["anrufer"]` =
+ {vorname, nachname, patientId, geschlecht, geburtsdatum, telefon}) — auch
+ auf dem Cache-Treffer-Pfad (Hintergrund-Registrierung reicht nach). Ohne
+ echte Nummer (anonymous) nie; Docks haben das Feld nie.
+- **Buchung** (`gehirn.naechste_frage`, VOR der schonmal-Frage): steht ein
+ Treffer und ist noch kein Name gefallen, kommt EINMAL
+ `frage=anrufer_check` (`gehirn.anrufer_check_frage`: "Ich habe Sie an
+ Ihrer Rufnummer erkannt: {Name}, unter {Ziffern}. Stimmt das so?").
+ Ja (`einsammeln`): Name in Kartei-Schreibweise (buchstabiert=True,
+ bekannt=True, patientId), Geschlecht als Quelle "akte", Telefon gilt als
+ rückbestätigt (telefonOk), warSchonMal=True — schonmal-, Namens-,
+ Buchstabier- und Telefon-Frage entfallen komplett; die Hintergrund-Kartei
+ reichert wie gehabt an (aktePhone/letzterBesuch/Versicherung → Rückblick/
+ PZR laufen normal). Nein: Treffer verworfen (anruferCheck="nein", kommt
+ nie wieder), klassische Fragen wie vor dem Patch. NIE gefragt: bei
+ `fuerWen` (Termin für Dritte) oder warSchonMal=False (Angehöriger am
+ selben Anschluss); ein Kind, das den Hörer der Mutter nutzt, verneint.
+- **Absage/Verschieben/Auskunft** (`verwalten._sammeln` bzw. Auskunfts-Zweig
+ in `verwalten.zug`): dieselbe Frage ersetzt die Nachnamen-Frage; ein Ja
+ sucht SOFORT mit Kartei-Name, patientId und Anrufernummer
+ (`agentFindPatientAppointments` bekommt phone=callerPhone mit).
+- **Deterministisch wie telefon_check:** die Frage trägt Ziffern
+ (Wiederholungs-Wächter fasst sie nie an, TTS-Ziffern-Wächter verifiziert
+ den Render), Antwort-Leerlauf bleibt beim festen Text ("Habe ich Sie
+ richtig erkannt? Ein kurzes Ja oder Nein genügt."), zwei unklare Antworten
+ => `flow._eskalieren` verwirft den Treffer (Sicherheit vor Tempo — nie
+ eine Identität raten). Kurze Ruhe-Schwelle 350 ms (`_STILLE_KURZ`),
+ Frage-Kern in `agent._FRAGE_KERN["anrufer_check"]`.
+- **Notaus:** `ANRUFER_CHECK=0` (gehirn.anrufer_bekannt liefert {}) =>
+ Verhalten wie vor dem Patch. Tests: W-ANRUFER-CHECK-Blöcke in
+ `tests/test_bianca_bausteine.py` (Buchung ja/nein, Neupatient/Dritte,
+ Absage, Auskunft, Eskalation) und `tests/test_agentprofil.py`
+ (Ernte, +E164, nie im Cache, Nachreichen beim Cache-Treffer).
+
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.

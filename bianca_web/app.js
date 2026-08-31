@@ -879,6 +879,7 @@ const KOENNEN = [
     "<b>Handynummer mit Ziffern-Rückbestätigung:</b> das Readback ist immer deterministisch — nie „aus dem Bauch“.",
     "<b>Buchstabierte Namen</b> verstehen und festhalten.",
     "<b>Kartei-Suche im Hintergrund,</b> während das Gespräch normal weiterläuft: schon Patient? Letzter Besuch? Bei welchem Behandler?",
+    "<b>Anrufer an der Rufnummer erkennen:</b> steht die übermittelte Nummer in der Kartei, liest Bianca Name und Nummer zur Kontrolle vor („Ich habe Sie an Ihrer Rufnummer erkannt: …“) statt sie zu erfragen — ein Ja übernimmt beides, ein Nein fragt klassisch nach.",
   ]},
   { t: "Praxisgedächtnis (MAS-Brain) & Notizen", p: [
     "<b>Gesprächs-Report nach jedem Anruf:</b> Zusammenfassung im Terminpopup-Stil ins MAS-Praxisgedächtnis („Laut Anruf (Bianca): …“).",
@@ -993,6 +994,7 @@ const PATCHES = [
   ["W-VERBINDEN-ECHT (echte Weiterleitung)", "31.08.", "Telefon", "Hat der Client im Portal eine Weiterleitung eingerichtet (callForwardings), wird nach Ansage + Jingle WIRKLICH durchgestellt: die Brücke merkt sich die Zielnummer je Anruf, der Asterisk-Dialplan holt sie nach dem AudioSocket-Ende per CURL ab (gleicher Port, HTTP-Peek) und wählt über den Zaluma-Trunk raus — wie die alten REFER-Transfers des phone_agent. Behandler nicht erreichbar → der Anrufer landet wieder bei Bianca statt in Totenstille. Ohne Einrichtung bleibt der Platzhalter-Weg."],
   ["W-TTS-NAHT (nichts mehr abgehackt)", "31.08.", "Hirn/Mund", "Sätze und Wörter klangen manchmal mittendrin abgehackt: der Satz-Split schnitt hinter Ordnungszahlen und Abkürzungen („im 3. | Stock“, „Bahnhofstr. | Fünf“), der Satz-Deckel kappte Antworten an solchen falschen Satzenden. Jetzt gilt die Grenz-Wache des alten phone_agent (tts_chunks) in der ganzen Kette: nie hinter Ziffer/Abkürzung/Einzelbuchstabe splitten, und Vorab-Sätze unter 20 Zeichen warten auf den Folgesatz statt als Mini-Render zu klingen."],
   ["Verbinde-Imperativ erkannt", "31.08.", "Gespräch", "„Verbinde mich mit Dr. Petzos jetzt.“ fiel durch alle Erkennungs-Formen — das LLM fragte in jedem Anruf aufs Neue „Zu welchem unserer Ärzte darf ich Sie verbinden?“ statt durchzustellen. Jetzt zählt auch der nackte Imperativ („Verbinde mich/uns …“) als Weiterleitungs-Wunsch, und der Namens-Weg greift auch bei verhörten Namen (Petzos/Petzl → Petsas)."],
+  ["W-ANRUFER-CHECK (erkannten Anrufer vorlesen)", "31.08.", "Gespräch", "Findet die Cloud Function den Anrufer über seine übermittelte Rufnummer in der Kartei, liest Bianca bei Buchung, Absage, Verschieben und Auskunft Name + Nummer EINMAL zur Kontrolle vor („Ich habe Sie an Ihrer Rufnummer erkannt: Julia Berger, unter … Stimmt das so?“) statt beides zu erfragen. Ein Ja übernimmt Name (Kartei-Schreibweise, nichts zu buchstabieren), patientId, Geschlecht und die Nummer als rückbestätigt; ein Nein (oder zweimal Unklares) verwirft den Treffer komplett und fragt klassisch. Nie für Dritte („Termin für meine Tochter“), nie nach „ich war noch nie bei Ihnen“, Notaus ANRUFER_CHECK=0."],
 ];
 
 let kTab = "faehig";
