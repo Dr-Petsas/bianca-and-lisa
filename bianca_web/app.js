@@ -986,6 +986,7 @@ const PATCHES = [
   ["W-CALLAUDIO (Anruf-Audio im Portal)", "30.08.", "Kern", "Nach dem Auflegen lädt Bianca den kompletten Anruf (Mitschnitt-Zusammenschnitt) als MP3 in den Firebase Storage — gleicher Pfad wie früher beim ElevenLabs-Agent — und trägt die Download-URL als audioRecordingUrl in den PhoneCall ein: der Abspiel-Knopf der Portal-Anrufliste (CallR) spielt wieder. Notaus: CALL_AUDIO_UPLOAD=0."],
   ["W-ANRUFER (Anrufernummer im Portal)", "30.08.", "Kern", "Das Portal zeigte überall „Unterdrückte Nummer“: AudioSocket übergibt nur eine UUID, die Anrufernummer ging verloren. Jetzt packt der Asterisk-Dialplan die CALLERID-Ziffern in den UUID-Kopf (das DID-Ende bleibt), die Brücke liest sie heraus und die Cloud Function bekommt callerPhone als +E164 — das Portal zeigt wieder Nummer und bei Bestandspatienten den Namen. Unterdrückte Nummern bleiben „anonymous“ wie gehabt."],
   ["W-STUPS-KURZ (weniger Wiederholung)", "31.08.", "Gespräch", "Der erste Stille-Stups wiederholt nur kurz die offene Frage (Nummern-Check ohne Ziffern), erst der zweite bringt den vollen Stand — kein Sermon Sekunden nach der Frage."],
+  ["W-START-RUHE (natürliches Abheben)", "31.08.", "Telefon", "Mindestens 1 s Ruhe zwischen Abheben und Begrüßung (BRIDGE_START_RUHE_S) — kein Sprechen in die noch stehende Leitung, klingt natürlicher."],
 ];
 
 let kTab = "faehig";

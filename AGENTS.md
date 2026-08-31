@@ -561,6 +561,13 @@ Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
  zuhört), und der Stups-Timer zählt erst ab dem ÜBERGANG spielen→leer
  (vorher wurde `fertig_seit` jeden Tick überschrieben, der 4-s-Stups
  feuerte nie). Barge-/Zug-Logs tragen rms+floor für die Feld-Diagnose.
+- **Start-Ruhe (W-START-RUHE 31.08.2026):** Chef: "manchmal hackt es am
+ anfang oder der agent spricht schon aber die leitung steht noch gar nicht
+ ... und es klingt eh natürlicher, wenn der nicht sofort abnimmt." Zwischen
+ Abheben (UUID-Rahmen) und Begrüßung liegt jetzt MINDESTENS
+ `BRIDGE_START_RUHE_S` (Default 1,0 s, compose reicht durch; 0 = aus) —
+ die Laufzeit von `/api/start` (CF-Mandanten-Lookup) wird angerechnet,
+ gewartet wird nur der Rest. Nur die Brücke; Docks unverändert.
 - **Kurze Antworten zählen (W-SIP-KURZJA 30.08.2026 — nicht rückbauen):**
  Live 16:23: Anrufer sagte mehrfach "Ja" auf die Schonmal-Frage — die
  Brücke verwarf alles ("zug verworfen (5 Sprach-Frames)"), zwei Stupse,

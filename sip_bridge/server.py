@@ -121,6 +121,17 @@ if BRIDGE_GAIN <= 0:
 # Notfall: BRIDGE_ECHO=1 = Alt-Verhalten (W-SIP-RAUSCH-Halbduplex).
 BRIDGE_ECHO = (os.environ.get("BRIDGE_ECHO") or "0").strip() == "1"
 
+# W-START-RUHE (31.08.2026, Chef: "manchmal hackt es am anfang oder der
+# agent spricht schon aber die leitung steht noch gar nicht ... und es
+# klingt eh natuerlicher, wenn der nicht sofort abnimmt"): zwischen dem
+# Abheben (UUID-Rahmen der Leitung) und der Begruessung liegt MINDESTENS
+# diese Ruhe. Die Laufzeit von /api/start wird angerechnet — dauert der
+# Mandanten-Lookup ohnehin so lange, kommt nichts obendrauf. 0 = aus.
+try:
+    START_RUHE_S = float(os.environ.get("BRIDGE_START_RUHE_S") or "1.0")
+except ValueError:
+    START_RUHE_S = 1.0
+
 # AudioSocket-Rahmentypen
 K_ENDE = 0x00
 K_UUID = 0x01
@@ -591,6 +602,7 @@ class Anruf:
     # ---- Bianca-Dialog ------------------------------------------------------
 
     async def _start(self) -> bool:
+        t0 = time.monotonic()
         r = await self.http.post("/api/start",
                                  json={"tenant": BRIDGE_TENANT, "did": self.did,
                                        "caller": self.caller})
@@ -602,6 +614,11 @@ class Anruf:
         self.stille_ms = int(d.get("stilleMs") or STILLE_MS_DEFAULT)
         print(f"bruecke-start session={self.session_id} did={self.did or '-'} "
               f"tenant={d.get('tenantId', '')} text={d.get('text', '')[:60]!r}", flush=True)
+        # W-START-RUHE: erst nach einer kurzen Ruhe seit Abheben begruessen —
+        # die /api/start-Zeit zaehlt mit, gewartet wird nur der Rest.
+        rest = START_RUHE_S - (time.monotonic() - t0)
+        if rest > 0:
+            await asyncio.sleep(rest)
         self._spielen(d.get("audioUrl") or "")
         with contextlib.suppress(Exception):
             q = await self.http.get("/api/quittung")
