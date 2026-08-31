@@ -1,7 +1,8 @@
 """Stille-Wächter (kern/stille.py, Chef 27.08.2026): nach ~4 s Funkstille
 ergreift die Stimme selbst das Wort — zurück auf die Job-Spur oder das
-letzte Thema, mit Stand-Ansage (Auftrag, was schon da ist, was fehlt)
-statt bei null anzufangen. Offline, ohne LLM und ohne Netz.
+letzte Thema. W-STUPS-KURZ (31.08.2026): der erste Stups wiederholt nur
+kurz die offene Frage, erst der zweite bringt die Stand-Ansage (Auftrag,
+was schon da ist, was fehlt). Offline, ohne LLM und ohne Netz.
 """
 
 from __future__ import annotations
@@ -57,9 +58,9 @@ def test_kurzlaut_stupst_statt_llm():
     laufen jetzt als Stille-Stups — gedeckelt, offline, nie durchs LLM."""
     sit = _buchungs_sit(frage="telefon")
     z1 = bianca_agent.user_turn(sit, "Hm.")
-    assert z1["text"], "erster Kurz-Laut: Stups mit Stand und offener Frage"
+    assert z1["text"], "erster Kurz-Laut: kurzer Frage-Stups"
     z2 = bianca_agent.user_turn(sit, "Well.")
-    assert z2["text"], "zweiter Kurz-Laut: kurzer Frage-Stups"
+    assert z2["text"], "zweiter Kurz-Laut: Stups mit Stand"
     z3 = bianca_agent.user_turn(sit, "Ähm...")
     assert z3["text"] == "", "nach MAX_STUPSE Stupsen ist Schweigen"
     # Echte Kurz-Antworten bleiben unberuehrt (kein Match).
@@ -92,26 +93,31 @@ def test_anhaengen_verlaengert_letzte_antwort():
 # Bianca: stille_zug
 # ---------------------------------------------------------------------------
 
-def test_stups_nennt_stand_und_offene_frage():
+def test_erster_stups_kurz_nur_offene_frage():
+    """W-STUPS-KURZ (Chef 31.08.2026: "bianca wiederholt etwas zuviel, das
+    nervt"): die Frage lief eben erst — der erste Stups wiederholt sie nur
+    kurz, ohne Stand-Sermon und ohne Begleitsätze."""
     sit = _buchungs_sit()
     out = bianca_agent.stille_zug(sit)
     t = out["text"]
     assert "noch dran" in t.casefold()
-    assert "Terminaufnahme" in t, "Auftrag ansagen — nicht bei null anfangen"
-    assert "Kontrolle" in t, "der Grund gehoert zum Stand"
-    assert "Namen habe ich schon" in t, "was schon da ist, wird genannt"
-    assert "andynummer" in t, "die offene Frage bleibt hoerbar"
+    assert "Terminaufnahme" not in t, "kein Sermon beim ersten Stups"
+    assert "Mir fehlt noch" not in t, "kein Fehlt-Satz beim ersten Stups"
+    assert "andynummer" in t or "ummer" in t, "die offene Frage bleibt hoerbar"
+    assert "brauche ich" not in t.casefold(), "Begleitsaetze kamen schon — nicht nochmal"
     assert sit["messages"][-1]["role"] == "assistant"
     assert t.split()[-1] in sit["messages"][-1]["content"].split(), "Stups steht im Protokoll"
 
 
-def test_zweiter_stups_kurz_und_nie_wortgleich():
+def test_zweiter_stups_bringt_den_stand():
     sit = _buchungs_sit()
     t1 = bianca_agent.stille_zug(sit)["text"]
     t2 = bianca_agent.stille_zug(sit)["text"]
     assert t2 and t2 != t1
-    assert "Terminaufnahme" not in t2, "der Sermon kommt nicht zweimal"
-    assert "andynummer" in t2 or "ummer" in t2, "aber die offene Frage bleibt hoerbar"
+    assert "Terminaufnahme" in t2, "jetzt hilft Orientierung: Auftrag ansagen"
+    assert "Kontrolle" in t2, "der Grund gehoert zum Stand"
+    assert "Namen habe ich schon" in t2, "was schon da ist, wird genannt"
+    assert "andynummer" in t2 or "ummer" in t2, "die offene Frage bleibt hoerbar"
     saetze1 = {x.strip().casefold() for x in t1.split("?") if x.strip()}
     saetze2 = {x.strip().casefold() for x in t2.split("?") if x.strip()}
     assert not (saetze1 & saetze2), "kein Satz wortgleich doppelt"
@@ -132,13 +138,19 @@ def test_nach_reset_wieder_stups():
     assert bianca_agent.stille_zug(sit)["text"], "neues Gehoertes = neues Stups-Budget"
 
 
-def test_telefon_check_wiederholt_die_nummer():
+def test_telefon_check_erst_kurz_dann_nummer():
+    """W-STUPS-KURZ: die Ziffern kamen Sekunden vorher — der erste Stups
+    fragt nur kurz nach, erst der zweite wiederholt die komplette Nummer
+    (dann deterministisch, wortgleich richtig)."""
     sit = _buchungs_sit(frage="telefon_check")
     s = sit["sammler"]
     s["telefonOffen"] = "017760011"
-    t = bianca_agent.stille_zug(sit)["text"]
-    assert "null eins sieben sieben" in t.casefold(), "die Nummer wird deterministisch wiederholt"
-    assert "timmt das so" in t, "die Rueckbestaetigung bleibt eine Frage"
+    t1 = bianca_agent.stille_zug(sit)["text"]
+    assert "null eins" not in t1.casefold(), "kein Ziffern-Readback beim ersten Stups"
+    assert "timmt die Nummer" in t1, "die Rueckbestaetigung bleibt eine Frage"
+    t2 = bianca_agent.stille_zug(sit)["text"]
+    assert "null eins sieben sieben" in t2.casefold(), "zweiter Stups: Nummer deterministisch wiederholt"
+    assert "timmt das so" in t2, "die Rueckbestaetigung bleibt eine Frage"
 
 
 def test_talk_thema_zuerst_dann_jobspur():

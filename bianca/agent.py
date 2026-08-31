@@ -208,7 +208,9 @@ def _stand_ansage(sit: dict) -> str:
         fehlt = _FEHLT_WORT.get(fid, "")
         frage = _kanonische_frage(sit, fid) if fid else ""
         teile = [auftrag + "."] + habe
-        if fehlt:
+        if fehlt and not frage:
+            # "Mir fehlt noch X. Welche X ...?" ist doppelt gemoppelt —
+            # der Fehlt-Satz kommt nur, wenn keine Frage folgt (W-STUPS-KURZ).
             teile.append(f"Mir fehlt noch {fehlt}.")
         if frage:
             teile.append(frage)
@@ -222,9 +224,10 @@ def stille_zug(sit: dict) -> dict[str, Any]:
 
     - Läuft gerade ein Nebenthema (Talk-Floor), knüpft der ERSTE Stups dort
       an; der zweite holt auf die Job-Spur.
-    - Auf der Job-Spur kommt der volle Stand (Auftrag, was schon da ist,
-      offene Frage) — beim wiederholten Stups nur noch kurz die Frage, den
-      Wortlaut variiert der Wiederholungs-Wächter.
+    - W-STUPS-KURZ (Chef 31.08.2026: "bianca wiederholt etwas zuviel, das
+      nervt"): der ERSTE Job-Stups ist KURZ — nur Anrede + offene Frage,
+      denn die Frage lief eben erst. Erst der ZWEITE bringt den vollen
+      Stand (Auftrag, was schon da ist, offene Frage) als Orientierung.
     - Nach MAX_STUPSE Stupsen ohne Antwort: Schweigen (leerer Text), bis der
       Anrufer wieder spricht (user_turn setzt den Zähler zurück).
     """
@@ -234,10 +237,14 @@ def stille_zug(sit: dict) -> dict[str, Any]:
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
 
-    # Nummern-Rückbestätigung bleibt IMMER deterministisch — hier ist die
-    # wortgleiche Wiederholung der Nummer ausdrücklich richtig.
+    # Nummern-Rückbestätigung bleibt IMMER deterministisch. Aber die Ziffern
+    # kamen erst Sekunden vorher — der erste Stups fragt nur kurz nach, erst
+    # der zweite wiederholt die komplette Nummer (W-STUPS-KURZ).
     if fid == "telefon_check" and _s(s.get("telefonOffen")):
-        text = f"{stille.anrede(n)} {gehirn.readback_text(s['telefonOffen'])}"
+        if n <= 1:
+            text = f"{stille.anrede(n)} Stimmt die Nummer so, wie ich sie vorgelesen habe?"
+        else:
+            text = f"{stille.anrede(n)} {gehirn.readback_text(s['telefonOffen'])}"
         stille.anhaengen(sit, text)
         return {"text": text, "book": None}
     if fid == "telefon_alt" and _s(s.get("aktePhone")):
@@ -257,13 +264,16 @@ def stille_zug(sit: dict) -> dict[str, Any]:
             stille.anhaengen(sit, text)
             return {"text": text, "book": None}
 
-    if stille.job_stups_gemerkt(sit):
-        # Stand kam schon einmal — jetzt nur kurz die offene Frage neu
-        # anstoßen (ohne Begleitsätze); den Wortlaut tauscht der
-        # Wiederholungs-Wächter.
-        frage = stille.nur_fragesaetze(_kanonische_frage(sit, fid)) if fid else ""
-        text = " ".join(x for x in [stille.anrede(n), frage] if x)
+    frage = stille.nur_fragesaetze(_kanonische_frage(sit, fid)) if fid else ""
+    if n <= 1 and frage:
+        # Erster Stups: KURZ — nur die offene Frage, ohne Begleitsätze
+        # (nur_fragesaetze). Der volle Stand-Sermon nervt, wenn die Frage
+        # eben erst gestellt wurde; den Wortlaut variiert der
+        # Wiederholungs-Wächter (W-STUPS-KURZ).
+        text = " ".join([stille.anrede(n), frage])
     else:
+        # Zweiter Stups (oder Rückkehr vom Nebenthema): jetzt hilft
+        # Orientierung — Auftrag, was schon da ist, offene Frage.
         text = f"{stille.anrede(n)} {_stand_ansage(sit)}"
     text = _wiederholungs_wache(sit, text) or text
     stille.anhaengen(sit, text)

@@ -663,17 +663,23 @@ Zaluma/SIP hängt ein Kollege später an denselben Sitzungs-Umschlag.
   das Dock ~4 s Funkstille (`STUPS_NACH_S`, gemessen in `web/app.js` und
   `bianca_web/app.js` nach dem eigenen Sprech-Ende), ergreift die Stimme
   selbst das Wort: `POST /api/stille` -> `agent.stille_zug` (deterministisch,
-  ohne LLM, ohne Kalender). Gehirn an, nie bei null: auf der Job-Spur kommt
-  der STAND (Auftrag, was schon eingesammelt ist, offene Frage — Bianca
-  `_stand_ansage` aus dem Sammler, Lisa Auftrag + zuletzt gestellte Frage
-  mit "Meine Frage war:"-Präfix); läuft gerade ein Nebenthema (Talk-Floor),
-  knüpft der ERSTE Stups dort an, der zweite holt auf die Job-Spur.
-  `telefon_check` wiederholt deterministisch die Nummer. Max. `MAX_STUPSE`
-  (2) Stupse in Folge, dann Schweigen; jedes echte Gehörte setzt zurück
-  (`stille.reset` in beiden `user_turn`, Zähler auch im Dock). Jeder Stups
-  läuft durch den Wiederholungs-Wächter — nie wortgleich; der Kurz-Stups
-  spricht nur Frage-Sätze (`nur_fragesaetze`), keine Begleitsätze doppelt.
-  Tests: `tests/test_stille.py`.
+  ohne LLM, ohne Kalender). Gehirn an, nie bei null — aber auch nie als
+  Sermon (**W-STUPS-KURZ 31.08.2026**, Chef: "bianca wiederholt etwas
+  zuviel, das nervt" — live wiederholte der erste Stups den kompletten
+  Stand samt Begleitsätzen und beim Nummern-Check alle Ziffern, obwohl die
+  Frage Sekunden vorher lief): Biancas ERSTER Job-Stups ist KURZ (Anrede +
+  offene Frage via `nur_fragesaetze`, keine Begleitsätze; `telefon_check`:
+  "Stimmt die Nummer so, wie ich sie vorgelesen habe?" OHNE Ziffern), erst
+  der ZWEITE bringt den STAND (Auftrag, was schon eingesammelt ist, offene
+  Frage — `_stand_ansage` aus dem Sammler, dort entfällt "Mir fehlt noch X",
+  wenn direkt die X-Frage folgt; `telefon_check`: komplettes Readback,
+  deterministisch wie gehabt). Lisa unverändert: Auftrag + zuletzt gestellte
+  Frage mit "Meine Frage war:"-Präfix. Läuft gerade ein Nebenthema
+  (Talk-Floor), knüpft der ERSTE Stups dort an, der zweite holt mit dem
+  Stand auf die Job-Spur. Max. `MAX_STUPSE` (2) Stupse in Folge, dann
+  Schweigen; jedes echte Gehörte setzt zurück (`stille.reset` in beiden
+  `user_turn`, Zähler auch im Dock). Jeder Stups läuft durch den
+  Wiederholungs-Wächter — nie wortgleich. Tests: `tests/test_stille.py`.
 - Namens-Wache: Zustände/Prosa ("ich bin ganz aufgeregt", Erzählsätze auf
   die Namensfrage) sind KEINE Namen (`gehirn._KEIN_NAME_RE`, Token-Deckel).
 - Tests: `tests/test_gespraech.py` (offline); Sprech-Probe am echten LLM:

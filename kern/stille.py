@@ -2,12 +2,15 @@
 das Wort (Chef 27.08.2026: "ein stille wächter der nach 4 sekunden stille
 zurück auf die jobspur oder das letzte thema bringt").
 
-Der Stups kommt NIE bei null an: Er sagt an, wo das Gespräch steht — welcher
-Auftrag läuft, was schon eingesammelt ist, was noch fehlt (Bianca: Sammler +
-offene Pflichtfrage; Lisa: Auftrag + zuletzt gestellte Frage). War gerade ein
-Nebenthema am Zug (Talk-Floor), knüpft der ERSTE Stups dort an; der zweite
-holt auf die Job-Spur. Nach MAX_STUPSE Stupsen ohne Antwort schweigt die
-Stimme, bis der Anrufer wieder spricht — kein Endlos-Genöle.
+Der Stups kommt NIE bei null an — aber auch nie als Sermon (W-STUPS-KURZ
+31.08.2026, Chef: "bianca wiederholt etwas zuviel, das nervt"): der ERSTE
+Stups wiederholt nur kurz die offene Frage (sie lief ja eben erst), der
+ZWEITE bringt den vollen Stand — welcher Auftrag läuft, was schon
+eingesammelt ist, was noch fehlt (Bianca: Sammler + offene Pflichtfrage;
+Lisa: Auftrag + zuletzt gestellte Frage). War gerade ein Nebenthema am Zug
+(Talk-Floor), knüpft der ERSTE Stups dort an; der zweite holt auf die
+Job-Spur. Nach MAX_STUPSE Stupsen ohne Antwort schweigt die Stimme, bis der
+Anrufer wieder spricht — kein Endlos-Genöle.
 
 Die 4 Sekunden misst das Browser-Dock (bianca_web/app.js, web/app.js) nach
 dem Ende der eigenen Wiedergabe; der Dienst liefert auf POST /api/stille nur
@@ -43,7 +46,6 @@ def _stand(sit: dict) -> dict:
         st = {}
         sit["stille"] = st
     st.setdefault("stupse", 0)
-    st.setdefault("jobStups", False)
     return st
 
 
@@ -51,7 +53,6 @@ def reset(sit: dict) -> None:
     """Der Anrufer hat wieder gesprochen — Stups-Zaehlung beginnt von vorn."""
     st = _stand(sit)
     st["stupse"] = 0
-    st["jobStups"] = False
 
 
 def stups_zaehlen(sit: dict) -> int:
@@ -60,15 +61,6 @@ def stups_zaehlen(sit: dict) -> int:
     st["stupse"] = int(st.get("stupse") or 0) + 1
     spur.merken(sit, "stille-stups", str(st["stupse"]))
     return st["stupse"]
-
-
-def job_stups_gemerkt(sit: dict) -> bool:
-    """War schon ein Stups mit voller Stand-Ansage? Dann beim naechsten nur
-    noch kurz die offene Frage — nicht denselben Sermon zweimal."""
-    st = _stand(sit)
-    war = bool(st.get("jobStups"))
-    st["jobStups"] = True
-    return war
 
 
 def anrede(n: int) -> str:

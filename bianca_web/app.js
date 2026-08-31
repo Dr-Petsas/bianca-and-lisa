@@ -935,7 +935,7 @@ const TECHNIK = [
 const PATCHES = [
   ["Job+Talk-Schichten", "27.08.", "Gespräch", "Deterministische Termin-Maschine + freie Talk-Schicht mit Gravity; zurück führt genau eine Brücke."],
   ["Wiederholungs-Wächter", "27.08.", "Gespräch", "Pflichtfragen nie wortgleich doppelt; Varianten tragen die Kern-Wörter, Readbacks bleiben unangetastet."],
-  ["Stille-Wächter (Stups)", "27.08.", "Gespräch", "~4 s Funkstille → Bianca meldet Stand + offene Frage; max. 2 Stupse in Folge."],
+  ["Stille-Wächter (Stups)", "27.08.", "Gespräch", "~4 s Funkstille → Bianca meldet sich; max. 2 Stupse in Folge."],
   ["Lokales TTS (Shootout)", "27.08.", "Mund", "Umschalten per TTS_BASE, bewusst OHNE Cloud-Rückfall — Fehler müssen in der Testphase hörbar sein."],
   ["Füller-Platten-Cache", "28.08.", "Mund", "Statische Sätze als WAV auf Platte; Dienststart ~2 s statt ~60 s."],
   ["Satz-Pinning", "28.08.", "Mund", "Feste Fragen im gepinnten RAM (~0,0 s statt 1–2 s); mehrsätzige Antworten satzweise gefügt — ein WAV, keine Naht."],
@@ -985,6 +985,7 @@ const PATCHES = [
   ["Nachhör-Wächter: Extra-Ziffern", "30.08.", "Mund", "Die Engine hängte einem Readback halluzinierte Ziffern an („…4600 46“) — der alte Vergleich prüfte nur auf FEHLENDE Ziffern und ließ das durch. Jetzt muss die gehörte Ziffernfolge EXAKT dem Soll entsprechen, sonst wird neu gerendert."],
   ["W-CALLAUDIO (Anruf-Audio im Portal)", "30.08.", "Kern", "Nach dem Auflegen lädt Bianca den kompletten Anruf (Mitschnitt-Zusammenschnitt) als MP3 in den Firebase Storage — gleicher Pfad wie früher beim ElevenLabs-Agent — und trägt die Download-URL als audioRecordingUrl in den PhoneCall ein: der Abspiel-Knopf der Portal-Anrufliste (CallR) spielt wieder. Notaus: CALL_AUDIO_UPLOAD=0."],
   ["W-ANRUFER (Anrufernummer im Portal)", "30.08.", "Kern", "Das Portal zeigte überall „Unterdrückte Nummer“: AudioSocket übergibt nur eine UUID, die Anrufernummer ging verloren. Jetzt packt der Asterisk-Dialplan die CALLERID-Ziffern in den UUID-Kopf (das DID-Ende bleibt), die Brücke liest sie heraus und die Cloud Function bekommt callerPhone als +E164 — das Portal zeigt wieder Nummer und bei Bestandspatienten den Namen. Unterdrückte Nummern bleiben „anonymous“ wie gehabt."],
+  ["W-STUPS-KURZ (weniger Wiederholung)", "31.08.", "Gespräch", "Der erste Stille-Stups wiederholt nur kurz die offene Frage (Nummern-Check ohne Ziffern), erst der zweite bringt den vollen Stand — kein Sermon Sekunden nach der Frage."],
 ];
 
 let kTab = "faehig";
