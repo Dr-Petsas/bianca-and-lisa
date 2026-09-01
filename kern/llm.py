@@ -139,8 +139,8 @@ def _saetze_bis(text: str, *, min_len: int = 0) -> list[str]:
     return out
 
 
-def _erster_satz_von(text: str) -> str:
-    """Erster abgeschlossener Satz — '' solange keiner bestätigt ist.
+def _erster_satz_ende(text: str) -> int:
+    """Index des Whitespace NACH dem ersten Vorab-Block (≥25 Zeichen), sonst -1.
 
     Die 25-Zeichen-Schwelle gilt vom Textanfang: ein bloßes „Ja." allein
     ist kein Vorab (zu kurz zum Vertonen), „Ja. Das mache ich sehr gerne."
@@ -150,9 +150,15 @@ def _erster_satz_von(text: str) -> str:
     while True:
         ende = _satz_ende(text, ende)
         if ende < 0:
-            return ""
+            return -1
         if ende >= 25:
-            return text[:ende].strip()
+            return ende
+
+
+def _erster_satz_von(text: str) -> str:
+    """Erster abgeschlossener Vorab-Block — '' solange keiner bestätigt ist."""
+    ende = _erster_satz_ende(text)
+    return text[:ende].strip() if ende >= 0 else ""
 
 
 def _deckel_text(text: str) -> str:
@@ -191,10 +197,17 @@ def _neue_stream_saetze(text: str, n_schon: int) -> tuple[list[str], int]:
     nichts Abgehacktes (Genuschel-Lektion 28.08.2026).
     Rückgabe: (neue_bloecke, neuer_zaehler)."""
     if n_schon <= 0:
-        erster = _erster_satz_von(text)
-        if not erster:
+        ende = _erster_satz_ende(text)
+        if ende < 0:
             return [], 0
-        return [erster], max(1, len(_saetze_bis(erster)))
+        erster = text[:ende].strip()
+        # ende zeigt aufs Whitespace NACH dem Satzpunkt. _saetze_bis braucht
+        # dieses Leerzeichen, sonst fehlt der LETZTE Satz des Mehrsatz-Blocks
+        # im Zähler (erster endet auf dem Punkt). Live 01.09.2026: „Ja, genau.
+        # Ich bin die digitale Assistentin…" zählte als 1 → Satz 2 nochmal als
+        # Vorab → Prefix-Mismatch → Full-Reply nochmal („drei mal dasselbe").
+        n = len(_saetze_bis(text[: ende + 1]))
+        return [erster], max(1, n)
     alle = _saetze_bis(text)
     bloecke: list[str] = []
     puffer = ""
@@ -208,6 +221,82 @@ def _neue_stream_saetze(text: str, n_schon: int) -> tuple[list[str], int]:
             verbraucht += offen
             puffer, offen = "", 0
     return bloecke, n_schon + verbraucht
+
+
+def _norm_vorab(satz: str) -> str:
+    """Vergleichsform für Vorab-FIFO: Kleinbuchstaben, ohne Satzzeichen."""
+    return " ".join(re.sub(r"[^a-zäöüß0-9 ]", " ", (satz or "").casefold()).split())
+
+
+def _vorab_saetze(text: str) -> list[str]:
+    """Abgeschlossene Sätze eines Vorab-Chunks (trailing space erzwingt den letzten)."""
+    t = " ".join((text or "").split()).strip()
+    return _saetze_bis(t + " ") if t else []
+
+
+def vorab_fifo_gehabt(fifo: list[str], neu: str) -> bool:
+    """True, wenn neu (als Chunk oder alle seine Sätze) schon in der FIFO liegt."""
+    n_neu = _norm_vorab(neu)
+    if not n_neu:
+        return True
+    gehabt: set[str] = set()
+    for chunk in fifo or []:
+        nc = _norm_vorab(chunk)
+        if nc:
+            gehabt.add(nc)
+        for s in _vorab_saetze(chunk):
+            ns = _norm_vorab(s)
+            if ns:
+                gehabt.add(ns)
+    if n_neu in gehabt:
+        return True
+    teile = [_norm_vorab(s) for s in _vorab_saetze(neu)]
+    return bool(teile) and all(t in gehabt for t in teile)
+
+
+def vorab_fifo_anhaengen(fifo: list[str], neu: str) -> bool:
+    """Chunk an die FIFO hängen, wenn neu. False = Duplikat, nicht angehängt."""
+    san = " ".join((neu or "").split()).strip()
+    if not san or vorab_fifo_gehabt(fifo, san):
+        return False
+    fifo.append(san)
+    return True
+
+
+def rest_nach_vorab(gesprochen: str | list[str], text: str) -> str:
+    """Was nach bereits gespielten Vorab-Chunks noch zu vertonen ist.
+
+    `gesprochen` ist die FIFO (Liste) oder — Rückfall — der zusammengeklebte
+    Prefix-String. Führende Final-Sätze, die in der FIFO schon vorkamen,
+    werden gestrichen; nie Full-Replay (live 01.09.2026)."""
+    if isinstance(gesprochen, list):
+        fifo = [c for c in gesprochen if " ".join(str(c or "").split()).strip()]
+        g = " ".join(fifo).strip()
+    else:
+        g = " ".join((gesprochen or "").split()).strip()
+        fifo = _vorab_saetze(g) if g else []
+    t = " ".join((text or "").split()).strip()
+    if not t:
+        return ""
+    if not g and not fifo:
+        return t
+    if g and t.startswith(g):
+        return t[len(g):].strip()
+    gehabt = {_norm_vorab(c) for c in fifo if _norm_vorab(c)}
+    for c in fifo:
+        for s in _vorab_saetze(c):
+            ns = _norm_vorab(s)
+            if ns:
+                gehabt.add(ns)
+    rest: list[str] = []
+    skipping = True
+    for s in _vorab_saetze(t):
+        n = _norm_vorab(s)
+        if skipping and n and n in gehabt:
+            continue
+        skipping = False
+        rest.append(s)
+    return " ".join(rest).strip()
 
 
 def _satz_stream_an() -> bool:

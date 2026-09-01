@@ -1,15 +1,10 @@
 """Stille-Wächter: nach ~4 Sekunden Funkstille ergreift die Stimme selbst
-das Wort (Chef 27.08.2026: "ein stille wächter der nach 4 sekunden stille
-zurück auf die jobspur oder das letzte thema bringt").
+das Wort (Chef 27.08.2026).
 
-Der Stups kommt NIE bei null an — aber auch nie als Sermon (W-STUPS-KURZ
-31.08.2026, Chef: "bianca wiederholt etwas zuviel, das nervt"): der ERSTE
-Stups wiederholt nur kurz die offene Frage (sie lief ja eben erst), der
-ZWEITE bringt den vollen Stand — welcher Auftrag läuft, was schon
-eingesammelt ist, was noch fehlt (Bianca: Sammler + offene Pflichtfrage;
-Lisa: Auftrag + zuletzt gestellte Frage). War gerade ein Nebenthema am Zug
-(Talk-Floor), knüpft der ERSTE Stups dort an; der zweite holt auf die
-Job-Spur. Nach MAX_STUPSE Stupsen ohne Antwort schweigt die Stimme, bis der
+W-STUPS-PRESENCE 01.09.2026 (phone_agent): der ERSTE Stups ist nur Presence
+(„Sind Sie noch dran?"), der ZWEITE die kurze offene Frage — nie die
+Pflichtfrage sofort wiederholen. Denk-Cue unterdrückt Stups kurz.
+Nach MAX_STUPSE Stupsen ohne Antwort schweigt die Stimme, bis der
 Anrufer wieder spricht — kein Endlos-Genöle.
 
 Die 4 Sekunden misst das Browser-Dock (bianca_web/app.js, web/app.js) nach

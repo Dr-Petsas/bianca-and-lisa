@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, mitschnitt, sprech, spur, stt, tenants, tts, unterbrechung
+from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
@@ -237,77 +237,55 @@ class Dienst:
         geht raus, bevor die Synthese fertig ist — das Dock spielt progressiv,
         der erste Ton kommt nach der Container-TTFA statt nach dem Voll-Render.
 
-        Blocking bleiben: ElevenLabs-Pfad, komplett gecachte Texte (eh sofort)
-        und Ziffern-Saetze (Nachhoer-Waechter braucht das ganze Audio) —
-        Ziffern-SAETZE innerhalb eines Mehr-Satz-Textes rendert der Feeder
-        blocking und schiebt sie verifiziert in den Strom.
+        W-TTS-STOCK (01.09.2026): der GANZE Text geht als EIN /speak-stream
+        an den Container — kein Satz-fuer-Satz mehr. Der GPU-Lock laesst
+        Satz 2 erst nach Satz 1 zu; dazwischen ~0,2 s TTFA-Luecke (bei
+        Ziffern-Retries Sekunden), die Bruecke fuellt mit Stille = hoerbares
+        Stocken. Ein Request = durchgehendes Audio.
 
-        ``karte`` (W-BARGE): der Feeder schreibt je Satz den End-Zeitpunkt im
-        Audio mit (endenMs, kumulierte PCM-Bytes -> ms) — daraus rechnet
-        unterbrechung.eingang() beim Reinsprechen den ungesprochenen Rest."""
+        Blocking bleiben: ElevenLabs-Pfad, komplett gecachte Texte, und
+        JEDE Aeusserung mit Ziffern-Soll (Nachhoer-Waechter braucht das
+        komplette Audio VOR dem Anrufer — nie Retry mitten im Strom).
+
+        ``karte`` (W-BARGE): Ein-Block-Render — der ganze Text ist EIN Satz
+        (wie stimme() ohne Split); Fein-Rest satzweise entfaellt zugunsten
+        lueckenfreier Wiedergabe."""
         if not text or not tts.bereit():
             return "", 0.0
         if not tts.stream_bereit() or tts.im_cache(text):
             return self.stimme(text, karte)
-        # W-TTS-NAHT: geschuetzter Split (nie hinter "3."/"St."/"Nr.") —
-        # sonst rendert der Feeder halbe Phrasen mit Satzende-Prosodie.
-        saetze = sprech.tts_saetze(text) or [text.strip()]
-        frisch = [s for s in saetze if not tts.im_cache(s) and not tts.ziffern_satz(s)]
-        if not frisch:
-            # P1 Readback-Parallelisierung (29.08.2026): Ein Mehr-Satz-Text
-            # aus Cache- und Ziffern-Saetzen lohnt den Strom TROTZDEM, wenn
-            # der ERSTE Satz sofort lieferbar ist — der gewaermte Vorsatz
-            # ("Ich wiederhole die Nummer.") spielt, WAEHREND der Feeder den
-            # Ziffern-Satz blocking rendert und der Nachhoer-Waechter ihn
-            # verifiziert. Erst dann kommt er in den Strom: Sicherheit
-            # unveraendert, gefuehlte Wartezeit nahe null. Beginnt der Text
-            # direkt mit dem Ziffern-Satz, bleibt der bewaehrte Blocking-
-            # Pfad (der erste Ton wartet ohnehin auf die Verifikation).
-            if not (len(saetze) > 1 and tts.im_cache(saetze[0])
-                    and any(tts.ziffern_satz(x) for x in saetze)):
-                return self.stimme(text, karte)
-        if karte is not None:
-            karte["saetze"] = list(saetze)
-            karte["endenMs"] = []
+        # Ziffern irgendwo im Text => komplett blocking (verifiziert), nie
+        # mitten im Stream nachwuerfeln — Live 01.09.: 3 Retries in einem
+        # 3-Satz-Strom => 6 s Stille nach dem Vorsatz.
+        if any(tts.ziffern_satz(s) for s in (sprech.tts_saetze(text) or [text])):
+            return self.stimme(text, karte)
         t0 = time.perf_counter()
         aid, push, fertig = self.audio_stream_anlegen()
+        if karte is not None:
+            karte["saetze"] = [_s(text)]
+            karte["endenMs"] = []
 
         def feeder() -> None:
             t1 = time.perf_counter()
             erster: float | None = None
             gesamt = 0
             try:
-                for satz in saetze:
-                    stand = gesamt
-                    try:
-                        if tts.im_cache(satz) or tts.ziffern_satz(satz):
-                            blob = tts.engine().speak(satz)
-                            if blob and blob[:4] == b"RIFF" and len(blob) > 44:
-                                push(blob[44:])
-                                gesamt += len(blob) - 44
-                                if erster is None:
-                                    erster = time.perf_counter() - t1
-                        else:
-                            for stueck in tts.engine().speak_stream(satz):
-                                push(stueck)
-                                gesamt += len(stueck)
-                                if erster is None:
-                                    erster = time.perf_counter() - t1
-                        if karte is not None:
-                            # Kein Ton fuer diesen Satz (None) = gilt beim
-                            # Barge als ungesprochen — nie Inhalt verlieren.
-                            karte["endenMs"].append(
-                                gesamt * 1000 // (tts.PCM_RATE * 2) if gesamt > stand else None)
-                    except Exception as e:
-                        # Testphase: Fehler hoerbar lassen (Satz fehlt im
-                        # Audio), aber die restlichen Saetze noch sprechen.
-                        if karte is not None:
-                            karte["endenMs"].append(None)
-                        print(f"{self.name}-stream satz-fail {satz[:40]!r} {e}", flush=True)
+                for stueck in tts.engine().speak_stream(text):
+                    push(stueck)
+                    gesamt += len(stueck)
+                    if erster is None:
+                        erster = time.perf_counter() - t1
+                if karte is not None:
+                    karte["endenMs"].append(
+                        gesamt * 1000 // (tts.PCM_RATE * 2) if gesamt else None)
+            except Exception as e:
+                if karte is not None and not karte.get("endenMs"):
+                    karte["endenMs"].append(None)
+                print(f"{self.name}-stream fail {text[:40]!r} {e}", flush=True)
             finally:
                 fertig()
                 print(f"{self.name}-stream ttfa={erster if erster is not None else -1:.2f}s "
-                      f"gesamt={time.perf_counter() - t1:.2f}s saetze={len(saetze)}", flush=True)
+                      f"gesamt={time.perf_counter() - t1:.2f}s saetze=1", flush=True)
 
         threading.Thread(target=feeder, daemon=True).start()
         return f"/api/audio-stream/{aid}.wav", round(time.perf_counter() - t0, 2)
@@ -456,17 +434,20 @@ class Dienst:
         else:
             text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
         # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
+        # Sicherheitsnetz: auch bei Prefix-Mismatch (Zähler/Sanitize) nie den
+        # ganzen Text nochmal — nur Sätze, die im Vorab noch nicht kamen.
         gesprochen = _s(sit.pop("_vorabText", ""))
         vorab_url = _s(sit.pop("_vorabUrl", ""))
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        if gesprochen and text.startswith(gesprochen):
-            rest = text[len(gesprochen):].strip()
+        if gesprochen:
+            rest = llm.rest_nach_vorab(gesprochen, text)
+            if rest != text[len(gesprochen):].strip() and not text.startswith(gesprochen):
+                print(f"{self.name}-vorab Rest per Satz-Abgleich "
+                      f"({len(gesprochen)}→{len(rest)} Zeichen)", flush=True)
             url, tts_s = self.stimme_stream(rest, karte) if rest else ("", 0.0)
             unterbrechung.merken(sit, url=url, karte=karte, text=text,
                                  vorab_text=gesprochen, vorab_url=vorab_url)
         else:
-            if gesprochen:
-                print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
             url, tts_s = self.stimme_stream(text, karte)
             unterbrechung.merken(sit, url=url, karte=karte, text=text)
         # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
@@ -514,11 +495,11 @@ class Dienst:
             antwort["modus"] = str(sammler.get("modus") or "")
         antwort.update(self._stille_feld(sit))
         # W-MITSCHNITT (30.08.2026): Zug samt Audio sofort auf die Platte
-        # (.data/anrufe) — die Anrufliste im Dock lebt davon. Die Vorab-Satz-
-        # URLs (P5) gehören nur dazu, wenn ihr Text wirklich der Anfang der
-        # Antwort war — verworfene Vorabs würden das Audio doppeln.
+        # (.data/anrufe) — die Anrufliste im Dock lebt davon. Vorab-Satz-URLs
+        # (P5) gehören dazu, sobald Vorab-Text lief — der Rest-Abgleich
+        # (rest_nach_vorab) verhindert Doppeln im Audio, die Dateien bleiben.
         satz_liste = sit.pop("_vorabUrlListe", None) or []
-        vorab_urls = [u for u in satz_liste if u] if (gesprochen and text.startswith(gesprochen)) else []
+        vorab_urls = [u for u in satz_liste if u] if gesprochen else []
         mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
                        timings=timings, waechter=waechter, audio_url=url,
                        vorab_urls=vorab_urls, book=reply.get("book"),

@@ -140,13 +140,15 @@ def slots_zeile(offered: list | None) -> str:
     )
 
 
-def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: str = "") -> dict[str, Any]:
+def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: str = "",
+                exclude_isos: list | set | None = None) -> dict[str, Any]:
     if not _s(ctx.get("patientId")) and not _s(ctx.get("patientName")):
         return {"ok": False, "spoken": NO_CONTEXT, "regie": NO_CONTEXT_REGIE}
     if not _s(ctx.get("visitMotiveId")) and not _s(ctx.get("visitMotiveName")):
         ctx["visitMotiveName"] = "Kontrolluntersuchung"
     wish = parse_slot_wish(wish_text) if wish_text else None
     vorrat = list(ctx.get("slotVorrat") or [])
+    gesperrt = list(exclude_isos or []) or list(ctx.get("slotGesperrt") or [])
     nachladen = not vorrat
     if wish and wish.get("date") and vorrat:
         if not any(str(iso).startswith(wish["date"]) for iso in vorrat):
@@ -163,7 +165,7 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
         if found.get("ok"):
             vorrat = _iso_liste(found.get("slots") or [])
             ctx["slotVorrat"] = vorrat
-    picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso)
+    picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso, exclude_isos=gesperrt)
     slots = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     return {
         "ok": True,
@@ -308,9 +310,21 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "regie": "Nummer erfragen, dann erneut buchen.",
         }
     meldung = _s((data or {}).get("message")) if isinstance(data, dict) else ""
+    # Diagnose (W-BOOK-RETRY / Thaler 01.09.2026): calendarId/Motiv/ISO mitloggen,
+    # damit "not available" trotz frischem Angebot nachvollziehbar bleibt.
+    print(
+        f"book_slot fail status={status} message={meldung!r} "
+        f"iso={iso!r} calendarId={body.get('calendarId')!r} "
+        f"visitMotiveId={body.get('visitMotiveId')!r} patientId={patient_id!r}",
+        flush=True,
+    )
     if "not available" in meldung.lower():
         # Der Kalender sagt WIRKLICH "belegt": Alternativen anbieten.
-        alt = offer_slots(tenant, ctx, exclude_iso=iso)
+        # slotGesperrt aus dem Kontext (Sitzung) + die gerade gescheiterte ISO.
+        alt = offer_slots(
+            tenant, ctx, exclude_iso=iso,
+            exclude_isos=ctx.get("slotGesperrt") or [],
+        )
         return {
             "ok": False,
             "slotTaken": True,
@@ -320,7 +334,6 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         }
     # Alles andere (Validierung, Patient/Kalender nicht gefunden, 500):
     # ehrlich bleiben statt "Termin ist weg" zu behaupten.
-    print(f"book_slot fail status={status} message={meldung!r}", flush=True)
     return {
         "ok": False,
         "spoken": "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.",

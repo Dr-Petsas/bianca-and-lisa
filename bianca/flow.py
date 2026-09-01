@@ -274,6 +274,8 @@ def _ctx_bauen(sit: dict) -> dict:
         ctx["privateInsurance"] = s["versicherung"] == "privat"
     if sit.get("slotVorrat"):
         ctx["slotVorrat"] = list(sit["slotVorrat"])
+    if sit.get("slotGesperrt"):
+        ctx["slotGesperrt"] = list(sit["slotGesperrt"])
     return ctx
 
 
@@ -351,6 +353,11 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     sit.pop("angebotKalender", None)  # neues Angebot => neue Bindung
     ctx = _ctx_bauen(sit)
     vorrat = list(sit.get("slotVorrat") or [])
+    # Gescheiterte Buchungs-ISOs nie wieder anbieten (W-BOOK-RETRY 01.09.2026).
+    gesperrt = sit.get("slotGesperrt") or []
+    if gesperrt:
+        keys = {str(g)[:16] for g in gesperrt}
+        vorrat = [v for v in vorrat if str(v)[:16] not in keys]
     wish = s["wunsch"]
     egal = not a.get("calendarId")
 
@@ -365,6 +372,9 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         )
         if found.get("ok"):
             frisch = kal._iso_liste(found.get("slots") or [])
+            if gesperrt:
+                keys = {str(g)[:16] for g in gesperrt}
+                frisch = [v for v in frisch if str(v)[:16] not in keys]
             if frisch:
                 sit["slotVorrat"] = frisch
                 ctx["slotVorrat"] = list(frisch)
@@ -378,6 +388,9 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     if nachladen:
         found = _laden()
         vorrat = list(sit.get("slotVorrat") or [])
+        if gesperrt:
+            keys = {str(g)[:16] for g in gesperrt}
+            vorrat = [v for v in vorrat if str(v)[:16] not in keys]
         if not found.get("ok") and not vorrat:
             s["phase"] = ""
             return {"text": (
@@ -386,13 +399,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             )}
 
     dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
-    picked = pick_slots(vorrat, wish=wish, dringend=dringend)
+    picked = pick_slots(vorrat, wish=wish, dringend=dringend, exclude_isos=gesperrt)
     if wish and not picked["wishMatched"] and not nachladen:
         # Der Vorrat passt nicht zum Wunsch (z. B. "nächste Woche"): einmal
         # gezielt ab Wunschdatum nachladen, bevor wir Ausweichzeiten anbieten.
         _laden()
         vorrat = list(sit.get("slotVorrat") or [])
-        picked = pick_slots(vorrat, wish=wish, dringend=dringend)
+        if gesperrt:
+            keys = {str(g)[:16] for g in gesperrt}
+            vorrat = [v for v in vorrat if str(v)[:16] not in keys]
+        picked = pick_slots(vorrat, wish=wish, dringend=dringend, exclude_isos=gesperrt)
 
     # Merken, aus WELCHEM Kalender dieses Angebot kommt: die Buchung bindet
     # sich daran, nicht an spätere Sammler-Umbauten (Vorfall 27.08.2026:
@@ -536,6 +552,8 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     if res.get("ok") and (res.get("booked") or res.get("dryRun")):
         s["phase"] = "gebucht"
         s["frage"] = ""
+        sit.pop("buchIntent", None)
+        sit.pop("bookFails", None)
         text = res.get("spoken") or "Der Termin ist eingetragen."
         if res.get("booked"):
             neu = telefon.normaliert(s["telefon"]) if s["telefon"] else ""
@@ -594,11 +612,41 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
     if res.get("slotTaken"):
-        sit["offered"] = res.get("slots") or []
-        s["phase"] = "angebot"
-        s["frage"] = "slotwahl"
+        # W-BOOK-RETRY 01.09.2026: phone_agent-Deckel — max. 2 slotTaken,
+        # gescheiterte ISOs sperren, Intent merken (kein zweites Confirm).
+        fail_iso = _s(s.get("slotIso")) or _s(res.get("slotIso"))
+        gesperrt = list(sit.get("slotGesperrt") or [])
+        if fail_iso and fail_iso not in gesperrt:
+            gesperrt.append(fail_iso)
+        sit["slotGesperrt"] = gesperrt
+        keys = {str(g)[:16] for g in gesperrt}
+        sit["slotVorrat"] = [
+            v for v in (sit.get("slotVorrat") or []) if str(v)[:16] not in keys
+        ]
+        fails = int(sit.get("bookFails") or 0) + 1
+        sit["bookFails"] = fails
+        sit["buchIntent"] = True  # Anrufer hat schon Ja gesagt
         s["slotIso"] = ""
-        return {"text": res.get("spoken") or "Der Termin ist gerade weg — ich schaue nach Alternativen.", "book": book}
+        if fails >= 2:
+            s["phase"] = "fertig"
+            s["frage"] = ""
+            sit["offered"] = []
+            verwalten.rueckruf_notiz(sit)
+            return {
+                "text": (
+                    "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
+                    "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
+                    "und die Praxis meldet sich gleich bei Ihnen mit einem Termin. "
+                    "Kann ich sonst noch etwas für Sie tun?"
+                ),
+                "book": book,
+            }
+        # Frisches Angebot OHNE die gesperrten ISOs.
+        ang = _angebot(sit, melde)
+        txt = _s(ang.get("text"))
+        if txt and not txt.lower().startswith("der termin ist gerade weg"):
+            txt = "Der Termin ist gerade weg. " + txt
+        return {"text": txt or (res.get("spoken") or "Der Termin ist gerade weg."), "book": book}
     s["phase"] = ""
     gesagt = _s(res.get("spoken"))
     if "nummer" in gesagt.lower() or "handy" in gesagt.lower():
@@ -722,6 +770,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _buchen(sit, melde)
         if gehirn.ist_nein(t):
             sit.pop("bestaetigenUnklar", None)
+            sit.pop("buchIntent", None)
             s["phase"] = ""
             s["slotIso"] = ""
             return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
@@ -730,6 +779,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         iso = _slot_wahl(t, sit["offered"])
         if iso:
             s["slotIso"] = iso
+            # Nach Ja + slotTaken: Intent steht — Alternativ-Slot direkt buchen
+            # (kein zweites "Dann halte ich fest…", W-BOOK-RETRY 01.09.2026).
+            if sit.get("buchIntent"):
+                return _buchen(sit, melde)
             return _readback(sit)
 
     neu = gehirn.einsammeln(sit, t)
@@ -787,6 +840,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             s["slotIso"] = ""
             sit["offered"] = []
             sit.pop("angebotKalender", None)
+            sit.pop("buchIntent", None)
             s["frage"] = "wunsch"
             return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
         elif (s["phase"] == "bestaetigen" and not gehirn.ist_zwischenfrage(t)

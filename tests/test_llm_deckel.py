@@ -122,3 +122,59 @@ def test_neue_stream_saetze_kurzer_schlusssatz_bleibt_offen():
     # Haengt nur ein Kurz-Satz am Ende, bleibt er ungemeldet — er laeuft
     # spaeter im Rest-Render mit (nie doppelt, nie verloren).
     assert neu == [] and n == 1
+
+
+def test_neue_stream_saetze_mehrsatz_block_zaehlt_alle():
+    """Live 01.09.2026: kurzes „Ja, genau." + langer Satz als EIN Vorab-Block
+    — der Zähler muss BEIDE Sätze zählen, sonst kommt Satz 2 nochmal."""
+    t = ("Ja, genau. Ich bin die digitale Assistentin der Praxis und helfe "
+         "Ihnen gerne bei Terminen oder Fragen. Darf ich Sie schon "
+         "weiterhelfen, zum Beispiel bei der Terminvereinbarung? ")
+    neu, n = llm._neue_stream_saetze(t, 0)
+    assert neu == [
+        "Ja, genau. Ich bin die digitale Assistentin der Praxis und helfe "
+        "Ihnen gerne bei Terminen oder Fragen."
+    ]
+    assert n == 2  # nicht 1 — sonst Doppel-Vorab des Mittelsatzes
+    neu2, n2 = llm._neue_stream_saetze(t, n)
+    assert neu2 == [
+        "Darf ich Sie schon weiterhelfen, zum Beispiel bei der Terminvereinbarung?"
+    ]
+    assert n2 == 3
+    # Streaming-Simulation: nie denselben Satz zweimal als Vorab.
+    n_saetze = 0
+    teile = []
+    for i in range(1, len(t) + 1):
+        neu_i, n_neu = llm._neue_stream_saetze(t[:i], n_saetze)
+        if neu_i:
+            n_saetze = n_neu
+            teile.extend(neu_i)
+    assert teile == [
+        "Ja, genau. Ich bin die digitale Assistentin der Praxis und helfe "
+        "Ihnen gerne bei Terminen oder Fragen.",
+        "Darf ich Sie schon weiterhelfen, zum Beispiel bei der Terminvereinbarung?",
+    ]
+
+
+def test_rest_nach_vorab_bei_doppel_mittelsatz():
+    """Sicherheitsnetz: wenn der alte Bug den Mittelsatz doppelt im Vorab
+    hatte, nur noch die fehlende Schlussfrage nachlegen — nie Full-Replay."""
+    gesprochen = (
+        "Ja, genau. Ich bin die digitale Assistentin der Praxis und helfe "
+        "Ihnen gerne bei Terminen oder Fragen. Ich bin die digitale "
+        "Assistentin der Praxis und helfe Ihnen gerne bei Terminen oder Fragen."
+    )
+    text = (
+        "Ja, genau. Ich bin die digitale Assistentin der Praxis und helfe "
+        "Ihnen gerne bei Terminen oder Fragen. Darf ich Sie schon "
+        "weiterhelfen, zum Beispiel bei der Terminvereinbarung?"
+    )
+    rest = llm.rest_nach_vorab(gesprochen, text)
+    assert rest == (
+        "Darf ich Sie schon weiterhelfen, zum Beispiel bei der "
+        "Terminvereinbarung?"
+    )
+    assert not text.startswith(gesprochen)  # exakter Prefix scheitert
+    # Sauberer Prefix → Suffix wie bisher.
+    g2 = text[: text.index("Darf")].strip()
+    assert llm.rest_nach_vorab(g2, text).startswith("Darf ich")

@@ -79,6 +79,21 @@ def test_alle_varianten_verbrannt_streicht_die_frage():
     assert raus == "Gut.", "alle Formen gehoert -> streichen, Eskalation uebernimmt"
 
 
+def test_wache_restored_nie_das_original():
+    """W-REPEAT 01.09.2026: `or text` holte früher die wortgleiche Frage zurück."""
+    sit = _buchungs_sit("telefon")
+    sit["messages"] = [
+        {"role": "assistant", "content": TELEFON_FRAGE},
+    ]
+    # Varianten verbrennen
+    sit["frageForm"] = {"telefon": 99}
+    formen = list(gehirn.FRAGE_VARIANTEN["telefon"])
+    sit["messages"] = [{"role": "assistant", "content": x} for x in [TELEFON_FRAGE] + formen]
+    raus = bianca_agent._wiederholung_oder_presence(sit, TELEFON_FRAGE)
+    assert raus != TELEFON_FRAGE
+    assert "noch dran" in raus.casefold() or "andynummer" in raus
+
+
 def test_telefon_check_bleibt_unangetastet():
     sit = _sit()
     text = "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null. Stimmt das so?"

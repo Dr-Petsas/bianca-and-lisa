@@ -88,7 +88,8 @@ def stille_zug(session_doc: dict) -> dict[str, Any]:
         session_doc, text,
         frueher=wiederholung.letzte_antworten(session_doc.get("messages") or []),
     )
-    text = ent or text
+    # Nie Original zurückholen (W-REPEAT 01.09.2026).
+    text = ent if ent else stille.anrede(n)
     stille.anhaengen(session_doc, text)
     return {"text": text, "book": None}
 

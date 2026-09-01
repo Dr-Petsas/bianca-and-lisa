@@ -2294,6 +2294,42 @@ def test_egal_auf_die_zeitfrage_ist_eine_antwort():
     assert s3["wunsch"] is None
 
 
+def test_yeah_zaehlt_als_ja():
+    """Live 01.09. Rebrovic: 'Yeah.' auf die Bestätigung wurde nicht erkannt."""
+    assert gehirn.ist_ja("Yeah.")
+    assert gehirn.ist_ja("Yeah")
+    assert gehirn.ist_ja("yea")
+    assert gehirn.ist_ja("Yes.")
+
+
+def test_wunsch_gleich_heute_noch_ohne_nachfrage():
+    """Live 01.09. Rebrovic: 'Am liebsten gleich' → nochmal vormittags/nachmittags."""
+    from datetime import datetime
+    from kern.slots import TZ
+    heute = datetime.now(TZ).date().isoformat()
+
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "wunsch", "warSchonMal": True})
+    neu = gehirn.einsammeln(sit, "Am liebsten gleich.")
+    assert "wunsch" in neu
+    assert s["wunsch"] and s["wunsch"].get("date") == heute
+
+    sit2 = _sit()
+    s2 = gehirn.sammler(sit2)
+    s2.update({"modus": "buchen", "frage": "wunsch"})
+    neu2 = gehirn.einsammeln(sit2, "Am besten heute noch, weil ich Schmerzen habe.")
+    assert "wunsch" in neu2
+    assert s2["wunsch"].get("date") == heute
+
+    # "ganz gleich" bleibt egal / keine Zeit
+    sit3 = _sit()
+    s3 = gehirn.sammler(sit3)
+    s3.update({"modus": "buchen", "frage": "wunsch"})
+    gehirn.einsammeln(sit3, "Das ist mir ganz gleich.")
+    assert s3["wunsch"] == {}
+
+
 # --- Behandler-Wahl fuer Neupatienten (Chef 29.08.2026) ---------------------
 
 def test_neupatient_bekommt_behandler_wahl():
@@ -2414,9 +2450,10 @@ def test_dienst_traegt_stille_feld():
 
 
 def test_readback_text_ist_dreisatzform():
-    """P1 Readback-Parallelisierung: Vorsatz und Schlussfrage sind eigene,
-    warmbare Saetze (in feste_saetze), der Ziffern-Satz beginnt GROSS —
-    nur so trennt der Satz-Split in stimme_stream ihn vom Vorsatz ab."""
+    """Readback bleibt Dreisatz: Vorsatz und Schlussfrage sind eigene,
+    warmbare Saetze (feste_saetze) — der Blocking-Pfad (_sprech_blob)
+    pinned sie aus dem Cache, der Ziffern-Satz wird verifiziert dazwischen.
+    W-TTS-STOCK: Mid-Stream-Parallelisierung ist aus; die Form bleibt."""
     t = gehirn.readback_text("01776004600")
     saetze = re.split(r"(?<=[.!?]) +(?=[A-ZÄÖÜ])", t)
     assert saetze[0] == "Ich wiederhole die Nummer."
@@ -2610,3 +2647,124 @@ def test_anrufer_check_eskalation_verwirft_treffer():
         assert z3 and "schon einmal bei uns" in z3["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
+
+
+# --- W-BOOK-RETRY 01.09.2026: slotTaken-Deckel -----------------------------
+
+def _buch_sit(slot_iso: str) -> dict:
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung",
+        "warSchonMal": False, "grund": "akute Beschwerden/Notfall",
+        "motivName": "Akute Beschwerden / Notfall", "wunsch": {},
+        "vorname": "Schacklin", "nachname": "Rebrovic", "buchstabiert": True,
+        "telefon": "016090356870", "telefonOk": True,
+        "slotIso": slot_iso,
+        "arzt": {"typ": "genannt", "calendarId": "cal-thaler", "calendarName": "Thaler"},
+    })
+    sit["offered"] = [{"iso": slot_iso, "spoken": "heute um elf Uhr dreißig"}]
+    sit["angebotKalender"] = {"calendarId": "cal-thaler", "calendarName": "Thaler"}
+    sit["slotVorrat"] = [
+        slot_iso,
+        "2026-09-03T11:00:00+02:00",
+        "2026-09-03T14:00:00+02:00",
+        "2026-09-04T09:00:00+02:00",
+    ]
+    return sit
+
+
+def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
+    """Live 01.09. Rebrovic: nach Ja kam 'gerade weg' ×5. Max. 2 Fails, dann
+    Notiz — gescheiterte ISO nie wieder anbieten."""
+    iso1 = "2026-09-03T10:00:00+02:00"
+    iso2 = "2026-09-03T11:00:00+02:00"
+    sit = _buch_sit(iso1)
+    notizen: list = []
+    angebote: list = []
+
+    def _fail_book(tenant, ctx, slot_iso=""):
+        return {
+            "ok": False, "slotTaken": True, "slotIso": slot_iso,
+            "spoken": "Der Termin ist gerade weg.",
+            "slots": [{"iso": iso2, "spoken": "heute um elf"}],
+        }
+
+    echt_book = flow.kal.book_slot
+    echt_notiz = flow.verwalten._notiz_schreiben
+    echt_find = flow.kal.find_slots
+    flow.kal.book_slot = _fail_book
+    flow.verwalten._notiz_schreiben = (
+        lambda sit, **kw: notizen.append(kw) or None
+    )
+    # _angebot soll aus dem lokalen Vorrat schöpfen, nicht die CF anrufen.
+    flow.kal.find_slots = lambda *a, **k: {"ok": False}
+
+    try:
+        r1 = flow._buchen(sit)
+        assert sit["bookFails"] == 1
+        assert sit["buchIntent"] is True
+        assert iso1 in sit["slotGesperrt"]
+        assert iso1[:16] not in {str(v)[:16] for v in sit.get("slotVorrat") or []}
+        assert r1 and "gerade weg" in r1["text"].lower()
+        assert gehirn.sammler(sit)["phase"] == "angebot"
+        angebote.append(r1["text"])
+
+        # Zweite Wahl mit Intent: direkt buchen, KEIN Confirm-Readback.
+        s = gehirn.sammler(sit)
+        s["slotIso"] = iso2
+        # offered muss die Alternativen tragen
+        sit["offered"] = [{"iso": iso2, "spoken": "heute um elf"}]
+        r_pick = flow.zug(sit, "Dann nehme ich elf Uhr.")
+        # zug mit buchIntent + klarer Wahl -> _buchen -> zweiter Fail -> Notiz
+        assert sit["bookFails"] == 2
+        assert r_pick and "notiz" in r_pick["text"].lower()
+        assert "praxis meldet sich" in r_pick["text"].lower()
+        assert gehirn.sammler(sit)["phase"] == "fertig"
+        assert notizen, "Rueckruf-Notiz muss geschrieben sein"
+        assert "Dann halte ich fest" not in (r_pick.get("text") or "")
+    finally:
+        flow.kal.book_slot = echt_book
+        flow.verwalten._notiz_schreiben = echt_notiz
+        flow.kal.find_slots = echt_find
+
+
+def test_book_retry_nach_ja_fail_bucht_alternativ_ohne_zweites_confirm():
+    """Nach erstem Ja+Fail: gewählte Alternative wird ohne 'Soll ich eintragen?' gebucht."""
+    iso1 = "2026-09-03T10:00:00+02:00"
+    iso2 = "2026-09-03T11:00:00+02:00"
+    sit = _buch_sit(iso1)
+    sit["buchIntent"] = True
+    sit["bookFails"] = 1
+    sit["slotGesperrt"] = [iso1]
+    sit["offered"] = [
+        {"iso": iso2, "spoken": "heute um elf Uhr"},
+        {"iso": "2026-09-04T09:00:00+02:00", "spoken": "übermorgen um neun"},
+    ]
+    gehirn.sammler(sit)["phase"] = "angebot"
+    gehirn.sammler(sit)["frage"] = "slotwahl"
+    gehirn.sammler(sit)["slotIso"] = ""
+
+    gebucht: list = []
+
+    def _ok_book(tenant, ctx, slot_iso=""):
+        gebucht.append(slot_iso)
+        return {
+            "ok": True, "booked": True, "slotIso": slot_iso,
+            "appointmentId": "ok1",
+            "spoken": f"Der Termin ist fest eingetragen.",
+        }
+
+    echt = flow.kal.book_slot
+    echt_note = flow.kal.note_appointment
+    flow.kal.book_slot = _ok_book
+    flow.kal.note_appointment = lambda *a, **k: {"ok": True}
+    try:
+        r = flow.zug(sit, "Elf Uhr bitte.")
+        assert gebucht and iso2 in gebucht[0]
+        assert r and "fest eingetragen" in r["text"]
+        assert "Soll ich" not in r["text"] and "halte ich fest" not in r["text"]
+        assert not sit.get("buchIntent")
+    finally:
+        flow.kal.book_slot = echt
+        flow.kal.note_appointment = echt_note

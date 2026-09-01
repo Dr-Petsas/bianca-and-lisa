@@ -323,17 +323,22 @@ def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
     """Dienst.stimme_stream: mit stream-faehigem Container kommt SOFORT eine
     /api/audio-stream/-URL, der Feeder fuellt den Slot im Hintergrund und
     audio_stream_iter liefert Header + alle Stuecke. Ohne Stream-Faehigkeit
-    faellt alles auf den blocking Pfad (/api/audio/) zurueck."""
+    faellt alles auf den blocking Pfad (/api/audio/) zurueck.
+
+    W-TTS-STOCK: Mehrsatz-Text = EIN speak_stream (ganzer Text), nicht
+    Satz-fuer-Satz — sonst Stocken an der Naht."""
     from kern import dienst as dienst_mod
 
     d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     pcm = (1500).to_bytes(2, "little", signed=True) * 8
+    rufe: list[str] = []
 
     class _EngineFake:
         def speak(self, text):
             return tts._wav_header(len(pcm), tts.PCM_RATE) + pcm
 
         def speak_stream(self, text):
+            rufe.append(text)
             yield pcm[:6]
             yield pcm[6:]
 
@@ -343,12 +348,14 @@ def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
     tts.im_cache = lambda text: False
     try:
         tts.stream_bereit = lambda: True
-        url, _ = d.stimme_stream("Passt Ihnen der Termin am Montag? Oder lieber Dienstag?")
+        text = "Passt Ihnen der Termin am Montag? Oder lieber Dienstag?"
+        url, _ = d.stimme_stream(text)
         assert url.startswith("/api/audio-stream/") and url.endswith(".wav")
         gen = d.audio_stream_iter(url.rsplit("/", 1)[1])
         teile = list(gen)
         assert teile[0][:4] == b"RIFF", "erstes Stueck ist der offene Header"
-        assert b"".join(teile[1:]) == pcm + pcm, "beide Saetze vollstaendig im Strom"
+        assert b"".join(teile[1:]) == pcm, "ein Stream, ganzer Text"
+        assert rufe == [text], "kein Satz-Split mehr im Stream"
         assert d.audio_stream_iter("gibtsnicht.wav") is None
 
         tts.stream_bereit = lambda: False
@@ -358,15 +365,15 @@ def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
         (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
 
 
-def test_stimme_stream_ziffern_satz_bleibt_verifiziert_blocking():
-    """Ein Readback-Satz MITTEN im Text laeuft weiter durch speak() (mit
-    Nachhoer-Waechter) und wird als fertiges Stueck in den Strom gelegt —
-    gestreamt wird nur der Rest."""
+def test_stimme_stream_ziffern_aeusserung_komplett_blocking():
+    """W-TTS-STOCK: Ziffern irgendwo im Text => KOMPLETT blocking (speak/
+    Nachhoer-Waechter), nie Mid-Stream-Retry. Live 01.09.: 3 Retries in
+    einem 3-Satz-Strom => 6 s Stille nach dem Vorsatz."""
     from kern import dienst as dienst_mod
 
     d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     pcm = (1500).to_bytes(2, "little", signed=True) * 8
-    rufe: list[str] = []
+    rufe: list[tuple[str, str]] = []
 
     class _EngineFake:
         def speak(self, text):
@@ -386,24 +393,18 @@ def test_stimme_stream_ziffern_satz_bleibt_verifiziert_blocking():
         url, _ = d.stimme_stream(
             "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null. "
             "Stimmt das so?")
-        assert url.startswith("/api/audio-stream/")
-        list(d.audio_stream_iter(url.rsplit("/", 1)[1]))  # Feeder zu Ende laufen lassen
-        arten = {art for art, _ in rufe}
-        assert ("speak", "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null.") in rufe
-        assert any(art == "stream" for art in arten), "der Nicht-Ziffern-Satz streamt"
-        for art, text in rufe:
-            if "null eins" in text:
-                assert art == "speak", "Readback NIE am Waechter vorbei streamen"
+        assert url.startswith("/api/audio/"), "Ziffern-Aeusserung nie streamen"
+        assert any(art == "speak" for art, _ in rufe)
+        assert not any(art == "stream" for art, _ in rufe)
     finally:
         (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
 
 
-def test_stimme_stream_readback_vorsatz_spielt_sofort():
-    """P1 Readback-Parallelisierung (29.08.2026): Vorsatz und Schlussfrage
-    liegen im Pin-Cache, der Ziffern-Satz wird verifiziert nachgeschoben —
-    der Text streamt TROTZDEM (frueher: komplett blocking, 1,5-2,3 s bis
-    zum ersten Ton). Ein Text, der direkt mit dem Ziffern-Satz beginnt,
-    bleibt auf dem bewaehrten Blocking-Pfad."""
+def test_stimme_stream_readback_mit_ziffern_blocking():
+    """P1 Mid-Stream-Parallelisierung ist aus (W-TTS-STOCK): Readback mit
+    Ziffern-Satz bleibt komplett auf dem Blocking-Pfad — Vorsatz im Cache
+    lohnt den Strom nicht mehr, weil der Ziffern-Retry die Luecke hoerbar
+    machte. Reiner Ziffern-Satz ebenfalls blocking."""
     from bianca import gehirn
     from kern import dienst as dienst_mod
 
@@ -429,15 +430,9 @@ def test_stimme_stream_readback_vorsatz_spielt_sofort():
         tts.stream_bereit = lambda: True
         text = gehirn.readback_text("01776004600")
         url, _ = d.stimme_stream(text)
-        assert url.startswith("/api/audio-stream/"), "Vorsatz im Cache => Strom lohnt"
-        list(d.audio_stream_iter(url.rsplit("/", 1)[1]))  # Feeder zu Ende laufen lassen
-        assert rufe and rufe[0] == ("speak", "Ich wiederhole die Nummer."), \
-            "der gewaermte Vorsatz spielt ZUERST"
-        for art, t in rufe:
-            if "eins" in t.lower():
-                assert art == "speak", "Ziffern NIE am Waechter vorbei streamen"
+        assert url.startswith("/api/audio/"), "Readback mit Ziffern => blocking"
+        assert not any(art == "stream" for art, _ in rufe)
 
-        # Nur der Ziffern-Satz allein: kein Gewinn durch den Strom => blocking.
         rufe.clear()
         url2, _ = d.stimme_stream("Null eins sieben sieben, sechs null null.")
         assert url2.startswith("/api/audio/")

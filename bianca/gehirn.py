@@ -62,7 +62,9 @@ _PZR_KEINE_RE = re.compile(
 )
 
 _JA_RE = re.compile(
-    r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|sicher|natürlich|natuerlich)\b",
+    r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|yeah|yea|"
+    r"jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|"
+    r"sicher|natürlich|natuerlich)\b",
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
@@ -486,6 +488,17 @@ _WUNSCH_EGAL_RE = re.compile(
     r"\bwie\s+(?:sie|es)\s+(?:wollen|meinen|passt)\b|\bwei(?:ß|ss)\s+(?:ich\s+)?nicht\b",
     re.I,
 )
+# "Am liebsten gleich" / "heute noch" / "sofort" auf die Wunschzeit-Frage
+# (live 01.09. Rebrovic: Antwort wurde ignoriert, Frage kam wortgleich nochmal).
+_WUNSCH_SOBALD_RE = re.compile(
+    r"\b(?:sofort|asap|schnellstm(?:ö|oe)glich|baldm(?:ö|oe)glich)\b|"
+    r"\bheute\s+noch\b|"
+    r"\b(?:am\s+liebsten|lieber|gerne|am\s+besten)\s+gleich\b|"
+    r"\bgleich\s+(?:heute|jetzt|noch)\b|"
+    r"(?:^|[.!?]\s+)gleich(?:\s*[.!?…]*)?$|"
+    r"\bso\s+(?:fr(?:ü|ue)h|schnell|bald)\s+wie\s+m(?:ö|oe)glich\b",
+    re.I,
+)
 
 
 def _wunsch_deuten(text: str) -> dict | None:
@@ -494,6 +507,13 @@ def _wunsch_deuten(text: str) -> dict | None:
     rel = _relatives_datum(f" {_s(text).lower()} ")
     if rel and not wish.get("date"):
         wish["date"] = rel
+    # "gleich"/"sofort"/"heute noch" = heute, so früh wie möglich
+    # (nicht "ganz gleich" — das ist egal, s. _WUNSCH_EGAL_RE).
+    tpad = f" {_s(text).lower()} "
+    if (not wish.get("date")
+            and not re.search(r"\bganz\s+gleich\b|\bgleichg", tpad)
+            and _WUNSCH_SOBALD_RE.search(text)):
+        wish["date"] = datetime.now(TZ).date().isoformat()
     gehaltvoll = any([
         wish.get("date"), wish.get("weekday") is not None, wish.get("hour") is not None,
         wish.get("hourMin") is not None, wish.get("minDaysAhead"),
@@ -1156,6 +1176,14 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "pzr": (
         "Möchten Sie eine professionelle Zahnreinigung mit dazu?",
         "Soll die Zahnreinigung mit auf den Termin?",
+    ),
+    "anrufer_check": (
+        "Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt.",
+        "Stimmt Name und Nummer so — oder habe ich mich vertan?",
+    ),
+    "rueckblick": (
+        "Wie ist es Ihnen seither ergangen?",
+        "Hat sich das seitdem gut beruhigt?",
     ),
 }
 

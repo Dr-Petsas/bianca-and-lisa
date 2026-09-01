@@ -230,10 +230,12 @@ def test_bruecke_uebersetzt_uuid_in_did():
     u4101 = bytes.fromhex("b1a2ca000000000000000000" + "00004101")
     u4110 = bytes.fromhex("b1a2ca000000000000000000" + "00004110")
     u4120 = bytes.fromhex("b1a2ca000000000000000000" + "00004120")
+    u4105 = bytes.fromhex("b1a2ca000000000000000000" + "00004105")
     fremd = bytes.fromhex("deadbeefdeadbeefdeadbeefdeadbeef")
     assert did_von_uuid(u4101) == "+4921154244101"
     assert did_von_uuid(u4110) == "+4921154244110"
     assert did_von_uuid(u4120) == "+4921154244120"  # Blessing (30.08.2026)
+    assert did_von_uuid(u4105) == "+4921154244105"  # Thaler (31.08.2026)
     assert did_von_uuid(fremd) == ""
     assert did_von_uuid(b"") == ""
 

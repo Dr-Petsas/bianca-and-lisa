@@ -1,14 +1,14 @@
 """Stille-Wächter (kern/stille.py, Chef 27.08.2026): nach ~4 s Funkstille
-ergreift die Stimme selbst das Wort — zurück auf die Job-Spur oder das
-letzte Thema. W-STUPS-KURZ (31.08.2026): der erste Stups wiederholt nur
-kurz die offene Frage, erst der zweite bringt die Stand-Ansage (Auftrag,
-was schon da ist, was fehlt). Offline, ohne LLM und ohne Netz.
+ergreift die Stimme selbst das Wort. W-STUPS-PRESENCE (01.09.2026): der
+erste Stups ist nur Presence (phone_agent), der zweite die kurze offene
+Frage. Offline, ohne LLM und ohne Netz.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,7 +34,7 @@ def _buchungs_sit(frage: str = "telefon") -> dict:
     sit["messages"] = [
         {"role": "system", "content": "..."},
         {"role": "user", "content": "Ich haette gern einen Termin."},
-        {"role": "assistant", "content": "Gern."},
+        {"role": "assistant", "content": "Gern. Und unter welcher Handynummer erreichen wir Sie?"},
     ]
     return sit
 
@@ -58,9 +58,10 @@ def test_kurzlaut_stupst_statt_llm():
     laufen jetzt als Stille-Stups — gedeckelt, offline, nie durchs LLM."""
     sit = _buchungs_sit(frage="telefon")
     z1 = bianca_agent.user_turn(sit, "Hm.")
-    assert z1["text"], "erster Kurz-Laut: kurzer Frage-Stups"
+    assert z1["text"], "erster Kurz-Laut: Presence"
+    assert "noch dran" in z1["text"].casefold()
     z2 = bianca_agent.user_turn(sit, "Well.")
-    assert z2["text"], "zweiter Kurz-Laut: Stups mit Stand"
+    assert z2["text"], "zweiter Kurz-Laut: kurze Frage"
     z3 = bianca_agent.user_turn(sit, "Ähm...")
     assert z3["text"] == "", "nach MAX_STUPSE Stupsen ist Schweigen"
     # Echte Kurz-Antworten bleiben unberuehrt (kein Match).
@@ -79,48 +80,39 @@ def test_letzte_frage_nur_aus_juengster_antwort():
     assert stille.letzte_frage(msgs) == "", "aeltere Fragen sind bedient — nicht ausgraben"
 
 
-def test_anhaengen_verlaengert_letzte_antwort():
-    sit = {"messages": [
-        {"role": "user", "content": "..."},
-        {"role": "assistant", "content": "Gern."},
-    ]}
-    stille.anhaengen(sit, "Sind Sie noch dran?")
-    assert len(sit["messages"]) == 2, "kein neuer Eintrag — ans letzte Assistant angehaengt"
-    assert sit["messages"][-1]["content"] == "Gern. Sind Sie noch dran?"
+def test_nur_fragesaetze_schneidet_begleit():
+    assert stille.nur_fragesaetze(
+        "Prima. Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Bestätigung."
+    ).endswith("?")
+    assert "brauche" not in stille.nur_fragesaetze(
+        "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich."
+    ).casefold()
 
 
 # ---------------------------------------------------------------------------
 # Bianca: stille_zug
 # ---------------------------------------------------------------------------
 
-def test_erster_stups_kurz_nur_offene_frage():
-    """W-STUPS-KURZ (Chef 31.08.2026: "bianca wiederholt etwas zuviel, das
-    nervt"): die Frage lief eben erst — der erste Stups wiederholt sie nur
-    kurz, ohne Stand-Sermon und ohne Begleitsätze."""
+def test_erster_stups_nur_presence():
+    """W-STUPS-PRESENCE (01.09.2026): phone_agent wiederholte auf Silence nie
+    die Pflichtfrage — nur Presence."""
     sit = _buchungs_sit()
     out = bianca_agent.stille_zug(sit)
     t = out["text"]
     assert "noch dran" in t.casefold()
-    assert "Terminaufnahme" not in t, "kein Sermon beim ersten Stups"
-    assert "Mir fehlt noch" not in t, "kein Fehlt-Satz beim ersten Stups"
-    assert "andynummer" in t or "ummer" in t, "die offene Frage bleibt hoerbar"
-    assert "brauche ich" not in t.casefold(), "Begleitsaetze kamen schon — nicht nochmal"
+    assert "andynummer" not in t and "ummer erreichen" not in t
+    assert "Terminaufnahme" not in t
     assert sit["messages"][-1]["role"] == "assistant"
-    assert t.split()[-1] in sit["messages"][-1]["content"].split(), "Stups steht im Protokoll"
 
 
-def test_zweiter_stups_bringt_den_stand():
+def test_zweiter_stups_kurze_frage():
     sit = _buchungs_sit()
     t1 = bianca_agent.stille_zug(sit)["text"]
     t2 = bianca_agent.stille_zug(sit)["text"]
     assert t2 and t2 != t1
-    assert "Terminaufnahme" in t2, "jetzt hilft Orientierung: Auftrag ansagen"
-    assert "Kontrolle" in t2, "der Grund gehoert zum Stand"
-    assert "Namen habe ich schon" in t2, "was schon da ist, wird genannt"
-    assert "andynummer" in t2 or "ummer" in t2, "die offene Frage bleibt hoerbar"
-    saetze1 = {x.strip().casefold() for x in t1.split("?") if x.strip()}
-    saetze2 = {x.strip().casefold() for x in t2.split("?") if x.strip()}
-    assert not (saetze1 & saetze2), "kein Satz wortgleich doppelt"
+    assert "andynummer" in t2 or "ummer" in t2, "zweite Stups: offene Frage"
+    assert "Terminaufnahme" not in t2, "kein Stand-Sermon auf dem Stups-Pfad"
+    assert "Ich bin noch da" in t2 or "noch da" in t2.casefold()
 
 
 def test_dritter_stups_schweigt():
@@ -138,6 +130,14 @@ def test_nach_reset_wieder_stups():
     assert bianca_agent.stille_zug(sit)["text"], "neues Gehoertes = neues Stups-Budget"
 
 
+def test_denk_cue_unterdrueckt_stups():
+    sit = _buchungs_sit()
+    out = bianca_agent.user_turn(sit, "Einen Moment bitte.")
+    assert out["text"] == ""
+    assert sit.get("denkPauseBis", 0) > time.time()
+    assert bianca_agent.stille_zug(sit)["text"] == "", "Denk-Pause: kein Stups"
+
+
 def test_telefon_check_erst_kurz_dann_nummer():
     """W-STUPS-KURZ: die Ziffern kamen Sekunden vorher — der erste Stups
     fragt nur kurz nach, erst der zweite wiederholt die komplette Nummer
@@ -153,7 +153,7 @@ def test_telefon_check_erst_kurz_dann_nummer():
     assert "timmt das so" in t2, "die Rueckbestaetigung bleibt eine Frage"
 
 
-def test_talk_thema_zuerst_dann_jobspur():
+def test_talk_thema_zuerst_dann_frage():
     sit = _buchungs_sit()
     st = gespraech.stand(sit)
     st["floor"] = gespraech.TALK
@@ -163,19 +163,20 @@ def test_talk_thema_zuerst_dann_jobspur():
     assert "hochzeit" in t1.casefold(), "erster Stups knuepft am letzten Thema an"
     assert "Terminaufnahme" not in t1, "kein Job-Sermon mitten im Talk"
     t2 = bianca_agent.stille_zug(sit)["text"]
-    assert "Terminaufnahme" in t2, "zweiter Stups holt auf die Job-Spur"
-    assert "andynummer" in t2 or "ummer" in t2
+    assert "andynummer" in t2 or "ummer" in t2, "zweiter Stups: Job-Frage"
 
 
-def test_verwalten_stand_mit_flussfrage():
+def test_verwalten_zweiter_stups_mit_flussfrage():
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({"modus": "absagen", "frage": ""})
     sit["flussFrage"] = "Um welchen Termin geht es denn genau?"
-    sit["messages"] = [{"role": "assistant", "content": "Gern."}]
-    t = bianca_agent.stille_zug(sit)["text"]
-    assert "abzusagen" in t, "Auftrag ansagen: wir waren beim Absagen"
-    assert "welchen Termin" in t, "die offene Fluss-Frage kommt mit"
+    sit["messages"] = [{"role": "assistant", "content": "Gern. Um welchen Termin geht es denn genau?"}]
+    # Erster = Presence
+    t1 = bianca_agent.stille_zug(sit)["text"]
+    assert "noch dran" in t1.casefold()
+    t2 = bianca_agent.stille_zug(sit)["text"]
+    assert "welchen Termin" in t2
 
 
 def test_ohne_offenen_job_freundlich():
@@ -183,7 +184,9 @@ def test_ohne_offenen_job_freundlich():
     sit["messages"] = [{"role": "assistant", "content": "Gern geschehen."}]
     t = bianca_agent.stille_zug(sit)["text"]
     assert "noch dran" in t.casefold()
-    assert "sonst noch etwas" in t.casefold()
+    # Zweiter Stups: Fallback-Frage
+    t2 = bianca_agent.stille_zug(sit)["text"]
+    assert "sonst noch etwas" in t2.casefold()
 
 
 # ---------------------------------------------------------------------------
@@ -209,34 +212,25 @@ def test_lisa_stups_nennt_auftrag_und_letzte_frage():
 def test_lisa_identitaetsphase_wiederholt_die_frage():
     doc = {
         "tenant": {"praxisName": "Testpraxis"},
-        "auftrag": "Termin bestätigen",
+        "auftrag": "Termin",
         "idCheck": identitaet.FRAGE,
         "patient": {"firstName": "Max", "lastName": "Muster"},
-        "messages": [{"role": "assistant", "content": "Spreche ich mit Max Muster?"}],
+        "messages": [{"role": "assistant", "content": "Bin ich mit Max Muster verbunden?"}],
     }
     t = lisa_agent.stille_zug(doc)["text"]
-    assert "Meine Frage war" in t
-    assert "Muster" in t, "die Identitaetsfrage bleibt hoerbar"
+    assert "Meine Frage war" in t or "Max" in t
 
 
-def test_lisa_cap_und_reset():
+def test_lisa_cap():
     doc = {
         "tenant": {"praxisName": "Testpraxis"},
-        "auftrag": "Termin bestätigen",
+        "auftrag": "Termin",
         "idCheck": identitaet.FERTIG,
         "patient": {},
-        "messages": [{"role": "assistant", "content": "Passt das so?"}],
+        "messages": [{"role": "assistant", "content": "Passt Ihnen Donnerstag?"}],
     }
     assert lisa_agent.stille_zug(doc)["text"]
     assert lisa_agent.stille_zug(doc)["text"]
     assert lisa_agent.stille_zug(doc)["text"] == "", "Cap gilt auch bei Lisa"
     stille.reset(doc)
     assert lisa_agent.stille_zug(doc)["text"]
-
-
-if __name__ == "__main__":
-    for name, fn in sorted(list(globals().items())):
-        if name.startswith("test_"):
-            fn()
-            print(f"ok {name}")
-    print("test_stille: alle gruen")

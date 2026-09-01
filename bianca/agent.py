@@ -9,12 +9,13 @@ Kalender-Werkzeugen wie Lisa (kern.zuege).
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from bianca import flow, gehirn, session, telefon
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
-from kern import gedaechtnis, gespraech, llm, stille, tenants, wiederholung, zuege
+from kern import antwort_wache, gedaechtnis, gespraech, llm, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
@@ -22,6 +23,19 @@ from kern.calendar import slots_zeile
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
+
+# Denk-Pause: Anrufer signalisiert Nachdenken — Stups kurz unterdrücken
+# (phone_agent skip_turn, W-STUPS-PRESENCE 01.09.2026).
+_DENK_RE = re.compile(
+    r"^\s*(?:(?:einen?\s+)?moment|augenblick|"
+    r"(?:lassen?\s+(?:sie\s+)?mich\s+)?(?:kurz\s+)?(?:überleg\w*|ueberleg\w*)|"
+    r"warte(?:n)?(?:\s+(?:sie|mal|kurz))*|"
+    r"ich\s+(?:muss|will)\s+(?:kurz\s+)?(?:nach)?denk\w*|"
+    r"kurz(?:\s+mal)?)"
+    r"(?:\s+\w+){0,4}[\s.,!?…]*$",
+    re.I,
+)
+_DENK_PAUSE_S = 7.0
 
 # --- Wachen für den LLM-Pfad -------------------------------------------------
 # Live 27.08.2026: Das Modell ERFAND Terminangebote ("Mittwoch, den 24. Juli,
@@ -80,6 +94,7 @@ _FRAGE_KERN = {
     "versicherung": r"privat|gesetzlich|versichert",
     "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
     "pzr": r"zahnreinigung|prophylaxe|\bpzr\b",
+    "rueckblick": r"seither|beruhigt|ergangen|zufrieden|verheilt",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -182,7 +197,24 @@ _FEHLT_WORT = {
     "pzr": "ob die Zahnreinigung mit dazu soll",
     "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
+    "anrufer_check": "ob ich Sie richtig erkannt habe",
+    "rueckblick": "wie es nach dem letzten Besuch war",
 }
+
+
+def _wiederholung_oder_presence(sit: dict, text: str) -> str:
+    """Wiederholungs-Wächter ohne wortgleiches Restore (W-REPEAT 01.09.2026).
+
+    phone_agent stellte nie dieselbe Frage erneut; wenn Varianten verbrannt
+    sind, bleibt Presence statt dem Original — nie `or text`.
+    """
+    raus = _wiederholungs_wache(sit, text)
+    if raus:
+        return antwort_wache.saeubern(sit, raus)
+    # Alles war Wiederholung und keine Variante frei: Presence, nicht Original.
+    if _s(text):
+        return stille.anrede(1)
+    return ""
 
 
 def _stand_ansage(sit: dict) -> str:
@@ -224,15 +256,17 @@ def stille_zug(sit: dict) -> dict[str, Any]:
     """Stille-Wächter (Chef 27.08.2026): der Anrufer sagt seit ~4 Sekunden
     nichts — Bianca ergreift selbst das Wort, statt stumm zu warten.
 
-    - Läuft gerade ein Nebenthema (Talk-Floor), knüpft der ERSTE Stups dort
-      an; der zweite holt auf die Job-Spur.
-    - W-STUPS-KURZ (Chef 31.08.2026: "bianca wiederholt etwas zuviel, das
-      nervt"): der ERSTE Job-Stups ist KURZ — nur Anrede + offene Frage,
-      denn die Frage lief eben erst. Erst der ZWEITE bringt den vollen
-      Stand (Auftrag, was schon da ist, offene Frage) als Orientierung.
-    - Nach MAX_STUPSE Stupsen ohne Antwort: Schweigen (leerer Text), bis der
-      Anrufer wieder spricht (user_turn setzt den Zähler zurück).
+    - W-STUPS-PRESENCE (01.09.2026, phone_agent): der ERSTE Stups ist nur
+      Presence („Sind Sie noch dran?“) — keine Pflichtfrage. Der ZWEITE
+      bringt die kurze Frage-Variante. Kein Stand-Sermon auf dem Stups-Pfad
+      (außer telefon_check #2 mit Ziffern).
+    - Denk-Cue („Moment“, „überlegen“): kurze Pause ohne Stups.
+    - Nach MAX_STUPSE Stupsen ohne Antwort: Schweigen, bis der Anrufer
+      wieder spricht (user_turn setzt den Zähler zurück).
     """
+    if time.time() < float(sit.get("denkPauseBis") or 0):
+        return {"text": "", "book": None}
+
     n = stille.stups_zaehlen(sit)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
@@ -266,18 +300,28 @@ def stille_zug(sit: dict) -> dict[str, Any]:
             stille.anhaengen(sit, text)
             return {"text": text, "book": None}
 
+    if n <= 1:
+        # Presence only — phone_agent hat auf Silence nie die Pflichtfrage
+        # wiederholt (W-STUPS-PRESENCE 01.09.2026).
+        text = stille.anrede(n)
+        stille.anhaengen(sit, text)
+        return {"text": text, "book": None}
+
+    # Zweiter Stups: kurze offene Frage (Variante), kein Stand-Sermon.
     frage = stille.nur_fragesaetze(_kanonische_frage(sit, fid)) if fid else ""
-    if n <= 1 and frage:
-        # Erster Stups: KURZ — nur die offene Frage, ohne Begleitsätze
-        # (nur_fragesaetze). Der volle Stand-Sermon nervt, wenn die Frage
-        # eben erst gestellt wurde; den Wortlaut variiert der
-        # Wiederholungs-Wächter (W-STUPS-KURZ).
-        text = " ".join([stille.anrede(n), frage])
+    if not frage and _s(sit.get("flussFrage")):
+        frage = stille.nur_fragesaetze(sit["flussFrage"])
+    if not frage:
+        frage = "Kann ich sonst noch etwas für Sie tun?"
+    text = " ".join([stille.anrede(n), frage])
+    ent = _wiederholungs_wache(sit, text)
+    if ent and "?" in ent:
+        text = antwort_wache.saeubern(sit, ent)
+    elif frage:
+        # Frage war schon wortgleich da — mit Präfix, nie Original-Restore.
+        text = f"{stille.anrede(n)} {stille.frage_praefix(frage)}"
     else:
-        # Zweiter Stups (oder Rückkehr vom Nebenthema): jetzt hilft
-        # Orientierung — Auftrag, was schon da ist, offene Frage.
-        text = f"{stille.anrede(n)} {_stand_ansage(sit)}"
-    text = _wiederholungs_wache(sit, text) or text
+        text = stille.anrede(n)
     stille.anhaengen(sit, text)
     return {"text": text, "book": None}
 
@@ -292,9 +336,9 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False,
         return text
 
     def _entdoppelt(aus: str) -> str:
-        # Wiederholungs-Wächter als letzte Instanz VOR dem Mund — nie stumm:
-        # bleibt nach dem Entdoppeln nichts übrig, spricht der Originaltext.
-        return _wiederholungs_wache(sit, aus) or aus
+        # Wiederholungs-Wächter als letzte Instanz VOR dem Mund — nie das
+        # Original zurückholen, wenn alles gestrichen wurde (W-REPEAT).
+        return _wiederholung_oder_presence(sit, aus)
 
     # 0) Erledigt-Wache: "ich sage den Termin ab" / "ist verschoben" ohne
     #    Werkzeuglauf ist eine leere Behauptung (live 27.08.: beide Termine
@@ -471,6 +515,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # (MAX_STUPSE) auch eine "Hm."-Serie beendet.
         return stille_zug(sit)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
+    if _DENK_RE.match(text_in):
+        # phone_agent skip_turn: nachdenkende Anrufer nicht anstupsen.
+        sit["denkPauseBis"] = time.time() + _DENK_PAUSE_S
+        return {"text": "", "book": None}
+    sit.pop("denkPauseBis", None)
     # W-GEDAECHTNIS: falls inzwischen Name/Nummer bekannt sind, parallel im
     # Praxisgedaechtnis nachsehen (key-gesichert, no-op ohne neue Fakten).
     gedaechtnis.kontext_anstossen(sit)
@@ -500,10 +549,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # Wiederholungs-Wächter auch für die Maschine: fragt der Fluss die
         # noch offene Frage erneut (z. B. weil der Anrufer erst etwas anderes
         # beantwortet hat), kommt sie in der nächsten Formulierung — nie
-        # zweimal wortgleich (Chef 27.08.2026). Nie stumm: bleibt nichts
-        # übrig, spricht der Originaltext.
+        # zweimal wortgleich (Chef 27.08.2026). Nie Original zurückholen.
         if _s(fl.get("text")):
-            fl["text"] = _wiederholungs_wache(sit, fl["text"]) or fl["text"]
+            fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
             if "?" in fl["text"]:
                 sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
             msgs.append({"role": "assistant", "content": fl["text"]})

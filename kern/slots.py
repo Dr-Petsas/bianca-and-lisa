@@ -176,8 +176,14 @@ def _streuen(pool: list[dict], parsed: list[dict], wish: dict | None, max_n: int
 
 
 def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | None = None,
-               exclude_iso: str = "", max_n: int = 3, dringend: bool = False) -> dict[str, Any]:
+               exclude_iso: str = "", exclude_isos: list | set | None = None,
+               max_n: int = 3, dringend: bool = False) -> dict[str, Any]:
     now = now_ms if now_ms is not None else int(datetime.now(TZ).timestamp() * 1000)
+    # Gesperrte ISOs (Buchungs-Fails): per Minuten-Praefix, damit Offset-Formen
+    # denselben Slot treffen (W-BOOK-RETRY 01.09.2026).
+    gesperrt = {str(x)[:16] for x in (exclude_isos or []) if x}
+    if exclude_iso:
+        gesperrt.add(str(exclude_iso)[:16])
     parsed = []
     for iso in iso_slots or []:
         m = re.match(r"^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})", str(iso))
@@ -189,7 +195,7 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             continue
         if ms < now + 60 * 60000:
             continue
-        if exclude_iso and str(iso) == exclude_iso:
+        if str(iso)[:16] in gesperrt:
             continue
         parsed.append({
             "iso": str(iso), "date": m.group(1), "time": f"{m.group(2)}:{m.group(3)}",

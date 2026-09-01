@@ -122,6 +122,8 @@ services:
       # Ruhe zwischen Abheben und Begruessung in Sekunden (W-START-RUHE),
       # /api/start-Zeit wird angerechnet; 0 = aus
       BRIDGE_START_RUHE_S: ${BRIDGE_START_RUHE_S:-1.0}
+      # UUID-Ende -> angerufene Nummer (W-MANDANT). 4105 = Thaler Zahnmedizin.
+      BRIDGE_DID_MAP: ${BRIDGE_DID_MAP:-4101=+4921154244101,4110=+4921154244110,4120=+4921154244120,4105=+4921154244105}
     depends_on:
       - bianca
     ports:
