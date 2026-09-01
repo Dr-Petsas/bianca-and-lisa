@@ -404,6 +404,10 @@ class Dienst:
         extra = extra or {}
         sit.pop("_vorabText", None)
         sit.pop("_vorabUrl", None)
+        # _vorabFifo nur leeren, wenn kein Live-Vorab-Callback hängt —
+        # sonst reißt pop die von zug_stream eingehängte Liste weg.
+        if vorab is None:
+            sit.pop("_vorabFifo", None)
         sit.pop("_satzJobs", None)
         t0 = time.perf_counter()
         if art == "start":
@@ -433,17 +437,18 @@ class Dienst:
             sit.pop("unterbrochen", None)  # offener Barge-Rest verfaellt
         else:
             text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
-        # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
-        # Sicherheitsnetz: auch bei Prefix-Mismatch (Zähler/Sanitize) nie den
-        # ganzen Text nochmal — nur Sätze, die im Vorab noch nicht kamen.
-        gesprochen = _s(sit.pop("_vorabText", ""))
+        # Vorab-FIFO: schon gesendete Chunks. Rest = nur was noch fehlt —
+        # nie Full-Replay, auch wenn Prefix-String und Final auseinanderlaufen.
+        fifo = [c for c in (sit.pop("_vorabFifo", None) or []) if _s(c)]
+        gesprochen = " ".join(fifo).strip() or _s(sit.pop("_vorabText", ""))
+        sit.pop("_vorabText", None)
         vorab_url = _s(sit.pop("_vorabUrl", ""))
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        if gesprochen:
-            rest = llm.rest_nach_vorab(gesprochen, text)
-            if rest != text[len(gesprochen):].strip() and not text.startswith(gesprochen):
-                print(f"{self.name}-vorab Rest per Satz-Abgleich "
-                      f"({len(gesprochen)}→{len(rest)} Zeichen)", flush=True)
+        if fifo or gesprochen:
+            rest = llm.rest_nach_vorab(fifo or gesprochen, text)
+            if gesprochen and not text.startswith(gesprochen):
+                print(f"{self.name}-vorab FIFO-Rest "
+                      f"({len(fifo)} Chunks → {len(rest)} Zeichen)", flush=True)
             url, tts_s = self.stimme_stream(rest, karte) if rest else ("", 0.0)
             unterbrechung.merken(sit, url=url, karte=karte, text=text,
                                  vorab_text=gesprochen, vorab_url=vorab_url)
@@ -496,10 +501,9 @@ class Dienst:
         antwort.update(self._stille_feld(sit))
         # W-MITSCHNITT (30.08.2026): Zug samt Audio sofort auf die Platte
         # (.data/anrufe) — die Anrufliste im Dock lebt davon. Vorab-Satz-URLs
-        # (P5) gehören dazu, sobald Vorab-Text lief — der Rest-Abgleich
-        # (rest_nach_vorab) verhindert Doppeln im Audio, die Dateien bleiben.
+        # (P5) gehören dazu, sobald die FIFO Chunks trug.
         satz_liste = sit.pop("_vorabUrlListe", None) or []
-        vorab_urls = [u for u in satz_liste if u] if gesprochen else []
+        vorab_urls = [u for u in satz_liste if u] if (fifo or gesprochen) else []
         mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
                        timings=timings, waechter=waechter, audio_url=url,
                        vorab_urls=vorab_urls, book=reply.get("book"),
@@ -579,6 +583,10 @@ class Dienst:
         satz_lock = threading.Lock()
         satz_urls: list[str | None] = []
         satz_raus = 0
+        # Vorab-FIFO: jeder schon an Dock/Brücke gesendete Chunk (Reihenfolge).
+        # Duplikate (Zähler-Bug, gleiches Norm) werden VOR dem TTS verworfen.
+        vorab_fifo: list[str] = []
+        sit["_vorabFifo"] = vorab_fifo
         # W-MITSCHNITT: json_antwort liest die Vorab-Satz-URLs am Zug-Ende
         # über die Sitzung ab (Referenz auf DIESELBE Liste, kein Kopieren).
         sit["_vorabUrlListe"] = satz_urls
@@ -593,12 +601,15 @@ class Dienst:
             san = sprech.sanitize(satz)
             if not san:
                 return
-            alt = _s(sit.get("_vorabText"))
-            sit["_vorabText"] = (alt + " " + san).strip() if alt else san
-            jobs: list = sit.setdefault("_satzJobs", [])
             with satz_lock:
+                if not llm.vorab_fifo_anhaengen(vorab_fifo, san):
+                    print(f"{self.name}-vorab Duplikat verworfen: {san[:60]!r}",
+                          flush=True)
+                    return
+                sit["_vorabText"] = " ".join(vorab_fifo)
                 idx = len(satz_urls)
                 satz_urls.append(None)
+            jobs: list = sit.setdefault("_satzJobs", [])
 
             def _arbeit(i: int = idx, s: str = san) -> None:
                 nonlocal satz_raus

@@ -178,3 +178,20 @@ def test_rest_nach_vorab_bei_doppel_mittelsatz():
     # Sauberer Prefix → Suffix wie bisher.
     g2 = text[: text.index("Darf")].strip()
     assert llm.rest_nach_vorab(g2, text).startswith("Darf ich")
+
+
+def test_vorab_fifo_verwirft_doppelten_mittelsatz():
+    """FIFO: schon gesendete Chunks/Sätze werden VOR dem TTS verworfen."""
+    a = ("Ja, genau. Ich bin die digitale Assistentin der Praxis und helfe "
+         "Ihnen gerne bei Terminen oder Fragen.")
+    b = "Ich bin die digitale Assistentin der Praxis und helfe Ihnen gerne bei Terminen oder Fragen."
+    c = "Darf ich Sie schon weiterhelfen, zum Beispiel bei der Terminvereinbarung?"
+    fifo: list[str] = []
+    assert llm.vorab_fifo_anhaengen(fifo, a) is True
+    assert llm.vorab_fifo_anhaengen(fifo, b) is False  # Satz schon in a
+    assert llm.vorab_fifo_anhaengen(fifo, a) is False   # Chunk-Duplikat
+    assert llm.vorab_fifo_anhaengen(fifo, c) is True
+    assert fifo == [a, c]
+    text = f"{a} {c}"
+    assert llm.rest_nach_vorab(fifo, text) == ""
+    assert llm.rest_nach_vorab(fifo, text + " Noch etwas?") == "Noch etwas?"
