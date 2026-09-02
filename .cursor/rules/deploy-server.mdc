@@ -1,0 +1,91 @@
+---
+description: Deploy Bianca/Lisa auf pickadoc1 — bei „deploy auf den Server“ sofort so vorgehen, nicht nachschlagen
+alwaysApply: true
+---
+
+# Deploy auf den Server (pickadoc1)
+
+Bei „deploy“, „auf den Server“, „rollout“: **diese Regel ausführen**, nicht DEPLOY-5090.md oder alte Skripte neu erforschen.
+
+## Ziel
+
+| Was | Wo |
+| --- | --- |
+| SSH | `pickadoc1` (User `cursor`, Key wie in `~/.ssh/config`) |
+| App-Repo | `/home/cursor/telefonki` |
+| Lisa / Bianca | Ports **8095** / **8096** (Container `telefonki-lisa-1` / `telefonki-bianca-1`) |
+| SIP-Brücke | `telefonki-sipbridge-1` → `127.0.0.1:40101` |
+| Studio | hinter Bianca `/studio` (`studio` + `bianca-test`, kein Host-Port) |
+| TTS / STT | eigene Stacks `tts_serve` (**8213** Qwen3), `stt_serve` (**8212**) — nur anfassen wenn der Change dort liegt |
+| Live-URL | Tailscale `http://100.82.122.62:8096` (Dock), `:8095` Lisa |
+
+**Nie anfassen:** Clara 8091/8093/8094, MAS-2, Lena-Voice, pickadoc-live-base, vLLM (`pickadoc-vllm-1`). `WRITE_LIVE` bleibt **1**, außer der Chef stoppt Schreiben ausdrücklich. Server-`.env` nie pauschal überschreiben.
+
+## Standard-Ablauf (Code / Website)
+
+Code und Dock-HTML/JS liegen **im Docker-Image** (Dockerfile `COPY`), nicht als Bind-Mount. Deshalb: Dateien syncen → Image bauen → Container neu starten.
+
+```powershell
+# 1) Vom Dev-Repo: nur geänderte Dateien zippen (POSIX-Pfade!)
+cd "d:\dev\Dr-Petsas\bianca-and-lisa"
+python -c "from pathlib import Path; import zipfile
+files = [Path(p) for p in '''LISTE'''.split()]  # z.B. kern/foo.py bianca_web/app.js
+z = Path('app-deploy.zip')
+with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as zf:
+    [zf.write(f, f.as_posix()) for f in files if f.is_file()]
+print(z, z.stat().st_size)"
+
+# 2) Hochladen + entpacken
+scp -o BatchMode=yes app-deploy.zip pickadoc1:/tmp/app-deploy.zip
+ssh -o BatchMode=yes pickadoc1 "set -e; cd /home/cursor/telefonki; python3 -m zipfile -e /tmp/app-deploy.zip .; rm -f /tmp/app-deploy.zip"
+
+# 3) Betroffene Services neu bauen + starten (siehe Matrix unten)
+ssh -o BatchMode=yes pickadoc1 "set -e; cd /home/cursor/telefonki; docker compose build SERVICE…; docker compose up -d SERVICE…"
+
+# 4) Health + Stichprobe im Container, lokales Zip löschen
+ssh pickadoc1 "curl -sf http://127.0.0.1:8095/health; echo; curl -sf http://127.0.0.1:8096/health; echo"
+```
+
+Kein `git pull` auf dem Server voraussetzen — Sync läuft per Zip/scp. Altes `tools/deploy_5090.py` / Voll-ZIP nur für Erst-Setup, nicht für Alltags-Deploys.
+
+## Was neu bauen?
+
+| Änderung | Befehl auf pickadoc1 (`cd /home/cursor/telefonki`) |
+| --- | --- |
+| `kern/`, `lisa/`, `bianca/`, `bianca_web/`, `web/`, `tests/` (Studio) | `docker compose build lisa bianca bianca-test studio && docker compose up -d lisa bianca bianca-test studio` |
+| `sip_bridge/` | zusätzlich `sipbridge` mitbauen/starten |
+| `Dockerfile`, `requirements.txt`, `compose.yml` | alle App-Services: `lisa bianca bianca-test studio sipbridge` (nicht `tunnel` neu bauen) |
+| `tenants/*.json` | nur Datei nach `/home/cursor/telefonki/tenants/` scp — **kein Rebuild** (ro-Mount) |
+| `secrets/` | nur nach `/home/cursor/telefonki/secrets/` scp — **kein Rebuild** |
+| Nur `.env` | Datei auf dem Server editieren, dann `docker compose up -d SERVICE…` (recreate, kein Build) |
+
+Website-JS/CSS: nach Deploy Cache-Buster in HTML bumpfen (`?v=…`), sonst sieht der Browser Altlast.
+
+## `.env` auf dem Server
+
+Pfad: `/home/cursor/telefonki/.env` (Compose `env_file`). **utf-8 ohne BOM**; PowerShell-Redirects vermeiden.
+
+- Token mit `#` und `$` (z. B. `PICKADOC_PHONE_CALL_API_TOKEN`): Wert in **einfachen** Quotes — sonst schneidet `#` ab oder Compose expandiert `$…` → 401.
+- Nach Env-Change: betroffene Container recreate (`docker compose up -d …`), danach `printenv` im Container prüfen.
+- Typische Keys: `WRITE_LIVE`, `LLM_BASE`, `TTS_BASE`, `STT_BASE`, `PICKADOC_*`, Bridge-Vars (`BRIDGE_*`).
+
+## TTS / STT (nur wenn Change dort)
+
+```bash
+# TTS (nie zwei Profile zugleich)
+cd /home/cursor/telefonki/tts_serve && docker compose --profile qwen3 up -d --build
+# STT
+cd /home/cursor/telefonki/stt_serve && docker compose up -d --build
+```
+
+Engine-/Stimmwechsel: App-`.env` `TTS_BASE`/`STT_BASE` setzen + App recreate; TTS-Platten-Cache im Volume ggf. leeren (`.data/tts-cache/`).
+
+## Asterisk / Dialplan (selten)
+
+Referenzkopie: Repo `sip_bridge/extensions_bianca.conf`. Live: `ssh -J pickadoc1 asterisk-strato`, Backup vor Edit, dann Dialplan reload. Brücken-Code selbst = `sipbridge`-Rebuild wie oben.
+
+## Abnahme (kurz)
+
+1. Health 8095 + 8096 OK, `WRITE_LIVE=1` im Container.
+2. Geänderte Datei im Container sichtbar (`docker exec telefonki-bianca-1 grep …` / `ls`).
+3. Fremde Container unverändert; laufende Echtanrufe bedenken (kurzer Restart von lisa/bianca/sipbridge legt auf).
