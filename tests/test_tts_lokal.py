@@ -289,10 +289,38 @@ def test_ziffern_satz_erkennt_readbacks():
     assert not tts.ziffern_satz("Ihr Termin ist um neun Uhr fünfzehn.")
 
 
+def test_prebuffer_ms_fuer_waechst_mit_text():
+    """Laengere Aeusserungen bekommen mehr Prefill; kurze bleiben bei Basis."""
+    import os
+
+    alt = os.environ.get("TTS_PREBUFFER_MS")
+    os.environ["TTS_PREBUFFER_MS"] = "220"
+    try:
+        kurz = tts._prebuffer_ms_fuer("Passt das?")
+        mittel = tts._prebuffer_ms_fuer("x" * 80)
+        lang = tts._prebuffer_ms_fuer(
+            "Alles klar. Am schnellsten geht es bei Doktor Petsas. "
+            "Frei ist morgen um zwoelf Uhr oder morgen um neun Uhr oder "
+            "uebermorgen um vierzehn Uhr. Welcher Termin passt Ihnen?")
+        assert kurz == 220
+        assert mittel == 220
+        assert lang > kurz
+        assert lang <= 550
+        os.environ["TTS_PREBUFFER_MS"] = "0"
+        assert tts._prebuffer_ms_fuer("langer text " * 40) == 0
+    finally:
+        if alt is None:
+            os.environ.pop("TTS_PREBUFFER_MS", None)
+        else:
+            os.environ["TTS_PREBUFFER_MS"] = alt
+
+
 def test_speak_stream_liefert_stuecke_und_fuellt_den_cache():
     """Audio-Chunk-Streaming: Stuecke kommen sample-sauber (gerade Bytes)
     raus, der fertige Satz liegt danach als EIN WAV im LRU — die
     Wiederholung kostet keinen zweiten Container-Aufruf."""
+    import os
+
     pcm = (1500).to_bytes(2, "little", signed=True) * 4  # 8 Bytes = 4 Samples
     fake = _FakeLokal(_Antwort(200, pcm))
     fake.stream_aufrufe = []
@@ -304,19 +332,57 @@ def test_speak_stream_liefert_stuecke_und_fuellt_den_cache():
         return _StreamAntwort(200, [pcm[:3], pcm[3:]])
 
     fake.stream = stream
+    alt = os.environ.get("TTS_PREBUFFER_MS")
+    os.environ["TTS_PREBUFFER_MS"] = "0"  # Mini-PCM: Schwelle wuerde alles halten
+    try:
+        def lauf():
+            eng = tts.LokalTts()
+            stuecke = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
+            assert b"".join(stuecke) == pcm, "alle Samples, nichts verschluckt"
+            assert all(len(s) % 2 == 0 for s in stuecke), "nie mitten im Sample schneiden"
+            assert len(fake.stream_aufrufe) == 1
+            wieder = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
+            assert len(fake.stream_aufrufe) == 1 and len(fake.aufrufe) == 0
+            assert b"".join(wieder) == pcm
+        _mit_lokal(fake, lauf)
+    finally:
+        if alt is None:
+            os.environ.pop("TTS_PREBUFFER_MS", None)
+        else:
+            os.environ["TTS_PREBUFFER_MS"] = alt
 
-    def lauf():
-        eng = tts.LokalTts()
-        stuecke = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
-        assert b"".join(stuecke) == pcm, "alle Samples, nichts verschluckt"
-        assert all(len(s) % 2 == 0 for s in stuecke), "nie mitten im Sample schneiden"
-        assert len(fake.stream_aufrufe) == 1
-        # Wiederholung: kommt als EIN Stueck aus dem Cache, kein neuer Aufruf
-        wieder = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
-        assert len(fake.stream_aufrufe) == 1 and len(fake.aufrufe) == 0
-        assert b"".join(wieder) == pcm
 
-    _mit_lokal(fake, lauf)
+def test_speak_stream_prebuffer_haelt_bis_schwelle():
+    """W-TTS-PREBUF: vor dem ersten Yield mindestens TTS_PREBUFFER_MS Audio
+    (oder Strom-Ende) — LiveKit-Lektion gegen Underrun nach Mini-Chunk."""
+    import os
+
+    # 24 kHz * 2 Byte * 0,05 s = 2400 Byte je 50-ms-Stueck
+    stueck = (1500).to_bytes(2, "little", signed=True) * (tts.PCM_RATE // 20)
+    fake = _FakeLokal(_Antwort(200, b""))
+    fake.stream_aufrufe = []
+
+    def stream(methode, url, json=None, **kw):
+        fake.stream_aufrufe.append((url, json or {}))
+        return _StreamAntwort(200, [stueck, stueck, stueck, stueck])
+
+    fake.stream = stream
+    alt = os.environ.get("TTS_PREBUFFER_MS")
+    os.environ["TTS_PREBUFFER_MS"] = "100"  # 2*50 ms Stuecke halten
+    try:
+        def lauf():
+            eng = tts.LokalTts()
+            out = list(eng.speak_stream("Kurzer Testsatz ohne Ziffern."))
+            assert len(out) >= 1
+            # Erster Yield erst nach Prebuffer: mindestens 100 ms = 2 Stuecke
+            assert len(out[0]) >= 2 * len(stueck)
+            assert sum(len(x) for x in out) == 4 * len(stueck)
+        _mit_lokal(fake, lauf)
+    finally:
+        if alt is None:
+            os.environ.pop("TTS_PREBUFFER_MS", None)
+        else:
+            os.environ["TTS_PREBUFFER_MS"] = alt
 
 
 def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():

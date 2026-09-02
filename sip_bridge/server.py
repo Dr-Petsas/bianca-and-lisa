@@ -321,7 +321,13 @@ class Wiedergabe:
         return int(ref)
 
     def neu(self, url: str) -> dict:
-        p = {"url": url, "buf": bytearray(), "done": False, "sent": 0}
+        # W-TTS-PREBUF: Stream-URLs erst abspielen, wenn genug PCM liegt
+        # (oder der Slot zu ist) — sonst startet der 20-ms-Takt auf dem
+        # ersten Mini-Chunk und stockt bei der naechsten Generierungs-Luecke
+        # (LiveKit fishaudio #6368, bei uns gemessen bis ~180 ms Gap).
+        stream = "/api/audio-stream/" in (url or "")
+        p = {"url": url, "buf": bytearray(), "done": False, "sent": 0,
+             "armed": not stream}
         self.posten.append(p)
         return p
 
@@ -359,6 +365,13 @@ class Wiedergabe:
             async with self.lock:
                 while self.posten:
                     p = self.posten[0]
+                    if not p.get("armed"):
+                        # 200 ms @ 8 kHz — App prefillt schon; Bruecke soll
+                        # nicht noch 350 ms obendrauf warten (TTFA-Klage).
+                        if p["done"] or len(p["buf"]) >= RATE_IN * 2 * 200 // 1000:
+                            p["armed"] = True
+                        else:
+                            break
                     rest = len(p["buf"]) - p["sent"]
                     if rest >= FRAME_B:
                         rahmen = bytes(p["buf"][p["sent"]:p["sent"] + FRAME_B])

@@ -966,6 +966,7 @@ const PATCHES = [
   ["W-ABSAGE-NEUSTART", "29.08.", "Termine", "Absage-Varianten breit (stornieren, löschen, streichen, canceln, „fällt aus“ …); nach erledigtem/gescheitertem Anliegen startet ein neuer Wunsch die Sammel-Prozedur frisch, nach „nicht gefunden“ wird der (oft verhörte) Name neu erfragt."],
   ["P1 Readback-Parallelisierung", "29.08.", "Mund", "Dreisatz-Readback: Vorsatz/Schlussfrage aus Pin-Cache (Blocking). Mid-Stream-Parallel abgelöst durch W-TTS-STOCK."],
   ["W-TTS-STOCK", "01.09.", "Mund", "Streaming: ganzer Text = ein /speak-stream (kein Satz-für-Satz); Ziffern-Äußerungen komplett blocking — kein Stocken an Naht/Retry."],
+  ["W-TTS-PREBUF", "01.09.", "Mund", "Prefill vor Playout: Basis 220 ms (schnell starten), erst ab langen Texten bis 550 ms — langsamer reden hilft der Pause nach dem Anrufer nicht."],
   ["P2 Satz-Deckel", "29.08.", "Hirn", "LLM-Stream schließt hart nach zwei Sätzen plus Frage — nichts Abgehacktes."],
   ["P5 Satzweises LLM→TTS", "29.08.", "Hirn/Mund", "Jeder fertige Satz wird sofort vertont, während der Stream weiterliest — URLs in Reihenfolge."],
   ["P4 Speculative Decoding", "29.08.", "Hirn", "Geprüft und bewusst NICHT aktiv: kein freier VRAM neben TTS (30,5/32,6 GB belegt)."],

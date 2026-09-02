@@ -462,7 +462,13 @@ class LokalTts:
         Pegel: Gain aus dem ersten sprach-aktiven Stueck, dann KONSTANT fuer
         den ganzen Satz (kein Pumpen). Am Ende wandert der Satz normal
         gepegelt in den LRU — Wiederholungen kommen wie gewohnt aus dem Cache.
-        Cache-Treffer liefern ihr PCM sofort als EIN Stueck."""
+        Cache-Treffer liefern ihr PCM sofort als EIN Stueck.
+
+        W-TTS-PREBUF (01.09.2026): vor dem ersten Yield warten wir auf
+        TTS_PREBUFFER_MS Audio. LiveKit/Qwen: Start auf dem ersten Mini-Chunk
+        => Underrun bei Generierungs-Luecken (~170 ms). Prefill kostet TTFA;
+        Default bewusst knapp (220 ms, eine Luecke), laengere Texte etwas mehr.
+        0 = aus."""
         sauber = _normalisieren(text)
         if not sauber:
             return
@@ -476,6 +482,11 @@ class LokalTts:
         roh: list[bytes] = []
         gain: float | None = None
         rest = b""
+        pre_ms = _prebuffer_ms_fuer(sauber)
+        pre_bytes = PCM_RATE * 2 * pre_ms // 1000
+        pending: list[bytes] = []
+        pending_n = 0
+        frei = pre_bytes <= 0
         with _lokal_client().stream(
             "POST", f"{TTS_BASE}/speak-stream",
             json={"text": payload, "voice": _VOICE_NAME},
@@ -493,7 +504,18 @@ class LokalTts:
                 samples.frombytes(stueck)
                 if gain is None:
                     gain = _gain_oder_none(samples)
-                yield _skaliert_bytes(samples, gain if gain is not None else 1.0)
+                out = _skaliert_bytes(samples, gain if gain is not None else 1.0)
+                if not frei:
+                    pending.append(out)
+                    pending_n += len(out)
+                    if pending_n >= pre_bytes:
+                        yield b"".join(pending)
+                        pending.clear()
+                        frei = True
+                    continue
+                yield out
+            if pending:
+                yield b"".join(pending)
         alles = b"".join(roh)
         if alles:
             # Standard-Pegel fuer den Cache-Eintrag (voller Satz-RMS) — die
@@ -519,6 +541,39 @@ def stream_gewollt() -> bool:
     import os
 
     return os.environ.get("TTS_AUDIO_STREAM", "1").strip() != "0"
+
+
+def _prebuffer_ms() -> int:
+    """Basis-Prefill vor dem ersten Playout-Chunk (ms). 0 = aus.
+
+    220 ms: eine typische Qwen-Luecke (~170 ms) plus Reserve — spuerbar
+    schnellerer Antwortstart als 450/900 (Chef 01.09.: Pausen zu lang)."""
+    import os
+
+    roh = os.environ.get("TTS_PREBUFFER_MS", "220").strip()
+    try:
+        return max(0, int(roh))
+    except ValueError:
+        return 220
+
+
+def _prebuffer_ms_fuer(text: str) -> int:
+    """Adaptive Prefill: kurz = Basis, erst ab ~80 Zeichen Extra.
+
+    Kurze Maschinen-/LLM-Antworten (Ja/Nein-Fragen, Quittungen) sollen
+    schnell starten; lange Angebots-Saetze bekommen mehr Headroom gegen
+    die ~1 Gap/Audio-Sekunde (Messung 01.09.). Deckel 550 ms — nicht 900,
+    sonst wirkt Bianca nach dem Anrufer 'haengend'."""
+    basis = _prebuffer_ms()
+    if basis <= 0:
+        return 0
+    zeichen = len(_normalisieren(text) or "")
+    if zeichen <= 80:
+        return basis
+    # Nur der Ueberschuss ueber kurze Antworten zaehlt.
+    extra_s = (zeichen - 80) / 14.0
+    extra = int(55 * extra_s)
+    return min(550, basis + extra)
 
 
 _STREAM_BEREIT: tuple[float, bool] | None = None
