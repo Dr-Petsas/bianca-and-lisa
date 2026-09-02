@@ -95,6 +95,8 @@ _FRAGE_KERN = {
     "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
     "pzr": r"zahnreinigung|prophylaxe|\bpzr\b",
     "rueckblick": r"seither|beruhigt|ergangen|zufrieden|verheilt",
+    "frisch_absage_ok": r"absagen|stornier|wirklich",
+    "absage_ok": r"absagen|stornier|wirklich",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -343,9 +345,17 @@ def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False,
     # 0) Erledigt-Wache: "ich sage den Termin ab" / "ist verschoben" ohne
     #    Werkzeuglauf ist eine leere Behauptung (live 27.08.: beide Termine
     #    standen noch im Kalender). Zurueck zur letzten offenen Fluss-Frage.
-    if s.get("modus") in {"absagen", "verschieben"} and not werkzeug_lief and _ERLEDIGT_RE.search(t):
-        zurueck = _s(sit.get("flussFrage")) or "Um welchen Termin geht es denn genau?"
-        return _entdoppelt("Da will ich nichts falsch machen — das mache ich erst nach Ihrer Bestätigung. " + zurueck)
+    if not werkzeug_lief and _ERLEDIGT_RE.search(t):
+        if s.get("modus") in {"absagen", "verschieben"}:
+            zurueck = _s(sit.get("flussFrage")) or "Um welchen Termin geht es denn genau?"
+            return _entdoppelt("Da will ich nichts falsch machen — das mache ich erst nach Ihrer Bestätigung. " + zurueck)
+        # Frisch gebucht: LLM behauptet "Der Termin ist storniert" ohne Tool
+        # (live 02.09. Tzannis) — Rueckfrage, beim Ja cancel_appointment.
+        if s.get("phase") == "gebucht" and flow._frisch_termin(sit):
+            s["frage"] = "frisch_absage_ok"
+            return _entdoppelt(
+                "Da will ich nichts falsch machen — soll ich den Termin wirklich absagen?"
+            )
 
     if s.get("modus") != "buchen" or s.get("phase") in {"gebucht", "fertig"}:
         return _entdoppelt(t)

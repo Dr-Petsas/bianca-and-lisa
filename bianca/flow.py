@@ -378,8 +378,14 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             if frisch:
                 sit["slotVorrat"] = frisch
                 ctx["slotVorrat"] = list(frisch)
+                sit["vorratDispatch"] = (
+                    found.get("dispatch")
+                    if isinstance(found.get("dispatch"), dict) else None
+                )
             if egal and _s(found.get("doctorName")):
                 sit["angebotArzt"] = _s(found.get("doctorName")).split(",")[0].strip()
+        merke_tool(sit, "getFreeTimeSlots", found)
+        sit["vorratGemerkt"] = True
         return found
 
     nachladen = not vorrat
@@ -397,6 +403,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 "Der Terminkalender antwortet gerade nicht. "
                 "Die Praxis ruft Sie kurzfristig zurück — Ihre Nummer habe ich ja."
             )}
+    elif vorrat and not sit.get("vorratGemerkt"):
+        # Hintergrund-Vorrat verbraucht: CF lief schon (bianca-vorrat), die
+        # Tool-Karte fehlt sonst am Angebots-Zug (live 02.09. Tzannis).
+        disp = sit.get("vorratDispatch") if isinstance(sit.get("vorratDispatch"), dict) else None
+        merke_tool(sit, "getFreeTimeSlots", {
+            "ok": True,
+            "slots": list(vorrat),
+            "dispatch": disp,
+        })
+        sit["vorratGemerkt"] = True
 
     dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
     picked = pick_slots(vorrat, wish=wish, dringend=dringend, exclude_isos=gesperrt)
@@ -740,6 +756,55 @@ def _eskalieren(sit: dict, fid: str) -> str:
     return "Entschuldigung, das habe ich nicht mitbekommen. "
 
 
+# LLM hat nach frischer Buchung selbst nach Storno gefragt ("Soll ich … stornieren?") —
+# auf Ja muss cancel_appointment laufen, nicht eine erfundene Bestaetigung
+# (live 02.09. Tzannis: "Der Termin ist storniert" ohne Tool).
+_STORNO_FRAGE_RE = re.compile(
+    r"soll\s+ich[^.!?]{0,80}?(?:stornier\w*|absag\w*)|"
+    r"(?:stornier\w*|absag\w*)[^.!?]{0,40}?(?:für\s+sie|fuer\s+sie|\?)",
+    re.I,
+)
+
+
+def _frisch_termin(sit: dict) -> dict:
+    """Termin, der in DIESEM Anruf gerade gebucht wurde (appointmentId)."""
+    aid = _s((sit.get("booking") or {}).get("appointmentId")) or _s(
+        (sit.get("lastBook") or {}).get("appointmentId")
+    )
+    if not aid:
+        return {}
+    s = gehirn.sammler(sit)
+    iso = _s(s.get("slotIso")) or _s((sit.get("lastBook") or {}).get("slotIso"))
+    a = s.get("arzt") or {}
+    return {
+        "id": aid,
+        "iso": iso,
+        "spoken": spoken_slot(iso) if iso else "wie gerade vereinbart",
+        "calendarId": _s(a.get("calendarId")),
+        "doctorName": _s(a.get("calendarName")),
+        "motivId": _s(s.get("motivId")),
+        "motivName": _s(s.get("motivName")),
+    }
+
+
+def _letzte_fragte_storno(sit: dict) -> bool:
+    for m in reversed(sit.get("messages") or []):
+        if (m or {}).get("role") == "assistant":
+            return bool(_STORNO_FRAGE_RE.search(_s(m.get("content"))))
+    return False
+
+
+def _frisch_absagen(sit: dict, melde: Melde = None) -> dict:
+    """Frisch gebuchten Termin wirklich per CF stornieren."""
+    termin = _frisch_termin(sit)
+    if not termin:
+        return {"text": "Welchen Termin soll ich absagen?"}
+    sit["verwaltenTermin"] = termin["id"]
+    sit["gefunden"] = [termin]
+    gehirn.sammler(sit)["modus"] = "absagen"
+    return verwalten._absagen(sit, melde)
+
+
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     """Ein Anrufer-Satz durch den Buchungsfluss. None => LLM übernimmt."""
     s = gehirn.sammler(sit)
@@ -759,8 +824,31 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.
         neu = gehirn.einsammeln(sit, t)
         sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
+        frisch = _frisch_termin(sit)
+
+        # Eigene Rueckfrage nach erfundener LLM-Storno-Behauptung (Erledigt-Wache).
+        if s["frage"] == "frisch_absage_ok":
+            if gehirn.ist_ja(t) and not gehirn.ist_nein(t):
+                return _frisch_absagen(sit, melde)
+            if gehirn.ist_nein(t):
+                s["frage"] = ""
+                return {"text": (
+                    "Alles klar, der Termin bleibt bestehen. "
+                    "Kann ich sonst noch etwas für Sie tun?"
+                )}
+            return {"text": "Soll ich den Termin wirklich absagen? Ein kurzes Ja oder Nein genügt."}
+
+        # LLM fragte bereits "Soll ich stornieren?" — Ja => wirklich canceln
+        # (W-FRISCH-ABSAGE 02.09.2026).
+        if (frisch and _letzte_fragte_storno(sit)
+                and gehirn.ist_ja(t) and not gehirn.ist_nein(t)):
+            return _frisch_absagen(sit, melde)
+
         if s["modus"] in {"absagen", "verschieben", "auskunft"}:
             sit["gefundenKey"] = ""  # Bestand frisch laden, der neue Termin zaehlt mit
+            # Frische Buchung: Nachnamen-Suche ueberspringen, direkt bestaetigen.
+            if s["modus"] == "absagen" and frisch:
+                return verwalten._absage_frage(sit, frisch)
             return verwalten.zug(sit, t, neu, melde)
         return None
 
@@ -835,6 +923,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 # Anderer Kalender-Rahmen: alter Slot-Vorrat ist wertlos.
                 sit["slotVorrat"] = []
                 sit["vorratKey"] = ""
+                sit["vorratGemerkt"] = False
+                sit.pop("vorratDispatch", None)
         elif gehirn.ist_nein(t) or _ABLEHNUNG_RE.search(t):
             s["phase"] = ""
             s["slotIso"] = ""

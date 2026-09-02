@@ -173,6 +173,12 @@ def vorrat_anstossen(sit: dict) -> None:
             if found.get("ok") and sit.get("vorratKey") == mein_key:
                 isos = calendar._iso_liste(found.get("slots") or [])
                 sit["slotVorrat"] = isos
+                # Dispatch fuer den Angebots-Zug merken — _angebot zeigt die
+                # CF-Karte dann in der Unterhaltung (W-VORRAT-UI 02.09.2026),
+                # auch wenn kein zweiter getFreeTimeSlots noetig ist.
+                disp = found.get("dispatch")
+                sit["vorratDispatch"] = disp if isinstance(disp, dict) else None
+                sit["vorratGemerkt"] = False
                 if egal and _s(found.get("doctorName")):
                     # Titel-Anhängsel ("…, M.Sc.") nicht mit ansagen.
                     sit["angebotArzt"] = _s(found.get("doctorName")).split(",")[0].strip()

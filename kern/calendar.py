@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import httpx
@@ -29,6 +30,10 @@ _CF_CLIENT = httpx.Client(timeout=10.0)
 # Ansage behauptete "Termin ist weg". Timeout-Budget: CF-Limit ist 30 s.
 _SCHREIB_TIMEOUT = 25.0
 
+# W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
+# endlos speichern — erste N reichen zur Diagnose, Rest als total.
+_SLOT_CAP = 40
+
 
 def _cf_post(route: str, body: dict, *, timeout: float | None = None) -> tuple[int, Any]:
     url = f"{CF_BASE}/{route.lstrip('/')}"
@@ -41,6 +46,88 @@ def _cf_post(route: str, body: dict, *, timeout: float | None = None) -> tuple[i
         return r.status_code, data
     except httpx.HTTPError as e:
         return 0, {"message": str(e)}
+
+
+def _response_kappen(data: Any) -> Any:
+    """Antwort fuer die Tool-Anzeige schlank halten (Slot-Listen)."""
+    if not isinstance(data, dict):
+        return data
+    out = dict(data)
+    nutz = out.get("data")
+    if not isinstance(nutz, dict):
+        return out
+    nutz = dict(nutz)
+    raw = nutz.get("free_time_slots")
+    slots: list | None
+    if isinstance(raw, str):
+        try:
+            slots = json.loads(raw)
+        except json.JSONDecodeError:
+            slots = None
+    elif isinstance(raw, list):
+        slots = raw
+    else:
+        slots = None
+    if isinstance(slots, list):
+        if len(slots) > _SLOT_CAP:
+            nutz["free_time_slots"] = slots[:_SLOT_CAP]
+            nutz["free_time_slots_total"] = len(slots)
+        else:
+            nutz["free_time_slots"] = slots
+        out["data"] = nutz
+    return out
+
+
+def _updates_von_antwort(data: Any) -> list[dict[str, Any]]:
+    """Dynamic-Variable-Updates wie im Portal: gesetzte Antwort-Felder."""
+    if not isinstance(data, dict):
+        return []
+    nutz = data.get("data") if isinstance(data.get("data"), dict) else data
+    if not isinstance(nutz, dict):
+        return []
+    aus: list[dict[str, Any]] = []
+    for key in (
+        "free_time_slots", "doctor_name", "visit_motive_name", "visit_motive_id",
+        "request_id", "code_version", "any_doctor_preference", "appointmentId",
+    ):
+        if key not in nutz:
+            continue
+        val = nutz.get(key)
+        if val in (None, "", [], {}):
+            continue
+        if key == "free_time_slots" and isinstance(val, list):
+            total = nutz.get("free_time_slots_total") or len(val)
+            kurz = val[:6]
+            aus.append({"key": key, "from": "", "to": kurz, "total": total})
+        else:
+            aus.append({"key": key, "from": "", "to": val})
+    return aus
+
+
+def _cf_call(route: str, body: dict, *, timeout: float | None = None) -> tuple[int, Any, dict]:
+    """Wie _cf_post, plus Dispatch-Meta fuer die Unterhaltungs-Anzeige."""
+    url = f"{CF_BASE}/{route.lstrip('/')}"
+    t0 = time.perf_counter()
+    status, data = _cf_post(route, body, timeout=timeout)
+    ms = int(round((time.perf_counter() - t0) * 1000))
+    gekappt = _response_kappen(data)
+    dispatch = {
+        "route": route,
+        "url": url,
+        "method": "POST",
+        "request": body,
+        "httpStatus": status,
+        "ms": ms,
+        "response": gekappt,
+        "updates": _updates_von_antwort(gekappt),
+    }
+    return status, data, dispatch
+
+
+def _mit_dispatch(result: dict[str, Any], dispatch: dict | None) -> dict[str, Any]:
+    if dispatch:
+        result["dispatch"] = dispatch
+    return result
 
 
 def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
@@ -76,7 +163,7 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = Fa
         body["visitMotiveName"] = vm["name"]
     if start_date:
         body["startDate"] = start_date
-    status, data = _cf_post("getFreeTimeSlots", body)
+    status, data, dispatch = _cf_call("getFreeTimeSlots", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         nutz = data.get("data") or {}
         raw = nutz.get("free_time_slots")
@@ -84,13 +171,16 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = Fa
             slots = json.loads(raw) if isinstance(raw, str) else (raw or [])
         except json.JSONDecodeError:
             slots = []
-        return {
+        return _mit_dispatch({
             "ok": True, "slots": slots, "calendar": cal, "motive": vm,
             # Bei "egal" waehlt der Server den Kalender — der Name des
             # Gewinner-Arztes kommt hier zurueck (fuers Buchen + Ansagen).
             "doctorName": _s(nutz.get("doctor_name")),
-        }
-    return {"ok": False, "error": (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"}
+        }, dispatch)
+    return _mit_dispatch({
+        "ok": False,
+        "error": (data or {}).get("message") if isinstance(data, dict) else f"http_{status}",
+    }, dispatch)
 
 
 def _iso_liste(raw) -> list[str]:
@@ -157,14 +247,22 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
         start = (wish or {}).get("date") or ""
         found = find_slots(tenant, ctx, start_date=start)
         if not found.get("ok") and not vorrat:
-            return {
+            return _mit_dispatch({
                 "ok": False,
                 "spoken": "Der Kalender antwortet gerade nicht. Die Praxis meldet sich kurzfristig mit Terminvorschlägen.",
                 "regie": "Keine Zeiten erfinden. Rückruf anbieten.",
-            }
+            }, found.get("dispatch") if isinstance(found.get("dispatch"), dict) else None)
         if found.get("ok"):
             vorrat = _iso_liste(found.get("slots") or [])
             ctx["slotVorrat"] = vorrat
+            picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso, exclude_isos=gesperrt)
+            slots = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
+            return _mit_dispatch({
+                "ok": True,
+                "spoken": spoken_offer(picked["slots"], wish_matched=picked["wishMatched"]),
+                "regie": REGIE_ANGEBOT,
+                "slots": slots,
+            }, found.get("dispatch") if isinstance(found.get("dispatch"), dict) else None)
     picked = pick_slots(vorrat, wish=wish, exclude_iso=exclude_iso, exclude_isos=gesperrt)
     slots = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
     return {
@@ -262,7 +360,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "visitMotiveId": _s(ctx.get("visitMotiveId") or (vm or {}).get("id")),
         "appointmentStartDate": iso,
     }
-    status, data = _cf_post("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
+    status, data, dispatch = _cf_call("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
     if status == 0:
         # Netzfehler/Timeout: die Buchung kann trotzdem gelandet sein —
         # NACHSCHAUEN statt raten (sonst bucht der Anrufer doppelt).
@@ -270,7 +368,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         if landung:
             ctx["appointmentId"] = landung
             ctx["appointmentDate"] = iso[:10]
-            return {
+            return _mit_dispatch({
                 "ok": True,
                 "booked": True,
                 "slotIso": iso,
@@ -278,15 +376,15 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
                 "patientId": patient_id,
                 "createdPatient": created_patient,
                 "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
-            }
-        return {
+            }, dispatch)
+        return _mit_dispatch({
             "ok": False,
             "spoken": (
                 "Der Kalender antwortet gerade nicht — ich möchte nichts doppelt "
                 "eintragen. Die Praxis bestätigt Ihnen den Termin kurzfristig."
             ),
             "regie": "Netzfehler beim Buchen. Keinen anderen Slot anbieten, Rückruf zusagen.",
-        }
+        }, dispatch)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         # Termin-ID behalten: daran haengt spaeter die Gespraechsnotiz
         # (masAppointmentNote) und ein evtl. Verschieben im selben Anruf.
@@ -294,7 +392,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         if aid:
             ctx["appointmentId"] = aid
         ctx["appointmentDate"] = iso[:10]
-        return {
+        return _mit_dispatch({
             "ok": True,
             "booked": True,
             "slotIso": iso,
@@ -302,13 +400,13 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "patientId": patient_id,
             "createdPatient": created_patient,
             "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
-        }
+        }, dispatch)
     if status == 200 and isinstance(data, dict) and data.get("status") == "needs_phone":
-        return {
+        return _mit_dispatch({
             "ok": False,
             "spoken": "In Ihrer Akte fehlt noch eine Handynummer. Wie lautet sie?",
             "regie": "Nummer erfragen, dann erneut buchen.",
-        }
+        }, dispatch)
     meldung = _s((data or {}).get("message")) if isinstance(data, dict) else ""
     # Diagnose (W-BOOK-RETRY / Thaler 01.09.2026): calendarId/Motiv/ISO mitloggen,
     # damit "not available" trotz frischem Angebot nachvollziehbar bleibt.
@@ -325,20 +423,20 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             tenant, ctx, exclude_iso=iso,
             exclude_isos=ctx.get("slotGesperrt") or [],
         )
-        return {
+        return _mit_dispatch({
             "ok": False,
             "slotTaken": True,
             "spoken": "Der Termin ist gerade weg. " + (alt.get("spoken") or ""),
             "regie": REGIE_ANGEBOT,
             "slots": alt.get("slots") or [],
-        }
+        }, dispatch)
     # Alles andere (Validierung, Patient/Kalender nicht gefunden, 500):
     # ehrlich bleiben statt "Termin ist weg" zu behaupten.
-    return {
+    return _mit_dispatch({
         "ok": False,
         "spoken": "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.",
         "regie": f"Buchung fehlgeschlagen ({meldung or status}). Keinen Erfolg behaupten.",
-    }
+    }, dispatch)
 
 
 def _buchung_pruefen(tenant: dict, patient_id: str, iso: str) -> str:
@@ -436,7 +534,7 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
         "appointmentStartDate": iso,
         "source": "phone_agent",
     }
-    status, data = _cf_post("createAppointment", body)
+    status, data, dispatch = _cf_call("createAppointment", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         auf = patients.patient_aufloesen(tenant, {
             "name": f"{first} {last}".strip(),
@@ -455,15 +553,15 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
         if aid:
             ctx["appointmentId"] = aid
         ctx["appointmentDate"] = iso[:10]
-        return {
+        return _mit_dispatch({
             "ok": True,
             "booked": True,
             "createdPatient": True,
             "slotIso": iso,
             "appointmentId": aid,
             "spoken": f"Akte und Termin {spoken_slot(iso)} sind fest eingetragen.",
-        }
-    return {"ok": False}
+        }, dispatch)
+    return _mit_dispatch({"ok": False}, dispatch)
 
 
 def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
@@ -484,7 +582,7 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     phone = _s(ctx.get("phone"))
     if phone:
         body["callerPhone"] = phone
-    status, data = _cf_post("agentFindPatientAppointments", body)
+    status, data, dispatch = _cf_call("agentFindPatientAppointments", body)
     if not isinstance(data, dict):
         data = {}
     vorname_verworfen = False
@@ -494,7 +592,7 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
         # ausgehen — einmal NUR mit dem Nachnamen nachfassen. Meldet die CF
         # dann ambiguous, fragt die Prozedur den Vornamen ohnehin sauber nach.
         body = {k: v for k, v in body.items() if k != "firstName"}
-        status, data = _cf_post("agentFindPatientAppointments", body)
+        status, data, dispatch = _cf_call("agentFindPatientAppointments", body)
         if not isinstance(data, dict):
             data = {}
         vorname_verworfen = True
@@ -527,22 +625,22 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
                 "motivName": _s(vm.get("name")),
                 "spoken": gesprochen,
             })
-        return {"ok": True, "patient": patient, "appointments": termine,
-                "vornameVerworfen": vorname_verworfen}
+        return _mit_dispatch({"ok": True, "patient": patient, "appointments": termine,
+                "vornameVerworfen": vorname_verworfen}, dispatch)
     if status == 404 and data.get("status") == "no_upcoming":
-        return {"ok": True, "patient": patient, "appointments": [],
-                "vornameVerworfen": vorname_verworfen}
+        return _mit_dispatch({"ok": True, "patient": patient, "appointments": [],
+                "vornameVerworfen": vorname_verworfen}, dispatch)
     if status == 404:
-        return {"ok": True, "notFound": True, "patient": {}, "appointments": []}
+        return _mit_dispatch({"ok": True, "notFound": True, "patient": {}, "appointments": []}, dispatch)
     if status == 409 or _s(data.get("status")).lower() in {"conflict", "ambiguous"}:
         # Mehrere Patienten mit gleichem Nachnamen (W-NACHNAME 31.08.2026,
         # phone_agent-Vorbild): der Anrufer muss den Vornamen nachliefern,
         # dann wird mit firstName erneut gesucht. vornameVerworfen sagt dem
         # Aufrufer: der GESPEICHERTE Vorname passte nicht — leeren und fragen.
-        return {"ok": True, "mehrdeutig": True, "patient": {}, "appointments": [],
-                "vornameVerworfen": vorname_verworfen}
+        return _mit_dispatch({"ok": True, "mehrdeutig": True, "patient": {}, "appointments": [],
+                "vornameVerworfen": vorname_verworfen}, dispatch)
     msg = _s(data.get("message")) or f"http_{status}"
-    return {"ok": False, "appointments": [], "error": msg}
+    return _mit_dispatch({"ok": False, "appointments": [], "error": msg}, dispatch)
 
 
 def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]:
@@ -559,7 +657,7 @@ def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]
             "spoken": "Den Termin hätte ich jetzt abgesagt.",
             "regie": "Testmodus: der Kalender wurde nicht geändert.",
         }
-    status, data = _cf_post("agentCancelAppointmentById", {
+    status, data, dispatch = _cf_call("agentCancelAppointmentById", {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
         "appointmentId": aid,
@@ -567,13 +665,16 @@ def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]
     }, timeout=_SCHREIB_TIMEOUT)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         ctx["appointmentId"] = aid
-        return {"ok": True, "cancelled": True, "appointmentId": aid, "spoken": "Der Termin ist abgesagt."}
+        return _mit_dispatch({
+            "ok": True, "cancelled": True, "appointmentId": aid,
+            "spoken": "Der Termin ist abgesagt.",
+        }, dispatch)
     msg = (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"
-    return {
+    return _mit_dispatch({
         "ok": False,
         "spoken": "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum.",
         "regie": f"Absage fehlgeschlagen: {msg}",
-    }
+    }, dispatch)
 
 
 def _termin_id_suchen(tenant: dict, ctx: dict, iso: str) -> str:
@@ -609,9 +710,9 @@ def _termin_datum(ctx: dict, date: str = "") -> str:
     return ""
 
 
-def _cf_update(action: str, body: dict) -> tuple[int, Any]:
+def _cf_update(action: str, body: dict) -> tuple[int, Any, dict]:
     payload = {**body, "action": action}
-    return _cf_post("updateOrCancelAppointment", payload, timeout=_SCHREIB_TIMEOUT)
+    return _cf_call("updateOrCancelAppointment", payload, timeout=_SCHREIB_TIMEOUT)
 
 
 def list_appointments(tenant: dict, ctx: dict, upcoming: list | None = None, sit: dict | None = None) -> dict[str, Any]:
@@ -673,24 +774,30 @@ def cancel_appointment(tenant: dict, ctx: dict, *, date: str = "") -> dict[str, 
     }
     if first:
         body["firstName"] = first
-    status, data = _cf_update("cancel", body)
+    status, data, dispatch = _cf_update("cancel", body)
     if status == 200 and isinstance(data, dict) and data.get("success"):
-        return {
+        return _mit_dispatch({
             "ok": True,
             "cancelled": True,
             "appointmentDate": day,
             "spoken": f"Der Termin {slot_wort(day)} ist abgesagt.",
-        }
+        }, dispatch)
     if status == 409:
-        return {"ok": False, "spoken": "Wie ist Ihr Vorname? Es gibt mehrere Patienten mit diesem Nachnamen."}
+        return _mit_dispatch({
+            "ok": False,
+            "spoken": "Wie ist Ihr Vorname? Es gibt mehrere Patienten mit diesem Nachnamen.",
+        }, dispatch)
     if status == 404:
-        return {"ok": False, "spoken": "An diesem Tag finde ich unter Ihrem Namen keinen Termin."}
+        return _mit_dispatch({
+            "ok": False,
+            "spoken": "An diesem Tag finde ich unter Ihrem Namen keinen Termin.",
+        }, dispatch)
     msg = (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"
-    return {
+    return _mit_dispatch({
         "ok": False,
         "spoken": "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum.",
         "regie": f"Absage fehlgeschlagen: {msg}",
-    }
+    }, dispatch)
 
 
 def offer_move(tenant: dict, ctx: dict, *, date: str = "", wish: str = "") -> dict[str, Any]:
@@ -710,7 +817,7 @@ def offer_move(tenant: dict, ctx: dict, *, date: str = "", wish: str = "") -> di
             parsed = parse_slot_wish(wish)
             if parsed and parsed.get("date"):
                 body["startSearchDate"] = parsed["date"]
-        status, data = _cf_update("find-for-postpone", body)
+        status, data, dispatch = _cf_update("find-for-postpone", body)
         if status == 200 and isinstance(data, dict) and data.get("success"):
             appt = data.get("appointment") or {}
             raw_slots = data.get("freeSlots") or []
@@ -721,7 +828,7 @@ def offer_move(tenant: dict, ctx: dict, *, date: str = "", wish: str = "") -> di
                     slots.append({"iso": iso, "spoken": spoken_slot(iso)})
             aid = _s(appt.get("appointmentId"))
             liste = "; oder ".join(x["spoken"] for x in slots)
-            return {
+            return _mit_dispatch({
                 "ok": True,
                 "appointmentId": aid,
                 "slots": slots,
@@ -730,9 +837,12 @@ def offer_move(tenant: dict, ctx: dict, *, date: str = "", wish: str = "") -> di
                     if slots else
                     "Ich habe den Termin, aber gerade keinen freien Ausweichplatz."
                 ),
-            }
+            }, dispatch)
         if status == 409:
-            return {"ok": False, "spoken": "Wie ist Ihr Vorname? Es gibt mehrere Patienten mit diesem Nachnamen."}
+            return _mit_dispatch({
+                "ok": False,
+                "spoken": "Wie ist Ihr Vorname? Es gibt mehrere Patienten mit diesem Nachnamen.",
+            }, dispatch)
     return offer_slots(tenant, ctx, wish_text=wish)
 
 
@@ -774,19 +884,22 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
         "newStartDate": iso.replace("T", " ")[:16],
         "source": "telefonki-lisa",
     }
-    status, data = _cf_update("postpone", body)
+    status, data, dispatch = _cf_update("postpone", body)
     if status == 200 and isinstance(data, dict) and data.get("success"):
-        return {
+        return _mit_dispatch({
             "ok": True,
             "moved": True,
             "appointmentId": aid,
             "slotIso": iso,
             "spoken": f"Der Termin liegt jetzt {spoken_slot(iso)}.",
-        }
+        }, dispatch)
     if status == 400:
         alt = offer_slots(tenant, ctx, exclude_iso=iso)
-        return {"ok": False, "spoken": "Dieser Platz ist nicht mehr frei. " + (alt.get("spoken") or "")}
-    return {"ok": False, "spoken": "Verschieben hat gerade nicht geklappt."}
+        return _mit_dispatch({
+            "ok": False,
+            "spoken": "Dieser Platz ist nicht mehr frei. " + (alt.get("spoken") or ""),
+        }, dispatch)
+    return _mit_dispatch({"ok": False, "spoken": "Verschieben hat gerade nicht geklappt."}, dispatch)
 
 
 def _notiz_ziel(tenant: dict, ctx: dict, sit: dict | None) -> str:
@@ -836,18 +949,18 @@ def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: 
         "appointmentId": aid,
         "note": zeile,
     }
-    status, data = _cf_post("masAppointmentNote", body)
+    status, data, dispatch = _cf_call("masAppointmentNote", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
-        return {
+        return _mit_dispatch({
             "ok": True,
             "noted": True,
             "note": zeile,
             "appointmentId": aid,
             "spoken": "Die Notiz steht im Termin.",
-        }
+        }, dispatch)
     msg = (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"
-    return {
+    return _mit_dispatch({
         "ok": False,
         "spoken": "Die Notiz ist nicht im Termin gelandet.",
         "regie": f"masAppointmentNote fehlgeschlagen: {msg}",
-    }
+    }, dispatch)

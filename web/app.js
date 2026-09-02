@@ -101,12 +101,87 @@ function bubble(role, text) {
   $("live").scrollTop = $("live").scrollHeight;
 }
 
+function jsonText(v) {
+  try { return JSON.stringify(v, null, 2); } catch { return String(v ?? ""); }
+}
+
+function zeigeTools(tools) {
+  if (!tools || !tools.length) return;
+  const live = $("live");
+  for (const t of tools) {
+    const d = t.dispatch || {};
+    const name = d.route || t.cf || t.name || "tool";
+    const ok = t.ok !== false && (d.httpStatus == null || d.httpStatus === 200);
+    const ms = d.ms != null ? d.ms : t.ms;
+    const card = document.createElement("details");
+    card.className = "tool-card";
+    const sum = document.createElement("summary");
+    const n = document.createElement("span");
+    n.className = "tool-name";
+    n.textContent = name;
+    sum.appendChild(n);
+    const marke = document.createElement("span");
+    marke.className = `marke ${ok ? "gruen" : "gelb"}`;
+    marke.textContent = ok ? "Succeeded" : "Failed";
+    sum.appendChild(marke);
+    if (ms != null) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.textContent = ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+      sum.appendChild(c);
+    }
+    card.appendChild(sum);
+    const body = document.createElement("div");
+    body.className = "tool-body";
+    if (d.url) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      abs.innerHTML = "<b>Requested URL</b>";
+      const url = document.createElement("div");
+      url.className = "tool-url";
+      url.textContent = `${d.method || "POST"} ${d.url}`;
+      abs.appendChild(url);
+      body.appendChild(abs);
+    }
+    const req = d.request != null ? d.request : t.args;
+    if (req != null) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      const lab = document.createElement("b");
+      lab.textContent = d.request != null ? "Request Body" : "Parameters";
+      abs.appendChild(lab);
+      const pre = document.createElement("pre");
+      pre.className = "tool-json";
+      pre.textContent = jsonText(req);
+      abs.appendChild(pre);
+      body.appendChild(abs);
+    }
+    if (d.response != null) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      const lab = document.createElement("b");
+      lab.textContent = "Response";
+      abs.appendChild(lab);
+      const pre = document.createElement("pre");
+      pre.className = "tool-json";
+      pre.textContent = jsonText(d.response);
+      abs.appendChild(pre);
+      body.appendChild(abs);
+    }
+    if (!body.children.length) body.textContent = t.spoken || (ok ? "ok" : "fehlgeschlagen");
+    card.appendChild(body);
+    live.appendChild(card);
+  }
+  live.scrollTop = live.scrollHeight;
+}
+
 function maleProtokoll(call, writeLive) {
   const z = (call && call.zuege) || [];
   for (const ein of z) {
     if (!ein || ein.art === "hangup") continue;
     if (ein.textIn) bubble("user", ein.textIn);
     if (ein.text) bubble("lisa", ein.text);
+    if (ein.tools) zeigeTools(ein.tools);
     if (ein.book) zeigeBuch(ein.book, writeLive);
   }
 }
@@ -496,6 +571,7 @@ async function leseZug(r, onFiller) {
         if (ev.sessionId) out.sessionId = ev.sessionId;
         if (ev.empty) out.empty = true;
         if (ev.stilleMs) out.stilleMs = ev.stilleMs;
+        if (ev.tools) out.tools = ev.tools;
       }
       if (ev.type === "audio") {
         out.audioUrl = ev.audioUrl || "";
@@ -694,6 +770,8 @@ async function sendeZug({ text, blob, nr }) {
       return;
     }
     stilleStupse = 0; // echter Zug gehört und beantwortet — Stupse von vorn
+    if (data.tools) zeigeTools(data.tools);
+    if (data.book) zeigeBuch(data.book, data.writeLive);
     const t = data.timings || {};
     if (t.total != null) phase("lisa", `Lisa spricht · ${t.total}s`);
     await playUrl(data.audioUrl);

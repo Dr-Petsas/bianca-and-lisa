@@ -35,6 +35,26 @@ function uidForm(roh) {
   return String(roh || "");
 }
 
+/** Zwischenablage: clipboard-API braucht HTTPS/localhost; über Tailscale-HTTP
+    fällt der execCommand-Pfad ein (sonst schweigt der Knopf still). */
+async function inZwischenablage(text) {
+  const t = String(text || "");
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(t);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = t;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;left:-9999px;top:0";
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, t.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } finally { document.body.removeChild(ta); }
+  if (!ok) throw new Error("copy");
+}
+
 function kopierKnopf(text, label) {
   const b = document.createElement("button");
   b.className = "kopie";
@@ -44,10 +64,13 @@ function kopierKnopf(text, label) {
   b.onclick = async (ev) => {
     ev.stopPropagation();
     try {
-      await navigator.clipboard.writeText(text);
+      await inZwischenablage(text);
       b.textContent = "kopiert";
       setTimeout(() => { b.textContent = label || "kopieren"; }, 1200);
-    } catch { /* */ }
+    } catch {
+      b.textContent = "fehlgeschlagen";
+      setTimeout(() => { b.textContent = label || "kopieren"; }, 1500);
+    }
   };
   return b;
 }
@@ -110,21 +133,25 @@ function chip(text) {
   return c;
 }
 
+function msChip(label, s) {
+  return chip(`${label} ${Math.round(Number(s) * 1000)} ms`);
+}
+
 function sttChips(t) {
-  if (t && t.stt != null) return [chip(`stt ${Number(t.stt).toFixed(2)}s`)];
+  if (t && t.stt != null) return [msChip("stt", t.stt)];
   return [];
 }
 
 function kiTimingChips(t) {
   if (!t) return [];
   const aus = [];
-  if (t.llm != null) aus.push(chip(`llm ${Number(t.llm).toFixed(2)}s`));
+  if (t.llm != null) aus.push(msChip("llm", t.llm));
   if (t.ttsCache) {
     aus.push(chip("tts cache"));
   } else if (t.tts != null) {
-    aus.push(chip(`tts ${Number(t.tts).toFixed(2)}s`));
+    aus.push(msChip("tts", t.tts));
   }
-  if (t.total != null) aus.push(chip(`total ${Number(t.total).toFixed(2)}s`));
+  if (t.total != null) aus.push(msChip("total", t.total));
   return aus;
 }
 
@@ -133,6 +160,152 @@ function bubble(wer, text) {
   d.className = `bubble ${wer}`;
   d.textContent = text;
   return d;
+}
+
+function jsonText(v) {
+  try { return JSON.stringify(v, null, 2); } catch { return String(v ?? ""); }
+}
+
+function toolKarte(t) {
+  const d = t.dispatch || {};
+  const name = d.route || t.cf || t.name || "tool";
+  const ok = t.ok !== false && (d.httpStatus == null || d.httpStatus === 200);
+  const ms = d.ms != null ? d.ms : t.ms;
+  const card = document.createElement("details");
+  card.className = "tool-card";
+  const sum = document.createElement("summary");
+  const n = document.createElement("span");
+  n.className = "tool-name";
+  n.textContent = name;
+  sum.appendChild(n);
+  const marke = document.createElement("span");
+  marke.className = `marke ${ok ? "gruen" : "gelb"}`;
+  marke.textContent = ok ? "Succeeded" : "Failed";
+  sum.appendChild(marke);
+  if (ms != null) sum.appendChild(chip(ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`));
+  if (t.name && t.name !== name) sum.appendChild(chip(t.name));
+  card.appendChild(sum);
+
+  const body = document.createElement("div");
+  body.className = "tool-body";
+
+  if (d.url) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const lab = document.createElement("b");
+    lab.textContent = "Requested URL";
+    abs.appendChild(lab);
+    const url = document.createElement("div");
+    url.className = "tool-url";
+    url.textContent = `${d.method || "POST"} ${d.url}`;
+    abs.appendChild(url);
+    body.appendChild(abs);
+  }
+
+  const req = d.request != null ? d.request : t.args;
+  if (req != null) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const kopf = document.createElement("div");
+    kopf.className = "tool-kopf";
+    const lab = document.createElement("b");
+    lab.textContent = d.request != null ? "Request Body" : "Parameters";
+    kopf.appendChild(lab);
+    kopf.appendChild(kopierKnopf(jsonText(req), "Copy"));
+    abs.appendChild(kopf);
+    const pre = document.createElement("pre");
+    pre.className = "tool-json";
+    pre.textContent = jsonText(req);
+    abs.appendChild(pre);
+    body.appendChild(abs);
+  }
+
+  if (t.args && d.request != null) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const lab = document.createElement("b");
+    lab.textContent = "Parameters extracted by LLM";
+    abs.appendChild(lab);
+    const pre = document.createElement("pre");
+    pre.className = "tool-json";
+    pre.textContent = jsonText(t.args);
+    abs.appendChild(pre);
+    body.appendChild(abs);
+  }
+
+  if (ms != null) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const lab = document.createElement("b");
+    lab.textContent = "Tool execution time";
+    abs.appendChild(lab);
+    const v = document.createElement("div");
+    v.textContent = ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+    abs.appendChild(v);
+    body.appendChild(abs);
+  }
+
+  if (d.response != null) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const kopf = document.createElement("div");
+    kopf.className = "tool-kopf";
+    const lab = document.createElement("b");
+    lab.textContent = "Response";
+    kopf.appendChild(lab);
+    kopf.appendChild(kopierKnopf(jsonText(d.response), "Copy"));
+    abs.appendChild(kopf);
+    const pre = document.createElement("pre");
+    pre.className = "tool-json";
+    pre.textContent = jsonText(d.response);
+    abs.appendChild(pre);
+    body.appendChild(abs);
+  }
+
+  const ups = d.updates || [];
+  if (ups.length) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const lab = document.createElement("b");
+    lab.textContent = "Dynamic Variable Updates";
+    abs.appendChild(lab);
+    const liste = document.createElement("div");
+    liste.className = "tool-upd";
+    for (const u of ups) {
+      const z = document.createElement("div");
+      z.className = "tool-upd-zeile";
+      const key = document.createElement("b");
+      key.style.color = "var(--text)";
+      key.textContent = u.key || "?";
+      z.appendChild(key);
+      z.appendChild(document.createTextNode(" "));
+      const von = document.createElement("span");
+      von.className = "von";
+      von.textContent = u.from === "" || u.from == null ? "EMPTY STRING" : jsonText(u.from);
+      z.appendChild(von);
+      z.appendChild(document.createTextNode(" → "));
+      const nach = document.createElement("span");
+      nach.className = "nach";
+      let toText = jsonText(u.to);
+      if (u.key === "free_time_slots" && Array.isArray(u.to) && u.total && u.total > u.to.length) {
+        toText = `[${u.to.length} shown / ${u.total} total] ` + toText;
+      }
+      nach.textContent = toText;
+      z.appendChild(nach);
+      liste.appendChild(z);
+    }
+    abs.appendChild(liste);
+    body.appendChild(abs);
+  }
+
+  if (!body.children.length) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    abs.textContent = t.spoken || (ok ? "ok" : "fehlgeschlagen");
+    body.appendChild(abs);
+  }
+  card.appendChild(body);
+  return card;
 }
 
 function maleDetail(a) {
@@ -245,11 +418,19 @@ function maleDetail(a) {
     if (z.book && (z.book.ok || z.book.booked)) {
       fluss.appendChild(bubble("sys", `Buchung: ${z.book.spoken || z.book.slotIso || "ok"}`));
     }
+    for (const t of z.tools || []) {
+      fluss.appendChild(toolKarte(t));
+    }
     if (z.art === "hangup") {
       fluss.appendChild(bubble("sys", `Aufgelegt${z.note ? " — Notiz: " + z.note : ""}`));
     }
   }
-  if (!(a.zuege || []).length) {
+  // Ältere Mitschnitte: Tools nur am Manifest-Kopf, nicht je Zug.
+  const hatZugTools = (a.zuege || []).some((z) => (z.tools || []).length);
+  if (!hatZugTools) {
+    for (const t of a.tools || []) fluss.appendChild(toolKarte(t));
+  }
+  if (!(a.zuege || []).length && !(a.tools || []).length) {
     fluss.appendChild(bubble("sys", "keine Züge aufgezeichnet"));
   }
   wurzel.appendChild(fluss);

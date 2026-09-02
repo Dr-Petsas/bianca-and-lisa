@@ -113,6 +113,49 @@ def test_echo_referenz_klingt_ab(monkeypatch):
     assert voll_frames >= 1                            # Konstanten-Sanity
 
 
+# --- W-SIP-VOLLBUF (02.09.2026): Audio erst nach vollem Download ------------
+
+def _arm_check(p: dict) -> bool:
+    """Gleiche Arm-Logik wie Wiedergabe.lauf — offline ohne Async-Takt."""
+    if p.get("armed"):
+        return True
+    if p["done"]:
+        p["armed"] = True
+        return True
+    return False
+
+
+def test_fertig_wav_wartet_auf_done_nicht_auf_teilpuffer():
+    """Begruessung /api/audio/: auch 1 s schon im buf darf Playout nicht
+    starten — erst wenn done (Download+Resample fertig). Sonst Underrun
+    mit Stille-Rahmen = Live-Haken bei sauberer Mitschnitt-WAV."""
+    async def _schreib(_b):
+        pass
+
+    w = srv.Wiedergabe(_schreib)
+    p = w.neu("/api/audio/begruessung.wav")
+    assert p["armed"] is False and p["stream"] is False
+    p["buf"].extend(b"\x00" * (srv.RATE_IN * 2))  # 1 s Audio, aber noch ladend
+    assert _arm_check(p) is False
+    p["done"] = True
+    assert _arm_check(p) is True
+
+
+def test_stream_url_wartet_auch_auf_done():
+    """Telefon: auch /api/audio-stream/ erst nach done — kein 200-ms-Prefill
+    (Live 02.09.: Prefill + HTTP-Luecke = starkes Stocken + ReadError)."""
+    async def _schreib(_b):
+        pass
+
+    w = srv.Wiedergabe(_schreib)
+    p = w.neu("/api/audio-stream/xyz.wav")
+    assert p["armed"] is False and p["stream"] is True
+    p["buf"].extend(b"\x00" * (srv.RATE_IN * 2 * 500 // 1000))  # 500 ms
+    assert _arm_check(p) is False
+    p["done"] = True
+    assert _arm_check(p) is True
+
+
 # --- W-STT-SCHWANZ (30.08.2026): Hysterese fuers Zugende ---------------------
 
 def test_leiser_auslauf_haelt_zugende_offen(anruf):
@@ -220,3 +263,36 @@ def test_http_peek_beantwortet_dialplan_curl():
     erste, zweite = asyncio.run(_lauf())
     assert erste.startswith(b"HTTP/1.1 200 OK") and erste.endswith(b"+49555666777")
     assert zweite.endswith(b"\r\n\r\n")  # verbraucht: leerer Body
+
+
+def test_stream_underrun_gibt_ohr_frei(anruf):
+    """W-SIP-OHR: haengender Stream-Posten (done=False, buf leer gespielt)
+    darf nach SPIEL_NACHLAUF_S die Aufnahme nicht mehr im Barge-Modus halten.
+    Live 02.09.: aktiv klebte True, Anrufer sprach ungehhört."""
+    # Fake-Posten wie nach ausgespielt.em Stream-Underrun.
+    anruf.wiedergabe.posten = [{
+        "url": "/api/audio-stream/x.wav", "buf": bytearray(), "done": False,
+        "sent": 0, "armed": True, "stream": True,
+    }]
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr() - (srv.SPIEL_NACHLAUF_S + 0.2)
+    assert anruf.wiedergabe.aktiv is True
+    assert anruf.wiedergabe.spielt() is False
+    # Normale Sprech-Schwelle (400) + START_FRAMES: kurzes "Ja" reicht.
+    _fuettern(anruf, [_frame(1800)] * 6)
+    _fuettern(anruf, [_frame(0)] * 40)
+    assert anruf.zuege.qsize() == 1
+    assert anruf.wiedergabe.posten == []  # Zombie-Stream verworfen
+
+
+def test_kurzer_stream_gap_bleibt_barge(anruf):
+    """Kurze TTS-Luecke (< SPIEL_NACHLAUF_S) bleibt Barge — kein Fehlstart."""
+    anruf.wiedergabe.posten = [{
+        "url": "/api/audio-stream/x.wav", "buf": bytearray(), "done": False,
+        "sent": 0, "armed": True, "stream": True,
+    }]
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr() - 0.05  # frisch gespielt
+    assert anruf.wiedergabe.spielt() is True
+    # 6 Frames reichen fuer START, nicht fuer BARGE (14) — kein Zug.
+    _fuettern(anruf, [_frame(2400)] * 6)
+    _fuettern(anruf, [_frame(0)] * 40)
+    assert anruf.zuege.qsize() == 0

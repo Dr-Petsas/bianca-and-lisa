@@ -159,6 +159,11 @@ def api_start(body: StartIn):
         # W-CALLSTATUS: phoneCallId dieses Anrufs in die Sitzung (frisch aus
         # der pre-Antwort oder per Hintergrund-Registrierung bei Cache-Hit).
         agentprofil.call_erfassen(sit, did=body.did, caller=body.caller)
+        # W-SIP-BLOCK (02.09.2026): DID = SIP-Bruecke. Am Telefon kein
+        # Audio-Stream (VOLLBUF wartete auf kompletten Download → 5+ s
+        # Stille nach "Yep"); Blocking-WAV + Bruecken-VOLLBUF = sofort
+        # durchspielen. Dock (ohne did) bleibt bei Stream.
+        sit["clientKind"] = "sip"
     return DIENST.json_antwort(
         sit, art="start",
         extra={"sessionId": sit["id"], "praxis": t.get("praxisName"),

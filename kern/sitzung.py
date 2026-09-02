@@ -15,8 +15,18 @@ def merke_zug(sit: dict[str, Any], **zug: Any) -> None:
     sit["zuege"] = sit["zuege"][-24:]
 
 
-def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any]) -> None:
-    ein = {
+def _tools_des_zugs(sit: dict[str, Any]) -> list[dict[str, Any]]:
+    """Werkzeuge des laufenden Zugs abholen (fuer Antwort + Mitschnitt)."""
+    aus = sit.pop("_toolsZug", None) or []
+    return [t for t in aus if isinstance(t, dict)]
+
+
+def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any],
+               *, args: dict[str, Any] | None = None) -> None:
+    """Werkzeug-Spur merken — inkl. CF-Dispatch (URL/Body/Response/ms)
+    fuer die Unterhaltungs-Anzeige (W-TOOL-UI 02.09.2026)."""
+    dispatch = result.get("dispatch") if isinstance(result.get("dispatch"), dict) else None
+    ein: dict[str, Any] = {
         "name": name,
         "ok": bool(result.get("ok")),
         "booked": bool(result.get("booked")),
@@ -30,8 +40,27 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any]) -> None:
         "spoken": result.get("spoken") or "",
         "note": result.get("note") or "",
     }
+    if args:
+        ein["args"] = args
+    if dispatch:
+        ein["dispatch"] = {
+            "route": dispatch.get("route") or "",
+            "url": dispatch.get("url") or "",
+            "method": dispatch.get("method") or "POST",
+            "request": dispatch.get("request"),
+            "httpStatus": dispatch.get("httpStatus"),
+            "ms": dispatch.get("ms"),
+            "response": dispatch.get("response"),
+            "updates": dispatch.get("updates") or [],
+        }
+        if dispatch.get("route"):
+            ein["cf"] = dispatch["route"]
+        if dispatch.get("ms") is not None:
+            ein["ms"] = dispatch["ms"]
     sit.setdefault("tools", []).append(ein)
-    sit["tools"] = sit["tools"][-12:]
+    sit["tools"] = sit["tools"][-24:]
+    # Pro Zug bundeln — landet in Antwort, Sitzungs-Protokoll und Mitschnitt.
+    sit.setdefault("_toolsZug", []).append(ein)
     if name == "create_patient":
         sit["lastCreate"] = {**ein, "created": bool(result.get("created"))}
         if result.get("patient") and isinstance(result.get("patient"), dict):

@@ -137,7 +137,7 @@ def apply_tools(sit: dict, msgs: list, first: dict, melde=None) -> tuple[str, li
                 "slotIso": result.get("slotIso") or "",
                 "spoken": result.get("spoken") or "",
             }
-        merke_tool(sit, name, result)
+        merke_tool(sit, name, result, args=args if isinstance(args, dict) else None)
         if name != "note_appointment":
             spoken = _s(result.get("spoken")) or spoken
         elif not spoken:

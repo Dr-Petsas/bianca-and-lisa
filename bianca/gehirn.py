@@ -124,6 +124,10 @@ _ABSAGE_RE = re.compile(
     r"absagen|abzusagen|abgesagt|\babsage\b|stornieren|storniert|stornierung|"
     r"abbestellen|\w*cancel\w*|"
     r"nicht\s+(kommen|wahrnehmen|schaffen|einhalten)|"
+    # "den wieder weg" / "doch wieder stornieren" nach frischer Buchung
+    # (W-FRISCH-ABSAGE 02.09.2026) — ohne klassisches Absage-Verb.
+    r"wieder\s+(?:ab\b|stornier\w*|weg\b|raus\b)|"
+    r"(?:termin\w*|ihn|den)\s+[^.!?]{0,40}?\bwieder\s+(?:ab|weg|raus|storn)|"
     # "der Termin (morgen) fällt aus" / "den Termin platzen lassen" — aber
     # NICHT "mir fällt ein Zahn aus" (Subjekt muss der Termin sein).
     r"termin\w*[^.!?]{0,30}?(?:fällt|faellt)\s+(?:leider\s+|doch\s+)?aus\b|"
@@ -1185,6 +1189,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Wie ist es Ihnen seither ergangen?",
         "Hat sich das seitdem gut beruhigt?",
     ),
+    "frisch_absage_ok": (
+        "Soll ich den Termin wirklich absagen? Ein kurzes Ja oder Nein genügt.",
+        "Darf ich den Termin jetzt stornieren — Ja oder Nein?",
+    ),
 }
 
 # Behandler-WAHL fuer Neupatienten (Chef 29.08.2026: "es muss zu beginn
@@ -1374,7 +1382,7 @@ def telefon_alt_frage(s: dict) -> str:
 # 1500 ms — traege genug fuer Gruppen-Pausen, ohne das Gespraech zu laehmen.
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
                 "versicherung_check", "pzr", "telefon_alt", "telefon_check",
-                "rueckblick", "anrufer_check"}
+                "rueckblick", "anrufer_check", "frisch_absage_ok", "absage_ok"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.

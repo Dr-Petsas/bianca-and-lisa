@@ -107,12 +107,137 @@ function bubble(role, text) {
   $("live").scrollTop = $("live").scrollHeight;
 }
 
+function jsonText(v) {
+  try { return JSON.stringify(v, null, 2); } catch { return String(v ?? ""); }
+}
+
+function zeigeTools(tools) {
+  if (!tools || !tools.length) return;
+  const live = $("live");
+  for (const t of tools) {
+    const d = t.dispatch || {};
+    const name = d.route || t.cf || t.name || "tool";
+    const ok = t.ok !== false && (d.httpStatus == null || d.httpStatus === 200);
+    const ms = d.ms != null ? d.ms : t.ms;
+    const card = document.createElement("details");
+    card.className = "tool-card";
+    const sum = document.createElement("summary");
+    const n = document.createElement("span");
+    n.className = "tool-name";
+    n.textContent = name;
+    sum.appendChild(n);
+    const marke = document.createElement("span");
+    marke.className = `marke ${ok ? "gruen" : "gelb"}`;
+    marke.textContent = ok ? "Succeeded" : "Failed";
+    sum.appendChild(marke);
+    if (ms != null) {
+      const c = document.createElement("span");
+      c.className = "chip";
+      c.textContent = ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+      sum.appendChild(c);
+    }
+    card.appendChild(sum);
+    const body = document.createElement("div");
+    body.className = "tool-body";
+    if (d.url) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      abs.innerHTML = `<b>Requested URL</b>`;
+      const url = document.createElement("div");
+      url.className = "tool-url";
+      url.textContent = `${d.method || "POST"} ${d.url}`;
+      abs.appendChild(url);
+      body.appendChild(abs);
+    }
+    const req = d.request != null ? d.request : t.args;
+    if (req != null) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      const kopf = document.createElement("div");
+      kopf.className = "tool-kopf";
+      const lab = document.createElement("b");
+      lab.textContent = d.request != null ? "Request Body" : "Parameters";
+      kopf.appendChild(lab);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Copy";
+      const txt = jsonText(req);
+      btn.onclick = async () => {
+        try { await navigator.clipboard.writeText(txt); btn.textContent = "kopiert"; setTimeout(() => { btn.textContent = "Copy"; }, 1000); } catch { /* */ }
+      };
+      kopf.appendChild(btn);
+      abs.appendChild(kopf);
+      const pre = document.createElement("pre");
+      pre.className = "tool-json";
+      pre.textContent = txt;
+      abs.appendChild(pre);
+      body.appendChild(abs);
+    }
+    if (d.response != null) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      const kopf = document.createElement("div");
+      kopf.className = "tool-kopf";
+      const lab = document.createElement("b");
+      lab.textContent = "Response";
+      kopf.appendChild(lab);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Copy";
+      const txt = jsonText(d.response);
+      btn.onclick = async () => {
+        try { await navigator.clipboard.writeText(txt); btn.textContent = "kopiert"; setTimeout(() => { btn.textContent = "Copy"; }, 1000); } catch { /* */ }
+      };
+      kopf.appendChild(btn);
+      abs.appendChild(kopf);
+      const pre = document.createElement("pre");
+      pre.className = "tool-json";
+      pre.textContent = txt;
+      abs.appendChild(pre);
+      body.appendChild(abs);
+    }
+    if (ms != null) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      abs.innerHTML = `<b>Tool execution time</b><div>${ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : ms + " ms"}</div>`;
+      body.appendChild(abs);
+    }
+    const ups = d.updates || [];
+    if (ups.length) {
+      const abs = document.createElement("div");
+      abs.className = "tool-abs";
+      const lab = document.createElement("b");
+      lab.textContent = "Dynamic Variable Updates";
+      abs.appendChild(lab);
+      const liste = document.createElement("div");
+      liste.className = "tool-upd";
+      for (const u of ups) {
+        const z = document.createElement("div");
+        z.className = "tool-upd-zeile";
+        z.innerHTML = `<b style="color:var(--text)">${u.key || "?"}</b> `
+          + `<span class="von">${u.from === "" || u.from == null ? "EMPTY STRING" : jsonText(u.from)}</span>`
+          + ` → <span class="nach">${jsonText(u.to)}</span>`;
+        liste.appendChild(z);
+      }
+      abs.appendChild(liste);
+      body.appendChild(abs);
+    }
+    if (!body.children.length) {
+      body.textContent = t.spoken || (ok ? "ok" : "fehlgeschlagen");
+    }
+    card.appendChild(body);
+    live.appendChild(card);
+  }
+  live.scrollTop = live.scrollHeight;
+}
+
 function maleProtokoll(call, writeLive) {
   const z = (call && call.zuege) || [];
   for (const ein of z) {
     if (!ein || ein.art === "hangup") continue;
     if (ein.textIn) bubble("user", ein.textIn);
     if (ein.text) bubble("ki", ein.text);
+    if (ein.tools) zeigeTools(ein.tools);
     if (ein.book) zeigeBuch(ein.book, writeLive);
   }
 }
@@ -367,6 +492,7 @@ async function leseZug(r, onFiller) {
         if (ev.empty) out.empty = true;
         if (ev.hangup) out.hangup = true;
         if (ev.stilleMs) out.stilleMs = ev.stilleMs;
+        if (ev.tools) out.tools = ev.tools;
       }
       if (ev.type === "audio") {
         out.audioUrl = ev.audioUrl || "";
@@ -579,6 +705,7 @@ async function sendeZug({ text, blob, nr }) {
     stilleStupse = 0; // echter Zug gehört und beantwortet — Stupse von vorn
     if (data.textIn) bubble("user", data.textIn);
     if (data.text) bubble("ki", data.text);
+    if (data.tools) zeigeTools(data.tools);
     if (data.book) zeigeBuch(data.book, data.writeLive);
     const t = data.timings || {};
     if (t.total != null) phase("ki", `Bianca spricht · ${t.total}s`);
@@ -967,6 +1094,7 @@ const PATCHES = [
   ["P1 Readback-Parallelisierung", "29.08.", "Mund", "Dreisatz-Readback: Vorsatz/Schlussfrage aus Pin-Cache (Blocking). Mid-Stream-Parallel abgelöst durch W-TTS-STOCK."],
   ["W-TTS-STOCK", "01.09.", "Mund", "Streaming: ganzer Text = ein /speak-stream (kein Satz-für-Satz); Ziffern-Äußerungen komplett blocking — kein Stocken an Naht/Retry."],
   ["W-TTS-PREBUF", "01.09.", "Mund", "Prefill vor Playout: Basis 220 ms (schnell starten), erst ab langen Texten bis 550 ms — langsamer reden hilft der Pause nach dem Anrufer nicht."],
+  ["W-SIP-VOLLBUF", "02.09.", "Telefon", "Brücke spielt fertige WAVs und Streams erst nach komplettem Download; Lade-Tasks vor aclose. W-SIP-BLOCK: SIP-Sitzungen (DID) immer Blocking-TTS — kein Stream-Hang (fehlendes slot→fertig) mit 5–30 s Stille nach kurzer Antwort."],
   ["P2 Satz-Deckel", "29.08.", "Hirn", "LLM-Stream schließt hart nach zwei Sätzen plus Frage — nichts Abgehacktes."],
   ["P5 Satzweises LLM→TTS", "29.08.", "Hirn/Mund", "Jeder fertige Satz wird sofort vertont, während der Stream weiterliest — URLs in Reihenfolge."],
   ["P4 Speculative Decoding", "29.08.", "Hirn", "Geprüft und bewusst NICHT aktiv: kein freier VRAM neben TTS (30,5/32,6 GB belegt)."],
@@ -998,6 +1126,9 @@ const PATCHES = [
   ["W-TTS-NAHT (nichts mehr abgehackt)", "31.08.", "Hirn/Mund", "Sätze und Wörter klangen manchmal mittendrin abgehackt: der Satz-Split schnitt hinter Ordnungszahlen und Abkürzungen („im 3. | Stock“, „Bahnhofstr. | Fünf“), der Satz-Deckel kappte Antworten an solchen falschen Satzenden. Jetzt gilt die Grenz-Wache des alten phone_agent (tts_chunks) in der ganzen Kette: nie hinter Ziffer/Abkürzung/Einzelbuchstabe splitten, und Vorab-Sätze unter 20 Zeichen warten auf den Folgesatz statt als Mini-Render zu klingen."],
   ["Verbinde-Imperativ erkannt", "31.08.", "Gespräch", "„Verbinde mich mit Dr. Petzos jetzt.“ fiel durch alle Erkennungs-Formen — das LLM fragte in jedem Anruf aufs Neue „Zu welchem unserer Ärzte darf ich Sie verbinden?“ statt durchzustellen. Jetzt zählt auch der nackte Imperativ („Verbinde mich/uns …“) als Weiterleitungs-Wunsch, und der Namens-Weg greift auch bei verhörten Namen (Petzos/Petzl → Petsas)."],
   ["W-ANRUFER-CHECK (erkannten Anrufer vorlesen)", "31.08.", "Gespräch", "Findet die Cloud Function den Anrufer über seine übermittelte Rufnummer in der Kartei, liest Bianca bei Buchung, Absage, Verschieben und Auskunft Name + Nummer EINMAL zur Kontrolle vor („Ich habe Sie an Ihrer Rufnummer erkannt: Julia Berger, unter … Stimmt das so?“) statt beides zu erfragen. Ein Ja übernimmt Name (Kartei-Schreibweise, nichts zu buchstabieren), patientId, Geschlecht und die Nummer als rückbestätigt; ein Nein (oder zweimal Unklares) verwirft den Treffer komplett und fragt klassisch. Nie für Dritte („Termin für meine Tochter“), nie nach „ich war noch nie bei Ihnen“, Notaus ANRUFER_CHECK=0."],
+  ["W-TOOL-UI (Tool-Dispatch in der Unterhaltung)", "02.09.", "Betrieb", "Jeder Cloud-Function-Aufruf (getFreeTimeSlots, Buchen, Absage …) erscheint in Dock und Anrufe-Ansicht als aufklappbare Karte: URL, Request-Body, Response, Dauer und Dynamic-Variable-Updates — wie im Portal-Tool-Dispatch."],
+  ["W-VORRAT-UI (getFreeTimeSlots auch aus Hintergrund)", "02.09.", "Betrieb", "Slots aus dem Hintergrund-Vorrat (bianca-vorrat) erscheinen beim Angebot trotzdem als getFreeTimeSlots-Tool-Karte — nicht nur, wenn der Angebots-Zug die CF nochmal anruft."],
+  ["W-FRISCH-ABSAGE (Storno nach frischer Buchung)", "02.09.", "Gespräch", "Nach frischer Buchung: Absage-Wunsch und Ja auf eine LLM-Storno-Frage lösen wirklich cancel_appointment aus (kein erfundenes „Der Termin ist storniert“). Erledigt-Wache greift auch bei phase=gebucht."],
 ];
 
 let kTab = "faehig";

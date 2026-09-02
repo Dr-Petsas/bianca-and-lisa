@@ -731,6 +731,8 @@ def test_absage_varianten_erkannt():
         "Nehmen Sie den Termin bitte aus dem Kalender, also entfernen.",
         "Ich muss den Termin platzen lassen.",
         "Ich kann den Termin nicht wahrnehmen.",
+        "Den Termin bitte wieder weg.",
+        "Können Sie ihn wieder stornieren?",
     ]:
         sit = _sit()
         z = flow.zug(sit, satz)
@@ -1310,6 +1312,85 @@ def test_erledigt_wache_blockt_falsche_absage_behauptung():
     # Lief das Werkzeug wirklich, bleibt der Text unangetastet.
     gleich = agentmod._nachbessern(sit, text, werkzeug_lief=True)
     assert gleich == text
+
+
+def test_frisch_absage_nach_llm_storno_frage():
+    """Live 02.09. Tzannis: nach Buchung fragte das LLM 'Soll ich stornieren?',
+    Anrufer 'Yeah.' — Antwort 'Der Termin ist storniert' OHNE Tool. Jetzt
+    cancel_appointment auf den frisch gebuchten Termin."""
+    from bianca import verwalten
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "phase": "gebucht", "frage": "",
+        "vorname": "Kiriakos", "nachname": "Tzannis",
+        "slotIso": "2026-09-02T10:15:00+02:00",
+        "arzt": {"typ": "genannt", "calendarId": "calPetsas", "calendarName": "Dr. Petsas"},
+    })
+    sit["booking"] = {"appointmentId": "YYFlonPPFQifsUK61UU0"}
+    sit["lastBook"] = {
+        "appointmentId": "YYFlonPPFQifsUK61UU0",
+        "slotIso": "2026-09-02T10:15:00+02:00",
+        "ok": True,
+    }
+    sit["messages"] = [
+        {"role": "system", "content": "x"},
+        {"role": "assistant", "content": "Der Termin heute um zehn Uhr fünfzehn ist fest eingetragen."},
+        {"role": "user", "content": "Ah nee, ich schaff's schon anders."},
+        {"role": "assistant", "content": "Verstehe. Soll ich den Termin dann für Sie stornieren?"},
+    ]
+    calls: list[str] = []
+    echt = verwalten.kal.cancel_by_id
+
+    def _cancel(tenant, ctx, aid):
+        calls.append(aid)
+        return {"ok": True, "cancelled": True, "appointmentId": aid,
+                "spoken": "Der Termin ist abgesagt."}
+
+    verwalten.kal.cancel_by_id = _cancel
+    try:
+        z = flow.zug(sit, "Yeah.")
+    finally:
+        verwalten.kal.cancel_by_id = echt
+    assert calls == ["YYFlonPPFQifsUK61UU0"], calls
+    assert z and ("abgesagt" in z["text"].lower() or "erledigt" in z["text"].lower())
+    assert (z.get("book") or {}).get("cancelled") is True
+    assert s["phase"] == "fertig"
+
+
+def test_frisch_absage_wunsch_bestaetigt_ohne_namenssuche():
+    """'Sagen Sie den Termin doch wieder ab' nach Buchung: Bestaetigungsfrage
+    fuer den frischen Termin, kein Nachnamen-Suchen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "phase": "gebucht",
+        "vorname": "Kiriakos", "nachname": "Tzannis",
+        "slotIso": "2026-09-02T10:15:00+02:00",
+    })
+    sit["booking"] = {"appointmentId": "aid-frisch"}
+    z = flow.zug(sit, "Ach warten Sie — bitte sagen Sie den Termin doch wieder ab.")
+    assert s["modus"] == "absagen"
+    assert s["phase"] == "absage_bestaetigen"
+    assert z and "wirklich absagen" in z["text"].lower()
+    assert "nachname" not in z["text"].lower()
+
+
+def test_erledigt_wache_bei_gebucht_fragt_nach():
+    """LLM behauptet Storno bei phase=gebucht ohne Tool → Rueckfrage statt Luege."""
+    from bianca import agent as agentmod
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "phase": "gebucht", "frage": ""})
+    sit["booking"] = {"appointmentId": "aid-x"}
+    sit["lastBook"] = {"appointmentId": "aid-x", "slotIso": "2026-09-02T10:15:00+02:00"}
+    raus = agentmod._nachbessern(
+        sit, "Der Termin ist storniert. Gibt es sonst noch etwas für Sie?",
+        werkzeug_lief=False,
+    )
+    assert "storniert" not in raus.lower() or "wirklich" in raus.lower()
+    assert "absagen" in raus.lower()
+    assert s["frage"] == "frisch_absage_ok"
 
 
 def test_noch_nicht_ist_nein():

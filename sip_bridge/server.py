@@ -176,6 +176,13 @@ FLOOR_MIN = 60.0
 FLOOR_MAX = 4000.0
 START_FRAMES = 3        # 60 ms Sprache = Zugbeginn
 BARGE_FRAMES = 14       # 280 ms Sprache waehrend Bianca spricht = Barge
+# W-SIP-OHR (02.09.2026): TTS-Stream-Underruns (buf leer, done noch False)
+# hielten Wiedergabe.aktiv Minuten lang True — die Bruecke blieb im
+# Barge-Modus (schwelle 1100, 280 ms noetig), der Anrufer wurde nicht
+# gehoert (Live: Sessions 15e7c31c / 2274944a). Nach SPIEL_NACHLAUF_S ohne
+# echten Sende-Ton gilt die Leitung als zuhoerbereit, auch wenn der
+# Stream-Posten noch "offen" ist.
+SPIEL_NACHLAUF_S = 0.35
 # W-STT-SCHWANZ (30.08.2026): 500 ms Vorlauf wie der phone_agent
 # (VAD_PREROLL_MS=500, dort gegen abgeschnittene Wortanfaenge wie
 # "gesetzlich" -> "ersetzlich") statt vorher 300 ms.
@@ -321,19 +328,39 @@ class Wiedergabe:
         return int(ref)
 
     def neu(self, url: str) -> dict:
-        # W-TTS-PREBUF: Stream-URLs erst abspielen, wenn genug PCM liegt
-        # (oder der Slot zu ist) — sonst startet der 20-ms-Takt auf dem
-        # ersten Mini-Chunk und stockt bei der naechsten Generierungs-Luecke
-        # (LiveKit fishaudio #6368, bei uns gemessen bis ~180 ms Gap).
+        # W-SIP-VOLLBUF (02.09.2026): JEDER Posten (fertige WAV und
+        # /api/audio-stream/) erst abspielen, wenn Download+Resample
+        # KOMPLETT im buf liegt (done=True). Live 02.09.: Stream nach
+        # 200 ms Prefill gestartet → Generierungs-/HTTP-Luecke → Stille-
+        # Rahmen = starkes Stocken; Mitschnitt fehlte z004 (ReadError beim
+        # aclose). Dock bleibt unberuehrt (spielt Streams selbst progressiv).
         stream = "/api/audio-stream/" in (url or "")
         p = {"url": url, "buf": bytearray(), "done": False, "sent": 0,
-             "armed": not stream}
+             "armed": False, "stream": stream}
         self.posten.append(p)
         return p
 
     @property
     def aktiv(self) -> bool:
         return any(len(p["buf"]) > p["sent"] or not p["done"] for p in self.posten)
+
+    def spielt(self) -> bool:
+        """Fuer VAD/Barge: spielt Bianca GRADE hoerbar (oder startet gleich)?
+
+        Anders als ``aktiv``: ein Stream-Posten, dessen Puffer schon leer
+        gespielt ist und der nur noch auf Nachschub wartet (Underrun),
+        zaehlt nach SPIEL_NACHLAUF_S NICHT mehr — sonst bleibt die Bruecke
+        im Barge-Modus und der Anrufer wird nie aufgenommen (W-SIP-OHR).
+        """
+        if not self.posten:
+            return False
+        if any(len(p["buf"]) > p["sent"] for p in self.posten):
+            return True
+        # Noch nicht armed: Prebuf/Vollbuf — Begruessung kommt gleich.
+        if any(not p.get("armed") and not p["done"] for p in self.posten):
+            return True
+        # Underrun / hangender Stream: nur kurz nach dem letzten echten Ton.
+        return (time.monotonic() - self.zuletzt_ton) < SPIEL_NACHLAUF_S
 
     def stoppen(self) -> tuple[str, float]:
         """Barge: alles verwerfen; (url, gespielte ms) des laufenden Postens."""
@@ -366,9 +393,9 @@ class Wiedergabe:
                 while self.posten:
                     p = self.posten[0]
                     if not p.get("armed"):
-                        # 200 ms @ 8 kHz — App prefillt schon; Bruecke soll
-                        # nicht noch 350 ms obendrauf warten (TTFA-Klage).
-                        if p["done"] or len(p["buf"]) >= RATE_IN * 2 * 200 // 1000:
+                        # W-SIP-VOLLBUF: Stream und fertige WAV erst nach
+                        # komplettem buf (kein 200-ms-Prefill mehr am Telefon).
+                        if p["done"]:
                             p["armed"] = True
                         else:
                             break
@@ -428,6 +455,9 @@ class Anruf:
         self.quittungen: list[bytes] = []
         self.quittung_nr = 0
         self.stups_zahl = 0
+        # W-SIP-VOLLBUF: offene Audio-Downloads — vor http.aclose() abwarten,
+        # sonst ReadError mitten im Stream (Live 02.09. Session 219c71f2).
+        self._lade_tasks: set[asyncio.Task] = set()
         # VAD-Zustand
         self._ring: list[bytes] = []
         self._rec = bytearray()
@@ -531,8 +561,20 @@ class Anruf:
             return b""
 
     def _spielen(self, url: str) -> None:
-        if url:
-            asyncio.create_task(self._laden(url))
+        if not url:
+            return
+        t = asyncio.create_task(self._laden(url))
+        self._lade_tasks.add(t)
+        t.add_done_callback(self._lade_tasks.discard)
+
+    async def _laden_abschliessen(self, timeout: float = 8.0) -> None:
+        """Offene _laden-Tasks zu Ende laufen lassen, bevor der HTTP-Client
+        stirbt — sonst bricht aclose() den Stream-GET ab (ReadError)."""
+        pending = [t for t in self._lade_tasks if not t.done()]
+        if not pending:
+            return
+        with contextlib.suppress(Exception):
+            await asyncio.wait(pending, timeout=timeout)
 
     def _quittung(self) -> None:
         if not self.quittungen:
@@ -599,7 +641,7 @@ class Anruf:
                 self._floor = max(FLOOR_MIN, 0.7 * self._floor + 0.3 * rms)
             else:
                 self._floor = min(FLOOR_MAX, self._floor * 1.008 + 1.0)
-        if self.wiedergabe.aktiv and not self._rec_an:
+        if self.wiedergabe.spielt() and not self._rec_an:
             schwelle = min(max(BARGE_RMS, self._floor * 5.0), BARGE_DECKEL)
         else:
             schwelle = min(max(SPRECH_RMS, self._floor * 2.2), SPRECH_DECKEL)
@@ -610,7 +652,8 @@ class Anruf:
         if self._diag_n >= 100:
             print(f"bruecke-pegel max={self._diag_max} floor={self._floor:.0f} "
                   f"schwelle={schwelle:.0f} echoRef={echo_ref} "
-                  f"aktiv={self.wiedergabe.aktiv} rec={self._rec_an}", flush=True)
+                  f"aktiv={self.wiedergabe.aktiv} spielt={self.wiedergabe.spielt()} "
+                  f"rec={self._rec_an}", flush=True)
             self._diag_n = 0
             self._diag_max = 0
         jetzt = time.monotonic()
@@ -633,15 +676,23 @@ class Anruf:
             self._ring.append(rahmen)
             if len(self._ring) > VORLAUF_FRAMES:
                 self._ring.pop(0)
-            noetig = BARGE_FRAMES if self.wiedergabe.aktiv else START_FRAMES
+            spielend = self.wiedergabe.spielt()
+            noetig = BARGE_FRAMES if spielend else START_FRAMES
             if self._sprech_run >= noetig:
+                # Offene/haengende Posten verwerfen — sonst spielt spaeter
+                # Stream-Nachschub ueber den Anrufer (W-SIP-OHR).
                 if self.wiedergabe.aktiv:
                     url, ms = self.wiedergabe.stoppen()
                     self.barge_url, self.barge_ms = url, ms
-                    self._quittung()
-                    print(f"bruecke-barge url={url} ms={ms:.0f} "
-                          f"rms={rms} floor={self._floor:.0f} "
-                          f"echoRef={echo_ref}", flush=True)
+                    if spielend:
+                        self._quittung()
+                        print(f"bruecke-barge url={url} ms={ms:.0f} "
+                              f"rms={rms} floor={self._floor:.0f} "
+                              f"echoRef={echo_ref}", flush=True)
+                    else:
+                        print(f"bruecke-stream-verworfen url={url} "
+                              f"(Underrun, Anrufer spricht) "
+                              f"rms={rms} floor={self._floor:.0f}", flush=True)
                 self._rec_an = True
                 self._rec_start = jetzt
                 self._rec = bytearray(b"".join(self._ring))
@@ -776,7 +827,7 @@ class Anruf:
             try:
                 pcm = await asyncio.wait_for(self.zuege.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                ruhig = (not self.wiedergabe.aktiv and not self._rec_an
+                ruhig = (not self.wiedergabe.spielt() and not self._rec_an
                          and time.monotonic() - self.wiedergabe.fertig_seit > STUPS_NACH_S
                          and time.monotonic() - self._letzte_sprache > STUPS_NACH_S)
                 if ruhig and self.stups_zahl < 2:
@@ -812,6 +863,7 @@ class Anruf:
         if not await self._start():
             await self._ende_raus()
             self.writer.close()
+            await self._laden_abschliessen()
             await self.http.aclose()
             return
         spieler = asyncio.create_task(self.wiedergabe.lauf())
@@ -833,6 +885,8 @@ class Anruf:
                 await self.http.post("/api/hangup", json={"sessionId": self.session_id})
             with contextlib.suppress(Exception):
                 self.writer.close()
+            # Erst Downloads fertig, dann Client zu — sonst ReadError im Stream.
+            await self._laden_abschliessen()
             await self.http.aclose()
             print(f"bruecke-ende session={self.session_id}", flush=True)
 

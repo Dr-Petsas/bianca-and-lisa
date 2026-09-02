@@ -140,6 +140,7 @@ def _finden(sit: dict, melde: Melde) -> dict:
     if melde:
         melde("list_appointments")
     res = kal.find_patient_appointments(sit["tenant"], _ctx(sit))
+    merke_tool(sit, "agentFindPatientAppointments", res)
     if res.get("ok") and not res.get("notFound") and not res.get("mehrdeutig"):
         pat = res.get("patient") or {}
         if _s(pat.get("id")):
@@ -485,6 +486,7 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
         egal=not such_ctx["calendarId"],
         source="pickadoc-bianca",
     )
+    merke_tool(sit, "getFreeTimeSlots", found)
     if not found.get("ok"):
         s["phase"] = "fertig"
         s["frage"] = ""

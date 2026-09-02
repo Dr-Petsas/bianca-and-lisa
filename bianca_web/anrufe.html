@@ -68,6 +68,38 @@
     .play:hover { background: #2a2128; }
     .play.laeuft { border-color: var(--accent); color: var(--accent); }
     .leer { color: var(--muted); font-size: 14px; padding: 20px 6px; }
+    /* W-TOOL-UI: CF-Dispatch in der Unterhaltung */
+    .tool-card {
+      align-self: stretch; max-width: 100%;
+      background: #1a1519; border: 1px solid var(--line); border-radius: 12px;
+      padding: 0; font-size: 12px; color: var(--muted);
+    }
+    .tool-card > summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center;
+      gap: 8px; flex-wrap: wrap; padding: 9px 12px; user-select: none;
+    }
+    .tool-card > summary::-webkit-details-marker { display: none; }
+    .tool-card > summary::before { content: "▸"; color: var(--muted); font-size: 11px; }
+    .tool-card[open] > summary::before { content: "▾"; }
+    .tool-card .tool-name {
+      color: var(--text); font-weight: 650; font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px;
+    }
+    .tool-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+    .tool-abs { display: flex; flex-direction: column; gap: 4px; }
+    .tool-abs b { color: var(--text); font-weight: 600; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; }
+    .tool-url { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--ki); word-break: break-all; }
+    .tool-json {
+      margin: 0; padding: 8px 10px; background: #120e11; border: 1px solid var(--line);
+      border-radius: 8px; overflow: auto; max-height: 220px; color: var(--user);
+      font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.45;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .tool-kopf { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .tool-upd { display: flex; flex-direction: column; gap: 4px; }
+    .tool-upd-zeile { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+    .tool-upd-zeile .von { color: #8a6a78; text-decoration: line-through; }
+    .tool-upd-zeile .nach { color: var(--gut); }
   </style>
 </head>
 <body>
@@ -75,7 +107,7 @@
     <header>
       <div>
         <h1>Anrufe</h1>
-        <div class="sub">Bianca — Unterhaltungen mit Audio, Transkript und Zeiten</div>
+        <div class="sub">Bianca — Unterhaltungen mit Audio, Transkript, Tools und Zeiten</div>
       </div>
       <div style="display:flex; gap:8px;">
         <button class="knopf" id="neuLaden" type="button">Neu laden</button>
@@ -94,6 +126,6 @@
     </div>
   </div>
   <audio id="spieler" hidden></audio>
-  <script src="anrufe.js?v=a3"></script>
+  <script src="anrufe.js?v=a6"></script>
 </body>
 </html>

@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 
 from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
+from kern.sitzung import _tools_des_zugs
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
 # blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
@@ -248,6 +249,12 @@ class Dienst:
             return "", round(time.perf_counter() - t0, 2), cached
         return url, round(time.perf_counter() - t0, 2), cached
 
+    def _sprech(self, sit: dict, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
+        """SIP: immer blocking (W-SIP-BLOCK). Dock: Stream wenn moeglich."""
+        if (sit or {}).get("clientKind") == "sip":
+            return self.stimme(text, karte)
+        return self.stimme_stream(text, karte)
+
     def stimme_stream(self, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
         """Wie stimme(), aber mit SOFORTIGER Stream-URL, wenn der lokale
         Container Audio-Chunk-Streaming kann (Phase 2, 29.08.2026): der Zug
@@ -277,6 +284,7 @@ class Dienst:
         if any(tts.ziffern_satz(s) for s in (sprech.tts_saetze(text) or [text])):
             return self.stimme(text, karte)
         aid, push, fertig = self.audio_stream_anlegen()
+        slot = self.audio_streams[aid]
         if karte is not None:
             karte["saetze"] = [_s(text)]
             karte["endenMs"] = []
@@ -470,12 +478,12 @@ class Dienst:
             if gesprochen and not text.startswith(gesprochen):
                 print(f"{self.name}-vorab FIFO-Rest "
                       f"({len(fifo)} Chunks → {len(rest)} Zeichen)", flush=True)
-            url, tts_teil, main_cached = self.stimme_stream(rest, karte) if rest else ("", 0.0, False)
+            url, tts_teil, main_cached = self._sprech(sit, rest, karte) if rest else ("", 0.0, False)
             unterbrechung.merken(sit, url=url, karte=karte, text=text,
                                  vorab_text=gesprochen, vorab_url=vorab_url)
         else:
             rest = ""
-            url, tts_teil, main_cached = self.stimme_stream(text, karte)
+            url, tts_teil, main_cached = self._sprech(sit, text, karte)
             unterbrechung.merken(sit, url=url, karte=karte, text=text)
         # TTS: Vorab-Saetze (P5) + blocking-Render; Stream-Audio wird in
         # mitschnitt._audio_einloesen nachgetragen (URL geht vor Render-Ende raus).
@@ -499,8 +507,14 @@ class Dienst:
             timings["total"] = round(stt_s + llm_s + tts_s, 2)
         # Waechter-Spur dieses Zugs (W-BK-3): additiv in Antwort + Protokoll.
         waechter = spur.abholen(sit)
-        self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"),
-                       timings=timings, waechter=waechter)
+        tools_zug = _tools_des_zugs(sit)
+        zug_kw: dict[str, Any] = {
+            "art": art, "textIn": text_in, "text": text, "book": reply.get("book"),
+            "timings": timings, "waechter": waechter,
+        }
+        if tools_zug:
+            zug_kw["tools"] = tools_zug
+        self.merke_zug(sit, **zug_kw)
         antwort = {
             "ok": True,
             "empty": False,
@@ -515,6 +529,8 @@ class Dienst:
             "timings": timings,
             "waechter": waechter,
         }
+        if tools_zug:
+            antwort["tools"] = tools_zug
         if reply.get("hangup"):
             antwort["hangup"] = True
         # W-VERBINDEN-ECHT (31.08.2026): eingerichtete Client-Weiterleitung —
@@ -542,7 +558,8 @@ class Dienst:
         mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
                        timings=timings, waechter=waechter, audio_url=url,
                        vorab_urls=vorab_urls, book=reply.get("book"),
-                       frage=str(antwort.get("frage") or ""))
+                       frage=str(antwort.get("frage") or ""),
+                       tools=tools_zug or None)
         return antwort
 
     # ---- Barge-Fortsetzung (W-BARGE) ---------------------------------------
@@ -557,7 +574,7 @@ class Dienst:
             return None
         spur.merken(sit, "barge-weiter", text)
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        url, tts_s, cached = self.stimme_stream(text, karte)
+        url, tts_s, cached = self._sprech(sit, text, karte)
         unterbrechung.merken(sit, url=url, karte=karte, text=text)
         timings = {"llm": 0.0, "tts": tts_s, "total": tts_s}
         if cached:

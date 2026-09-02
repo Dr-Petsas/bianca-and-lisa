@@ -228,7 +228,7 @@ def eingang(sit: dict, blob: bytes, mime: str = "") -> None:
 def zug(sit: dict, dienst, *, art: str, text_in: str = "", text: str = "",
         timings: dict | None = None, waechter: list | None = None,
         audio_url: str = "", vorab_urls: list[str] | None = None,
-        book: Any = None, frage: str = "") -> None:
+        book: Any = None, frage: str = "", tools: list | None = None) -> None:
     """Einen gesprochenen Zug ins Manifest schreiben — sofort, nicht erst
     beim Auflegen. Audio kommt aus der Dienst-Ablage (RAM) auf die Platte;
     noch laufende Streams bleiben als "offen" markiert."""
@@ -269,6 +269,8 @@ def zug(sit: dict, dienst, *, art: str, text_in: str = "", text: str = "",
                 eintrag["book"] = book
             if frage:
                 eintrag["frage"] = frage
+            if tools:
+                eintrag["tools"] = tools
             manifest.setdefault("zuege", []).append(eintrag)
             _audio_einloesen(manifest, pfad, dienst)
             _zusammenfassung(manifest, sit)
