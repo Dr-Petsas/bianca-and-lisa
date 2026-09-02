@@ -8,7 +8,7 @@ spiegelt es in sit["patient"] / sit["booking"], sobald es fest ist.
 from __future__ import annotations
 
 import json
-import secrets
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,7 +25,9 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None) -> dict[st
     # W-MANDANT: ein fertiges Tenant-Dict (DID -> Pickadoc-DB, kern/agentprofil)
     # darf direkt einziehen — sonst wie bisher aus tenants/<id>.json laden.
     tenant = tenant if isinstance(tenant, dict) and tenant else laden(tenant_id)
-    sid = secrets.token_hex(8)
+    # Anruf-UID: uuid4 ohne Bindestriche (32 Hex) — Ordnername, Manifest-id,
+    # Mitschnitt-API. Alte 16-Hex-IDs (token_hex) bleiben lesbar.
+    sid = uuid.uuid4().hex
     doc = {
         "id": sid,
         "stimme": "Bianca",

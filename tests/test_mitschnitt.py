@@ -96,17 +96,20 @@ def test_stream_audio_wird_nachtraeglich_eingeloest(monkeypatch, tmp_path):
     url = f"/api/audio-stream/{aid}.wav"
 
     mit.zug(sit, d, art="turn", text_in="Hallo", text="Guten Tag!",
-            timings={}, audio_url=url)
+            timings={"llm": 1.2, "tts": 0.0, "total": 1.2}, audio_url=url)
     m = mit.laden("bianca", sit["id"])
     ein = m["zuege"][0]["audioOut"][0]
     assert ein.get("url") == url and not ein.get("datei")  # noch offen
 
+    d.audio_streams[aid]["render_s"] = 0.85
     fertig()
     sit["zuege"] = [{"art": "hangup", "note": "Testnotiz"}]
     mit.ende(sit, d, warte_s=2.0)
     m = mit.laden("bianca", sit["id"])
     ein = m["zuege"][0]["audioOut"][0]
     assert ein["datei"] == "z001_stimme.wav" and "url" not in ein
+    assert m["zuege"][0]["timings"]["tts"] == 0.85
+    assert m["zuege"][0]["timings"]["total"] == 2.05
     blob = (tmp_path / "anrufe" / "bianca" / sit["id"] / "z001_stimme.wav").read_bytes()
     assert blob[:4] == b"RIFF" and len(blob) == 44 + 4800
     # Ende-Stempel + Hangup-Zug aus der Sitzung übernommen.
@@ -152,6 +155,30 @@ def test_liste_laden_loeschen(monkeypatch, tmp_path):
     assert mit.loeschen("bianca", a["id"]) is True
     assert mit.laden("bianca", a["id"]) is None
     assert mit.loeschen("bianca", a["id"]) is False
+
+
+def test_anruf_uid_ist_uuid_hex_und_im_manifest(monkeypatch, tmp_path):
+    """Neue Sitzungen tragen eine 32-Hex-UUID; Mitschnitt speichert sie als id
+    und reicht phoneCallId (Portal) mit — Detailansicht zeigt beides."""
+    import re
+
+    from bianca import session as bsess
+
+    sit = bsess.neu(tenant_id="meddent")
+    assert re.fullmatch(r"[0-9a-f]{32}", sit["id"])
+    # uuid4-Variante (Version-Nibble = 4).
+    assert sit["id"][12] == "4"
+
+    _umleiten(monkeypatch, tmp_path)
+    d = _dienst()
+    sit["phoneCallId"] = "pc-portal-42"
+    mit.zug(sit, d, art="start", text="Guten Tag!", timings={})
+    m = mit.laden("bianca", sit["id"])
+    assert m["id"] == sit["id"]
+    assert m["phoneCallId"] == "pc-portal-42"
+    assert mit.liste("bianca")[0]["phoneCallId"] == "pc-portal-42"
+    # 32-Hex passt in die bestehende Whitelist (8..32).
+    assert mit.laden("bianca", sit["id"]) is not None
 
 
 def test_anruf_wav_fuegt_alle_zuege_in_reihenfolge(monkeypatch, tmp_path):

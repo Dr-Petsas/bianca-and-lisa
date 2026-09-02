@@ -41,6 +41,19 @@
     .detail-kopf { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
     .zeiten { color: var(--muted); font-size: 13px; line-height: 1.6; }
     .zeiten b { color: var(--text); font-weight: 600; }
+    .uid-zeile { margin-top: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+    .uid-sep { color: var(--muted); }
+    code.uid {
+      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      font-size: 12px; color: var(--text); background: #171114;
+      border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px;
+      user-select: all; word-break: break-all;
+    }
+    button.kopie {
+      appearance: none; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+      background: #171114; color: var(--muted); font: inherit; font-size: 11px; padding: 1px 8px;
+    }
+    button.kopie:hover { color: var(--text); background: #2a2128; }
     .zuege { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 62vh; overflow: auto; }
     .bubble { padding: 9px 12px; border-radius: 12px; max-width: 92%; font-size: 15px; line-height: 1.4; }
     .bubble.ki { background: #33202c; color: var(--ki); align-self: flex-start; }
@@ -81,6 +94,6 @@
     </div>
   </div>
   <audio id="spieler" hidden></audio>
-  <script src="anrufe.js?v=a2"></script>
+  <script src="anrufe.js?v=a3"></script>
 </body>
 </html>

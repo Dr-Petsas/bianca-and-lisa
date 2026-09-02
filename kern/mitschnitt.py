@@ -127,6 +127,13 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
     name = pat.get("name") or " ".join(x for x in (s.get("vorname"), s.get("nachname")) if x).strip()
     manifest["patientName"] = name or ""
     manifest["auftrag"] = sit.get("auftrag") or ""
+    # id = Anruf-UID (session.neu: uuid4.hex). Portal-phoneCallId separat,
+    # falls die CF einen Datensatz angelegt hat (CF-Mandanten).
+    if sit.get("id") and not manifest.get("id"):
+        manifest["id"] = sit["id"]
+    pcid = str(sit.get("phoneCallId") or "").strip()
+    if pcid:
+        manifest["phoneCallId"] = pcid
     for k in ("lastBook", "lastCancel", "lastMove", "lastNote", "lastCreate"):
         if sit.get(k) is not None:
             manifest[k] = sit.get(k)
@@ -134,6 +141,33 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
         manifest["praxisNotiz"] = sit["praxisNotiz"]
     if sit.get("tools"):
         manifest["tools"] = sit.get("tools")
+
+
+def _stream_render_s(dienst, url: str) -> float | None:
+    """Gemessene Render-Dauer eines /api/audio-stream/-Slots (Phase 2)."""
+    u = str(url or "")
+    if not u.startswith("/api/audio-stream/"):
+        return None
+    streams = getattr(dienst, "audio_streams", None)
+    if not isinstance(streams, dict):
+        return None
+    aid = u.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    slot = streams.get(aid)
+    if not isinstance(slot, dict):
+        return None
+    rs = slot.get("render_s")
+    return float(rs) if rs is not None else None
+
+
+def _timings_tts_nachtragen(zug: dict, extra: float) -> None:
+    if extra <= 0:
+        return
+    tim = zug.setdefault("timings", {})
+    tts = round(float(tim.get("tts") or 0) + extra, 2)
+    tim["tts"] = tts
+    stt = float(tim.get("stt") or 0)
+    llm = float(tim.get("llm") or 0)
+    tim["total"] = round(stt + llm + tts, 2)
 
 
 def _audio_einloesen(manifest: dict, pfad: Path, dienst) -> None:
@@ -153,6 +187,7 @@ def _audio_einloesen(manifest: dict, pfad: Path, dienst) -> None:
                 blob = None
             if not blob:
                 continue
+            rs = _stream_render_s(dienst, url)
             datei = str(ein.get("ziel") or f"z{zug.get('nr', 0):03d}_stimme.wav")
             try:
                 (pfad / datei).write_bytes(blob)
@@ -162,6 +197,8 @@ def _audio_einloesen(manifest: dict, pfad: Path, dienst) -> None:
             ein["ms"] = _wav_ms(blob)
             ein.pop("url", None)
             ein.pop("ziel", None)
+            if rs is not None:
+                _timings_tts_nachtragen(zug, rs)
 
 
 def eingang(sit: dict, blob: bytes, mime: str = "") -> None:
@@ -308,6 +345,7 @@ def liste(stimme: str, limit: int = 200) -> list[dict[str, Any]]:
         zuege = m.get("zuege") or []
         aus.append({
             "id": m.get("id") or d.name,
+            "phoneCallId": m.get("phoneCallId") or "",
             "startedAt": m.get("startedAt") or "",
             "endedAt": m.get("endedAt"),
             "dauerMs": m.get("dauerMs"),

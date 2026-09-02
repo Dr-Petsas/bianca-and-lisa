@@ -145,7 +145,10 @@ class Dienst:
         """Slot fuer einen laufenden Audio-Strom: (aid, push, fertig).
         push() haengt PCM-Stuecke an, fertig() schliesst den Strom."""
         aid = secrets.token_hex(6)
-        slot: dict[str, Any] = {"chunks": [], "done": False, "cond": threading.Condition()}
+        slot: dict[str, Any] = {
+            "chunks": [], "done": False, "cond": threading.Condition(),
+            "render_s": None,
+        }
         self.audio_streams[aid] = slot
         self._stream_ord.append(aid)
         while len(self._stream_ord) > 24:
@@ -221,17 +224,31 @@ class Dienst:
             return kopf + pcm
         return None
 
-    def stimme(self, text: str, karte: dict | None = None) -> tuple[str, float]:
+    @staticmethod
+    def _tts_aus_cache(text: str) -> bool:
+        """True, wenn speak() fuer diesen Text nur aus RAM-Pin/LRU liest."""
+        t = _s(text)
+        if not t or not tts.bereit():
+            return False
+        if tts.im_cache(t):
+            return True
+        saetze = sprech.tts_saetze(t)
+        if len(saetze) <= 1:
+            return False
+        return all(tts.im_cache(s) for s in saetze)
+
+    def stimme(self, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
         if not text or not tts.bereit():
-            return "", 0.0
+            return "", 0.0, False
+        cached = self._tts_aus_cache(text)
         t0 = time.perf_counter()
         try:
             url = self.audio_legen(self._sprech_blob(text, karte))
         except RuntimeError:
-            return "", round(time.perf_counter() - t0, 2)
-        return url, round(time.perf_counter() - t0, 2)
+            return "", round(time.perf_counter() - t0, 2), cached
+        return url, round(time.perf_counter() - t0, 2), cached
 
-    def stimme_stream(self, text: str, karte: dict | None = None) -> tuple[str, float]:
+    def stimme_stream(self, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
         """Wie stimme(), aber mit SOFORTIGER Stream-URL, wenn der lokale
         Container Audio-Chunk-Streaming kann (Phase 2, 29.08.2026): der Zug
         geht raus, bevor die Synthese fertig ist — das Dock spielt progressiv,
@@ -251,7 +268,7 @@ class Dienst:
         (wie stimme() ohne Split); Fein-Rest satzweise entfaellt zugunsten
         lueckenfreier Wiedergabe."""
         if not text or not tts.bereit():
-            return "", 0.0
+            return "", 0.0, False
         if not tts.stream_bereit() or tts.im_cache(text):
             return self.stimme(text, karte)
         # Ziffern irgendwo im Text => komplett blocking (verifiziert), nie
@@ -259,7 +276,6 @@ class Dienst:
         # 3-Satz-Strom => 6 s Stille nach dem Vorsatz.
         if any(tts.ziffern_satz(s) for s in (sprech.tts_saetze(text) or [text])):
             return self.stimme(text, karte)
-        t0 = time.perf_counter()
         aid, push, fertig = self.audio_stream_anlegen()
         if karte is not None:
             karte["saetze"] = [_s(text)]
@@ -283,12 +299,16 @@ class Dienst:
                     karte["endenMs"].append(None)
                 print(f"{self.name}-stream fail {text[:40]!r} {e}", flush=True)
             finally:
+                with slot["cond"]:
+                    slot["render_s"] = round(time.perf_counter() - t1, 2)
                 fertig()
                 print(f"{self.name}-stream ttfa={erster if erster is not None else -1:.2f}s "
-                      f"gesamt={time.perf_counter() - t1:.2f}s saetze=1", flush=True)
+                      f"gesamt={slot['render_s']:.2f}s saetze=1", flush=True)
 
         threading.Thread(target=feeder, daemon=True).start()
-        return f"/api/audio-stream/{aid}.wav", round(time.perf_counter() - t0, 2)
+        # Latenz-Messung: die URL geht sofort raus; die echte Render-Zeit
+        # steht erst in slot["render_s"] (mitschnitt patcht beim Einloesen).
+        return f"/api/audio-stream/{aid}.wav", 0.0, False
 
     @staticmethod
     def _karte_ganz(karte: dict | None, text: str, blob: bytes) -> None:
@@ -444,21 +464,36 @@ class Dienst:
         sit.pop("_vorabText", None)
         vorab_url = _s(sit.pop("_vorabUrl", ""))
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        if fifo or gesprochen:
+        had_vorab = bool(fifo or gesprochen)
+        if had_vorab:
             rest = llm.rest_nach_vorab(fifo or gesprochen, text)
             if gesprochen and not text.startswith(gesprochen):
                 print(f"{self.name}-vorab FIFO-Rest "
                       f"({len(fifo)} Chunks → {len(rest)} Zeichen)", flush=True)
-            url, tts_s = self.stimme_stream(rest, karte) if rest else ("", 0.0)
+            url, tts_teil, main_cached = self.stimme_stream(rest, karte) if rest else ("", 0.0, False)
             unterbrechung.merken(sit, url=url, karte=karte, text=text,
                                  vorab_text=gesprochen, vorab_url=vorab_url)
         else:
-            url, tts_s = self.stimme_stream(text, karte)
+            rest = ""
+            url, tts_teil, main_cached = self.stimme_stream(text, karte)
             unterbrechung.merken(sit, url=url, karte=karte, text=text)
+        # TTS: Vorab-Saetze (P5) + blocking-Render; Stream-Audio wird in
+        # mitschnitt._audio_einloesen nachgetragen (URL geht vor Render-Ende raus).
+        tts_s = round(float(sit.pop("_ttsAcc", 0) or 0), 2)
+        if url and not url.startswith("/api/audio-stream/"):
+            tts_s = round(tts_s + tts_teil, 2)
+        tts_ok = (not rest or main_cached) if had_vorab else main_cached
+        tts_cache = (
+            not sit.pop("_ttsCacheMiss", False)
+            and tts_ok
+            and not (url and url.startswith("/api/audio-stream/"))
+        )
         # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
         # ein voller Latenz-Posten des Zugs (Messlücke bis 28.08.2026).
         stt_s = sit.pop("_sttS", None)
         timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
+        if tts_cache:
+            timings["ttsCache"] = True
         if stt_s is not None:
             timings = {"stt": stt_s, **timings}
             timings["total"] = round(stt_s + llm_s + tts_s, 2)
@@ -522,9 +557,11 @@ class Dienst:
             return None
         spur.merken(sit, "barge-weiter", text)
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        url, tts_s = self.stimme_stream(text, karte)
+        url, tts_s, cached = self.stimme_stream(text, karte)
         unterbrechung.merken(sit, url=url, karte=karte, text=text)
         timings = {"llm": 0.0, "tts": tts_s, "total": tts_s}
+        if cached:
+            timings["ttsCache"] = True
         waechter = spur.abholen(sit)
         self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings,
                        waechter=waechter)
@@ -613,8 +650,11 @@ class Dienst:
 
             def _arbeit(i: int = idx, s: str = san) -> None:
                 nonlocal satz_raus
-                url, _ = self.stimme(s)
+                url, ts, cached = self.stimme(s)
                 with satz_lock:
+                    if not cached:
+                        sit["_ttsCacheMiss"] = True
+                    sit["_ttsAcc"] = round(float(sit.get("_ttsAcc") or 0) + ts, 2)
                     if i < len(satz_urls):
                         satz_urls[i] = url or ""
                     if i == 0 and url:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import secrets
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,7 +17,8 @@ _SESS_DIR = DATA_DIR / "sessions"
 
 def neu(*, tenant_id: str, auftrag: str, patient: dict | None, past: list, upcoming: list) -> dict[str, Any]:
     tenant = laden(tenant_id)
-    sid = secrets.token_hex(8)
+    # Anruf-UID: uuid4 ohne Bindestriche (32 Hex) — siehe bianca/session.neu.
+    sid = uuid.uuid4().hex
     booking = {}
     if patient:
         nxt = (upcoming or [None])[0] if upcoming else None

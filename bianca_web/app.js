@@ -887,7 +887,7 @@ const KOENNEN = [
     "<b>Terminnotiz im Termin:</b> „telefonisch Termin vereinbart wegen … // Bianca“ — direkt im Terminpopup sichtbar.",
     "<b>Besonderes automatisch heraushören</b> und notieren: Angst, Allergie, Begleitung, „bitte nur vormittags“ …",
     "<b>Offene Anliegen als Vorgang:</b> nicht gefundene Termine oder Rückruf-Wünsche landen als offenes Ticket bei der Praxis.",
-    "<b>Anrufliste mit Mitschnitt:</b> jedes Gespräch liegt unter „Anrufe“ im Browser — Transkript als Blasen, Audio je Zug (Anrufer UND Bianca), alle Zeiten (Uhrzeit, Offset, stt/llm/tts je Zug), Buchungs-Ergebnis und Praxis-Notiz.",
+    "<b>Anrufliste mit Mitschnitt:</b> jedes Gespräch liegt unter „Anrufe“ im Browser — Transkript als Blasen, Audio je Zug (Anrufer UND Bianca), alle Zeiten (Uhrzeit, Offset, stt/llm/tts je Zug), Anruf-UID (uuid4) in der Detailansicht, Buchungs-Ergebnis und Praxis-Notiz.",
   ]},
   { t: "Gesprächsführung", p: [
     "<b>Smalltalk &amp; Abschweifen:</b> Nebenthemen bekommen Raum (Talk-Schicht) — danach führt genau EINE Brücke zurück zur offenen Frage.",
@@ -975,6 +975,7 @@ const PATCHES = [
   ["W-SIP (AudioSocket-Brücke)", "29.08.", "Telefon", "Echte Anrufe: Zaluma → Asterisk → AudioSocket über SSH-Rücktunnel → sip_bridge (pickadoc1) → Bianca-API; Barge-in, Stille-Stups und Auflegen wie im Dock."],
   ["W-SIP-RAUSCH (Leitungs-VAD)", "29.08.", "Telefon", "Adaptiver Rauschteppich statt starrer RMS-Schwelle: Telefon-Grundrauschen löst keinen falschen Barge mehr aus; Dauer-Stille-Rahmen halten den Medienstrom am Leben."],
   ["W-MITSCHNITT (Anrufliste)", "30.08.", "Betrieb", "Jeder Anruf als Ordner unter .data/anrufe (Manifest + Audio je Zug, sofort geschrieben); Browser-Seite /anrufe mit Transkript, Abspiel-Knöpfen und allen Zeiten. Notaus: MITSCHNITT=0."],
+  ["W-ANRUF-UID", "02.09.", "Betrieb", "Jeder Anruf trägt eine uuid4-Hex-UID (session.id = Manifest-id); Gesprächs-Detail zeigt UID (+ Portal-phoneCallId bei CF-Mandanten) mit Kopier-Knopf. Alte 16-Hex-IDs bleiben lesbar."],
   ["Anruf-Download (ein WAV)", "30.08.", "Betrieb", "Knopf \"Audio herunterladen\" auf /anrufe: der Server fügt alle Züge (Anrufer + Bianca, Gesprächsreihenfolge, 250 ms Pause) zu EINER WAV-Datei — api/anrufe/<sid>/download."],
   ["W-SIP-KURZJA (kurze Antworten)", "30.08.", "Telefon", "Ein kurzes lautes \"Ja\" zählt jetzt als Zug (Kurz-aber-laut-Ausnahme statt 240-ms-Deckel), und die Echo-Sperre klingt nach Biancas Sprechende ab statt 800 ms hart zu blocken."],
   ["W-STUDIO-5090 (Test-Studio auf dem Server)", "30.08.", "Technik", "Das Baukasten-Studio läuft auch auf pickadoc1 (…:8096/studio): eigener Editor- und Test-Bianca-Container, Testläufe stören nie die Live-Bianca; Testtermine löschen sich nach 2 h selbst."],

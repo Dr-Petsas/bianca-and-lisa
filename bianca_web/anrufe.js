@@ -26,6 +26,32 @@ function mmss(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** Anruf-UID lesbar: uuid4.hex (32) mit Bindestrichen; kurze Alt-IDs unverändert. */
+function uidForm(roh) {
+  const h = String(roh || "").replace(/-/g, "").toLowerCase();
+  if (/^[0-9a-f]{32}$/.test(h)) {
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  return String(roh || "");
+}
+
+function kopierKnopf(text, label) {
+  const b = document.createElement("button");
+  b.className = "kopie";
+  b.type = "button";
+  b.textContent = label || "kopieren";
+  b.title = "in Zwischenablage";
+  b.onclick = async (ev) => {
+    ev.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      b.textContent = "kopiert";
+      setTimeout(() => { b.textContent = label || "kopieren"; }, 1200);
+    } catch { /* */ }
+  };
+  return b;
+}
+
 function ergebnis(a) {
   if (a.lastBook && a.lastBook.ok) return ["Termin gebucht", "gruen"];
   if (a.lastMove && a.lastMove.ok) return ["Termin verschoben", "gruen"];
@@ -84,11 +110,21 @@ function chip(text) {
   return c;
 }
 
-function timingChips(t) {
+function sttChips(t) {
+  if (t && t.stt != null) return [chip(`stt ${Number(t.stt).toFixed(2)}s`)];
+  return [];
+}
+
+function kiTimingChips(t) {
+  if (!t) return [];
   const aus = [];
-  for (const k of ["stt", "llm", "tts", "total"]) {
-    if (t && t[k] != null) aus.push(chip(`${k} ${Number(t[k]).toFixed(2)}s`));
+  if (t.llm != null) aus.push(chip(`llm ${Number(t.llm).toFixed(2)}s`));
+  if (t.ttsCache) {
+    aus.push(chip("tts cache"));
+  } else if (t.tts != null) {
+    aus.push(chip(`tts ${Number(t.tts).toFixed(2)}s`));
   }
+  if (t.total != null) aus.push(chip(`total ${Number(t.total).toFixed(2)}s`));
   return aus;
 }
 
@@ -111,6 +147,28 @@ function maleDetail(a) {
   zeiten.innerHTML =
     `<b>${a.patientName || "Unbekannter Anrufer"}</b> — ${a.zuege ? a.zuege.length : 0} Züge<br>` +
     `Beginn: <b>${zeit(a.startedAt)}</b> · Ende: <b>${a.endedAt ? zeit(a.endedAt) : "—"}</b> · Dauer: <b>${dauer}</b>`;
+  const uidZeile = document.createElement("div");
+  uidZeile.className = "uid-zeile";
+  const uidLabel = document.createElement("span");
+  uidLabel.textContent = "UID ";
+  const uidCode = document.createElement("code");
+  uidCode.className = "uid";
+  uidCode.textContent = uidForm(sid);
+  uidZeile.appendChild(uidLabel);
+  uidZeile.appendChild(uidCode);
+  uidZeile.appendChild(kopierKnopf(sid, "kopieren"));
+  if (a.phoneCallId) {
+    const sep = document.createElement("span");
+    sep.className = "uid-sep";
+    sep.textContent = " · Portal ";
+    const pc = document.createElement("code");
+    pc.className = "uid";
+    pc.textContent = a.phoneCallId;
+    uidZeile.appendChild(sep);
+    uidZeile.appendChild(pc);
+    uidZeile.appendChild(kopierKnopf(a.phoneCallId, "kopieren"));
+  }
+  zeiten.appendChild(uidZeile);
   kopf.appendChild(zeiten);
 
   const knoepfe = document.createElement("div");
@@ -169,6 +227,7 @@ function maleDetail(a) {
       m.className = "b-meta";
       m.appendChild(chip(`${mmss(z.offsetMs)}`));
       if (rein.length) m.appendChild(playKnopf(rein, "Anrufer"));
+      for (const c of sttChips(z.timings)) m.appendChild(c);
       b.appendChild(m);
       fluss.appendChild(b);
     }
@@ -178,7 +237,7 @@ function maleDetail(a) {
       m.className = "b-meta";
       m.appendChild(chip(`${mmss(z.offsetMs)}`));
       if (z.art && z.art !== "turn" && z.art !== "listen") m.appendChild(chip(z.art));
-      for (const c of timingChips(z.timings)) m.appendChild(c);
+      for (const c of kiTimingChips(z.timings)) m.appendChild(c);
       if (raus.length) m.appendChild(playKnopf(raus, "Bianca"));
       b.appendChild(m);
       fluss.appendChild(b);

@@ -223,9 +223,12 @@ def api_stille(body: HangupIn):
     text = sprech.sanitize(reply.get("text") or "")
     if not text:
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
-    url, tts_s = DIENST.stimme(text)
-    session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
-    mitschnitt.zug(sit, DIENST, art="stille", text=text, timings={"tts": tts_s}, audio_url=url)
+    url, tts_s, cached = DIENST.stimme(text)
+    timings: dict = {"tts": tts_s}
+    if cached:
+        timings["ttsCache"] = True
+    session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)
+    mitschnitt.zug(sit, DIENST, art="stille", text=text, timings=timings, audio_url=url)
     print(f"bianca-stille session={body.sessionId} text={text!r}", flush=True)
     return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
