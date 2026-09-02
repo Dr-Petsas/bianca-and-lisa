@@ -28,12 +28,15 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
     # W-GEDAECHTNIS: Lisa weiss schon beim Waehlen, WEN sie anruft — das
     # Praxisgedaechtnis (MAS) parallel abfragen, bevor der erste Zug faellt.
     gedaechtnis.kontext_anstossen(session_doc)
-    text = begruessung(
-        tenants.praxis_von(tenant),
-        _s(session_doc.get("auftrag")),
-        patient=patient,
-        behandler=_s(tenant.get("behandler")),
-    )
+    # Outbound-DB-Begruessung (firstMessage), sonst Lisas Identitaets-Gruss.
+    text = _s(tenant.get("begruessungText"))
+    if not text:
+        text = begruessung(
+            tenants.praxis_von(tenant),
+            _s(session_doc.get("auftrag")),
+            patient=patient,
+            behandler=_s(tenant.get("behandler")),
+        )
     msgs = [
         {
             "role": "system",

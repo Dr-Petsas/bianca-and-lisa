@@ -15,9 +15,12 @@ _LAST_PATH = DATA_DIR / "last_call.json"
 _SESS_DIR = DATA_DIR / "sessions"
 
 
-def neu(*, tenant_id: str, auftrag: str, patient: dict | None, past: list, upcoming: list) -> dict[str, Any]:
-    tenant = laden(tenant_id)
-    # Anruf-UID: uuid4 ohne Bindestriche (32 Hex) — siehe bianca/session.neu.
+def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None,
+        auftrag: str = "", patient: dict | None = None,
+        past: list | None = None, upcoming: list | None = None,
+        offered: list | None = None, phone_call_id: str = "") -> dict[str, Any]:
+    # Outbound: fertiges CF-Tenant-Dict (kein tenants/*.json). Dock: laden(id).
+    tenant = tenant if isinstance(tenant, dict) and tenant else laden(tenant_id)
     sid = uuid.uuid4().hex
     booking = {}
     if patient:
@@ -46,12 +49,15 @@ def neu(*, tenant_id: str, auftrag: str, patient: dict | None, past: list, upcom
         "booking": booking,
         "past": past or [],
         "upcoming": upcoming or [],
+        "offered": offered or [],
         "devPhone": format_de_phone(DEV_PHONE),
         "messages": [],
         "tools": [],
         "zuege": [],
         "startedAt": datetime.now(timezone.utc).isoformat(),
     }
+    if phone_call_id:
+        doc["phoneCallId"] = phone_call_id
     _STORE[sid] = doc
     return doc
 
@@ -63,6 +69,10 @@ def _sichern(sit: dict[str, Any]) -> None:
     try:
         _SESS_DIR.mkdir(parents=True, exist_ok=True)
         roh = {k: v for k, v in sit.items() if k != "tenant"}
+        # CF-Outbound-Mandanten: Tenant-Blob mitspeichern (kein lokales JSON).
+        t = sit.get("tenant") or {}
+        if str(t.get("_quelle") or "").startswith("cf"):
+            roh["tenant"] = t
         (_SESS_DIR / f"{sid}.json").write_text(json.dumps(roh, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
@@ -80,7 +90,8 @@ def holen(sid: str) -> dict[str, Any] | None:
         roh = json.loads(pfad.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    roh["tenant"] = laden(roh.get("tenantId") or "")
+    if not isinstance(roh.get("tenant"), dict) or not roh.get("tenant"):
+        roh["tenant"] = laden(roh.get("tenantId") or "")
     _STORE[sid] = roh
     return roh
 

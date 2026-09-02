@@ -14,6 +14,7 @@ from starlette.background import BackgroundTask
 from kern import gedaechtnis, halbsatz, mitschnitt, sprech, unterbrechung
 from kern.dienst import Dienst, ndjson
 from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
+from lisa import outbound
 from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
@@ -43,6 +44,29 @@ class StartIn(BaseModel):
     tenant: str = ""
     auftrag: str = ""
     patient: dict | None = None
+    # Lisa-Outbound (Bridge mode=outbound): Pending-UUID, kein Dock-Body.
+    outboundUuid: str = ""
+
+
+class OutboundDialIn(BaseModel):
+    phoneCallId: str = ""
+    clientId: str = ""
+    locationId: str = ""
+    fromDid: str = ""
+    toE164: str = ""
+    agent: dict | None = None
+    auftrag: str = ""
+    prompt: str = ""
+    firstMessage: str = ""
+    patient: dict | None = None
+    doctor: dict | None = None
+    freeTimeSlots: list | None = None
+    calendars: list | None = None
+    visitMotives: list | None = None
+    locationName: str = ""
+    campaignId: str = ""
+    doctors: list | None = None
+    calendarId: str = ""
 
 
 class TurnIn(BaseModel):
@@ -171,6 +195,7 @@ def health():
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "gedaechtnis": gedaechtnis.anzeige(),
+        "outbound": True,
         "lastCall": session.last_call(),
     }
 
@@ -194,8 +219,66 @@ def api_patients(body: SucheIn):
     return {"ok": True, "patients": karten, "error": found.get("error") or ""}
 
 
+def _auth_outbound(request: Request) -> None:
+    tok = (
+        (request.headers.get("authorization") or "").strip()
+        or (request.headers.get("x-api-key") or "").strip()
+    )
+    if not outbound.token_ok(tok):
+        raise HTTPException(401, "token")
+
+
+def _start_outbound(uid: str):
+    """Bridge-Outbound: Pending-Meta -> Session aus CF-DB-Profil."""
+    meta = outbound.pending_holen(uid)
+    if not meta:
+        raise HTTPException(404, "outbound pending unbekannt oder verbraucht")
+    tenant = outbound.tenant_von_bundle(meta)
+    patient = outbound.patient_von_bundle(meta)
+    auftrag = outbound.auftrag_von_bundle(meta)
+    if not patient.get("name") and not patient.get("id"):
+        raise HTTPException(400, "patient fehlt im outbound-bundle")
+    slots = meta.get("freeTimeSlots") if isinstance(meta.get("freeTimeSlots"), list) else []
+    sit = session.neu(
+        tenant=tenant,
+        auftrag=auftrag,
+        patient=patient,
+        past=[],
+        upcoming=[],
+        offered=slots,
+        phone_call_id=str(meta.get("phoneCallId") or ""),
+    )
+    # Slots schon gesetzt — Hintergrund-Anreicherung trotzdem fuer Historie.
+    threading.Thread(target=_anreichern, args=(sit,), daemon=True).start()
+    threading.Thread(target=anliegen.vorbereiten, args=(sit,), daemon=True).start()
+    return _json_antwort(
+        sit, art="start",
+        extra={"sessionId": sit["id"], "praxis": tenant.get("praxisName"),
+               "outbound": True},
+    )
+
+
+@app.post("/api/outbound/dial")
+def api_outbound_dial(body: OutboundDialIn, request: Request):
+    """CF startOutboundCall -> Originate auf Asterisk/Zaluma."""
+    _auth_outbound(request)
+    bundle = body.model_dump()
+    try:
+        out = outbound.dial(bundle)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        print(f"lisa-outbound dial fail: {e}", flush=True)
+        raise HTTPException(502, str(e)) from e
+    print(f"lisa-outbound dial ok uuid={out.get('uuid')} "
+          f"to={out.get('toE164')} phoneCallId={out.get('phoneCallId')}", flush=True)
+    return out
+
+
 @app.post("/api/start")
 def api_start(body: StartIn):
+    if (body.outboundUuid or "").strip():
+        return _start_outbound(body.outboundUuid.strip())
     auftrag = (body.auftrag or "").strip()
     if not auftrag:
         raise HTTPException(400, "auftrag fehlt")

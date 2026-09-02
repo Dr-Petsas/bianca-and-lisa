@@ -32,6 +32,13 @@ services:
   lisa:
     <<: *app
     command: python -m uvicorn lisa.server:app --host 0.0.0.0 --port 8095
+    environment:
+      <<: *app-env
+      # Outbound-Dial (CF -> Lisa -> Asterisk Call-File)
+      LISA_OUTBOUND_API_TOKEN: ${LISA_OUTBOUND_API_TOKEN:-}
+      ASTERISK_SSH: ${ASTERISK_SSH:-root@87.106.34.137}
+      ASTERISK_SSH_KEY: ${ASTERISK_SSH_KEY:-/app/secrets/asterisk-cli-key}
+      ASTERISK_SSH_PROXY: ${ASTERISK_SSH_PROXY:-}
     ports:
       - "8095:8095"
     healthcheck:
@@ -113,6 +120,7 @@ services:
     environment:
       <<: *app-env
       BIANCA_BASE: http://bianca:8096
+      BRIDGE_MODE: inbound
       # 1 = Anrufer-Zuege als WAV nach /tmp mitschneiden (Feld-Diagnose)
       BRIDGE_DUMP: ${BRIDGE_DUMP:-0}
       # Daempfung Richtung Asterisk (W-SIP-PEGEL): 0.5 = -6 dB, 1.0 = aus
@@ -136,15 +144,56 @@ services:
       retries: 3
       start_period: 15s
 
+  # Lisa-Outbound-Bruecke (W-LISA-OUT): Cold-Call AudioSocket auf 40102.
+  # Eigene Instanz — Bianca-Inbound (40101) bleibt unangetastet.
+  sipbridge-lisa:
+    <<: *app
+    command: python -m sip_bridge.server
+    environment:
+      <<: *app-env
+      LISA_BASE: http://lisa:8095
+      BIANCA_BASE: http://lisa:8095
+      BRIDGE_PORT: "40102"
+      BRIDGE_MODE: outbound
+      BRIDGE_DUMP: ${BRIDGE_DUMP:-0}
+      BRIDGE_GAIN: ${BRIDGE_GAIN:-0.5}
+      BRIDGE_ECHO: ${BRIDGE_ECHO:-0}
+      BRIDGE_START_RUHE_S: ${BRIDGE_START_RUHE_S:-1.0}
+    depends_on:
+      - lisa
+    ports:
+      - "127.0.0.1:40102:40102"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket; socket.create_connection(('127.0.0.1', 40102), timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Oeffentlicher Cloudflare-Tunnel fuer Lisa-Outbound (CF -> pickadoc1:8095).
+  # Named Tunnel (Zero Trust), Token in .env: CLOUDFLARE_TELEFONKI_TOKEN
+  # Public Hostname in CF-UI: lisa-live.pickadoc-tunnel.com -> http://localhost:8095
+  # (network_mode:host, damit localhost die Host-Lisa meint).
+  lisa-public:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TELEFONKI_TOKEN:-}
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TELEFONKI_TOKEN}
+    depends_on:
+      - lisa
+
   # SSH-Ruecktunnel zum Asterisk (W-SIP): haelt auf dem Asterisk-Server
-  # 127.0.0.1:40101 offen und leitet zur Bruecke. Der Schluessel ist auf dem
-  # Asterisk mit restrict,permitlisten auf GENAU diesen Port beschraenkt —
-  # keine Shell, kein anderes Forwarding. sudo-frei: Docker statt systemd.
+  # 127.0.0.1:40101 und :40102 offen. Der Schluessel ist auf dem Asterisk
+  # mit permitlisten auf GENAU diese Ports beschraenkt — keine Shell.
   tunnel:
     image: alpine:3.20
     restart: unless-stopped
     depends_on:
       - sipbridge
+      - sipbridge-lisa
     volumes:
       - ${TUNNEL_KEY:-/home/cursor/.ssh/id_ed25519_asterisk_tunnel}:/tunnel_key:ro
     command: >
@@ -156,6 +205,7 @@ services:
       -o ExitOnForwardFailure=yes
       -i /tmp/key
       -R 127.0.0.1:40101:sipbridge:40101
+      -R 127.0.0.1:40102:sipbridge-lisa:40102
       ${ASTERISK_SSH:-root@87.106.34.137}"
 
 volumes:

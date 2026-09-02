@@ -5,9 +5,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ffmpeg nur fuer die SIP-Bruecke (MP3-Jingle -> PCM); haelt das Image klein
-# genug und erspart einen zweiten Basis-Container.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# ffmpeg: SIP-Bruecke (MP3-Jingle -> PCM) + STT-webm.
+# openssh-client: Lisa-Outbound Originate (Call-File per SSH auf Asterisk).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

@@ -48,9 +48,19 @@ from collections import deque
 
 import httpx
 
-BIANCA_BASE = (os.environ.get("BIANCA_BASE") or "http://127.0.0.1:8096").rstrip("/")
+# BIANCA_BASE / LISA_BASE: Ziel-Dienst. sipbridge-lisa setzt LISA_BASE
+# (oder BIANCA_BASE=http://lisa:8095) — gleiche Variable, anderer Host.
+BIANCA_BASE = (
+    os.environ.get("LISA_BASE")
+    or os.environ.get("BIANCA_BASE")
+    or "http://127.0.0.1:8096"
+).rstrip("/")
 BRIDGE_PORT = int(os.environ.get("BRIDGE_PORT") or "40101")
 BRIDGE_TENANT = (os.environ.get("BRIDGE_TENANT") or "").strip()
+# inbound (Default, Bianca DID) | outbound (Lisa Cold-Call, Pending-Meta)
+BRIDGE_MODE = (os.environ.get("BRIDGE_MODE") or "inbound").strip().lower()
+if BRIDGE_MODE not in {"inbound", "outbound"}:
+    BRIDGE_MODE = "inbound"
 
 # W-MANDANT (30.08.2026): Der Dialplan (extensions_bianca.conf) traegt je
 # DID eine FESTE AudioSocket-UUID, deren Hex-Ende die Leitung verraet
@@ -731,17 +741,21 @@ class Anruf:
 
     async def _start(self) -> bool:
         t0 = time.monotonic()
-        r = await self.http.post("/api/start",
-                                 json={"tenant": BRIDGE_TENANT, "did": self.did,
-                                       "caller": self.caller})
+        # Outbound (Lisa): UUID -> Pending-DB-Profil auf dem Dienst, kein DID.
+        if BRIDGE_MODE == "outbound":
+            body = {"outboundUuid": self.uuid_hex}
+        else:
+            body = {"tenant": BRIDGE_TENANT, "did": self.did, "caller": self.caller}
+        r = await self.http.post("/api/start", json=body)
         if r.status_code != 200:
-            print(f"bruecke-start http {r.status_code}", flush=True)
+            print(f"bruecke-start http {r.status_code} body={r.text[:200]!r}", flush=True)
             return False
         d = r.json()
         self.session_id = d.get("sessionId") or ""
         self.stille_ms = int(d.get("stilleMs") or STILLE_MS_DEFAULT)
-        print(f"bruecke-start session={self.session_id} did={self.did or '-'} "
-              f"tenant={d.get('tenantId', '')} text={d.get('text', '')[:60]!r}", flush=True)
+        print(f"bruecke-start mode={BRIDGE_MODE} session={self.session_id} "
+              f"did={self.did or '-'} tenant={d.get('tenantId', '')} "
+              f"text={d.get('text', '')[:60]!r}", flush=True)
         # W-START-RUHE: erst nach einer kurzen Ruhe seit Abheben begruessen —
         # die /api/start-Zeit zaehlt mit, gewartet wird nur der Rest.
         rest = START_RUHE_S - (time.monotonic() - t0)
@@ -915,7 +929,8 @@ async def _klient(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
 
 async def main() -> None:
     server = await asyncio.start_server(_klient, "0.0.0.0", BRIDGE_PORT)
-    print(f"bruecke bereit auf :{BRIDGE_PORT} -> {BIANCA_BASE}", flush=True)
+    print(f"bruecke bereit auf :{BRIDGE_PORT} mode={BRIDGE_MODE} -> {BIANCA_BASE}",
+          flush=True)
     async with server:
         await server.serve_forever()
 
