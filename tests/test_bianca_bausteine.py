@@ -283,16 +283,17 @@ def test_fluss_fragenkette_bis_angebot():
 
 
 def test_buchung_bindet_angebots_kalender():
-    """Vorfall 27.08.2026: Angebot kam global (Patrikis), die späte Kartei-
-    Recherche stellte den Sammler auf Petsas um — gebucht wurde der Slot dann
-    im falschen Kalender. Die Buchung MUSS am Angebots-Kalender kleben."""
+    """Vorfall 27.08.2026: Angebot kam aus Kalender A, die späte Kartei-
+    Recherche stellte den Sammler auf Kalender B um — gebucht wurde der Slot
+    dann im falschen Kalender. Die Buchung MUSS am Angebots-Kalender kleben.
+    Seit W-ARZT-DEFAULT (03.09.2026) sucht 'weiß nicht, bei wem ich war' ohne
+    Kartei-Treffer beim Standard-Behandler (Dr. Petsas) statt global."""
     echt_anstossen = flow.hintergrund.anstossen
     echt_find = flow.kal.find_slots
     flow.hintergrund.anstossen = lambda sit: None
     flow.kal.find_slots = lambda *a, **k: {
         "ok": True,
-        "slots": ["2026-09-08T09:00", "2026-09-08T09:15", "2026-09-08T09:30"],
-        "doctorName": "Doktor Theodosios Patrikis, M.Sc.",
+        "slots": [_iso_in(5, 9, 0), _iso_in(5, 9, 15), _iso_in(6, 9, 30)],
     }
     try:
         sit = _sit()
@@ -307,14 +308,15 @@ def test_buchung_bindet_angebots_kalender():
         z = flow._angebot(sit)
         assert sit.get("offered")
         bind = sit.get("angebotKalender") or {}
-        assert bind.get("calendarId") == "RHYdoQFD7oAhqIepLzC2", bind
+        # W-ARZT-DEFAULT: ungeklaerter Behandler -> Standard-Kalender Petsas.
+        assert bind.get("calendarId") == "zex5bmv5jfIHWVW6zHbg", bind
         assert "M.Sc" not in (z["text"] or "")
 
         # Späte Kartei-Recherche stellt den Sammler um — darf die Buchung
         # nicht mehr umlenken:
-        s["arzt"] = {"typ": "letzter", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"}
+        s["arzt"] = {"typ": "letzter", "calendarId": "RHYdoQFD7oAhqIepLzC2", "calendarName": "Dr. Patrikis"}
         ctx = flow._ctx_bauen(sit)
-        assert ctx["calendarId"] == "RHYdoQFD7oAhqIepLzC2", ctx
+        assert ctx["calendarId"] == "zex5bmv5jfIHWVW6zHbg", ctx
     finally:
         flow.hintergrund.anstossen = echt_anstossen
         flow.kal.find_slots = echt_find

@@ -380,6 +380,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         hintergrund.kartei_abwarten(sit, max_s=3.0)
         a = s["arzt"] or {}
 
+    # Chef 03.09.2026: "wenn jemand nicht weiss zu welchem arzt er soll dann
+    # immer bei dr. Petsas buchen" — steht bis hier KEIN Kalender fest (egal,
+    # Kartei-Recherche erfolglos, Neupatient ohne Wahl), sucht das Angebot im
+    # Standard-Behandler-Kalender statt global beim schnellsten Arzt.
+    if not a.get("calendarId"):
+        d = gehirn.arzt_default(sit.get("tenant") or {})
+        if d:
+            s["arzt"] = d
+            a = d
+
     sit.pop("angebotKalender", None)  # neues Angebot => neue Bindung
     ctx = _ctx_bauen(sit)
     vorrat = list(sit.get("slotVorrat") or [])
@@ -781,7 +791,13 @@ def _eskalieren(sit: dict, fid: str) -> str:
         s["warSchonMal"] = False
         return "Kein Problem — dann nehme ich Sie einfach neu auf. "
     if fid == "arzt":
-        s["arzt"] = {"typ": "egal"}
+        # Chef 03.09.2026: wer nicht weiss, zu welchem Arzt — immer der
+        # Standard-Behandler (Meddent: Dr. Petsas), keine globale Suche.
+        d = gehirn.arzt_default(sit.get("tenant") or {})
+        s["arzt"] = d or {"typ": "egal"}
+        beim = arzt_sprechname(_s((d or {}).get("calendarName")))
+        if beim:
+            return f"Machen wir es einfach: Ich schaue bei {beim} nach freien Terminen. "
         return "Machen wir es einfach: Ich schaue, wo es am schnellsten geht. "
     if fid == "grund":
         s["grund"] = "Kontrolluntersuchung"

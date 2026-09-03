@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
-from kern import motive, vornamen
+from kern import motive, tenants as kern_tenants, vornamen
 from kern.patients import arzt_sprechname
 from kern.slots import parse_slot_wish
 
@@ -879,7 +879,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["warSchonMal"] = True if s["warSchonMal"] is None and _SCHONMAL_JA_RE.search(t) else s["warSchonMal"]
             neu.add("arzt")
         elif im_kontext and not (s["arzt"] or {}).get("calendarId"):
-            s["arzt"] = gedeutet
+            if gedeutet["typ"] == "egal":
+                # Chef 03.09.2026: "wenn jemand nicht weiss zu welchem arzt
+                # er soll dann immer bei dr. Petsas buchen" — "egal" heisst
+                # ab jetzt Standard-Behandler, nicht Schnellster-Suche.
+                s["arzt"] = arzt_default(tenant) or gedeutet
+            else:
+                s["arzt"] = gedeutet
             neu.add("arzt")
 
     # Für wen ist der Termin?
@@ -1288,13 +1294,14 @@ ARZTWAHL_VARIANTEN: tuple[str, ...] = (
 def arztwahl_frage(tenant: dict | None) -> str:
     """Behandler-Frage fuer Neupatienten MIT den Namen zur Auswahl.
 
-    Die Namen kommen aus den Tenant-Kalendern (jeder Behandler hat seinen
-    eigenen Kalender samt Id) in Sprechform ("Doktor Petsas" — Vorname faellt
-    weg, kern.patients.arzt_sprechname). "Egal" bleibt eine gueltige Antwort:
-    einsammeln setzt dann typ=egal und die Slot-Suche nimmt den Praxis-Default.
-    """
+    Die Namen kommen aus den Tenant-Kalendern in der SPRECH-Reihenfolge von
+    kern.tenants.behandler_reihe (Chef 03.09.2026: "Dr. Petsas, Dr. Patrikis
+    oder Dr. Nikolaou" — der Chef zuerst, nie mehr andersherum), in
+    Sprechform ("Doktor Petsas", kern.patients.arzt_sprechname). "Egal"
+    bleibt eine gueltige Antwort: einsammeln setzt dann direkt den
+    Standard-Behandler (arzt_default)."""
     namen: list[str] = []
-    for c in (tenant or {}).get("calendars") or []:
+    for c in kern_tenants.behandler_reihe(tenant or {}):
         n = arzt_sprechname(_s((c or {}).get("name")))
         if n and n not in namen:
             namen.append(n)
@@ -1302,6 +1309,19 @@ def arztwahl_frage(tenant: dict | None) -> str:
         return ARZTWAHL_VARIANTEN[0]
     liste = ", ".join(namen[:-1]) + " oder " + namen[-1]
     return f"Zu welchem unserer Behandler möchten Sie — {liste}?"
+
+
+def arzt_default(tenant: dict | None) -> dict | None:
+    """Der Standard-Behandler als Sammler-Arzt (Chef 03.09.2026: "wenn
+    jemand nicht weiss zu welchem arzt er soll dann immer bei dr. Petsas
+    buchen"). typ bleibt "egal", aber MIT Kalender — alle Suchen und
+    Buchungen laufen dann in diesem Kalender statt in der globalen
+    Schnellster-Arzt-Suche."""
+    d = kern_tenants.default_kalender(tenant or {})
+    if not d or not _s(d.get("id")):
+        return None
+    return {"typ": "egal", "calendarId": _s(d.get("id")),
+            "calendarName": _s(d.get("name"))}
 
 
 def readback_text(nummer: str) -> str:

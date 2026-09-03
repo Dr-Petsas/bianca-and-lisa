@@ -163,6 +163,34 @@ def kalender_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | Non
     return cals[0] if cals else None
 
 
+def default_kalender(tenant: dict[str, Any]) -> dict[str, Any] | None:
+    """Der Standard-Behandler des Mandanten (defaultCalendarId, sonst der
+    erste Kalender). Chef 03.09.2026: "wenn jemand nicht weiss zu welchem
+    arzt er soll dann immer bei dr. Petsas buchen" — bei Meddent zeigt die
+    defaultCalendarId auf den Chef selbst."""
+    cals = tenant.get("calendars") or []
+    cid = _sauber(tenant.get("defaultCalendarId"))
+    if cid:
+        hit = next((c for c in cals if _sauber((c or {}).get("id")) == cid), None)
+        if hit:
+            return hit
+    return cals[0] if cals else None
+
+
+def behandler_reihe(tenant: dict[str, Any]) -> list[dict[str, Any]]:
+    """Kalender in SPRECH-Reihenfolge fuer Aufzaehlungen (Chef 03.09.2026):
+    "erwähne nicht die Namen in dieser RehenFolge: Dr. Nikolaou, Dr.Patrikis
+    und Dr. Petsas. sondern umgekehert." — der Standard-Behandler zuerst,
+    die uebrigen in umgekehrter Kalender-Reihenfolge. Ergibt bei Meddent
+    exakt: Dr. Petsas, Dr. Patrikis, Dr. Nikolaou."""
+    cals = [c for c in tenant.get("calendars") or [] if _sauber((c or {}).get("name"))]
+    d = default_kalender(tenant)
+    did = _sauber((d or {}).get("id"))
+    rest = [c for c in cals if _sauber((c or {}).get("id")) != did]
+    kopf = [d] if d and _sauber(d.get("name")) else []
+    return kopf + rest[::-1]
+
+
 def motiv_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | None:
     vms = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
     q = _sauber(name).lower()

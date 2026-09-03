@@ -478,10 +478,12 @@ def _offene_frage(sit: dict) -> str:
 def _behandler_alle(tenant: dict) -> str:
     """Alle Behandler des Standorts (Kalender-Namen), Haupt-Behandler zuerst —
     fuer Auskunftsfragen ("Welche Ärzte arbeiten da?"). Live 29.08.2026:
-    das LLM kannte nur den einen behandler-Eintrag und verschwieg den Rest."""
+    das LLM kannte nur den einen behandler-Eintrag und verschwieg den Rest.
+    Reihenfolge seit 03.09.2026: kern.tenants.behandler_reihe (Chef:
+    "Dr. Petsas, Dr. Patrikis oder Dr. Nikolaou" — nie andersherum)."""
     haupt = _s(tenant.get("behandler"))
     namen = [haupt] if haupt else []
-    for k in tenant.get("calendars") or []:
+    for k in tenants.behandler_reihe(tenant):
         n = _s((k or {}).get("name"))
         if n and n not in namen:
             namen.append(n)

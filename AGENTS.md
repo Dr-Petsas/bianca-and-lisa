@@ -1442,6 +1442,29 @@ Kontroll-Default, sobald nur der Behandler feststand.
   handgesetztem `slotVorrat` IMMER `motivId` + `vorratFuer =
   hintergrund.vorrat_schluessel(sit)` setzen, sonst lädt `_angebot` nach.
 
+## Behandler-Reihenfolge + Standard-Arzt (W-ARZT-DEFAULT 03.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „erwähne nicht die Namen in dieser RehenFolge: Dr. Nikolaou,
+Dr.Patrikis und Dr. Petsas. sondern umgekehert. [...] Dr. Petsas,
+Dr. Patrikis oder Dr. Nikolaou. wenn jemand nicht weiss zu welchem arzt er
+soll dann immer bei dr. Petsas buchen."
+
+- **Sprech-Reihenfolge** (`kern.tenants.behandler_reihe`): der Standard-
+  Behandler (`defaultCalendarId`) zuerst, die übrigen in umgekehrter
+  Kalender-Reihenfolge — Meddent: Petsas, Patrikis, Nikolaou. Nutzt
+  `gehirn.arztwahl_frage` (Neupatienten-Arztwahl) und `agent._behandler_alle`
+  (LLM-Prompt BEHANDLER-Zeile).
+- **"Weiß nicht/egal" → Standard-Behandler** (`gehirn.arzt_default`, typ
+  bleibt "egal" aber MIT calendarId): greift in `einsammeln` (egal-Antwort),
+  `flow._eskalieren` ("arzt"-Frage zweimal unklar) und als letzter Fallback
+  in `flow._angebot` (auch fuer Bestand "weiß nicht bei wem ich war", wenn
+  die Kartei-Recherche nichts hergibt). Die globale Schnellster-Arzt-Suche
+  (egal=True an die CF) läuft nur noch, wenn ein Tenant KEINEN
+  Default-Kalender hat.
+- Tests: `tests/test_arzt_default.py` (7, offline);
+  `test_buchung_bindet_angebots_kalender` wurde auf die neue Regel gedreht
+  (Bindungs-Wache selbst unverändert).
+
 ## Bleaching-Angebot zur Zahnreinigung (W-BLEACHING 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn jemand anruft um eine Zahnreinigung zu buchen kannst
