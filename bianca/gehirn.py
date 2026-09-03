@@ -270,17 +270,117 @@ _ARZT_KONTEXT_RE = re.compile(r"arzt|ärztin|aerztin|behandler|doktor|dr\.|bei\s
 # der anrufer nicht für sich sondern für jemand anderen den termin bucht" —
 # Live-Fall: "Meinen Sohn braucht einen Termin" (ohne "für") wurde dreimal
 # ueberhoert und der Termin auf den per Rufnummer erkannten VATER gebucht.
-_FUER_WEN_PERS = r"(?:tochter|sohn|mann|frau|mutter|vater|kind|oma|opa|enkelin|enkel|schwester|bruder)"
+# Chef-Nachtrag: "es muss nicht immer der sohn sein, es kann auch der
+# nachbar der bruder oder die mutter sein. du musst alle möglichen Fälle
+# verstehen" — bekannte Rollen bekommen die passende Grammatik, alles
+# andere (Betreuer, Nachbar, "für Peter", "im Auftrag von") laeuft
+# generisch als "andere" und fragt nach dem Namen.
+_ROLLEN: dict[str, tuple[str, str]] = {
+    # rolle: ("Ihr X" / wer-Fall, "Ihren X" / wen-Fall)
+    "sohn": ("Ihr Sohn", "Ihren Sohn"),
+    "tochter": ("Ihre Tochter", "Ihre Tochter"),
+    "mann": ("Ihr Mann", "Ihren Mann"),
+    "frau": ("Ihre Frau", "Ihre Frau"),
+    "mutter": ("Ihre Mutter", "Ihre Mutter"),
+    "mama": ("Ihre Mama", "Ihre Mama"),
+    "vater": ("Ihr Vater", "Ihren Vater"),
+    "papa": ("Ihr Papa", "Ihren Papa"),
+    "kind": ("Ihr Kind", "Ihr Kind"),
+    "oma": ("Ihre Oma", "Ihre Oma"),
+    "grossmutter": ("Ihre Großmutter", "Ihre Großmutter"),
+    "opa": ("Ihr Opa", "Ihren Opa"),
+    "grossvater": ("Ihr Großvater", "Ihren Großvater"),
+    "enkel": ("Ihr Enkel", "Ihren Enkel"),
+    "enkelin": ("Ihre Enkelin", "Ihre Enkelin"),
+    "enkelkind": ("Ihr Enkelkind", "Ihr Enkelkind"),
+    "schwester": ("Ihre Schwester", "Ihre Schwester"),
+    "bruder": ("Ihr Bruder", "Ihren Bruder"),
+    "tante": ("Ihre Tante", "Ihre Tante"),
+    "onkel": ("Ihr Onkel", "Ihren Onkel"),
+    "cousin": ("Ihr Cousin", "Ihren Cousin"),
+    "cousine": ("Ihre Cousine", "Ihre Cousine"),
+    "kusine": ("Ihre Kusine", "Ihre Kusine"),
+    "neffe": ("Ihr Neffe", "Ihren Neffen"),
+    "nichte": ("Ihre Nichte", "Ihre Nichte"),
+    "nachbar": ("Ihr Nachbar", "Ihren Nachbarn"),
+    "nachbarin": ("Ihre Nachbarin", "Ihre Nachbarin"),
+    "freund": ("Ihr Freund", "Ihren Freund"),
+    "freundin": ("Ihre Freundin", "Ihre Freundin"),
+    "kollege": ("Ihr Kollege", "Ihren Kollegen"),
+    "kollegin": ("Ihre Kollegin", "Ihre Kollegin"),
+    "partner": ("Ihr Partner", "Ihren Partner"),
+    "partnerin": ("Ihre Partnerin", "Ihre Partnerin"),
+    "lebensgefaehrte": ("Ihr Lebensgefährte", "Ihren Lebensgefährten"),
+    "lebensgefaehrtin": ("Ihre Lebensgefährtin", "Ihre Lebensgefährtin"),
+    "chef": ("Ihr Chef", "Ihren Chef"),
+    "chefin": ("Ihre Chefin", "Ihre Chefin"),
+    "schwiegermutter": ("Ihre Schwiegermutter", "Ihre Schwiegermutter"),
+    "schwiegervater": ("Ihr Schwiegervater", "Ihren Schwiegervater"),
+    "schwiegersohn": ("Ihr Schwiegersohn", "Ihren Schwiegersohn"),
+    "schwiegertochter": ("Ihre Schwiegertochter", "Ihre Schwiegertochter"),
+    "schwager": ("Ihr Schwager", "Ihren Schwager"),
+    "schwaegerin": ("Ihre Schwägerin", "Ihre Schwägerin"),
+    "mitbewohner": ("Ihr Mitbewohner", "Ihren Mitbewohner"),
+    "mitbewohnerin": ("Ihre Mitbewohnerin", "Ihre Mitbewohnerin"),
+    "patenkind": ("Ihr Patenkind", "Ihr Patenkind"),
+    "pflegekind": ("Ihr Pflegekind", "Ihr Pflegekind"),
+    "betreuer": ("Ihr Betreuer", "Ihren Betreuer"),
+    "betreuerin": ("Ihre Betreuerin", "Ihre Betreuerin"),
+    "pfleger": ("Ihr Pfleger", "Ihren Pfleger"),
+    "pflegerin": ("Ihre Pflegerin", "Ihre Pflegerin"),
+}
+# Flektierte/alternative Formen -> kanonische Rolle. Rollen ohne klares
+# Genus (Bekannte/Verwandte/Eltern) laufen generisch als "andere" — die
+# Namensfrage ("Für wen ist der Termin denn …") passt dann immer.
+_ROLLE_ALIAS: dict[str, str] = {
+    "nachbarn": "nachbar", "kollegen": "kollege", "neffen": "neffe",
+    "großmutter": "grossmutter", "großvater": "grossvater",
+    "schwägerin": "schwaegerin", "mutti": "mutter", "vati": "vater",
+    "lebensgefährte": "lebensgefaehrte", "lebensgefährten": "lebensgefaehrte",
+    "lebensgefährtin": "lebensgefaehrtin",
+    "bekannte": "andere", "bekannten": "andere", "bekannter": "andere",
+    "verwandte": "andere", "verwandten": "andere", "verwandter": "andere",
+    "eltern": "andere", "jungen": "andere", "junge": "andere",
+    "kleinen": "andere", "maedchen": "andere", "mädchen": "andere",
+    "patient": "andere", "patienten": "andere", "patientin": "andere",
+}
+# Woerter nach "für meinen …", die KEIN Dritter sind (Wunschzeit, Grund,
+# Behandler). "sie" bleibt raus: am Telefon ist "für Sie" oft die formale
+# Anrede, nicht "für sie" = die Frau nebenan.
+_FUER_WEN_STOP = {
+    "mich", "uns", "sie", "selbst", "praxis", "termin", "termine",
+    "kontrolle", "untersuchung", "zahnreinigung", "prophylaxe", "behandlung",
+    "woche", "wochen", "monat", "monate", "tag", "tage",
+    "vormittag", "nachmittag", "vormittags", "nachmittags",
+    "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag",
+    "sonntag", "naechste", "nächste", "naechsten", "nächsten",
+    "naechster", "nächster", "diesen", "diese", "diesem",
+    "uhr", "schmerzen", "zahn", "zähne", "zaehne",
+    "doktor", "dr", "arzt", "ärztin", "aerztin", "behandler", "behandlerin",
+    "anliegen", "grund", "bitte",
+}
+_FUER_WEN_BEDARF = (
+    r"braucht|benötigt|benoetigt|möchte|moechte|müsste|muesste|"
+    r"hätte\s+gern\w*|haette\s+gern\w*|soll\b|will\b|"
+    r"hat\s+(?:\w+\s+){0,3}?(?:\w*schmerz\w*|\bweh\b)"
+)
+# Besitz + beliebige Person ("für meinen Betreuer" / "meine Nachbarin
+# braucht") — Rolle wird danach normalisiert, unbekannte Woerter -> "andere".
 _FUER_WEN_RE = re.compile(
-    r"f(?:ü|ue)r\s+(?:mein(?:e|en)?|unser(?:e|en)?|die|den|das)\s+(" + _FUER_WEN_PERS + r")\b"
-    r"|\bmein(?:e|en)?\s+(" + _FUER_WEN_PERS + r")\s+(?:braucht|benötigt|benoetigt|"
-    r"möchte|moechte|müsste|muesste|hätte\s+gern\w*|haette\s+gern\w*|soll\b|will\b|"
-    r"hat\s+(?:\w+\s+){0,3}?(?:\w*schmerz\w*|\bweh\b))",
+    r"f(?:ü|ue)r\s+(?:mein|unser|ein)(?:e|en|em)?\s+(\w{3,})\b"
+    r"|\b(?:mein|unser)(?:e|en)?\s+(\w{3,})\s+(?:" + _FUER_WEN_BEDARF + r")",
     re.I,
 )
-# Pauschal "nicht für mich" / "für jemand anderen" — Dritter ohne Rolle.
+# Pauschal ohne Rolle: "nicht für mich", "für jemand anderen",
+# "für Herrn Müller" (nicht "für Frau Doktor Petsas"), "im Auftrag/Namen
+# von", "stellvertretend", "für ihn", "ich rufe für Peter an".
 _NICHT_FUER_MICH_RE = re.compile(
-    r"nicht\s+f(?:ü|ue)r\s+mich|f(?:ü|ue)r\s+(?:jemand(?:en)?|eine[nn]?)\s+ander",
+    r"nicht\s+f(?:ü|ue)r\s+mich|"
+    r"f(?:ü|ue)r\s+(?:jemand(?:en)?|eine[nn]?)\s+ander|"
+    r"f(?:ü|ue)r\s+(?:herrn?|frau)\s+(?!dr\b|doktor)\w{2,}|"
+    r"im\s+(?:auftrag|namen)\s+von|stellvertretend|in\s+vertretung|"
+    r"f(?:ü|ue)r\s+ihn\b|"
+    r"rufe?\s+f(?:ü|ue)r\s+(?!mich\b|uns\b|sie\b)\w{2,}",
     re.I,
 )
 # "Doch für mich (selbst)" — loest ein Missverstaendnis wieder auf.
@@ -290,31 +390,46 @@ _NICHT_ICH_RE = re.compile(
     r"bin\s+(?:ich\s+)?nicht|nicht\s+mein\s+name|falscher?\s+name|verwählt|verwaehlt",
     re.I,
 )
-# Maennliche Rollen fuer Nominativ ("Ihr Sohn") und Akkusativ ("Ihren Sohn").
-_WEN_ER = {"sohn", "mann", "vater", "opa", "bruder", "enkel"}
+
+
+def _rolle_normal(w: str) -> str:
+    """Flektierte Rolle auf den Tabellen-Schluessel bringen.
+
+    Leerer String = das Wort ist KEIN Dritter (Stopwort: Woche, Kontrolle…).
+    Unbekannte Person ("Betreuer", "Peter") wird "andere"."""
+    w = _s(w).lower()
+    if not w or w in _FUER_WEN_STOP:
+        return ""
+    if w in _ROLLEN:
+        return w
+    return _ROLLE_ALIAS.get(w, "andere")
 
 
 def fuer_wen_signal(text: str) -> str:
-    """Rolle des Dritten aus dem Satz — '' wenn kein Fuer-Wen-Signal."""
+    """Rolle des Dritten aus dem Satz — '' wenn kein Fuer-Wen-Signal.
+
+    Bekannte Rollen ("Nachbarn", "Bruder", "Mutter") behalten ihre Grammatik;
+    alles ohne klare Rolle ("nicht für mich", "für Frau Schmidt", "ich rufe
+    für Peter an", "für meinen Betreuer") wird "andere"."""
     t = _s(text)
     fm = _FUER_WEN_RE.search(t)
     if fm:
-        return _s(fm.group(1) or fm.group(2)).lower()
+        rolle = _rolle_normal(fm.group(1) or fm.group(2))
+        if rolle:
+            return rolle
     if _NICHT_FUER_MICH_RE.search(t):
         return "andere"
     return ""
 
 
 def fuer_wen_phrase(s: dict, *, fall: str = "wer") -> str:
-    """'Ihr Sohn' / 'Ihre Tochter' (fall='wen': 'Ihren Sohn') — '' bei 'andere'."""
+    """'Ihr Nachbar' / 'Ihre Tochter' (fall='wen': 'Ihren Nachbarn') —
+    '' bei 'andere'/unbekannter Rolle (dann greift die generische Frage)."""
     w = _s(s.get("fuerWen")).lower()
-    if not w or w == "andere":
+    eintrag = _ROLLEN.get(w)
+    if not eintrag:
         return ""
-    if w == "kind":
-        return "Ihr Kind"
-    if w in _WEN_ER:
-        return ("Ihren " if fall == "wen" else "Ihr ") + w.capitalize()
-    return "Ihre " + w.capitalize()
+    return eintrag[1] if fall == "wen" else eintrag[0]
 
 
 def _fuer_wen_name_frage(s: dict) -> str:
@@ -1558,10 +1673,11 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "War er oder sie schon einmal bei uns in der Praxis?",
     ]
     # W-FUER-WEN: die haeufigsten Dritten-Rollen mitwaermen (Namensfrage +
-    # Schonmal-Frage) — seltene Rollen synthetisieren live (langsamer, nie
-    # falsch).
+    # Schonmal-Frage) — seltene Rollen (Nachbar, Kollege, Chefin …)
+    # synthetisieren live (langsamer, nie falsch).
     for wer in ("Ihr Sohn", "Ihre Tochter", "Ihr Mann", "Ihre Frau", "Ihr Kind",
-                "Ihre Mutter", "Ihr Vater"):
+                "Ihre Mutter", "Ihr Vater", "Ihr Bruder", "Ihre Schwester",
+                "Ihre Oma", "Ihr Opa", "Ihr Nachbar", "Ihre Nachbarin"):
         erstformen.append(f"Wie heißt {wer}? Bitte mit Vor- und Nachnamen.")
         erstformen.append(f"War {wer} schon einmal bei uns in der Praxis?")
     out = list(erstformen)

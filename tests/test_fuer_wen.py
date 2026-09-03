@@ -66,14 +66,77 @@ def test_signal_auch_ohne_fuer():
         assert gehirn.fuer_wen_signal(satz) == wen, satz
 
 
+def test_signal_alle_moeglichen_rollen():
+    """Chef: 'es muss nicht immer der sohn sein, es kann auch der nachbar
+    der bruder oder die mutter sein. du musst alle möglichen Fälle
+    verstehen.'"""
+    for satz, wen in [
+        ("Ich rufe für meinen Nachbarn an.", "nachbar"),
+        ("Mein Nachbar braucht dringend einen Termin.", "nachbar"),
+        ("Einen Termin für meinen Bruder, bitte.", "bruder"),
+        ("Meine Mutter müsste mal wieder zur Kontrolle.", "mutter"),
+        ("Der Termin ist für meine Schwiegermutter.", "schwiegermutter"),
+        ("Ich brauche einen Termin für meinen Kollegen.", "kollege"),
+        ("Für meine Freundin bitte.", "freundin"),
+        ("Meine Oma hat Zahnschmerzen.", "oma"),
+        ("Termin für unseren Opa.", "opa"),
+        ("Für meinen Neffen bitte.", "neffe"),
+        ("Einen Termin für meine Chefin.", "chefin"),
+        ("Für meine Mama bitte.", "mama"),
+        # Ohne klare Rolle -> generisch "andere":
+        ("Ich rufe für einen Bekannten an.", "andere"),
+        ("Der Termin ist für Frau Schmidt.", "andere"),
+        ("Ich rufe im Auftrag von Herrn Müller an.", "andere"),
+        ("Der Termin ist für meine Eltern.", "andere"),
+        # Chef: ALLE Fälle — auch ohne Rollenwort in der Tabelle:
+        ("Ich rufe für Peter an.", "andere"),
+        ("Der Termin ist für ihn.", "andere"),
+        ("Ich rufe im Namen von Meier an.", "andere"),
+        ("Stellvertretend für meine Schwester.", "schwester"),
+        ("Einen Termin für meinen Betreuer.", "betreuer"),
+        ("Meine Lebensgefährtin möchte einen Termin.", "lebensgefaehrtin"),
+    ]:
+        assert gehirn.fuer_wen_signal(satz) == wen, satz
+
+
 def test_signal_keine_falschen_treffer():
     for satz in [
         "Meine Tochter heiratet am Wochenende!",
         "Meine Frau hat gesagt, ich soll anrufen.",
         "Ich hätte gern einen Termin für mich.",
         "Kontrolle bitte, am dritten Oktober.",
+        "Ich möchte zu Frau Doktor Petsas.",
+        "Geht auch ein Termin bei Frau Doktor?",
+        "Einen Termin für Frau Doktor Nikolaou bitte.",
     ]:
         assert gehirn.fuer_wen_signal(satz) == "", satz
+
+
+def test_phrase_beugt_richtig():
+    for wen, wer_fall, wen_fall in [
+        ("nachbar", "Ihr Nachbar", "Ihren Nachbarn"),
+        ("kollege", "Ihr Kollege", "Ihren Kollegen"),
+        ("neffe", "Ihr Neffe", "Ihren Neffen"),
+        ("bruder", "Ihr Bruder", "Ihren Bruder"),
+        ("mutter", "Ihre Mutter", "Ihre Mutter"),
+        ("kind", "Ihr Kind", "Ihr Kind"),
+        ("andere", "", ""),
+    ]:
+        s = {"fuerWen": wen}
+        assert gehirn.fuer_wen_phrase(s) == wer_fall, wen
+        assert gehirn.fuer_wen_phrase(s, fall="wen") == wen_fall, wen
+
+
+def test_nachbar_fluss_fragt_nach_dem_nachbarn():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "fuerWen": "nachbar"})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "schonmal" and "Ihr Nachbar" in frage, frage
+    s["warSchonMal"] = True
+    s["arzt"] = {"typ": "egal", "calendarId": "c1", "calendarName": "Dr. P"}
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "name" and "Wie heißt Ihr Nachbar?" in frage, frage
 
 
 # --- 2. Die Chef-Frage: "Der Termin ist für Sie selbst, richtig?" ------------

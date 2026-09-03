@@ -1516,9 +1516,21 @@ DREIMAL „für meinen Sohn" — Bianca buchte stur auf den Vater. Drei Löcher:
 
 - **Erkennung** (`gehirn.fuer_wen_signal`): `_FUER_WEN_RE` matcht jetzt auch
   ohne „für" („Mein(en) Sohn braucht/möchte/hat Schmerzen …") plus
-  `_NICHT_FUER_MICH_RE` („nicht für mich", „für jemand anderen" → Rolle
-  "andere"). `_FUER_MICH_RE` löst „doch für mich" wieder auf. Wache:
-  „Meine Frau hat gesagt…"/„Meine Tochter heiratet" matchen NICHT.
+  `_NICHT_FUER_MICH_RE` („nicht für mich", „für jemand anderen", „für
+  Herrn/Frau <Name>", „im Auftrag von" → Rolle "andere"). `_FUER_MICH_RE`
+  löst „doch für mich" wieder auf. Wache: „Meine Frau hat gesagt…"/„Meine
+  Tochter heiratet"/„für Frau Doktor Petsas" matchen NICHT.
+- **Alle Rollen** (Chef-Nachtrag: „es muss nicht immer der sohn sein, es
+  kann auch der nachbar der bruder oder die mutter sein. du musst alle
+  möglichen Fälle verstehen"): `_ROLLEN` liefert die Grammatik für die
+  bekannten Fälle (Familie, Nachbar(in), Bruder, Mutter, Freund,
+  Kollege, Partner, Chef, Schwieger-, Betreuer, Pfleger …). `_FUER_WEN_RE`
+  matcht aber **jede** Besitz-Konstruktion („für meinen X", „meine X
+  braucht/möchte") — unbekanntes X (Betreuer, Peter) wird „andere" und
+  Bianca fragt „Für wen ist der Termin denn — wie heißt er oder sie?".
+  Stopwörter (Woche, Kontrolle, Donnerstag, Frau Doktor) sind kein Dritter.
+  Extra-Netze: „für ihn", „ich rufe für Peter an", „im Auftrag/Namen von",
+  „stellvertretend". Grammatik kommt NUR aus der Tabelle — nie geraten.
 - **Die Chef-Frage:** der Anrufer-Check im BUCHEN-Fluss endet mit „Der
   Termin ist für Sie selbst, richtig?" (`anrufer_check_frage(sit,
   selbst=True)`); Verwaltung (Absage/Auskunft) behält „Stimmt das so?".
@@ -1545,7 +1557,7 @@ DREIMAL „für meinen Sohn" — Bianca buchte stur auf den Vater. Drei Löcher:
 - **Termin-Notiz:** „Telefonisch gebucht von Angehörigem (Sohn-Termin):
   Kiriakos Tzannis, Kontakt-Nummer … gehört dem Anrufer." — die Praxis
   sieht, WER angerufen hat.
-- Tests: `tests/test_fuer_wen.py` (13, offline).
+- Tests: `tests/test_fuer_wen.py` (offline).
 
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
