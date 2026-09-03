@@ -61,6 +61,25 @@ _PZR_KEINE_RE = re.compile(
     re.I,
 )
 
+# W-BLEACHING (Chef 03.09.2026): Zahnaufhellung zur Zahnreinigung anbieten.
+# "Aufhellung/Bleaching" im Motiv- oder Anrufer-Wortlaut.
+_BLEACH_RE = re.compile(r"aufhell|bleach|blitzeblank\s*weiss", re.I)
+# Zahnersatz im Frontbereich: dann ist die Aufhellung unter Umstaenden nicht
+# moeglich (Ausnahme: eigene Zaehne an zu helle Kronen angleichen).
+_ZAHNERSATZ_RE = re.compile(
+    r"krone|brücke|bruecke|veneer|implantat|zahnersatz|prothese|"
+    r"die\s+dritten\b",  # NICHT nacktes "dritte" — "am dritten Oktober"!
+    re.I)
+# "Weiss nicht, ob das bei mir geht/sinnvoll ist" -> Notiz, der Doktor beraet.
+_BLEACH_UNSICHER_RE = re.compile(
+    r"weiß\s+nicht|weiss\s+nicht|keine\s+ahnung|nicht\s+sicher|unsicher|"
+    r"geht\s+das\s+(?:bei\s+mir|denn|überhaupt|ueberhaupt)|"
+    r"ob\s+das\s+(?:geht|klappt|sinn|möglich|moeglich)|sinnvoll|"
+    r"müsste\s+man|muesste\s+man|schwer\s+zu\s+sagen|kommt\s+drauf\s+an|"
+    r"was\s+meinen\s+sie|fragen\s+sie\s+den\s+doktor",
+    re.I,
+)
+
 _JA_RE = re.compile(
     r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|yeah|yea|"
     r"jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|"
@@ -425,6 +444,14 @@ FELDER_START = {
     "letzterGrund": "",
     "rueckblick": "",
     "pzr": "",
+    # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot zur Zahnreinigung.
+    # "" = nie gefragt, "gefragt" = Angebot offen, "check" = Zahnersatz-
+    # Rueckfrage offen, "ja" = kommt mit (+1 Std., 350 Euro, Notiz),
+    # "nein" = ohne, "beratung" = Notiz, der Doktor schaut und beraet.
+    "bleaching": "",
+    # Grund der Beratung: "zahnersatz" (Kronen/Bruecken/Veneers/Implantate
+    # vorne) oder "unsicher" — steuert Ansage und Termin-Notiz.
+    "bleachingInfo": "",
     # W-ANRUFER-CHECK (31.08.2026): die CF hat den Anrufer ueber seine
     # Rufnummer in der Kartei gefunden (sit["anrufer"]). "" = noch nicht
     # rueckbestaetigt, "ja" = Name+Nummer uebernommen, "nein" = Treffer
@@ -1096,6 +1123,42 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["pzr"] = "nein"
                 neu.add("pzr")
 
+    # W-BLEACHING (Chef 03.09.2026): Antwort auf das Aufhellungs-Angebot.
+    # Ja -> erst der Zahnersatz-Check (Kronen/Bruecken/Veneers/Implantate
+    # vorne: unter Umstaenden nicht moeglich, ausser die eigenen Zaehne
+    # sollen an zu helle Kronen angepasst werden). Unsicher -> Notiz, der
+    # Doktor schaut es sich in Ruhe an und beraet.
+    if s["bleaching"] == "gefragt" and s["frage"] == "bleaching":
+        if _BLEACH_UNSICHER_RE.search(t):
+            s["bleaching"] = "beratung"
+            s["bleachingInfo"] = "unsicher"
+            neu.add("bleaching")
+        elif _ZAHNERSATZ_RE.search(t) and not ist_nein(t):
+            # "Ich habe vorne aber Kronen" — direkt der Beratungs-Weg.
+            s["bleaching"] = "beratung"
+            s["bleachingInfo"] = "zahnersatz"
+            neu.add("bleaching")
+        elif ist_ja(t):
+            s["bleaching"] = "check"
+            neu.add("bleachingCheck")
+        elif ist_nein(t):
+            s["bleaching"] = "nein"
+            neu.add("bleaching")
+    elif s["bleaching"] == "check" and s["frage"] == "bleaching_check":
+        verneint = bool(re.search(r"\bkein\w*\b|\bnicht\b|\bnee\b", t, re.I))
+        if ist_nein(t) or (verneint and _ZAHNERSATZ_RE.search(t)):
+            # "Nein" / "Keine Kronen" -> Aufhellung kommt fest mit dazu.
+            s["bleaching"] = "ja"
+            neu.add("bleaching")
+        elif _BLEACH_UNSICHER_RE.search(t):
+            s["bleaching"] = "beratung"
+            s["bleachingInfo"] = "unsicher"
+            neu.add("bleaching")
+        elif ist_ja(t) or _ZAHNERSATZ_RE.search(t):
+            s["bleaching"] = "beratung"
+            s["bleachingInfo"] = "zahnersatz"
+            neu.add("bleaching")
+
     # Vornamen-Waechter (Chef 29.08.2026): Anrede-Geschlecht aus dem Vornamen,
     # sobald er da ist oder korrigiert wurde. Ein Kartei-Geschlecht (Quelle
     # "akte", gesetzt vom Hintergrund-Treffer) wird NIE ueberschrieben.
@@ -1187,6 +1250,14 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "pzr": (
         "Möchten Sie eine professionelle Zahnreinigung mit dazu?",
         "Soll die Zahnreinigung mit auf den Termin?",
+    ),
+    "bleaching": (
+        "Möchten Sie die Zähne bei der Zahnreinigung auch gleich aufhellen lassen?",
+        "Soll die Zahnaufhellung mit dazu — ja oder nein?",
+    ),
+    "bleaching_check": (
+        "Haben Sie im Frontbereich Zahnersatz — also Kronen, Brücken, Veneers oder Implantate?",
+        "Kurz zur Aufhellung: Haben Sie vorne Kronen, Brücken, Veneers oder Implantate?",
     ),
     "anrufer_check": (
         "Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt.",
@@ -1388,7 +1459,8 @@ def telefon_alt_frage(s: dict) -> str:
 # wartet im Diktat 1800 ms (SMART_ENDPOINT_DICTATION_HOLD); wir nehmen
 # 1500 ms — traege genug fuer Gruppen-Pausen, ohne das Gespraech zu laehmen.
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
-                "versicherung_check", "pzr", "telefon_alt", "telefon_check",
+                "versicherung_check", "pzr", "bleaching", "bleaching_check",
+                "telefon_alt", "telefon_check",
                 "rueckblick", "anrufer_check", "frisch_absage_ok", "absage_ok"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
@@ -1421,6 +1493,12 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             and not s["telefonAlt"]
             and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
         return "telefon_alt", telefon_alt_frage(s)
+
+    # W-BLEACHING: der Anrufer hat Ja zur Aufhellung gesagt — die
+    # Zahnersatz-Rueckfrage steht im Raum und wird ZUERST geklaert.
+    if s["bleaching"] == "check":
+        return "bleaching_check", ("Haben Sie denn im Frontbereich Zahnersatz — "
+                                   "also Kronen, Brücken, Veneers oder Implantate?")
 
     # W-ANRUFER-CHECK (31.08.2026): die Rufnummer hat einen Kartei-Patienten
     # getroffen — EINMAL Name + Nummer vorlesen statt sie zu erfragen. Nur
@@ -1685,6 +1763,37 @@ def pzr_faellig(s: dict) -> bool:
     if _PZR_GRUND_RE.search(_s(s.get("letzterGrund"))) and not besuch_lange_her(s):
         return False
     return True
+
+
+BLEACHING_FRAGE = (
+    "Übrigens: Möchten Sie Ihre Zähne bei der Zahnreinigung auch gleich "
+    "aufhellen lassen? Das dauert etwa eine Stunde länger und kostet "
+    "dreihundertfünfzig Euro zusätzlich."
+)
+
+
+def bleaching_faellig(sit: dict) -> bool:
+    """Zahnaufhellung zur Zahnreinigung anbieten (W-BLEACHING Chef 03.09.2026)?
+
+    NUR wenn der neue Termin selbst eine Zahnreinigung ist, die Praxis eine
+    Aufhellung im Motiv-Katalog fuehrt (Tenant-Wache: eine Derma-Praxis
+    kennt kein Bleaching — und Preis/Dauer unten sind die Ansage des Chefs
+    fuer SEINE Praxis), der Anrufer die Aufhellung nicht schon selbst
+    angesprochen hat — und EINMAL pro Anruf."""
+    s = sammler(sit)
+    if s.get("modus") != "buchen" or s.get("bleaching"):
+        return False
+    if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
+        return False
+    if not s.get("grund") or not ist_pzr_grund(s):
+        return False
+    if _BLEACH_RE.search(f"{s.get('grund')} {s.get('grundWortlaut')} {s.get('motivName')}"):
+        return False  # Aufhellung ist schon selbst Thema/Grund
+    kat = motive.katalog(sit)
+    return any(
+        _BLEACH_RE.search(f"{_s(v.get('name'))} {_s(v.get('nameForPatient'))}")
+        for v in kat if isinstance(v, dict)
+    )
 
 
 def pzr_frage(s: dict) -> str:

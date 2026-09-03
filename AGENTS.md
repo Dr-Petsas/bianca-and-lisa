@@ -1442,6 +1442,43 @@ Kontroll-Default, sobald nur der Behandler feststand.
   handgesetztem `slotVorrat` IMMER `motivId` + `vorratFuer =
   hintergrund.vorrat_schluessel(sit)` setzen, sonst lädt `_angebot` nach.
 
+## Bleaching-Angebot zur Zahnreinigung (W-BLEACHING 03.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „wenn jemand anruft um eine Zahnreinigung zu buchen kannst
+du auch fragen ob die Zähne mit aufgehellt werden sollen.. Die Aufhellung /
+bleaching dauert ca 1 Stunde länger und kostet 350 euro zusätzlich. Sie ist
+unter Umständen nicht möglich, wenn in der Front Zahnersatz [...] es sei
+denn die Zähne sollen bei zu hellen kronen durch bleaching an die
+zahnkronen angepasst werden. [...] wenn der Patient sich ungewiss ist [...]
+sagst du du hast eine notiz gemacht und der Doktor schaut sich das in Ruhe
+an und berät sie"
+
+- **Zustandsmaschine** (`sammler["bleaching"]`): "" → "gefragt" (Angebot mit
+  Preis/Dauer als `flow._einschub`, wie die PZR-Mitbuch-Frage) → bei Ja
+  "check" (Zahnersatz-Rückfrage: Kronen/Brücken/Veneers/Implantate vorne?)
+  → "ja" | "nein" | "beratung" (+ `bleachingInfo`: "zahnersatz"/"unsicher").
+  EINMAL pro Anruf; zweimal keine klare Antwort → `_eskalieren` setzt
+  "nein" (Angebot) bzw. "beratung" (Check).
+- **Tenant-Wache** (`gehirn.bleaching_faellig`): nur wenn der NEUE Termin
+  selbst eine Zahnreinigung ist (`ist_pzr_grund`) UND der Motiv-Katalog der
+  Praxis eine Aufhellung führt (`_BLEACH_RE` gegen Namen). Derma-Praxen
+  (Blessing) sehen die Frage nie. Preis (350 €) und Dauer (+1 Std.) sind die
+  Chef-Ansage für SEINE Praxis — führt ein anderer Zahn-Tenant Bleaching,
+  vorher Preis/Dauer klären!
+- **Gebucht wird IMMER die Zahnreinigung** (kein zweiter Slot, kein
+  Motiv-Wechsel — Meddent hat kein Kombi-Motiv): bei "ja" bekommt der Termin
+  „PLUS Zahnaufhellung/Bleaching … (ca. +1 Std., 350 Euro zusätzlich) —
+  bitte Terminlänge anpassen." als Popup-Notiz; bei "beratung" die passende
+  Berate-Notiz (Zahnersatz vorne bzw. unsicher).
+- **Bianca berät NIE selbst medizinisch:** bei Unsicherheit/Zahnersatz sagt
+  sie den Chef-Satz (Notiz gemacht, der Doktor schaut es sich in Ruhe an
+  und berät). Faktenwissen fürs LLM (Nachfragen wie „Was kostet das?")
+  hängt `flow.status_zeile` an, solange die Frage offen ist — kein globaler
+  Prompt-Absatz, damit fremde Tenants die Meddent-Preise nie sehen.
+- Regex-Wachen: `_ZAHNERSATZ_RE` matcht NICHT „am dritten Oktober" (nur
+  „die Dritten"); Zwischenfragen halten die Bleaching-Frage offen (wie pzr).
+- Tests: `tests/test_bleaching.py` (16, offline).
+
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....

@@ -319,6 +319,28 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if s.get("pzr") == "ja":
             return "Sehr gerne — die Zahnreinigung nehme ich mit auf. "
         return "Alles klar, dann ohne Zahnreinigung. "
+    if "bleachingCheck" in neu:
+        # Ja zur Aufhellung — naechste_frage stellt jetzt den Zahnersatz-Check.
+        return "Sehr gerne. "
+    if "bleaching" in neu:
+        if s.get("bleaching") == "ja":
+            return ("Wunderbar — dann plane ich die Aufhellung mit ein, "
+                    "der Termin dauert dann etwa eine Stunde länger. ")
+        if s.get("bleaching") == "beratung":
+            if s.get("bleachingInfo") == "zahnersatz":
+                # Chef 03.09.2026: bei Kronen/Bruecken/Veneers/Implantaten in
+                # der Front ist die Aufhellung unter Umstaenden nicht moeglich
+                # — ausser die eigenen Zaehne sollen an zu helle Kronen
+                # angepasst werden. Bianca beraet NICHT selbst.
+                return ("Bei Zahnersatz im Frontbereich ist eine Aufhellung "
+                        "unter Umständen nicht möglich — es sei denn, die "
+                        "eigenen Zähne sollen an hellere Kronen angepasst "
+                        "werden. Ich habe mir eine Notiz gemacht: Der Doktor "
+                        "schaut sich das beim Termin in Ruhe an und berät Sie. ")
+            return ("Kein Problem — ich habe mir eine Notiz gemacht. Der "
+                    "Doktor schaut sich das beim Termin in Ruhe an und "
+                    "berät Sie. ")
+        return "Alles klar — dann nur die Zahnreinigung. "
     if "grund" in neu:
         return "Alles klar. "
     if "wunsch" in neu:
@@ -624,6 +646,29 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 # der Praxis am Termin sichtbar gemacht.
                 hinweise.append("PLUS PZR heute")
                 text += " Die professionelle Zahnreinigung habe ich mit dazu vermerkt."
+            # W-BLEACHING (Chef 03.09.2026): die Aufhellung wird nicht als
+            # zweiter Slot gebucht — die Praxis sieht sie am Termin und
+            # verlaengert selbst (ca. +1 Std., 350 Euro zusaetzlich).
+            if s["bleaching"] == "ja":
+                hinweise.append(
+                    "PLUS Zahnaufhellung/Bleaching zur Zahnreinigung "
+                    "(ca. +1 Std., 350 Euro zusätzlich) — bitte Terminlänge anpassen."
+                )
+                text += " Die Zahnaufhellung habe ich mit dazu vermerkt."
+            elif s["bleaching"] == "beratung":
+                if s["bleachingInfo"] == "zahnersatz":
+                    hinweise.append(
+                        "Anrufer interessiert sich für Zahnaufhellung, hat aber "
+                        "Zahnersatz im Frontbereich (Kronen/Brücken/Veneers/"
+                        "Implantate) — bitte prüfen, ob/wie möglich (ggf. eigene "
+                        "Zähne an helle Kronen angleichen), und beim Termin beraten."
+                    )
+                else:
+                    hinweise.append(
+                        "Anrufer interessiert sich für Zahnaufhellung, ist aber "
+                        "unsicher, ob sie bei ihm geht/sinnvoll ist — bitte beim "
+                        "Termin ansehen und beraten."
+                    )
             if s["versicherungNotiz"]:
                 if s["versicherung"]:
                     hinweise.append(
@@ -716,6 +761,14 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
         s["pzr"] = "gefragt"
         s["frage"] = "pzr"
         return {"text": (vorsatz + gehirn.pzr_frage(s)).strip()}
+    # W-BLEACHING (Chef 03.09.2026): "wenn jemand anruft um eine
+    # Zahnreinigung zu buchen kannst du auch fragen ob die Zähne mit
+    # aufgehellt werden sollen" — einmal pro Anruf, nur wenn die Praxis
+    # eine Aufhellung im Katalog fuehrt.
+    if gehirn.bleaching_faellig(sit):
+        s["bleaching"] = "gefragt"
+        s["frage"] = "bleaching"
+        return {"text": (vorsatz + gehirn.BLEACHING_FRAGE).strip()}
     return None
 
 
@@ -743,6 +796,18 @@ def _eskalieren(sit: dict, fid: str) -> str:
     if fid == "buchstabieren":
         s["buchstabiert"] = True
         return ""
+    if fid == "bleaching":
+        # Keine klare Antwort auf das Aufhellungs-Angebot: nicht nerven,
+        # erstmal ohne — der Anrufer kann es jederzeit wieder ansprechen.
+        s["bleaching"] = "nein"
+        return "Alles gut — dann erst einmal ohne Aufhellung. "
+    if fid == "bleaching_check":
+        # Zahnersatz-Frage bleibt unklar: Notiz, der Doktor beraet (Chef
+        # 03.09.2026: bei Ungewissheit schaut sich das der Doktor in Ruhe an).
+        s["bleaching"] = "beratung"
+        s["bleachingInfo"] = "unsicher"
+        return ("Ich habe mir eine Notiz gemacht — der Doktor schaut sich das "
+                "beim Termin in Ruhe an und berät Sie. ")
     if fid == "anrufer_check":
         # Zweimal keine klare Antwort auf das vorgelesene Name+Nummer-Paar:
         # NICHTS uebernehmen (Sicherheit vor Tempo — falsche Identitaet waere
@@ -1101,9 +1166,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # "Abschweifungen müssen erlaubt sein"). Brachte der Satz Ernte,
             # macht die Maschine normal weiter; die Nummern-Rückbestätigung
             # (telefon_check) bleibt IMMER deterministisch.
-            if s["frage"] != "pzr":
-                # Eine offene Zahnreinigungs-Frage bleibt offen ("Was kostet
-                # die denn?" -> LLM nennt den Preis, das Ja danach zaehlt).
+            if s["frage"] not in {"pzr", "bleaching", "bleaching_check"}:
+                # Eine offene Zahnreinigungs-/Aufhellungs-Frage bleibt offen
+                # ("Was kostet die denn?" -> LLM nennt den Preis, das Ja
+                # danach zaehlt).
                 s["frage"] = fid
             return None
         if not neu and s["frage"] == fid:
@@ -1175,11 +1241,24 @@ def status_zeile(sit: dict) -> str:
     ]
     if s.get("pzr") == "ja":
         teile.append("Zahnreinigung=kommt mit dazu")
+    if s.get("bleaching") == "ja":
+        teile.append("Zahnaufhellung=kommt mit dazu (ca. +1 Std., 350 Euro zusätzlich)")
     offen = ""
     if s.get("frage"):
         offen = f" Offene Frage: {s['frage']}."
     if s.get("frage") == "pzr":
         offen += " (Bianca hat gefragt, ob eine professionelle Zahnreinigung mit dazu soll — Preisfragen dazu beantwortet der Preise-Abschnitt.)"
+    if s.get("frage") in {"bleaching", "bleaching_check"}:
+        # W-BLEACHING (Chef 03.09.2026): Faktenwissen fuer freie Nachfragen.
+        offen += (" (Bianca hat eine Zahnaufhellung/Bleaching zur Zahnreinigung"
+                  " angeboten: dauert ca. eine Stunde länger, kostet 350 Euro"
+                  " zusätzlich. Bei Zahnersatz im Frontbereich — Kronen, Brücken,"
+                  " Veneers, Implantaten — ist sie unter Umständen nicht möglich;"
+                  " Ausnahme: die eigenen Zähne sollen an zu helle Kronen"
+                  " angepasst werden. Ist der Anrufer unsicher, ob das bei ihm"
+                  " geht oder sinnvoll ist: Bianca sagt, sie hat eine Notiz"
+                  " gemacht und der Doktor schaut es sich in Ruhe an und berät —"
+                  " Bianca berät NIE selbst medizinisch.)")
     # Rueckblick-Kontext (30.08.2026): das LLM plaudert ueber den letzten
     # Besuch mit — es muss wissen, wann und weswegen der Anrufer da war.
     if s.get("rueckblick") and s.get("letzterGrund"):

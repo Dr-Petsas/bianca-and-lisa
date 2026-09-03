@@ -94,6 +94,9 @@ _FRAGE_KERN = {
     "versicherung": r"privat|gesetzlich|versichert",
     "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
     "pzr": r"zahnreinigung|prophylaxe|\bpzr\b",
+    # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot + Zahnersatz-Check.
+    "bleaching": r"aufhell|bleach|zahnaufhellung",
+    "bleaching_check": r"krone|brücke|bruecke|veneer|implantat|zahnersatz",
     "rueckblick": r"seither|beruhigt|ergangen|zufrieden|verheilt",
     "frisch_absage_ok": r"absagen|stornier|wirklich",
     "absage_ok": r"absagen|stornier|wirklich",
@@ -197,6 +200,8 @@ _FEHLT_WORT = {
     "slotwahl": "Ihre Terminwahl",
     "bestaetigung": "Ihr Okay",
     "pzr": "ob die Zahnreinigung mit dazu soll",
+    "bleaching": "ob die Zähne mit aufgehellt werden sollen",
+    "bleaching_check": "ob Sie vorne Zahnersatz haben — Kronen, Brücken, Veneers oder Implantate",
     "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
