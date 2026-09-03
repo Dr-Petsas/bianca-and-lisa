@@ -476,7 +476,7 @@ def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
     zusatz = f", {wer}" if wer else ""
     return {"text": (
         f"Gefunden — es geht um den Termin {termin.get('spoken')}{zusatz}. "
-        "Wann passt es Ihnen denn besser: eher vormittags oder nachmittags, und ab welchem Tag?"
+        "Wann passt es Ihnen denn besser: eher vormittags oder nachmittags?"
     )}
 
 

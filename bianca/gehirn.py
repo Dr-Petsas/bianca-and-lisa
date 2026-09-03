@@ -1143,7 +1143,7 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     ),
     "wunsch": (
         "Wann würde es Ihnen denn gut passen — eher vormittags oder nachmittags?",
-        "Ab welchem Tag passt es Ihnen — und lieber vormittags oder nachmittags?",
+        "Passt es Ihnen eher vormittags oder eher nachmittags?",
     ),
     # Verwaltungs-Fragen (W-SAMMELN): beim Neustart der Prozedur im selben
     # Anruf darf der Wiederholungs-Wächter die Frage nicht streichen —
@@ -1297,7 +1297,7 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?",
         "Und der Vorname?",
         "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?",
-        "Wann passt es Ihnen am besten — eher vormittags oder nachmittags? Und ab welchem Tag?",
+        "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?",
         "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
         "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?",
         "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer.",
@@ -1450,7 +1450,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if not s["grund"]:
             return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
         if s["wunsch"] is None:
-            return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags? Und ab welchem Tag?"
+            return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
         if not s["bekannt"] and not s["buchstabiert"]:
             return "buchstabieren", "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?"
         if not s["telefonOk"] and not s["telefonAkte"] and not (s["bekannt"] and s["aktePhone"]):
@@ -1474,7 +1474,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if not s["grund"]:
         return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
     if s["wunsch"] is None:
-        return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags? Und ab welchem Tag?"
+        return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
     if not s["nachname"]:
         if s["vorname"]:
             return "nachname", "Und der Nachname, bitte?"
