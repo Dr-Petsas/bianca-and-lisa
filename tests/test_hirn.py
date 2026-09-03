@@ -244,6 +244,44 @@ def test_nachzug_korrigiert_im_naechsten_zug(monkeypatch):
     assert sit["sammler"]["modus"] == ""  # Buchungsmaschine still gelegt
 
 
+def test_zahnschmerzen_starten_buchung(monkeypatch):
+    """Chef-Testanruf 03.09.2026 abends: 'Ich glaube, ich habe Zahnschmerzen.'
+    muss SOFORT (0 ms) als Terminwunsch erkannt werden — vorher sagte die
+    Heuristik KEINE und das Buchen sprang nie an."""
+    _llm_verboten(monkeypatch)
+    sit = _sit()
+    d = intent.erkennen(sit, "Ich glaube, ich habe Zahnschmerzen.")
+    assert d["handlung"] == "ANLEGEN" and d["quelle"] == "schnell"
+    hirn.anwenden(sit, d)
+    assert sit["sammler"]["modus"] == "buchen"
+
+
+def test_symptom_plus_terminwunsch_bleibt_schnell(monkeypatch):
+    _llm_verboten(monkeypatch)
+    d = intent.erkennen(_sit(), "Ich habe Zahnschmerzen und brauche einen Termin.")
+    assert d["handlung"] == "ANLEGEN" and d["quelle"] == "schnell"
+
+
+def test_preisfrage_ist_kein_symptom(monkeypatch):
+    _llm_verboten(monkeypatch)
+    d = intent.erkennen(_sit(), "Was kostet eine Krone bei Ihnen?")
+    assert d["handlung"] == "WISSEN"
+
+
+def test_schmerzen_weg_absage_gewinnt(monkeypatch):
+    _llm_tot(monkeypatch)
+    d = intent.erkennen(_sit(), "Die Schmerzen sind weg, ich will den Termin absagen.")
+    assert d["handlung"] == "AENDERN" and d["ersatz"] is False
+
+
+def test_symptom_mitten_im_anliegen_wechselt(monkeypatch):
+    _llm_tot(monkeypatch)
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("WISSEN", gegenstand="REGEL"))
+    d = intent.erkennen(sit, "Ich habe uebrigens ganz schlimme Zahnschmerzen.")
+    assert d["handlung"] == "ANLEGEN"
+
+
 def test_klare_heuristik_startet_kein_llm(monkeypatch):
     """Hat die Heuristik eine Handlung erkannt, bleibt das vLLM unbelaestigt
     — jeder gesparte Aufruf schont die GPU von TTS/STT (Aussetzer 03.09.)."""

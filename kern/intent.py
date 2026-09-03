@@ -82,6 +82,7 @@ _WECHSEL_RE = re.compile(
     r"frage\b|fragen\b|wissen\b|fertig\b|urlaub\b|ge(?:ö|oe)ffnet|offen\b|"
     r"mitarbeiter\w*|anmeldung|empfang|buchhaltung|praxisleitung|"
     r"doktor|\bdr\b\.?|arzt|(?:ä|ae)rztin|"
+    r"schmerz\w*|\bnotfall\b|abgebrochen|entz(?:ü|ue)nd\w*|geschwollen|"
     r"kein\w*\s+termin|nicht\s+buchen",
     re.I,
 )
@@ -204,6 +205,24 @@ _FB_NEU_RE = re.compile(
     r"(?:brauch\w*|h(?:ä|ae)tte?\s+gern\w*|m(?:ö|oe)chte\w*|will)\s+(?:\w+\s+){0,4}?termin",
     re.I,
 )
+# Beschwerde/Symptom = Behandlungsbedarf = Termin. Ohne diese Regel lief
+# "Ich glaube, ich habe Zahnschmerzen" (Chef-Testanruf 03.09.2026 abends)
+# komplett am Buchen vorbei: Heuristik sagte KEINE, jeder Zug ging ans
+# traege Haupt-LLM — "das buchen ist im arsch".
+_FB_SYMPTOM_RE = re.compile(
+    r"schmerz\w*|\bweh\b|wehtut|tut\s+(?:\w+\s+)?weh|"
+    r"abgebrochen|abgeplatzt|rausgefallen|ausgefallen|"
+    r"entz(?:ü|ue)nd\w*|geschwollen|schwellung|dicke?\s+(?:backe|wange)|"
+    r"\beiter\w*|vereitert|blutet|zahnfleischblut\w*|"
+    r"f(?:ü|ue)llung\s+(?:ist\s+)?(?:raus\w*|verloren|kaputt|abgefallen|weg)|"
+    r"krone\s+(?:\w+\s+){0,2}?(?:ab\w*|locker|raus\w*|kaputt|verloren)|"
+    r"zahn\s+(?:ist\s+)?(?:locker|wackelt)|loch\s+im\s+zahn|karies|"
+    r"empfindlich\w*|\bnotfall\b|beschwerden",
+    re.I,
+)
+_KEIN_SYMPTOM_RE = re.compile(
+    r"kein\w*\s+(?:\w+\s+)?(?:schmerz\w*|beschwerden)|schmerzfrei", re.I,
+)
 
 
 def _fallback(sit: dict, text: str) -> dict[str, Any]:
@@ -233,6 +252,8 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
     if _FB_NEU_RE.search(t):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
+    if _FB_SYMPTOM_RE.search(t) and not _KEIN_SYMPTOM_RE.search(t):
+        return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     return {**aus, "zug": "halten", "handlung": "KEINE", "gegenstand": ""}
 
 
@@ -260,7 +281,15 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
                                      "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
     if _FB_NEU_RE.search(t):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
-    if len(treffer) != 1:
+    if _FB_SYMPTOM_RE.search(t):
+        treffer.append(("SYMPTOM", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
+    if not treffer:
+        return None
+    # Mehrere Treffer sind ok, solange sie DASSELBE meinen ("Zahnschmerzen,
+    # ich brauche einen Termin" = SYMPTOM + NEU = beides ANLEGEN).
+    kerne = {(d.get("handlung"), d.get("gegenstand"), d.get("ersatz"))
+             for _, d in treffer}
+    if len(kerne) != 1:
         return None
     aus = {"kanal": "ok", "zug": "wechseln", "fuer": "selbst", "ersatz": None,
            "spiegel": t[:80], "quelle": "schnell"}
