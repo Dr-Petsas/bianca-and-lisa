@@ -1266,9 +1266,12 @@ def status_zeile(sit: dict) -> str:
         offen += " (Bianca hat gefragt, ob eine professionelle Zahnreinigung mit dazu soll — Preisfragen dazu beantwortet der Preise-Abschnitt.)"
     if s.get("frage") in {"bleaching", "bleaching_check"}:
         # W-BLEACHING (Chef 03.09.2026): Faktenwissen fuer freie Nachfragen.
+        # Preis NUR auf Nachfrage nennen ("nicht mit den kosten ins haus
+        # fallen") — die Angebotsfrage selbst nennt keine Kosten.
         offen += (" (Bianca hat eine Zahnaufhellung/Bleaching zur Zahnreinigung"
-                  " angeboten: dauert ca. eine Stunde länger, kostet 350 Euro"
-                  " zusätzlich. Bei Zahnersatz im Frontbereich — Kronen, Brücken,"
+                  " angeboten: dauert ca. eine Stunde länger. Preis: 350 Euro"
+                  " zusätzlich — den Preis NUR nennen, wenn der Anrufer danach"
+                  " fragt. Bei Zahnersatz im Frontbereich — Kronen, Brücken,"
                   " Veneers, Implantaten — ist sie unter Umständen nicht möglich;"
                   " Ausnahme: die eigenen Zähne sollen an zu helle Kronen"
                   " angepasst werden. Ist der Anrufer unsicher, ob das bei ihm"

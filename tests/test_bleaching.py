@@ -79,7 +79,9 @@ def test_nur_einmal_pro_anruf():
     assert not gehirn.bleaching_faellig(sit)
 
 
-def test_einschub_stellt_die_frage_mit_preis_und_dauer():
+def test_einschub_stellt_die_frage_mit_dauer_ohne_preis():
+    # Chef 03.09.2026: "kosten nur bei nachfrage nennen. nicht mit den
+    # kosten ins haus fallen" — die Frage nennt die Dauer, NIE den Preis.
     echt = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
@@ -88,7 +90,9 @@ def test_einschub_stellt_die_frage_mit_preis_und_dauer():
         r = flow.zug(sit, "Am liebsten Dienstag vormittags.")
         assert r and "aufhellen" in r["text"].lower(), r
         assert "eine Stunde länger" in r["text"]
-        assert "dreihundertfünfzig Euro" in r["text"]
+        assert "dreihundertfünfzig" not in r["text"]
+        assert "350" not in r["text"]
+        assert "Euro" not in r["text"]
         assert s["bleaching"] == "gefragt" and s["frage"] == "bleaching"
     finally:
         flow.hintergrund.anstossen = echt

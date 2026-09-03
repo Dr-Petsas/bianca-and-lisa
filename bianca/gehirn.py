@@ -1785,10 +1785,12 @@ def pzr_faellig(s: dict) -> bool:
     return True
 
 
+# Chef 03.09.2026: "kosten nur bei nachfrage nennen. nicht mit den kosten
+# ins haus fallen" — der Preis (350 Euro) steht NICHT in der Angebotsfrage,
+# das LLM nennt ihn nur, wenn der Anrufer danach fragt (flow.status_zeile).
 BLEACHING_FRAGE = (
     "Übrigens: Möchten Sie Ihre Zähne bei der Zahnreinigung auch gleich "
-    "aufhellen lassen? Das dauert etwa eine Stunde länger und kostet "
-    "dreihundertfünfzig Euro zusätzlich."
+    "aufhellen lassen? Das dauert etwa eine Stunde länger."
 )
 
 

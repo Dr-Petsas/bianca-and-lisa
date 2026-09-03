@@ -1476,8 +1476,11 @@ zahnkronen angepasst werden. [...] wenn der Patient sich ungewiss ist [...]
 sagst du du hast eine notiz gemacht und der Doktor schaut sich das in Ruhe
 an und berät sie"
 
-- **Zustandsmaschine** (`sammler["bleaching"]`): "" → "gefragt" (Angebot mit
-  Preis/Dauer als `flow._einschub`, wie die PZR-Mitbuch-Frage) → bei Ja
+- **Zustandsmaschine** (`sammler["bleaching"]`): "" → "gefragt" (Angebot als
+  `flow._einschub`, wie die PZR-Mitbuch-Frage; nennt die Dauer, aber KEINEN
+  Preis — Chef 03.09.2026: „kosten nur bei nachfrage nennen. nicht mit den
+  kosten ins haus fallen", der Preis kommt nur übers LLM, wenn der Anrufer
+  fragt) → bei Ja
   "check" (Zahnersatz-Rückfrage: Kronen/Brücken/Veneers/Implantate vorne?)
   → "ja" | "nein" | "beratung" (+ `bleachingInfo`: "zahnersatz"/"unsicher").
   EINMAL pro Anruf; zweimal keine klare Antwort → `_eskalieren` setzt
