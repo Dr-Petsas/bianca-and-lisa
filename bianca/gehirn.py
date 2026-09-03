@@ -266,9 +266,63 @@ _SCHONMAL_NEIN_RE = re.compile(
     re.I,
 )
 _ARZT_KONTEXT_RE = re.compile(r"arzt|ärztin|aerztin|behandler|doktor|dr\.|bei\s+wem|zu\s+wem", re.I)
+# W-FUER-WEN (Chef 03.09.2026): "wir haben noch nicht den fall trainiert wo
+# der anrufer nicht für sich sondern für jemand anderen den termin bucht" —
+# Live-Fall: "Meinen Sohn braucht einen Termin" (ohne "für") wurde dreimal
+# ueberhoert und der Termin auf den per Rufnummer erkannten VATER gebucht.
+_FUER_WEN_PERS = r"(?:tochter|sohn|mann|frau|mutter|vater|kind|oma|opa|enkelin|enkel|schwester|bruder)"
 _FUER_WEN_RE = re.compile(
-    r"für\s+mein(?:e|en)?\s+(tochter|sohn|mann|frau|mutter|vater|kind|oma|opa)", re.I
+    r"f(?:ü|ue)r\s+(?:mein(?:e|en)?|unser(?:e|en)?|die|den|das)\s+(" + _FUER_WEN_PERS + r")\b"
+    r"|\bmein(?:e|en)?\s+(" + _FUER_WEN_PERS + r")\s+(?:braucht|benötigt|benoetigt|"
+    r"möchte|moechte|müsste|muesste|hätte\s+gern\w*|haette\s+gern\w*|soll\b|will\b|"
+    r"hat\s+(?:\w+\s+){0,3}?(?:\w*schmerz\w*|\bweh\b))",
+    re.I,
 )
+# Pauschal "nicht für mich" / "für jemand anderen" — Dritter ohne Rolle.
+_NICHT_FUER_MICH_RE = re.compile(
+    r"nicht\s+f(?:ü|ue)r\s+mich|f(?:ü|ue)r\s+(?:jemand(?:en)?|eine[nn]?)\s+ander",
+    re.I,
+)
+# "Doch für mich (selbst)" — loest ein Missverstaendnis wieder auf.
+_FUER_MICH_RE = re.compile(r"f(?:ü|ue)r\s+mich\b", re.I)
+# "Das bin ich nicht" — Identitaet falsch (nicht: Termin fuer Dritte).
+_NICHT_ICH_RE = re.compile(
+    r"bin\s+(?:ich\s+)?nicht|nicht\s+mein\s+name|falscher?\s+name|verwählt|verwaehlt",
+    re.I,
+)
+# Maennliche Rollen fuer Nominativ ("Ihr Sohn") und Akkusativ ("Ihren Sohn").
+_WEN_ER = {"sohn", "mann", "vater", "opa", "bruder", "enkel"}
+
+
+def fuer_wen_signal(text: str) -> str:
+    """Rolle des Dritten aus dem Satz — '' wenn kein Fuer-Wen-Signal."""
+    t = _s(text)
+    fm = _FUER_WEN_RE.search(t)
+    if fm:
+        return _s(fm.group(1) or fm.group(2)).lower()
+    if _NICHT_FUER_MICH_RE.search(t):
+        return "andere"
+    return ""
+
+
+def fuer_wen_phrase(s: dict, *, fall: str = "wer") -> str:
+    """'Ihr Sohn' / 'Ihre Tochter' (fall='wen': 'Ihren Sohn') — '' bei 'andere'."""
+    w = _s(s.get("fuerWen")).lower()
+    if not w or w == "andere":
+        return ""
+    if w == "kind":
+        return "Ihr Kind"
+    if w in _WEN_ER:
+        return ("Ihren " if fall == "wen" else "Ihr ") + w.capitalize()
+    return "Ihre " + w.capitalize()
+
+
+def _fuer_wen_name_frage(s: dict) -> str:
+    """Namensfrage fuer den Dritten: 'Wie heißt Ihr Sohn?' bzw. generisch."""
+    wer = fuer_wen_phrase(s)
+    if wer:
+        return f"Wie heißt {wer}? Bitte mit Vor- und Nachnamen."
+    return "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?"
 _NAME_LEADIN_RE = re.compile(
     # Nach dem Leadin folgt bei einem NAMEN nie eine Präposition — "ich bin
     # bei Ihnen in Behandlung" erntete live (29.08.2026) "Bei Behandlung".
@@ -418,6 +472,11 @@ FELDER_START = {
     "telefonAlt": "",
     "gesucht": "",
     "fuerWen": "",
+    # W-FUER-WEN (03.09.2026): Name des ANRUFERS, wenn der Termin fuer einen
+    # Dritten ist und die Kartei-Identitaet vom Patienten geloest wurde —
+    # wandert als Kontakt in die Termin-Notiz. Dient zugleich als Riegel:
+    # die Identitaet wird pro Anruf nur EINMAL geloest.
+    "kontaktName": "",
     "slotIso": "",
     # Geschlecht fuer die Anrede (Chef 29.08.2026): aus der Kartei ("akte")
     # oder vom Vornamen-Waechter geschaetzt ("rate"); unklare Vornamen =>
@@ -868,6 +927,17 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         elif ist_nein(t):
             s["anruferCheck"] = "nein"
             neu.add("anruferCheck")
+            # W-FUER-WEN: die Buchen-Frage lautet "Der Termin ist für Sie
+            # selbst, richtig?" — ein Nein heisst hier meist: Termin fuer
+            # jemand anderen. Kartei bleibt verworfen, aber der Fluss fragt
+            # gleich "Für wen…?" statt stumpf nach "Ihrem" Namen. Nennt der
+            # Satz die Rolle selbst ("Nein, für meinen Sohn"), setzt der
+            # Fuer-Wen-Block unten die konkrete Rolle. "Nein, das bin ich
+            # nicht" bleibt der Identitaets-Fall (klassisch frisch aufnehmen).
+            if (s["modus"] == "buchen" and not s["fuerWen"]
+                    and not fuer_wen_signal(t) and not _NICHT_ICH_RE.search(t)):
+                s["fuerWen"] = "andere"
+                neu.add("fuerWen")
 
     # Behandler: ein Name zählt immer; "egal"/"weiß nicht" nur im Arzt-Kontext.
     tenant = sit.get("tenant") or {}
@@ -888,11 +958,30 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["arzt"] = gedeutet
             neu.add("arzt")
 
-    # Für wen ist der Termin?
-    fm = _FUER_WEN_RE.search(t)
-    if fm and not s["fuerWen"]:
-        s["fuerWen"] = fm.group(1).lower()
+    # Für wen ist der Termin? (W-FUER-WEN: auch ohne "für" — "Mein Sohn
+    # braucht einen Termin" — und pauschal "nicht für mich".)
+    wen = fuer_wen_signal(t)
+    if wen and (not s["fuerWen"] or (s["fuerWen"] == "andere" and wen != "andere")):
+        s["fuerWen"] = wen
         neu.add("fuerWen")
+    elif (s["fuerWen"] == "andere" and _FUER_MICH_RE.search(t)
+          and not _NICHT_FUER_MICH_RE.search(t)):
+        # "Doch für mich selbst" — Missverstaendnis aufgeloest.
+        s["fuerWen"] = ""
+        neu.add("fuerWen")
+
+    # W-FUER-WEN: die Patient-Identitaet kam per Rufnummer aus der Kartei des
+    # ANRUFERS (anrufer_check "ja") — aber der Termin ist fuer jemand anderen
+    # (Live-Fall 03.09.2026: "für meinen Sohn" wurde dreimal ueberhoert und
+    # auf den Vater gebucht). Der Anrufer bleibt Kontakt (Nummer/SMS), der
+    # Patient wird frisch erfragt. kontaktName als Einmal-Riegel.
+    if (s["fuerWen"] and s["modus"] == "buchen" and s["anruferCheck"] == "ja"
+            and s["bekannt"] and not s["kontaktName"]
+            and s["phase"] not in {"gebucht", "fertig"}):
+        a = anrufer_bekannt(sit)
+        if a and _s(a.get("nachname")).lower() == _s(s["nachname"]).lower():
+            patient_von_kontakt_loesen(sit)
+            neu.add("fuerWen")
 
     # Besuchsgrund: auf die Besuchsgrund-Liste des Behandlers mappen; der
     # WORTLAUT des Patienten bleibt für die Terminnotiz erhalten (Chef 27.08.).
@@ -1357,17 +1446,65 @@ def anrufer_bekannt(sit: dict) -> dict:
     return a
 
 
-def anrufer_check_frage(sit: dict) -> str:
+def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     """Name + Nummer VORLESEN statt erfragen — der Anrufer bestaetigt nur.
 
     Traegt Ziffern: der Wiederholungs-Waechter fasst den Satz nie an, und
     der TTS-Ziffern-Waechter verifiziert den Render wie jedes Readback.
-    'Stimmt das so?' ist als fester Satz vorgewaermt (satzweises TTS)."""
+    Die Schluss-Saetze sind als feste Saetze vorgewaermt (satzweises TTS).
+
+    selbst=True (Buchen-Fluss, W-FUER-WEN Chef 03.09.2026): "Der Termin ist
+    für Sie selbst, richtig?" — deckt Identitaet UND Fuer-Wen in einem ab.
+    Ein Nein heisst dann: Termin fuer jemand anderen (einsammeln)."""
     a = anrufer_bekannt(sit)
     name = f"{_s(a.get('vorname'))} {_s(a.get('nachname'))}".strip()
     z = telefon.sprechbar(a.get("telefon") or "")
+    schluss = ("Der Termin ist für Sie selbst, richtig?" if selbst
+               else "Stimmt das so?")
     return (f"Ich habe Sie an Ihrer Rufnummer erkannt: {name}, "
-            f"unter {z}. Stimmt das so?")
+            f"unter {z}. {schluss}")
+
+
+def patient_von_kontakt_loesen(sit: dict) -> None:
+    """Kartei-Identitaet des ANRUFERS vom PATIENTEN loesen (W-FUER-WEN).
+
+    Der Anrufer wurde ueber die Rufnummer erkannt und hat bestaetigt — aber
+    der Termin ist fuer jemand anderen. Seine Nummer bleibt als Kontakt
+    (die Bestaetigungs-SMS geht an den Anrufer), sein Name wandert nach
+    kontaktName (Termin-Notiz). Name, Akte, Geschlecht und Historie des
+    Patienten werden geleert und frisch erfragt; Grund, Arzt, Wunsch und
+    ein schon gewaehlter Slot bleiben stehen."""
+    s = sammler(sit)
+    if not s["kontaktName"]:
+        s["kontaktName"] = f"{s['vorname']} {s['nachname']}".strip()
+    s["vorname"] = ""
+    s["nachname"] = ""
+    s["buchstabiert"] = False
+    s["bekannt"] = False
+    s["patientId"] = ""
+    s["gesucht"] = ""
+    s["aktePhone"] = ""
+    s["telefonAkte"] = False
+    s["telefonAlt"] = ""
+    s["geschlecht"] = ""
+    s["geschlechtQuelle"] = ""
+    s["geschlechtVon"] = ""
+    s["geschlechtUnklar"] = False
+    s["warSchonMal"] = None
+    s["letzterBesuch"] = ""
+    s["letzterGrund"] = ""
+    s["rueckblick"] = ""
+    s["versicherung"] = ""
+    s["versicherungOk"] = False
+    s["versicherungAkte"] = ""
+    s["versicherungWechsel"] = False
+    # Kartei-Spiegel des Vaters/Anrufers raus — sonst spricht die Anrede
+    # ("für Herrn Tzannis") und die Kartei-Suche weiter vom Falschen. Auch
+    # die gecachte Termin-Historie gehoert dem Anrufer, nicht dem Patienten.
+    sit["patient"] = None
+    sit.pop("upcoming", None)
+    sit.pop("past", None)
+    sit["gefundenKey"] = ""
 
 
 def feste_saetze(tenant: dict | None = None) -> list[str]:
@@ -1415,7 +1552,18 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Damit ich den richtigen Termin finde: Wie ist Ihr Nachname? "
         "Buchstabieren Sie ihn am besten gleich einmal.",
         "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?",
+        # W-FUER-WEN (Chef 03.09.2026): Termin fuer einen Dritten.
+        "Der Termin ist für Sie selbst, richtig?",
+        "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
+        "War er oder sie schon einmal bei uns in der Praxis?",
     ]
+    # W-FUER-WEN: die haeufigsten Dritten-Rollen mitwaermen (Namensfrage +
+    # Schonmal-Frage) — seltene Rollen synthetisieren live (langsamer, nie
+    # falsch).
+    for wer in ("Ihr Sohn", "Ihre Tochter", "Ihr Mann", "Ihre Frau", "Ihr Kind",
+                "Ihre Mutter", "Ihr Vater"):
+        erstformen.append(f"Wie heißt {wer}? Bitte mit Vor- und Nachnamen.")
+        erstformen.append(f"War {wer} schon einmal bei uns in der Praxis?")
     out = list(erstformen)
     # Kirri-Zettel (gesprochene Zeile nach dem Verbinden-Jingle) mitwaermen —
     # Import in der Funktion, weil weiterleiten selbst gehirn importiert.
@@ -1528,20 +1676,29 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     # am selben Anschluss).
     if (not s["anruferCheck"] and not s["nachname"] and not s["fuerWen"]
             and s["warSchonMal"] is not False and anrufer_bekannt(sit)):
-        return "anrufer_check", anrufer_check_frage(sit)
+        # W-FUER-WEN (Chef 03.09.2026): im Buchen-Fluss fragt der Check
+        # gleich mit, ob der Termin fuer den Anrufer selbst ist.
+        return "anrufer_check", anrufer_check_frage(sit, selbst=True)
 
     if s["warSchonMal"] is None:
+        if s["fuerWen"]:
+            wer = fuer_wen_phrase(s)
+            return "schonmal", (f"War {wer} schon einmal bei uns in der Praxis?" if wer
+                                else "War er oder sie schon einmal bei uns in der Praxis?")
         return "schonmal", "Waren Sie denn schon einmal bei uns in der Praxis?"
 
     if s["warSchonMal"]:
         if not s["arzt"]:
+            wer = fuer_wen_phrase(s)
+            if wer:
+                return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
             return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:
             if s["vorname"]:
                 return "nachname", "Und der Nachname, bitte?"
-            wen = f"Wie heißt {'Ihr' if s['fuerWen'] in {'sohn', 'mann', 'vater', 'opa'} else 'Ihre'} {s['fuerWen']}?" if s["fuerWen"] else "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?"
+            wen = _fuer_wen_name_frage(s) if s["fuerWen"] else "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?"
             return "name", wen
         if not s["vorname"]:
             return "vorname", "Und der Vorname?"
@@ -1576,7 +1733,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if not s["nachname"]:
         if s["vorname"]:
             return "nachname", "Und der Nachname, bitte?"
-        wen = f"Wie heißt {'Ihr' if s['fuerWen'] in {'sohn', 'mann', 'vater', 'opa'} else 'Ihre'} {s['fuerWen']}?" if s["fuerWen"] else "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?"
+        wen = _fuer_wen_name_frage(s) if s["fuerWen"] else "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?"
         return "name", wen
     if not s["vorname"]:
         return "vorname", "Und der Vorname?"
@@ -1631,6 +1788,10 @@ def _versicherung_frage(s: dict) -> tuple[str, str]:
         return "versicherung", "Kurz für unsere Unterlagen: Sind Sie privat oder gesetzlich versichert?"
     if s["warSchonMal"]:
         return "", ""
+    wer = fuer_wen_phrase(s)
+    if wer:
+        # W-FUER-WEN: der Patient ist ein Dritter — nach IHM fragen.
+        return "versicherung", f"Und ist {wer} privat oder gesetzlich versichert?"
     return "versicherung", "Und sind Sie privat oder gesetzlich versichert?"
 
 

@@ -293,6 +293,14 @@ def _grund_sprechbar(s: dict) -> str:
 
 
 def _quittung(s: dict, neu: set[str]) -> str:
+    if "fuerWen" in neu and s.get("fuerWen"):
+        # W-FUER-WEN (Chef 03.09.2026): der Termin ist fuer jemand anderen —
+        # das SOFORT quittieren, bevor irgendein "Danke, <Anrufername>"
+        # den Eindruck erweckt, es gehe weiter um den Anrufer.
+        wer = gehirn.fuer_wen_phrase(s, fall="wen")
+        if wer:
+            return f"Alles klar — der Termin ist für {wer}. "
+        return "Alles klar — der Termin ist für jemand anderen. "
     if "nachname" in neu and s["buchstabiert"]:
         return f"Danke — {s['nachname']}, notiert. "
     if "name" in neu:
@@ -693,6 +701,18 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 hinweise.append(
                     "Bitte Geschlecht aktualisieren — Vorname unklar, vorläufig weiblich eingetragen."
                 )
+            # W-FUER-WEN (Chef 03.09.2026): Termin von einem Angehörigen
+            # gebucht — die Praxis sieht am Termin, WER angerufen hat und
+            # dass die Kontakt-Nummer dem Anrufer gehört, nicht dem Patienten.
+            if s["fuerWen"]:
+                rolle = s["fuerWen"].capitalize() if s["fuerWen"] != "andere" else "Fremd"
+                kontakt = _s(s.get("kontaktName"))
+                hinweise.append(
+                    f"Telefonisch gebucht von Angehörigem ({rolle}-Termin)"
+                    + (f": {kontakt}" if kontakt else "")
+                    + (f", Kontakt-Nummer {s['telefon']} gehört dem Anrufer."
+                       if s.get("telefon") else ".")
+                )
             # W-MOTIV-KATALOG (Chef 03.09.2026): "entsprechende kurznotizen
             # bitte nicht vergessen" — deckt der gebuchte Besuchsgrund den
             # O-Ton des Anrufers nicht wörtlich ab (Fallback- oder Fuzzy-
@@ -1020,6 +1040,20 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if gehirn.ist_nein(t):
             sit.pop("bestaetigenUnklar", None)
             sit.pop("buchIntent", None)
+            # W-FUER-WEN (Chef 03.09.2026): "Nein, der Termin ist nicht für
+            # mich, der ist für meinen Sohn" — NICHT den Slot verwerfen,
+            # sondern den Patienten umschreiben: einsammeln erntet fuerWen
+            # und loest die Kartei-Identitaet des Anrufers vom Patienten
+            # (Live-Fall: die Korrektur lief dreimal ins Leere).
+            if gehirn.fuer_wen_signal(t):
+                neu = gehirn.einsammeln(sit, t)
+                sit["ernteZuletzt"] = sorted(neu)
+                s["phase"] = ""
+                fid2, frage2 = gehirn.naechste_frage(sit)
+                s["frage"] = fid2
+                if fid2:
+                    return {"text": f"Ah, verstehe! {frage2}"}
+                return _readback(sit)
             s["phase"] = ""
             s["slotIso"] = ""
             return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}

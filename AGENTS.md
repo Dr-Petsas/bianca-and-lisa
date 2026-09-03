@@ -1505,6 +1505,48 @@ an und berät sie"
   „die Dritten"); Zwischenfragen halten die Bleaching-Frage offen (wie pzr).
 - Tests: `tests/test_bleaching.py` (16, offline).
 
+## Termin für Dritte (W-FUER-WEN 03.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „wir haben noch nicht den fall trainiert wo der anrufer
+nicht für sich sondern für jemand anderen den termin bucht. ‚Der Termin ist
+für Sie selbst, richtig?' das fehlt ... korrigiere das rein"
+
+Live-Fall (Anruf 03.09. 21:43): Der Vater (per Rufnummer erkannt) sagte
+DREIMAL „für meinen Sohn" — Bianca buchte stur auf den Vater. Drei Löcher:
+
+- **Erkennung** (`gehirn.fuer_wen_signal`): `_FUER_WEN_RE` matcht jetzt auch
+  ohne „für" („Mein(en) Sohn braucht/möchte/hat Schmerzen …") plus
+  `_NICHT_FUER_MICH_RE` („nicht für mich", „für jemand anderen" → Rolle
+  "andere"). `_FUER_MICH_RE` löst „doch für mich" wieder auf. Wache:
+  „Meine Frau hat gesagt…"/„Meine Tochter heiratet" matchen NICHT.
+- **Die Chef-Frage:** der Anrufer-Check im BUCHEN-Fluss endet mit „Der
+  Termin ist für Sie selbst, richtig?" (`anrufer_check_frage(sit,
+  selbst=True)`); Verwaltung (Absage/Auskunft) behält „Stimmt das so?".
+  Ein Nein ohne Rolle ⇒ fuerWen="andere" („Für wen ist der Termin denn —
+  wie heißt er oder sie…"); „Nein, das bin ich nicht" (`_NICHT_ICH_RE`)
+  bleibt der Identitäts-Fall (frisch aufnehmen wie bisher).
+- **Identität lösen** (`gehirn.patient_von_kontakt_loesen`): kommt das
+  Fuer-Wen-Signal, NACHDEM „ja" auf den Check die Kartei des Anrufers als
+  Patient übernommen hat (auch im selben Satz: „Ja, aber für meinen Sohn"),
+  werden Name/Akte/patientId/Geschlecht/Historie/Versicherung geleert,
+  `warSchonMal=None`, `sit["patient"]/upcoming/past` verworfen. Die NUMMER
+  des Anrufers bleibt als Kontakt (SMS an den Anrufer ist richtig), sein
+  Name wandert nach `sammler["kontaktName"]` — der zugleich der
+  Einmal-Riegel ist (Sohn heißt oft gleich ⇒ nie doppelt wischen).
+- **Späte Korrektur:** „Nein, der ist für meinen Sohn" auf die
+  Bestätigungsfrage lief vorher in „Was darf ich ändern…" ins Leere —
+  `flow.zug` (phase bestaetigen, nein) prüft jetzt `fuer_wen_signal` und
+  schreibt den Patienten um, OHNE Slot/Grund/Arzt zu verwerfen.
+- **Fragen drehen sich um den Dritten:** „War Ihr Sohn schon einmal bei
+  uns?", „bei welchem Behandler Ihr Sohn zuletzt war?", „Wie heißt Ihr
+  Sohn? Bitte mit Vor- und Nachnamen.", „Und ist Ihr Sohn privat oder
+  gesetzlich versichert?" (`fuer_wen_phrase`, Nominativ/Akkusativ). Häufige
+  Rollen sind als feste Sätze vorgewärmt.
+- **Termin-Notiz:** „Telefonisch gebucht von Angehörigem (Sohn-Termin):
+  Kiriakos Tzannis, Kontakt-Nummer … gehört dem Anrufer." — die Praxis
+  sieht, WER angerufen hat.
+- Tests: `tests/test_fuer_wen.py` (13, offline).
+
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....
