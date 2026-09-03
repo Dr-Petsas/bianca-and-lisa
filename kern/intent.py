@@ -19,12 +19,15 @@ ein desaster"). Der Zug wartet auf keine Modell-Antwort:
 2. HEURISTIK (0 ms): bei Wechsel-Verdacht oder unklarem Erstsatz entscheidet
    SOFORT die Regex-Heuristik (Vorrang ERREICHEN > AENDERN > ABGEBEN >
    WISSEN > ANLEGEN; buchen nur bei ausdruecklichem Terminwunsch, nie als
-   Default) — und ZUSAETZLICH wird das LLM im HINTERGRUND gestartet.
-3. NACHZUG (asynchron): die LLM-Deutung (kern/llm.chat, Temperatur 0,
-   Mini-JSON) landet im Register; der NAECHSTE Zug arbeitet sie ueber
-   nachzug() ein, bevor er selbst deutet. War die Heuristik richtig,
-   dedupliziert kern/hirn.anwenden; lag sie daneben, lenkt das Hirn einen
-   Zug spaeter um. So schwingt das LLM immer mit — ohne je zu bremsen.
+   Default).
+3. NACHZUG (asynchron, GEDROSSELT): NUR wenn die Heuristik ratlos blieb
+   (halten/KEINE), geht der Satz ans LLM (kern/llm.chat, Temperatur 0,
+   Mini-JSON) — hoechstens EIN Auftrag je Sitzung zugleich, denn am
+   gesaettigten vLLM liefen Nachzuege 9.5-20.6 s und stahlen der GPU von
+   TTS/STT die Luft (Audio-Aussetzer, Chef 03.09.2026 abends). Der
+   NAECHSTE Zug arbeitet das Ergebnis ueber nachzug() ein: richtige
+   Heuristik dedupliziert kern/hirn.anwenden, falsche wird einen Zug
+   spaeter umgelenkt. So schwingt das LLM mit — ohne je zu bremsen.
 
 Notaus: INTENT_SCHICHT=0. INTENT_NACHZUG=0 schaltet nur das Hintergrund-LLM
 ab (reine Heuristik, z. B. wenn das vLLM ueberlastet ist).
@@ -364,9 +367,16 @@ def _sid(sit: dict) -> str:
 
 def _nachdeuten(sit: dict, t: str, stimme: str) -> None:
     """LLM-Deutung im Hintergrund anstossen — der Zug wartet NICHT darauf.
-    Ein neuer Auftrag ersetzt den alten (nur der juengste Satz zaehlt)."""
+
+    GEDROSSELT (Chef 03.09.2026 abends, "starke Aussetzer"): am gesaettigten
+    vLLM liefen Nachzuege 9.5-20.6 s und frassen die GPU, auf der auch TTS
+    und STT sitzen — Biancas Stimme stotterte. Darum: pro Sitzung laeuft
+    hoechstens EIN Auftrag, ein laufender wird nie ueberholt."""
     if not nachzug_an():
         return
+    alt = _NACHZUG.get(_sid(sit))
+    if alt is not None and not alt[0].done():
+        return  # einer ist unterwegs — GPU nicht fluten
     try:
         _NACHZUG[_sid(sit)] = (
             _POOL.submit(_chat, _kontext(sit, t, stimme=stimme)),
@@ -444,8 +454,11 @@ def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
         if schnell is not None:
             return schnell
     # Wechsel-Verdacht oder unklarer Erstsatz: Heuristik entscheidet JETZT
-    # (0 ms), das LLM prueft im Hintergrund nach.
+    # (0 ms). Das LLM prueft NUR nach, wenn sie ratlos blieb (halten/KEINE)
+    # — hat sie eine Handlung erkannt, uebernimmt die Maschine, und jeder
+    # gesparte vLLM-Aufruf schont die GPU von TTS und STT.
     deutung = _fallback(sit, t)
     deutung["quelle"] = "heuristik"
-    _nachdeuten(sit, t, stimme)
+    if deutung.get("handlung") == "KEINE" and deutung.get("zug") == "halten":
+        _nachdeuten(sit, t, stimme)
     return deutung

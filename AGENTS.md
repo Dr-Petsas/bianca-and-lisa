@@ -1349,12 +1349,17 @@ Routen und Ports sind unangetastet.
      die Regexes SOFORT; buchen NUR bei ausdrücklichem Terminwunsch, NIE
      als Default. Im laufenden Slot-Angebot meint „absagen/passt nicht"
      das ANGEBOT (verfeinern).
-  3. Nachzug (asynchron): dieselben Sätze gehen ZUSÄTZLICH ans vLLM
-     (Temperatur 0, Mini-JSON, max_tokens 44, statischer Prompt =
-     Prefix-Cache); `intent.nachzug()` arbeitet das Ergebnis am ANFANG des
-     nächsten Zugs ein — richtig gelegene Heuristik dedupliziert
-     `hirn.anwenden`, falsche wird einen Zug später umgelenkt.
-     Notaus nur fürs Hintergrund-LLM: `INTENT_NACHZUG=0`.
+  3. Nachzug (asynchron, GEDROSSELT): NUR wenn die Heuristik ratlos blieb
+     (halten/KEINE), geht der Satz ans vLLM (Temperatur 0, Mini-JSON,
+     max_tokens 44, statischer Prompt = Prefix-Cache), höchstens EIN
+     Auftrag je Sitzung zugleich — ungedrosselt liefen Nachzüge am
+     gesättigten vLLM 9,5–20,6 s und stahlen der GPU von TTS/STT die Luft
+     (Audio-Aussetzer, Chef 03.09.2026 abends). `intent.nachzug()` arbeitet
+     das Ergebnis am ANFANG des nächsten Zugs ein — richtige Heuristik
+     dedupliziert `hirn.anwenden`, falsche wird einen Zug später umgelenkt.
+     Notaus nur fürs Hintergrund-LLM: `INTENT_NACHZUG=0` (steht seit
+     03.09.2026 abends auf dem Server in `.env`, bis der GPU-Druck bzw.
+     die Audio-Qualität geklärt ist).
 - **Einbau:** `bianca/agent.user_turn` Schritt 0 (sync → erkennen →
   anwenden, vor `flow.zug`); `lisa/agent.user_turn` nach der Identität, vor
   dem Modell. Anliegen-Stand steht als ANLIEGEN-Block im Systemprompt

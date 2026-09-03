@@ -244,6 +244,46 @@ def test_nachzug_korrigiert_im_naechsten_zug(monkeypatch):
     assert sit["sammler"]["modus"] == ""  # Buchungsmaschine still gelegt
 
 
+def test_klare_heuristik_startet_kein_llm(monkeypatch):
+    """Hat die Heuristik eine Handlung erkannt, bleibt das vLLM unbelaestigt
+    — jeder gesparte Aufruf schont die GPU von TTS/STT (Aussetzer 03.09.)."""
+    _llm_verboten(monkeypatch)
+    sit = _sit()
+    sit["id"] = "test-drossel-klar"
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    d = intent.erkennen(sit, "Moment, eigentlich will ich nur den Doktor sprechen")
+    assert d["handlung"] == "ERREICHEN"
+    assert "test-drossel-klar" not in intent._NACHZUG  # kein Hintergrund-Auftrag
+
+
+def test_nachzug_ueberholt_nie(monkeypatch):
+    """Pro Sitzung hoechstens EIN Hintergrund-Auftrag: ein laufender wird
+    von neuen unklaren Saetzen nicht ueberholt (GPU-Drossel)."""
+    import threading
+    import time as _time
+
+    bremse = threading.Event()
+
+    def _lahm(*a, **k):
+        bremse.wait(timeout=5)
+        return {"ok": False, "error": "test-ende"}
+
+    monkeypatch.setattr(intent, "_chat", _lahm)
+    sit = _sit()
+    sit["id"] = "test-drossel-flug"
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    intent.erkennen(sit, "Ja also, der Herr Doktor, wissen Sie...")
+    erster = intent._NACHZUG["test-drossel-flug"][0]
+    intent.erkennen(sit, "Hm, tja, der Doktor, also wie soll ich sagen...")
+    assert intent._NACHZUG["test-drossel-flug"][0] is erster  # nicht ersetzt
+    bremse.set()
+    for _ in range(50):
+        if erster.done():
+            break
+        _time.sleep(0.02)
+    intent._NACHZUG.pop("test-drossel-flug", None)  # aufraeumen
+
+
 def test_fallback_absage_ohne_ersatz(monkeypatch):
     _llm_tot(monkeypatch)
     d = intent.erkennen(_sit(), "Ich muss den Termin leider absagen.")
