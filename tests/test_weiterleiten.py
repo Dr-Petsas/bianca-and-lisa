@@ -1,4 +1,4 @@
-"""Weiterleitungs-Platzhalter (Kirri/Zaluma): Erkennung, Ablauf, Jingle-Event.
+﻿"""Weiterleitungs-Platzhalter (Kirri/Zaluma): Erkennung, Ablauf, Jingle-Event.
 
 Laeuft ohne Netz: die Akten-Recherche (letzter_behandler) wird gestummt,
 der Mandant kommt aus tenants/meddent.json (lokale Datei).
@@ -66,8 +66,8 @@ def test_live_saetze_31_08_imperativ_und_verhoerte_namen():
     ]:
         sit = _sit()
         z = flow.zug(sit, satz)
-        assert z and z.get("hangup") is True, satz
-        assert z.get("jingle") == weiterleiten.JINGLE_EVENT, satz
+        assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"], satz
+        assert not z.get("hangup"), satz  # ohne Einrichtung: Gespraech offen
         s = gehirn.sammler(sit)
         assert (s["arzt"] or {}).get("calendarName") == "Dr. Petsas", satz
 
@@ -112,20 +112,17 @@ def test_buchungssaetze_loesen_nicht_aus():
 
 def test_namentlich_genannt_verbindet_direkt_ohne_personalfrei():
     """'Kann ich bitte mit Doktor Patrikis sprechen?' (Chef 27.08., zweite
-    Fassung): KEINE Personalfrei-Ansage, KEINE Rueckfrage — Ansage + Jingle
-    + Kirri-Zettel, fertig."""
+    Fassung): KEINE Personalfrei-Ansage, KEINE Rueckfrage. Ohne
+    eingerichtete Weiterleitung (meddent.json): ehrliche Ansage, KEIN
+    Jingle, KEIN Auflegen, KEIN Rueckruf-Angebot (Chef 03.09.2026)."""
     sit = _sit()
     events: list[str] = []
     z = flow.zug(sit, "Kann ich bitte mit Doktor Patrikis sprechen?", events.append)
-    assert z and "Kirri" in z["text"]  # Diss-Spruch IST die gesprochene Zeile
-    assert z.get("hangup") is True
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert not z.get("hangup")
     assert "personalfrei" not in z["text"] and "KI-geführt" not in z["text"]
-    assert z.get("jingle") == weiterleiten.JINGLE_EVENT
-    assert weiterleiten.JINGLE_EVENT in events
-    # Gesprochene Ansage kommt VOR dem Jingle.
-    sag = [e for e in events if e.startswith("sag:")]
-    assert sag and "Verbindung" in sag[0] and "Doktor Patrikis" in sag[0]
-    assert events.index(sag[0]) < events.index(weiterleiten.JINGLE_EVENT)
+    assert weiterleiten.JINGLE_EVENT not in events  # Jingle NUR bei echt
+    assert "meldet sich" not in z["text"]  # kein unverlangtes Rueckruf-Angebot
     assert not (sit.get("weiterleiten") or {})  # Anliegen bedient
     # Doppelte Fragen verboten: der Behandler zaehlt auch fuer die Buchung.
     s = gehirn.sammler(sit)
@@ -134,14 +131,14 @@ def test_namentlich_genannt_verbindet_direkt_ohne_personalfrei():
 
 def test_petzers_hoerfehler_verbindet_zu_petsas():
     """Der Chef-Satz vom 29.08. wortgleich: STT-Hörfehler 'Petzers' läuft
-    über die Klang-Faltung in arzt.deute auf Doktor Petsas — direkt
-    verbinden, Jingle, Kirri-Zettel, auflegen."""
+    über die Klang-Faltung in arzt.deute auf Doktor Petsas — der
+    Weiterleitungs-Zweig greift (hier ohne Einrichtung: ehrliche Ansage)."""
     sit = _sit()
     events: list[str] = []
     z = flow.zug(sit, "Könnte ich bitte mit Doktor Petzers verbunden?", events.append)
-    assert z and "Kirri" in z["text"]
-    assert z.get("hangup") is True
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert not z.get("hangup")
+    assert weiterleiten.JINGLE_EVENT not in events
     s = gehirn.sammler(sit)
     assert (s["arzt"] or {}).get("calendarName") == "Dr. Petsas"
 
@@ -155,8 +152,8 @@ def test_verbunden_ohne_namen_fragt_nach_arzt():
     assert "zu welchem unserer" in z["text"].lower()
     events: list[str] = []
     z2 = flow.zug(sit, "Mit Doktor Petsas.", events.append)
-    assert z2 and "Kirri" in z2["text"] and z2.get("hangup") is True
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z2 and weiterleiten.ANSAGE_PLATZHALTER in z2["text"]
+    assert not z2.get("hangup") and weiterleiten.JINGLE_EVENT not in events
 
 
 def test_herr_petsas_ohne_doktor_titel_verbindet():
@@ -165,9 +162,8 @@ def test_herr_petsas_ohne_doktor_titel_verbindet():
     sit = _sit()
     events: list[str] = []
     z = flow.zug(sit, "Kann ich Herrn Petsas sprechen?", events.append)
-    assert z and "Kirri" in z["text"]
-    assert z.get("hangup") is True
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert not z.get("hangup") and weiterleiten.JINGLE_EVENT not in events
     s = gehirn.sammler(sit)
     assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
 
@@ -176,8 +172,8 @@ def test_arzt_ans_telefon_verbindet():
     sit = _sit()
     events: list[str] = []
     z = flow.zug(sit, "Holen Sie mir bitte Doktor Nikolaou ans Telefon.", events.append)
-    assert z and "Kirri" in z["text"]
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert weiterleiten.JINGLE_EVENT not in events
 
 
 def test_chef_ans_telefon_bekommt_wahrheit_und_angebot():
@@ -195,8 +191,8 @@ def test_llm_rueckfrage_name_allein_verbindet():
                             "content": "Zu welchem unserer Ärzte darf ich Sie verbinden?"})
     events: list[str] = []
     z = weiterleiten.zug(sit, "Doktor Nikolaou, bitte.", events.append)
-    assert z and "Kirri" in z["text"] and z.get("hangup") is True
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert not z.get("hangup") and weiterleiten.JINGLE_EVENT not in events
 
 
 def test_name_allein_ohne_rueckfrage_verbindet_nicht():
@@ -212,10 +208,10 @@ def test_verbinden_lassen_mit_namen_verbindet_direkt():
     sit = _sit()
     events: list[str] = []
     z = flow.zug(sit, "Ich möchte mich direkt zu Doktor Petsas verbinden lassen.", events.append)
-    assert z and "Kirri" in z["text"]
-    assert z.get("hangup") is True
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert not z.get("hangup")
     assert "personalfrei" not in z["text"]
-    assert weiterleiten.JINGLE_EVENT in events
+    assert weiterleiten.JINGLE_EVENT not in events
     s = gehirn.sammler(sit)
     assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
 
@@ -244,9 +240,8 @@ def test_buchhaltung_bekommt_wahrheit_und_arztfrage():
     # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.
     events: list[str] = []
     z2 = flow.zug(sit, "Dann zu Doktor Patrikis, bitte.", events.append)
-    assert z2 and "Kirri" in z2["text"]
-    assert z2.get("hangup") is True
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z2 and weiterleiten.ANSAGE_PLATZHALTER in z2["text"]
+    assert not z2.get("hangup") and weiterleiten.JINGLE_EVENT not in events
 
 
 def test_akte_liefert_letzten_behandler():
@@ -281,9 +276,8 @@ def test_weiterleiten_ohne_namen_fragt_nur_nach_arzt():
     # Antwort mit Behandler-Namen (Fuzzy ueber arzt.deute) -> direkt verbinden.
     events: list[str] = []
     z2 = flow.zug(sit, "Bei Doktor Patrikis.", events.append)
-    assert z2 and "Kirri" in z2["text"]
-    assert z2.get("hangup") is True
-    assert weiterleiten.JINGLE_EVENT in events
+    assert z2 and weiterleiten.ANSAGE_PLATZHALTER in z2["text"]
+    assert not z2.get("hangup") and weiterleiten.JINGLE_EVENT not in events
 
 
 def test_infofrage_verbindet_nicht():
@@ -296,7 +290,7 @@ def test_infofrage_verbindet_nicht():
     assert weiterleiten.zug(sit, "Nein, gibt es auch Doktor Patrikis ist bei euch?") is None
     assert weiterleiten.zug(sit, "Welche Ärzte haben Sie denn?") is None
     z = weiterleiten.zug(sit, "Dann zu Doktor Patrikis, bitte.")
-    assert z and "Kirri" in z["text"]
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
 
 
 def test_infofrage_beim_angebot_verbindet_nicht():
@@ -306,7 +300,7 @@ def test_infofrage_beim_angebot_verbindet_nicht():
                                     "calendarName": "Dr. Petsas"}}
     assert weiterleiten.zug(sit, "Gibt es auch Doktor Patrikis bei Ihnen?") is None
     z = weiterleiten.zug(sit, "Ja, gerne.")
-    assert z and "Kirri" in z["text"]
+    assert z and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
 
 
 def test_mensch_ohne_arzt_fragt_nach_arzt():
@@ -316,9 +310,9 @@ def test_mensch_ohne_arzt_fragt_nach_arzt():
     assert "Zu wem darf ich Sie durchstellen?" in z["text"]
 
 
-# --- (d) Ja -> Jingle + Kirri-Zettel -----------------------------------------
+# --- (d) Ja -> ohne Einrichtung: ehrliche Ansage, offenes Gespraech ----------
 
-def test_ja_spielt_jingle_und_kirri_zettel():
+def test_ja_ohne_einrichtung_ehrliche_ansage():
     sit = _sit()
     s = gehirn.sammler(sit)
     s["arzt"] = {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"}
@@ -329,11 +323,10 @@ def test_ja_spielt_jingle_und_kirri_zettel():
     assert "personalfrei" not in z1["text"]
     z2 = flow.zug(sit, "Ja, bitte.", events.append)
     assert z2 and z2["text"] == weiterleiten.ANSAGE_PLATZHALTER
-    assert z2.get("hangup") is True
-    assert "Kirri" in z2["text"] and "Lappen" in z2["text"]
-    assert weiterleiten.JINGLE_EVENT in events
-    assert any(e.startswith("sag:") for e in events)
-    assert z2.get("jingle") == weiterleiten.JINGLE_EVENT
+    assert not z2.get("hangup")  # Gespraech bleibt offen
+    assert "Kirri" not in z2["text"] and "Lappen" not in z2["text"]
+    assert "meldet sich" not in z2["text"]  # kein unverlangter Rueckruf
+    assert weiterleiten.JINGLE_EVENT not in events  # Jingle NUR bei echt
     assert not (sit.get("weiterleiten") or {})
 
 
@@ -410,13 +403,13 @@ def test_echte_weiterleitung_traegt_transfer_und_bleibt_stumm():
 
 def test_ohne_passendes_ziel_bleibt_platzhalter():
     """Mehrere Eintraege, keiner passt zum gewuenschten Behandler:
-    NICHT raten — der Platzhalter-Weg (Kirri-Zettel) bleibt."""
+    NICHT raten — der Platzhalter-Weg (ehrliche Ansage) bleibt."""
     sit = _sit_mit_weiterleitung()
     events: list[str] = []
     z = flow.zug(sit, "Kann ich bitte mit Doktor Patrikis sprechen?", events.append)
-    assert z is not None and "Kirri" in z["text"]
+    assert z is not None and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
     assert "transfer" not in z
-    assert z.get("hangup") is True
+    assert not z.get("hangup")
 
 
 def test_agent_reicht_transfer_durch_ohne_llm():
@@ -450,7 +443,7 @@ def test_meddent_ohne_konfig_bleibt_platzhalter():
     """meddent.json traegt keine weiterleitungen — Alt-Verhalten unveraendert."""
     sit = _sit()
     z = flow.zug(sit, "Kann ich bitte mit Doktor Petsas sprechen?")
-    assert z is not None and "Kirri" in z["text"] and "transfer" not in z
+    assert z is not None and weiterleiten.ANSAGE_PLATZHALTER in z["text"] and "transfer" not in z
 
 
 # --- Jingle-Infrastruktur ----------------------------------------------------
@@ -472,9 +465,12 @@ def test_dienst_festes_audio():
 
 
 def test_ansage_ueberlebt_sprech_filter():
-    """Kirri-Zettel und Wahrheit dürfen vom Sprech-Filter nicht zerlegt werden."""
+    """Platzhalter-Ansage und Wahrheit duerfen der Sprech-Filter nicht zerlegen.
+    (Chef 03.09.2026: der alte Kirri-Spassatz ist Geschichte — die Ansage ist
+    jetzt eine ehrliche Rueckruf-Zusage.)"""
     from kern import sprech
     raus = sprech.sanitize(weiterleiten.ANSAGE_PLATZHALTER)
-    assert "Kirri" in raus and "Petsas" in raus and "Lappen" in raus
+    assert "Verbindung" in raus and "möglich" in raus
+    assert "Kirri" not in raus and "Lappen" not in raus
     wahr = sprech.sanitize(weiterleiten.WAHRHEIT)
     assert "personalfrei" in wahr and "KI-geführt" in wahr

@@ -48,13 +48,14 @@ WAHRHEIT = (
     "die Praxis ist komplett KI-geführt und personalfrei."
 )
 
-# Der Kirri-Zettel IST die gesprochene Zeile nach dem Jingle (Chef 29.08.2026:
-# "beim Verbinden kommt ... kein Diss-Spruch an Kirri" — er soll am Telefon
-# zu hoeren sein, bis die echte Zaluma-Weiterleitung an der Marke steht).
+# Die Antwort, wenn KEINE echte Weiterleitung eingerichtet ist. Chef
+# 03.09.2026: der alte Kirri-Spassatz ("... du Lappen") MUSS ueberall
+# verschwinden, und Rueckrufe werden NIE angeboten, nur auf Verlangen —
+# darum: ehrlich absagen, Gespraech offen halten (kein Jingle, kein
+# Auflegen). Der Verbinden-Jingle spielt nur noch vor ECHTEM Durchstellen.
 ANSAGE_PLATZHALTER = (
-    "Kirri, such die Stelle mit dem Jingle und bau hier deine "
-    "Zaluma-Weiterleitung ein — also, wenn du das überhaupt kannst … "
-    "sonst lass es den dicken Petsas machen, du Lappen."
+    "Die direkte Verbindung ist im Moment leider nicht möglich. "
+    "Kann ich sonst etwas für Sie tun?"
 )
 
 _MENSCH_WORT = (
@@ -251,15 +252,15 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
         "calendarId": _s(ziel.get("calendarId")),
         "calendarName": _s(ziel.get("calendarName")),
     }
-    if melde:
-        # Erst die Ansage, DANN der Jingle: beides ueber die Filler-Kette
-        # (Client spielt strikt nacheinander, Abschied-Audio danach).
-        wer = arzt_sprechname(ziel_arzt["calendarName"])
-        zu = f" zu {wer}" if wer else ""
-        melde(f"sag:Ok, einen Moment bitte — ich stelle die Verbindung{zu} her.")
-        melde(JINGLE_EVENT)
     wl = weiterleitungs_ziel(sit.get("tenant") or {}, ziel_arzt)
     if wl:
+        if melde:
+            # Erst die Ansage, DANN der Jingle: beides ueber die Filler-Kette
+            # (Client spielt strikt nacheinander, Abschied-Audio danach).
+            wer = arzt_sprechname(ziel_arzt["calendarName"])
+            zu = f" zu {wer}" if wer else ""
+            melde(f"sag:Ok, einen Moment bitte — ich stelle die Verbindung{zu} her.")
+            melde(JINGLE_EVENT)
         # Echte Weiterleitung: Ansage + Jingle liefen als Filler, die Antwort
         # selbst bleibt stumm (text="") — nach dem Jingle klingelt es beim
         # Behandler. Das Ziel steht in der Sitzung fuer Nacharbeit/Report.
@@ -277,15 +278,17 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
     # =====================================================================
     # ZALUMA_TRANSFER_PLATZHALTER: Rueckfall, wenn der Client KEINE
     # Weiterleitung eingerichtet hat (DB: callForwardingToolEnabled aus
-    # oder keine callForwardings). Der Anrufer hoert Jingle + Kirri-Zettel.
+    # oder keine callForwardings). KEIN Jingle, KEIN Auflegen, KEIN
+    # Rueckruf-Angebot (Chef 03.09.2026: "keine Rueckrufe anbieten, es sei
+    # denn, sie werden verlangt") — ehrlich sagen, dass es nicht geht, und
+    # das Gespraech offen halten. Verlangt der Anrufer daraufhin selbst
+    # einen Rueckruf, uebernimmt der ABGEBEN-Fluss.
     # =====================================================================
     print(f"bianca-zaluma-platzhalter ziel={ziel_arzt!r} sit={sit.get('id')!r}",
           flush=True)
     return {
         "text": ANSAGE_PLATZHALTER,
-        "jingle": JINGLE_EVENT,
         "ziel": ziel_arzt,
-        "hangup": True,
     }
 
 
