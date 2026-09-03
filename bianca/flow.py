@@ -70,6 +70,13 @@ _ABLEHNUNG_RE = re.compile(r"passt nicht|passt mir nicht|keiner davon|nichts dav
 # Dringlichkeit (kanonischer Grund aus gehirn._GRUND_MAP): Notfaelle bekommen
 # die naechstmoeglichen Plaetze DICHT angeboten — Streuung gilt dort nicht.
 _DRINGEND_RE = re.compile(r"akut|notfall|schmerz", re.I)
+# Chef 03.09.2026: mit der Bestaetigungs-SMS geht ein Link raus, ueber den
+# der Anrufer die Unterlagen fuer den Termin ausfuellt (Anamnese,
+# Datenschutz, Aufklaerung) — Bianca sagt das bei der Buchung dazu.
+_SMS_LINK_SATZ = (
+    " In der SMS ist auch ein Link — darüber füllen Sie bitte vorab kurz die"
+    " Unterlagen für Ihren Termin aus, zum Beispiel Anamnese und Datenschutz."
+)
 _KUERZEL_RE = re.compile(r"^[A-ZÄÖÜ]{2,4}\s+")
 
 
@@ -583,7 +590,8 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 # Frage + masUpdatePatientPhone); dieser Zweig ist der Rest:
                 # Entscheidung "SMS an die alte", ungeklaert oder Update kaputt.
                 if s["telefonAlt"] == "akte":
-                    text += " Die Bestätigung kommt gleich per SMS an die Nummer aus Ihrer Akte."
+                    text += (" Die Bestätigung kommt gleich per SMS an die Nummer aus"
+                             " Ihrer Akte." + _SMS_LINK_SATZ)
                 else:
                     if melde:
                         melde("note_appointment")
@@ -596,7 +604,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     )
                     text += " Ihre neue Handynummer gebe ich der Praxis mit."
             elif s["telefon"] or s["aktePhone"]:
-                text += " Die Bestätigung kommt gleich per SMS."
+                text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
             # Praxis-Notizen ans Terminpopup (29.08.2026): unklares Geschlecht
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
