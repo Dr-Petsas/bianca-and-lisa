@@ -182,13 +182,13 @@ def test_fastpath_slotwahl_kein_llm(monkeypatch):
     assert d["zug"] == "verfeinern"
 
 
-def test_wechselwort_geht_ans_llm(monkeypatch):
-    _llm_tot(monkeypatch)  # LLM tot -> Fallback muss greifen
+def test_wechselwort_heuristik_sofort(monkeypatch):
+    _llm_tot(monkeypatch)  # synchron entscheidet IMMER die Heuristik (0 ms)
     sit = _sit()
     hirn.anwenden(sit, _deutung("ANLEGEN"))
     sit["sammler"]["frage"] = "telefon"
     d = intent.erkennen(sit, "Moment, eigentlich will ich nur den Doktor sprechen")
-    assert d["handlung"] == "ERREICHEN"
+    assert d["handlung"] == "ERREICHEN" and d["quelle"] == "heuristik"
 
 
 def test_schnellstrasse_erreichen_ohne_llm(monkeypatch):
@@ -211,11 +211,37 @@ def test_ernte_im_anliegen_ohne_llm(monkeypatch):
     assert d["zug"] == "halten" and d["quelle"] == "fastpath-still"
 
 
-def test_negation_geht_ans_llm(monkeypatch):
-    _llm_tot(monkeypatch)  # Verneinung: nie Schnellstrasse, LLM (hier: Fallback)
+def test_negation_heuristik_und_nachzug(monkeypatch):
+    _llm_tot(monkeypatch)  # Verneinung: nie Schnellstrasse -> Heuristik sofort
     d = intent.erkennen(_sit(), "Ich will den Termin nicht absagen, nur verschieben.")
     assert d["handlung"] == "AENDERN" and d["ersatz"] is True
-    assert d["quelle"] == "fallback"
+    assert d["quelle"] == "heuristik"
+
+
+def test_nachzug_korrigiert_im_naechsten_zug(monkeypatch):
+    """Heuristik entscheidet sofort, das Hintergrund-LLM lenkt den Zug
+    danach um — ohne dass je ein Zug auf das Modell gewartet hat."""
+    import time as _time
+
+    antwort = ('{"zug":"wechseln","handlung":"ERREICHEN","gegenstand":"PERSON",'
+               '"fuer":"selbst","ersatz":null,"spiegel":"Doktor sprechen"}')
+    monkeypatch.setattr(intent, "_chat", lambda *a, **k: {"ok": True, "text": antwort})
+    sit = _sit()
+    sit["id"] = "test-nachzug"
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    # Mehrdeutiger Satz: Heuristik sagt nichts Klares, LLM laeuft hinterher.
+    d = intent.erkennen(sit, "Ja also, der Herr Doktor, wissen Sie...")
+    assert d["quelle"] == "heuristik"
+    for _ in range(50):  # Hintergrund-Future fertig werden lassen
+        spaet = intent.nachzug(sit)
+        if spaet is not None:
+            break
+        _time.sleep(0.02)
+    assert spaet is not None and spaet["quelle"] == "nachzug"
+    hirn.anwenden(sit, spaet)
+    a = hirn.aktiv(sit)
+    assert a is not None and a["handlung"] == "ERREICHEN"
+    assert sit["sammler"]["modus"] == ""  # Buchungsmaschine still gelegt
 
 
 def test_fallback_absage_ohne_ersatz(monkeypatch):

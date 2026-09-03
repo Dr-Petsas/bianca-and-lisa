@@ -124,11 +124,16 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
         gespraech.nach_antwort(session_doc)
         return {"text": id_zug["text"], "book": None}
     # W-HIRN/W-INTENT (03.09.2026): NACH der Identitaet (wer am Apparat sitzt
-    # ist kein Anliegen), VOR dem Modell — jeder Patientensatz wird gedeutet.
-    # Sagt der Angerufene etwas anderes als der Chef-Auftrag ("sagen Sie den
-    # Termin ab"), wechselt das Hirn das Anliegen, statt auf der Mission zu
-    # kleben. Kurze Ja/Nein-/Diktat-Antworten nimmt der Fast-Path ohne LLM.
+    # ist kein Anliegen), VOR dem Modell — jeder Patientensatz wird gedeutet,
+    # synchron immer in 0 ms (Fast-Paths + Heuristik). Das LLM prueft
+    # mehrdeutige Saetze im Hintergrund nach (Nachzug vom vorigen Satz
+    # zuerst einarbeiten). Sagt der Angerufene etwas anderes als der
+    # Chef-Auftrag, wechselt das Hirn das Anliegen, statt auf der Mission
+    # zu kleben.
     if "hirn" in session_doc and intent.enabled():
+        spaet = intent.nachzug(session_doc)
+        if spaet is not None:
+            hirn.anwenden(session_doc, spaet)
         deutung = intent.erkennen(session_doc, text_in, stimme="lisa")
         hirn.anwenden(session_doc, deutung)
     # Gespraechslage frisch in den Systemprompt (Talk-/Brueckenzuege).

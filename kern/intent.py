@@ -4,23 +4,30 @@ Chef: Bianca (und Lisa) muessen JEDERZEIT die Intention des Anrufers kennen —
 die Erkennung schwingt bei jedem Satz mit, VOR den deterministischen
 Maschinen. Drei Stufen halten die Latenz klein:
 
-1. FAST-PATH (0 ms, der Normalfall — Chef 03.09.2026 "die spritzigkeit und
-   speed ist komplett weg", Antworten liefen auf ~8 s):
+SYNCHRON ist hier NICHTS mehr LLM (Chef 03.09.2026 nachmittags: gemessene
+2.3-2.4 s je Intent-Call am ~22-Token/s-vLLM, Antworten bei ~8 s — "das ist
+ein desaster"). Der Zug wartet auf keine Modell-Antwort:
+
+1. FAST-PATH (0 ms, der Normalfall):
    a) Formular-Antworten (Ziffern, Buchstabieren, Ja/Nein, Slotwahl).
-   b) Laeuft ein Anliegen, wird das LLM NUR bei Wechsel-Verdacht gerufen
-      (Signalwoerter: sprechen/absagen/aendern/Rechnung/Rueckruf/"doch
-      nicht" ...). Gewoehnliche Sammel-Antworten ("naechste Woche
-      vormittags waere gut") kosten NICHTS.
+   b) Laeuft ein Anliegen und der Satz traegt kein Wechsel-Signal
+      (sprechen/absagen/aendern/Rechnung/Rueckruf/"doch nicht" ...),
+      gehoert er dem laufenden Anliegen — fertig.
    c) Eindeutige Erstsaetze ("Ich haette gern einen Termin", "Termin
       absagen", "Doktor sprechen"): genau EIN Kategorie-Treffer, keine
-      Verneinung -> sofort, ohne LLM.
-2. LLM (kern/llm.chat, dasselbe vLLM wie das Gespraech) nur fuer die
-   mehrdeutigen Saetze: Temperatur 0, Mini-JSON (Spiegel max. 5 Worte,
-   max_tokens 44 — das vLLM schafft ~20-25 Tokens/s, jedes Token zaehlt),
-   eigener Timeout ueber einen Thread-Future — die 20-s-Leine des Clients
-   gilt hier NICHT (INTENT_TIMEOUT, Default 2.5 s).
-3. FALLBACK (LLM tot/zu langsam/unparsebar): kompakte Heuristik. Buchen nur
-   bei AUSDRUECKLICHEM Terminwunsch — nie als stiller Default.
+      Verneinung -> Deutung sofort.
+2. HEURISTIK (0 ms): bei Wechsel-Verdacht oder unklarem Erstsatz entscheidet
+   SOFORT die Regex-Heuristik (Vorrang ERREICHEN > AENDERN > ABGEBEN >
+   WISSEN > ANLEGEN; buchen nur bei ausdruecklichem Terminwunsch, nie als
+   Default) — und ZUSAETZLICH wird das LLM im HINTERGRUND gestartet.
+3. NACHZUG (asynchron): die LLM-Deutung (kern/llm.chat, Temperatur 0,
+   Mini-JSON) landet im Register; der NAECHSTE Zug arbeitet sie ueber
+   nachzug() ein, bevor er selbst deutet. War die Heuristik richtig,
+   dedupliziert kern/hirn.anwenden; lag sie daneben, lenkt das Hirn einen
+   Zug spaeter um. So schwingt das LLM immer mit — ohne je zu bremsen.
+
+Notaus: INTENT_SCHICHT=0. INTENT_NACHZUG=0 schaltet nur das Hintergrund-LLM
+ab (reine Heuristik, z. B. wenn das vLLM ueberlastet ist).
 
 Notaus: INTENT_SCHICHT=0 -> erkennen() liefert immer 'halten', und
 bianca/gehirn.einsammeln laesst die alte Regex-Modus-Erkennung wieder zu.
@@ -35,24 +42,24 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from kern import llm
 
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="intent")
 
+# Hintergrund-Register: Sitzungs-ID -> (Future, Startzeit). Lebt NUR im
+# Prozess (nie in der Sitzung — die wird als JSON gesichert).
+_NACHZUG: dict[str, tuple[Future, float]] = {}
+
 
 def enabled() -> bool:
     return os.environ.get("INTENT_SCHICHT", "1").strip().lower() not in ("0", "false", "no")
 
 
-def _timeout_s() -> float:
-    try:
-        return float(os.environ.get("INTENT_TIMEOUT", "2.5"))
-    except ValueError:
-        return 2.5
+def nachzug_an() -> bool:
+    return os.environ.get("INTENT_NACHZUG", "1").strip().lower() not in ("0", "false", "no")
 
 
 def _s(v: Any) -> str:
@@ -351,13 +358,64 @@ def _parse(text: str) -> dict[str, Any] | None:
     return aus
 
 
-def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
-    """Ein Anrufer-Satz -> Deutung fuer kern/hirn.anwenden().
+def _sid(sit: dict) -> str:
+    return _s(sit.get("id")) or str(id(sit))
 
-    Schwingt bei jedem Satz mit (Chef 03.09.2026) — aber fast immer ueber
-    die 0-ms-Fast-Paths. Das LLM zahlt nur, wer mehrdeutig spricht:
-    Wechsel-Verdacht im laufenden Anliegen oder ein unklarer Erstsatz.
+
+def _nachdeuten(sit: dict, t: str, stimme: str) -> None:
+    """LLM-Deutung im Hintergrund anstossen — der Zug wartet NICHT darauf.
+    Ein neuer Auftrag ersetzt den alten (nur der juengste Satz zaehlt)."""
+    if not nachzug_an():
+        return
+    try:
+        _NACHZUG[_sid(sit)] = (
+            _POOL.submit(_chat, _kontext(sit, t, stimme=stimme)),
+            time.monotonic(),
+        )
+    except RuntimeError:
+        pass  # Pool im Shutdown: dann eben ohne Nachzug
+
+
+def nachzug(sit: dict) -> dict[str, Any] | None:
+    """Fertige Hintergrund-Deutung abholen (nie blockierend).
+
+    Der Aufrufer (agent, VOR der neuen Deutung) reicht sie an
+    kern/hirn.anwenden weiter: war die Heuristik des vorigen Zugs richtig,
+    dedupliziert das Hirn; lag sie daneben, lenkt es jetzt um.
     """
+    eintrag = _NACHZUG.get(_sid(sit))
+    if eintrag is None:
+        return None
+    fut, t0 = eintrag
+    if not fut.done():
+        if time.monotonic() - t0 > 30:
+            _NACHZUG.pop(_sid(sit), None)  # verwaist (vLLM klemmt): vergessen
+        return None
+    _NACHZUG.pop(_sid(sit), None)
+    try:
+        out = fut.result()
+    except Exception as e:
+        print(f"intent-nachzug: fehler {e}", flush=True)
+        return None
+    ms = int((time.monotonic() - t0) * 1000)
+    if not out.get("ok"):
+        print(f"intent-nachzug: llm {_s(out.get('error'))[:100]}", flush=True)
+        return None
+    deutung = _parse(out.get("text") or "")
+    if deutung is None:
+        print(f"intent-nachzug: unparsebar ({ms}ms)", flush=True)
+        return None
+    deutung["quelle"] = "nachzug"
+    print(f"intent-nachzug: {ms}ms zug={deutung['zug']} handlung={deutung['handlung']}", flush=True)
+    return deutung
+
+
+def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
+    """Ein Anrufer-Satz -> Deutung fuer kern/hirn.anwenden(). IMMER 0 ms.
+
+    Schwingt bei jedem Satz mit (Chef 03.09.2026), blockiert aber NIE auf
+    das Modell: Fast-Paths und Heuristik entscheiden sofort, das LLM prueft
+    mehrdeutige Saetze im Hintergrund nach (nachzug())."""
     t = _s(text)
     if not enabled():
         return {"kanal": "ok", "zug": "halten", "handlung": "KEINE",
@@ -378,31 +436,16 @@ def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
         if not _wechsel_verdacht(t, a_handlung):
             # Kein Wechsel-Signal: der Satz gehoert dem laufenden Anliegen
             # (Ernte/Erzaehlung/Zwischenfrage) — Maschine und Talk-Schicht
-            # verarbeiten ihn wie gewohnt, OHNE LLM-Aufschlag.
+            # verarbeiten ihn wie gewohnt.
             return {"kanal": "ok", "zug": "halten", "handlung": "KEINE",
                     "gegenstand": "", "quelle": "fastpath-still"}
     else:
         schnell = _eindeutig(t)
         if schnell is not None:
             return schnell
-    t0 = time.monotonic()
-    fut = _POOL.submit(_chat, _kontext(sit, t, stimme=stimme))
-    try:
-        out = fut.result(timeout=_timeout_s())
-    except FutureTimeout:
-        fut.cancel()
-        print(f"intent: timeout {int((time.monotonic() - t0) * 1000)}ms -> fallback", flush=True)
-        return _fallback(sit, t)
-    except Exception as e:  # Pool/Transport kaputt: nie den Zug reissen
-        print(f"intent: fehler {e} -> fallback", flush=True)
-        return _fallback(sit, t)
-    ms = int((time.monotonic() - t0) * 1000)
-    if not out.get("ok"):
-        print(f"intent: llm {_s(out.get('error'))[:120]} -> fallback", flush=True)
-        return _fallback(sit, t)
-    deutung = _parse(out.get("text") or "")
-    if deutung is None:
-        print(f"intent: unparsebar ({ms}ms) -> fallback", flush=True)
-        return _fallback(sit, t)
-    print(f"intent: llm {ms}ms zug={deutung['zug']} handlung={deutung['handlung']}", flush=True)
+    # Wechsel-Verdacht oder unklarer Erstsatz: Heuristik entscheidet JETZT
+    # (0 ms), das LLM prueft im Hintergrund nach.
+    deutung = _fallback(sit, t)
+    deutung["quelle"] = "heuristik"
+    _nachdeuten(sit, t, stimme)
     return deutung

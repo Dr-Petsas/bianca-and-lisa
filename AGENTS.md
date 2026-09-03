@@ -1338,17 +1338,23 @@ Routen und Ports sind unangetastet.
   verwalten.abgeben_notiz, kein Termin-Angebot). Lisa: Seed aus dem
   Chef-Auftrag (`seed_von_auftrag`, deterministisch), `/api/auftrag` hängt
   Nachschub als neues Anliegen an; Wirkung über `stand_block()` im Prompt.
-- **`kern/intent.py` (Erkennung, 3 Stufen gegen die Latenz):**
-  1. Fast-Path 0 ms: Formular-Antworten (Ziffern, Buchstabieren, kurzes
-     Ja/Nein, Slotwahl, Kurzantwort auf offene Frage) → `zug=verfeinern`,
-     KEIN LLM — das sind die latenzkritischen Diktat-Züge. Wechsel-Wörter
-     (sprechen, absagen, Rechnung, Rückruf …) erzwingen immer die Deutung.
-  2. LLM: dasselbe vLLM (`kern/llm.chat`), Temperatur 0, kleines JSON,
-     eigener Timeout per Thread-Future (`INTENT_TIMEOUT`, Default 4 s) —
-     die 20-s-Leine des Clients gilt hier nicht.
-  3. Fallback-Heuristik (LLM tot/unparsebar): kompakte Regexes; buchen NUR
-     bei ausdrücklichem Terminwunsch, NIE als Default. Im laufenden
-     Slot-Angebot meint „absagen/passt nicht" das ANGEBOT (verfeinern).
+- **`kern/intent.py` (Erkennung — synchron IMMER 0 ms):** Der Zug wartet
+  NIE auf ein Modell (Chef 03.09.2026 nachmittags: gemessene 2,3–2,4 s je
+  synchronem Intent-Call am ~22-Token/s-vLLM = „Desaster", Antworten ~8 s).
+  1. Fast-Paths: Formular-Antworten (Ziffern, Buchstabieren, Ja/Nein,
+     Slotwahl) → `verfeinern`; ohne Wechsel-Signal im laufenden Anliegen →
+     `halten`; eindeutige Erstsätze (genau EIN Kategorie-Treffer, keine
+     Verneinung: „Termin absagen", „Doktor sprechen") → sofort.
+  2. Heuristik (0 ms): bei Wechsel-Verdacht/unklarem Erstsatz entscheiden
+     die Regexes SOFORT; buchen NUR bei ausdrücklichem Terminwunsch, NIE
+     als Default. Im laufenden Slot-Angebot meint „absagen/passt nicht"
+     das ANGEBOT (verfeinern).
+  3. Nachzug (asynchron): dieselben Sätze gehen ZUSÄTZLICH ans vLLM
+     (Temperatur 0, Mini-JSON, max_tokens 44, statischer Prompt =
+     Prefix-Cache); `intent.nachzug()` arbeitet das Ergebnis am ANFANG des
+     nächsten Zugs ein — richtig gelegene Heuristik dedupliziert
+     `hirn.anwenden`, falsche wird einen Zug später umgelenkt.
+     Notaus nur fürs Hintergrund-LLM: `INTENT_NACHZUG=0`.
 - **Einbau:** `bianca/agent.user_turn` Schritt 0 (sync → erkennen →
   anwenden, vor `flow.zug`); `lisa/agent.user_turn` nach der Identität, vor
   dem Modell. Anliegen-Stand steht als ANLIEGEN-Block im Systemprompt

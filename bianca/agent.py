@@ -540,10 +540,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 0) Intent-Schicht (W-HIRN/W-INTENT 03.09.2026, Chef: "erst erkennen,
     #    dann handeln"): das Session-Hirn deutet JEDEN Satz, BEVOR eine
-    #    Maschine laeuft. Formular-Antworten (Ziffern, Ja/Nein, Slotwahl)
-    #    nimmt der Fast-Path ohne LLM-Call — die Latenz bleibt.
+    #    Maschine laeuft — synchron IMMER in 0 ms (Fast-Paths + Heuristik).
+    #    Das LLM prueft mehrdeutige Saetze im Hintergrund nach; sein
+    #    Nachzug vom VORIGEN Satz wird hier zuerst eingearbeitet.
     if "hirn" in sit and intent.enabled():
         hirn.sync_nach_zug(sit)  # Maschinen-Stand vom VORIGEN Zug abgleichen
+        spaet = intent.nachzug(sit)
+        if spaet is not None:
+            hirn.anwenden(sit, spaet)
         deutung = intent.erkennen(sit, text_in)
         hirn.anwenden(sit, deutung)
 
