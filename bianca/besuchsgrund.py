@@ -15,6 +15,7 @@ Regeln vom Chef:
 
 from __future__ import annotations
 
+import html
 import re
 from typing import Any
 
@@ -138,6 +139,15 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
             vm = (motiv_suchen(tenant, muster, katalog=katalog, calendar_id=calendar_id)
                   or motiv_suchen(tenant, FALLBACK_MUSTER, katalog=katalog, calendar_id=calendar_id))
             return kern, vm
+    # W-MOTIV-KATALOG (03.09.2026): kein kuratiertes Konzept — den Grund
+    # generisch gegen den frischen Katalog mappen (Namen + Erklärtexte).
+    # So treffen auch kundeneigene Besuchsgründe ("Füllung", "Botox").
+    kat = katalog
+    if kat is None:
+        kat = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
+    vm = katalog_treffer(text, katalog=kat, calendar_id=calendar_id)
+    if vm is not None:
+        return sprechname(vm), vm
     return "", None
 
 
@@ -145,6 +155,154 @@ def fallback_motiv(tenant: dict, *, katalog: list[dict] | None = None,
                    calendar_id: str = "") -> dict | None:
     """Für frei formulierte Gründe ohne erkennbares Konzept ("Holzbein absägen")."""
     return motiv_suchen(tenant, FALLBACK_MUSTER, katalog=katalog, calendar_id=calendar_id)
+
+
+# =============================================================================
+# W-MOTIV-KATALOG (Chef 03.09.2026): "bianca muss den besuchsgrund besser
+# mappen lernen auf die realen besuchsgründe in der Praxis. die besuchsgründe
+# müssen auf jeden fall parat stehen in einem RAG oder ähnlichem, weil viele
+# user eigene besuchsgründe editieren oder erstellen."
+#
+# Der Katalog steht pro Anruf frisch in der Sitzung (kern/motive.anstossen —
+# das IST unser "RAG": parat, ohne Netz-Roundtrip pro Zug). Diese Stufe mappt
+# den gesprochenen Grund GENERISCH gegen Namen UND Erklärtexte der Motive
+# (patientInfo von der Einstellungsseite, Landingpage-Headline/-Beschreibung —
+# masVisitMotives liefert sie seit 03.09.2026 mit). Sie greift NACH den
+# kuratierten KONZEPTEN und VOR dem Kontrolle-Fallback — so funktionieren
+# auch kundeneigene Gründe ("Füllung", "Funktionsanalyse", "Botox-Beratung"),
+# die kein Zahnarzt-Konzept kennt. Klein/gross-Regel gilt auch hier.
+# =============================================================================
+
+# Füllwörter des Anrufersatzes und der Erklärtexte — tragen keine Bedeutung.
+_MATCH_STOP = {
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
+    "einer", "ich", "wir", "sie", "ihr", "mir", "mich", "uns", "mein", "meine",
+    "meinen", "meinem", "meiner", "und", "oder", "aber", "auch", "noch", "mal",
+    "bitte", "gern", "gerne", "danke", "hallo", "guten", "tag", "morgen",
+    "termin", "terminwunsch", "brauche", "braeuchte", "haette", "moechte",
+    "will", "wollte", "wuerde", "koennte", "kann", "muss", "soll", "lassen",
+    "machen", "kommen", "vorbeikommen", "haben", "sein", "ist", "sind", "war",
+    "waren", "wird", "werden", "fuer", "wegen", "zum", "zur", "bei", "beim",
+    "mit", "ohne", "auf", "aus", "nach", "vor", "ueber", "unter", "von", "als",
+    "wie", "was", "wann", "ganz", "sehr", "schon", "wieder", "neu", "neue",
+    "neuen", "ihnen", "ihre", "ihren", "praxis", "zahnarzt", "arzt", "doktor",
+    "frau", "herr", "uhr", "woche", "diese", "dieser", "dieses", "denn",
+    "dann", "dass", "nicht", "kein", "keine", "etwas", "gemacht", "gehabt",
+    # Groessen-Marker entscheiden NIE das Matching — nur die Klein-Regel am
+    # Ende ("bei xy klein oder xy gross nehmen wir grundsaetzlich klein").
+    "klein", "kleine", "kleinen", "kleiner", "kleines",
+    "gross", "grosse", "grossen", "grosser", "grosses",
+    # Allerweltsverben aus Anrufersaetzen ("stellen Sie Taxischeine aus?").
+    "stellen", "stelle", "stellt", "geben", "gibt", "geht", "gehen",
+}
+
+
+def _match_norm(text: str) -> str:
+    t = html.unescape(_s(text)).lower()
+    t = (t.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+          .replace("ß", "ss"))
+    return re.sub(r"[^a-z0-9]+", " ", t)
+
+
+def _match_tokens(text: str) -> set[str]:
+    return {w for w in _match_norm(text).split()
+            if len(w) >= 3 and w not in _MATCH_STOP and not w.isdigit()}
+
+
+def _stamm(w: str) -> str:
+    """Deutsche Endungen light strippen: reparieren/Reparatur -> repar."""
+    for suf in ("ierung", "ieren", "ungen", "ung", "atur", "en", "e", "n"):
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            return w[: len(w) - len(suf)]
+    return w
+
+
+def _token_passt(a: str, b: str) -> bool:
+    """Wortstamm-tolerant: 'reparieren' trifft 'Reparatur', 'Kontrolle'
+    trifft 'Kontrolluntersuchung' — aber 'zahn' (zu kurz) trifft nichts."""
+    if a == b:
+        return True
+    if len(a) >= 5 and len(b) >= 5 and (a in b or b in a):
+        return True
+    sa, sb = _stamm(a), _stamm(b)
+    if sa == sb:
+        return True
+    # Stamm-Vergleich NUR als Praefix-Beziehung ("versiegel"/"versiegelung"),
+    # nie mitten im Wort — sonst traf "stellen" die "Planerstellung"
+    # (Taxi-Abschweifer, Baukasten 03.09.2026).
+    if len(sa) >= 5 and len(sb) >= 5 and (sa.startswith(sb) or sb.startswith(sa)):
+        return True
+    # Gemeinsamer Praefix >= 6: deutsche Flexion/Komposita.
+    p = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        p += 1
+    return p >= 6
+
+
+def katalog_treffer(text: str, *, katalog: list[dict],
+                    calendar_id: str = "") -> dict | None:
+    """Bestes Motiv fuer den gesprochenen Grund — ueber Namen UND Erklärtexte.
+
+    Score je Motiv: Treffer im Namen (name/nameForPatient) zaehlen 3, Treffer
+    in den Erklärtexten (patientInfo, Landingpage) zaehlen 1. Unter 3 Punkten
+    kein Treffer (mindestens EIN Namens-Treffer oder drei Text-Indizien).
+    Unter den Besten: "klein" schlaegt "gross" (Chef: immer klein buchen),
+    online-buchbare vor internen, dann der kuerzeste Name.
+    """
+    worte = _match_tokens(text)
+    if not worte:
+        return None
+    pool = motive.fuer_kalender(katalog or [], calendar_id)
+    beste: list[tuple[int, dict]] = []
+    top = 0
+    for vm in pool:
+        name_toks = _match_tokens(f"{vm.get('name')} {vm.get('nameForPatient')}")
+        text_toks = _match_tokens(
+            f"{vm.get('patientInfo')} {vm.get('landingPageHeadline')} "
+            f"{vm.get('landingPageDescription')}"
+        ) - name_toks
+        score = 0
+        for w in worte:
+            if any(_token_passt(w, n) for n in name_toks):
+                score += 3
+            elif any(_token_passt(w, x) for x in text_toks):
+                score += 1
+        if score > top:
+            beste = [(score, vm)]
+            top = score
+        elif score == top and score > 0:
+            beste.append((score, vm))
+    if top < 3:
+        return None
+    kandidaten = [vm for _, vm in beste]
+    buchbar = [v for v in kandidaten if v.get("allowOnlineBooking") is not False]
+    if buchbar:
+        kandidaten = buchbar
+    kleine = [v for v in kandidaten if "klein" in _s(v.get("name")).lower()]
+    return min(kleine or kandidaten, key=lambda v: len(_s(v.get("name"))))
+
+
+def deckt_ab(motiv_text: str, o_ton: str) -> bool:
+    """True, wenn ALLE bedeutenden O-Ton-Worte im Motiv-/Grundtext aufgehen.
+
+    Fuer die Kurznotiz am Termin (Chef 03.09.2026: "entsprechende
+    kurznotizen bitte nicht vergessen"): deckt der gebuchte Besuchsgrund
+    den Wortlaut nicht ab, bekommt die Praxis den O-Ton ans Terminpopup."""
+    wl = _match_tokens(o_ton)
+    nm = _match_tokens(motiv_text)
+    return bool(wl) and all(any(_token_passt(w, n) for n in nm) for w in wl)
+
+
+def sprechname(vm: dict) -> str:
+    """Sprechbarer Kern eines Motivs: Patientenname vor internem Kuerzel-Namen."""
+    schoen = _s(vm.get("nameForPatient"))
+    if schoen:
+        return schoen
+    name = _s(vm.get("name"))
+    # Interne Kuerzel-Praefixe ("KCH ", "PRO ", "SLM ") nicht mit ansagen.
+    return re.sub(r"^[A-ZÄÖÜ]{2,4}\s+", "", name) or name
 
 
 def konzept_muster(text: str) -> list[str]:

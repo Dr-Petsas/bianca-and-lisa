@@ -1372,6 +1372,44 @@ Routen und Ports sind unangetastet.
   Verhalten wie vor W-HIRN. Tests: `tests/test_hirn.py` (33, offline —
   LLM gestummt).
 
+## Besuchsgrund-Katalog-Mapping (W-MOTIV-KATALOG 03.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): "bianca muss den besuchsgrund besser mappen lernen auf die
+realen besuchsgründe in der Praxis. die besuchsgründe müssen auf jeden fall
+parat stehen in einem RAG oder ähnlichem, weil viele user eigene
+besuchsgründe editieren oder erstellen. [...] entsprechende kurznotizen
+bitte nicht vergessen [...] bei Besuchsgründen mit xy klein oder xy gross
+[...] nehmen wir grundsätzlich die klein variante"
+
+- **Das "RAG":** der Katalog steht pro Anruf frisch in der Sitzung
+  (`kern/motive.anstossen` -> `masVisitMotives`, einmal, im Hintergrund).
+  Die CF liefert seit 03.09.2026 zusätzlich die **Erklärtexte**:
+  `patientInfo` (Einstellungsseite) + `landingPageHeadline`/
+  `landingPageDescription` (Landingpage), HTML-bereinigt, 400-Zeichen-Kappe
+  (Commit 70288461 in pickadoc-live-base, deployt auf docgenda).
+- **Drei Stufen** beim Mapping (`bianca/besuchsgrund.py`):
+  1. kuratierte KONZEPTE (Zahnarzt-Muster, wie gehabt),
+  2. NEU `katalog_treffer()`: generisches Scoring gegen Namen (3 Punkte)
+     UND Erklärtexte (1 Punkt), Schwelle 3, wortstamm-tolerant
+     (`_token_passt`: exakt / Substring ab 5 / Stamm-Präfix / Präfix 6) —
+     trifft kundeneigene Gründe ("Füllung", "Funktionsanalyse", "Botox"),
+  3. Kontrolle/Besprechungs-Fallback (wie gehabt).
+  Grössen-Marker (klein/gross) sind Stoppwörter — sie entscheiden NIE das
+  Matching, nur die Klein-Regel am Ende ("Füllung" -> "KCH Füllung klein",
+  auch wenn der Anrufer "grosse Füllung" sagt).
+- **Behandlerspezifisch:** `gehirn.motiv_fuer_kalender` versucht
+  `katalog_treffer` mit dem Wortlaut, bevor altes Motiv/Fallback greifen.
+- **Kurznotiz:** deckt der gebuchte Grund den O-Ton nicht wörtlich ab
+  (`besuchsgrund.deckt_ab`), hängt `flow._buchen` an den Termin:
+  "Anrufer wörtlich: „…" — gebucht als <Motiv>." (note_appointment).
+- **Falsch-Positiv-Wachen:** Stoppwörter (Floskeln, Allerweltsverben wie
+  "stellen" — Taxi-Abschweifer traf sonst "Planerstellung"), Stamm-Vergleich
+  nur als Präfix-Beziehung, Score-Schwelle 3. `tests/test_baukasten.py::
+  test_abschweifer_ernten_keinen_grund` ist die Regressionswache.
+- Tests: `tests/test_motiv_katalog.py` (15, offline). Live-Probe (read-only):
+  `.data/motiv_probe.py` gegen den echten Meddent-Katalog (133 Motive,
+  102 mit Erklärtext).
+
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....

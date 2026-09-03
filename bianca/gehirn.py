@@ -1717,6 +1717,13 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     vm = None
     if muster:
         vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=kat, calendar_id=calendar_id)
+    if not vm:
+        # W-MOTIV-KATALOG (03.09.2026): kein Konzept-Treffer — den Wortlaut
+        # generisch gegen den Behandler-Katalog mappen (Namen + Erklärtexte),
+        # bevor das alte Motiv oder der Kontrolle-Fallback greift.
+        wortlaut = _s(f"{s['grundWortlaut']} {s['grund']}")
+        if wortlaut:
+            vm = besuchsgrund.katalog_treffer(wortlaut, katalog=kat, calendar_id=calendar_id)
     if not vm and s["motivId"]:
         aktuell = next((v for v in kat if _s(v.get("id")) == s["motivId"]), None)
         if aktuell and motive.erlaubt(aktuell, calendar_id):

@@ -11,7 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from bianca import gehirn, hintergrund, telefon, verwalten, weiterleiten
+from bianca import besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
+from kern import notes as kern_notes
 from kern import calendar as kal
 from kern import gespraech
 from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_aktualisieren
@@ -628,6 +629,16 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             if s["geschlechtUnklar"]:
                 hinweise.append(
                     "Bitte Geschlecht aktualisieren — Vorname unklar, vorläufig weiblich eingetragen."
+                )
+            # W-MOTIV-KATALOG (Chef 03.09.2026): "entsprechende kurznotizen
+            # bitte nicht vergessen" — deckt der gebuchte Besuchsgrund den
+            # O-Ton des Anrufers nicht wörtlich ab (Fallback- oder Fuzzy-
+            # Mapping), bekommt die Praxis den Wortlaut ans Terminpopup.
+            o_ton = kern_notes.grund_kurz(sit)
+            if (o_ton and s["motivName"]
+                    and not besuchsgrund.deckt_ab(f"{s['motivName']} {s['grund']}", o_ton)):
+                hinweise.append(
+                    f"Anrufer wörtlich: „{o_ton}“ — gebucht als {s['motivName']}."
                 )
             if hinweise:
                 if melde:
