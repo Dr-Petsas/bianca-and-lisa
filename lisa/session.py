@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from kern import hirn
 from kern.sitzung import merke_tool, merke_zug, oeffentlich as _oeffentlich  # noqa: F401 - geteilt mit Bianca
 from lisa.config import DATA_DIR, DEV_PHONE
 from lisa.patients import format_de_phone
@@ -58,6 +59,11 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None,
     }
     if phone_call_id:
         doc["phoneCallId"] = phone_call_id
+    # W-HIRN (03.09.2026): der Chef-Auftrag wird EINMAL in ein Anliegen
+    # gegossen (quelle=auftrag) — wechselt der Angerufene das Thema
+    # ("sagen Sie Donnerstag ab"), erkennt kern/intent das und das Hirn
+    # parkt den Seed, statt stur auf der Mission zu bleiben.
+    hirn.init(doc, auftrag=auftrag)
     _STORE[sid] = doc
     return doc
 

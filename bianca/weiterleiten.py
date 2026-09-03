@@ -295,6 +295,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     t = _s(gesagt)
     if not t:
         return None
+    # W-HIRN (03.09.2026): das Session-Hirn hat ERREICHEN erkannt — auch wenn
+    # keine der Verbinde-Regexes den Satz fasst ("Ich haette gern Doktor X",
+    # "I want to talk to him", "Mitarbeiter, bitte"). Der Zettel bewaffnet
+    # diesen Zweig genau einmal.
+    hirn_wunsch = sit.pop("hirnVerbinden", None)
     w = sit.get("weiterleiten") or {}
 
     # Offenes Weiterleitungs-Angebot ("Soll ich Sie zu Doktor X weiterleiten?")
@@ -344,7 +349,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         return {"text": "Entschuldigung — zu welchem unserer Ärzte darf ich Sie denn verbinden?"}
 
     # Neuer (oder wiederholter) Weiterleitungs-Wunsch?
-    if not erkannt(t):
+    if not erkannt(t) and not hirn_wunsch:
         # Buchungs-/Verwaltungssaetze ("Termin bei Doktor Petsas ...")
         # gehoeren den anderen Fluessen — kein Namens-Kurzschluss.
         if "termin" in t.lower():
@@ -371,6 +376,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # Fall 1: Arzt NAMENTLICH im Satz ("Kann ich mit Doktor Patrikis
     # sprechen?") -> direkt verbinden. KEINE Personalfrei-Ansage, keine Frage.
     d = arztmod.deute(t, sit.get("tenant") or {})
+    if (not d or d.get("typ") != "genannt") and isinstance(hirn_wunsch, dict) \
+            and _s(hirn_wunsch.get("person")):
+        # Der Name stand in einem frueheren Satz — das Hirn traegt ihn nach.
+        d = arztmod.deute(_s(hirn_wunsch["person"]), sit.get("tenant") or {})
     if d and d.get("typ") == "genannt":
         ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
         _arzt_merken(s, ziel)

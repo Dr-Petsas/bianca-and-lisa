@@ -389,6 +389,20 @@ def rueckruf_notiz(sit: dict) -> None:
     )
 
 
+def abgeben_notiz(sit: dict, *, was: str = "") -> None:
+    """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf-/Nachricht-Notiz OHNE
+    Termin-Bezug — frueher gab es die Spur nur, wenn zufaellig keine Slots
+    frei waren. Jetzt ist 'die Praxis kuemmert sich' eine eigene Loesung."""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    anliegen_text = _s(was) or "Rueckruf erbeten"
+    _notiz_schreiben(
+        sit, anliegen="rueckruf",
+        status="Rueckruf erbeten — bitte melden",
+        dock_text=f"{name} bittet um Rueckruf: {anliegen_text}.",
+    )
+
+
 def _nicht_gefunden(sit: dict) -> dict:
     """Chef 29.08.2026: ehrlich sagen + 'keine Sorge, ich schreibe eine
     Notiz, und die wird dem Behandler XY vorgelegt.'"""

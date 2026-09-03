@@ -15,7 +15,7 @@ from typing import Any
 from bianca import flow, gehirn, session, telefon
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
-from kern import antwort_wache, gedaechtnis, gespraech, llm, stille, tenants, wiederholung, zuege
+from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 
@@ -538,6 +538,15 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
 
+    # 0) Intent-Schicht (W-HIRN/W-INTENT 03.09.2026, Chef: "erst erkennen,
+    #    dann handeln"): das Session-Hirn deutet JEDEN Satz, BEVOR eine
+    #    Maschine laeuft. Formular-Antworten (Ziffern, Ja/Nein, Slotwahl)
+    #    nimmt der Fast-Path ohne LLM-Call — die Latenz bleibt.
+    if "hirn" in sit and intent.enabled():
+        hirn.sync_nach_zug(sit)  # Maschinen-Stand vom VORIGEN Zug abgleichen
+        deutung = intent.erkennen(sit, text_in)
+        hirn.anwenden(sit, deutung)
+
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
     # W-VERBINDEN-ECHT (31.08.2026): eine echte Weiterleitung spricht ihre
@@ -582,6 +591,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.
     plan = gespraech.plan_block(route, offene_frage=_offene_frage(sit), stimme="bianca")
+    # W-HIRN: das erkannte Anliegen steht im Prompt — das Modell antwortet
+    # passend zur Handlung (ERREICHEN/WISSEN/ABGEBEN ...) statt zu buchen.
+    anliegen_stand = hirn.stand_block(sit)
+    if anliegen_stand:
+        plan = f"{plan}\n\n{anliegen_stand}" if plan else anliegen_stand
     if msgs and msgs[0].get("role") == "system":
         msgs[0]["content"] = system_prompt_aktuell(sit, plan=plan)
     # Kein Stream-Vorab, solange Buchung ODER Verwaltung offen ist: die Wachen

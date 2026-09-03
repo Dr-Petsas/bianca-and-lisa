@@ -805,6 +805,44 @@ def _frisch_absagen(sit: dict, melde: Melde = None) -> dict:
     return verwalten._absagen(sit, melde)
 
 
+def _abgeben_zug(sit: dict, t: str) -> dict | None:
+    """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf/Nachricht deterministisch.
+
+    Frueher gab es diesen Weg nur, wenn zufaellig keine Slots frei waren
+    (verwalten.rueckruf_notiz) — jetzt ist er eine eigene Loesung: Name und
+    Nummer einsammeln, ECHTE Notiz (praxis_notizen.jsonl + Dock), fertig.
+    KEIN Termin-Angebot. None => LLM klaert die Zwischenfrage.
+    """
+    from kern import hirn as kern_hirn
+
+    s = gehirn.sammler(sit)
+    ab = sit.get("hirnAbgeben") or {}
+    neu = gehirn.einsammeln(sit, t)
+    sit["ernteZuletzt"] = sorted(neu)
+    if not s["nachname"]:
+        if s["frage"] == "name" and not neu:
+            return None  # Zwischenfrage — LLM antwortet, die Frage bleibt offen
+        s["frage"] = "name"
+        return {"text": "Das richte ich gern aus. Für den Rückruf: Wie ist Ihr Name?"}
+    tel = s["telefon"] or s["aktePhone"]
+    if not tel:
+        if s["frage"] == "telefon" and not neu:
+            return None
+        s["frage"] = "telefon"
+        return {"text": "Danke. Und unter welcher Nummer erreichen wir Sie am besten?"}
+    name = f"{s['vorname']} {s['nachname']}".strip()
+    verwalten.abgeben_notiz(sit, was=_s(ab.get("was")))
+    ab["offen"] = False
+    sit["hirnAbgeben"] = ab
+    s["frage"] = ""
+    s["phase"] = "fertig"
+    kern_hirn.erledigt(sit)
+    return {"text": (
+        f"Alles notiert — die Praxis meldet sich bei Ihnen unter der "
+        f"{telefon.sprechbar(tel)}. Kann ich sonst noch etwas für Sie tun?"
+    )}
+
+
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     """Ein Anrufer-Satz durch den Buchungsfluss. None => LLM übernimmt."""
     s = gehirn.sammler(sit)
@@ -819,10 +857,25 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if wl is not None:
         return wl
 
+    # W-HIRN (03.09.2026): die Intent-Schicht hat den Modus evtl. schon vor
+    # diesem Zug geschaltet — das Signal wandert in die Ernte-Menge, damit
+    # verwalten seinen Einstiegs-Reset faehrt wie frueher bei der Regex.
+    hirn_modus_neu = bool(sit.pop("hirnModusNeu", False))
+
+    # Rueckruf-/Notiz-Anliegen (ABGEBEN): eigener deterministischer Zweig —
+    # Name + Nummer einsammeln, echte Notiz schreiben, KEIN Termin-Angebot.
+    # Direkt zurueck (auch None => LLM): der Satz ist hier schon geerntet,
+    # ein zweites einsammeln unten wuerde Ziffern doppelt zaehlen.
+    ab = sit.get("hirnAbgeben")
+    if isinstance(ab, dict) and ab.get("offen"):
+        return _abgeben_zug(sit, t)
+
     if s["phase"] == "gebucht":
         # Frisch gebucht — aber "sagen Sie ihn doch wieder ab" / "wann war
         # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.
         neu = gehirn.einsammeln(sit, t)
+        if hirn_modus_neu:
+            neu.add("modus")
         sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
         frisch = _frisch_termin(sit)
 
@@ -874,6 +927,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _readback(sit)
 
     neu = gehirn.einsammeln(sit, t)
+    if hirn_modus_neu:
+        neu.add("modus")
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren

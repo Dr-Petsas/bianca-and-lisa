@@ -751,8 +751,15 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # prüfen — "Ich möchte meinen Termin absagen" enthält auch "Termin".
     # Läuft schon ein Angebot im Buchungsfluss, bezieht sich "absagen"/
     # "verschieben" auf das Angebot, nicht auf einen Bestandstermin.
+    # W-HIRN (03.09.2026): traegt die Sitzung ein Session-Hirn, setzt NUR
+    # noch kern/hirn den Modus (LLM-Intent-Schicht, Chef: "erst erkennen,
+    # dann handeln") — die Regexes hier sind dann reine Ernte-Helfer.
+    # Alt-Sitzungen ohne Hirn und der Notaus INTENT_SCHICHT=0 behalten das
+    # alte Verhalten.
+    from kern import intent as _intent  # lokal: gehirn laedt vor kern.llm
     im_angebot = s["modus"] == "buchen" and s["phase"] in {"angebot", "bestaetigen"}
-    if not im_angebot:
+    hirn_regelt = "hirn" in sit and _intent.enabled()
+    if not im_angebot and not hirn_regelt:
         # phase "fertig" = das vorige Anliegen ist abgeschlossen (Storno
         # erledigt ODER ehrlich nicht gefunden). Ein WIEDERHOLTER Wunsch im
         # selben Modus muss dann neu bewaffnen — live 29.08. 08:47 klebte

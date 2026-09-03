@@ -450,6 +450,10 @@ def api_auftrag(body: AuftragIn):
     if not neu:
         raise HTTPException(400, "auftrag fehlt")
     sit["auftrag"] = neu
+    # W-HIRN (03.09.2026): der Nachschub-Auftrag wird ein eigenes Anliegen —
+    # das alte parkt, das Session-Hirn fuehrt den Stand im Prompt mit.
+    from kern import hirn as kern_hirn
+    kern_hirn.anliegen_hinzufuegen(sit, kern_hirn.seed_von_auftrag(neu))
     return _json_antwort(sit, art="auftrag", text_in=f"(Neuer Auftrag vom Chef, jetzt ausführen: {neu})")
 
 

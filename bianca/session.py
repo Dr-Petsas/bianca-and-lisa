@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from kern import hirn
 from kern.config import DATA_DIR
 from kern.sitzung import merke_tool, merke_zug, oeffentlich  # noqa: F401 - geteilt mit Lisa
 from kern.tenants import laden
@@ -33,7 +34,10 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None) -> dict[st
         "stimme": "Bianca",
         "tenant": tenant,
         "tenantId": tenant.get("_id"),
-        "auftrag": "Eingehender Anruf: Terminwunsch aufnehmen und buchen.",
+        # W-HIRN (03.09.2026): eingehend gibt es KEINEN Default-Auftrag mehr —
+        # das Anliegen wird im Gespraech erkannt (kern/intent + kern/hirn),
+        # Terminbuchung ist nur EINE von mehreren Loesungen.
+        "auftrag": "Eingehender Anruf: Anliegen erkennen und passend loesen.",
         "patient": {},
         "booking": {},
         "past": [],
@@ -43,6 +47,7 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None) -> dict[st
         "zuege": [],
         "startedAt": datetime.now(timezone.utc).isoformat(),
     }
+    hirn.init(doc)  # leer: kein Anliegen, kein Default-buchen
     _STORE[sid] = doc
     return doc
 

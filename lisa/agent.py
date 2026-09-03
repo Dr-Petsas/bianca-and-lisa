@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kern import gedaechtnis, gespraech, stille, tenants, wiederholung, zuege
+from kern import gedaechtnis, gespraech, hirn, intent, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
@@ -123,8 +123,19 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
         session_doc["messages"] = msgs
         gespraech.nach_antwort(session_doc)
         return {"text": id_zug["text"], "book": None}
+    # W-HIRN/W-INTENT (03.09.2026): NACH der Identitaet (wer am Apparat sitzt
+    # ist kein Anliegen), VOR dem Modell — jeder Patientensatz wird gedeutet.
+    # Sagt der Angerufene etwas anderes als der Chef-Auftrag ("sagen Sie den
+    # Termin ab"), wechselt das Hirn das Anliegen, statt auf der Mission zu
+    # kleben. Kurze Ja/Nein-/Diktat-Antworten nimmt der Fast-Path ohne LLM.
+    if "hirn" in session_doc and intent.enabled():
+        deutung = intent.erkennen(session_doc, text_in, stimme="lisa")
+        hirn.anwenden(session_doc, deutung)
     # Gespraechslage frisch in den Systemprompt (Talk-/Brueckenzuege).
     plan = gespraech.plan_block(route, stimme="lisa")
+    anliegen_stand = hirn.stand_block(session_doc)
+    if anliegen_stand:
+        plan = f"{plan}\n\n{anliegen_stand}" if plan else anliegen_stand
     if msgs and msgs[0].get("role") == "system":
         msgs[0]["content"] = system_prompt_aktuell(session_doc, plan=plan)
     # Stream: der erste fertige Satz geht sofort an die Stimme (vorab),

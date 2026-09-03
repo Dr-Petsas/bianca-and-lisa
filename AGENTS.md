@@ -1315,6 +1315,52 @@ sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
 `PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
 Schaufenster.
 
+## Session-Hirn + Intent-Schicht (W-HIRN / W-INTENT 03.09.2026 — nicht rückbauen)
+
+Chef: „erst erkennen, dann handeln" — Bianca rannte bei jedem Terminwort in
+den Buchungs-Default, dabei ist Buchen nur EINE Lösung für EINES von mehreren
+Anliegen (Meddent-Auswertung: verbinden, Auskunft, absagen ohne Ersatz,
+Rückruf …). Jetzt schwingt eine LLM-Erkennung bei JEDEM Satz mit, vor den
+deterministischen Maschinen. Fable 5 hat das gebaut; LLM-Config, STT, TTS,
+Routen und Ports sind unangetastet.
+
+- **`kern/hirn.py` (Session-Brain, beide Stimmen):** `sit["hirn"]` hält die
+  Anliegen-Queue (aktiv/offen/geparkt/erledigt, max. 8), abstrahiert als
+  Handlung×Gegenstand: ERREICHEN, WISSEN, AENDERN (ersatz ja/nein), ANLEGEN,
+  ABGEBEN × PERSON/VORGANG/SACHE/REGEL. NUR das Hirn schaltet Biancas
+  `sammler["modus"]` (buchen/absagen/verschieben/auskunft); der Wechsel
+  signalisiert sich über `sit["hirnModusNeu"]` → `flow.zug` hebt es in die
+  Ernte-Menge (`neu.add("modus")`), damit verwaltens Einstiegs-Reset läuft
+  wie früher bei der Regex. Phase `gebucht` bleibt beim Schalten stehen
+  (Frisch-Absage-Sonderwege). ERREICHEN legt `sit["hirnVerbinden"]`
+  (weiterleiten.zug konsumiert ihn, auch ohne Regex-Treffer), ABGEBEN legt
+  `sit["hirnAbgeben"]` (flow._abgeben_zug: Name+Nummer, echte Notiz via
+  verwalten.abgeben_notiz, kein Termin-Angebot). Lisa: Seed aus dem
+  Chef-Auftrag (`seed_von_auftrag`, deterministisch), `/api/auftrag` hängt
+  Nachschub als neues Anliegen an; Wirkung über `stand_block()` im Prompt.
+- **`kern/intent.py` (Erkennung, 3 Stufen gegen die Latenz):**
+  1. Fast-Path 0 ms: Formular-Antworten (Ziffern, Buchstabieren, kurzes
+     Ja/Nein, Slotwahl, Kurzantwort auf offene Frage) → `zug=verfeinern`,
+     KEIN LLM — das sind die latenzkritischen Diktat-Züge. Wechsel-Wörter
+     (sprechen, absagen, Rechnung, Rückruf …) erzwingen immer die Deutung.
+  2. LLM: dasselbe vLLM (`kern/llm.chat`), Temperatur 0, kleines JSON,
+     eigener Timeout per Thread-Future (`INTENT_TIMEOUT`, Default 4 s) —
+     die 20-s-Leine des Clients gilt hier nicht.
+  3. Fallback-Heuristik (LLM tot/unparsebar): kompakte Regexes; buchen NUR
+     bei ausdrücklichem Terminwunsch, NIE als Default. Im laufenden
+     Slot-Angebot meint „absagen/passt nicht" das ANGEBOT (verfeinern).
+- **Einbau:** `bianca/agent.user_turn` Schritt 0 (sync → erkennen →
+  anwenden, vor `flow.zug`); `lisa/agent.user_turn` nach der Identität, vor
+  dem Modell. Anliegen-Stand steht als ANLIEGEN-Block im Systemprompt
+  (über den `plan`-Parameter, kein Prompt-Signatur-Umbau).
+- **Gate:** `gehirn.einsammeln` öffnet den Modus per Regex NUR noch, wenn
+  die Sitzung kein Hirn trägt (Alt-Sitzungen mitten im Deploy) oder der
+  Notaus greift. Biancas Session-Auftrag ist nicht mehr „Terminwunsch
+  aufnehmen und buchen", sondern „Anliegen erkennen und passend lösen".
+- **Notaus:** `INTENT_SCHICHT=0` → Erkennung aus, Regex-Modus wieder aktiv,
+  Verhalten wie vor W-HIRN. Tests: `tests/test_hirn.py` (27, offline —
+  LLM gestummt).
+
 ## Fernsteuerung
 
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).
