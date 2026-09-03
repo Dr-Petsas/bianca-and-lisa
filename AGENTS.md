@@ -1369,8 +1369,23 @@ Routen und Ports sind unangetastet.
   Notaus greift. Biancas Session-Auftrag ist nicht mehr „Terminwunsch
   aufnehmen und buchen", sondern „Anliegen erkennen und passend lösen".
 - **Notaus:** `INTENT_SCHICHT=0` → Erkennung aus, Regex-Modus wieder aktiv,
-  Verhalten wie vor W-HIRN. Tests: `tests/test_hirn.py` (27, offline —
+  Verhalten wie vor W-HIRN. Tests: `tests/test_hirn.py` (33, offline —
   LLM gestummt).
+
+## Server-Deploy (pickadoc1) — die .env-Falle
+
+- **`.env` ist im Git GETRACKT.** Jedes `git archive` enthält sie — ein
+  `rsync` des Archivs auf `/home/cursor/telefonki/` ÜBERSCHREIBT die
+  Live-`.env` und löscht live-only Werte: `CLOUDFLARE_TELEFONKI_TOKEN`
+  (Tunnel `lisa-public` crash-loopt beim nächsten Recreate!) und Schalter
+  wie `INTENT_NACHZUG=0`. Genau das ist am 03.09.2026 ZWEIMAL passiert.
+- **Regel:** beim Deploy IMMER `rsync … --exclude=tenants/ --exclude=.env`.
+  Nach jedem Deploy prüfen:
+  `grep -c 'CLOUDFLARE_TELEFONKI_TOKEN\|INTENT_NACHZUG' .env` → muss 2 sein.
+- Token-Notfall: lokal `cloudflared tunnel token pickadoc-telefonki`
+  erzeugt ihn neu; per ssh-stdin an die Server-`.env` anhängen.
+- Sauberer wäre: `.env` aus dem Git nehmen (`git rm --cached`) — Entscheidung
+  des Chefs, weil GitHub-Historie und andere Checkouts dranhängen.
 
 ## Fernsteuerung
 
