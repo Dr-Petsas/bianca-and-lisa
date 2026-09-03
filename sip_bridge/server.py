@@ -48,6 +48,8 @@ from collections import deque
 
 import httpx
 
+from sip_bridge.stimme import filtern as stimme_filtern
+
 # BIANCA_BASE / LISA_BASE: Ziel-Dienst. sipbridge-lisa setzt LISA_BASE
 # (oder BIANCA_BASE=http://lisa:8095) — gleiche Variable, anderer Host.
 BIANCA_BASE = (
@@ -774,6 +776,7 @@ class Anruf:
     async def _zug(self, pcm8: bytes) -> bool:
         """Einen Anrufer-Zug an Bianca geben. False = auflegen."""
         pcm16, _ = audioop.ratecv(pcm8, 2, 1, RATE_IN, RATE_STT, None)
+        pcm16 = await asyncio.to_thread(stimme_filtern, pcm16, RATE_STT)
         wav = _wav(pcm16, RATE_STT)
         if os.environ.get("BRIDGE_DUMP") == "1":
             pfad = f"/tmp/zug-{int(time.time())}.wav"

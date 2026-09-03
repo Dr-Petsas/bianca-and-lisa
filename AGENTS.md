@@ -675,6 +675,17 @@ Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
  ProxyJump erreichbar: `ssh -J pickadoc1 asterisk-strato` (Port 22 lässt
  nur pickadoc1 durch). Vermutlich erklärt derselbe Verwechsler auch den
  früheren „~1 % Clipping"-Nebenbefund und STT-Verhörer wie „Zermin".
+- **Sprachband-EQ vor dem STT (W-STIMME-EQ 04.09.2026 — nicht rückbauen):**
+  Chef nach dem Flughafen-Testanruf (Session 55f9b05a, 04.09. 00:44):
+  „noise filter, kompressoren mit verstärkung der stimmfrequenzen und
+  unterdrückung des rests mit eq". `sip_bridge.stimme_filtern` läuft auf
+  dem 16-kHz-PCM **nach** dem Resample, **bevor** das WAV an
+  `/api/listen` geht (`sip_bridge/stimme.py`) — STT/TTS/Ports unangetastet.
+  Kette (ffmpeg, schon im Image fürs Jingle): Hochpass 160 Hz + Tiefpass
+  4,5 kHz, `afftdn` (Rauschen), EQ senkt 250 Hz / hebt 900+1800 Hz
+  (Formanten) / senkt 3,5 kHz, Kompressor (Makeup +8 dB), Gate −40 dB. Aus:
+  `BRIDGE_STIMME=0`. Docks hören den Rohweg weiter (nur Telefon).
+  Tests: `tests/test_sip_stimme.py` (offline, skip ohne ffmpeg).
 - **Probe:** `tests/sip_bridge_probe.py` simuliert Asterisk (UUID + PCM-
   Rahmen, echtes deutsches TTS-Audio als Anrufer) gegen eine laufende
   Brücke; Kettentest vom Asterisk: `channel originate

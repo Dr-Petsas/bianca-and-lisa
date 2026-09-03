@@ -127,6 +127,8 @@ services:
       BRIDGE_GAIN: ${BRIDGE_GAIN:-0.5}
       # Halbduplex-Echo-Sperre (W-SIP-ECHO-RAUS): 0 = aus (Default), 1 = an
       BRIDGE_ECHO: ${BRIDGE_ECHO:-0}
+      # Sprachband-EQ+Kompressor vor dem STT (W-STIMME-EQ). 0 = aus.
+      BRIDGE_STIMME: ${BRIDGE_STIMME:-1}
       # Ruhe zwischen Abheben und Begruessung in Sekunden (W-START-RUHE),
       # /api/start-Zeit wird angerechnet; 0 = aus
       BRIDGE_START_RUHE_S: ${BRIDGE_START_RUHE_S:-1.0}
@@ -158,6 +160,7 @@ services:
       BRIDGE_DUMP: ${BRIDGE_DUMP:-0}
       BRIDGE_GAIN: ${BRIDGE_GAIN:-0.5}
       BRIDGE_ECHO: ${BRIDGE_ECHO:-0}
+      BRIDGE_STIMME: ${BRIDGE_STIMME:-1}
       BRIDGE_START_RUHE_S: ${BRIDGE_START_RUHE_S:-1.0}
     depends_on:
       - lisa
