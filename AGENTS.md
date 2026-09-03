@@ -1372,6 +1372,30 @@ Routen und Ports sind unangetastet.
   Verhalten wie vor W-HIRN. Tests: `tests/test_hirn.py` (33, offline —
   LLM gestummt).
 
+## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....
+boah... das war nicht nett... ich gebe mir echt mühe oder 4-5 Alternativen
+in dieser Art. eine lustige nehmen wir auf wenn jemand sagt ach fick dich
+oder ähnliches.. sagst du..... ähhhm selber!! sonst noch was?"
+
+- **`bianca/anstand.py`:** deterministisch (0 ms, kein LLM). Drei Muster:
+  `_SELBER_RE` (fick dich/verpiss dich/Arschloch …) → „Ähm — selber! Sonst
+  noch was?"; `_SCHIMPF_RE` (blöde Kuh, halt die Klappe, Scheiß-KI …) →
+  eine von 5 charmanten Antworten, rotierend pro Sitzung
+  (`anstandZaehler`); `_FLUCH_RE` (purer Fluch) nur bei ≤ 6 Wörtern —
+  Frust MIT Inhalt („Scheiße, ich hab den Termin verpennt") gehört dem
+  Gespräch. `\bspasti?\b` trifft NICHT „Spastik" (Medizin-Kontext).
+- **Einbau:** `agent.user_turn` fragt anstand NUR, wenn `flow.zug` None
+  lieferte — ein Anliegen mit Schimpfwort im selben Satz („Verbinden Sie
+  mich, Sie blöde Kuh!") gewinnt immer den Fach-Weg, der Konter entfällt.
+  Nie zurückschimpfen, nie auflegen; der Frage-Anker holt die offene
+  Pflichtfrage im nächsten Zug zurück.
+- **Prompt-Leitplanke** (BESCHIMPFUNGEN in `bianca/prompt.py`): fängt
+  Umschreibungen, die das Regex nicht kennt, im selben Ton ab.
+- Tests: `tests/test_anstand.py` (7, offline — Agent-Test beweist, dass
+  das LLM beim Konter nie läuft).
+
 ## Server-Deploy (pickadoc1) — die .env-Falle
 
 - **`.env` ist im Git GETRACKT.** Jedes `git archive` enthält sie — ein

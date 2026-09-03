@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from bianca import flow, gehirn, session, telefon
+from bianca import anstand, flow, gehirn, session, telefon
 from bianca.greeting import begruessung
 from bianca.prompt import TOOLS, system_prompt
 from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, tenants, wiederholung, zuege
@@ -553,6 +553,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
+    if fl is None:
+        # W-ANSTAND (Chef 03.09.2026): Beschimpfung/Fluchen ohne Fach-Anliegen
+        # bekommt einen kurzen, charmanten Konter statt des LLM — ein Satz
+        # mit echtem Anliegen hat den Fluss oben schon gewonnen.
+        fl = anstand.zug(sit, text_in)
     # W-VERBINDEN-ECHT (31.08.2026): eine echte Weiterleitung spricht ihre
     # Ansage als Filler und traegt text="" — sie ZAEHLT trotzdem als
     # Maschinen-Zug, sonst wuerfe das LLM das transfer-Reply weg (live
