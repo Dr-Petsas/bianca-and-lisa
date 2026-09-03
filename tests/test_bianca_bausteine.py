@@ -227,12 +227,20 @@ def test_naechste_woche_ab_mitternacht():
 # --- Fluss ohne Netz ------------------------------------------------------
 
 def test_fluss_fragenkette_bis_angebot():
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
     echt_anstossen = flow.hintergrund.anstossen
     echt_find = flow.kal.find_slots
     flow.hintergrund.anstossen = lambda sit: None
+    # Slots dynamisch in der Zukunft ("nächste Woche vormittags" passt):
+    def _slot(tage: int, h: int, m: int) -> str:
+        d = datetime.now(ZoneInfo("Europe/Berlin")).replace(
+            hour=h, minute=m, second=0, microsecond=0) + timedelta(days=tage)
+        return d.isoformat(timespec="seconds")
     flow.kal.find_slots = lambda *a, **k: {
         "ok": True,
-        "slots": ["2026-08-31T09:15", "2026-09-01T14:30", "2026-09-02T11:00"],
+        "slots": [_slot(7, 9, 15), _slot(8, 10, 30), _slot(9, 11, 0)],
         "doctorName": "Dr. Nikolaou",
     }
     try:
@@ -1843,6 +1851,7 @@ def test_wiederhol_wache_sagt_gleiches_angebot_ehrlich_an():
     """Führt ein neuer Wunsch zum SELBEN Angebot, sagt Bianca das ehrlich
     ('es bleibt bei …') statt die Liste wortgleich zu wiederholen."""
     echt_anstossen = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
     flow.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
@@ -1851,15 +1860,23 @@ def test_wiederhol_wache_sagt_gleiches_angebot_ehrlich_an():
         s.update({"modus": "buchen", "warSchonMal": True,
                   "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
                   "vorname": "Michael", "nachname": "Petsas", "buchstabiert": True,
-                  "grund": "Kontrolluntersuchung", "wunsch": {},
+                  "grund": "Kontrolluntersuchung", "motivId": "vm-kontrolle",
+                  "motivName": "Kontrolluntersuchung", "wunsch": {},
                   "telefonAkte": True, "phase": "angebot", "frage": "slotwahl"})
         sit["slotVorrat"] = [slot]
+        # W-MOTIV-FENSTER: Vorrat gilt nur mit passendem Rahmen-Marker; der
+        # neue Wunsch aendert das Startdatum, also laedt der Zug nach — der
+        # Mock liefert denselben Slot, die Wiederhol-Wache muss greifen.
+        from bianca import hintergrund as hg
+        sit["vorratFuer"] = hg.vorrat_schluessel(sit)
+        flow.kal.find_slots = lambda *a, **k: {"ok": True, "slots": [slot]}
         sit["offered"] = [{"iso": slot, "spoken": "in vier Wochen um neun Uhr dreißig"}]
         z = flow.zug(sit, "Ginge es auch nächste Woche?")
         assert z and "es bleibt bei" in z["text"], z
         assert [o["iso"] for o in sit["offered"]] == [slot]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
+        flow.kal.find_slots = echt_find
 
 
 # --- Angebots-Streuung (Chef 27.08.: nie benachbarte Leer-Slots) ------------
@@ -1956,10 +1973,14 @@ def test_notfall_im_fluss_bietet_dicht_an():
     s.update({"modus": "buchen", "warSchonMal": True,
               "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"},
               "vorname": "Michael", "nachname": "Petsas", "buchstabiert": True,
-              "grund": "akute Beschwerden/Notfall", "wunsch": {},
+              "grund": "akute Beschwerden/Notfall", "motivId": "vm-akut",
+              "motivName": "Schmerzbehandlung", "wunsch": {},
               "telefonAkte": True})
     dicht = [_iso_in(30, 12, 15), _iso_in(30, 12, 45), _iso_in(30, 13, 15)]
     sit["slotVorrat"] = list(dicht)
+    # W-MOTIV-FENSTER: der Vorrat zaehlt nur mit passendem Rahmen-Marker.
+    from bianca import hintergrund as hg
+    sit["vorratFuer"] = hg.vorrat_schluessel(sit)
     flow._angebot(sit)
     assert [o["iso"] for o in sit.get("offered") or []] == dicht
 

@@ -92,14 +92,17 @@ def test_merke_tool_buendelt_dispatch_fuer_zug():
 def test_angebot_zeigt_hintergrund_vorrat_als_tool():
     """Hintergrund hat getFreeTimeSlots schon geladen — Angebots-Zug muss die
     Tool-Karte trotzdem tragen (W-VORRAT-UI, live 02.09. Tzannis)."""
-    from bianca import flow, gehirn
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from bianca import flow, gehirn, hintergrund
     from kern.tenants import laden
 
+    tag = (datetime.now(ZoneInfo("Europe/Berlin")) + timedelta(days=1)).date().isoformat()
     sit = {
         "tenant": laden("meddent"),
         "slotVorrat": [
-            "2026-09-02T10:15:00+02:00",
-            "2026-09-02T12:45:00+02:00",
+            f"{tag}T10:15:00+02:00",
+            f"{tag}T12:45:00+02:00",
         ],
         "vorratDispatch": {
             "route": "getFreeTimeSlots",
@@ -120,10 +123,13 @@ def test_angebot_zeigt_hintergrund_vorrat_als_tool():
         "warSchonMal": True,
         "arzt": {"typ": "genannt", "calendarId": "cal1", "calendarName": "Dr. Petsas"},
         "motivId": "vm1", "motivName": "Kontrolle",
-        "grund": "Kontrolle", "wunsch": {"date": "2026-09-02"},
+        "grund": "Kontrolle", "wunsch": {"date": tag},
         "vorname": "Kiriakos", "nachname": "Tzannis", "bekannt": True,
         "buchstabiert": True, "telefonOk": True, "telefon": "015253904756",
     })
+    # W-MOTIV-FENSTER: der Vorrat zaehlt nur mit passendem Rahmen-Marker —
+    # sonst wuerde _angebot nachladen (Schutz vor fremden Motiv-Fenstern).
+    sit["vorratFuer"] = hintergrund.vorrat_schluessel(sit)
     # Kein CF-Nachladen — Vorrat deckt den Wunsch ab.
     ang = flow._angebot(sit)
     assert ang and "frei" in (ang.get("text") or "").lower()

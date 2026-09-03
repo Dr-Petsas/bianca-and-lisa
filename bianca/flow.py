@@ -386,6 +386,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             if frisch:
                 sit["slotVorrat"] = frisch
                 ctx["slotVorrat"] = list(frisch)
+                sit["vorratFuer"] = hintergrund.vorrat_schluessel(sit)
                 sit["vorratDispatch"] = (
                     found.get("dispatch")
                     if isinstance(found.get("dispatch"), dict) else None
@@ -396,7 +397,14 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         sit["vorratGemerkt"] = True
         return found
 
-    nachladen = not vorrat
+    # W-MOTIV-FENSTER (Chef 03.09.2026): ein vorgeladener Vorrat zaehlt NUR,
+    # wenn er fuer GENAU diesen Rahmen (Kalender + Besuchsgrund + Startdatum)
+    # geladen wurde — sonst kaemen Zeiten aus fremden Spezialsprechzeiten-
+    # Fenstern (z. B. Kontroll-Slots fuer eine Zahnreinigung). Bei Abweichung
+    # oder unklarem Rahmen laedt der Zug synchron mit dem richtigen Motiv.
+    schluessel = hintergrund.vorrat_schluessel(sit)
+    nachladen = (not vorrat or not schluessel
+                 or sit.get("vorratFuer") != schluessel)
     if wish and wish.get("date") and vorrat and not any(str(v).startswith(str(wish["date"])) for v in vorrat):
         nachladen = True
     if nachladen:

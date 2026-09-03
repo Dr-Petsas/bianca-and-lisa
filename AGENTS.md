@@ -1410,6 +1410,38 @@ bitte nicht vergessen [...] bei Besuchsgründen mit xy klein oder xy gross
   `.data/motiv_probe.py` gegen den echten Meddent-Katalog (133 Motive,
   102 mit Erklärtext).
 
+## Erst Besuchsgrund, dann Slots (W-MOTIV-FENSTER 03.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „wenn du VOR dem Besuchsgrund nach terminslots suchst,
+kannst du gar nicht die spezialsprechzeiten beruecksichtigen. du musst erst
+wissen welcher besuchsgrund gefordert ist [...] ohne kenntnis des grundes
+tappst du im dunkeln."
+
+Hintergrund: `getFreeTimeSlots` filtert die Fenster NACH `visitMotiveId`
+(Spezialsprechzeiten: PZR-Slots ≠ Kontroll-Slots, nicht jedes Motiv in
+jedem Raum). Vorher suchte der Hintergrund-Vorrat blind mit dem
+Kontroll-Default, sobald nur der Behandler feststand.
+
+- **`hintergrund.vorrat_schluessel`** (früher `_vorrat_schluessel`) liefert
+  `""` ohne gemapptes Motiv — der Vorrat wartet, bis `einsammeln` den Grund
+  auf ein Motiv gemappt hat (Fragenkette fragt den Grund VOR der
+  Wunschzeit, der Vorsprung bleibt also). Der Schlüssel trägt die
+  behandlerspezifisch AUFGELÖSTE Motiv-ID (`gehirn.motiv_fuer_kalender`,
+  rein lokal am Katalog) — Hintergrund-Lauf, Marker und Angebots-Check
+  sprechen dieselbe Sprache.
+- **`sit["vorratFuer"]`:** der Hintergrund-Lauf (und `flow._laden`) stempelt
+  nach ERFOLGREICHEM Laden, für welchen Rahmen der Vorrat gilt.
+  `flow._angebot` nutzt einen Vorrat NUR bei passendem Stempel — sonst
+  synchron nachladen mit dem richtigen Motiv. Schließt das Rennen „Anrufer
+  nennt den Grund, alter Blind-Vorrat liegt noch in der Sitzung".
+- Der Hintergrund-Lauf löst das Motiv ebenfalls per `motiv_fuer_kalender`
+  auf, statt roh `s["motivId"]` zu senden.
+- Verschieben war schon sauber: `_verschieb_angebot` sucht mit dem Motiv
+  des BESTANDstermins.
+- Tests: `tests/test_motiv_fenster.py` (6, offline). Beim Testen mit
+  handgesetztem `slotVorrat` IMMER `motivId` + `vorratFuer =
+  hintergrund.vorrat_schluessel(sit)` setzen, sonst lädt `_angebot` nach.
+
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....

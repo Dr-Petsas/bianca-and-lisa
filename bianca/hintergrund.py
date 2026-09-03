@@ -129,8 +129,18 @@ def kartei_anstossen(sit: dict) -> None:
     threading.Thread(target=arbeit, daemon=True).start()
 
 
-def _vorrat_schluessel(sit: dict) -> str:
+def vorrat_schluessel(sit: dict) -> str:
+    """Suchrahmen als Schluessel — "" heisst: NOCH NICHT suchen.
+
+    W-MOTIV-FENSTER (Chef 03.09.2026): "wenn du VOR dem Besuchsgrund nach
+    terminslots suchst, kannst du gar nicht die spezialsprechzeiten
+    beruecksichtigen. [...] ohne kenntnis des grundes tappst du im dunkeln."
+    Darum: OHNE gemapptes Motiv laeuft KEINE Slot-Suche mehr los — frueher
+    suchte der Vorrat blind mit dem Kontroll-Default und lieferte Zeiten
+    aus den falschen Fenstern."""
     s = gehirn.sammler(sit)
+    if not s["motivId"]:
+        return ""  # Besuchsgrund noch unklar — nicht ins Blaue suchen
     a = s.get("arzt") or {}
     if a.get("calendarId"):
         scope = a["calendarId"]
@@ -138,7 +148,16 @@ def _vorrat_schluessel(sit: dict) -> str:
         scope = "EGAL"
     else:
         return ""  # Kalender-Rahmen noch unklar — nicht ins Blaue suchen
-    return f"{scope}|{s['motivId'] or 'std'}|{gehirn.start_datum(s)}"
+    # Die AUFGELOESTE Motiv-ID (behandlerspezifisch, rein lokal am Katalog) —
+    # damit sprechen Hintergrund-Lauf, Rahmen-Marker (vorratFuer) und der
+    # Angebots-Check dieselbe Sprache, auch wenn der Sammler noch die rohe
+    # Konzept-ID traegt.
+    vm = gehirn.motiv_fuer_kalender(sit, a.get("calendarId") or "") or {}
+    mid = str(vm.get("id") or "").strip() or s["motivId"]
+    return f"{scope}|{mid}|{gehirn.start_datum(s)}"
+
+
+_vorrat_schluessel = vorrat_schluessel  # alter Name bleibt gueltig
 
 
 def vorrat_anstossen(sit: dict) -> None:
@@ -156,11 +175,16 @@ def vorrat_anstossen(sit: dict) -> None:
             tenant = sit["tenant"]
             a = s.get("arzt") or {}
             egal = not a.get("calendarId")
+            # Motiv BEHANDLERSPEZIFISCH aufloesen (W-MOTIV-FENSTER): das
+            # gemappte Motiv gilt evtl. nicht im Ziel-Kalender — dann sucht
+            # motiv_fuer_kalender das passende aus dessen Katalog.
+            vm = gehirn.motiv_fuer_kalender(sit, a.get("calendarId") or "") or {}
             ctx = {
                 "calendarId": a.get("calendarId") or "",
                 "calendarName": a.get("calendarName") or "",
-                "visitMotiveId": s["motivId"],
-                "visitMotiveName": s["motivName"] or "Kontrolluntersuchung",
+                "visitMotiveId": _s(vm.get("id")) or s["motivId"],
+                "visitMotiveName": (_s(vm.get("name")) or s["motivName"]
+                                    or "Kontrolluntersuchung"),
             }
             found = calendar.find_slots(
                 tenant, ctx,
@@ -173,6 +197,10 @@ def vorrat_anstossen(sit: dict) -> None:
             if found.get("ok") and sit.get("vorratKey") == mein_key:
                 isos = calendar._iso_liste(found.get("slots") or [])
                 sit["slotVorrat"] = isos
+                # Fuer WELCHEN Rahmen wurde geladen? flow._angebot nutzt den
+                # Vorrat NUR, wenn dieser Marker zum aktuellen Stand passt
+                # (W-MOTIV-FENSTER: nie Zeiten aus fremden Motiv-Fenstern).
+                sit["vorratFuer"] = mein_key
                 # Dispatch fuer den Angebots-Zug merken — _angebot zeigt die
                 # CF-Karte dann in der Unterhaltung (W-VORRAT-UI 02.09.2026),
                 # auch wenn kein zweiter getFreeTimeSlots noetig ist.
