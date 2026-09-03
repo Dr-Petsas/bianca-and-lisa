@@ -191,10 +191,31 @@ def test_wechselwort_geht_ans_llm(monkeypatch):
     assert d["handlung"] == "ERREICHEN"
 
 
-def test_fallback_erreichen(monkeypatch):
-    _llm_tot(monkeypatch)
+def test_schnellstrasse_erreichen_ohne_llm(monkeypatch):
+    _llm_verboten(monkeypatch)  # eindeutiger Erstsatz: 0 ms, kein LLM
     d = intent.erkennen(_sit(), "Kann ich bitte mit Doktor Petsas sprechen?")
-    assert d["handlung"] == "ERREICHEN" and d["quelle"] == "fallback"
+    assert d["handlung"] == "ERREICHEN" and d["quelle"] == "schnell"
+
+
+def test_schnellstrasse_terminwunsch_ohne_llm(monkeypatch):
+    _llm_verboten(monkeypatch)
+    d = intent.erkennen(_sit(), "Guten Tag, ich haette gern einen Termin zur Kontrolle.")
+    assert d["handlung"] == "ANLEGEN" and d["quelle"] == "schnell"
+
+
+def test_ernte_im_anliegen_ohne_llm(monkeypatch):
+    _llm_verboten(monkeypatch)  # kein Wechsel-Signal -> kein LLM-Aufschlag
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    d = intent.erkennen(sit, "Naechste Woche vormittags waere super, am liebsten Dienstag.")
+    assert d["zug"] == "halten" and d["quelle"] == "fastpath-still"
+
+
+def test_negation_geht_ans_llm(monkeypatch):
+    _llm_tot(monkeypatch)  # Verneinung: nie Schnellstrasse, LLM (hier: Fallback)
+    d = intent.erkennen(_sit(), "Ich will den Termin nicht absagen, nur verschieben.")
+    assert d["handlung"] == "AENDERN" and d["ersatz"] is True
+    assert d["quelle"] == "fallback"
 
 
 def test_fallback_absage_ohne_ersatz(monkeypatch):
