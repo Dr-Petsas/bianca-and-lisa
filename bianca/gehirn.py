@@ -82,7 +82,7 @@ _BLEACH_UNSICHER_RE = re.compile(
 
 _JA_RE = re.compile(
     r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|yeah|yea|"
-    r"jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|"
+    r"correct|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|"
     r"sicher|natürlich|natuerlich)\b",
     re.I,
 )
@@ -129,7 +129,7 @@ _ZWISCHENFRAGE_KERN_RE = re.compile(
 # "hier"/"naja" gehören dazu: "Äh, hier nein" fiel live (27.08. 18:10) durch
 # und die Schonmal-Frage kam doppelt.
 _ANLAUF_RE = re.compile(
-    r"^\s*(?:(?:äh+m*|aeh+m*|hm+|mh+m*|also|na|naja|nun|tja|ach|och|oh|boah|puh|hier|ähm|öhm)\b[\s,.!—-]*)+",
+    r"^\s*(?:(?:äh+m*|aeh+m*|uh+m*|uhm+|hm+|mh+m*|also|na|naja|nun|tja|ach|och|oh|boah|puh|hier|ähm|öhm)\b[\s,.!—-]*)+",
     re.I,
 )
 
@@ -441,7 +441,8 @@ def _fuer_wen_name_frage(s: dict) -> str:
 _NAME_LEADIN_RE = re.compile(
     # Nach dem Leadin folgt bei einem NAMEN nie eine Präposition — "ich bin
     # bei Ihnen in Behandlung" erntete live (29.08.2026) "Bei Behandlung".
-    r"(?:mein\s+name\s+ist|ich\s+heiße|ich\s+heisse|hier\s+(?:ist|spricht)|ich\s+bin)\s+"
+    r"(?:mein\s+name\s+ist|ich\s+heiße|ich\s+heisse|hier\s+(?:ist|spricht)|ich\s+bin|"
+    r"(?:den\s+|der\s+)?name[ns]?\s+(?:auf|ist|wird|soll(?:te)?))\s+"
     r"(?!(?:bei|in|im|an|am|auf|aus|mit|seit|unter|vor|zu|zum|zur|nach|ohne|"
     r"gegen|für|fuer|über|ueber|durch|um)\b)"
     r"([A-Za-zÄÖÜäöüß' -]{2,60})",
@@ -449,6 +450,7 @@ _NAME_LEADIN_RE = re.compile(
 )
 _NAME_STOP = {
     "und", "der", "die", "das", "ein", "eine", "herr", "frau", "doktor", "dr",
+    "uh", "ähm", "ahm", "öhm", "ohm",
     "mein", "name", "ist", "hier", "spricht", "ich", "bin", "heiße", "heisse",
     "guten", "tag", "morgen", "hallo", "von", "aus", "am", "apparat",
     # "Auch Paul" (Antwort auf die Vornamens-Frage) darf keinen Vornamen
@@ -875,6 +877,15 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     text = _s(_KEIN_NAME_RE.sub(" ", text))
     if not text:
         return False
+    # W-SCHLEIFE (04.09.2026): "Uh Dr. Petter" auf die Behandler-Frage
+    # darf NICHT als Patienten-Nachname "Udrpetter" landen — das war die
+    # Live-Schleife (nochmal Behandler, dann falscher Name, dann 4×
+    # "Soll ich eintragen?"). Explizites "ich heiße …" bleibt erlaubt.
+    if not erzwungen and s.get("frage") == "arzt" and not _NAME_LEADIN_RE.search(text):
+        return False
+    if (not erzwungen and re.search(r"\b(?:dr\.?|doktor)\b", text, re.I)
+            and not _NAME_LEADIN_RE.search(text)):
+        return False
 
     # Explizite Zuweisung gewinnt IMMER und darf Falsches überschreiben:
     # "Nee, der Vorname ist Paul und der Nachname ist Panzer" (live 27.08.2026
@@ -1152,6 +1163,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     buch = buchstaben.deute(t)
     if "name" in neu:
         pass  # Korrektur hat Vorrang — nichts erneut ernten.
+    elif (s["frage"] == "arzt" or (
+            s["frage"] != "buchstabieren"
+            and re.search(r"\b(?:dr\.?|doktor)\b", t, re.I)
+            and not _NAME_LEADIN_RE.search(t))):
+        # W-SCHLEIFE: "Uh Dr. Petter" liest buchstaben.deute als
+        # "Udrpetter" — das darf kein Patienten-Nachname werden.
+        pass
     elif buch and (s["frage"] in {"buchstabieren", "name", "nachname"} or not s["nachname"]):
         name = buch["name"]
         # Deutung gegen den schon GESAGTEN Nachnamen halten: hat STT nur
@@ -1449,6 +1467,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Darf ich den Termin so eintragen?",
         "Soll ich es so festhalten?",
     ),
+    "aenderung": (
+        "Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?",
+        "Was soll ich korrigieren — Zeitpunkt, Name oder Nummer?",
+    ),
     "versicherung": (
         "Sind Sie privat oder gesetzlich versichert?",
         "Wie sind Sie versichert — privat oder gesetzlich?",
@@ -1622,6 +1644,29 @@ def patient_von_kontakt_loesen(sit: dict) -> None:
     sit["gefundenKey"] = ""
 
 
+def name_fuer_aenderung_leeren(sit: dict) -> None:
+    """Patientennamen leeren, damit die Bestaetigung ihn neu erfragt (W-SCHLEIFE).
+
+    Live 03.09.2026 ~22:44: nach „Nein" auf die Readback-Frage blieb
+    ``frage=bestaetigung`` stehen, der (falsche) Name „Udrpetter" galt
+    weiter als gefuellt — „Der Name." landete wieder bei „Soll ich das
+    so eintragen?". Slot, Arzt, Grund, Wunsch und die Nummer des
+    Anrufers bleiben; nur die Patienten-Identitaet wird neu eingesammelt.
+    ``kontaktName`` wird NICHT mit dem verworfenen Namen ueberschrieben
+    (der Anrufer-Name steht dort schon vom Fuer-Wen-Pfad)."""
+    s = sammler(sit)
+    s["vorname"] = ""
+    s["nachname"] = ""
+    s["buchstabiert"] = False
+    s["bekannt"] = False
+    s["patientId"] = ""
+    s["gesucht"] = ""
+    sit["patient"] = None
+    sit.pop("upcoming", None)
+    sit.pop("past", None)
+    sit["gefundenKey"] = ""
+
+
 def feste_saetze(tenant: dict | None = None) -> list[str]:
     """Alle festen Maschinen-Sätze für den TTS-Platten-Cache (28.08.2026).
 
@@ -1742,7 +1787,8 @@ def telefon_alt_frage(s: dict) -> str:
 # Nummer geschnitten ("letzte Ziffern verschluckt"). Der phone_agent
 # wartet im Diktat 1800 ms (SMART_ENDPOINT_DICTATION_HOLD); wir nehmen
 # 1500 ms — traege genug fuer Gruppen-Pausen, ohne das Gespraech zu laehmen.
-_STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "versicherung",
+_STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
+                "versicherung",
                 "versicherung_check", "pzr", "bleaching", "bleaching_check",
                 "telefon_alt", "telefon_check",
                 "rueckblick", "anrufer_check", "frisch_absage_ok", "absage_ok"}

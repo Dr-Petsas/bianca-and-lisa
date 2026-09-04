@@ -68,6 +68,17 @@ def _minuten_von(wort: str) -> int | None:
         return _M_ZEHNER[m.group(2)] + _H_WORT[m.group(1)]
     return None
 _ABLEHNUNG_RE = re.compile(r"passt nicht|passt mir nicht|keiner davon|nichts davon|geht nicht|geht bei mir nicht|anderer termin|was anderes", re.I)
+# W-SCHLEIFE (04.09.2026): nach Nein auf die Readback-Frage sagt der
+# Anrufer, WAS falsch ist — nicht nochmal "Soll ich eintragen?".
+_AENDERUNG_NAME_RE = re.compile(
+    r"\b(?:vor-?\s*und\s*nach)?namen?\b|nachname|vorname|heißt|heisst", re.I)
+_AENDERUNG_NUMMER_RE = re.compile(r"nummer|handy|telefon", re.I)
+_AENDERUNG_ZEIT_RE = re.compile(
+    r"zeitpunkt|uhrzeit|\bzeit\b|datum|\btag\b|vormittag|nachmittag|"
+    r"\bslot\b|\buhr\b|montag|dienstag|mittwoch|donnerstag|freitag|"
+    r"samstag|sonntag|woche|früher|spaeter|später|anderswann",
+    re.I,
+)
 # Dringlichkeit (kanonischer Grund aus gehirn._GRUND_MAP): Notfaelle bekommen
 # die naechstmoeglichen Plaetze DICHT angeboten — Streuung gilt dort nicht.
 _DRINGEND_RE = re.compile(r"akut|notfall|schmerz", re.I)
@@ -349,6 +360,11 @@ def _quittung(s: dict, neu: set[str]) -> str:
                     "Doktor schaut sich das beim Termin in Ruhe an und "
                     "berät Sie. ")
         return "Alles klar — dann nur die Zahnreinigung. "
+    if "arzt" in neu and (s.get("arzt") or {}).get("typ") == "unbekannt":
+        # W-SCHLEIFE: "Keine Ahnung, wie der Zahnarzt heisst" darf nicht
+        # nur eine Plauder-Quittung sein — die nächste Pflichtfrage
+        # (Name) kommt im selben Zug hinterher.
+        return "Kein Problem, das finden wir schon. "
     if "grund" in neu:
         return "Alles klar. "
     if "wunsch" in neu:
@@ -971,6 +987,71 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     )}
 
 
+def _aenderung_feld(t: str) -> str:
+    """Was will der Anrufer an der Readback-Zusammenfassung ändern?"""
+    if _AENDERUNG_NAME_RE.search(t):
+        return "name"
+    if _AENDERUNG_NUMMER_RE.search(t):
+        return "nummer"
+    if _AENDERUNG_ZEIT_RE.search(t):
+        return "zeit"
+    return ""
+
+
+def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
+    """Nach 'Nein' auf die Bestätigung: nur das gewählte Feld neu einsammeln.
+
+    Slot/Angebot bleiben stehen, solange nicht die Zeit geändert wird —
+    sonst fragt Bianca den ganzen Termin nochmal ab (Live-Schleife
+    03.09.2026: viermal 'Soll ich das so eintragen?')."""
+    s = gehirn.sammler(sit)
+    feld = _aenderung_feld(t)
+    if feld == "name":
+        gehirn.name_fuer_aenderung_leeren(sit)
+        s["frage"] = "name"
+        s["phase"] = ""
+        neu = gehirn.einsammeln(sit, t)
+        sit["ernteZuletzt"] = sorted(neu)
+        # "Ändere den Namen auf Levi" — ein einzelnes Rest-Wort ist der
+        # Vorname (Live: Levi), nicht der Nachname.
+        if s["nachname"] and not s["vorname"] and len(_s(s["nachname"]).split()) == 1:
+            s["vorname"] = s["nachname"]
+            s["nachname"] = ""
+        hintergrund.anstossen(sit)
+        fid, frage = gehirn.naechste_frage(sit)
+        s["frage"] = fid
+        if fid:
+            return {"text": (_quittung(s, neu) + frage).strip()}
+        if s["slotIso"]:
+            return _readback(sit)
+        ang = _angebot(sit, melde)
+        if ang and _s(ang.get("text")):
+            q = _quittung(s, neu)
+            if q:
+                ang["text"] = q + ang["text"]
+        return ang
+    if feld == "nummer":
+        s["telefon"] = ""
+        s["telefonOk"] = False
+        s["telefonOffen"] = ""
+        s["telefonTeil"] = ""
+        s["telefonAkte"] = False
+        s["phase"] = ""
+        s["frage"] = "telefon"
+        return {"text": "Welche Handynummer darf ich eintragen?"}
+    if feld == "zeit":
+        s["slotIso"] = ""
+        s["wunsch"] = None
+        sit["offered"] = []
+        sit.pop("angebotKalender", None)
+        sit.pop("buchIntent", None)
+        s["phase"] = ""
+        s["frage"] = "wunsch"
+        return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
+    s["frage"] = "aenderung"
+    return {"text": "Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
+
+
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     """Ein Anrufer-Satz durch den Buchungsfluss. None => LLM übernimmt."""
     s = gehirn.sammler(sit)
@@ -1054,9 +1135,27 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 if fid2:
                     return {"text": f"Ah, verstehe! {frage2}"}
                 return _readback(sit)
+            # W-SCHLEIFE: Slot UND Angebot stehen lassen — der Anrufer
+            # will oft nur den Namen korrigieren (Live: "Der Name." /
+            # "Ändere den Namen auf Levi" landete sonst wieder in der
+            # Bestätigung, weil naechste_frage den alten Namen sah).
             s["phase"] = ""
-            s["slotIso"] = ""
+            s["frage"] = "aenderung"
+            if _aenderung_feld(t):
+                return _aenderung_zug(sit, t, melde)
             return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
+        if _aenderung_feld(t):
+            sit.pop("bestaetigenUnklar", None)
+            sit.pop("buchIntent", None)
+            s["phase"] = ""
+            s["frage"] = "aenderung"
+            return _aenderung_zug(sit, t, melde)
+
+    if s["frage"] == "aenderung" or (
+        s["frage"] == "bestaetigung" and s["phase"] != "bestaetigen"
+        and _aenderung_feld(t) and not gehirn.ist_ja(t)
+    ):
+        return _aenderung_zug(sit, t, melde)
 
     if s["phase"] in {"angebot", "bestaetigen"} and sit.get("offered"):
         iso = _slot_wahl(t, sit["offered"])

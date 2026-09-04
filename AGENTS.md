@@ -1570,6 +1570,29 @@ DREIMAL „für meinen Sohn" — Bianca buchte stur auf den Vater. Drei Löcher:
   sieht, WER angerufen hat.
 - Tests: `tests/test_fuer_wen.py` (offline).
 
+## Keine Doppelschleifen nach der Bestätigung (W-SCHLEIFE 04.09.2026 — nicht rückbauen)
+
+Live-Anruf 03.09. ~22:44 UTC (Kiriakos Tzannis, Flughafen): drei
+Inhalts-Schleifen hintereinander — „schon mal bei uns?", Behandler, dann
+viermal „Soll ich das so eintragen?" trotz „Nein" / „Der Name." /
+„Ändere den Namen auf Levi".
+
+- **Anlauf „Uh"** (`gehirn._ANLAUF_RE`): „Uh ja." ist Ja, „Uh Dr. Petter"
+  verliert das Füllwort. Englisches „Correct" zählt als Ja (`_JA_RE`).
+- **Kein Namensdiebstahl vom Behandler:** auf die Arzt-Frage und bei
+  „Dr./Doktor …" ohne „ich heiße" wird kein Patientenname geerntet
+  (`_name_aufnehmen`). „Uh Dr. Petter" darf nie als „Udrpetter" landen.
+- **Änderungs-Zweig** (`flow._aenderung_zug`): Nein auf die Readback-
+  Frage lässt Slot und Angebot stehen und setzt `frage=aenderung`.
+  „Der Name." / „Ändere den Namen auf Levi" leert nur die Patienten-
+  Identität (`name_fuer_aenderung_leeren`) und fragt „Wie heißt Ihr
+  Sohn?" — nie wieder die Bestätigung, solange der Name fehlt.
+  Nummer → Telefonfrage, Zeitpunkt → Wunschzeit (dann Slot weg).
+- **Unbekannter Behandler:** „Keine Ahnung, wie der Zahnarzt heißt"
+  quittiert „Kein Problem, das finden wir schon." und stellt im
+  selben Zug die nächste Pflichtfrage (Name), statt nur zu plaudern.
+- Tests: `tests/test_schleife.py` (offline).
+
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....
