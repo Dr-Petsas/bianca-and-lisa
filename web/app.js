@@ -1,5 +1,7 @@
 const $ = (id) => document.getElementById(id);
 let patient = null;
+let vorbereitung = null;
+let trotzdemAnrufen = false;
 let sessionId = "";
 let callOn = false;
 let micStream = null;
@@ -17,11 +19,12 @@ let hoerNr = 0;
 // Stille-Wächter (Chef 27.08.2026): ~4 s Funkstille => Lisa stupst selbst an
 // — mit Stand (Auftrag, offene Frage) statt stumm zu warten. Max. 2 Stupse
 // in Folge; echtes Gehörtes setzt den Zähler zurück.
-const STILLE_MS = 4000;
+const STILLE_MS = 4000; // Anrufer-Zug: so lange ohne Sprache → Stups
 let stilleStupse = 0;
 // W-TEMPO (29.08.2026): Ruhe-Schwelle fürs Zugende — sagt der Server nach
 // einem Zug etwas anderes an (stilleMs), gilt das; sonst der Default.
 let stilleSoll = 500;
+let stilleWarte = STILLE_MS; // ohne Wort: so lange bis Stups (Nummer-Suche länger)
 // Barge-in mit Fortsetzung (W-BARGE 29.08.2026): beim Reinsprechen merkt sich
 // das Dock, WELCHES Audio bei WIE VIEL ms gestoppt wurde, spielt sofort eine
 // vorgewärmte Quittung ("Hm."/"Okay.") und meldet beides mit dem nächsten Zug
@@ -30,6 +33,12 @@ let stilleSoll = 500;
 let bargeInfo = null;
 let quittungen = [];
 let quittungNr = 0;
+
+function stilleVomServer(d) {
+  if (!d) return;
+  if (d.stilleMs) stilleSoll = d.stilleMs;
+  if (d.stilleWarteMs) stilleWarte = d.stilleWarteMs;
+}
 
 function bargeMerken(url, ms) {
   bargeInfo = { url, ms: Math.max(0, Math.round(ms || 0)) };
@@ -45,7 +54,7 @@ function bargeMerken(url, ms) {
 // lokale, beim Boot als BLOB geladene Warte-Ansagen. Sie spielen über ein
 // EIGENES Audio-Objekt (die playUrl-Kette bleibt unberührt) und verstummen,
 // sobald die echte Antwort loslegt. Blobs spielen auch bei hängendem Server.
-const WACHT_MS = 1400;
+const WACHT_MS = 1400; // KI-Zug: so lange ohne Ton → lokale Notfall-Ansage
 const WACHT_MAX = 3;
 let notfall = [];
 let wachtTimer = null;
@@ -101,87 +110,12 @@ function bubble(role, text) {
   $("live").scrollTop = $("live").scrollHeight;
 }
 
-function jsonText(v) {
-  try { return JSON.stringify(v, null, 2); } catch { return String(v ?? ""); }
-}
-
-function zeigeTools(tools) {
-  if (!tools || !tools.length) return;
-  const live = $("live");
-  for (const t of tools) {
-    const d = t.dispatch || {};
-    const name = d.route || t.cf || t.name || "tool";
-    const ok = t.ok !== false && (d.httpStatus == null || d.httpStatus === 200);
-    const ms = d.ms != null ? d.ms : t.ms;
-    const card = document.createElement("details");
-    card.className = "tool-card";
-    const sum = document.createElement("summary");
-    const n = document.createElement("span");
-    n.className = "tool-name";
-    n.textContent = name;
-    sum.appendChild(n);
-    const marke = document.createElement("span");
-    marke.className = `marke ${ok ? "gruen" : "gelb"}`;
-    marke.textContent = ok ? "Succeeded" : "Failed";
-    sum.appendChild(marke);
-    if (ms != null) {
-      const c = document.createElement("span");
-      c.className = "chip";
-      c.textContent = ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
-      sum.appendChild(c);
-    }
-    card.appendChild(sum);
-    const body = document.createElement("div");
-    body.className = "tool-body";
-    if (d.url) {
-      const abs = document.createElement("div");
-      abs.className = "tool-abs";
-      abs.innerHTML = "<b>Requested URL</b>";
-      const url = document.createElement("div");
-      url.className = "tool-url";
-      url.textContent = `${d.method || "POST"} ${d.url}`;
-      abs.appendChild(url);
-      body.appendChild(abs);
-    }
-    const req = d.request != null ? d.request : t.args;
-    if (req != null) {
-      const abs = document.createElement("div");
-      abs.className = "tool-abs";
-      const lab = document.createElement("b");
-      lab.textContent = d.request != null ? "Request Body" : "Parameters";
-      abs.appendChild(lab);
-      const pre = document.createElement("pre");
-      pre.className = "tool-json";
-      pre.textContent = jsonText(req);
-      abs.appendChild(pre);
-      body.appendChild(abs);
-    }
-    if (d.response != null) {
-      const abs = document.createElement("div");
-      abs.className = "tool-abs";
-      const lab = document.createElement("b");
-      lab.textContent = "Response";
-      abs.appendChild(lab);
-      const pre = document.createElement("pre");
-      pre.className = "tool-json";
-      pre.textContent = jsonText(d.response);
-      abs.appendChild(pre);
-      body.appendChild(abs);
-    }
-    if (!body.children.length) body.textContent = t.spoken || (ok ? "ok" : "fehlgeschlagen");
-    card.appendChild(body);
-    live.appendChild(card);
-  }
-  live.scrollTop = live.scrollHeight;
-}
-
 function maleProtokoll(call, writeLive) {
   const z = (call && call.zuege) || [];
   for (const ein of z) {
     if (!ein || ein.art === "hangup") continue;
     if (ein.textIn) bubble("user", ein.textIn);
     if (ein.text) bubble("lisa", ein.text);
-    if (ein.tools) zeigeTools(ein.tools);
     if (ein.book) zeigeBuch(ein.book, writeLive);
   }
 }
@@ -202,6 +136,7 @@ function liste(ul, items) {
 }
 
 function zeigePatient(p) {
+  if (patient && p && patient.id !== p.id) vorbereitung = null;
   patient = p;
   $("person").hidden = false;
   $("personName").textContent = (p.test ? "⚠ " : "") + (p.name || "—");
@@ -518,7 +453,7 @@ async function playUrl(url) {
 }
 
 async function leseZug(r, onFiller) {
-  const out = { sessionId: "", textIn: "", text: "", audioUrl: "", book: null, writeLive: false, timings: {}, empty: false, error: "", warte: false, stilleMs: 0 };
+  const out = { sessionId: "", textIn: "", text: "", audioUrl: "", book: null, writeLive: false, timings: {}, empty: false, error: "", warte: false, stilleMs: 0, stilleWarteMs: 0 };
   if (!r.ok && !r.body) {
     throw new Error("Antwort fehlgeschlagen");
   }
@@ -555,6 +490,7 @@ async function leseZug(r, onFiller) {
         // Halbsatz-Wache: Satz klingt unfertig — still weiterhören.
         out.warte = true;
         if (ev.stilleMs) out.stilleMs = ev.stilleMs;
+        if (ev.stilleWarteMs) out.stilleWarteMs = ev.stilleWarteMs;
       }
       if (ev.type === "filler" && ev.audioUrl && onFiller) {
         // Überbrückungssatz SOFORT abspielen — die echte Antwort kommt gleich nach.
@@ -571,7 +507,7 @@ async function leseZug(r, onFiller) {
         if (ev.sessionId) out.sessionId = ev.sessionId;
         if (ev.empty) out.empty = true;
         if (ev.stilleMs) out.stilleMs = ev.stilleMs;
-        if (ev.tools) out.tools = ev.tools;
+        if (ev.stilleWarteMs) out.stilleWarteMs = ev.stilleWarteMs;
       }
       if (ev.type === "audio") {
         out.audioUrl = ev.audioUrl || "";
@@ -610,6 +546,7 @@ function recordUntilSilence(stream) {
       resolve({
         blob: new Blob(chunks, { type: blobTyp() }),
         vorab: vorabWunsch ? vorabLauf : null,
+        heard,
       });
     };
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -657,7 +594,8 @@ function recordUntilSilence(stream) {
       // der Default bleibt 500, nur eine Server-Ansage ändert ihn.
       // Ohne jedes Geräusch nach STILLE_MS abbrechen: der Stille-Wächter
       // stupst dann an, statt weitere Sekunden stumm zu warten.
-      if ((heard && quiet > stilleSoll && now - t0 > 450) || (!heard && now - t0 > STILLE_MS) || now - t0 > 8000) {
+      const deckel = Math.max(8000, stilleSoll + 4000, stilleWarte);
+      if ((heard && quiet > stilleSoll && now - t0 > 450) || (!heard && now - t0 > stilleWarte) || now - t0 > deckel) {
         recLocal.stop();
         try { src.disconnect(); } catch { /* */ }
         return;
@@ -687,6 +625,7 @@ async function stilleStups(nr) {
   // läuft das normale "Nichts gehört"-Verhalten.
   if (!callOn || nr !== hoerNr || zugBusy || stilleStupse >= 2) return false;
   stilleStupse += 1;
+  wachtStart(nr);
   try {
     const r = await fetch("/api/stille", {
       method: "POST",
@@ -695,16 +634,17 @@ async function stilleStups(nr) {
     });
     const d = await r.json();
     if (!callOn || nr !== hoerNr) return true;
-    if (d && d.stilleMs) stilleSoll = d.stilleMs;
-    if (d.empty || !d.audioUrl) return false;
+    stilleVomServer(d);
+    if (d.empty || !d.audioUrl) { wachtStopp(); return false; }
     // Halbsatz-Flush: der Stups beantwortet ein gehaltenes Satz-Fragment —
     // dann gehört der Anrufer-Satz auch in den Verlauf.
     if (d.textIn) bubble("user", d.textIn);
     if (d.text) bubble("lisa", d.text);
     phase("lisa", "Lisa spricht …");
     await playUrl(d.audioUrl);
+    wachtStopp();
     return true;
-  } catch { return false; }
+  } catch { wachtStopp(); return false; }
 }
 
 async function sendeZug({ text, blob, nr }) {
@@ -745,7 +685,7 @@ async function sendeZug({ text, blob, nr }) {
       data = await leseZug(r, spielFiller);
     }
     if (fillerLauf) { try { await fillerLauf; } catch { /* */ } }
-    if (data && data.stilleMs) stilleSoll = data.stilleMs;
+    stilleVomServer(data);
     if (!callOn || nr !== hoerNr) { zugBusy = false; return; }
     if (data.warte) {
       // Halbsatz-Wache: der Satz klingt unfertig (Denkpause) — Lisa schweigt
@@ -770,8 +710,6 @@ async function sendeZug({ text, blob, nr }) {
       return;
     }
     stilleStupse = 0; // echter Zug gehört und beantwortet — Stupse von vorn
-    if (data.tools) zeigeTools(data.tools);
-    if (data.book) zeigeBuch(data.book, data.writeLive);
     const t = data.timings || {};
     if (t.total != null) phase("lisa", `Lisa spricht · ${t.total}s`);
     await playUrl(data.audioUrl);
@@ -802,7 +740,7 @@ async function bargeWeiter(nr) {
       body: JSON.stringify({ sessionId, bargeUrl: b.url, bargeMs: b.ms }),
     });
     const d = await r.json();
-    if (d && d.stilleMs) stilleSoll = d.stilleMs;
+    stilleVomServer(d);
     if (!callOn || nr !== hoerNr) return true;
     if (d.empty || !d.audioUrl) return false;
     phase("lisa", "Lisa spricht …");
@@ -819,8 +757,9 @@ async function hoeren() {
   phase("du", "Sie sind dran — einfach reden");
   let blob;
   let vorab = null;
+  let auf = { heard: false };
   try {
-    const auf = await recordUntilSilence(micStream);
+    auf = await recordUntilSilence(micStream);
     blob = auf.blob;
     vorab = auf.vorab;
   } catch (e) {
@@ -829,7 +768,8 @@ async function hoeren() {
     return;
   }
   if (!callOn || nr !== hoerNr) return;
-  if (!blob || blob.size < 1200) {
+  const nichtsGesagt = !auf.heard || !blob || blob.size < 1200;
+  if (nichtsGesagt) {
     // W-BARGE-Fehlalarm: Unterbrechung ohne Einwand — weiterreden.
     if (bargeInfo && await bargeWeiter(nr)) {
       if (callOn && nr === hoerNr) hoeren();
@@ -848,10 +788,11 @@ async function hoeren() {
   // der Antwort dürfen nie mehr als ~1,4 s vergehen, sonst spricht die
   // lokale Warte-Ansage.
   wachtStart(nr);
-  // W-TEMPO: liegt das Vorab-Transkript rechtzeitig vor, geht der Zug als
-  // TEXT raus (STT ist dann schon bezahlt); sonst wie bisher als Audio.
+  // W-TEMPO: Vorab-Text nicht beim Diktat (Nummern/Buchstaben) — sonst
+  // fehlen oft Anfang oder Ende. Dann volle Aufnahme an /api/listen.
   let vorabText = "";
-  if (vorab) {
+  const diktat = stilleSoll >= 650;
+  if (vorab && !diktat) {
     vorabText = await Promise.race([
       vorab,
       new Promise((r) => setTimeout(() => r(""), 700)),
@@ -967,6 +908,86 @@ $("who").addEventListener("keydown", (e) => {
 const recP = { current: null };
 $("micPrompt").onclick = () => toggleMic($("micPrompt"), recP, $("promptLive"), $("prompt"));
 
+function akteListe(id, titel, items, klasse) {
+  const box = $(id);
+  if (!box) return;
+  const list = (items || []).filter(Boolean);
+  if (!list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h3>${titel}</h3><ul class="${klasse || ""}">${
+    list.map((x) => `<li>${String(x).replace(/</g, "&lt;")}</li>`).join("")
+  }</ul>`;
+}
+
+function zeigeAkte(d) {
+  const karte = $("akteKarte");
+  if (!karte) return;
+  karte.hidden = false;
+  const stand = d.gedaechtnis || "";
+  const standText = stand === "ok" ? "Praxisgedächtnis gelesen."
+    : stand === "tot" ? "Praxisgedächtnis antwortet nicht."
+    : stand === "aus" ? "Praxisgedächtnis ist aus."
+    : "Kein Eintrag im Praxisgedächtnis zu diesem Kontakt.";
+  $("akteStand").textContent = d.bereit
+    ? standText + " Lisa ist bereit."
+    : standText + " Es fehlen noch Angaben.";
+  akteListe("akteUnterlage", "Unterlage", d.unterlage);
+  akteListe("akteEinwaende", "Erwartete Einwände", d.einwaende);
+  akteListe("akteLuecken", "An dich", d.luecken, "luecke");
+  const tor = $("akteTor");
+  if (tor) tor.hidden = !!d.bereit;
+}
+
+function prepPasst(auftrag, wer) {
+  if (!vorbereitung || !vorbereitung.ok) return false;
+  const name = (wer && (wer.name || "")).trim().toLowerCase();
+  const alt = (vorbereitung._name || "").trim().toLowerCase();
+  return vorbereitung.auftrag === auftrag && alt === name;
+}
+
+async function akteLesen() {
+  const auftrag = $("prompt").value.trim();
+  if (!auftrag) { meld("Erst einen Auftrag eintragen — auch ein Einzeiler reicht.", true); return null; }
+  const wer = patient || ($("who").value.trim() ? { name: $("who").value.trim() } : {});
+  const knopf = $("knopf-vertiefen");
+  if (knopf) { knopf.disabled = true; knopf.textContent = "liest die Akte …"; }
+  try {
+    const r = await fetch("/api/auftrag/vorbereiten", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auftrag, tenant: $("tenant").value, patient: wer }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      throw new Error((d && (d.detail || d.error)) || "Akte lesen fehlgeschlagen");
+    }
+    vorbereitung = d;
+    vorbereitung._name = (wer && wer.name) || "";
+    zeigeAkte(d);
+    if (d.luecken && d.luecken.length) {
+      meld(d.bereit
+        ? "Akte gelesen. Lücken stehen unten — Lisa erfindet nichts."
+        : "Akte gelesen. Bitte Lücken füllen oder trotzdem anrufen.", !d.bereit);
+    } else {
+      meld("Akte gelesen. Auftrag bleibt unverändert.", false);
+    }
+    return d;
+  } catch (e) {
+    meld(String(e.message || e), true);
+    return null;
+  } finally {
+    if (knopf) { knopf.disabled = false; knopf.textContent = "Akte lesen"; }
+  }
+}
+
+$("knopf-vertiefen").onclick = () => { akteLesen(); };
+
+if ($("knopf-trotzdem")) {
+  $("knopf-trotzdem").onclick = () => {
+    trotzdemAnrufen = true;
+    starteAnruf();
+  };
+}
+
 function starteAnruf() {
   meld("");
   const auftrag = $("prompt").value.trim();
@@ -1005,12 +1026,38 @@ async function weiterNachMic(auftrag, wer, micBitte) {
   zugBusy = false;
   stilleStupse = 0;
   stilleSoll = 500;
-  phase("warte", "verbindet …");
+  stilleWarte = STILLE_MS;
+  phase("warte", "liest die Akte …");
   try {
+    if (!prepPasst(auftrag, wer)) {
+      trotzdemAnrufen = trotzdemAnrufen && vorbereitung && vorbereitung.auftrag === auftrag;
+      const d = await akteLesen();
+      if (!d) throw new Error("Akte konnte nicht gelesen werden");
+    }
+    if (vorbereitung && !vorbereitung.bereit && !trotzdemAnrufen) {
+      callOn = false;
+      $("call").classList.remove("open", "lisa", "du", "warte");
+      document.body.classList.remove("incall");
+      $("start").disabled = false;
+      $("start").textContent = "Anruf starten";
+      if (micStream) {
+        for (const t of micStream.getTracks()) t.stop();
+        micStream = null;
+      }
+      meld("Lisa hält — unten stehen Lücken. Füllen oder „Trotzdem anrufen“.", true);
+      return;
+    }
+    phase("warte", "verbindet …");
     const r = await fetch("/api/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant: $("tenant").value, auftrag, patient: wer }),
+      body: JSON.stringify({
+        tenant: $("tenant").value,
+        auftrag,
+        patient: wer,
+        vorbereitung: vorbereitung || {},
+        trotzdem: trotzdemAnrufen,
+      }),
     });
     if (!r.ok) {
       let msg = "start fehlgeschlagen";
@@ -1021,6 +1068,7 @@ async function weiterNachMic(auftrag, wer, micBitte) {
       throw new Error(msg);
     }
     const data = await leseZug(r);
+    stilleVomServer(data);
     sessionId = data.sessionId || sessionId;
     if (!sessionId) throw new Error("keine Sitzung");
     const t = data.timings || {};

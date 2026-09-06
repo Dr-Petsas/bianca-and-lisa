@@ -65,9 +65,31 @@ def _token_ziffern(tok: str) -> str:
     return ""
 
 
+# Parakeet-Salat auf Zahlwörter (Chef 30.08.2026: Diktat kam oft ohne
+# eine einzige erkennbare Ziffer an). Nur eindeutige Hörfehler — "oh ja"
+# bleibt ein einzelnes "null" und wird ohne 10 Stellen nie zur Nummer.
+_STT_TAUSCH = (
+    (re.compile(r"\bnol+\b", re.I), "null"),
+    (re.compile(r"\bnoll\b", re.I), "null"),
+    (re.compile(r"\boh\b", re.I), "null"),
+    (re.compile(r"\bo\b", re.I), "null"),
+    (re.compile(r"\bseven\b", re.I), "sieben"),
+    (re.compile(r"\beight\b", re.I), "acht"),
+    (re.compile(r"\bnine\b", re.I), "neun"),
+    (re.compile(r"\bfive\b", re.I), "fünf"),
+)
+
+
+def _stt_saeubern(text: str) -> str:
+    raw = _s(text)
+    for cre, ziel in _STT_TAUSCH:
+        raw = cre.sub(ziel, raw)
+    return raw
+
+
 def ziffern(text: str) -> str:
     """Alle gehörten Ziffern des Satzes, in Sprechreihenfolge."""
-    raw = _s(text).lower().replace("-", " ").replace("/", " ")
+    raw = _stt_saeubern(text).lower().replace("-", " ").replace("/", " ")
     raw = re.sub(r"[.,;:!?()]+", " ", raw)
     out: list[str] = []
     toks = raw.split()
@@ -126,15 +148,30 @@ def normaliert(nummer: str) -> str:
     return d.replace("+", "")
 
 
-def plausibel(nummer: str) -> bool:
+# Handy ohne hörbare Null am Anfang (STT verschluckt oft das erste "null"):
+# 1776004600 → 01776004600. Nur Mobilfunk-Vorwahlen 15/16/17.
+_HANDY_OHNE_NULL = re.compile(r"^1[567]\d{7,10}$")
+
+
+def mit_fuehrender_null(nummer: str) -> str:
+    """Deutsche Handynummer: fehlende führende 0 nachziehen."""
     d = normaliert(nummer)
+    if d.startswith("0"):
+        return d
+    if _HANDY_OHNE_NULL.match(d):
+        return "0" + d
+    return d
+
+
+def plausibel(nummer: str) -> bool:
+    d = mit_fuehrender_null(nummer)
     return d.startswith("0") and 10 <= len(d) <= 13
 
 
 def aus_satz(text: str) -> str:
     """Beste Telefonnummer aus dem Satz — '' wenn nichts Plausibles."""
     kette = ziffern(text)
-    d = normaliert(kette)
+    d = mit_fuehrender_null(kette)
     if plausibel(d):
         return d
     return ""

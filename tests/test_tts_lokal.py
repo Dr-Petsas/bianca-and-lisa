@@ -139,33 +139,6 @@ def test_ziffern_nachhoeren_rendert_neu_bis_alle_ziffern_da_sind():
     _mit_lokal(fake, lauf)
 
 
-def test_ziffern_nachhoeren_weist_extra_ziffern_ab():
-    """Live 30.08.2026: STT hoerte '0177 600 4600' korrekt, die Engine sprach
-    aber '0177 600 4600 46' — das angehaengte '46' bestand den alten
-    Substring-Vergleich (Soll steckt als Praefix im Gehoerten). Zu VIELE
-    Ziffern muessen genauso zum Neu-Rendern fuehren wie fehlende."""
-    from kern import config as cfg
-    from kern import stt as stt_mod
-
-    leise = (2000).to_bytes(2, "little", signed=True) * (tts.MIN_AKTIV_SAMPLES * 2)
-    fake = _FakeLokal(_Antwort(200, leise))
-    gehoert = iter(["0177 600 4600 46", "0177 600 4600"])
-
-    def lauf():
-        alt_base, alt_tr = cfg.STT_BASE, stt_mod.transcribe
-        cfg.STT_BASE = "http://stt-test:8212"
-        stt_mod.transcribe = lambda *a, **k: next(gehoert)
-        try:
-            wav = tts.LokalTts().speak(
-                "Null eins sieben sieben, sechs null null, vier sechs, null null.")
-        finally:
-            cfg.STT_BASE, stt_mod.transcribe = alt_base, alt_tr
-        assert len(fake.aufrufe) == 2, "Extra-Ziffern -> Wurf verworfen, genau ein zweiter"
-        assert wav[:4] == b"RIFF"
-
-    _mit_lokal(fake, lauf)
-
-
 def test_warm_gegenhoeren_score():
     """Warm-Abnahme (29.08.2026): Parakeet hoert Warm-Renders gegen — Babble
     ('hissio') faellt durch, ein korrekter Render besteht, ohne lokales STT
@@ -282,45 +255,48 @@ def test_wav_header_offen_fuer_progressive_wiedergabe():
 
 
 def test_ziffern_satz_erkennt_readbacks():
-    """Ziffern-Saetze bleiben blocking (Nachhoer-Waechter braucht das ganze
-    Audio) — alles andere darf streamen."""
+    """Ziffern-Saetze bleiben blocking — alles andere darf streamen."""
     assert tts.ziffern_satz("Ich wiederhole die Nummer: null eins sieben sieben, sechs null null.")
     assert not tts.ziffern_satz("Waren Sie denn schon einmal bei uns in der Praxis?")
     assert not tts.ziffern_satz("Ihr Termin ist um neun Uhr fünfzehn.")
 
 
-def test_prebuffer_ms_fuer_waechst_mit_text():
-    """Laengere Aeusserungen bekommen mehr Prefill; kurze bleiben bei Basis."""
-    import os
-
-    alt = os.environ.get("TTS_PREBUFFER_MS")
-    os.environ["TTS_PREBUFFER_MS"] = "220"
+def test_ziffern_soll_aus_bei_qwen():
+    """Qwen (:8213) braucht keinen Nachhoer-Waechter — sonst 3x Render-Hang."""
+    alt = tts.TTS_BASE
     try:
-        kurz = tts._prebuffer_ms_fuer("Passt das?")
-        mittel = tts._prebuffer_ms_fuer("x" * 80)
-        lang = tts._prebuffer_ms_fuer(
-            "Alles klar. Am schnellsten geht es bei Doktor Petsas. "
-            "Frei ist morgen um zwoelf Uhr oder morgen um neun Uhr oder "
-            "uebermorgen um vierzehn Uhr. Welcher Termin passt Ihnen?")
-        assert kurz == 220
-        assert mittel == 220
-        assert lang > kurz
-        assert lang <= 550
-        os.environ["TTS_PREBUFFER_MS"] = "0"
-        assert tts._prebuffer_ms_fuer("langer text " * 40) == 0
+        tts.TTS_BASE = "http://100.82.122.62:8213"
+        payload = tts._ziffern_einzeln(
+            "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null.")
+        assert tts._ziffern_soll(payload) == ""
+        assert tts.ziffern_satz(
+            "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null."), \
+            "Readback bleibt blocking, nur ohne Gegenhoeren"
+        tts.TTS_BASE = "http://tts-test:8211"
+        assert tts._ziffern_soll(payload) == "0177600"
     finally:
-        if alt is None:
-            os.environ.pop("TTS_PREBUFFER_MS", None)
-        else:
-            os.environ["TTS_PREBUFFER_MS"] = alt
+        tts.TTS_BASE = alt
+
+
+def test_qwen_behaelt_wortform_als_tts_payload():
+    """Live-A/B 06.09.: Digit-Payload an Qwen halluziniert Extra-Ziffern."""
+    alt = tts.TTS_BASE
+    satz = ("Ich wiederhole die Nummer. Null eins fünf zwei, fünf drei, "
+            "neun null, vier sieben, fünf sechs. Stimmt das so?")
+    try:
+        tts.TTS_BASE = "http://100.82.122.62:8213"
+        assert tts._tts_payload(satz) == satz[:400]
+        assert "0 1 5 2" not in tts._tts_payload(satz)
+        tts.TTS_BASE = "http://tts-test:8211"
+        assert "0 1 5 2" in tts._tts_payload(satz)
+    finally:
+        tts.TTS_BASE = alt
 
 
 def test_speak_stream_liefert_stuecke_und_fuellt_den_cache():
     """Audio-Chunk-Streaming: Stuecke kommen sample-sauber (gerade Bytes)
     raus, der fertige Satz liegt danach als EIN WAV im LRU — die
     Wiederholung kostet keinen zweiten Container-Aufruf."""
-    import os
-
     pcm = (1500).to_bytes(2, "little", signed=True) * 4  # 8 Bytes = 4 Samples
     fake = _FakeLokal(_Antwort(200, pcm))
     fake.stream_aufrufe = []
@@ -332,79 +308,36 @@ def test_speak_stream_liefert_stuecke_und_fuellt_den_cache():
         return _StreamAntwort(200, [pcm[:3], pcm[3:]])
 
     fake.stream = stream
-    alt = os.environ.get("TTS_PREBUFFER_MS")
-    os.environ["TTS_PREBUFFER_MS"] = "0"  # Mini-PCM: Schwelle wuerde alles halten
-    try:
-        def lauf():
-            eng = tts.LokalTts()
-            stuecke = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
-            assert b"".join(stuecke) == pcm, "alle Samples, nichts verschluckt"
-            assert all(len(s) % 2 == 0 for s in stuecke), "nie mitten im Sample schneiden"
-            assert len(fake.stream_aufrufe) == 1
-            wieder = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
-            assert len(fake.stream_aufrufe) == 1 and len(fake.aufrufe) == 0
-            assert b"".join(wieder) == pcm
-        _mit_lokal(fake, lauf)
-    finally:
-        if alt is None:
-            os.environ.pop("TTS_PREBUFFER_MS", None)
-        else:
-            os.environ["TTS_PREBUFFER_MS"] = alt
 
+    def lauf():
+        eng = tts.LokalTts()
+        stuecke = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
+        assert b"".join(stuecke) == pcm, "alle Samples, nichts verschluckt"
+        assert all(len(s) % 2 == 0 for s in stuecke), "nie mitten im Sample schneiden"
+        assert len(fake.stream_aufrufe) == 1
+        # Wiederholung: kommt als EIN Stueck aus dem Cache, kein neuer Aufruf
+        wieder = list(eng.speak_stream("Passt Ihnen der Termin am Montag?"))
+        assert len(fake.stream_aufrufe) == 1 and len(fake.aufrufe) == 0
+        assert b"".join(wieder) == pcm
 
-def test_speak_stream_prebuffer_haelt_bis_schwelle():
-    """W-TTS-PREBUF: vor dem ersten Yield mindestens TTS_PREBUFFER_MS Audio
-    (oder Strom-Ende) — LiveKit-Lektion gegen Underrun nach Mini-Chunk."""
-    import os
-
-    # 24 kHz * 2 Byte * 0,05 s = 2400 Byte je 50-ms-Stueck
-    stueck = (1500).to_bytes(2, "little", signed=True) * (tts.PCM_RATE // 20)
-    fake = _FakeLokal(_Antwort(200, b""))
-    fake.stream_aufrufe = []
-
-    def stream(methode, url, json=None, **kw):
-        fake.stream_aufrufe.append((url, json or {}))
-        return _StreamAntwort(200, [stueck, stueck, stueck, stueck])
-
-    fake.stream = stream
-    alt = os.environ.get("TTS_PREBUFFER_MS")
-    os.environ["TTS_PREBUFFER_MS"] = "100"  # 2*50 ms Stuecke halten
-    try:
-        def lauf():
-            eng = tts.LokalTts()
-            out = list(eng.speak_stream("Kurzer Testsatz ohne Ziffern."))
-            assert len(out) >= 1
-            # Erster Yield erst nach Prebuffer: mindestens 100 ms = 2 Stuecke
-            assert len(out[0]) >= 2 * len(stueck)
-            assert sum(len(x) for x in out) == 4 * len(stueck)
-        _mit_lokal(fake, lauf)
-    finally:
-        if alt is None:
-            os.environ.pop("TTS_PREBUFFER_MS", None)
-        else:
-            os.environ["TTS_PREBUFFER_MS"] = alt
+    _mit_lokal(fake, lauf)
 
 
 def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
     """Dienst.stimme_stream: mit stream-faehigem Container kommt SOFORT eine
     /api/audio-stream/-URL, der Feeder fuellt den Slot im Hintergrund und
     audio_stream_iter liefert Header + alle Stuecke. Ohne Stream-Faehigkeit
-    faellt alles auf den blocking Pfad (/api/audio/) zurueck.
-
-    W-TTS-STOCK: Mehrsatz-Text = EIN speak_stream (ganzer Text), nicht
-    Satz-fuer-Satz — sonst Stocken an der Naht."""
+    faellt alles auf den blocking Pfad (/api/audio/) zurueck."""
     from kern import dienst as dienst_mod
 
     d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     pcm = (1500).to_bytes(2, "little", signed=True) * 8
-    rufe: list[str] = []
 
     class _EngineFake:
         def speak(self, text):
             return tts._wav_header(len(pcm), tts.PCM_RATE) + pcm
 
         def speak_stream(self, text):
-            rufe.append(text)
             yield pcm[:6]
             yield pcm[6:]
 
@@ -414,14 +347,12 @@ def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
     tts.im_cache = lambda text: False
     try:
         tts.stream_bereit = lambda: True
-        text = "Passt Ihnen der Termin am Montag? Oder lieber Dienstag?"
-        url, _ = d.stimme_stream(text)
+        url, _ = d.stimme_stream("Passt Ihnen der Termin am Montag? Oder lieber Dienstag?")
         assert url.startswith("/api/audio-stream/") and url.endswith(".wav")
         gen = d.audio_stream_iter(url.rsplit("/", 1)[1])
         teile = list(gen)
         assert teile[0][:4] == b"RIFF", "erstes Stueck ist der offene Header"
-        assert b"".join(teile[1:]) == pcm, "ein Stream, ganzer Text"
-        assert rufe == [text], "kein Satz-Split mehr im Stream"
+        assert b"".join(teile[1:]) == pcm + pcm, "beide Saetze vollstaendig im Strom"
         assert d.audio_stream_iter("gibtsnicht.wav") is None
 
         tts.stream_bereit = lambda: False
@@ -431,15 +362,15 @@ def test_stimme_stream_dienst_pfad_und_blocking_rueckfall():
         (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
 
 
-def test_stimme_stream_ziffern_aeusserung_komplett_blocking():
-    """W-TTS-STOCK: Ziffern irgendwo im Text => KOMPLETT blocking (speak/
-    Nachhoer-Waechter), nie Mid-Stream-Retry. Live 01.09.: 3 Retries in
-    einem 3-Satz-Strom => 6 s Stille nach dem Vorsatz."""
+def test_stimme_stream_ziffern_satz_bleibt_verifiziert_blocking():
+    """Ein Readback-Satz MITTEN im Text laeuft weiter durch speak() (mit
+    Nachhoer-Waechter) und wird als fertiges Stueck in den Strom gelegt —
+    gestreamt wird nur der Rest."""
     from kern import dienst as dienst_mod
 
     d = dienst_mod.Dienst(name="test", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     pcm = (1500).to_bytes(2, "little", signed=True) * 8
-    rufe: list[tuple[str, str]] = []
+    rufe: list[str] = []
 
     class _EngineFake:
         def speak(self, text):
@@ -459,18 +390,24 @@ def test_stimme_stream_ziffern_aeusserung_komplett_blocking():
         url, _ = d.stimme_stream(
             "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null. "
             "Stimmt das so?")
-        assert url.startswith("/api/audio/"), "Ziffern-Aeusserung nie streamen"
-        assert any(art == "speak" for art, _ in rufe)
-        assert not any(art == "stream" for art, _ in rufe)
+        assert url.startswith("/api/audio-stream/")
+        list(d.audio_stream_iter(url.rsplit("/", 1)[1]))  # Feeder zu Ende laufen lassen
+        arten = {art for art, _ in rufe}
+        assert ("speak", "Ich wiederhole die Nummer: null eins sieben sieben, sechs null null.") in rufe
+        assert any(art == "stream" for art in arten), "der Nicht-Ziffern-Satz streamt"
+        for art, text in rufe:
+            if "null eins" in text:
+                assert art == "speak", "Readback NIE am Waechter vorbei streamen"
     finally:
         (tts.TTS_BASE, tts.stream_bereit, tts.engine, tts.im_cache) = alt
 
 
-def test_stimme_stream_readback_mit_ziffern_blocking():
-    """P1 Mid-Stream-Parallelisierung ist aus (W-TTS-STOCK): Readback mit
-    Ziffern-Satz bleibt komplett auf dem Blocking-Pfad — Vorsatz im Cache
-    lohnt den Strom nicht mehr, weil der Ziffern-Retry die Luecke hoerbar
-    machte. Reiner Ziffern-Satz ebenfalls blocking."""
+def test_stimme_stream_readback_vorsatz_spielt_sofort():
+    """P1 Readback-Parallelisierung (29.08.2026): Vorsatz und Schlussfrage
+    liegen im Pin-Cache, der Ziffern-Satz wird verifiziert nachgeschoben —
+    der Text streamt TROTZDEM (frueher: komplett blocking, 1,5-2,3 s bis
+    zum ersten Ton). Ein Text, der direkt mit dem Ziffern-Satz beginnt,
+    bleibt auf dem bewaehrten Blocking-Pfad."""
     from bianca import gehirn
     from kern import dienst as dienst_mod
 
@@ -496,9 +433,15 @@ def test_stimme_stream_readback_mit_ziffern_blocking():
         tts.stream_bereit = lambda: True
         text = gehirn.readback_text("01776004600")
         url, _ = d.stimme_stream(text)
-        assert url.startswith("/api/audio/"), "Readback mit Ziffern => blocking"
-        assert not any(art == "stream" for art, _ in rufe)
+        assert url.startswith("/api/audio-stream/"), "Vorsatz im Cache => Strom lohnt"
+        list(d.audio_stream_iter(url.rsplit("/", 1)[1]))  # Feeder zu Ende laufen lassen
+        assert rufe and rufe[0] == ("speak", "Ich wiederhole die Nummer."), \
+            "der gewaermte Vorsatz spielt ZUERST"
+        for art, t in rufe:
+            if "eins" in t.lower():
+                assert art == "speak", "Ziffern NIE am Waechter vorbei streamen"
 
+        # Nur der Ziffern-Satz allein: kein Gewinn durch den Strom => blocking.
         rufe.clear()
         url2, _ = d.stimme_stream("Null eins sieben sieben, sechs null null.")
         assert url2.startswith("/api/audio/")

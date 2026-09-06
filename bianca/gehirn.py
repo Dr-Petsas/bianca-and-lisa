@@ -1053,6 +1053,15 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         elif ist_nein(t):
             s["anruferCheck"] = "nein"
             neu.add("anruferCheck")
+            # Seed aus Rufnummer-Match verwerfen — sonst sucht list_appointments
+            # weiter den abgelehnten Patienten (Bugcheck 06.09.2026).
+            sit["patient"] = {}
+            sit["upcoming"] = []
+            sit.pop("anrufer", None)
+            booking = sit.get("booking")
+            if isinstance(booking, dict):
+                for k in ("patientId", "firstName", "lastName", "patientName", "phone"):
+                    booking.pop(k, None)
             # W-FUER-WEN: die Buchen-Frage lautet "Der Termin ist für Sie
             # selbst, richtig?" — ein Nein heisst hier meist: Termin fuer
             # jemand anderen. Kartei bleibt verworfen, aber der Fluss fragt

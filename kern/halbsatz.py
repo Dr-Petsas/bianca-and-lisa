@@ -88,18 +88,21 @@ def enabled() -> bool:
 def unfertig(text: str) -> bool:
     """Klingt das Gehoerte nach einem abgeschnittenen Satz?
 
-    Konservativ: bei Satzzeichen am Ende (. ! ? …) gilt der Satz als fertig —
-    die STT-Interpunktion sitzt bei klarer Sprechmelodie zuverlaessig. Nur
-    Komma-/Gedankenstrich-Enden und haengende Funktionswoerter halten."""
+    Komma-/Gedankenstrich-Enden und haengende Funktionswoerter halten.
+    W-SVETLANA (04.09.2026): ein Punkt hinter einem Fortsetzungswort
+    ("Also.", "Ich.", "Und.") ist oft STT-Artefakt nach dem Erstwort-Cut —
+    gilt weiter als unfertig, solange der Zug kurz ist (<= 3 Woerter).
+    Laengere Saetze mit echtem Satzende bleiben fertig."""
     t = _s(text)
     if not t:
         return False
     if t.endswith(_HALT_ZEICHEN):
         return True
-    if t.endswith(_SATZ_ENDE):
-        return False
     letztes = re.sub(r"[^a-zäöüß]", "", t.split()[-1].casefold())
-    return letztes in _FORTSETZUNG
+    haengt = letztes in _FORTSETZUNG
+    if t.endswith(_SATZ_ENDE):
+        return haengt and len(t.split()) <= 3
+    return haengt
 
 
 def mergen(sit: dict, neu: str) -> str:

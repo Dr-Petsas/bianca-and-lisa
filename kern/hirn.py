@@ -354,6 +354,11 @@ _REGEL_JE_HANDLUNG = {
     "ANLEGEN": "Der Anrufer moechte einen neuen Termin — die Terminaufnahme fuehrt die Maschine.",
 }
 
+_DOKUMENT_SPIEGEL_RE = re.compile(
+    r"\brezept\w*|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
+    re.I,
+)
+
 
 def stand_block(sit: dict) -> str:
     """ANLIEGEN-Block fuer den Systemprompt (beide Stimmen). '' wenn leer."""
@@ -374,6 +379,13 @@ def stand_block(sit: dict) -> str:
             if a.get("handlung") == "AENDERN" and a.get("ersatz") is False:
                 regel = ("Es geht um einen BESTEHENDEN Termin, der Anrufer will "
                          "ABSAGEN OHNE Ersatz: keinen neuen Termin anbieten.")
+            if a.get("handlung") == "ABGEBEN" and _DOKUMENT_SPIEGEL_RE.search(
+                    _s(a.get("spiegel"))):
+                regel = (
+                    "Rezept/Überweisung: NIEMALS ausstellen oder zusichern. "
+                    "Klar sagen, dass die Praxis/der Arzt entscheidet; Wunsch "
+                    "notieren oder Termin zum Abholen/Besprechen anbieten."
+                )
             zeilen.append(regel)
     wartend = [x for x in (h.get("anliegen") or [])
                if x.get("status") in {"offen", "geparkt"}]

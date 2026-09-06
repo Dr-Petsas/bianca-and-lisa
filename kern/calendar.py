@@ -579,6 +579,9 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     }
     if first:
         body["firstName"] = first
+    pid = _s(ctx.get("patientId"))
+    if pid:
+        body["patientId"] = pid
     phone = _s(ctx.get("phone"))
     if phone:
         body["callerPhone"] = phone
@@ -715,17 +718,109 @@ def _cf_update(action: str, body: dict) -> tuple[int, Any, dict]:
     return _cf_call("updateOrCancelAppointment", payload, timeout=_SCHREIB_TIMEOUT)
 
 
+def _ctx_aus_sitzung(sit: dict, ctx: dict) -> dict:
+    """booking-ctx aus Sammler / sit.patient / Anrufer fuellen (Bianca-Live
+    06.09.2026: list_appointments sah sonst leeres patient/upcoming und
+    behauptete 'keinen Termin', obwohl die CF den Bestand kannte)."""
+    out = ctx if isinstance(ctx, dict) else {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    pat = sit.get("patient") if isinstance(sit.get("patient"), dict) else {}
+    a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    # Abgelehnter Rufnummer-Treffer darf die Tool-Suche nicht weiter fuettern.
+    if _s(s.get("anruferCheck")) == "nein":
+        a = {}
+    if not _s(out.get("lastName")):
+        out["lastName"] = _s(s.get("nachname")) or _s(pat.get("lastName")) or _s(a.get("nachname"))
+    if not _s(out.get("firstName")):
+        out["firstName"] = _s(s.get("vorname")) or _s(pat.get("firstName")) or _s(a.get("vorname"))
+    if not _s(out.get("patientId")):
+        out["patientId"] = _s(s.get("patientId")) or _s(pat.get("id")) or _s(a.get("patientId"))
+    if not _s(out.get("phone")):
+        out["phone"] = (
+            _s(s.get("telefon")) or _s(s.get("aktePhone"))
+            or _s(pat.get("phone")) or _s(a.get("telefon"))
+        )
+    if not _s(out.get("patientName")):
+        name = f"{_s(out.get('firstName'))} {_s(out.get('lastName'))}".strip()
+        if name:
+            out["patientName"] = name
+    return out
+
+
+def _termine_als_upcoming(termine: list | None) -> list[dict[str, str]]:
+    """find_patient_appointments-Treffer → upcoming-Labels fuer list_appointments."""
+    out: list[dict[str, str]] = []
+    for a in termine or []:
+        if not isinstance(a, dict):
+            continue
+        iso = _s(a.get("iso"))
+        spoken = _s(a.get("spoken"))
+        if not spoken and iso:
+            spoken = spoken_slot(iso) if "T" in iso else iso
+        if not spoken:
+            continue
+        # spoken enthaelt oft schon den Behandler — Motiv nur ergaenzen.
+        motiv = _s(a.get("motivName"))
+        label = spoken
+        if motiv and motiv.lower() not in spoken.lower():
+            label = f"{spoken} — {motiv}"
+        out.append({
+            "id": _s(a.get("id")),
+            "iso": iso,
+            "date": _s(a.get("date")) or (iso[:10] if len(iso) >= 10 else ""),
+            "label": label,
+        })
+    return out
+
+
 def list_appointments(tenant: dict, ctx: dict, upcoming: list | None = None, sit: dict | None = None) -> dict[str, Any]:
     if sit is not None:
+        ctx = _ctx_aus_sitzung(sit, ctx if isinstance(ctx, dict) else {})
+        # Spiegel in booking + patient, damit Folge-Tools dieselbe Identitaet sehen.
+        booking = sit.setdefault("booking", {})
+        if isinstance(booking, dict):
+            for k in ("firstName", "lastName", "patientId", "phone", "patientName"):
+                if _s(ctx.get(k)) and not _s(booking.get(k)):
+                    booking[k] = ctx[k]
+        if _s(ctx.get("lastName")) or _s(ctx.get("patientId")):
+            alt = sit.get("patient") if isinstance(sit.get("patient"), dict) else {}
+            sit["patient"] = {
+                **alt,
+                "id": _s(ctx.get("patientId")) or _s(alt.get("id")),
+                "firstName": _s(ctx.get("firstName")) or _s(alt.get("firstName")),
+                "lastName": _s(ctx.get("lastName")) or _s(alt.get("lastName")),
+                "name": _s(ctx.get("patientName")) or _s(alt.get("name")),
+                "phone": _s(ctx.get("phone")) or _s(alt.get("phone")),
+            }
         # Die Anreicherung beim Start hat die Termine schon geholt — nur bei
         # leerer Sitzung noch einmal fragen (spart einen ganzen Netz-Umlauf).
         if sit.get("upcoming"):
             upcoming = sit["upcoming"]
         else:
             hist = patients.termine_fuer(tenant, sit.get("patient") or {})
-            sit["upcoming"] = hist["upcoming"]
-            sit["past"] = hist["past"]
             upcoming = hist["upcoming"]
+            sit["past"] = hist["past"]
+            # Fallback: CF-Namenssuche (wie Auskunft/Absage), wenn die Akte
+            # am sit.patient keine upcoming trug — typisch Bianca-SIP.
+            if not upcoming and _s(ctx.get("lastName")):
+                found = find_patient_appointments(tenant, ctx)
+                if (found.get("ok") and not found.get("notFound")
+                        and not found.get("mehrdeutig")):
+                    upcoming = _termine_als_upcoming(found.get("appointments") or [])
+                    pat = found.get("patient") or {}
+                    if _s(pat.get("id")):
+                        cur = sit.get("patient") if isinstance(sit.get("patient"), dict) else {}
+                        sit["patient"] = {
+                            **cur,
+                            "id": _s(pat.get("id")),
+                            "firstName": _s(pat.get("firstName")) or cur.get("firstName") or "",
+                            "lastName": _s(pat.get("lastName")) or cur.get("lastName") or "",
+                            "name": (
+                                f"{_s(pat.get('firstName'))} {_s(pat.get('lastName'))}".strip()
+                                or cur.get("name") or ""
+                            ),
+                        }
+            sit["upcoming"] = upcoming or []
         nxt = (upcoming or [None])[0] if upcoming else None
         if nxt and isinstance(nxt, dict):
             ctx["appointmentId"] = nxt.get("id") or ctx.get("appointmentId")

@@ -75,6 +75,8 @@ def test_harmlose_saetze_bleiben_unberuehrt():
         "Mein Zahn ist abgebrochen.",
         "Können Sie mich zurückrufen lassen?",
         "Die Klappe vom Briefkasten klemmt.",
+        "Seht, seht!",  # W-MEDDENT: STT-Müll, kein Konter
+        "Niedjungel",
     ]:
         assert anstand.zug(_sit(), satz) is None, satz
 

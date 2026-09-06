@@ -222,32 +222,14 @@ def test_kontext_anstossen_key_gesichert():
 
 def test_kontext_arbeit_schreibt_in_sitzung():
     echt = ged._kontext_holen
-    gesehen = {}
-
-    def _fake(t, n, client_id=""):
-        gesehen["clientId"] = client_id
-        return "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
-
-    ged._kontext_holen = _fake
+    ged._kontext_holen = lambda t, n, c="": "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
     try:
         sit = _sit_bianca()
-        sit["tenant"] = {"clientId": "client-w-mandant"}
         sit["gedaechtnisKey"] = "01771234567|martin berger"
         ged._kontext_arbeit(sit, "01771234567", "Martin Berger", sit["gedaechtnisKey"])
         assert "Rückruf erbeten" in sit["gedaechtnis"]
-        # W-MANDANT: die Abfrage laeuft unter der clientId des Sitzungs-Mandanten.
-        assert gesehen["clientId"] == "client-w-mandant"
     finally:
         ged._kontext_holen = echt
-
-
-def test_client_id_kommt_aus_dem_sitzungs_mandanten():
-    # W-MANDANT: Session-Tenant schlaegt die Prozess-Env; ohne Tenant bleibt
-    # der alte Default (MAS_CLIENT_ID) — byte-identisch fuer meddent.
-    assert ged._client_id({"tenant": {"clientId": "client-xyz"}}) == "client-xyz"
-    assert ged._client_id({}) == ged.MAS_CLIENT_ID
-    assert ged._headers("client-xyz")["X-Client-Id"] == "client-xyz"
-    assert ged._headers()["X-Client-Id"] == ged.MAS_CLIENT_ID
 
 
 def test_notaus_schaltet_alles_ab():
@@ -261,6 +243,75 @@ def test_notaus_schaltet_alles_ab():
     finally:
         os.environ.pop("MAS_GEDAECHTNIS", None)
     assert ged.enabled() is True
+
+
+def test_zeile_inhaltlich_filtert_muell_und_lehre():
+    assert ged.zeile_inhaltlich("Lisa hat gestern angerufen, Recall offen.")
+    assert ged.zeile_inhaltlich("Termin verschoben auf nächsten Dienstag.")
+    assert not ged.zeile_inhaltlich("")
+    assert not ged.zeile_inhaltlich("Gespräch ohne Kalenderänderung")
+    assert not ged.zeile_inhaltlich(
+        "Adressbuch der Praxis: Demo-Interessent. Zollabfertigung mit AWB 1, Onlinekauf."
+    )
+
+
+def test_fachfremder_caller_context_wird_verworfen():
+    def fake_get(url, params=None, **kw):
+        class _R:
+            @staticmethod
+            def json():
+                if "caller-context" in url:
+                    return {"ok": True, "found": True, "name": "Demo",
+                            "context": "Demo-Interessent (Rechnung). Zollabfertigung AWB Onlinekauf."}
+                if "/brain/search" in url:
+                    return {"ok": True, "results": []}
+                if "karteikarte" in url:
+                    return {"ok": True, "events": []}
+                raise AssertionError(url)
+        return _R()
+
+    echt = ged.httpx.get
+    ged.httpx.get = fake_get
+    try:
+        assert ged._kontext_holen("01776004600", "Demo") == ""
+    finally:
+        ged.httpx.get = echt
+
+
+def test_zeile_inhaltlich_laesst_mail_durch():
+    assert ged.zeile_inhaltlich("Laut E-Mail (Nadine): Labor hat die Lieferung bestätigt.")
+    assert not ged.zeile_inhaltlich("Zollabfertigung AWB Onlinekauf Demo-Interessent.")
+
+
+def test_ereignisse_holen_mischt_suche_und_kartei():
+    def fake_get(url, params=None, **kw):
+        class _R:
+            @staticmethod
+            def json():
+                if "/brain/search" in url:
+                    return {"ok": True, "results": [
+                        {"kind": "event", "ts": 1767200000000, "status": "open",
+                         "snippet": "Laut Anruf (Lisa): Labor nicht erreicht."},
+                    ]}
+                if "caller-context" in url:
+                    return {"ok": True, "found": False, "context": ""}
+                if "karteikarte" in url:
+                    return {"ok": True, "events": [
+                        {"ts": 1767100000000, "status": "none",
+                         "summary": "Laut E-Mail (Nadine): Bestellung 12er, KW36."},
+                    ]}
+                raise AssertionError(url)
+        return _R()
+
+    echt = ged.httpx.get
+    ged.httpx.get = fake_get
+    try:
+        hits = ged.ereignisse_holen("0177111222", "Labor Nord")
+        texte = " ".join(h["summary"] for h in hits)
+        assert "nicht erreicht" in texte
+        assert "Bestellung 12er" in texte
+    finally:
+        ged.httpx.get = echt
 
 
 def test_prompt_block_beide_stimmen():

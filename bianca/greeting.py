@@ -8,3 +8,9 @@ def begruessung(praxis: str) -> str:
     bzw. tenants.praxis_melde), z. B. "Zahnärzte im Medical Center"."""
     wo = " ".join(str(praxis or "").split()).strip() or "unserer Praxis"
     return f"{wo}, guten Tag! Mein Name ist Bianca. Was kann ich für Sie tun?"
+
+
+def gruss_saeubern(text: str) -> str:
+    """W-MEDDENT: Live-Bug „Wem kann ich…“ aus DB/TTS abfangen."""
+    t = " ".join(str(text or "").split()).strip()
+    return t.replace("Wem kann ich", "Was kann ich")

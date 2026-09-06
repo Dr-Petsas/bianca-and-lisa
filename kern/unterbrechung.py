@@ -192,19 +192,60 @@ def nachtragen(sit: dict, text: str) -> None:
         msgs.append({"role": "assistant", "content": text})
 
 
-def ist_echo(sit: dict, gesagt: str) -> bool:
-    """Lautsprecher-Echo der eigenen Stimme? Nur bei aktivem Barge geprüft.
-    Kurze echte Reaktionen ("ja", "nein", "stopp") werden NIE geschluckt —
-    erst ab drei Wörtern, und nur wenn das Gehörte wortgleich im gerade
-    Gesagten steckt (Claras Barge-in-Echo-Regel, aufs Dock übersetzt)."""
-    u = sit.get("unterbrochen")
-    if not isinstance(u, dict) or not enabled():
-        return False
+# Kurze echte Reaktionen — nie als Echo werten (Freisprechen / Barge).
+_KURZ_ECHT = {
+    "ja", "nein", "nee", "nö", "noe", "ok", "okay", "genau", "richtig",
+    "passt", "yeah", "yes", "no", "jup", "jepp", "stopp", "stop", "halt",
+    "hm", "mhm", "aha", "danke", "bitte",
+}
+
+
+def ist_echo(sit: dict, gesagt: str, *, ohr: bool = False) -> bool:
+    """Lautsprecher-Echo der eigenen Stimme?
+
+    Greift bei aktivem Barge (unterbrochen) oder stillem Ohr-Puffer (ohr=True).
+    Kurze echte Reaktionen (ja/nein/stopp/ok) werden NIE geschluckt.
+    Gegen die Satzkarte (ausspr) und ggf. unterbrochen.gesprochen — fuzzy,
+    damit Freisprech-STT die Auto-Schleife nicht oeffnet (W-SVETLANA)."""
     g = _norm(gesagt)
-    if not g or len(g.split()) < 3:
+    if not g:
         return False
-    gespr = _norm(u.get("gesprochen") or "")
-    return bool(gespr) and g in gespr
+    toks = g.split()
+    if toks and toks[0] in _KURZ_ECHT and len(toks) <= 2:
+        return False
+    if all(t in _KURZ_ECHT for t in toks) and 0 < len(toks) <= 3:
+        return False
+
+    u = sit.get("unterbrochen")
+    barge = isinstance(u, dict)
+    if not barge and not ohr:
+        return False
+
+    refs: list[str] = []
+    if barge:
+        refs.append(str(u.get("gesprochen") or ""))
+        refs.extend(str(x) for x in (u.get("rest") or []) if x)
+    a = sit.get("ausspr") if isinstance(sit.get("ausspr"), dict) else {}
+    if a:
+        refs.append(str(a.get("text") or ""))
+        refs.append(str(a.get("vorabText") or ""))
+        refs.extend(str(x) for x in (a.get("saetze") or []) if x)
+
+    min_w = 2 if ohr else 3
+    if len(toks) < min_w:
+        return False
+
+    for ref in refs:
+        nref = _norm(ref)
+        if not nref:
+            continue
+        if g in nref or (len(g) >= 16 and nref in g):
+            return True
+        rset = set(nref.split())
+        treffer = sum(1 for w in toks if w in rset)
+        if treffer >= min_w and treffer / len(toks) >= 0.75:
+            return True
+    return False
 
 
 def fortsetzen(sit: dict, text: str, reply: dict | None = None,
@@ -218,6 +259,8 @@ def fortsetzen(sit: dict, text: str, reply: dict | None = None,
     wer stoppt, will den Rest NICHT hören. Wortgleich in der Antwort
     enthaltene Rest-Sätze fallen weg.
     """
+    u = sit.get("unterbrochen")
+    ech = bool(isinstance(u, dict) and _s(gesagt) and ist_echo(sit, gesagt))
     u = sit.pop("unterbrochen", None)
     t = _s(text)
     if not isinstance(u, dict) or not enabled():
@@ -227,6 +270,13 @@ def fortsetzen(sit: dict, text: str, reply: dict | None = None,
         return t
     if ist_abbruch(gesagt):
         spur.merken(sit, "barge-abbruch", gesagt)
+        return t
+    # W-SVETLANA (04.09.2026): hat der Anrufer wirklich etwas gesagt,
+    # gehört ihm der Floor — den unterbrochenen Monolog NICHT hinterher
+    # hängen ("Also, wo war ich: …"). Das war der Ins-Wort-Fallen-Effekt.
+    # Nur leerer/Echo-Einwurf setzt an der Unterbrechungsstelle fort.
+    if _s(gesagt) and not ech:
+        spur.merken(sit, "barge-floor", gesagt[:40])
         return t
     if (reply or {}).get("book"):
         return t

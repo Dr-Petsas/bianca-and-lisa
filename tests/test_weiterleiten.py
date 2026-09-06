@@ -1,4 +1,4 @@
-﻿"""Weiterleitungs-Platzhalter (Kirri/Zaluma): Erkennung, Ablauf, Jingle-Event.
+"""Weiterleitungs-Platzhalter (Kirri/Zaluma): Erkennung, Ablauf, Jingle-Event.
 
 Laeuft ohne Netz: die Akten-Recherche (letzter_behandler) wird gestummt,
 der Mandant kommt aus tenants/meddent.json (lokale Datei).

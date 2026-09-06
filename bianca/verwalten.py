@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from bianca import gehirn, hintergrund
+from kern import agentprofil
 from kern import calendar as kal
 from kern import gespraech
 from kern.config import DATA_DIR
@@ -765,11 +766,28 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     # W-SAMMELN ist ausgebaut, freiwillig genannte Hinweise filtern weiter).
     if not s["nachname"]:
         if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
-            return None  # LLM klaert die Zwischenfrage, Status fuehrt zurueck
+            # Live 06.09.2026: return None liess das LLM Name fragen und
+            # list_appointments ohne Patient — Identitaet deterministisch halten.
+            if s["frage"] == "anrufer_check" and gehirn.anrufer_bekannt(sit):
+                return {"text": gehirn.anrufer_check_frage(sit)}
+            # Async-Anrufer kam NACH der Nachnamen-Frage: auf Check upgraden.
+            if (s["frage"] in {"name", "nachname"} and not s["anruferCheck"]
+                    and not s["fuerWen"] and gehirn.anrufer_bekannt(sit)):
+                s["frage"] = "anrufer_check"
+                return {"text": gehirn.anrufer_check_frage(sit)}
+            was = {
+                "absagen": "Damit ich den richtigen Termin absage",
+                "verschieben": "Damit ich den richtigen Termin finde",
+            }.get(s["modus"], "Damit ich den richtigen Termin finde")
+            return {"text": (
+                f"{was}: Wie ist Ihr Nachname? "
+                "Buchstabieren Sie ihn am besten gleich einmal."
+            )}
         # W-ANRUFER-CHECK: die Rufnummer hat einen Kartei-Patienten getroffen
         # — Name + Nummer vorlesen statt den Nachnamen zu erfragen. Ein Ja
         # (einsammeln) fuellt Name/patientId/Telefon, die Suche laeuft dann
         # direkt; ein Nein faellt hierher zurueck auf die Nachnamen-Frage.
+        agentprofil.anrufer_warten(sit)
         if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
             s["frage"] = "anrufer_check"
             return {"text": gehirn.anrufer_check_frage(sit)}
@@ -777,7 +795,7 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         was = {
             "absagen": "Damit ich den richtigen Termin absage",
             "verschieben": "Damit ich den richtigen Termin finde",
-        }[s["modus"]]
+        }.get(s["modus"], "Damit ich den richtigen Termin finde")
         # Chef 31.08.2026: direkt zum Buchstabieren einladen — der verhoerte
         # Nachname ist die haeufigste Ursache fuer die Fehlsuche (Zannes).
         return {"text": (
@@ -923,8 +941,19 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     # 6) Auskunft: Nachname reicht — Termine holen und vorlesen.
     if not s["nachname"]:
         if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
-            return None  # LLM klaert die Zwischenfrage, Status fuehrt zurueck
+            # Live 06.09.2026 Petsas: LLM fragte "Wie lautet Ihr Name?" und
+            # rief list_appointments ohne Patient — hier deterministisch bleiben.
+            if s["frage"] == "anrufer_check" and gehirn.anrufer_bekannt(sit):
+                return {"text": gehirn.anrufer_check_frage(sit)}
+            # Async-Anrufer kam erst NACH der Nachnamen-Frage: upgraden.
+            if (s["frage"] in {"name", "nachname"} and not s["anruferCheck"]
+                    and not s["fuerWen"] and gehirn.anrufer_bekannt(sit)):
+                s["frage"] = "anrufer_check"
+                return {"text": gehirn.anrufer_check_frage(sit)}
+            return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?"}
         # W-ANRUFER-CHECK: erkannten Anrufer vorlesen statt erfragen.
+        # Cache-Pfad: Anrufer kommt oft erst async — kurz warten (Petsas).
+        agentprofil.anrufer_warten(sit)
         if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
             s["frage"] = "anrufer_check"
             return {"text": gehirn.anrufer_check_frage(sit)}
@@ -932,7 +961,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?"}
 
     if s["frage"] == "vorname" and not neu:
-        return None  # Zwischenfrage waehrend der Vornamen-Klaerung: LLM
+        return {"text": "Wie ist Ihr Vorname?"}
     if s["frage"] == "vorname" and neu:
         s["frage"] = ""
 

@@ -23,6 +23,9 @@ MODULE = [
     "tests.test_stille_notfall",
     "tests.test_llm_deckel",
     "tests.test_baukasten",
+    "tests.test_baukasten_runner",
+    "tests.test_auftrag",
+    "tests.test_selbst",
     "tests.test_spur",
 ]
 

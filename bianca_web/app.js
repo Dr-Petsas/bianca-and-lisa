@@ -1186,7 +1186,7 @@ function studioAuf(titel, pfad) {
   $("studio").hidden = false;
 }
 $("studioBtn").onclick = () => studioAuf("Test-Studio", "studio/");
-$("ergebnisseBtn").onclick = () => studioAuf("Ergebnisse", "studio/ergebnisse");
+$("ergebnisseBtn").onclick = () => studioAuf("Ergebnisse", "studio/ergebnisse/");
 $("studioZu").onclick = () => {
   $("studio").hidden = true;
   $("studioRahmen").src = "about:blank";

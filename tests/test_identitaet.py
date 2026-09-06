@@ -114,12 +114,33 @@ def test_nein_dann_das_bin_ich_doch():
 def test_deutung():
     assert identitaet.deute("Ja genau") == "ja"
     assert identitaet.deute("Am Apparat") == "ja"
-    assert identitaet.deute("Nein, falsch verbunden") == "nein"
+    assert identitaet.deute("Nein, falsch verbunden") == "fremd"
+    assert identitaet.deute("Das bin ich nicht, ich heiße Petra") == "fremd"
+    assert identitaet.deute("Ja, ich bin Levi") == "ja"
     assert identitaet.deute("Moment, ich gebe ihn Ihnen") == "holen"
     assert identitaet.deute("Das ist meine Tochter") == "dritter"
     # "Nein, das ist mein Sohn" -> nicht doppelt fragen, direkt weitermachen.
     assert identitaet.deute("Nein, das ist mein Sohn") == "dritter"
     assert identitaet.deute("Wer will das wissen") == "unklar"
+
+
+def test_fremd_fragt_nach_der_nummer():
+    sit = _sitzung()
+    zug = identitaet.naechster_zug(sit, "Das bin ich nicht, ich heiße Petra Müller.")
+    assert sit["idCheck"] == identitaet.NUMMER
+    assert sit["idErgebnis"] == "fremd"
+    assert "nummer" in zug["text"].lower()
+    assert "zeit" in zug["text"].lower() or "handy" in zug["text"].lower()
+    assert "Kontrolltermin" not in zug["text"]
+
+
+def test_holen_dann_nein_fragt_nummer_nicht_auftrag():
+    sit = _sitzung()
+    identitaet.naechster_zug(sit, "Nein.")
+    zug = identitaet.naechster_zug(sit, "Nein, der wohnt hier nicht.")
+    assert sit["idCheck"] == identitaet.NUMMER
+    assert "nummer" in zug["text"].lower()
+    assert "Kontrolltermin" not in zug["text"]
 
 
 def test_notfalltext_ohne_modell():

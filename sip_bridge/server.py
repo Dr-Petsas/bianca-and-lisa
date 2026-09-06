@@ -133,6 +133,10 @@ if BRIDGE_GAIN <= 0:
 # (unterbrechung.ist_echo: verwerfen + weitersprechen). Rueckweg fuer den
 # Notfall: BRIDGE_ECHO=1 = Alt-Verhalten (W-SIP-RAUSCH-Halbduplex).
 BRIDGE_ECHO = (os.environ.get("BRIDGE_ECHO") or "0").strip() == "1"
+# W-SVETLANA (04.09.2026): stilles Ohr waehrend Bianca spricht — mitschneiden
+# ohne sie zu stoppen. Nach ihrem Sprechende wird der Puffer zum Zug.
+# BRIDGE_OHR=0 = altes Halbduplex (Barge-Schwelle, 280 ms noetig).
+BRIDGE_OHR = (os.environ.get("BRIDGE_OHR") or "1").strip() != "0"
 
 # W-START-RUHE (31.08.2026, Chef: "manchmal hackt es am anfang oder der
 # agent spricht schon aber die leitung steht noch gar nicht ... und es
@@ -199,6 +203,9 @@ SPIEL_NACHLAUF_S = 0.35
 # (VAD_PREROLL_MS=500, dort gegen abgeschnittene Wortanfaenge wie
 # "gesetzlich" -> "ersetzlich") statt vorher 300 ms.
 VORLAUF_FRAMES = 25     # 500 ms Ringpuffer vor dem Zugbeginn
+# W-SVETLANA: langer Ohr-Puffer waehrend Bianca spricht (6 s) — Svetlanas
+# lange Aussagen ueber der Ansage gehen sonst verloren.
+OHR_FRAMES = 300        # 6 s bei 20-ms-Rahmen
 MIN_SPRACHE_FRAMES = 12 # unter 240 ms Sprachanteil: verwerfen (Knacser)
 # W-SIP-KURZJA (30.08.2026): ein gesprochenes "Ja" hat nur ~100-200 ms
 # Stimmanteil — der 240-ms-Deckel verwarf echte Antworten ("zug verworfen
@@ -356,6 +363,21 @@ class Wiedergabe:
     def aktiv(self) -> bool:
         return any(len(p["buf"]) > p["sent"] or not p["done"] for p in self.posten)
 
+    def hat_echten_rest(self) -> bool:
+        """Noch abspielbarer Inhalt oder Folgesatz, der noch laedt.
+
+        Anders als ``aktiv``: ein bewaffneter Stream-Underrun (armed, buf
+        leer, done=False) zaehlt NICHT — der darf das Ohr freigeben
+        (W-SIP-OHR). Ein noch nicht gestarteter Folgesatz (not armed) zaehlt
+        — sonst wuerde stoppen() ihn in der Satzluecke verwerfen.
+        """
+        for p in self.posten:
+            if len(p["buf"]) > p["sent"]:
+                return True
+            if not p["done"] and not p.get("armed"):
+                return True
+        return False
+
     def spielt(self) -> bool:
         """Fuer VAD/Barge: spielt Bianca GRADE hoerbar (oder startet gleich)?
 
@@ -486,6 +508,45 @@ class Anruf:
         self._audio_format = ""    # "", "slin" oder "alaw" (Erst-Erkennung)
         self._diag_n = 0           # Pegel-Diagnose: Rahmen seit letzter Zeile
         self._diag_max = 0
+        # W-SVETLANA: stilles Ohr waehrend Wiedergabe
+        self._ohr: list[bytes] = []
+        self._ohr_an = False
+        self._ohr_frames = 0
+        self._ohr_peak = 0
+        self._ohr_zug = False      # naechster Zug kam aus dem Ohr-Puffer
+        self._spielte = False
+
+    def _ohr_reset(self) -> None:
+        self._ohr = []
+        self._ohr_an = False
+        self._ohr_frames = 0
+        self._ohr_peak = 0
+
+    def _ohr_start(self) -> None:
+        self._ohr = list(self._ring)
+        self._ohr_an = True
+        self._ohr_frames = self._sprech_run
+        self._ohr_peak = self._peak_run
+
+    def _ohr_flush_zu_rec(self, jetzt: float) -> bool:
+        """Ohr-Puffer als laufende Aufnahme uebernehmen. True = gestartet."""
+        gilt = self._ohr_frames >= MIN_SPRACHE_FRAMES or (
+            self._ohr_frames >= KURZ_FRAMES and self._ohr_peak >= KURZ_PEAK)
+        if not (self._ohr_an and gilt and self._ohr):
+            self._ohr_reset()
+            return False
+        self._rec_an = True
+        self._rec_start = jetzt
+        self._rec = bytearray(b"".join(self._ohr))
+        self._sprech_frames = self._ohr_frames
+        self._rec_peak = self._ohr_peak
+        self._ohr_zug = True
+        self._ring.clear()
+        self._ohr_reset()
+        print(f"bruecke-ohr flush {len(self._rec) // 16} ms "
+              f"({self._sprech_frames} Sprach-Frames, peak={self._rec_peak})",
+              flush=True)
+        return True
 
     # ---- AudioSocket-Rohschicht ------------------------------------------
 
@@ -653,7 +714,17 @@ class Anruf:
                 self._floor = max(FLOOR_MIN, 0.7 * self._floor + 0.3 * rms)
             else:
                 self._floor = min(FLOOR_MAX, self._floor * 1.008 + 1.0)
-        if self.wiedergabe.spielt() and not self._rec_an:
+        spielend = self.wiedergabe.spielt()
+        # W-SVETLANA: "ki_dran" = hoerbar ODER echter Folgesatz in der Queue.
+        # Nur spielt() reicht nicht — in der Luecke vor dem naechsten Satz
+        # (spielt kurz False) loeste 60 ms Sprache stoppen() aus und warf die
+        # RESTLICHEN Saetze weg. Reine Underrun-Zombies zaehlen nicht mit
+        # (W-SIP-OHR: Ohr muss wieder frei werden).
+        ki_dran = spielend or self.wiedergabe.hat_echten_rest()
+        # Waehrend Bianca (noch) dran ist: Zuhör-Schwelle mitschneiden.
+        if ki_dran and not self._rec_an and BRIDGE_OHR:
+            schwelle = min(max(SPRECH_RMS, self._floor * 2.2), SPRECH_DECKEL)
+        elif spielend and not self._rec_an:
             schwelle = min(max(BARGE_RMS, self._floor * 5.0), BARGE_DECKEL)
         else:
             schwelle = min(max(SPRECH_RMS, self._floor * 2.2), SPRECH_DECKEL)
@@ -664,8 +735,8 @@ class Anruf:
         if self._diag_n >= 100:
             print(f"bruecke-pegel max={self._diag_max} floor={self._floor:.0f} "
                   f"schwelle={schwelle:.0f} echoRef={echo_ref} "
-                  f"aktiv={self.wiedergabe.aktiv} spielt={self.wiedergabe.spielt()} "
-                  f"rec={self._rec_an}", flush=True)
+                  f"aktiv={self.wiedergabe.aktiv} spielt={spielend} "
+                  f"rec={self._rec_an} ohr={self._ohr_an}", flush=True)
             self._diag_n = 0
             self._diag_max = 0
         jetzt = time.monotonic()
@@ -683,12 +754,35 @@ class Anruf:
             if (self._rec_an and not echo and rms >= schwelle * HALTE_FAKTOR
                     and jetzt - self._letzte_laut <= HALTE_MAX_S):
                 self._letzte_sprache = jetzt
+            if (self._ohr_an and not echo and rms >= schwelle * HALTE_FAKTOR
+                    and jetzt - self._letzte_laut <= HALTE_MAX_S):
+                self._letzte_sprache = jetzt
+
+        # Wirklich fertig (kein Ton, keine wartenden Posten): Ohr-Puffer
+        # uebernehmen. Bei Underrun/Satzluecke (aktiv noch True) NICHT flushen.
+        if self._spielte and not ki_dran and not self._rec_an and BRIDGE_OHR:
+            self._ohr_flush_zu_rec(jetzt)
+        self._spielte = ki_dran
 
         if not self._rec_an:
             self._ring.append(rahmen)
             if len(self._ring) > VORLAUF_FRAMES:
                 self._ring.pop(0)
-            spielend = self.wiedergabe.spielt()
+
+            # Stilles Ohr: solange sie noch Posten hat, puffern und NIE stoppen.
+            if BRIDGE_OHR and ki_dran:
+                if laut and not self._ohr_an and self._sprech_run >= START_FRAMES:
+                    self._ohr_start()
+                if self._ohr_an:
+                    self._ohr.append(rahmen)
+                    if laut:
+                        self._ohr_frames += 1
+                        self._ohr_peak = max(self._ohr_peak, rms)
+                    if len(self._ohr) > OHR_FRAMES:
+                        drop = len(self._ohr) - OHR_FRAMES
+                        del self._ohr[:drop]
+                return
+
             noetig = BARGE_FRAMES if spielend else START_FRAMES
             if self._sprech_run >= noetig:
                 # Offene/haengende Posten verwerfen — sonst spielt spaeter
@@ -711,6 +805,8 @@ class Anruf:
                 self._ring.clear()
                 self._sprech_frames = self._sprech_run
                 self._rec_peak = self._peak_run
+                self._ohr_zug = False
+                self._ohr_reset()
             return
 
         self._rec.extend(rahmen)
@@ -721,6 +817,8 @@ class Anruf:
         if still_seit >= max(self.stille_ms, 200) or (jetzt - self._rec_start) >= MAX_ZUG_S:
             self._rec_an = False
             pcm, frames, peak = bytes(self._rec), self._sprech_frames, self._rec_peak
+            war_ohr = self._ohr_zug
+            self._ohr_zug = False
             self._rec = bytearray()
             self._sprech_frames = 0
             self._rec_peak = 0
@@ -733,8 +831,9 @@ class Anruf:
                 self.stups_zahl = 0
                 print(f"bruecke-zug {len(pcm) // 16} ms "
                       f"({frames} Sprach-Frames, peak={peak}, "
-                      f"floor={self._floor:.0f})", flush=True)
-                self.zuege.put_nowait(pcm)
+                      f"floor={self._floor:.0f}"
+                      f"{', ohr' if war_ohr else ''})", flush=True)
+                self.zuege.put_nowait((pcm, war_ohr))
             else:
                 print(f"bruecke-zug verworfen ({frames} Sprach-Frames, "
                       f"peak={peak}, floor={self._floor:.0f})", flush=True)
@@ -773,7 +872,7 @@ class Anruf:
                     self.quittungen.append(pcm8)
         return bool(self.session_id)
 
-    async def _zug(self, pcm8: bytes) -> bool:
+    async def _zug(self, pcm8: bytes, *, ohr: bool = False) -> bool:
         """Einen Anrufer-Zug an Bianca geben. False = auflegen."""
         pcm16, _ = audioop.ratecv(pcm8, 2, 1, RATE_IN, RATE_STT, None)
         pcm16 = await asyncio.to_thread(stimme_filtern, pcm16, RATE_STT)
@@ -784,7 +883,8 @@ class Anruf:
                 f.write(wav)
             print(f"bruecke-dump {pfad}", flush=True)
         daten = {"sessionId": self.session_id, "text": "",
-                 "bargeUrl": self.barge_url, "bargeMs": str(self.barge_ms)}
+                 "bargeUrl": self.barge_url, "bargeMs": str(self.barge_ms),
+                 "ohrMit": "1" if ohr else "0"}
         self.barge_url, self.barge_ms = "", 0.0
         auflegen = False
         try:
@@ -842,16 +942,21 @@ class Anruf:
         ende = time.monotonic() + MAX_ANRUF_S
         while self.lebt and time.monotonic() < ende:
             try:
-                pcm = await asyncio.wait_for(self.zuege.get(), timeout=1.0)
+                item = await asyncio.wait_for(self.zuege.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 ruhig = (not self.wiedergabe.spielt() and not self._rec_an
+                         and not self._ohr_an
                          and time.monotonic() - self.wiedergabe.fertig_seit > STUPS_NACH_S
                          and time.monotonic() - self._letzte_sprache > STUPS_NACH_S)
                 if ruhig and self.stups_zahl < 2:
                     await self._stups()
                     self.wiedergabe.fertig_seit = time.monotonic()
                 continue
-            if not await self._zug(pcm):
+            if isinstance(item, tuple):
+                pcm, ohr = item[0], bool(item[1]) if len(item) > 1 else False
+            else:
+                pcm, ohr = item, False
+            if not await self._zug(pcm, ohr=ohr):
                 # Abschied/Weiterleitung: fertig spielen, dann auflegen.
                 for _ in range(600):
                     if not self.wiedergabe.aktiv:

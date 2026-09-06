@@ -8,25 +8,13 @@ import threading
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import (
-    agentprofil,
-    anrufaudio,
-    gedaechtnis,
-    halbsatz,
-    llm,
-    mitschnitt,
-    sprech,
-    stt,
-    tenants,
-    tts,
-    unterbrechung,
-)
+from kern import gedaechtnis, halbsatz, llm, sprech, stt, tenants, tts, unterbrechung
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -38,12 +26,27 @@ from kern.config import (
 )
 from kern.dienst import Dienst, ndjson
 
+# tempo.py fehlt auf aelteren Images — soft, sonst Crash-Loop beim Deploy
+# (06.09.2026: Full-Copy von lokaler server.py ohne tempo-Modul).
+try:
+    from kern import tempo as _tempo
+except ImportError:  # pragma: no cover
+    _tempo = None
+
 # Biancas Stimme gilt fuer diesen PROZESS — Lisa laeuft als eigener Dienst
 # mit ihrer eigenen Stimme weiter. "bianca" = Referenz-Stimme im lokalen
 # TTS-Container (tts_serve/stimmen/bianca.wav), falls TTS_BASE gesetzt ist.
 tts.set_voice(BIANCA_VOICE_ID, name="bianca")
 
 app = FastAPI(title="Bianca Telefon-KI", version="0.1")
+
+
+def _stille_ms(sit: dict) -> int:
+    basis = gehirn.stille_ms(gehirn.sammler(sit))
+    if _tempo is None:
+        return basis
+    return _tempo.pause_ms(basis, sit)
+
 
 DIENST = Dienst(
     name="bianca",
@@ -54,9 +57,10 @@ DIENST = Dienst(
     # weiterhin über melde(), sobald wirklich Netz-Zeit anfällt.
     schnell_fn=lambda sit: (sit.get("sammler") or {}).get("phase") != "gebucht",
     merke_zug=session.merke_zug,
-    # W-TEMPO: nach Ja/Nein-/Wahlfragen reicht dem Dock weniger Ruhe als
-    # Zugende, beim Ziffern-Diktat braucht es mehr (gehirn.stille_ms).
-    stille_fn=lambda sit: gehirn.stille_ms(gehirn.sammler(sit)),
+    # W-TEMPO / W-SVETLANA: Frage-Basis (350/500/1500) an das Sprechtempo
+    # des Anrufers anpassen — unbekannt/langsam nie unter 800/1100 ms, sonst
+    # schneidet 350 ms nach dem ersten Wort (Live Svetlana 04.09.2026).
+    stille_fn=_stille_ms,
 )
 
 
@@ -70,11 +74,6 @@ if _JINGLE_PFAD.is_file():
 
 class StartIn(BaseModel):
     tenant: str = ""
-    # W-MANDANT: die ANGERUFENE Nummer (DID) — gesetzt von der SIP-Bruecke.
-    # Sie schlaegt das tenant-Feld: erst lokale tenants/*.json (dids-Feld),
-    # dann die Pickadoc-DB (onPickadocPhoneCall, phase=pre).
-    did: str = ""
-    caller: str = ""
 
 
 class TurnIn(BaseModel):
@@ -125,8 +124,6 @@ def health():
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "gedaechtnis": gedaechtnis.anzeige(),
-        "mandant": agentprofil.anzeige(),
-        "anrufAudio": anrufaudio.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -136,38 +133,13 @@ def api_tenants():
     return {"ok": True, "tenants": tenants.liste(), "default": DEFAULT_TENANT}
 
 
-@app.post("/api/mandant-cache/leeren")
-def api_mandant_cache_leeren():
-    """W-MANDANT: DID->Agent-Cache (TTL 300 s) sofort verwerfen — nach einer
-    Konfig-Aenderung in der Pickadoc-DB greift der naechste Anruf direkt."""
-    agentprofil.cache_leeren()
-    print("bianca-mandant-cache geleert", flush=True)
-    return {"ok": True}
-
-
 @app.post("/api/start")
 def api_start(body: StartIn):
-    t = None
-    if body.did:
-        t = agentprofil.fuer_did(body.did, caller=body.caller)
-        if t is None:
-            print(f"bianca-start did={body.did!r} unbekannt -> Default-Mandant", flush=True)
-    if t is None:
-        t = tenants.laden(body.tenant or DEFAULT_TENANT)
-    sit = session.neu(tenant=t)
-    if body.did:
-        # W-CALLSTATUS: phoneCallId dieses Anrufs in die Sitzung (frisch aus
-        # der pre-Antwort oder per Hintergrund-Registrierung bei Cache-Hit).
-        agentprofil.call_erfassen(sit, did=body.did, caller=body.caller)
-        # W-SIP-BLOCK (02.09.2026): DID = SIP-Bruecke. Am Telefon kein
-        # Audio-Stream (VOLLBUF wartete auf kompletten Download → 5+ s
-        # Stille nach "Yep"); Blocking-WAV + Bruecken-VOLLBUF = sofort
-        # durchspielen. Dock (ohne did) bleibt bei Stream.
-        sit["clientKind"] = "sip"
+    t = tenants.laden(body.tenant or DEFAULT_TENANT)
+    sit = session.neu(tenant_id=body.tenant or DEFAULT_TENANT)
     return DIENST.json_antwort(
         sit, art="start",
-        extra={"sessionId": sit["id"], "praxis": t.get("praxisName"),
-               "tenantId": t.get("_id") or ""},
+        extra={"sessionId": sit["id"], "praxis": t.get("praxisName")},
     )
 
 
@@ -228,19 +200,16 @@ def api_stille(body: HangupIn):
     text = sprech.sanitize(reply.get("text") or "")
     if not text:
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
-    url, tts_s, cached = DIENST.stimme(text)
-    timings: dict = {"tts": tts_s}
-    if cached:
-        timings["ttsCache"] = True
-    session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)
-    mitschnitt.zug(sit, DIENST, art="stille", text=text, timings=timings, audio_url=url)
+    url, tts_s = DIENST.stimme(text)
+    session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
     print(f"bianca-stille session={body.sessionId} text={text!r}", flush=True)
     return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
 
 @app.post("/api/listen")
 async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: UploadFile = File(...),
-                     bargeUrl: str = Form(""), bargeMs: float = Form(0.0)):
+                     bargeUrl: str = Form(""), bargeMs: float = Form(0.0),
+                     ohrMit: str = Form("0")):
     sit = session.holen(sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
@@ -248,15 +217,13 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     mime = audio.content_type or "application/octet-stream"
     name = audio.filename or "turn.webm"
     live = " ".join((text or "").split()).strip()
+    ohr = (ohrMit or "").strip() in {"1", "true", "yes", "on"}
     if live:
         print(f"bianca-listen live session={sessionId} text={live!r}", flush=True)
-        # W-MITSCHNITT: beim Vorab-TEXT-Zug (W-TEMPO) kommt das Audio nur
-        # zum Archivieren mit — transkribiert wird nicht mehr.
-        mitschnitt.eingang(sit, blob, mime)
         return ndjson(DIENST.zug_stream(sit, art="turn", text_in=live,
-                                        barge_url=bargeUrl, barge_ms=bargeMs))
+                                        barge_url=bargeUrl, barge_ms=bargeMs, ohr=ohr))
     return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name,
-                                    barge_url=bargeUrl, barge_ms=bargeMs))
+                                    barge_url=bargeUrl, barge_ms=bargeMs, ohr=ohr))
 
 
 @app.post("/api/transcribe")
@@ -297,63 +264,6 @@ def api_last_call():
     return {"ok": True, "writeLive": WRITE_LIVE, "call": session.last_call()}
 
 
-# --- Anrufliste (W-MITSCHNITT 30.08.2026): Unterhaltungen mit Audio,
-# Transkript und allen Zeiten — Daten aus .data/anrufe/bianca/<sid>/.
-_MITSCHNITT_STIMME = "bianca"
-
-
-@app.get("/api/anrufe")
-def api_anrufe():
-    return {"ok": True, "anrufe": mitschnitt.liste(_MITSCHNITT_STIMME)}
-
-
-@app.get("/api/anrufe/{sid}")
-def api_anruf(sid: str):
-    m = mitschnitt.laden(_MITSCHNITT_STIMME, sid)
-    if not m:
-        raise HTTPException(404, "anruf unbekannt")
-    return {"ok": True, "anruf": m}
-
-
-@app.get("/api/anrufe/{sid}/audio/{datei}")
-def api_anruf_audio(sid: str, datei: str):
-    p = mitschnitt.audio_pfad(_MITSCHNITT_STIMME, sid, datei)
-    if p is None:
-        raise HTTPException(404)
-    mime = {"wav": "audio/wav", "mp3": "audio/mpeg", "m4a": "audio/mp4",
-            "ogg": "audio/ogg"}.get(p.suffix.lstrip("."), "audio/webm")
-    return FileResponse(p, media_type=mime)
-
-
-@app.get("/api/anrufe/{sid}/download")
-def api_anruf_download(sid: str):
-    """Kompletter Anruf als eine WAV-Datei (Download-Knopf der Anrufe-Seite)."""
-    m = mitschnitt.laden(_MITSCHNITT_STIMME, sid)
-    if not m:
-        raise HTTPException(404, "anruf unbekannt")
-    blob = mitschnitt.anruf_wav(_MITSCHNITT_STIMME, sid)
-    if not blob:
-        raise HTTPException(404, "kein Audio in diesem Mitschnitt")
-    stempel = str(m.get("startedAt") or "")[:16].replace(":", "-").replace("T", "_")
-    name = f"bianca-anruf-{stempel or sid[:8]}.wav"
-    return Response(blob, media_type="audio/wav",
-                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
-
-
-@app.post("/api/anrufe/{sid}/loeschen")
-def api_anruf_loeschen(sid: str):
-    return {"ok": mitschnitt.loeschen(_MITSCHNITT_STIMME, sid)}
-
-
-@app.get("/anrufe")
-def anrufe_seite():
-    p = BIANCA_WEB_DIR / "anrufe.html"
-    if not p.is_file():
-        raise HTTPException(404, "bianca_web/anrufe.html fehlt")
-    return FileResponse(p, media_type="text/html; charset=utf-8",
-                        headers={"Cache-Control": "no-store"})
-
-
 @app.post("/api/hangup")
 def api_hangup(body: HangupIn):
     sit = session.holen(body.sessionId)
@@ -371,14 +281,8 @@ def api_hangup(body: HangupIn):
             print(f"bianca-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
-        # W-MITSCHNITT: offene Stream-Audios einlösen, Ende-Zeit stempeln.
-        mitschnitt.ende(sit, DIENST)
         # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
         gedaechtnis.report_senden(sit)
-        # W-CALLSTATUS: PhoneCall in der Pickadoc-DB abschließen (Status
-        # callCompleted + Transkript + Zusammenfassung) — NACH mitschnitt.ende,
-        # damit Dauer und Zug-Offsets im Manifest stehen.
-        agentprofil.call_abschliessen(sit)
 
     threading.Thread(target=_nacharbeit, daemon=True).start()
     return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}
@@ -400,6 +304,21 @@ def _warm_start():
         for satz in gehirn.feste_saetze(t):
             tts.warm(sprech.sanitize(satz))
         print("bianca-warm: feste Fragen im Cache", flush=True)
+        # W-MANDANT-4: die uebrigen Mandanten NACH dem Default anwärmen —
+        # deren erste Anrufer sollen ebenso wenig auf die Synthese warten.
+        # Gleiche Saetze dedupliziert der Cache; ein kaputtes Tenant-JSON
+        # darf den Rest nicht stoppen.
+        for info in tenants.liste():
+            if info["id"] == DEFAULT_TENANT:
+                continue
+            try:
+                andere = tenants.laden(info["id"])
+                tts.warm(begruessung(tenants.praxis_melde(andere)))
+                for satz in gehirn.feste_saetze(andere):
+                    tts.warm(sprech.sanitize(satz))
+                print(f"bianca-warm: tenant {info['id']} im Cache", flush=True)
+            except Exception as e:
+                print(f"bianca-warm: tenant {info['id']} fail {e}", flush=True)
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -430,36 +349,59 @@ if BIANCA_WEB_DIR.is_dir():
 
 # --- Test-Studio (29.08.2026): HTML/CSS/JS kommen AUS DIESEM Prozess, damit
 # die Seite auch hinter Lisas /bianca/-Tunnel sofort da ist (kein zweites
-# Fenster, kein zweiter Port, kein Redirect auf /studio/ — der wuerde hinter
-# Lisa auf 8095/studio landen und weiss bleiben). API und Berichte gehen
-# intern an den Editor auf 8097.
+# Fenster, kein zweiter Port). API und Berichte gehen intern an den Editor
+# auf 8097 (Compose: STUDIO_BASE=http://studio:8097).
+#
+# Pfad-Falle (06.09.2026): relative Links "web/stil.css" von URL /studio
+# (ohne Slash) landen auf /web/… → 404, Seite wirkt tot. Darum <base href=
+# "/studio/"> in jedes HTML und Redirect /studio → /studio/.
 _STUDIO_WEB = Path(__file__).resolve().parent.parent / "tests" / "baukasten" / "editor_web"
-# Im Compose-Netz auf der 5090 laeuft der Editor als eigener Container
-# (STUDIO_BASE=http://studio:8097) — lokal bleibt es 127.0.0.1.
 _STUDIO_BASIS = os.environ.get("STUDIO_BASE", "").strip().rstrip("/") or "http://127.0.0.1:8097"
 
 
-def _studio_seite(name: str) -> FileResponse:
+def _studio_seite(name: str) -> Response:
     p = _STUDIO_WEB / name
     if not p.is_file():
         raise HTTPException(404, "Test-Studio-Datei fehlt")
+    if name.endswith(".html"):
+        html = p.read_text(encoding="utf-8")
+        if "<base " not in html.lower():
+            html = html.replace("<head>", '<head>\n<base href="/studio/">', 1)
+            if "<base " not in html.lower():
+                html = html.replace("<head ", '<head>\n<base href="/studio/">\n<head ', 1)
+        return Response(
+            html,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
     return FileResponse(p, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/studio")
+def studio_index_redirect():
+    return RedirectResponse(url="/studio/", status_code=307)
+
+
 @app.get("/studio/")
 def studio_index():
     return _studio_seite("index.html")
 
 
 @app.get("/studio/ergebnisse")
+@app.get("/studio/ergebnisse/")
 def studio_ergebnisse():
     return _studio_seite("ergebnisse.html")
 
 
+@app.get("/studio/uebergabe")
+@app.get("/studio/uebergabe/")
+def studio_uebergabe():
+    return _studio_seite("uebergabe.html")
+
+
 @app.get("/studio/web/{name}")
 def studio_web(name: str):
-    erlaubt = {"app.js", "stil.css", "ergebnisse.js"}
+    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js"}
     if name not in erlaubt:
         raise HTTPException(404)
     return _studio_seite(name)
@@ -482,7 +424,7 @@ async def studio_api(request: Request, pfad: str):
 
     def _holen():
         req = urllib.request.Request(ziel, data=body, headers=kopf, method=request.method)
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=180) as r:
             return r.status, r.read(), r.headers.get("content-type")
 
     try:
@@ -514,7 +456,7 @@ def index():
 
 @app.get("/{name}")
 def web_file(name: str):
-    erlaubt = {"app.js", "styles.css", "anrufe.js"}
+    erlaubt = {"app.js", "styles.css"}
     if name in erlaubt:
         p = BIANCA_WEB_DIR / name
         if p.is_file():

@@ -1,5 +1,4 @@
 .env
-secrets/
 .venv/
 __pycache__/
 *.pyc
@@ -13,3 +12,8 @@ app-5090.zip
 tests/daten/
 tests/baukasten/audio/
 tests/baukasten/berichte/
+uebergabe/aktuell.md
+uebergabe/aktuell.json
+uebergabe/vorschlag.md
+uebergabe/archiv/
+uebergabe/liste.md

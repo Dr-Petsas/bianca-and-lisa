@@ -415,6 +415,28 @@ Container (min_silence 2000, hotwords statt initial_prompt-Echo). Tests:
 `tests/test_stt_trim.py` (Trim-Grenzen offline), Hysterese-Block in
 `tests/test_sip_vad.py`, 1500er-Werte in `test_stille_ms_nach_fragetyp`.
 
+## Svetlana: Ohr offen, Echo nicht ans LLM (W-SVETLANA 04.09.2026 — nicht rückbauen)
+
+Live-Transkript Svetlana 04.09.: Überschneidungen fehlten, Anrufer wurde
+nach dem ersten Wort abgeschnitten, während Bianca sprach war die Brücke
+taub (Barge-Schwelle 1100 / 280 ms). Vier Bausteine:
+
+1. **Tempo verdrahtet** (`kern/tempo.py` → `bianca/server` `stille_fn`):
+   unbekannt/langsam nie unter 800/1100 ms statt starrer 350 ms.
+2. **Halbsatz** hält Fortsetzungsworte auch mit Punkt (`Also.`, `Ich.`).
+3. **Stilles Ohr** in `sip_bridge/server.py` (`BRIDGE_OHR=1` Default):
+   während Bianca spricht mit Zuhör-Schwelle puffern (6 s), sie nicht
+   stoppen; nach Ansage-Ende wird der Puffer zum Zug (`ohrMit=1`).
+   Wichtig: `stoppen()` greift erst wenn weder Ton noch wartende Posten
+   (`aktiv`) — sonst werden Folgesätze in TTS-Lücken/Underruns verworfen.
+   Notaus: `BRIDGE_OHR=0` = altes Halbduplex.
+4. **Text-Echo** (`unterbrechung.ist_echo`, auch ohne Barge wenn `ohr=True`)
+   gegen die Satzkarte — Freisprech-Echo startet kein LLM; Ja/Nein/Stopp
+   nie als Echo. Echter Einwand bekommt den Floor (kein „Also, wo war ich“).
+
+Tests: `tests/test_tempo.py`, Ohr-Block in `test_sip_vad.py`,
+`test_ist_echo_ohr_gegen_satzkarte`, Halbsatz-Punkt-Fälle.
+
 ## Ziel-Pipeline Lisa/Bianca (Stand 28.08.2026 spät)
 
 **Parakeet (STT, 8212) -> bewährte Guards/Wächter -> Qwen 3.6 (vLLM, 8000)
@@ -1592,6 +1614,27 @@ viermal „Soll ich das so eintragen?" trotz „Nein" / „Der Name." /
   quittiert „Kein Problem, das finden wir schon." und stellt im
   selben Zug die nächste Pflichtfrage (Name), statt nur zu plaudern.
 - Tests: `tests/test_schleife.py` (offline).
+
+## MedDent-Härte: Nonsense, Dokumente, Floor (W-MEDDENT 04.09.2026 — nicht rückbauen)
+
+Nach Auswertung der Live-Anrufe 04.09.2026 (STT-Müll → Plaudern, Rezept-
+Zusagen, Boah auf Hörfehler, PZR mitten in Wunschzeit, „Wem kann ich“):
+
+- **Talk-Unklar:** `kern/gespraech.wirkt_unklar` — 1–2 Tokens ohne Job/
+  Kurz-OK/Ziffern starten kein Thema (`unklar=True`). `agent.user_turn`
+  antwortet mit `UNKLAR_ANTWORT` („Das habe ich nicht verstanden…“), kein
+  LLM. Anstand greift bei Unklar nicht.
+- **Rezept/Überweisung:** Prompt-Harte + `_abgeben_zug` sagt klar „kann ich
+  nicht ausstellen“; Hirn-`stand_block` verstärkt die Regel.
+- **Barge-Floor:** echter Einwand (`gesagt` nicht leer/Echo) → kein Rest
+  („wo war ich“); nur leerer/Echo-Einwurf setzt fort (W-SVETLANA).
+- **Weiterleitung:** bei `frage=anbieten` auch erneutes `erkannt()` wie Ja.
+- **PZR/Einschub:** nicht im selben Zug wie frische `wunsch`-Ernte.
+- **Anrufer-Check:** bei Termin/Öffnungszeiten im Satz kurzer Vorsatz
+  „Gerne helfe ich Ihnen weiter.“ vor der Erkennung.
+- **Begrüßung:** `Wem kann ich` → `Was kann ich` (DB + `gruss_saeubern`).
+- Tests: `test_gespraech` (unklar), `test_hirn` (Rezept), `test_unterbrechung`
+  (Floor), `test_greeting_bianca`, `test_anstand` (STT-Müll).
 
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 

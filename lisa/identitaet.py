@@ -18,13 +18,15 @@ from __future__ import annotations
 import re
 
 from lisa.greeting import anrede
+from lisa import nummer
 
 # Zustaende in sit["idCheck"]:
 #   frage  – Begruessung ist raus, wir warten auf die Antwort
 #   holen  – "nein" kam, wir haben nach der Zielperson gefragt
 #   warten – jemand holt die Zielperson ans Telefon
+#   nummer – falsche Person; wir fragen nach einer anderen Rufnummer
 #   fertig – Identitaet geklaert, ab hier spricht das Modell
-FRAGE, HOLEN, WARTEN, FERTIG = "frage", "holen", "warten", "fertig"
+FRAGE, HOLEN, WARTEN, NUMMER, FERTIG = "frage", "holen", "warten", "nummer", "fertig"
 
 _JA = re.compile(
     r"\b(ja|jawohl|jup|jo|genau|richtig|korrekt|stimmt|selbst|persoenlich|persönlich|"
@@ -40,6 +42,20 @@ _NEIN = re.compile(
 _HOLEN = re.compile(
     r"\b(moment|augenblick|sekunde|hole|hol ihn|hol sie|gebe ihn|gebe sie|geb ihn|"
     r"geb sie|verbinde|reiche weiter|gleich da|kommt gleich|warten sie)\b",
+    re.I,
+)
+# "Das bin ich nicht, ich heiße …" — nicht der Gesuchte, übernimmt aber
+# auch nicht das Anliegen. Dann nach der richtigen Nummer fragen.
+_FREMDE = re.compile(
+    r"das bin ich nicht|ich bin (?:es )?nicht|falsch verbunden|"
+    r"haben sie sich verwählt|verwählt|falsche nummer|"
+    r"ich heiße|ich heisse|mein name ist|"
+    r"ich bin (?!seine|ihre|der|die|sein|ihr)\w+",
+    re.I,
+)
+_FREMDE_NAME = re.compile(
+    r"(?:ich bin|ich heiße|ich heisse|mein name ist|hier ist)\s+"
+    r"(?!nicht|seine|ihre|der|die)([a-zäöüß\-]{2,}(?:\s+[a-zäöüß\-]{2,})?)",
     re.I,
 )
 # Dritter am Apparat: Zielperson nicht erreichbar ODER "reden Sie mit mir".
@@ -78,7 +94,7 @@ def frage_satz(patient: dict | None) -> str:
 
 
 def deute(text: str) -> str:
-    """ja | nein | holen | dritter | unklar — Reihenfolge ist Absicht."""
+    """ja | nein | holen | dritter | fremd | unklar — Reihenfolge ist Absicht."""
     t = _s(text)
     if not t:
         return "unklar"
@@ -87,6 +103,12 @@ def deute(text: str) -> str:
     # "Nein, das ist mein Sohn" -> dritter schlaegt nein: nicht doppelt fragen.
     if _DRITTER.search(t):
         return "dritter"
+    # "Das bin ich nicht" vor "das bin ich" (steht in _JA).
+    # "Ja, ich bin Levi" darf nicht als fremd gelten.
+    if _FREMDE.search(t):
+        if _JA.search(t) and not re.search(r"\bnicht\b", t, re.I):
+            return "ja"
+        return "fremd"
     if _NEIN.search(t):
         return "nein"
     if _JA.search(t):
@@ -115,9 +137,25 @@ def _ohne_anrede(sit: dict, *, dank: str = "") -> str:
     return f"{kopf}{anliegen_satz(sit)}".strip()
 
 
+def _wer_sagt(gesagt: str) -> str:
+    m = _FREMDE_NAME.search(_s(gesagt))
+    return _s(m.group(1)) if m else ""
+
+
+def _zu_nummer(sit: dict, gesagt: str) -> dict:
+    sit["idCheck"] = NUMMER
+    sit["idErgebnis"] = "fremd"
+    return {"text": nummer.frage_nach_nummer(sit, wer=_wer_sagt(gesagt)), "warten": True}
+
+
 def naechster_zug(sit: dict, gesagt: str) -> dict | None:
     """Antwort der Identitaets-Phase — oder None, wenn das Modell dran ist."""
     stand = _s(sit.get("idCheck"))
+    if stand == NUMMER or nummer.aktiv(sit):
+        zug = nummer.naechster_zug(sit, gesagt)
+        if zug and nummer.stand(sit).get("phase") == nummer.FERTIG:
+            sit["idCheck"] = FERTIG
+        return zug
     if stand not in {FRAGE, HOLEN, WARTEN}:
         return None
     art = deute(gesagt)
@@ -128,6 +166,8 @@ def naechster_zug(sit: dict, gesagt: str) -> dict | None:
         return {"text": "Gerne, ich warte einen Moment.", "warten": True}
 
     if stand == FRAGE:
+        if art == "fremd":
+            return _zu_nummer(sit, gesagt)
         if art == "dritter":
             sit["idCheck"] = FERTIG
             sit["idErgebnis"] = "dritter"
@@ -155,16 +195,21 @@ def naechster_zug(sit: dict, gesagt: str) -> dict | None:
         sit["idErgebnis"] = "unklar"
         return {"text": _ohne_anrede(sit)}
 
-    # stand == HOLEN oder WARTEN: die Zielperson ist dran — oder eben nicht.
-    sit["idCheck"] = FERTIG
+    # HOLEN / WARTEN: Zielperson kommt — oder die Nummer stimmt nicht.
     if art == "dritter":
+        sit["idCheck"] = FERTIG
         sit["idErgebnis"] = "dritter"
         return {"text": _ohne_anrede(sit, dank="Alles klar, danke.")}
     if stand == WARTEN and art in {"ja", "unklar"}:
+        sit["idCheck"] = FERTIG
         sit["idErgebnis"] = "bestaetigt"
         return {"text": _mit_anrede(sit)}
     if art == "ja":
+        sit["idCheck"] = FERTIG
         sit["idErgebnis"] = "bestaetigt"
         return {"text": _mit_anrede(sit)}
+    if art in {"fremd", "nein"}:
+        return _zu_nummer(sit, gesagt)
+    sit["idCheck"] = FERTIG
     sit["idErgebnis"] = "dritter"
     return {"text": _ohne_anrede(sit)}

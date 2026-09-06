@@ -391,7 +391,8 @@ def _warm_start():
 
 @app.post("/api/listen")
 async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: UploadFile = File(...),
-                     bargeUrl: str = Form(""), bargeMs: float = Form(0.0)):
+                     bargeUrl: str = Form(""), bargeMs: float = Form(0.0),
+                     ohrMit: str = Form("0")):
     sit = session.holen(sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
@@ -399,15 +400,16 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     mime = audio.content_type or "application/octet-stream"
     name = audio.filename or "turn.webm"
     live = " ".join((text or "").split()).strip()
+    ohr = (ohrMit or "").strip() in {"1", "true", "yes", "on"}
     if live:
         print(f"lisa-listen live session={sessionId} text={live!r}", flush=True)
         # W-MITSCHNITT: beim Vorab-TEXT-Zug (W-TEMPO) kommt das Audio nur
         # zum Archivieren mit — transkribiert wird nicht mehr.
         mitschnitt.eingang(sit, blob, mime)
         return _ndjson(_zug_stream(sit, art="turn", text_in=live,
-                                   barge_url=bargeUrl, barge_ms=bargeMs))
+                                   barge_url=bargeUrl, barge_ms=bargeMs, ohr=ohr))
     return _ndjson(_zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name,
-                               barge_url=bargeUrl, barge_ms=bargeMs))
+                               barge_url=bargeUrl, barge_ms=bargeMs, ohr=ohr))
 
 
 @app.post("/api/transcribe")

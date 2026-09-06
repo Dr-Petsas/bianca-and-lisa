@@ -11,6 +11,13 @@ const wahl = {
 let storyNr = 1;
 let telefonQualitaet = false;
 let poller = null;
+let auftragGezeigt = false;
+let letzterAuftrag = null;
+let markenNachIdx = {};
+let selbstAn = false;
+let selbstBusy = false;
+let selbstMic = null;
+let selbstHoerNr = 0;
 const gespielt = new Set();  // Audio-URLs, die das Mithoeren schon abgespielt hat
 let spielKette = Promise.resolve();
 const lautsprecher = new Audio();
@@ -273,7 +280,12 @@ async function laufStarten(anzahl) {
   mithoerenSetzen(true);
   popupAuf();
   $("live-dialog").innerHTML = "";
-  $("live-story").textContent = "startet …";
+  $("live-story").textContent = "Freifelder werden als Audio erzeugt …";
+  auftragGezeigt = false;
+  letzterAuftrag = null;
+  if ($("auftrag-popup")) $("auftrag-popup").hidden = true;
+  if ($("selbst-leiste")) $("selbst-leiste").hidden = true;
+  selbstAn = false;
   const body = {
     anzahl, ab: storyNr, tag: wahl.tag || "Mittwoch",
     mithoeren: true,
@@ -292,7 +304,71 @@ async function laufStarten(anzahl) {
   pollerStarten();
 }
 
-function bubbleBauen(z) {
+function markenUebernehmen(liste) {
+  markenNachIdx = {};
+  (liste || []).forEach((m) => {
+    if (m && m.idx != null) markenNachIdx[m.idx] = m;
+  });
+}
+
+async function markeSenden(idx, z, kommentar) {
+  const kom = String(kommentar || "").trim();
+  try {
+    const r = await fetch("api/auftrag/marke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idx, text: z.text || "", wer: "Bianca", kommentar: kom,
+      }),
+    });
+    const d = await r.json();
+    if (d.marken) markenUebernehmen(d.marken);
+    if (d.auftrag) letzterAuftrag = d.auftrag;
+  } catch { /* */ }
+}
+
+function markeKnopf(div, idx, z) {
+  const da = markenNachIdx[idx];
+  if (da) div.classList.add("markiert");
+  const box = document.createElement("div");
+  box.className = "marke-box";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "marke-knopf";
+  btn.textContent = da ? "Markiert" : "Stimmt nicht";
+  const feld = document.createElement("textarea");
+  feld.className = "eigen";
+  feld.rows = 2;
+  feld.placeholder = "Was war falsch an dieser Antwort?";
+  feld.value = (da && da.kommentar) || "";
+  if (!da) feld.hidden = true;
+  const speichern = () => {
+    const kom = feld.value.trim();
+    if (kom) {
+      markenNachIdx[idx] = { idx, text: z.text || "", wer: "Bianca", kommentar: kom };
+      div.classList.add("markiert");
+      btn.textContent = "Markiert";
+    } else {
+      delete markenNachIdx[idx];
+      div.classList.remove("markiert");
+      btn.textContent = "Stimmt nicht";
+      feld.hidden = true;
+    }
+    markeSenden(idx, z, kom);
+  };
+  btn.addEventListener("click", () => {
+    if (feld.hidden) { feld.hidden = false; feld.focus(); return; }
+    speichern();
+  });
+  feld.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); speichern(); }
+  });
+  box.appendChild(btn);
+  box.appendChild(feld);
+  div.appendChild(box);
+}
+
+function bubbleBauen(z, idx) {
   const div = document.createElement("div");
   if (z.warte) {
     div.className = "bubble warte";
@@ -327,10 +403,12 @@ function bubbleBauen(z) {
     meta.appendChild(knopf);
   }
   if (meta.children.length) div.appendChild(meta);
+  if (z.wer === "bianca" && idx != null) markeKnopf(div, idx, z);
   return div;
 }
 
 function mithoerenSpielen(z) {
+  if (selbstAn) return;
   const rel = z.audioUrl || z.audio;
   if (!mithoerenAn() || !rel || gespielt.has(rel)) return;
   gespielt.add(rel);
@@ -347,16 +425,32 @@ async function pollen() {
   $("status").textContent = d.laeuft
     ? `Lauf ${d.laufId}: Story ${idx}/${d.storiesGesamt} ${d.story || ""}`
     : (d.laufId ? `Lauf ${d.laufId} fertig — ${(d.fertig || []).filter((x) => x.ok).length}/${(d.fertig || []).length} grün` : "bereit");
-  $("lauf-hinweis").innerHTML = d.laufId
+  let hinweis = d.laufId
     ? `<a href="ergebnisse#${d.laufId}" style="color:var(--akzent)">Ergebnisse des Laufs ansehen</a>` : "";
+  if (d.auftrag && d.auftrag.markdown) {
+    hinweis += (hinweis ? " · " : "")
+      + `<a href="#" id="auftrag-oeffnen" style="color:var(--akzent)">Auftrag anzeigen</a>`;
+  }
+  $("lauf-hinweis").innerHTML = hinweis;
+  const oeff = $("auftrag-oeffnen");
+  if (oeff) {
+    oeff.addEventListener("click", (e) => {
+      e.preventDefault();
+      auftragZeigen(d.auftrag);
+    });
+  }
   if (d.fehler) $("fehler").textContent = d.fehler;
   $("knopf-start").disabled = d.laeuft;
   $("knopf-batch").disabled = d.laeuft;
+  if ($("knopf-selbst")) $("knopf-selbst").disabled = d.laeuft && !selbstAn;
   if ($("knopf-telefon")) $("knopf-telefon").disabled = d.laeuft;
+  if (d.marken) markenUebernehmen(d.marken);
+  if ($("selbst-leiste")) $("selbst-leiste").hidden = !(selbstAn || d.modus === "selbst");
 
   if (d.warm && d.warm.n) {
     const t = String(d.warm.text || "");
-    $("live-story").textContent = `Audio ${d.warm.i}/${d.warm.n}: ${t}`;
+    const art = d.warm.art === "freifeld" ? "Freifeld" : "Audio";
+    $("live-story").textContent = `${art} ${d.warm.i}/${d.warm.n}: ${t}`;
   } else if (d.story) {
     $("live-story").textContent = d.story + (telefonQualitaet ? " · Telefonqualität" : "");
   }
@@ -365,14 +459,114 @@ async function pollen() {
     // Nur fehlende Bubbles anhaengen (kein Flackern beim Poll).
     while (dialog.children.length > d.zuege.length) dialog.removeChild(dialog.lastChild);
     for (let i = dialog.children.length; i < d.zuege.length; i++) {
-      dialog.appendChild(bubbleBauen(d.zuege[i]));
+      dialog.appendChild(bubbleBauen(d.zuege[i], i));
       mithoerenSpielen(d.zuege[i]);
     }
     dialog.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "end" });
-  } else if (!d.laeuft) {
-    // Lauf fertig: Poller schlafen legen.
+  }
+  einzelAuftragPruefen(d);
+  if (!d.laeuft && poller) {
     clearInterval(poller);
     poller = null;
+  }
+}
+
+function einzelAuftragPruefen(d) {
+  if (auftragGezeigt) return;
+  if (!d.auftrag || d.storiesGesamt !== 1) return;
+  auftragGezeigt = true;
+  auftragZeigen(d.auftrag);
+}
+
+function auftragZeigen(paket) {
+  letzterAuftrag = paket;
+  const liste = $("auftrag-liste");
+  const ges = $("auftrag-gespraech");
+  if (!liste || !$("auftrag-popup")) return;
+  liste.innerHTML = "";
+  const tickets = paket.tickets || [];
+  if (!tickets.length) {
+    const li = document.createElement("li");
+    li.className = "ok";
+    li.innerHTML = "<strong>Checks grün</strong>Trotzdem gegenlesen: klang etwas falsch? Hinweis unten eintragen.";
+    liste.appendChild(li);
+  } else {
+    tickets.forEach((t) => {
+      const li = document.createElement("li");
+      li.className = "rot";
+      const titel = document.createElement("strong");
+      titel.textContent = t.titel || "Punkt";
+      const text = document.createElement("div");
+      text.textContent = t.text || "";
+      li.appendChild(titel);
+      li.appendChild(text);
+      liste.appendChild(li);
+    });
+  }
+  $("auftrag-titel").textContent = paket.ok ? "Lauf grün — Verbesserungen?" : "Verbesserungen";
+  $("auftrag-meta").textContent = `${paket.storyId || ""} · ${paket.laufId || ""}`;
+  ges.textContent = (paket.gespraech || []).join("\n") || "(kein Gespräch)";
+  $("auftrag-hinweis").value = paket.hinweis || "";
+  $("auftrag-status").textContent = "";
+  const ml = $("auftrag-marken");
+  if (ml) {
+    ml.innerHTML = "";
+    const marken = paket.marken || Object.values(markenNachIdx);
+    if (!marken.length) {
+      const li = document.createElement("li");
+      li.className = "ok";
+      li.textContent = "Keine Antwort markiert. Im Verlauf auf „Stimmt nicht“ tippen.";
+      ml.appendChild(li);
+    } else {
+      marken.forEach((m) => {
+        const li = document.createElement("li");
+        li.className = "rot";
+        const titel = document.createElement("strong");
+        titel.textContent = `Zug ${m.idx} · ${m.wer || "Bianca"}`;
+        const text = document.createElement("div");
+        text.textContent = (m.kommentar || "") + (m.text ? `\n„${m.text}“` : "");
+        li.appendChild(titel);
+        li.appendChild(text);
+        ml.appendChild(li);
+      });
+    }
+  }
+  popupZu();
+  $("auftrag-popup").hidden = false;
+}
+
+async function auftragSpeichern() {
+  const hinweis = $("auftrag-hinweis") ? $("auftrag-hinweis").value : "";
+  $("auftrag-status").textContent = "speichert …";
+  try {
+    const r = await fetch("api/auftrag", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hinweis, marken: Object.values(markenNachIdx) }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      $("auftrag-status").textContent = d.fehler || "Speichern fehlgeschlagen";
+      return;
+    }
+    letzterAuftrag = d;
+    $("auftrag-status").textContent = "Im Ordner uebergabe. Im Chat: Übergabe";
+  } catch (e) {
+    $("auftrag-status").textContent = "Netzfehler — nochmal versuchen";
+  }
+}
+
+async function auftragKopieren() {
+  const text = (letzterAuftrag && letzterAuftrag.markdown) || "";
+  if (!text) {
+    $("auftrag-status").textContent = "Nichts zum Kopieren";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    $("auftrag-status").textContent = "Kopiert. Oder im Chat: Übergabe";
+  } catch {
+    $("auftrag-status").textContent = "Zwischenablage blockiert — Text steht in der Datei";
   }
 }
 
@@ -380,6 +574,198 @@ function pollerStarten() {
   if (poller) return;
   pollen();
   poller = setInterval(pollen, 350);
+}
+
+function selbstPhase(text) {
+  if ($("selbst-phase")) $("selbst-phase").textContent = text || "";
+}
+
+async function selbstAudios(d) {
+  for (const u of d.fillerUrls || []) {
+    if (u) await spielen(u);
+  }
+  if (d.audioUrl) await spielen(d.audioUrl);
+}
+
+async function selbstStarten() {
+  $("fehler").textContent = "";
+  await ohrOeffnen();
+  mithoerenSetzen(true);
+  popupAuf();
+  $("live-dialog").innerHTML = "";
+  $("live-story").textContent = "Selbst-Anruf — du bist der Anrufer, kein Caller-Audio";
+  if ($("selbst-leiste")) $("selbst-leiste").hidden = false;
+  auftragGezeigt = false;
+  letzterAuftrag = null;
+  markenNachIdx = {};
+  if ($("auftrag-popup")) $("auftrag-popup").hidden = true;
+  selbstAn = true;
+  selbstBusy = true;
+  selbstHoerNr += 1;
+  const r = await fetch("api/selbst/start", { method: "POST" });
+  const d = await r.json();
+  if (!d.ok) {
+    selbstAn = false;
+    selbstBusy = false;
+    $("fehler").textContent = d.fehler || "Selbst-Anruf startet nicht";
+    if ($("selbst-leiste")) $("selbst-leiste").hidden = true;
+    return;
+  }
+  pollerStarten();
+  selbstPhase("Bianca spricht …");
+  await selbstAudios(d);
+  selbstBusy = false;
+  try {
+    selbstMic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    selbstPhase("Sie sind dran — einfach reden oder tippen");
+    selbstHoeren();
+  } catch {
+    selbstMic = null;
+    selbstPhase("Mikro blockiert — unten tippen und Sagen");
+  }
+}
+
+async function selbstAufnehmen() {
+  if (!selbstMic) return null;
+  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    ? "audio/webm;codecs=opus" : (MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "");
+  const rec = mime ? new MediaRecorder(selbstMic, { mimeType: mime }) : new MediaRecorder(selbstMic);
+  const teile = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) teile.push(e.data); };
+  const ctx = window.AudioContext || window.webkitAudioContext;
+  const ac = ctx ? new ctx() : null;
+  let an = null;
+  if (ac) {
+    const src = ac.createMediaStreamSource(selbstMic);
+    an = ac.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);
+  }
+  const buf = an ? new Uint8Array(an.fftSize) : null;
+  rec.start(80);
+  const t0 = performance.now();
+  let sprach = 0;
+  let stillAb = 0;
+  await new Promise((done) => {
+    const tick = () => {
+      if (rec.state !== "recording") return done();
+      let rms = 0;
+      if (an && buf) {
+        an.getByteTimeDomainData(buf);
+        let s = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          s += v * v;
+        }
+        rms = Math.sqrt(s / buf.length);
+      }
+      const jetzt = performance.now();
+      if (rms > 0.025) { sprach += 1; stillAb = 0; }
+      else if (sprach) stillAb = stillAb || jetzt;
+      const still = stillAb && (jetzt - stillAb > 550);
+      if ((still && jetzt - t0 > 450) || jetzt - t0 > 10000) {
+        try { rec.stop(); } catch { /* */ }
+        return done();
+      }
+      requestAnimationFrame(tick);
+    };
+    rec.addEventListener("stop", () => done(), { once: true });
+    requestAnimationFrame(tick);
+  });
+  if (ac) try { ac.close(); } catch { /* */ }
+  if (!teile.length) return null;
+  return new Blob(teile, { type: rec.mimeType || "audio/webm" });
+}
+
+async function selbstZugAudio(blob) {
+  const fd = new FormData();
+  fd.append("audio", blob, (blob.type || "").includes("mp4") ? "turn.m4a" : "turn.webm");
+  const r = await fetch("api/selbst/hoeren", { method: "POST", body: fd });
+  return r.json();
+}
+
+async function selbstZugText(text) {
+  const r = await fetch("api/selbst/zug", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  return r.json();
+}
+
+async function selbstAntwort(d) {
+  await pollen();
+  if (!d || !d.ok) {
+    selbstPhase(d && d.fehler ? d.fehler : "Zug fehlgeschlagen — nochmal");
+    return;
+  }
+  if (d.warte) {
+    selbstPhase("… Satz klingt unfertig — Bianca hört weiter");
+    return;
+  }
+  selbstPhase("Bianca spricht …");
+  await selbstAudios(d);
+  if (d.hangup) {
+    await selbstAuflegen();
+    return;
+  }
+  selbstPhase("Sie sind dran — einfach reden oder tippen");
+}
+
+async function selbstHoeren() {
+  const nr = selbstHoerNr;
+  if (!selbstAn || selbstBusy || !selbstMic) return;
+  const blob = await selbstAufnehmen();
+  if (!selbstAn || nr !== selbstHoerNr) return;
+  if (!blob || blob.size < 1200) {
+    if (selbstAn && nr === selbstHoerNr) setTimeout(selbstHoeren, 200);
+    return;
+  }
+  selbstBusy = true;
+  selbstPhase("Bianca antwortet …");
+  try {
+    const d = await selbstZugAudio(blob);
+    await selbstAntwort(d);
+  } catch (e) {
+    selbstPhase(String(e.message || e));
+  }
+  selbstBusy = false;
+  if (selbstAn && nr === selbstHoerNr) selbstHoeren();
+}
+
+async function selbstSagen() {
+  const text = ($("selbst-text") && $("selbst-text").value || "").trim();
+  if (!text || !selbstAn || selbstBusy) return;
+  selbstBusy = true;
+  $("selbst-text").value = "";
+  selbstPhase("Bianca antwortet …");
+  try {
+    const d = await selbstZugText(text);
+    await selbstAntwort(d);
+  } catch (e) {
+    selbstPhase(String(e.message || e));
+  }
+  selbstBusy = false;
+  if (selbstAn && selbstMic) selbstHoeren();
+}
+
+async function selbstAuflegen() {
+  selbstHoerNr += 1;
+  selbstAn = false;
+  selbstBusy = false;
+  if (selbstMic) {
+    try { selbstMic.getTracks().forEach((t) => t.stop()); } catch { /* */ }
+    selbstMic = null;
+  }
+  if ($("selbst-leiste")) $("selbst-leiste").hidden = true;
+  let paket = null;
+  try {
+    const r = await fetch("api/selbst/hangup", { method: "POST" });
+    const d = await r.json();
+    paket = d.auftrag;
+  } catch { /* */ }
+  if (paket) auftragZeigen(paket);
+  else pollen();
 }
 
 async function boot() {
@@ -393,7 +779,21 @@ async function boot() {
   telefonKnopfZeichnen();
   $("knopf-start").addEventListener("click", () => laufStarten(1));
   $("knopf-batch").addEventListener("click", () => laufStarten(10));
-  $("anruf-zu").addEventListener("click", popupZu);
+  if ($("knopf-selbst")) $("knopf-selbst").addEventListener("click", selbstStarten);
+  if ($("selbst-sagen")) $("selbst-sagen").addEventListener("click", selbstSagen);
+  if ($("selbst-text")) $("selbst-text").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); selbstSagen(); }
+  });
+  if ($("selbst-auflegen")) $("selbst-auflegen").addEventListener("click", selbstAuflegen);
+  $("anruf-zu").addEventListener("click", () => {
+    if (selbstAn) selbstAuflegen();
+    else popupZu();
+  });
+  if ($("auftrag-zu")) $("auftrag-zu").addEventListener("click", () => {
+    $("auftrag-popup").hidden = true;
+  });
+  if ($("auftrag-speichern")) $("auftrag-speichern").addEventListener("click", auftragSpeichern);
+  if ($("auftrag-kopieren")) $("auftrag-kopieren").addEventListener("click", auftragKopieren);
   $("mithoeren").addEventListener("change", () => mithoerenSetzen($("mithoeren").checked));
   $("mithoeren-popup").addEventListener("change", () => {
     mithoerenSetzen($("mithoeren-popup").checked);

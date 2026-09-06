@@ -54,6 +54,69 @@ def test_vornamen_unklar_und_heuristik():
     assert vornamen.geschlecht("Warlia") == "f"
     # Gelistete Ausnahme bleibt männlich trotz -a.
     assert vornamen.geschlecht("Joshua") == "m"
+    # Live 30.08.2026: Haila wurde als männlich geraten — Wächter sagt f.
+    assert vornamen.geschlecht("Haila") == "f"
+    assert vornamen.aus_liste("Haila") == "f"
+    # Live 30.08.: Eythymios/Aethymius ungelistet → Default Frau.
+    assert vornamen.geschlecht("Eythymios") == "m"
+    assert vornamen.geschlecht("Aethymius") == "m"
+
+
+def test_haila_allein_ist_vorname_frau():
+    """Einzeln 'Haila' darf nicht als Nachname 'Herr Haila' landen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit, "Haila")
+    assert s["vorname"] == "Haila" and not s["nachname"]
+    assert s["geschlecht"] == "f" and not s["geschlechtUnklar"]
+    sit2 = _sit()
+    s2 = gehirn.sammler(sit2)
+    s2.update({"modus": "buchen", "frage": "name"})
+    gehirn.einsammeln(sit2, "Haila Müller")
+    assert s2["vorname"] == "Haila" and s2["nachname"] == "Müller"
+    assert gehirn.anrede(s2) == "Frau Müller"
+    stand = flow.status_zeile(sit2)
+    assert "Anrede=Frau Müller" in stand
+
+
+def test_festlegen_fuer_neuaufnahme():
+    """Neue Akte: Wächter bestimmt immer m/f, nie leer."""
+    assert vornamen.festlegen("Peter") == "m"
+    assert vornamen.festlegen("Anna") == "f"
+    assert vornamen.festlegen("Eythymios") == "m"
+    assert vornamen.festlegen("Haila") == "f"
+    assert vornamen.festlegen("Kim") == "f"  # unklar → Default weiblich
+    assert vornamen.festlegen("Kim", "m") == "m"  # schon gesetzt bleibt
+    assert vornamen.festlegen("", "herr") == "m"
+
+
+def test_akte_anlegen_setzt_geschlecht_aus_vornamen():
+    """Ohne mitgegebenes gender legt die Neuaufnahme anhand des Vornamens fest."""
+    from kern import patients
+    from kern.tenants import laden
+    echt = patients.WRITE_LIVE
+    patients.WRITE_LIVE = False
+    try:
+        tenant = laden("meddent")
+        r = patients.akte_anlegen(tenant, first="Peter", last="Berger", phone="01776004601")
+        assert r.get("ok") and r["patient"]["gender"] == "m", r
+        r2 = patients.akte_anlegen(tenant, first="Eythymios", last="Papagrigoriou", phone="01776004601")
+        assert r2["patient"]["gender"] == "m", r2
+        r3 = patients.akte_anlegen(tenant, first="Anna", last="Meier", phone="01776004601")
+        assert r3["patient"]["gender"] == "f", r3
+    finally:
+        patients.WRITE_LIVE = echt
+
+
+def test_ctx_bauen_legt_geschlecht_auch_ohne_sammler_fest():
+    """s.update(vorname=…) ohne einsammeln: ctx.gender darf nicht fehlen."""
+    sit = _sit()
+    s = _neu_komplett(sit)
+    assert not s.get("geschlecht")
+    ctx = flow._ctx_bauen(sit)
+    assert ctx["gender"] == "m"
+    assert s["geschlecht"] == "m"
 
 
 def test_geschlecht_im_sammler_mit_default_weiblich():

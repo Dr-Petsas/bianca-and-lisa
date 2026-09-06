@@ -25,14 +25,51 @@ from kern.config import (
 # trotz language_code=de gern englisch ("Maikl"). Der Bindestrich erzwingt die
 # deutsche Silbentrennung. Logs, Kalender und Transkript behalten die echte
 # Schreibweise — nur der Text an die Stimme wird umgeschrieben.
-_AUSSPRACHE = (
+#
+# W-MANDANT-4 (30.08.2026): Die BEHANDLER-Namen kommen aus den Tenant-JSONs
+# (Feld "aussprache": {"Petsas": "Pet-sas", ...}) — vereinigt ueber alle
+# Mandanten, denn ein Name klingt gleich, egal welche Praxis ihn traegt.
+# Traegt KEIN Tenant das Feld, gilt die alte eingebaute Liste. Die
+# Vornamen-Regeln (Michael/David) sind praxisunabhaengig und bleiben im Code.
+_GENERISCH = (
     (re.compile(r"\bMichael\b"), "Micha-el"),
     (re.compile(r"\bDavid\b"), "Dah-vid"),
-    # Behandler-Namen: Qwen3 liest sie sonst englisch/lateinisch an.
+)
+_BEHANDLER_FALLBACK = (
+    # Qwen3 liest die Namen sonst englisch/lateinisch an.
     (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
     (re.compile(r"\bPatrikis\b", re.I), "Pa-tri-kis"),
     (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
+_AUSSPRACHE_CACHE: tuple | None = None
+
+
+def _aussprache() -> tuple:
+    global _AUSSPRACHE_CACHE
+    if _AUSSPRACHE_CACHE is None:
+        regeln: dict[str, tuple] = {}
+        try:
+            from kern import tenants as _tenants
+            for info in _tenants.liste():
+                d = _tenants.laden(info["id"])
+                feld = d.get("aussprache")
+                if not isinstance(feld, dict):
+                    continue
+                for wort, sprech in feld.items():
+                    w = " ".join(str(wort or "").split()).strip()
+                    s = " ".join(str(sprech or "").split()).strip()
+                    if w and s and w.lower() not in regeln:
+                        regeln[w.lower()] = (re.compile(rf"\b{re.escape(w)}\b", re.I), s)
+        except Exception as e:
+            print(f"tts-aussprache: tenants nicht lesbar ({e}), Fallback-Liste", flush=True)
+        _AUSSPRACHE_CACHE = _GENERISCH + (tuple(regeln.values()) if regeln else _BEHANDLER_FALLBACK)
+    return _AUSSPRACHE_CACHE
+
+
+def aussprache_zuruecksetzen() -> None:
+    """Nur fuer Tests: Regel-Cache verwerfen (z. B. nach Tenant-Aenderung)."""
+    global _AUSSPRACHE_CACHE
+    _AUSSPRACHE_CACHE = None
 
 # Lautheit — RMS-Angleichung auf Clara-/ElevenLabs-Niveau (28.08.2026).
 # Das Demo-Clara-Peak-Rezept (Ziel 0,82 FS, max 1,8, nie absenken) macht
@@ -103,7 +140,7 @@ def _lokal_client() -> httpx.Client:
 
 def _normalisieren(text: str) -> str:
     sauber = " ".join(str(text or "").split()).strip()
-    for cre, ersatz in _AUSSPRACHE:
+    for cre, ersatz in _aussprache():
         sauber = cre.sub(ersatz, sauber)
     return sauber
 
@@ -116,6 +153,10 @@ def _normalisieren(text: str) -> str:
 # Logs und Transkript behalten die Wortform. Gilt erst ab ZWEI Zahlwoertern
 # in Folge (Telefonnummern-Muster); Uhrzeiten ("neun Uhr fuenfzehn") und
 # Mengen ("zwoelf Termine") bleiben unberuehrt.
+#
+# Qwen3 Hybrid (8213, Live 06.09.2026 A/B auf 015253904756): Wortform
+# STT-korrekt, Digit-Payload halluziniert Extra-Ziffern
+# (01525353904756). Darum: Umschrift NUR wenn NICHT Qwen.
 _ZIFFER_WORT = {
     "null": "0", "eins": "1", "zwei": "2", "drei": "3", "vier": "4",
     "fünf": "5", "fuenf": "5", "sechs": "6", "sieben": "7", "acht": "8",
@@ -137,14 +178,30 @@ def _ziffern_einzeln(text: str) -> str:
 # Nachhoer-Waechter fuer Ziffern-Saetze (29.08.2026): auch in Ziffern-Form
 # wuerfelt CosyVoice GELEGENTLICH einen Abbruch/Babble-Wurf (E2E-Probe:
 # 14-s-Audio, Nummer riss nach '0 1 7 7 6 0' ab). Eine Nummern-Ansage darf
-# den Anrufer nur erreichen, wenn der lokale Parakeet GENAU die Soll-Ziffern
-# in Reihenfolge gegengehoert hat — sonst wird neu gerendert (max. 3 Wuerfe,
-# ~1 s je Pruefung). GENAU heisst seit 30.08.2026 auch: keine Extra-Ziffern
-# (live sprach die Engine '0177 600 4600 46' — das angehaengte '46' rutschte
-# durch den alten Substring-Vergleich, der nur FEHLENDE Ziffern sah).
-# Ohne lokales STT wird nicht geprueft (ElevenLabs-Pfad bleibt unberuehrt).
-# Notaus: TTS_ZIFFERN_CHECK=0.
+# den Anrufer nur erreichen, wenn das STT GENAU die Soll-Ziffern in
+# Reihenfolge gegengehoert hat — sonst wird neu gerendert (max. 3 Wuerfe).
+# GENAU heisst seit 30.08.2026 auch: keine Extra-Ziffern (live: Engine
+# haengte '…4600 46' an, Substring-Vergleich liess das durch).
+#
+# Qwen3 Hybrid (8213) war gemessen ziffernfest OHNE Waechter (d11591a,
+# 5/5). Gegen Whisper scheitern die Nullen trotzdem oft → 3× Render ≈ 30 s
+# Stille, Anrufer weg (06.09.2026). Darum: Waechter nur fuer Nicht-Qwen
+# (Cosy/Chatterbox). Notaus global: TTS_ZIFFERN_CHECK=0.
+# Live-A/B 06.09.2026: Digit-Payload an Qwen halluziniert — Wortform bleibt.
 _ZIFFERN_VERSUCHE = 3
+
+
+def _ist_qwen_tts() -> bool:
+    """Qwen3-TTS laeuft auf :8213 — dort reicht die Engine selbst."""
+    base = (TTS_BASE or "").lower()
+    return ":8213" in base or "qwen" in base
+
+
+def _tts_payload(sauber: str) -> str:
+    """Text an den lokalen TTS-Container — Qwen behaelt Wortform."""
+    if _ist_qwen_tts():
+        return sauber[:400]
+    return _ziffern_einzeln(sauber)[:400]
 
 
 def _ziffern_soll(payload: str) -> str:
@@ -153,6 +210,8 @@ def _ziffern_soll(payload: str) -> str:
     import os
 
     if os.environ.get("TTS_ZIFFERN_CHECK", "1").strip() == "0":
+        return ""
+    if _ist_qwen_tts():
         return ""
     ziffern = re.findall(r"\d", payload)
     return "".join(ziffern) if len(ziffern) >= 4 else ""
@@ -430,9 +489,10 @@ class LokalTts:
         hit = _ram_holen(schluessel)
         if hit:
             return hit
-        payload = _ziffern_einzeln(sauber)[:400]
+        payload = _tts_payload(sauber)
         soll = _ziffern_soll(payload)
         blob = b""
+        ok = False
         for versuch in range(_ZIFFERN_VERSUCHE if soll else 1):
             r = _lokal_client().post(
                 f"{TTS_BASE}/speak",
@@ -447,11 +507,14 @@ class LokalTts:
             # beim ElevenLabs-Pfad, damit lokale Zuege gleich laut klingen.
             blob = pcm16_wav(raw)
             if not soll or _ziffern_gehoert(blob, soll):
+                ok = True
                 break
             print(f"tts-ziffern: Wurf {versuch + 1} weicht vom Soll ab ({soll}) — neu", flush=True)
-        _ram_merken(schluessel, blob)
+        # Fehlwuerfe nicht cachen — sonst bleibt die falsche Nummer im LRU
+        # (Live 06.09.: Wiederholung mit tts=0.0 spielte denselben Fehler).
+        if blob and (ok or not soll):
+            _ram_merken(schluessel, blob)
         return blob
-
     def speak_stream(self, text: str):
         """Audio-Chunk-Strom (Phase 2, 29.08.2026): der GANZE Satz geht als
         Text an /speak-stream, PCM-Stuecke kommen zurueck, waehrend die
@@ -462,13 +525,7 @@ class LokalTts:
         Pegel: Gain aus dem ersten sprach-aktiven Stueck, dann KONSTANT fuer
         den ganzen Satz (kein Pumpen). Am Ende wandert der Satz normal
         gepegelt in den LRU — Wiederholungen kommen wie gewohnt aus dem Cache.
-        Cache-Treffer liefern ihr PCM sofort als EIN Stueck.
-
-        W-TTS-PREBUF (01.09.2026): vor dem ersten Yield warten wir auf
-        TTS_PREBUFFER_MS Audio. LiveKit/Qwen: Start auf dem ersten Mini-Chunk
-        => Underrun bei Generierungs-Luecken (~170 ms). Prefill kostet TTFA;
-        Default bewusst knapp (220 ms, eine Luecke), laengere Texte etwas mehr.
-        0 = aus."""
+        Cache-Treffer liefern ihr PCM sofort als EIN Stueck."""
         sauber = _normalisieren(text)
         if not sauber:
             return
@@ -478,15 +535,10 @@ class LokalTts:
             if hit[:4] == b"RIFF" and len(hit) > 44:
                 yield hit[44:]
             return
-        payload = _ziffern_einzeln(sauber)[:400]
+        payload = _tts_payload(sauber)
         roh: list[bytes] = []
         gain: float | None = None
         rest = b""
-        pre_ms = _prebuffer_ms_fuer(sauber)
-        pre_bytes = PCM_RATE * 2 * pre_ms // 1000
-        pending: list[bytes] = []
-        pending_n = 0
-        frei = pre_bytes <= 0
         with _lokal_client().stream(
             "POST", f"{TTS_BASE}/speak-stream",
             json={"text": payload, "voice": _VOICE_NAME},
@@ -504,18 +556,7 @@ class LokalTts:
                 samples.frombytes(stueck)
                 if gain is None:
                     gain = _gain_oder_none(samples)
-                out = _skaliert_bytes(samples, gain if gain is not None else 1.0)
-                if not frei:
-                    pending.append(out)
-                    pending_n += len(out)
-                    if pending_n >= pre_bytes:
-                        yield b"".join(pending)
-                        pending.clear()
-                        frei = True
-                    continue
-                yield out
-            if pending:
-                yield b"".join(pending)
+                yield _skaliert_bytes(samples, gain if gain is not None else 1.0)
         alles = b"".join(roh)
         if alles:
             # Standard-Pegel fuer den Cache-Eintrag (voller Satz-RMS) — die
@@ -530,10 +571,13 @@ def engine() -> TtsEngine:
 
 
 def ziffern_satz(text: str) -> bool:
-    """Traegt der Satz ein Ziffern-Soll (Telefonnummern-Readback)? Solche
-    Saetze bleiben IMMER blocking — der Nachhoer-Waechter braucht das
-    komplette Audio, BEVOR der Anrufer es hoert."""
-    return bool(_ziffern_soll(_ziffern_einzeln(_normalisieren(text))))
+    """Telefonnummern-Readback ( >= 4 Ziffern nach Transformation)?
+
+    Solche Saetze bleiben blocking (ein Stueck Audio) — auch bei Qwen, wo
+    der Nachhoer-Waechter absichtlich AUS ist. Streaming wuerde die Nummer
+    stueckeln; Blocking ohne Gegenhoeren reicht (d11591a / 06.09.2026)."""
+    payload = _ziffern_einzeln(_normalisieren(text))
+    return len(re.findall(r"\d", payload)) >= 4
 
 
 def stream_gewollt() -> bool:
@@ -541,39 +585,6 @@ def stream_gewollt() -> bool:
     import os
 
     return os.environ.get("TTS_AUDIO_STREAM", "1").strip() != "0"
-
-
-def _prebuffer_ms() -> int:
-    """Basis-Prefill vor dem ersten Playout-Chunk (ms). 0 = aus.
-
-    220 ms: eine typische Qwen-Luecke (~170 ms) plus Reserve — spuerbar
-    schnellerer Antwortstart als 450/900 (Chef 01.09.: Pausen zu lang)."""
-    import os
-
-    roh = os.environ.get("TTS_PREBUFFER_MS", "220").strip()
-    try:
-        return max(0, int(roh))
-    except ValueError:
-        return 220
-
-
-def _prebuffer_ms_fuer(text: str) -> int:
-    """Adaptive Prefill: kurz = Basis, erst ab ~80 Zeichen Extra.
-
-    Kurze Maschinen-/LLM-Antworten (Ja/Nein-Fragen, Quittungen) sollen
-    schnell starten; lange Angebots-Saetze bekommen mehr Headroom gegen
-    die ~1 Gap/Audio-Sekunde (Messung 01.09.). Deckel 550 ms — nicht 900,
-    sonst wirkt Bianca nach dem Anrufer 'haengend'."""
-    basis = _prebuffer_ms()
-    if basis <= 0:
-        return 0
-    zeichen = len(_normalisieren(text) or "")
-    if zeichen <= 80:
-        return basis
-    # Nur der Ueberschuss ueber kurze Antworten zaehlt.
-    extra_s = (zeichen - 80) / 14.0
-    extra = int(55 * extra_s)
-    return min(550, basis + extra)
 
 
 _STREAM_BEREIT: tuple[float, bool] | None = None

@@ -102,6 +102,7 @@ def test_eingang_notaus():
 # ---------------------------------------------------------------------------
 
 def test_fortsetzen_haengt_bruecke_und_rest_an():
+    """Leerer/Echo-Einwurf: Rest anhaengen (gesagt='')."""
     sit = _sit()
     unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1800)
     sit["messages"].append({"role": "user", "content": "Moment, wie teuer ist das?"})
@@ -112,6 +113,29 @@ def test_fortsetzen_haengt_bruecke_und_rest_an():
     assert any(out.count(b) for b in unterbrechung.BRUECKEN), "Brücke fehlt"
     assert S3 in sit["messages"][-1]["content"], "Rest ist im Protokoll nachgetragen"
     assert "unterbrochen" not in sit
+
+
+def test_fortsetzen_bei_echtem_einwand_kein_rest():
+    """W-MEDDENT / W-SVETLANA: echter Text → Floor, kein „wo war ich“."""
+    sit = _sit()
+    unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1800)
+    out = unterbrechung.fortsetzen(
+        sit, "Gerne, ich schaue das nach.", {"book": None}, gesagt="Hallo!",
+    )
+    assert out == "Gerne, ich schaue das nach."
+    assert "unterbrochen" not in sit
+    assert S2 not in out
+
+
+def test_fortsetzen_bei_bis_bald_kein_rest():
+    sit = _sit()
+    unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1800)
+    out = unterbrechung.fortsetzen(
+        sit, "Zu welchem Arzt darf ich Sie verbinden?", None, gesagt="Bis bald!",
+    )
+    assert "wo war ich" not in out.lower()
+    assert S2 not in out
+    assert out.startswith("Zu welchem")
 
 
 def test_fortsetzen_bruecken_rotieren():
@@ -193,6 +217,17 @@ def test_ist_echo_schluckt_keine_kurzen_antworten():
     unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1800)
     for kurz in ("Ja.", "Nein!", "Stopp", "Termine gefunden"):
         assert not unterbrechung.ist_echo(sit, kurz), kurz
+
+
+def test_ist_echo_ohr_gegen_satzkarte():
+    """Stiller Ohr-Puffer: Echo gegen ausspr, auch ohne Barge."""
+    sit = _sit()
+    assert unterbrechung.ist_echo(
+        sit, "Ich habe drei Termine gefunden", ohr=True)
+    assert not unterbrechung.ist_echo(
+        sit, "Ich möchte bitte Freitag vormittag", ohr=True)
+    assert not unterbrechung.ist_echo(
+        sit, "Ich habe drei Termine gefunden", ohr=False)  # ohne ohr/barge: nie
 
 
 def test_wiederaufnahme_spricht_den_rest():

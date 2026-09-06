@@ -307,7 +307,9 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     # Offenes Weiterleitungs-Angebot ("Soll ich Sie zu Doktor X weiterleiten?")
     if w.get("frage") == "anbieten":
-        if gehirn.ist_ja(t):
+        if gehirn.ist_ja(t) or erkannt(t):
+            # W-MEDDENT (04.09.2026): Ja / erneuter Verbinde-Wunsch → sofort
+            # durchstellen, keine zweite Arztfrage.
             return zaluma_weiterleitung(sit, w.get("ziel") or {}, melde)
         if _INFOFRAGE_RE.search(t) and not erkannt(t):
             # Auskunftsfrage statt Zielangabe — LLM antwortet, Angebot bleibt.

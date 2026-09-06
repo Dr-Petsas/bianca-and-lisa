@@ -642,6 +642,9 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         s["frage"] = ""
         sit.pop("buchIntent", None)
         sit.pop("bookFails", None)
+        # Frischer Termin muss in Folge-Auskunft/Absage neu geladen werden.
+        sit["upcoming"] = []
+        sit["gefundenKey"] = ""
         text = res.get("spoken") or "Der Termin ist eingetragen."
         if res.get("booked"):
             neu = telefon.normaliert(s["telefon"]) if s["telefon"] else ""
@@ -949,6 +952,12 @@ def _frisch_absagen(sit: dict, melde: Melde = None) -> dict:
     return verwalten._absagen(sit, melde)
 
 
+_DOKUMENT_RE = re.compile(
+    r"\brezept\w*|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
+    re.I,
+)
+
+
 def _abgeben_zug(sit: dict, t: str) -> dict | None:
     """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf/Nachricht deterministisch.
 
@@ -956,17 +965,27 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     (verwalten.rueckruf_notiz) — jetzt ist er eine eigene Loesung: Name und
     Nummer einsammeln, ECHTE Notiz (praxis_notizen.jsonl + Dock), fertig.
     KEIN Termin-Angebot. None => LLM klaert die Zwischenfrage.
+
+    W-MEDDENT (04.09.2026): Rezept/Überweisung nie „ausstellen“ — klar sagen,
+    dass die Praxis entscheidet; Notiz + Abholung/Termin.
     """
     from kern import hirn as kern_hirn
 
     s = gehirn.sammler(sit)
     ab = sit.get("hirnAbgeben") or {}
+    dok = bool(_DOKUMENT_RE.search(_s(ab.get("was")) + " " + t))
     neu = gehirn.einsammeln(sit, t)
     sit["ernteZuletzt"] = sorted(neu)
     if not s["nachname"]:
         if s["frage"] == "name" and not neu:
             return None  # Zwischenfrage — LLM antwortet, die Frage bleibt offen
         s["frage"] = "name"
+        if dok:
+            return {"text": (
+                "Rezept und Überweisung kann ich am Telefon nicht ausstellen — "
+                "das entscheidet die Praxis. Ich notiere Ihren Wunsch gern. "
+                "Wie ist Ihr Name?"
+            )}
         return {"text": "Das richte ich gern aus. Für den Rückruf: Wie ist Ihr Name?"}
     tel = s["telefon"] or s["aktePhone"]
     if not tel:
@@ -974,13 +993,21 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
             return None
         s["frage"] = "telefon"
         return {"text": "Danke. Und unter welcher Nummer erreichen wir Sie am besten?"}
-    name = f"{s['vorname']} {s['nachname']}".strip()
-    verwalten.abgeben_notiz(sit, was=_s(ab.get("was")))
+    was = _s(ab.get("was"))
+    if dok and not _DOKUMENT_RE.search(was):
+        was = (was + " " + t).strip() or "Rezept/Überweisung"
+    verwalten.abgeben_notiz(sit, was=was)
     ab["offen"] = False
     sit["hirnAbgeben"] = ab
     s["frage"] = ""
     s["phase"] = "fertig"
     kern_hirn.erledigt(sit)
+    if dok:
+        return {"text": (
+            f"Alles notiert — die Praxis prüft Ihren Wunsch und meldet sich "
+            f"unter der {telefon.sprechbar(tel)}. Ausstellen kann ich selbst "
+            f"nicht. Kann ich sonst noch etwas für Sie tun?"
+        )}
     return {"text": (
         f"Alles notiert — die Praxis meldet sich bei Ihnen unter der "
         f"{telefon.sprechbar(tel)}. Kann ich sonst noch etwas für Sie tun?"
@@ -1108,6 +1135,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
         if s["modus"] in {"absagen", "verschieben", "auskunft"}:
             sit["gefundenKey"] = ""  # Bestand frisch laden, der neue Termin zaehlt mit
+            sit["upcoming"] = []  # list_appointments nicht aus Stale-Cache speisen
             # Frische Buchung: Nachnamen-Suche ueberspringen, direkt bestaetigen.
             if s["modus"] == "absagen" and frisch:
                 return verwalten._absage_frage(sit, frisch)
@@ -1175,6 +1203,9 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
     # eigenen deterministischen Fluss.
     if s["modus"] in {"absagen", "verschieben", "auskunft"}:
+        if "modus" in neu:
+            sit["gefundenKey"] = ""
+            sit["upcoming"] = []
         return verwalten.zug(sit, t, neu, melde)
 
     if s["modus"] != "buchen" and "modus" not in neu:
@@ -1289,7 +1320,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # als eigener Zug, sobald die Kartei-Daten da sind — aber nie vor einer
     # Nummern-Rueckbestaetigung, nie statt einer Zwischenfragen-Antwort und
     # nie mitten in einem unbeantworteten Pflichtfragen-Faden.
+    # W-MEDDENT (04.09.2026): nie direkt nach frischer Wunschzeit — erst
+    # Slot anbieten (Detschel-Live: PZR mitten in „Nachmittag 15.09.“).
     if (fid not in {"telefon_check", "telefon_alt"}
+            and "wunsch" not in neu
             and (neu or not s["frage"])
             and not gehirn.ist_zwischenfrage(t)
             and not gespraech.traegt_thema(sit, t)):
@@ -1298,6 +1332,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return ein
 
     if fid:
+        if fid == "anrufer_check" and not s.get("frage"):
+            # W-MEDDENT: Anliegen im ersten Satz kurz anerkennen, dann Erkennung
+            # (Live: Öffnungszeiten+Termin → sofort „Ich habe Sie erkannt“).
+            if re.search(r"termin|offen|öffnung|oeffnung|sprechstunde|uhrzeit", t, re.I):
+                frage = "Gerne helfe ich Ihnen weiter. " + frage
         if (fid == "telefon_alt" and s["frage"] == "telefon_alt"
                 and not neu and _NOCHMAL_RE.search(t)):
             # "Welche Nummer nochmal?" — die Alt-Nummer wortgleich erneut

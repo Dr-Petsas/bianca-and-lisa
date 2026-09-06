@@ -71,6 +71,10 @@ def zug(sit: dict, text: str) -> dict | None:
     t = _s(text)
     if not t:
         return None
+    # Reiner STT-Schnipsel ohne Schimpfwort-Treffer-Kontext: kein Konter.
+    # (Agent ueberspringt anstand bei wirkt_unklar sowieso — hier als Netz.)
+    if len(t.split()) <= 2 and not (_SELBER_RE.search(t) or _SCHIMPF_RE.search(t)):
+        return None
     if _SELBER_RE.search(t):
         return {"text": ANTWORT_SELBER}
     if _SCHIMPF_RE.search(t) or (

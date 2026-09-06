@@ -2541,13 +2541,21 @@ def test_stille_ms_nach_fragetyp():
 def test_dienst_traegt_stille_feld():
     """Der Dienst haengt stilleMs nur an, wenn ein stille_fn konfiguriert
     ist — Lisa (ohne Hook) bleibt byte-identisch."""
+    from kern import tempo
     from kern.dienst import Dienst
 
+    # Roh-Basis ohne Tempo (wie der Hook intern zuerst rechnet):
     mit = Dienst(name="t", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {},
                  stille_fn=lambda sit: gehirn.stille_ms(gehirn.sammler(sit)))
     sit = _sit()
     gehirn.sammler(sit)["frage"] = "schonmal"
     assert mit._stille_feld(sit) == {"stilleMs": 350}
+
+    # Produktiv wie bianca/server: Tempo-Wrap — unbekannt nie unter 800.
+    prod = Dienst(name="t3", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {},
+                  stille_fn=lambda sit: tempo.pause_ms(
+                      gehirn.stille_ms(gehirn.sammler(sit)), sit))
+    assert prod._stille_feld(sit) == {"stilleMs": 800}
 
     ohne = Dienst(name="t2", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     assert ohne._stille_feld(sit) == {}
@@ -2623,22 +2631,49 @@ def test_anrufer_check_buchung_ja_uebernimmt_name_und_nummer():
 def test_anrufer_check_nein_fragt_klassisch():
     """Bestaetigt der Anrufer den Kartei-Treffer NICHT, wird er verworfen —
     der Fluss fragt klassisch (schonmal/Name/Nummer) und bietet den
-    Treffer nie wieder an."""
+    Treffer nie wieder an. Seeded patient/booking werden geleert."""
     echt_anstossen = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit_mit_anrufer()
+        sit["patient"] = {"id": "pat-7", "lastName": "Berger", "firstName": "Julia"}
+        sit["booking"] = {"patientId": "pat-7", "lastName": "Berger", "firstName": "Julia"}
+        sit["upcoming"] = [{"id": "x", "label": "alt"}]
         flow.zug(sit, "Ich möchte einen Termin vereinbaren.")
         z2 = flow.zug(sit, "Nein, das bin ich nicht.")
         s = gehirn.sammler(sit)
         assert s["anruferCheck"] == "nein"
         assert not s["nachname"] and not s["telefonOk"] and not s["patientId"]
+        assert sit.get("patient") == {}
+        assert not sit.get("anrufer")
+        assert not (sit.get("booking") or {}).get("patientId")
+        assert sit.get("upcoming") == []
         assert z2 and "frisch auf" in z2["text"]
         assert s["frage"] == "schonmal"
         fid, _ = gehirn.naechste_frage(sit)
         assert fid == "schonmal"  # der verworfene Treffer kommt nie wieder
     finally:
         flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_auskunft_upgrade_nachname_zu_anrufer_check():
+    """Nachnamen-Frage schon offen, Anrufer kommt spaeter: auf Check upgraden."""
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich habe morgen einen Termin, weiß aber nicht um wie viel Uhr.")
+        assert gehirn.sammler(sit)["frage"] == "nachname"
+        assert "Nachname" in (z1 or {}).get("text", "")
+        sit["anrufer"] = {
+            "vorname": "Julia", "nachname": "Berger", "patientId": "pat-7",
+            "telefon": "+4915253904756",
+        }
+        z2 = flow.zug(sit, "Äh, Moment.")
+        assert z2 and "Julia Berger" in z2["text"]
+        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+    finally:
+        verwalten.hintergrund.anstossen = echt_anstossen
 
 
 def test_anrufer_check_nicht_bei_neupatient_oder_drittem():
@@ -2728,6 +2763,80 @@ def test_auskunft_mit_erkanntem_anrufer():
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
         z2 = flow.zug(sit, "Ja, richtig.")
         assert z2 and "dritten September" in z2["text"]  # Termin wird vorgelesen
+    finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_auskunft_identitaet_bleibt_deterministisch():
+    """Offene Auskunft-Nachnamenfrage darf nicht ans LLM (return None) —
+    sonst 'Wie lautet Ihr Name?' + leeres list_appointments (Petsas 06.09.)."""
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        z1 = flow.zug(sit, "Ich habe morgen einen Termin, weiß aber nicht um wie viel Uhr.")
+        assert z1 and "Nachname" in z1["text"]
+        assert gehirn.sammler(sit)["modus"] == "auskunft"
+        assert gehirn.sammler(sit)["frage"] == "nachname"
+        z2 = flow.zug(sit, "Tschüss!")
+        assert z2 is not None
+        assert "Nachname" in z2["text"]
+        assert gehirn.sammler(sit)["frage"] == "nachname"
+    finally:
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_anrufer_seedet_patient_fuer_list_appointments():
+    """call_erfassen spiegelt den Anrufer auch nach sit.patient/booking."""
+    from kern import agentprofil
+
+    sit = {"tenant": {"_quelle": "cf:x", "_anrufer": {
+        "vorname": "Michael", "nachname": "Petsas", "patientId": "74NA",
+    }, "_phoneCallId": "pc-1"}}
+    agentprofil.call_erfassen(sit, did="+4921154244110", caller="00491776004600")
+    assert sit["anrufer"]["nachname"] == "Petsas"
+    assert sit["patient"]["id"] == "74NA"
+    assert sit["booking"]["patientId"] == "74NA"
+    assert sit["booking"]["lastName"] == "Petsas"
+    assert sit["_anruferReady"].is_set()
+
+
+def test_anrufer_warten_bis_event():
+    """Auskunft wartet auf den Hintergrund-Anrufer, statt sofort Nachname."""
+    import threading
+    import time
+    from kern import agentprofil
+
+    sit = {"tenant": {"_quelle": "cf:test"}}
+    ready = threading.Event()
+    sit["_anruferReady"] = ready
+
+    def _spaet():
+        time.sleep(0.05)
+        sit["anrufer"] = {
+            "vorname": "A", "nachname": "B", "patientId": "p",
+            "telefon": "+491771",
+        }
+        ready.set()
+
+    threading.Thread(target=_spaet, daemon=True).start()
+    agentprofil.anrufer_warten(sit, timeout=1.0)
+    assert sit.get("anrufer", {}).get("nachname") == "B"
+
+
+def test_auskunft_leert_stale_upcoming():
+    """Beim Einstieg in Auskunft darf list_appointments keinen alten Cache nutzen."""
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        sit["upcoming"] = [{"id": "alt", "label": "gestern um zehn", "iso": "2020-01-01T10:00"}]
+        z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
+        assert z1 and "Julia Berger" in z1["text"]
+        assert sit.get("upcoming") == []
     finally:
         verwalten.kal.find_patient_appointments = echt_find
         verwalten.hintergrund.anstossen = echt_anstossen

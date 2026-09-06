@@ -47,6 +47,7 @@ murat mihail michalis nikolaos nikos omar osman panagiotis pavel pawel petar
 petros piotr sergej spiros stavros stefanos taner tarik theodoros vassilis
 vasilis yannis yusuf
 hamza illia idrissa kiriakos kyriakos musa
+efthymios eythymios efthymis aethymius aethymios itemius
 """.split())
 
 _F = frozenset("""
@@ -79,7 +80,7 @@ elif eleftheria emine esra fatima fatma georgia hatice irini ivana jelena
 katerina konstantina leyla ludmilla melek meltem merve milica mirjana nazan
 oksana olena panagiota paraskevi selin semra sevim songül songuel svetlana
 tugba vasiliki zeynep zoe
-olivia alisa beata luljeta
+olivia alisa beata luljeta haila hala hayla
 """.split())
 
 # Im Deutschen wirklich UNEINDEUTIGE Vornamen: nie raten, Default regelt
@@ -132,4 +133,25 @@ def geschlecht(vorname: str) -> str:
     # Deutschen fast immer weiblich (Ausnahmen wie Joshua/Luca stehen oben).
     if len(n) >= 3 and n.endswith("a"):
         return "f"
+    # Ungelistete griechisch/lateinische -ios/-ius-Namen sind männlich
+    # (live 30.08.2026: Eythymios/Aethymius → Default Frau Gregoriu).
+    if len(n) >= 5 and (n.endswith("ios") or n.endswith("ius")):
+        return "m"
     return ""
+
+
+def festlegen(vorname: str, gegeben: str = "") -> str:
+    """Geschlecht für eine NEUE Akte: immer m oder f, nie leer.
+
+    Chef 30.08.2026: der Wächter MUSS bei Neuaufnahme anhand des Vornamens
+    bestimmen und festlegen. Ein schon gesetztes m/f/d bleibt; sonst Liste
+    plus Heuristik; unklar → weiblich (wie bisher, plus Praxis-Notiz).
+    """
+    g = " ".join(str(gegeben or "").split()).strip().lower()
+    if g in {"m", "male", "herr", "mann", "männlich", "maennlich"}:
+        return "m"
+    if g in {"d", "diverse"}:
+        return "d"
+    if g in {"f", "female", "frau", "w", "weiblich"}:
+        return "f"
+    return geschlecht(vorname) or "f"

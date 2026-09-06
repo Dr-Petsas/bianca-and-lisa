@@ -18,6 +18,8 @@ x-app: &app
     # Leer = ElevenLabs Scribe. Lokal-STT (deutscher Conformer):
     # http://host.docker.internal:8212. KEIN Fallback (Chef 28.08.2026).
     STT_BASE: ${STT_BASE:-}
+    STT_WHISPER_BASE: ${STT_WHISPER_BASE:-}
+    STT_WHISPER_KEY: ${STT_WHISPER_KEY:-pickadoc-stt-dev-key}
   volumes:
     - ./tenants:/app/tenants:ro
     # Service-Account-Key (W-CALLAUDIO): Anruf-MP3 -> Firebase Storage.

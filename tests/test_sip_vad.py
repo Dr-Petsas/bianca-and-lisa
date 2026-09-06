@@ -169,7 +169,7 @@ def test_leiser_auslauf_haelt_zugende_offen(anruf):
     assert anruf.zuege.qsize() == 0                    # Zug laeuft noch
     _fuettern(anruf, [_frame(0)] * 40)                 # echte Stille => Ende
     assert anruf.zuege.qsize() == 1
-    pcm = anruf.zuege.get_nowait()
+    pcm, _ohr = anruf.zuege.get_nowait()
     # Der leise Auslauf steckt mit in der Aufnahme (Vorlauf + laut + Auslauf).
     assert len(pcm) >= (20 + 40) * srv.FRAME_B
 
@@ -285,14 +285,72 @@ def test_stream_underrun_gibt_ohr_frei(anruf):
 
 
 def test_kurzer_stream_gap_bleibt_barge(anruf):
-    """Kurze TTS-Luecke (< SPIEL_NACHLAUF_S) bleibt Barge — kein Fehlstart."""
+    """Kurze TTS-Luecke (< SPIEL_NACHLAUF_S): Sprache geht in den Ohr-Puffer,
+    aber solange spielt() True bleibt, entsteht kein Zug."""
     anruf.wiedergabe.posten = [{
         "url": "/api/audio-stream/x.wav", "buf": bytearray(), "done": False,
         "sent": 0, "armed": True, "stream": True,
     }]
     anruf.wiedergabe.zuletzt_ton = anruf._uhr() - 0.05  # frisch gespielt
     assert anruf.wiedergabe.spielt() is True
-    # 6 Frames reichen fuer START, nicht fuer BARGE (14) — kein Zug.
+    # 6 Frames Sprache + kurze Stille INNERHALB des Nachlaufs (0,35 s).
+    _fuettern(anruf, [_frame(2400)] * 6)
+    _fuettern(anruf, [_frame(0)] * 8)  # 160 ms — spielt() bleibt True
+    assert anruf.wiedergabe.spielt() is True
+    assert anruf.zuege.qsize() == 0
+
+
+def test_stilles_ohr_liefert_zug_nach_ansage(anruf):
+    """W-SVETLANA: Anrufer spricht waehrend Bianca — Puffer, kein Stopp;
+    nach Ansage-Ende + Stille kommt der Zug mit ohr-Flag."""
+    anruf.wiedergabe.posten = [{
+        "url": "/a.wav", "buf": bytearray(b"\x00" * 640), "done": True,
+        "sent": 0, "armed": True, "stream": False,
+    }]
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr()
+    assert anruf.wiedergabe.spielt() is True
+    _fuettern(anruf, [_frame(0)] * 10)
+    _fuettern(anruf, [_frame(2000)] * 25)  # lange Aussage ueber der Ansage
+    assert anruf.zuege.qsize() == 0
+    assert anruf.wiedergabe.posten, "Ansage darf nicht per Barge gestoppt werden"
+    assert anruf._ohr_an
+    # Ansage zu Ende
+    anruf.wiedergabe.posten.clear()
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr() - 1.0
+    _fuettern(anruf, [_frame(0)] * 40)
+    assert anruf.zuege.qsize() == 1
+    pcm, ohr = anruf.zuege.get_nowait()
+    assert ohr is True
+    assert len(pcm) > 1000
+
+
+def test_stilles_ohr_schneidet_naechsten_satz_nicht(anruf):
+    """Folgesatz wartet (noch nicht armed) hinter einem Underrun-Zombie —
+    stoppen() darf ihn nicht verwerfen, nur weil spielt() kurz False ist."""
+    anruf.wiedergabe.posten = [
+        {"url": "/api/audio-stream/a.wav", "buf": bytearray(), "done": False,
+         "sent": 3200, "armed": True, "stream": True},
+        {"url": "/b.wav", "buf": bytearray(), "done": False,
+         "sent": 0, "armed": False, "stream": False},
+    ]
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr() - 1.0
+    # Zombie allein: spielt False; Folgesatz laedt: hat_echten_rest / spielt True
+    assert anruf.wiedergabe.hat_echten_rest() is True
+    assert anruf.wiedergabe.spielt() is True  # not-armed + not-done
+    anruf._spielte = True
+    _fuettern(anruf, [_frame(2000)] * 20)
+    assert len(anruf.wiedergabe.posten) == 2, "Folgesatz darf nicht verworfen werden"
+    assert anruf.zuege.qsize() == 0
+
+
+def test_stilles_ohr_aus_bleibt_halbduplex(anruf, monkeypatch):
+    """BRIDGE_OHR=0: alte Barge-Schwelle — 6 Frames waehrend Spiel = kein Zug."""
+    monkeypatch.setattr(srv, "BRIDGE_OHR", False)
+    anruf.wiedergabe.posten = [{
+        "url": "/a.wav", "buf": bytearray(b"\x00" * 640), "done": True,
+        "sent": 0, "armed": True, "stream": False,
+    }]
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr()
     _fuettern(anruf, [_frame(2400)] * 6)
     _fuettern(anruf, [_frame(0)] * 40)
     assert anruf.zuege.qsize() == 0

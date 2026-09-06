@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 from bianca import anstand, flow, gehirn, session, telefon
-from bianca.greeting import begruessung
+from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
@@ -516,6 +516,8 @@ def start_reply(sit: dict) -> dict[str, Any]:
     # W-MANDANT: CF-Mandanten ohne kuratierte Datei melden sich mit der in
     # der Pickadoc-DB gepflegten Begruessung (agent.firstMessage).
     text = _s(tenant.get("begruessungText")) or begruessung(tenants.praxis_melde(tenant))
+    # W-MEDDENT (04.09.2026): Live-Bug „Wem kann ich für Sie tun?“ — TTS/DB.
+    text = gruss_saeubern(text)
     sit["messages"] = [
         {"role": "system", "content": system_prompt_aktuell(sit)},
         {"role": "user", "content": "(Ein Anrufer ist in der Leitung. Du hast dich gerade gemeldet.)"},
@@ -562,10 +564,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
-    if fl is None:
+    if fl is None and not gespraech.wirkt_unklar(text_in):
         # W-ANSTAND (Chef 03.09.2026): Beschimpfung/Fluchen ohne Fach-Anliegen
         # bekommt einen kurzen, charmanten Konter statt des LLM — ein Satz
         # mit echtem Anliegen hat den Fluss oben schon gewonnen.
+        # W-MEDDENT: STT-Muell ("Seht, seht!") nie als Beleidigung werten.
         fl = anstand.zug(sit, text_in)
     # W-VERBINDEN-ECHT (31.08.2026): eine echte Weiterleitung spricht ihre
     # Ansage als Filler und traegt text="" — sie ZAEHLT trotzdem als
@@ -607,6 +610,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             aus["transfer"] = fl["transfer"]
         return aus
 
+    # W-MEDDENT (04.09.2026): kurzer STT-Muell → nachfragen, kein LLM-Plaudern.
+    if route.get("unklar"):
+        text = gespraech.UNKLAR_ANTWORT
+        msgs.append({"role": "assistant", "content": text})
+        sit["messages"] = msgs
+        gespraech.nach_antwort(sit)
+        return {"text": text, "book": None}
+
     # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.
     plan = gespraech.plan_block(route, offene_frage=_offene_frage(sit), stimme="bianca")
     # W-HIRN: das erkannte Anliegen steht im Prompt — das Modell antwortet
@@ -620,7 +631,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # unten (_nachbessern) duerfen den Text noch umbauen — ein schon
     # gesprochener erster Satz waere dann falsch. Nur freies Geplauder streamt.
     s = sit.get("sammler") or {}
-    mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben"} and s.get("phase") not in {"gebucht", "fertig"}
+    mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"} and s.get("phase") not in {"gebucht", "fertig"}
     darf_vorab = vorab is not None and not mitten_drin
     werkzeuge_vorher = len(sit.get("tools") or [])
     # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben,

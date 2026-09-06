@@ -87,8 +87,23 @@ _LOSLASS_RE = re.compile(
     re.I,
 )
 
-# Fuell-/Hoeflichkeits-/Job-Woerter (>= 5 Zeichen — kuerzere filtert die
-# Laengenregel), die NIE ein Gespraechsthema tragen.
+# Kurze, klare Zuordnung — nie "nicht verstanden" (Ja/Nein, Hoeflichkeit,
+# Presence, Abschluss). W-MEDDENT 04.09.2026: STT-Schnipsel sollen nachfragen,
+# nicht plaudern — diese Liste ist die Ausnahme.
+_KURZ_OK_RE = re.compile(
+    r"^\s*(?:"
+    r"ja|jaja|jap|jep|jo|joa|nein|nee|n[oö]e?|doch|klar|genau|richtig|stimmt|"
+    r"ok|okay|gut|passt|super|prima|danke|bitte|hallo|hi|hey|tsch[uü]ss|"
+    r"wiederh[oö]ren|bis\s+bald|bis\s+dann|moment|sekunde|augenblick|"
+    r"entschuldigung|verzeihung|hm+|mhm+|aha|ach\s+so|alles\s+klar|"
+    r"in\s+ordnung|nat(?:ü|ue)rlich|gerne|gern"
+    r")(?:\s*[.,!?…]*\s*)*$",
+    re.I,
+)
+
+# Kurzer STT-Muell / Einwort-Rauschen: kein neues Talk-Thema, kein Plaudern.
+UNKLAR_ANTWORT = "Das habe ich nicht verstanden. Bitte noch einmal."
+
 _STOP = frozenset((
     "nicht", "haben", "hatte", "hatten", "haette", "hätte", "haetten", "hätten",
     "werden", "wurde", "wurden", "wuerde", "würde", "wuerden", "würden",
@@ -132,6 +147,35 @@ def ist_user_pull(text: str) -> bool:
     return True
 
 
+def wirkt_unklar(text: str) -> bool:
+    """Kurzer, unsicherer STT-Schnipsel — nachfragen statt plaudern.
+
+    Live 04.09.2026 (MedDent): Fragmente wie „Füsebte“, „Dornenze“,
+    „Arafevri“, nacktes „Paracetamol“ wurden zu Talk-Themen und bekamen
+    LLM-Vorträge. Echte Kurzantworten, Job-Stoff, Ziffern und längere
+    Sätze bleiben draußen.
+    """
+    t = _s(text)
+    if not t:
+        return False
+    low = t.casefold()
+    if _JOB_RE.search(low) or _DRINGEND_RE.search(low):
+        return False
+    if any(ch.isdigit() for ch in t):
+        return False
+    if _KURZ_OK_RE.match(t):
+        return False
+    if t.endswith("?") and len(t) >= 12:
+        return False
+    toks = re.findall(r"[a-zäöüß0-9]+", low)
+    if len(toks) == 0:
+        return True
+    if len(toks) > 2:
+        return False
+    # 1–2 Tokens ohne Job/Kurz-OK: zu dünn für Smalltalk.
+    return True
+
+
 def stand(sit: dict) -> dict:
     st = sit.get("talk")
     if not isinstance(st, dict):
@@ -159,6 +203,18 @@ def traegt_thema(sit: dict, text: str) -> bool:
     Richtung Eskalation, sie gehen ans LLM (Talk-Schicht antwortet).
     """
     if not enabled():
+        return False
+    if wirkt_unklar(text):
+        # Unklarer STT-Schnipsel: kein neues Thema — aber laufender Faden
+        # darf kurze Fortsetzungen behalten (siehe routen).
+        st = sit.get("talk") or {}
+        low = _s(text).casefold()
+        worte = _inhaltsworte(low)
+        if not worte:
+            return False
+        for thema, ws in (st.get("woerter") or {}).items():
+            if thema in worte or (set(ws or []) & worte):
+                return True
         return False
     low = _s(text).casefold()
     worte = _inhaltsworte(low)
@@ -259,12 +315,27 @@ def routen(sit: dict, text: str, *, ernte: list | tuple = (),
             )
             st["woerter"][thema] = sorted(set(st["woerter"].get(thema) or []) | worte)[:24]
         elif not task_hit:
+            # W-MEDDENT (04.09.2026): kurzer STT-Muell startet KEIN Thema —
+            # Floor bleibt job, agent antwortet mit UNKLAR_ANTWORT.
+            if wirkt_unklar(t):
+                st["frisch"] = []
+                spur.merken(sit, "talk-unklar", t[:40])
+                return _fertig({
+                    "floor": JOB, "thema": "", "dringend": False, "unklar": True,
+                })
             thema = max(sorted(worte), key=len)
             start = G_START_PULL if (ist_user_pull(t) or t.endswith("?")) else G_START_USER
             st["gravity"][thema] = start
             st["woerter"][thema] = sorted(worte)[:24]
         if thema:
             frisch.append(thema)
+    elif not task_hit and wirkt_unklar(t) and not st["stack"]:
+        # Reiner Zeichensalat / leere Tokens ohne laufenden Faden.
+        st["frisch"] = []
+        spur.merken(sit, "talk-unklar", t[:40])
+        return _fertig({
+            "floor": JOB, "thema": "", "dringend": False, "unklar": True,
+        })
 
     # Loslassen ("na gut", "okay dann", "wo waren wir"): Faden zu, Bruecke.
     if not thema and st["stack"] and _LOSLASS_RE.match(t):
@@ -367,8 +438,9 @@ def plan_block(route: dict, *, offene_frage: str = "", stimme: str = "bianca") -
             "GESPRÄCHSLAGE (dieser Block geht der Zwei-Satz-Regel vor): "
             f"Der Gespraechspartner hat \u201e{thema}\u201c auf den Tisch gelegt — geh JETZT "
             "ehrlich, konkret und mit eigenem Wissen darauf ein, wie eine warme, "
-            "belesene Kollegin am Empfang. Auch auf Kurioses reagierst du echt "
-            "(ueberrascht, amuesiert, interessiert), nie mit einer Floskel. "
+            "belesene Kollegin am Empfang. Nur bei klar gemeintem Smalltalk "
+            "mitreden — unklare oder abgeschnittene Schnipsel nicht deuten und "
+            "nicht bemalen. "
             "Bleib bei DIESEM Thema, solange das Gegenueber es weiterzieht — "
             "kein Schwenk zum Termin, KEINE Terminfrage in diesem Zug. Zwei bis "
             "fuenf Saetze, gern eine echte Rueckfrage zum Thema. "

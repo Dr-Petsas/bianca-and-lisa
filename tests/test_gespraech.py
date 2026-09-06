@@ -32,11 +32,30 @@ def test_erzaehltes_thema_bekommt_talk_floor():
 
 
 def test_bekloppte_aussage_bekommt_reaktion():
-    """Auch das Absurdeste ist ein Thema — nie Leerlauf, nie Floskel."""
+    """Längere Absurdes ist ein Thema — kurzer STT-Müll aber nicht."""
     sit = _sit()
     r = gespraech.routen(sit, "Ich bin uebrigens Batman und wohne in einer Hoehle.")
     assert r["floor"] == gespraech.TALK
     assert gespraech.traegt_thema(sit, "Die Hoehle ist wirklich gemuetlich.")
+
+
+def test_stt_muell_wird_unklar_nicht_talk():
+    """W-MEDDENT: Fragmente wie Füsebte/Dornenze → nachfragen, kein Plaudern."""
+    for satz in ["Füsebte", "Dornenze", "Arafevri", "Paracetamol", "Volks…", "Seht, seht!"]:
+        sit = _sit()
+        r = gespraech.routen(sit, satz)
+        assert r["floor"] == gespraech.JOB, satz
+        assert r.get("unklar") is True, satz
+        assert not sit["talk"]["stack"], satz
+        assert gespraech.wirkt_unklar(satz), satz
+
+
+def test_kurze_ok_woerter_sind_kein_unklar():
+    for satz in ["Ja.", "Nein!", "Danke", "Hallo", "Bis bald", "Okay"]:
+        assert not gespraech.wirkt_unklar(satz), satz
+        sit = _sit()
+        r = gespraech.routen(sit, satz)
+        assert not r.get("unklar"), satz
 
 
 def test_kurze_frage_zieht_den_floor():

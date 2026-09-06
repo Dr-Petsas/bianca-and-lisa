@@ -40,6 +40,15 @@ def test_fertige_saetze_bleiben_fertig():
     assert not hs.unfertig("")
 
 
+def test_fortsetzung_mit_punkt_bleibt_unfertig():
+    """W-SVETLANA: STT setzt oft einen Punkt nach dem Erstwort-Cut."""
+    assert hs.unfertig("Also.")
+    assert hs.unfertig("Ich.")
+    assert hs.unfertig("Und.")
+    assert hs.halten({}, "Also.")
+    assert not hs.unfertig("Ich hätte gern einen Termin.")  # langer fertiger Satz
+
+
 def test_ziffern_zuege_werden_nie_gehalten():
     # Nummern-Diktat hat seine eigene Teil-Logik (telefonTeil) — nie halten.
     sit: dict = {}

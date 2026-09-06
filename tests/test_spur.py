@@ -34,10 +34,27 @@ def test_barge_eingang_und_fortsetzen_melden_sich():
                          text=f"{S1} {S2}")
     spur.neu(sit)
     assert unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1200)
+    # W-SVETLANA: echter Einwand -> Floor an Anrufer, kein Rest-Anhang.
     text = unterbrechung.fortsetzen(sit, "Gern.", {}, gesagt="Moment mal kurz.")
+    assert text == "Gern."
+    assert S2 not in text
+    namen = [e["w"] for e in spur.abholen(sit)]
+    assert "barge-eingang" in namen and "barge-floor" in namen
+
+
+def test_barge_echo_setzt_rest_fort():
+    """Nur leerer/Echo-Einwurf haengt den unterbrochenen Rest an."""
+    sit = {"messages": [{"role": "assistant", "content": f"{S1} {S2}"}]}
+    karte = {"saetze": [S1, S2], "endenMs": [1000, 2500]}
+    unterbrechung.merken(sit, url="/api/audio-stream/abc.wav", karte=karte,
+                         text=f"{S1} {S2}")
+    spur.neu(sit)
+    unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 1200)
+    text = unterbrechung.fortsetzen(
+        sit, "Gern.", {}, gesagt="Ich habe drei Termine gefunden")
     assert S2 in text
     namen = [e["w"] for e in spur.abholen(sit)]
-    assert "barge-eingang" in namen and "barge-fortsetzen" in namen
+    assert "barge-fortsetzen" in namen
 
 
 def test_barge_abbruch_meldet_sich():

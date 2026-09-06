@@ -10,17 +10,26 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import secrets
-import struct
 import threading
 import time
 from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt, tenants, tts, unterbrechung
+from kern import filler, halbsatz, sprech, spur, stt, tempo, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
-from kern.sitzung import _tools_des_zugs
+
+
+def _audio_ms_schaetzen(blob: bytes | None) -> int:
+    """Grobe Zugdauer aus WAV/PCM16-16kHz — fuer tempo.merken, kein Decoder."""
+    if not blob:
+        return 0
+    n = len(blob)
+    if n >= 44 and blob[:4] == b"RIFF":
+        n = max(0, n - 44)
+    return max(0, n // 32)  # 16 kHz * 2 Byte = 32 Byte/ms
 
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
 # blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
@@ -146,10 +155,7 @@ class Dienst:
         """Slot fuer einen laufenden Audio-Strom: (aid, push, fertig).
         push() haengt PCM-Stuecke an, fertig() schliesst den Strom."""
         aid = secrets.token_hex(6)
-        slot: dict[str, Any] = {
-            "chunks": [], "done": False, "cond": threading.Condition(),
-            "render_s": None,
-        }
+        slot: dict[str, Any] = {"chunks": [], "done": False, "cond": threading.Condition()}
         self.audio_streams[aid] = slot
         self._stream_ord.append(aid)
         while len(self._stream_ord) > 24:
@@ -196,127 +202,94 @@ class Dienst:
 
         return gen()
 
-    def audio_bytes_fertig(self, url: str) -> bytes | None:
-        """Bytes zu einer eigenen Audio-URL — nur wenn das Audio KOMPLETT ist
-        (W-MITSCHNITT): Blocking-Ablage sofort, Stream-Slots erst nach
-        fertig(); laufende Streams liefern None (der Mitschnitt probiert es
-        beim nächsten Flush bzw. beim Gesprächs-Ende erneut)."""
-        u = _s(url)
-        if u.startswith("/api/audio/"):
-            return self.audio_holen(u.rsplit("/", 1)[-1])
-        if u.startswith("/api/audio-stream/"):
-            slot = self.audio_streams.get(u.rsplit("/", 1)[-1].rsplit(".", 1)[0])
-            if not slot:
-                return None
-            with slot["cond"]:
-                if not slot["done"]:
-                    return None
-                pcm = b"".join(slot["chunks"])
-            if not pcm:
-                return None
-            # Geschlossener Header (echte Längen) — die Stream-Auslieferung
-            # nutzt den offenen (0xFFFFFFFF), der taugt nicht für Dateien.
-            kopf = struct.pack(
-                "<4sI4s4sIHHIIHH4sI",
-                b"RIFF", 36 + len(pcm), b"WAVE",
-                b"fmt ", 16, 1, 1, tts.PCM_RATE, tts.PCM_RATE * 2, 2, 16,
-                b"data", len(pcm),
-            )
-            return kopf + pcm
-        return None
-
-    @staticmethod
-    def _tts_aus_cache(text: str) -> bool:
-        """True, wenn speak() fuer diesen Text nur aus RAM-Pin/LRU liest."""
-        t = _s(text)
-        if not t or not tts.bereit():
-            return False
-        if tts.im_cache(t):
-            return True
-        saetze = sprech.tts_saetze(t)
-        if len(saetze) <= 1:
-            return False
-        return all(tts.im_cache(s) for s in saetze)
-
-    def stimme(self, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
+    def stimme(self, text: str, karte: dict | None = None) -> tuple[str, float]:
         if not text or not tts.bereit():
-            return "", 0.0, False
-        cached = self._tts_aus_cache(text)
+            return "", 0.0
         t0 = time.perf_counter()
         try:
             url = self.audio_legen(self._sprech_blob(text, karte))
         except RuntimeError:
-            return "", round(time.perf_counter() - t0, 2), cached
-        return url, round(time.perf_counter() - t0, 2), cached
+            return "", round(time.perf_counter() - t0, 2)
+        return url, round(time.perf_counter() - t0, 2)
 
-    def _sprech(self, sit: dict, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
-        """SIP: immer blocking (W-SIP-BLOCK). Dock: Stream wenn moeglich."""
-        if (sit or {}).get("clientKind") == "sip":
-            return self.stimme(text, karte)
-        return self.stimme_stream(text, karte)
-
-    def stimme_stream(self, text: str, karte: dict | None = None) -> tuple[str, float, bool]:
+    def stimme_stream(self, text: str, karte: dict | None = None) -> tuple[str, float]:
         """Wie stimme(), aber mit SOFORTIGER Stream-URL, wenn der lokale
         Container Audio-Chunk-Streaming kann (Phase 2, 29.08.2026): der Zug
         geht raus, bevor die Synthese fertig ist — das Dock spielt progressiv,
         der erste Ton kommt nach der Container-TTFA statt nach dem Voll-Render.
 
-        W-TTS-STOCK (01.09.2026): der GANZE Text geht als EIN /speak-stream
-        an den Container — kein Satz-fuer-Satz mehr. Der GPU-Lock laesst
-        Satz 2 erst nach Satz 1 zu; dazwischen ~0,2 s TTFA-Luecke (bei
-        Ziffern-Retries Sekunden), die Bruecke fuellt mit Stille = hoerbares
-        Stocken. Ein Request = durchgehendes Audio.
+        Blocking bleiben: ElevenLabs-Pfad, komplett gecachte Texte (eh sofort)
+        und Ziffern-Saetze (Nachhoer-Waechter braucht das ganze Audio) —
+        Ziffern-SAETZE innerhalb eines Mehr-Satz-Textes rendert der Feeder
+        blocking und schiebt sie verifiziert in den Strom.
 
-        Blocking bleiben: ElevenLabs-Pfad, komplett gecachte Texte, und
-        JEDE Aeusserung mit Ziffern-Soll (Nachhoer-Waechter braucht das
-        komplette Audio VOR dem Anrufer — nie Retry mitten im Strom).
-
-        ``karte`` (W-BARGE): Ein-Block-Render — der ganze Text ist EIN Satz
-        (wie stimme() ohne Split); Fein-Rest satzweise entfaellt zugunsten
-        lueckenfreier Wiedergabe."""
+        ``karte`` (W-BARGE): der Feeder schreibt je Satz den End-Zeitpunkt im
+        Audio mit (endenMs, kumulierte PCM-Bytes -> ms) — daraus rechnet
+        unterbrechung.eingang() beim Reinsprechen den ungesprochenen Rest."""
         if not text or not tts.bereit():
-            return "", 0.0, False
+            return "", 0.0
         if not tts.stream_bereit() or tts.im_cache(text):
             return self.stimme(text, karte)
-        # Ziffern irgendwo im Text => komplett blocking (verifiziert), nie
-        # mitten im Stream nachwuerfeln — Live 01.09.: 3 Retries in einem
-        # 3-Satz-Strom => 6 s Stille nach dem Vorsatz.
-        if any(tts.ziffern_satz(s) for s in (sprech.tts_saetze(text) or [text])):
-            return self.stimme(text, karte)
-        aid, push, fertig = self.audio_stream_anlegen()
-        slot = self.audio_streams[aid]
+        saetze = sprech.tts_saetze(text) or [text.strip()]
+        frisch = [s for s in saetze if not tts.im_cache(s) and not tts.ziffern_satz(s)]
+        if not frisch:
+            # P1 Readback-Parallelisierung (29.08.2026): Ein Mehr-Satz-Text
+            # aus Cache- und Ziffern-Saetzen lohnt den Strom TROTZDEM, wenn
+            # der ERSTE Satz sofort lieferbar ist — der gewaermte Vorsatz
+            # ("Ich wiederhole die Nummer.") spielt, WAEHREND der Feeder den
+            # Ziffern-Satz blocking rendert und der Nachhoer-Waechter ihn
+            # verifiziert. Erst dann kommt er in den Strom: Sicherheit
+            # unveraendert, gefuehlte Wartezeit nahe null. Beginnt der Text
+            # direkt mit dem Ziffern-Satz, bleibt der bewaehrte Blocking-
+            # Pfad (der erste Ton wartet ohnehin auf die Verifikation).
+            if not (len(saetze) > 1 and tts.im_cache(saetze[0])
+                    and any(tts.ziffern_satz(x) for x in saetze)):
+                return self.stimme(text, karte)
         if karte is not None:
-            karte["saetze"] = [_s(text)]
+            karte["saetze"] = list(saetze)
             karte["endenMs"] = []
+        t0 = time.perf_counter()
+        aid, push, fertig = self.audio_stream_anlegen()
 
         def feeder() -> None:
             t1 = time.perf_counter()
             erster: float | None = None
             gesamt = 0
             try:
-                for stueck in tts.engine().speak_stream(text):
-                    push(stueck)
-                    gesamt += len(stueck)
-                    if erster is None:
-                        erster = time.perf_counter() - t1
-                if karte is not None:
-                    karte["endenMs"].append(
-                        gesamt * 1000 // (tts.PCM_RATE * 2) if gesamt else None)
-            except Exception as e:
-                if karte is not None and not karte.get("endenMs"):
-                    karte["endenMs"].append(None)
-                print(f"{self.name}-stream fail {text[:40]!r} {e}", flush=True)
+                for satz in saetze:
+                    stand = gesamt
+                    try:
+                        if tts.im_cache(satz) or tts.ziffern_satz(satz):
+                            blob = tts.engine().speak(satz)
+                            if blob and blob[:4] == b"RIFF" and len(blob) > 44:
+                                push(blob[44:])
+                                gesamt += len(blob) - 44
+                                if erster is None:
+                                    erster = time.perf_counter() - t1
+                        else:
+                            for stueck in tts.engine().speak_stream(satz):
+                                push(stueck)
+                                gesamt += len(stueck)
+                                if erster is None:
+                                    erster = time.perf_counter() - t1
+                        if karte is not None:
+                            # Kein Ton fuer diesen Satz (None) = gilt beim
+                            # Barge als ungesprochen — nie Inhalt verlieren.
+                            karte["endenMs"].append(
+                                gesamt * 1000 // (tts.PCM_RATE * 2) if gesamt > stand else None)
+                    except Exception as e:
+                        # Testphase: Fehler hoerbar lassen (Satz fehlt im
+                        # Audio), aber die restlichen Saetze noch sprechen.
+                        if karte is not None:
+                            karte["endenMs"].append(None)
+                        print(f"{self.name}-stream satz-fail {satz[:40]!r} {e}", flush=True)
             finally:
-                with slot["cond"]:
-                    slot["render_s"] = round(time.perf_counter() - t1, 2)
                 fertig()
                 print(f"{self.name}-stream ttfa={erster if erster is not None else -1:.2f}s "
-                      f"gesamt={slot['render_s']:.2f}s saetze=1", flush=True)
+                      f"gesamt={time.perf_counter() - t1:.2f}s saetze={len(saetze)}", flush=True)
 
         threading.Thread(target=feeder, daemon=True).start()
-        # Latenz-Messung: die URL geht sofort raus; die echte Render-Zeit
-        # steht erst in slot["render_s"] (mitschnitt patcht beim Einloesen).
-        return f"/api/audio-stream/{aid}.wav", 0.0, False
+        return f"/api/audio-stream/{aid}.wav", round(time.perf_counter() - t0, 2)
 
     @staticmethod
     def _karte_ganz(karte: dict | None, text: str, blob: bytes) -> None:
@@ -342,8 +315,6 @@ class Dienst:
             blob = tts.engine().speak(text)
             self._karte_ganz(karte, text, blob)
             return blob
-        # W-TTS-NAHT: geschuetzter Split — "im 3. Stock" / "St. Martin"
-        # bleiben EIN Render, keine Naht mitten in der Phrase.
         saetze = sprech.tts_saetze(text)
         if len(saetze) <= 1:
             blob = tts.engine().speak(text)
@@ -432,10 +403,6 @@ class Dienst:
         extra = extra or {}
         sit.pop("_vorabText", None)
         sit.pop("_vorabUrl", None)
-        # _vorabFifo nur leeren, wenn kein Live-Vorab-Callback hängt —
-        # sonst reißt pop die von zug_stream eingehängte Liste weg.
-        if vorab is None:
-            sit.pop("_vorabFifo", None)
         sit.pop("_satzJobs", None)
         t0 = time.perf_counter()
         if art == "start":
@@ -458,63 +425,38 @@ class Dienst:
         # W-BARGE: war der vorige Zug unterbrochen und dieser Einwand hat den
         # Zustand nicht bewegt, kommt der ungesprochene Rest mit Bruecke dran.
         # Ein Abbruch-Befehl ("Stopp.") verwirft den Rest (29.08.2026).
-        # W-VERBINDEN-ECHT: nach einem Transfer-Reply wird NIE fortgesetzt —
-        # der Anrufer ist gleich beim Behandler, ein "Also, wo war ich:"
-        # nach dem Jingle waere absurd.
-        if isinstance(reply.get("transfer"), dict) and reply["transfer"].get("nummer"):
-            sit.pop("unterbrochen", None)  # offener Barge-Rest verfaellt
-        else:
-            text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
-        # Vorab-FIFO: schon gesendete Chunks. Rest = nur was noch fehlt —
-        # nie Full-Replay, auch wenn Prefix-String und Final auseinanderlaufen.
-        fifo = [c for c in (sit.pop("_vorabFifo", None) or []) if _s(c)]
-        gesprochen = " ".join(fifo).strip() or _s(sit.pop("_vorabText", ""))
-        sit.pop("_vorabText", None)
+        text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
+        # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
+        gesprochen = _s(sit.pop("_vorabText", ""))
         vorab_url = _s(sit.pop("_vorabUrl", ""))
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        had_vorab = bool(fifo or gesprochen)
-        if had_vorab:
-            rest = llm.rest_nach_vorab(fifo or gesprochen, text)
-            if gesprochen and not text.startswith(gesprochen):
-                print(f"{self.name}-vorab FIFO-Rest "
-                      f"({len(fifo)} Chunks → {len(rest)} Zeichen)", flush=True)
-            url, tts_teil, main_cached = self._sprech(sit, rest, karte) if rest else ("", 0.0, False)
+        # Ein Stück TTS (sit["ttsGanz"]): Qwen klont sonst jeden Satz neu
+        # und die Stimme kippt mitten im Zug (Kampagnen-Lisa).
+        ganz = bool(sit.get("ttsGanz"))
+        if ganz:
+            url, tts_s = self.stimme(text, karte) if text else ("", 0.0)
+            unterbrechung.merken(sit, url=url, karte=karte, text=text)
+        elif gesprochen and text.startswith(gesprochen):
+            rest = text[len(gesprochen):].strip()
+            url, tts_s = self.stimme_stream(rest, karte) if rest else ("", 0.0)
             unterbrechung.merken(sit, url=url, karte=karte, text=text,
                                  vorab_text=gesprochen, vorab_url=vorab_url)
         else:
-            rest = ""
-            url, tts_teil, main_cached = self._sprech(sit, text, karte)
+            if gesprochen:
+                print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
+            url, tts_s = self.stimme_stream(text, karte)
             unterbrechung.merken(sit, url=url, karte=karte, text=text)
-        # TTS: Vorab-Saetze (P5) + blocking-Render; Stream-Audio wird in
-        # mitschnitt._audio_einloesen nachgetragen (URL geht vor Render-Ende raus).
-        tts_s = round(float(sit.pop("_ttsAcc", 0) or 0), 2)
-        if url and not url.startswith("/api/audio-stream/"):
-            tts_s = round(tts_s + tts_teil, 2)
-        tts_ok = (not rest or main_cached) if had_vorab else main_cached
-        tts_cache = (
-            not sit.pop("_ttsCacheMiss", False)
-            and tts_ok
-            and not (url and url.startswith("/api/audio-stream/"))
-        )
         # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
         # ein voller Latenz-Posten des Zugs (Messlücke bis 28.08.2026).
         stt_s = sit.pop("_sttS", None)
         timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
-        if tts_cache:
-            timings["ttsCache"] = True
         if stt_s is not None:
             timings = {"stt": stt_s, **timings}
             timings["total"] = round(stt_s + llm_s + tts_s, 2)
         # Waechter-Spur dieses Zugs (W-BK-3): additiv in Antwort + Protokoll.
         waechter = spur.abholen(sit)
-        tools_zug = _tools_des_zugs(sit)
-        zug_kw: dict[str, Any] = {
-            "art": art, "textIn": text_in, "text": text, "book": reply.get("book"),
-            "timings": timings, "waechter": waechter,
-        }
-        if tools_zug:
-            zug_kw["tools"] = tools_zug
-        self.merke_zug(sit, **zug_kw)
+        self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"),
+                       timings=timings, waechter=waechter, audioUrl=url or "")
         antwort = {
             "ok": True,
             "empty": False,
@@ -529,20 +471,8 @@ class Dienst:
             "timings": timings,
             "waechter": waechter,
         }
-        if tools_zug:
-            antwort["tools"] = tools_zug
         if reply.get("hangup"):
             antwort["hangup"] = True
-        # W-VERBINDEN-ECHT (31.08.2026): eingerichtete Client-Weiterleitung —
-        # die SIP-Bruecke merkt sich die Nummer je Anruf-UUID, der Asterisk-
-        # Dialplan waehlt nach dem Jingle wirklich raus (Docks ignorieren das
-        # Feld und legen wie bisher auf).
-        if isinstance(reply.get("transfer"), dict) and reply["transfer"].get("nummer"):
-            antwort["transfer"] = reply["transfer"]
-        # Weitere extra-Felder additiv durchreichen (W-MANDANT: tenantId im
-        # Start — die SIP-Bruecke loggt, welcher Mandant den Anruf traegt).
-        for k, v in extra.items():
-            antwort.setdefault(k, v)
         # Offene Maschinen-Frage (Bianca-Sammler) additiv mitgeben — der
         # Baukasten-Report mappt darueber Frage -> Antwort-Baustein.
         sammler = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
@@ -550,16 +480,6 @@ class Dienst:
             antwort["frage"] = str(sammler.get("frage") or "")
             antwort["modus"] = str(sammler.get("modus") or "")
         antwort.update(self._stille_feld(sit))
-        # W-MITSCHNITT (30.08.2026): Zug samt Audio sofort auf die Platte
-        # (.data/anrufe) — die Anrufliste im Dock lebt davon. Vorab-Satz-URLs
-        # (P5) gehören dazu, sobald die FIFO Chunks trug.
-        satz_liste = sit.pop("_vorabUrlListe", None) or []
-        vorab_urls = [u for u in satz_liste if u] if (fifo or gesprochen) else []
-        mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
-                       timings=timings, waechter=waechter, audio_url=url,
-                       vorab_urls=vorab_urls, book=reply.get("book"),
-                       frage=str(antwort.get("frage") or ""),
-                       tools=tools_zug or None)
         return antwort
 
     # ---- Barge-Fortsetzung (W-BARGE) ---------------------------------------
@@ -574,16 +494,12 @@ class Dienst:
             return None
         spur.merken(sit, "barge-weiter", text)
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
-        url, tts_s, cached = self._sprech(sit, text, karte)
+        url, tts_s = self.stimme_stream(text, karte)
         unterbrechung.merken(sit, url=url, karte=karte, text=text)
         timings = {"llm": 0.0, "tts": tts_s, "total": tts_s}
-        if cached:
-            timings["ttsCache"] = True
         waechter = spur.abholen(sit)
         self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings,
-                       waechter=waechter)
-        mitschnitt.zug(sit, self, art="weiter", text=text, timings=timings,
-                       waechter=waechter, audio_url=url)
+                       waechter=waechter, audioUrl=url or "")
         print(f"{self.name}-weiter (Barge-Fortsetzung): {text[:60]!r}", flush=True)
         extra = extra or {}
         antwort = {
@@ -604,11 +520,22 @@ class Dienst:
         return antwort
 
     def _stille_feld(self, sit: dict) -> dict[str, int]:
-        """W-TEMPO: Stille-Schwelle fuer die naechste Dock-Aufnahme (ms)."""
+        """W-TEMPO: Stille-Schwelle fuer die naechste Dock-Aufnahme (ms).
+
+        stille_fn darf eine Zahl liefern (wie Bianca) oder ein Dict mit
+        stilleMs und optional stilleWarteMs (Lisa: jemand sucht die Nummer)."""
         if not self.stille_fn:
             return {}
         try:
-            return {"stilleMs": int(self.stille_fn(sit))}
+            wert = self.stille_fn(sit)
+            if isinstance(wert, dict):
+                out: dict[str, int] = {}
+                if wert.get("stilleMs"):
+                    out["stilleMs"] = int(wert["stilleMs"])
+                if wert.get("stilleWarteMs"):
+                    out["stilleWarteMs"] = int(wert["stilleWarteMs"])
+                return out
+            return {"stilleMs": int(wert)}
         except Exception:
             return {}
 
@@ -616,7 +543,7 @@ class Dienst:
 
     def zug_stream(self, sit: dict, *, art: str, text_in: str = "", extra: dict | None = None,
                    stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = "",
-                   barge_url: str = "", barge_ms: float = 0.0):
+                   barge_url: str = "", barge_ms: float = 0.0, ohr: bool = False):
         """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
         # Waechter-Spur: frisch je Zug — jeder Waechter meldet sich hinein,
         # die Antwort traegt die Liste additiv als "waechter" (W-BK-3).
@@ -630,6 +557,7 @@ class Dienst:
         # schnelle Phase, sobald sie geklärt ist — er ist schneller als die
         # Fristberechnung im Hauptfaden und würde sie sonst in die Irre führen.
         schnelle_phase = bool(self.schnell_fn(sit))
+        ohr_zug = bool(ohr)
 
         def melde(tool: str) -> None:
             q.put(("tool", tool))
@@ -637,13 +565,6 @@ class Dienst:
         satz_lock = threading.Lock()
         satz_urls: list[str | None] = []
         satz_raus = 0
-        # Vorab-FIFO: jeder schon an Dock/Brücke gesendete Chunk (Reihenfolge).
-        # Duplikate (Zähler-Bug, gleiches Norm) werden VOR dem TTS verworfen.
-        vorab_fifo: list[str] = []
-        sit["_vorabFifo"] = vorab_fifo
-        # W-MITSCHNITT: json_antwort liest die Vorab-Satz-URLs am Zug-Ende
-        # über die Sitzung ab (Referenz auf DIESELBE Liste, kein Kopieren).
-        sit["_vorabUrlListe"] = satz_urls
 
         def vorab(satz: str) -> None:
             # P5 satzweises LLM→TTS (29.08.2026): jeder fertige Satz wird
@@ -655,23 +576,17 @@ class Dienst:
             san = sprech.sanitize(satz)
             if not san:
                 return
+            alt = _s(sit.get("_vorabText"))
+            sit["_vorabText"] = (alt + " " + san).strip() if alt else san
+            jobs: list = sit.setdefault("_satzJobs", [])
             with satz_lock:
-                if not llm.vorab_fifo_anhaengen(vorab_fifo, san):
-                    print(f"{self.name}-vorab Duplikat verworfen: {san[:60]!r}",
-                          flush=True)
-                    return
-                sit["_vorabText"] = " ".join(vorab_fifo)
                 idx = len(satz_urls)
                 satz_urls.append(None)
-            jobs: list = sit.setdefault("_satzJobs", [])
 
             def _arbeit(i: int = idx, s: str = san) -> None:
                 nonlocal satz_raus
-                url, ts, cached = self.stimme(s)
+                url, _ = self.stimme(s)
                 with satz_lock:
-                    if not cached:
-                        sit["_ttsCacheMiss"] = True
-                    sit["_ttsAcc"] = round(float(sit.get("_ttsAcc") or 0) + ts, 2)
                     if i < len(satz_urls):
                         satz_urls[i] = url or ""
                     if i == 0 and url:
@@ -690,14 +605,13 @@ class Dienst:
             try:
                 gesagt = text_in
                 stt_s = None
-                # W-TEMPO: Das Dock schickt Vorab-Transkripte als TEXT-Zug —
-                # der Echo-Waechter muss dort genauso greifen wie im
-                # Audio-Pfad, sonst schluckt ein Lautsprecher-Echo der
-                # eigenen Stimme den Barge nicht mehr. Nur bei gemeldetem
-                # Barge pruefen: ohne Unterbrechung sprach niemand, ein
-                # normaler Text-Zug (Lisa-Diktat, Tests) bleibt unberuehrt.
-                if stt_blob is None and gesagt and _s(barge_url) and unterbrechung.ist_echo(sit, gesagt):
-                    print(f"{self.name}-barge echo verworfen (vorab): {gesagt!r}", flush=True)
+                audio_ms = _audio_ms_schaetzen(stt_blob)
+                barge = bool(_s(barge_url))
+                # Echo nur bei Barge oder stillem Ohr-Zug — sonst wuerden
+                # Slot-Antworten ("Donnerstag um zehn") als Echo fallen.
+                if gesagt and (barge or ohr_zug) and unterbrechung.ist_echo(
+                        sit, gesagt, ohr=ohr_zug):
+                    print(f"{self.name}-echo verworfen (vorab): {gesagt!r}", flush=True)
                     spur.merken(sit, "barge-echo", gesagt)
                     q.put(("leer", "echo"))
                     return
@@ -730,16 +644,12 @@ class Dienst:
                             return
                     else:
                         print(f"{self.name}-listen ok text={gesagt!r}", flush=True)
-                        if unterbrechung.ist_echo(sit, gesagt):
-                            # Lautsprecher-Echo der eigenen Stimme hat den Barge
-                            # ausgeloest — kein Einwand: leise weitersprechen.
-                            print(f"{self.name}-barge echo verworfen: {gesagt!r}", flush=True)
+                        if unterbrechung.ist_echo(sit, gesagt, ohr=ohr_zug):
+                            # Lautsprecher-Echo der eigenen Stimme — kein Zug.
+                            print(f"{self.name}-echo verworfen: {gesagt!r}", flush=True)
                             spur.merken(sit, "barge-echo", gesagt)
                             q.put(("leer", "echo"))
                             return
-                        # W-MITSCHNITT: Anrufer-Audio dieses Zugs sichern —
-                        # bei W-HALBSATZ (Warte) haengt es am naechsten Zug.
-                        mitschnitt.eingang(sit, stt_blob, stt_mime)
                 # W-HALBSATZ (29.08.2026): gemerktes Fragment vor den neuen Zug
                 # setzen; klingt auch das Ergebnis unfertig (Komma-Ende,
                 # haengender Artikel/Konjunktion), wird NICHT geantwortet —
@@ -752,9 +662,11 @@ class Dienst:
                     if halbsatz.halten(sit, voll):
                         spur.merken(sit, "halbsatz-warte", voll)
                         print(f"{self.name}-halbsatz warte ({sit.get('halbsatzZahl')}): {voll!r}", flush=True)
+                        tempo.merken(sit, voll, audio_ms=audio_ms, barge=barge, gehalten=True)
                         q.put(("warte", voll))
                         return
                     gesagt = voll
+                tempo.merken(sit, gesagt, audio_ms=audio_ms, barge=barge, gehalten=False)
                 if stt_blob is not None:
                     q.put(("gehoert", gesagt))
                 if stt_s is not None:
@@ -844,7 +756,12 @@ class Dienst:
                 # W-HALBSATZ: Satz klingt unfertig — kein Ton, kein Fueller.
                 # Das Dock hoert mit laengerer Ruhe-Schwelle weiter, der
                 # naechste Zug wird an das gemerkte Fragment angefuegt.
-                yield zeile({"type": "warte", "textIn": wert, "stilleMs": halbsatz.WARTE_MS})
+                # W-TEMPO: langsamer/unbekannter Sprecher bekommt mehr Geduld.
+                yield zeile({
+                    "type": "warte",
+                    "textIn": wert,
+                    "stilleMs": tempo.warte_ms(sit),
+                })
                 return
             elif typ == "leer":
                 # W-BARGE: Barge ohne verwertbaren Einwand (nichts gehoert

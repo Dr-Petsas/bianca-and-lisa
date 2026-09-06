@@ -190,7 +190,12 @@ _FB_VERSCHIEBEN_RE = re.compile(
 )
 _FB_RUECKRUF_RE = re.compile(
     r"r(?:ü|ue)ckruf|zur(?:ü|ue)ckruf\w*|ruft\s+mich|meldet\s+(?:sich|euch)|"
-    r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back",
+    r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back|"
+    # W-SVETLANA (04.09.2026): Rezept/Überweisung ABHOLEN ist kein Termin —
+    # die Praxis soll eine Notiz kriegen, Bianca darf nicht ins Buchen kippen.
+    r"\brezept\w*|\b(?:ü|ue)berweisung\b|(?:ü|ue)berweisen|"
+    r"abhol\w*.{0,24}(?:rezept|(?:ü|ue)berweis)|"
+    r"(?:rezept|(?:ü|ue)berweis)\w*.{0,24}abhol",
     re.I,
 )
 _FB_AUSKUNFT_RE = re.compile(

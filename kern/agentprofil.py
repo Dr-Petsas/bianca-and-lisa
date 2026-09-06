@@ -286,7 +286,8 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     # ueber einen Marker-Text im DB-Agent).
     gruss = _s(agent.get("firstMessage"))
     if gruss:
-        t["begruessungText"] = gruss
+        # W-MEDDENT (04.09.2026): DB-Tippfehler „Wem kann ich…“ abfangen.
+        t["begruessungText"] = gruss.replace("Wem kann ich", "Was kann ich")
     if not _s(t.get("praxisName")):
         t["praxisName"] = _s(pre.get("locationName")) or _s(agent.get("locationName"))
 
@@ -408,6 +409,59 @@ def cache_leeren() -> None:
 # Zusammenfassung nach — gleiche CF, gleiche Auth wie fuer_did.
 # ---------------------------------------------------------------------------
 
+# Kurz warten, wenn der Anrufer noch im Hintergrund-Thread nachgereicht
+# wird (Cache-Treffer ohne _anrufer). Begruessungs-TTS deckt das meist;
+# Auskunft/Absage wartet explizit, bevor sie den Nachnamen erfragt.
+_ANRUFER_WARTE_S = 1.5
+
+
+def _anrufer_in_sitzung(sit: dict, pat: dict[str, str], caller_norm: str) -> None:
+    """Anrufer-Treffer in sit["anrufer"] + sit["patient"]/booking spiegeln.
+
+    patient/booking braucht list_appointments (Bianca setzt sonst kein
+    upcoming und behauptet fälschlich 'keinen Termin')."""
+    if not (isinstance(pat, dict) and pat and caller_norm):
+        return
+    telefon = "+" + caller_norm
+    sit["anrufer"] = {**pat, "telefon": telefon}
+    vor = _s(pat.get("vorname"))
+    nach = _s(pat.get("nachname"))
+    pid = _s(pat.get("patientId"))
+    if not (nach or pid):
+        return
+    alt = sit.get("patient") if isinstance(sit.get("patient"), dict) else {}
+    sit["patient"] = {
+        **alt,
+        "id": pid or _s(alt.get("id")),
+        "firstName": vor or _s(alt.get("firstName")),
+        "lastName": nach or _s(alt.get("lastName")),
+        "name": f"{vor} {nach}".strip() or _s(alt.get("name")),
+        "phone": telefon or _s(alt.get("phone")),
+    }
+    ctx = sit.setdefault("booking", {})
+    if not isinstance(ctx, dict):
+        return
+    if pid and not _s(ctx.get("patientId")):
+        ctx["patientId"] = pid
+    if vor and not _s(ctx.get("firstName")):
+        ctx["firstName"] = vor
+    if nach and not _s(ctx.get("lastName")):
+        ctx["lastName"] = nach
+    if (vor or nach) and not _s(ctx.get("patientName")):
+        ctx["patientName"] = f"{vor} {nach}".strip()
+    if not _s(ctx.get("phone")):
+        ctx["phone"] = telefon
+
+
+def anrufer_warten(sit: dict, timeout: float = _ANRUFER_WARTE_S) -> None:
+    """Blockiert kurz, bis der Hintergrund-Anrufer-Lookup fertig ist."""
+    if sit.get("anrufer"):
+        return
+    ev = sit.get("_anruferReady")
+    if isinstance(ev, threading.Event):
+        ev.wait(timeout)
+
+
 def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
     """Beim Anrufstart: die phoneCallId dieses Anrufs in die Sitzung holen.
 
@@ -416,46 +470,57 @@ def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
     Datensatz — dann registriert ein Daemon-Thread den Anruf nach (die
     Begruessung wartet nie auf die CF)."""
     sit["did"] = _s(did)
+    ready = threading.Event()
+    sit["_anruferReady"] = ready
     t = sit.get("tenant") or {}
     if not isinstance(t, dict):
+        ready.set()
         return
     # W-ANRUFER-CHECK: Kartei-Treffer zur Anrufernummer in die Sitzung —
     # nur mit ECHTER Nummer (bei "anonymous" matcht die CF ohnehin nie).
     caller_norm = tenants.nummer_norm(caller)
     pat = t.pop("_anrufer", None)
     if isinstance(pat, dict) and pat and caller_norm:
-        sit["anrufer"] = {**pat, "telefon": "+" + caller_norm}
+        _anrufer_in_sitzung(sit, pat, caller_norm)
         print(f"agentprofil anrufer erkannt: {pat.get('vorname','')} "
               f"{pat.get('nachname','')}".strip() + f" id={pat.get('patientId','-')}",
               flush=True)
     pcid = _s(t.pop("_phoneCallId", ""))
     if pcid:
         sit["phoneCallId"] = pcid
-        return
+        # Identitaet schon da: kein Hintergrund-Lauf noetig. Fehlt der
+        # Anrufer (Cache ohne _anrufer), trotzdem nachreichen — sonst
+        # laeuft Auskunft ohne Rufnummer-Treffer ins LLM.
+        if sit.get("anrufer"):
+            ready.set()
+            return
     if not enabled() or not str(t.get("_quelle") or "").startswith("cf"):
+        ready.set()
         return  # kein DB-Agent zu dieser Nummer -> kein PhoneCall-Datensatz
     norm = tenants.nummer_norm(did)
     if not norm:
+        ready.set()
         return
 
     def _lauf() -> None:
         try:
             pre = _cf_pre(norm, caller)
             neu = _s((pre or {}).get("phoneCallId"))
-            if neu:
+            if neu and not _s(sit.get("phoneCallId")):
                 sit["phoneCallId"] = neu
                 print(f"agentprofil call registriert phoneCallId={neu}", flush=True)
-            # Cache-Treffer: der frische pre-Wurf traegt auch den Patienten
-            # zur Anrufernummer — nachreichen, solange das Gespraech den
-            # Namen noch nicht anders geklaert hat (W-ANRUFER-CHECK).
+            # Cache-Treffer / fehlender Sync-Anrufer: frischen pre-Wurf
+            # nachreichen (W-ANRUFER-CHECK).
             pat2 = _anrufer_von_pre(pre)
             if pat2 and caller_norm and not sit.get("anrufer"):
-                sit["anrufer"] = {**pat2, "telefon": "+" + caller_norm}
+                _anrufer_in_sitzung(sit, pat2, caller_norm)
                 print(f"agentprofil anrufer erkannt (nachgereicht): "
                       f"{pat2.get('vorname','')} {pat2.get('nachname','')}".strip(),
                       flush=True)
         except Exception as e:
             print(f"agentprofil call-registrierung fail: {type(e).__name__}: {e}", flush=True)
+        finally:
+            ready.set()
 
     threading.Thread(target=_lauf, daemon=True).start()
 

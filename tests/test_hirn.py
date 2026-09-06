@@ -387,3 +387,15 @@ def test_abgeben_fragt_name_dann_notiz(tmp_path, monkeypatch):
     assert (tmp_path / "praxis_notizen.jsonl").exists()
     a = [x for x in sit["hirn"]["anliegen"] if x["handlung"] == "ABGEBEN"][0]
     assert a["status"] == "erledigt"
+
+
+def test_rezept_abgeben_sagt_nicht_ausstellen(tmp_path, monkeypatch):
+    """W-MEDDENT: Rezept/Überweisung — nie „ich stelle aus“."""
+    import bianca.verwalten as verwalten
+    monkeypatch.setattr(verwalten, "DATA_DIR", tmp_path)
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ABGEBEN", "SACHE", spiegel="Rezept Ibuprofen"))
+    aus = flow.zug(sit, "Können Sie mir ein Rezept ausstellen?")
+    assert aus and "nicht ausstellen" in aus["text"]
+    assert "Name" in aus["text"]
+    assert "stelle" not in aus["text"].lower().replace("ausstellen", "")
