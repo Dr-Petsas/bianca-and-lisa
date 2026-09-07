@@ -90,6 +90,29 @@ def test_saetze_kurz_genug_um_die_antwort_nicht_zu_ueberdauern():
             assert len(s) <= grenze, f"{gruppe}: {len(s)} Zeichen — {s}"
 
 
+def test_kartei_satz_nur_in_der_buchung_und_nie_als_frage():
+    from kern import filler as kf
+    sit = {
+        "karteiFillerText": "Letztes Mal die Kontrolle — einen Moment.",
+        "sammler": {"modus": "buchen", "phase": ""},
+    }
+    assert kf.kartei_satz(sit) == sit["karteiFillerText"]
+    sit["karteiFillerGesagt"] = True
+    assert kf.kartei_satz(sit) == ""
+    sit.pop("karteiFillerGesagt")
+    sit["sammler"]["phase"] = "bestaetigen"
+    assert kf.kartei_satz(sit) == ""
+    sit["sammler"]["phase"] = ""
+    sit["sammler"]["modus"] = ""
+    assert kf.kartei_satz(sit) == ""
+    sit["sammler"]["modus"] = "buchen"
+    sit["sammler"]["frage"] = "telefon_check"
+    assert kf.kartei_satz(sit) == ""
+    sit["sammler"]["frage"] = ""
+    sit["karteiFillerText"] = "Ist alles gut verlaufen?"
+    assert kf.kartei_satz(sit) == ""
+
+
 def test_saetze_gehen_unveraendert_durch_die_sprech_schicht():
     # Sonst passt die vorgerenderte Audio nicht zum gesprochenen Text.
     from lisa.sprech import sanitize

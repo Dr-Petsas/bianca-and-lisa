@@ -54,8 +54,8 @@ function bargeMerken(url, ms) {
 // lokale, beim Boot als BLOB geladene Warte-Ansagen. Sie spielen über ein
 // EIGENES Audio-Objekt (die playUrl-Kette bleibt unberührt) und verstummen,
 // sobald die echte Antwort loslegt. Blobs spielen auch bei hängendem Server.
-const WACHT_MS = 1400; // KI-Zug: so lange ohne Ton → lokale Notfall-Ansage
-const WACHT_MAX = 3;
+const WACHT_MS = 2000; // nur wenn der Server gar nichts schickt
+const WACHT_MAX = 1;   // eine lokale Ansage, kein Escalation-Sermon
 let notfall = [];
 let wachtTimer = null;
 let wachtAudio = null;
@@ -659,9 +659,9 @@ async function sendeZug({ text, blob, nr }) {
   let fillerLauf = null;
   const spielFiller = (url) => {
     if (!callOn || nr !== hoerNr) return;
+    // Server hat den Zug — lokale Notfall-Kette nicht noch drauflegen.
+    wachtStopp();
     phase("lisa", "Lisa spricht …");
-    // Mehrere Häppchen (Füller, dann Vorab-Satz aus dem LLM-Stream) laufen
-    // als Kette nacheinander — nichts überlappt, nichts geht verloren.
     fillerLauf = fillerLauf
       ? fillerLauf.then(() => playUrl(url)).catch(() => {})
       : playUrl(url).catch(() => {});

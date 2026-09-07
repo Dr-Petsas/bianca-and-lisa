@@ -113,13 +113,13 @@ def test_echo_referenz_klingt_ab(monkeypatch):
     assert voll_frames >= 1                            # Konstanten-Sanity
 
 
-# --- W-SIP-VOLLBUF (02.09.2026): Audio erst nach vollem Download ------------
+# --- W-SIP-PREBUF (06.09.2026): Stream nach Prefill, WAV erst bei done ------
 
 def _arm_check(p: dict) -> bool:
-    """Gleiche Arm-Logik wie Wiedergabe.lauf — offline ohne Async-Takt."""
+    """Gleiche Arm-Logik wie Wiedergabe.kann_armen / lauf — offline."""
     if p.get("armed"):
         return True
-    if p["done"]:
+    if srv.Wiedergabe.kann_armen(p):
         p["armed"] = True
         return True
     return False
@@ -127,8 +127,7 @@ def _arm_check(p: dict) -> bool:
 
 def test_fertig_wav_wartet_auf_done_nicht_auf_teilpuffer():
     """Begruessung /api/audio/: auch 1 s schon im buf darf Playout nicht
-    starten — erst wenn done (Download+Resample fertig). Sonst Underrun
-    mit Stille-Rahmen = Live-Haken bei sauberer Mitschnitt-WAV."""
+    starten — erst wenn done (Download+Resample fertig)."""
     async def _schreib(_b):
         pass
 
@@ -141,19 +140,22 @@ def test_fertig_wav_wartet_auf_done_nicht_auf_teilpuffer():
     assert _arm_check(p) is True
 
 
-def test_stream_url_wartet_auch_auf_done():
-    """Telefon: auch /api/audio-stream/ erst nach done — kein 200-ms-Prefill
-    (Live 02.09.: Prefill + HTTP-Luecke = starkes Stocken + ReadError)."""
+def test_stream_startet_nach_prebuf_nicht_erst_bei_done():
+    """Telefon-Stream: nach PREBUF_MS Playout, sonst Funkloch nach Filler
+    (Live 06.09.: File generiert weiter, Leitung sendet Stille)."""
     async def _schreib(_b):
         pass
 
     w = srv.Wiedergabe(_schreib)
     p = w.neu("/api/audio-stream/xyz.wav")
     assert p["armed"] is False and p["stream"] is True
-    p["buf"].extend(b"\x00" * (srv.RATE_IN * 2 * 500 // 1000))  # 500 ms
+    # Unter Prefill: noch nicht
+    p["buf"].extend(b"\x00" * (srv.PREBUF_B // 2))
     assert _arm_check(p) is False
-    p["done"] = True
+    # Prefill erreicht: starten, auch ohne done
+    p["buf"].extend(b"\x00" * (srv.PREBUF_B - len(p["buf"]) + srv.FRAME_B))
     assert _arm_check(p) is True
+    assert p["done"] is False
 
 
 # --- W-STT-SCHWANZ (30.08.2026): Hysterese fuers Zugende ---------------------
@@ -301,8 +303,7 @@ def test_kurzer_stream_gap_bleibt_barge(anruf):
 
 
 def test_stilles_ohr_liefert_zug_nach_ansage(anruf):
-    """W-SVETLANA: Anrufer spricht waehrend Bianca — Puffer, kein Stopp;
-    nach Ansage-Ende + Stille kommt der Zug mit ohr-Flag."""
+    """Kurzer Einwurf im Ohr: Puffer, kein Stopp; Zug nach Ansage-Ende."""
     anruf.wiedergabe.posten = [{
         "url": "/a.wav", "buf": bytearray(b"\x00" * 640), "done": True,
         "sent": 0, "armed": True, "stream": False,
@@ -310,13 +311,33 @@ def test_stilles_ohr_liefert_zug_nach_ansage(anruf):
     anruf.wiedergabe.zuletzt_ton = anruf._uhr()
     assert anruf.wiedergabe.spielt() is True
     _fuettern(anruf, [_frame(0)] * 10)
-    _fuettern(anruf, [_frame(2000)] * 25)  # lange Aussage ueber der Ansage
+    _fuettern(anruf, [_frame(2000)] * 10)  # unter OHR_BARGE_FRAMES
     assert anruf.zuege.qsize() == 0
-    assert anruf.wiedergabe.posten, "Ansage darf nicht per Barge gestoppt werden"
+    assert anruf.wiedergabe.posten, "kurzer Einwurf darf die Ansage nicht stoppen"
     assert anruf._ohr_an
-    # Ansage zu Ende
     anruf.wiedergabe.posten.clear()
     anruf.wiedergabe.zuletzt_ton = anruf._uhr() - 1.0
+    _fuettern(anruf, [_frame(0)] * 40)
+    assert anruf.zuege.qsize() == 1
+    pcm, ohr = anruf.zuege.get_nowait()
+    assert ohr is True
+    assert len(pcm) > 1000
+
+
+def test_langes_ohr_stoppt_ansage_sofort(anruf):
+    """Chef 08.09.: langer Zwischenruf (Termin für heute) — nicht die
+    Rest-Saetze zu Ende spielen und erst danach reagieren."""
+    anruf.wiedergabe.posten = [{
+        "url": "/a.wav", "buf": bytearray(b"\x00" * 640), "done": True,
+        "sent": 0, "armed": True, "stream": False,
+    }, {
+        "url": "/b.wav", "buf": bytearray(b"\x00" * 640), "done": False,
+        "sent": 0, "armed": False, "stream": False,
+    }]
+    anruf.wiedergabe.zuletzt_ton = anruf._uhr()
+    _fuettern(anruf, [_frame(2000)] * 25)
+    assert anruf.wiedergabe.posten == []
+    assert anruf._rec_an
     _fuettern(anruf, [_frame(0)] * 40)
     assert anruf.zuege.qsize() == 1
     pcm, ohr = anruf.zuege.get_nowait()
@@ -338,9 +359,25 @@ def test_stilles_ohr_schneidet_naechsten_satz_nicht(anruf):
     assert anruf.wiedergabe.hat_echten_rest() is True
     assert anruf.wiedergabe.spielt() is True  # not-armed + not-done
     anruf._spielte = True
-    _fuettern(anruf, [_frame(2000)] * 20)
-    assert len(anruf.wiedergabe.posten) == 2, "Folgesatz darf nicht verworfen werden"
+    _fuettern(anruf, [_frame(2000)] * 8)
+    assert len(anruf.wiedergabe.posten) == 2, "kurzer Einwurf darf den Folgesatz nicht verwerfen"
     assert anruf.zuege.qsize() == 0
+
+
+def test_ungespielt_wav_wirft_wartefueller_behaelt_stream(anruf):
+    """Reply ist da: ungehoerter Warte-Füller weg, Vorab-Stream bleibt."""
+    anruf.wiedergabe.posten = [
+        {"url": "/api/audio/fueller.wav", "buf": bytearray(b"x" * 100),
+         "done": True, "sent": 0, "armed": False, "stream": False},
+        {"url": "/api/audio-stream/vorab.wav", "buf": bytearray(),
+         "done": False, "sent": 0, "armed": False, "stream": True},
+        {"url": "/api/audio/gespielt.wav", "buf": bytearray(b"x" * 100),
+         "done": True, "sent": 40, "armed": True, "stream": False},
+    ]
+    weg = anruf.wiedergabe.ungespielt_wav_werfen()
+    assert weg == 1
+    urls = [p["url"] for p in anruf.wiedergabe.posten]
+    assert urls == ["/api/audio-stream/vorab.wav", "/api/audio/gespielt.wav"]
 
 
 def test_stilles_ohr_aus_bleibt_halbduplex(anruf, monkeypatch):

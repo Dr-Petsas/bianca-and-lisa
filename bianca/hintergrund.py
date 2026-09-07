@@ -17,7 +17,7 @@ from typing import Any
 
 from bianca import arzt as arztmod
 from bianca import gehirn
-from kern import calendar, gedaechtnis, motive, patients
+from kern import calendar, dossier, gedaechtnis, motive, patients
 from kern.patients import arzt_sprechname
 
 
@@ -35,6 +35,75 @@ def _laeuft(sit: dict, schluessel: str) -> bool:
 
 def _frei(sit: dict, schluessel: str) -> None:
     sit.setdefault("hgLaeuft", {})[schluessel] = False
+
+
+def kartei_von_anrufer(sit: dict) -> None:
+    """Letzten Besuch/Behandler zur Rufnummer holen — parallel zum Hallo.
+
+    Schreibt NUR sit['anruferKartei'], nicht den Sammler: die Identitaet
+    ist noch nicht bestaetigt (Nein auf den Check verwirft den Treffer)."""
+    a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    pid = _s(a.get("patientId"))
+    if not pid or sit.get("anruferKartei") is not None:
+        return
+    if _laeuft(sit, "anruferKartei"):
+        return
+
+    def arbeit() -> None:
+        try:
+            info = arztmod.letzter_behandler(sit.get("tenant") or {}, pid)
+            if info.get("ok") and info.get("war") and _s(info.get("calendarId")):
+                sit["anruferKartei"] = {
+                    "letzterBesuch": _s(info.get("lastIso")),
+                    "letzterGrund": _s(info.get("grund")),
+                    "calendarId": _s(info.get("calendarId")),
+                    "calendarName": _s(info.get("calendarName")),
+                    "doctorName": _s(info.get("doctorName") or info.get("calendarName")),
+                }
+                name = arzt_sprechname(
+                    _s(info.get("doctorName") or info.get("calendarName")))
+                print(f"bianca-anrufer-kartei: zuletzt {name!r} "
+                      f"{_s(info.get('lastIso'))[:10]}", flush=True)
+                frage = gehirn.arzt_check_frage(sit)
+                if frage:
+                    try:
+                        from kern import tts as _tts
+                        if _tts.bereit():
+                            _tts.speak_dauerhaft(frage)
+                    except Exception:
+                        pass
+            else:
+                sit["anruferKartei"] = {}
+            s = gehirn.sammler(sit)
+            if s.get("anruferCheck") == "ja":
+                gehirn.anrufer_kartei_uebernehmen(sit)
+            dossier.fuellen(sit)
+        except Exception as e:
+            sit.setdefault("anruferKartei", {})
+            print(f"bianca-anrufer-kartei fail {e}", flush=True)
+        finally:
+            _frei(sit, "anruferKartei")
+
+    threading.Thread(target=arbeit, daemon=True).start()
+
+
+def hallo_waermen(sit: dict) -> None:
+    """Hallo-Satz zur erkannten Nummer vorwärmen, während die Begrüßung spielt."""
+    if not gehirn.anrufer_bekannt(sit):
+        return
+    hallo = gehirn.anrufer_hallo(sit)
+    if not hallo:
+        return
+
+    def arbeit() -> None:
+        try:
+            from kern import tts as _tts
+            if _tts.bereit():
+                _tts.speak_dauerhaft(hallo)
+        except Exception:
+            pass
+
+    threading.Thread(target=arbeit, daemon=True).start()
 
 
 def kartei_anstossen(sit: dict) -> None:
@@ -88,6 +157,16 @@ def kartei_anstossen(sit: dict) -> None:
                     s["letzterGrund"] = _s(besuch_info.get("grund"))
                     print(f"bianca-kartei: letzter Besuch {s['letzterBesuch'][:10]} "
                           f"({s['letzterGrund'] or 'ohne Grund'})", flush=True)
+                    satz = gehirn.kartei_fueller_satz(s)
+                    if satz:
+                        sit["karteiFillerText"] = satz
+                        try:
+                            from kern import tts as _tts
+                            if _tts.bereit():
+                                _tts.speak_dauerhaft(satz)
+                        except Exception:
+                            pass
+                    dossier.fuellen(sit)
             # "Weiß nicht mehr, bei wem ich war": jetzt können wir nachschlagen.
             if (s.get("arzt") or {}).get("typ") == "unbekannt" and s["patientId"]:
                 if _s(s.get("phase")) in {"angebot", "bestaetigen", "gebucht"}:
@@ -229,6 +308,7 @@ def anstossen(sit: dict) -> None:
     # Besuchsgrund-Katalog EINMAL pro Anruf frisch von der Plattform holen
     # (behandlerspezifisches Mapping, Chef 30.08.2026) — laeuft parallel.
     motive.anstossen(sit)
+    kartei_von_anrufer(sit)
     kartei_anstossen(sit)
     vorrat_anstossen(sit)
     # W-GEDAECHTNIS: sobald Name/Telefon feststehen, im Praxisgedaechtnis

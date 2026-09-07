@@ -133,8 +133,10 @@ if BRIDGE_GAIN <= 0:
 # (unterbrechung.ist_echo: verwerfen + weitersprechen). Rueckweg fuer den
 # Notfall: BRIDGE_ECHO=1 = Alt-Verhalten (W-SIP-RAUSCH-Halbduplex).
 BRIDGE_ECHO = (os.environ.get("BRIDGE_ECHO") or "0").strip() == "1"
-# W-SVETLANA (04.09.2026): stilles Ohr waehrend Bianca spricht — mitschneiden
-# ohne sie zu stoppen. Nach ihrem Sprechende wird der Puffer zum Zug.
+# W-SVETLANA (04.09.2026): stilles Ohr waehrend Bianca spricht.
+# Kurze Einwürfe bleiben im Puffer (kein Stopp). Ab OHR_BARGE_FRAMES
+# echter Stimme: stoppen + Zug sofort (Chef 08.09.2026: sonst reagiert
+# sie erst, nachdem der Rest der Ansage durch ist).
 # BRIDGE_OHR=0 = altes Halbduplex (Barge-Schwelle, 280 ms noetig).
 BRIDGE_OHR = (os.environ.get("BRIDGE_OHR") or "1").strip() != "0"
 
@@ -199,6 +201,13 @@ BARGE_FRAMES = 14       # 280 ms Sprache waehrend Bianca spricht = Barge
 # echten Sende-Ton gilt die Leitung als zuhoerbereit, auch wenn der
 # Stream-Posten noch "offen" ist.
 SPIEL_NACHLAUF_S = 0.35
+# W-SIP-PREBUF (06.09.2026): Stream-URLs NICHT bis done=True zurueckhalten
+# (VOLLBUF erzeugte nach Filler ein Funkloch, waehrend TTS die Datei noch
+# schrieb — Chef: "Audio unterbrochen wie Funkloch, File laeuft weiter").
+# Start mit grossem Prefill; fertige /api/audio/-WAVs bleiben VOLLBUF.
+# 200 ms Prefill (02.09.) war zu knapp → Stocken. Default 1200 ms.
+PREBUF_MS = max(400, int(os.environ.get("BRIDGE_PREBUF_MS") or "1200"))
+PREBUF_B = RATE_IN * 2 * PREBUF_MS // 1000
 # W-STT-SCHWANZ (30.08.2026): 500 ms Vorlauf wie der phone_agent
 # (VAD_PREROLL_MS=500, dort gegen abgeschnittene Wortanfaenge wie
 # "gesetzlich" -> "ersetzlich") statt vorher 300 ms.
@@ -206,6 +215,11 @@ VORLAUF_FRAMES = 25     # 500 ms Ringpuffer vor dem Zugbeginn
 # W-SVETLANA: langer Ohr-Puffer waehrend Bianca spricht (6 s) — Svetlanas
 # lange Aussagen ueber der Ansage gehen sonst verloren.
 OHR_FRAMES = 300        # 6 s bei 20-ms-Rahmen
+# Echter Zwischenruf im Ohr: nach ~400 ms Stimme SOFORT stoppen und den
+# Puffer zum Zug machen — sonst spricht sie die Rest-Saetze zu Ende und
+# reagiert erst im uebernaechsten Turn (Chef 08.09.2026: Nummern-Readback
+# + „Termin für heute"). Knackser/kurze Ja bleiben unter der Schwelle.
+OHR_BARGE_FRAMES = 20   # 400 ms
 MIN_SPRACHE_FRAMES = 12 # unter 240 ms Sprachanteil: verwerfen (Knacser)
 # W-SIP-KURZJA (30.08.2026): ein gesprochenes "Ja" hat nur ~100-200 ms
 # Stimmanteil — der 240-ms-Deckel verwarf echte Antworten ("zug verworfen
@@ -347,17 +361,33 @@ class Wiedergabe:
         return int(ref)
 
     def neu(self, url: str) -> dict:
-        # W-SIP-VOLLBUF (02.09.2026): JEDER Posten (fertige WAV und
-        # /api/audio-stream/) erst abspielen, wenn Download+Resample
-        # KOMPLETT im buf liegt (done=True). Live 02.09.: Stream nach
-        # 200 ms Prefill gestartet → Generierungs-/HTTP-Luecke → Stille-
-        # Rahmen = starkes Stocken; Mitschnitt fehlte z004 (ReadError beim
-        # aclose). Dock bleibt unberuehrt (spielt Streams selbst progressiv).
+        # W-SIP-PREBUF (06.09.2026): Streams starten nach Prefill (nicht erst
+        # bei done). Fertige WAVs (/api/audio/) weiter erst bei done — die
+        # sind schnell komplett und brauchen keinen Progressiv-Start.
+        # Live 02.09. VOLLBUF-fuer-alles: Filler fertig → Stille bis Reply-
+        # Stream komplett generiert = Funkloch bei laufendem Audiofile.
         stream = "/api/audio-stream/" in (url or "")
         p = {"url": url, "buf": bytearray(), "done": False, "sent": 0,
-             "armed": False, "stream": stream}
+             "armed": False, "stream": stream, "underruns": 0}
         self.posten.append(p)
         return p
+
+    def ungespielt_wav_werfen(self) -> int:
+        """Reply ist da: ungehörte fertige WAVs (Warte-Füller) nicht mehr
+        in die Kette legen — Streams (Vorab-Satz) bleiben."""
+        alt = len(self.posten)
+        self.posten[:] = [p for p in self.posten
+                          if p["sent"] > 0 or p.get("stream")]
+        return alt - len(self.posten)
+
+    @staticmethod
+    def kann_armen(p: dict) -> bool:
+        """Darf dieser Posten jetzt Playout starten?"""
+        if p.get("armed") or p.get("done"):
+            return True
+        if p.get("stream") and len(p.get("buf") or b"") >= PREBUF_B:
+            return True
+        return False
 
     @property
     def aktiv(self) -> bool:
@@ -427,10 +457,13 @@ class Wiedergabe:
                 while self.posten:
                     p = self.posten[0]
                     if not p.get("armed"):
-                        # W-SIP-VOLLBUF: Stream und fertige WAV erst nach
-                        # komplettem buf (kein 200-ms-Prefill mehr am Telefon).
-                        if p["done"]:
+                        # Streams: Prefill; fertige WAVs: erst bei done.
+                        if self.kann_armen(p):
                             p["armed"] = True
+                            if p.get("stream") and not p["done"]:
+                                print(f"bruecke-prebuf start "
+                                      f"{len(p['buf']) // 16} ms "
+                                      f"(ziel={PREBUF_MS})", flush=True)
                         else:
                             break
                     rest = len(p["buf"]) - p["sent"]
@@ -446,7 +479,13 @@ class Wiedergabe:
                             break
                         self.posten.pop(0)
                         continue
-                    break  # Posten laedt noch — auf Daten warten
+                    # Prefill-Stream underrun: Generierung haengt hinter
+                    # Playout — Stille-Rahmen (Funkloch-Risiko). Zaehlen.
+                    p["underruns"] = int(p.get("underruns") or 0) + 1
+                    if p["underruns"] in (1, 25, 50):  # 0 / 0,5 / 1 s
+                        print(f"bruecke-underrun n={p['underruns']} "
+                              f"url={p.get('url', '')!r}", flush=True)
+                    break  # auf Nachschub warten
             if rahmen:
                 if BRIDGE_GAIN != 1.0:
                     rahmen = audioop.mul(rahmen, 2, BRIDGE_GAIN)
@@ -781,6 +820,15 @@ class Anruf:
                     if len(self._ohr) > OHR_FRAMES:
                         drop = len(self._ohr) - OHR_FRAMES
                         del self._ohr[:drop]
+                    if (self._ohr_frames >= OHR_BARGE_FRAMES
+                            and self.wiedergabe.aktiv):
+                        url, ms = self.wiedergabe.stoppen()
+                        self.barge_url, self.barge_ms = url, ms
+                        self._quittung()
+                        self._ohr_flush_zu_rec(jetzt)
+                        print(f"bruecke-ohr-barge url={url} ms={ms:.0f} "
+                              f"frames={self._sprech_frames} "
+                              f"peak={self._rec_peak}", flush=True)
                 return
 
             noetig = BARGE_FRAMES if spielend else START_FRAMES
@@ -908,6 +956,12 @@ class Anruf:
                     elif typ == "warte":
                         self.stille_ms = int(ev.get("stilleMs") or 900)
                     elif typ == "reply":
+                        # Chef 08.09.: ungehörte Warte-Füller nicht noch
+                        # hinter die echte Antwort klemmen.
+                        async with self.wiedergabe.lock:
+                            weg = self.wiedergabe.ungespielt_wav_werfen()
+                        if weg:
+                            print(f"bruecke-fueller-kapp {weg}", flush=True)
                         self._spielen(ev.get("audioUrl") or "")
                         if ev.get("stilleMs"):
                             self.stille_ms = int(ev["stilleMs"])

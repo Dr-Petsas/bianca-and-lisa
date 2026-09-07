@@ -182,6 +182,11 @@ def test_pzr_faellig_grenzen():
     assert not gehirn.pzr_faellig(s)
     s["letzterBesuch"] = _vor_tagen(400)  # alte Reinigung: wieder anbieten
     assert gehirn.pzr_faellig(s)
+    # Chef 08.09.2026: jeder Termin — auch ohne Kartei-Treffer.
+    s["bekannt"] = False
+    s["letzterGrund"] = "IMP OP Implantation"
+    assert gehirn.pzr_faellig(s)
+    assert gehirn.pzr_noch_fragen(s)
 
 
 def test_pzr_frage_zeitbezug_nur_wenn_wahr():
@@ -361,3 +366,80 @@ def test_buchen_traegt_plus_pzr_notiz():
         flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
     assert any("PLUS PZR heute" in n for n in notes)  # exakter Chef-Wortlaut
     assert "Zahnreinigung habe ich mit dazu vermerkt" in r["text"]
+
+
+def test_kartei_fueller_satz_nur_mit_fakt_ohne_frage():
+    sit = _sit()
+    s = _bestand(sit, 200, "KCH Kontrolluntersuchung")
+    satz = gehirn.kartei_fueller_satz(s)
+    assert satz
+    assert "?" not in satz
+    assert "Moment" in satz
+    assert "Kontrolle" in satz
+    s["grundWortlaut"] = "starke Schmerzen"
+    assert gehirn.kartei_fueller_satz(s) == ""
+    s["grundWortlaut"] = "einmal alles kontrollieren"
+    s["letzterBesuch"] = _vor_tagen(3)
+    assert gehirn.kartei_fueller_satz(s) == ""
+    s["letzterBesuch"] = _vor_tagen(200)
+    s["rueckblick"] = "fertig"
+    assert gehirn.kartei_fueller_satz(s) == ""
+
+
+def test_rueckblick_nach_fueller_fragt_nur_noch_verlauf():
+    sit = _sit()
+    s = _bestand(sit, 200, "KCH Kontrolluntersuchung")
+    s["karteiFuellerGesagt"] = True
+    text = gehirn.rueckblick_text(s)
+    assert "letzter Besuch" not in text
+    assert "verlaufen" in text
+    assert "?" in text
+
+
+def test_buchen_traegt_rueckblick_antwort_ins_popup():
+    sit = _sit()
+    s = _bestand(sit, 200, "KCH Kontrolluntersuchung")
+    s.update({
+        "rueckblick": "fertig",
+        "rueckblickAntwort": "Alles gut verheilt, danke.",
+        "slotIso": "2026-09-07T09:00",
+        "arzt": {"typ": "egal"},
+        "telefon": "01776004600",
+        "telefonOk": True,
+    })
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    notes: list[str] = []
+    flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
+        "ok": True, "booked": True, "slotIso": slot_iso, "spoken": "Der Termin ist eingetragen.",
+    }
+    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    try:
+        flow._buchen(sit)
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+    assert any("Alles gut verheilt" in n and "letzten Besuch" in n for n in notes), notes
+
+
+def test_zug_nach_kartei_fueller_fragt_nur_verlauf_und_merkt_antwort():
+    """Füller hat den Besuch schon genannt — Einschub fragt nur, merkt die Antwort.
+
+    Direkt über _einschub, nicht über einen Wunschzeit-Zug: nach W-MEDDENT
+    kommt der Rückblick nie im selben Zug wie die frische Wunschzeit
+    (sonst stört er den Slot)."""
+    sit = _sit()
+    s = _bestand(sit, 200, "KCH Kontrolluntersuchung")
+    s["karteiFuellerGesagt"] = True
+    ein = flow._einschub(sit)
+    assert ein and "?" in ein["text"]
+    assert "letzter Besuch" not in ein["text"]
+    assert "verlaufen" in ein["text"]
+    assert s["frage"] == "rueckblick" and s["rueckblick"] == "gefragt"
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        r2 = flow.zug(sit, "Ja, alles bestens verheilt!")
+        assert s["rueckblickAntwort"] == "Ja, alles bestens verheilt!"
+        assert s["rueckblick"] == "fertig"
+        assert r2 and "Zahnreinigung" in r2["text"]
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen

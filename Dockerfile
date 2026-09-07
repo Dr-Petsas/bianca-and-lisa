@@ -25,6 +25,8 @@ COPY bianca_web/ bianca_web/
 # Test-Studio (Baukasten): Biancas /studio-Seiten + Editor-Container.
 # .dockerignore laesst nur Code und editor_web durch, keine Render-Caches.
 COPY tests/ tests/
+# Produktions-Smoke (DID/WL/Intent/Prefill) — nach Deploy im Container.
+COPY tools/prod_smoke.py tools/prod_smoke.py
 # Basis-Mandanten liegen im Image; der Tenant-Mount in compose.yml legt sich
 # darueber und macht neue Praxen ohne Rebuild moeglich.
 COPY tenants/ tenants/

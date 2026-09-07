@@ -87,7 +87,8 @@ _FRAGE_KERN = {
     "telefon": r"nummer|handy|telefon",
     "telefon_check": r"nummer|stimmt",
     # W-ANRUFER-CHECK: das vorgelesene Name+Nummer-Paar zur Rufnummer.
-    "anrufer_check": r"rufnummer|erkannt|stimmt",
+    "anrufer_check": r"rufnummer|erkannt|stimmt|selbst",
+    "arzt_check": r"zuletzt|behandler|richtig",
     "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",
@@ -95,6 +96,10 @@ _FRAGE_KERN = {
     "versicherung": r"privat|gesetzlich|versichert",
     "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
     "pzr": r"zahnreinigung|prophylaxe|\bpzr\b",
+    "pzr_kasse": r"krankenkasse|versichert|kasse",
+    "termin_anbieten": r"termin|zahnreinigung|brauchen",
+    "arzt_notiz": r"notiz|doktor|besondere\s+frage|eingehen",
+    "arzt_notiz_diktat": r"doktor|mitgeben|notiz",
     # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot + Zahnersatz-Check.
     "bleaching": r"aufhell|bleach|zahnaufhellung",
     "bleaching_check": r"krone|brücke|bruecke|veneer|implantat|zahnersatz",
@@ -159,6 +164,9 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         # Weiche Zusatzfrage (30.08.2026) — naechste_frage kennt sie nicht,
         # der Anker soll sie nach einer LLM-Antwort trotzdem zurueckholen.
         return gehirn.pzr_frage(sit.get("sammler") or {})
+    if fid == "pzr_kasse":
+        from kern import pzr_kassen
+        return pzr_kassen.KASSE_FRAGE
     fid2, frage = gehirn.naechste_frage(sit)
     return frage if fid2 == fid else ""
 
@@ -518,6 +526,12 @@ def start_reply(sit: dict) -> dict[str, Any]:
     text = _s(tenant.get("begruessungText")) or begruessung(tenants.praxis_melde(tenant))
     # W-MEDDENT (04.09.2026): Live-Bug „Wem kann ich für Sie tun?“ — TTS/DB.
     text = gruss_saeubern(text)
+    # Fast-Pfad: Name aus der Rufnummer ist oft schon da. Hallo waermen
+    # und letzten Besuch/Behandler nachziehen — parallel zur Begruessung,
+    # nie auf dem Mund-Pfad.
+    from bianca import hintergrund as _hg
+    _hg.hallo_waermen(sit)
+    _hg.kartei_von_anrufer(sit)
     sit["messages"] = [
         {"role": "system", "content": system_prompt_aktuell(sit)},
         {"role": "user", "content": "(Ein Anrufer ist in der Leitung. Du hast dich gerade gemeldet.)"},
@@ -561,6 +575,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             hirn.anwenden(sit, spaet)
         deutung = intent.erkennen(sit, text_in)
         hirn.anwenden(sit, deutung)
+
+    # W-ANRUFER-HALLO: den verspielten Satz SOFORT als Vorab-Füller
+    # sprechen, während flow + Ziffern-TTS im Hintergrund laufen.
+    # Seriell (Hallo, Stille, Nummer) war der hörbare Hänger.
+    if vorab:
+        hallo = gehirn.anrufer_hallo_jetzt(sit, text_in)
+        if hallo:
+            vorab(hallo)
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)

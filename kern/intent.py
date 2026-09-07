@@ -73,8 +73,11 @@ def _s(v: Any) -> str:
 
 # Wechsel-Signale: sobald so ein Wort faellt, ist der Satz KEIN reiner
 # Formular-Zug mehr — das LLM muss ihn deuten (Themenwechsel moeglich).
+# \bsprech… — NICHT sprech\w* allein: das matchte „sprechung“ in
+# Besprechung / Implantatbesprechung und feuerte fälschlich ERREICHEN
+# (Live 06.09.2026 → Zaluma-Platzhalter statt Buchung).
 _WECHSEL_RE = re.compile(
-    r"sprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
+    r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*|(?:ä|ae)nder\w*|"
     r"r(?:ü|ue)ckruf\w*|zur(?:ü|ue)ckruf\w*|"
     r"rechnung\w*|abrechnung\w*|rezept\w*|(?:ü|ue)berweisung\w*|befund\w*|"
@@ -143,9 +146,11 @@ _SLOTWAHL_RE = re.compile(
 # Formular-Fragen der Maschine: Antworten darauf sind Ernte, kein Anliegen.
 _FORMULAR_FRAGEN = {
     "name", "vorname", "nachname", "telefon", "telefon_check", "telefon_alt",
-    "buchstabieren", "schonmal", "versicherung", "anrufer_check", "geburtstag",
+    "buchstabieren", "schonmal", "versicherung", "anrufer_check", "arzt_check",
+    "geburtstag",
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
-    "frisch_absage_ok", "behandlung", "pzr",
+    "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",
+    "arzt_notiz",
 }
 
 
@@ -172,7 +177,7 @@ def _ist_formular_antwort(sit: dict, text: str) -> bool:
 # --- Fallback-Heuristik (LLM tot / unparsebar) ------------------------------
 
 _FB_ERREICHEN_RE = re.compile(
-    r"sprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
+    r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"talk\s+to|speak\s+(?:to|with)|"
     r"h(?:ä|ae)tte?\s+gern\w*\s+(?:den|die|herrn|frau)?\s*(?:doktor|dr\b)|"
     r"mitarbeiter\w*|anmeldung|empfang|praxisleitung|personal\b|"
@@ -487,6 +492,13 @@ def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
         schnell = _eindeutig(t)
         if schnell is not None:
             return schnell
+        # Nacktes "Zahnreinigung": die Maschine fragt nach dem Termin —
+        # kein Hintergrund-LLM, das spaeter ANLEGEN nachschiebt.
+        from bianca import gehirn as _gehirn
+        if _gehirn.ist_nacktes_pzr(t):
+            return {"kanal": "ok", "zug": "halten", "handlung": "KEINE",
+                    "gegenstand": "", "fuer": "selbst", "ersatz": None,
+                    "spiegel": t[:80], "quelle": "nacktes-motiv"}
     # Wechsel-Verdacht oder unklarer Erstsatz: Heuristik entscheidet JETZT
     # (0 ms). Das LLM prueft NUR nach, wenn sie ratlos blieb (halten/KEINE)
     # — hat sie eine Handlung erkannt, uebernimmt die Maschine, und jeder

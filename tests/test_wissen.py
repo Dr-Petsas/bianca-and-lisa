@@ -10,7 +10,7 @@ from kern.tenants import laden
 from kern.wissen import VERWEIS_SATZ, wissen_block
 from lisa.prompt import system_prompt as lisa_prompt
 
-PREIS_KERNE = ("120 Euro", "900 bis 1400 Euro", "1600 bis 1800 Euro", "150 Euro", "80 Euro")
+PREIS_KERNE = ("120 Euro", "900 bis 1400 Euro", "1600 bis 1800 Euro", "80 Euro")
 
 
 # --- Mandant trägt das Wissen ----------------------------------------------
@@ -33,6 +33,10 @@ def test_wissen_block_mit_preisen():
     assert "NUR diese" in block
     assert VERWEIS_SATZ in block
     assert "keine Diagnosen" in block
+    assert "ungefähr" in block
+    assert "grob" not in block.lower()
+    assert "Prophylaxehelferinnen" in block
+    assert "Techniker" in block
 
 
 def test_wissen_block_ohne_preise_verweist_ehrlich():

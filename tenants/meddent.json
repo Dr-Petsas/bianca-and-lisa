@@ -16,12 +16,16 @@
     { "id": "RHYdoQFD7oAhqIepLzC2", "name": "Dr. Patrikis" },
     { "id": "zex5bmv5jfIHWVW6zHbg", "name": "Dr. Petsas" }
   ],
+  "weiterleitungen": [
+    { "name": "Dr. Patrikis", "nummer": "+4921130293034", "hinweis": "Patrikis" },
+    { "name": "Dr. Petsas", "nummer": "+4921130293035", "hinweis": "Petsas" }
+  ],
   "wissen": {
     "preise": [
       "Hochwertige Composite-Keramik-Füllung, unsichtbar zahnfarben: circa 120 Euro.",
       "Krone aus heller Vollkeramik: circa 900 bis 1400 Euro, je nach Krankenkasse und Ausführung.",
       "Implantat: in der Regel circa 1600 bis 1800 Euro.",
-      "Professionelle Zahnreinigung: circa 150 Euro.",
+      "Professionelle Zahnreinigung: ungefähr 120 Euro. Bei uns führen die Zahnärzte die Zahnreinigung selbst durch, nicht die Prophylaxehelferinnen.",
       "Narval-Schiene gegen Schnarchen und Schlafapnoe: für gesetzlich Versicherte kostenfrei bis auf einen Beitrag von rund 80 Euro für das digitale Scannen."
     ],
     "preiseSonst": "Das müssen Sie direkt mit Ihrem Zahnarzt besprechen.",

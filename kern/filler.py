@@ -15,30 +15,28 @@ import re
 from typing import Any
 
 # Laenge ist hier eine Funktion, kein Stil: ein Fueller darf die Antwort NICHT
-# überdauern, sonst wird der Zug langsamer statt schneller. ElevenLabs spricht
-# rund 19 Zeichen je Sekunde.
-MAX_VORAB = 52   # ~2,7 s — fuellt die 2 bis 4 s bis zur Antwort
+# überdauern, sonst wird der Zug langsamer statt schneller. Ein langer
+# „ich schaue eben in den Kalender"-Satz (~2,5 s) hat live die echte
+# Antwort hinter die 2-s-Grenze geschoben (Chef 08.09.2026).
+MAX_VORAB = 28   # ~1,4 s — ein kurzer Satz, dann die Antwort
 MAX_TOOL = 46    # ~2,4 s — nach dem Sprachmodell fehlt nur noch der Netz-Umlauf
 
 # Sätze, die nur vom Nachschauen sprechen — für den geratenen Fall erlaubt.
+# Kurz halten: FILLER_MAX=1, der Satz darf die Antwort nicht überdauern.
 _SUCHEN = [
-    "Hm, Moment mal, ich schaue eben in den Kalender.",
-    "Eine Sekunde bitte, ich prüfe kurz den Kalender.",
-    "Huch, ich schaue schnell, was frei ist.",
-    "Einen Augenblick — was hat der Kalender frei?",
+    "Einen Moment.",
+    "Ich schaue kurz nach.",
 ]
 _AKTE = [
-    "Eine Sekunde, ich suche gerade Ihren Termin.",
-    "Moment, ich hole Ihre Termine auf den Schirm.",
-    "Ganz kurz, ich schaue in Ihre Akte.",
+    "Einen Augenblick.",
+    "Ich suche das kurz.",
 ]
 # Neutral — KEIN Nachschauen behaupten (Chef 29.08.2026: auf „wie heißt du"
 # kam „einen Moment, ich schaue eben nach" — der Satz darf nur, wenn wirklich
 # Kalender oder Akte drankommt, also Gruppe suchen/akte).
 _ALLGEMEIN = [
-    "Hm, einen kleinen Moment bitte.",
+    "Einen Moment bitte.",
     "Ganz kurz bitte.",
-    "Einen Augenblick.",
 ]
 
 # Diese Sätze nennen die Handlung — nur wenn das Werkzeug wirklich läuft.
@@ -149,6 +147,36 @@ def fuer_tool(name: str) -> str:
 def satz(gruppe: str, nr: int = 0) -> str:
     liste = GRUPPEN.get(gruppe) or _ALLGEMEIN
     return liste[int(nr) % len(liste)]
+
+
+def kartei_satz(sit: dict | None) -> str:
+    """Kartei-Feststellung als Füller — nur Text, der schon liegt, nie Frage.
+
+    Kein Import aus Bianca: hintergrund legt karteiFillerText, sobald
+    letzterGrund da ist. Plauder (kein Buchungs-Modus) und Confirm/Buchung
+    bleiben beim neutralen Satz, damit der Pflichtpfad nicht driftet."""
+    sit = sit or {}
+    text = _s(sit.get("karteiFillerText"))
+    if sit.get("karteiFillerGesagt"):
+        return ""
+    if not text or "?" in text:
+        from kern import dossier
+        text = dossier.satz(sit)
+    if not text or "?" in text:
+        return ""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("modus")) != "buchen":
+        return ""
+    if _s(s.get("phase")) in {"angebot", "bestaetigen", "gebucht", "fertig"}:
+        return ""
+    # Pflicht-Rückfragen (Nummer, Slot, Confirm) bleiben unberührt —
+    # der Kartei-Satz darf dort nie zwischen Frage und Antwort rutschen.
+    if _s(s.get("frage")) in {
+        "telefon", "telefon_check", "buchstabieren", "slotwahl",
+        "bestaetigung", "arzt_notiz", "arzt_notiz_diktat",
+    }:
+        return ""
+    return text
 
 
 def alle_saetze() -> list[str]:

@@ -1,0 +1,31 @@
+---
+description: Nie erreichte Live-Fähigkeiten verlieren — Regressionen + Smoke vor Deploy
+alwaysApply: true
+---
+
+# Produktionsreife — keine Rücksetzer
+
+Jeder Change an Intent, Weiterleitung, Agentprofil, SIP-Brücke oder TTS/STT
+muss **bereits erreichte** Live-Fähigkeiten erhalten. Grünes Unit-Test-Suite
+allein reicht nicht, wenn Tests den alten Platzhalter-Zustand abbilden.
+
+## Nie verlieren (MedDent-Telefon)
+
+1. **Besprechung ≠ Durchstellen** — „Implantatbesprechung“ / „ZE Besprechung“ → Buchung, nie ERREICHEN/Transfer.
+2. **Echte Weiterleitung** — „mit Doktor Petsas sprechen“ → Jingle + `transfer` (nicht Platzhalter), wenn Forwardings existieren.
+3. **Alle DIDs** in `tenants/meddent.json` → CF findet Agent + `weiterleitungen` (4101 und 4110).
+4. **Audio ohne Funkloch** — Stream-Playout nach Prefill (`BRIDGE_PREBUF_MS`), keine Totstille während die Datei noch generiert; Underruns loggen (`bruecke-underrun`).
+5. **Anrufer/Akte** — CF-pre liefert Patient wenn Nummer bekannt (kein stiller Fallback ohne Agent).
+
+## Pflicht bei relevanten Changes
+
+- **Live-Satz-Test** mit wortgleichem Vorfall-Satz und Soll-Verhalten (nicht nur Regex-Kommentar).
+- Vor Deploy: `python tools/prod_smoke.py` (lokal oder auf pickadoc1 im Container).
+- Shared CF (`onPickadocPhoneCall`) nicht „nebenbei“ mit anderen Deploys; nach CF-Deploy Smoke.
+- `tenants/*.json`-kritische Felder (`dids`, `weiterleitungen`) nicht entfernen „weil DB die Wahrheit ist“ — Fallback und Geschwister-DIDs brauchen sie.
+
+## Verboten
+
+- Breite Regexes wie `sprech\w*` ohne Wortgrenze (trifft Besprechung).
+- Tests, die Platzhalter erwarten, obwohl Portal-Forwardings live sind.
+- Intent-/SIP-Änderung ohne Smoke, „nur schnell deployen“.

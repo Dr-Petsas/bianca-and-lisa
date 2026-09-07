@@ -65,7 +65,8 @@ _JOB_RE = re.compile(
     r"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|"
     r"übermorgen|uebermorgen|\bmorgen\b|n[aä]chste\s+woche|"
     r"nummer\w*|handy\w*|telefon\w*|doktor|praxis|behandler|"
-    r"buchstabier\w*|eintrag\w*|\bakte\b|besuchsgrund",
+    r"buchstabier\w*|eintrag\w*|\bakte\b|besuchsgrund|"
+    r"zahnreinigung|prophylaxe|\bpzr\b",
     re.I,
 )
 

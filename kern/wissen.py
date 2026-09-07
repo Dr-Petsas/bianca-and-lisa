@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from kern import pzr_kassen
+
 VERWEIS_SATZ = "Das müssen Sie direkt mit Ihrem Zahnarzt besprechen."
 
 # Anfahrts-/Wegfragen sind die EINE erlaubte Langtext-Antwort: der volle
@@ -49,13 +51,16 @@ def wissen_block(wissen: dict | None) -> str:
         "Allgemeine Zahnmedizinfragen (Was ist eine Wurzelbehandlung? Tut ein Implantat weh? Wie lange dauert eine Zahnreinigung?) beantwortest du in ein bis zwei allgemeinverständlichen Sätzen — keine Diagnosen, keine individuellen Heilaussagen.",
     ]
     if preise:
-        zeilen.append("PREISE (grob, circa — NUR diese nennen):")
+        zeilen.append("PREISE (ungefähr, circa — NUR diese nennen):")
         zeilen.extend(f"- {p}" for p in preise)
         zeilen.append(
             f"Alle anderen Preise kennst du NICHT: nie schätzen, nichts erfinden, sondern wörtlich: „{verweis}“"
         )
     else:
         zeilen.append(f"Preise kennst du KEINE: nie schätzen, sondern wörtlich: „{verweis}“")
+    pzr = pzr_kassen.fuer_wissen(w)
+    if pzr:
+        zeilen.append(pzr)
     if anfahrt:
         zeilen.append(
             "ANFAHRT — fragt jemand nach dem Weg, der Adresse oder „wie komme ich zu Ihnen“, "

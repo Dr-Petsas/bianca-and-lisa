@@ -12,13 +12,14 @@ import json
 import queue
 import re
 import secrets
+import struct
 import threading
 import time
 from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, sprech, spur, stt, tempo, tenants, tts, unterbrechung
+from kern import filler, halbsatz, mitschnitt, sprech, spur, stt, tempo, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 
@@ -34,21 +35,16 @@ def _audio_ms_schaetzen(blob: bytes | None) -> int:
 # Vorab-Füller: so früh raus, dass keine Stille entsteht, aber nicht bei
 # blitzschnellen Zügen (Cache-Treffer brauchen keinen Überbrückungssatz).
 FILLER_VORAB_S = 0.3
-# Späte Frist (W-STILLE, Chef 29.08.2026: "es darf NIE zum Schweigen kommen —
-# nie länger als 1,5 Sekunden"): Mit dem Dock-Vorlauf (Stille-Schwelle +
-# Upload, ~0,5-0,8 s) muss der erste Ton spätestens ~0,9 s nach Zug-Eingang
-# raus. Die Zustandsmaschine liefert in <0,4 s — dort feuert die Frist nie;
-# sie greift bei LLM-Zügen, Kalender-Hängern und Readback-Rendern. Die alte
-# 3,2-s-Frist (27.08.: "nicht in die Antwort hineinsprechen") riss live
-# 4-s-Löcher; seit die Docks Füller und Antwort als KETTE spielen, überlappt
-# nichts mehr — der Füller darf früh kommen.
-FILLER_SPAET_S = 0.9
-# Nachschub: steht die Antwort nach einem Füller weiter aus, spricht alle
-# 2,4 s (Füller-Audio ~1,2 s + Rest unter 1,5 s Stille) der nächste — bis
-# FILLER_MAX. Danach ist die Antwort ohnehin da (LLM-Deckel ~5 s) oder der
-# Dock-Watchdog übernimmt mit den lokalen Notfall-Ansagen.
+# Erster Ton spätestens hier (Chef 08.09.2026: keine Antwort länger als
+# 2 s, sonst kommt „Hallo?"). Die Maschine liefert in <0,4 s — dort feuert
+# die Frist nie. LLM/Kalender/Readback bekommen GENAU EINEN kurzen Satz,
+# dann wartet der Strom auf die echte Antwort — kein Nachschub-Sermon.
+FILLER_SPAET_S = 0.8
+# Nachschub-Intervall bleibt als Konstante (Tests setzen sie runter),
+# greift aber nicht mehr: FILLER_MAX=1. Live 06./08.09.: drei Sätze
+# hintereinander („ich schaue nach" / „einen Moment" / „kurzen Augenblick").
 FILLER_NACHSCHUB_S = 2.4
-FILLER_MAX = 3
+FILLER_MAX = 1
 
 # Stille-Notfall-Ansagen (W-STILLE): das Dock lädt sie beim Boot als BLOB
 # und spielt sie LOKAL, wenn nach dem Sprechende des Anrufers ~1,4 s kein
@@ -202,6 +198,35 @@ class Dienst:
 
         return gen()
 
+    def audio_bytes_fertig(self, url: str) -> bytes | None:
+        """Bytes zu einer eigenen Audio-URL — nur wenn das Audio KOMPLETT ist
+        (W-MITSCHNITT): Blocking-Ablage sofort, Stream-Slots erst nach
+        fertig(); laufende Streams liefern None (der Mitschnitt probiert es
+        beim nächsten Flush bzw. beim Gesprächs-Ende erneut)."""
+        u = _s(url)
+        if u.startswith("/api/audio/"):
+            return self.audio_holen(u.rsplit("/", 1)[-1])
+        if u.startswith("/api/audio-stream/"):
+            slot = self.audio_streams.get(u.rsplit("/", 1)[-1].rsplit(".", 1)[0])
+            if not slot:
+                return None
+            with slot["cond"]:
+                if not slot["done"]:
+                    return None
+                pcm = b"".join(slot["chunks"])
+            if not pcm:
+                return None
+            # Geschlossener Header (echte Längen) — die Stream-Auslieferung
+            # nutzt den offenen (0xFFFFFFFF), der taugt nicht für Dateien.
+            kopf = struct.pack(
+                "<4sI4s4sIHHIIHH4sI",
+                b"RIFF", 36 + len(pcm), b"WAVE",
+                b"fmt ", 16, 1, 1, tts.PCM_RATE, tts.PCM_RATE * 2, 2, 16,
+                b"data", len(pcm),
+            )
+            return kopf + pcm
+        return None
+
     def stimme(self, text: str, karte: dict | None = None) -> tuple[str, float]:
         if not text or not tts.bereit():
             return "", 0.0
@@ -232,19 +257,11 @@ class Dienst:
             return self.stimme(text, karte)
         saetze = sprech.tts_saetze(text) or [text.strip()]
         frisch = [s for s in saetze if not tts.im_cache(s) and not tts.ziffern_satz(s)]
-        if not frisch:
-            # P1 Readback-Parallelisierung (29.08.2026): Ein Mehr-Satz-Text
-            # aus Cache- und Ziffern-Saetzen lohnt den Strom TROTZDEM, wenn
-            # der ERSTE Satz sofort lieferbar ist — der gewaermte Vorsatz
-            # ("Ich wiederhole die Nummer.") spielt, WAEHREND der Feeder den
-            # Ziffern-Satz blocking rendert und der Nachhoer-Waechter ihn
-            # verifiziert. Erst dann kommt er in den Strom: Sicherheit
-            # unveraendert, gefuehlte Wartezeit nahe null. Beginnt der Text
-            # direkt mit dem Ziffern-Satz, bleibt der bewaehrte Blocking-
-            # Pfad (der erste Ton wartet ohnehin auf die Verifikation).
-            if not (len(saetze) > 1 and tts.im_cache(saetze[0])
-                    and any(tts.ziffern_satz(x) for x in saetze)):
-                return self.stimme(text, karte)
+        if not frisch and len(saetze) <= 1:
+            return self.stimme(text, karte)
+        # Mehr-Satz (Readback): IMMER streamen — der erste Satz geht raus,
+        # bevor Ziffern blocking fertig sind. Sonst 10–30 s Totenstille
+        # (Live 06.09.: tts=31,7 s auf „Ich wiederhole die Nummer.").
         if karte is not None:
             karte["saetze"] = list(saetze)
             karte["endenMs"] = []
@@ -389,6 +406,23 @@ class Dienst:
         print(f"{self.name}-notfall bereit: {len(urls)} Saetze", flush=True)
 
     def _filler_url(self, sit: dict, gruppe: str) -> str:
+        kartei = filler.kartei_satz(sit)
+        if kartei:
+            url = self.filler_urls.get(kartei)
+            if not url and tts.bereit():
+                try:
+                    url = self.audio_legen(tts.speak_dauerhaft(kartei))
+                    if url:
+                        self.filler_urls[kartei] = url
+                except Exception as e:
+                    print(f"{self.name}-kartei-filler fail {kartei!r} {e}", flush=True)
+                    url = ""
+            if url:
+                sit["karteiFillerGesagt"] = True
+                s = sit.get("sammler")
+                if isinstance(s, dict):
+                    s["karteiFuellerGesagt"] = True
+                return url
         nr = int(sit.get("fillerNr") or 0)
         sit["fillerNr"] = nr + 1
         url = self.filler_urls.get(filler.satz(gruppe, nr))
@@ -473,6 +507,15 @@ class Dienst:
         }
         if reply.get("hangup"):
             antwort["hangup"] = True
+        # W-VERBINDEN-ECHT: transfer MUSS bis zur SIP-Bruecke durchreichen.
+        # Live 06.09.2026: hangup ohne transfer → Jingle, CURL leer, Auflegen
+        # statt Dial zu Petsas (bruecke-transfer-abfrage -> leer).
+        tr = reply.get("transfer") if isinstance(reply.get("transfer"), dict) else None
+        if tr and tr.get("nummer"):
+            antwort["transfer"] = {
+                "nummer": str(tr["nummer"]),
+                "name": str(tr.get("name") or ""),
+            }
         # Offene Maschinen-Frage (Bianca-Sammler) additiv mitgeben — der
         # Baukasten-Report mappt darueber Frage -> Antwort-Baustein.
         sammler = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
@@ -480,6 +523,14 @@ class Dienst:
             antwort["frage"] = str(sammler.get("frage") or "")
             antwort["modus"] = str(sammler.get("modus") or "")
         antwort.update(self._stille_feld(sit))
+        # W-MITSCHNITT: Zug samt Audio auf die Platte (.data/anrufe).
+        # Live 06.09.2026: fehlte seit W-LIVE 13:43 → CallR ohne Audio/Transkript.
+        satz_liste = sit.pop("_vorabUrlListe", None) or []
+        vorab_urls = [u for u in satz_liste if u]
+        mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
+                       timings=timings, waechter=waechter, audio_url=url,
+                       vorab_urls=vorab_urls, book=reply.get("book"),
+                       frage=str(antwort.get("frage") or ""))
         return antwort
 
     # ---- Barge-Fortsetzung (W-BARGE) ---------------------------------------
@@ -500,6 +551,8 @@ class Dienst:
         waechter = spur.abholen(sit)
         self.merke_zug(sit, art="weiter", textIn="", text=text, timings=timings,
                        waechter=waechter, audioUrl=url or "")
+        mitschnitt.zug(sit, self, art="weiter", text=text, timings=timings,
+                       waechter=waechter, audio_url=url)
         print(f"{self.name}-weiter (Barge-Fortsetzung): {text[:60]!r}", flush=True)
         extra = extra or {}
         antwort = {
@@ -650,6 +703,9 @@ class Dienst:
                             spur.merken(sit, "barge-echo", gesagt)
                             q.put(("leer", "echo"))
                             return
+                        # W-MITSCHNITT: Anrufer-Audio dieses Zugs sichern —
+                        # bei W-HALBSATZ (Warte) haengt es am naechsten Zug.
+                        mitschnitt.eingang(sit, stt_blob, stt_mime)
                 # W-HALBSATZ (29.08.2026): gemerktes Fragment vor den neuen Zug
                 # setzen; klingt auch das Ergebnis unfertig (Komma-Ende,
                 # haengender Artikel/Konjunktion), wird NICHT geantwortet —
@@ -679,29 +735,28 @@ class Dienst:
         threading.Thread(target=arbeit, daemon=True).start()
 
         def frist_setzen(gehoert: str) -> tuple[float | None, str]:
-            """Nur raten, wenn wirklich Kalender/Akte drankommt.
+            """Ein kurzer Satz gegen Totenstille, nie eine Entschuldigungs-Kette.
 
-            Chef 29.08.2026: auf „wie heißt du" kam „einen Moment, ich
-            schaue eben nach" — der späte Allgemein-Füller (0,9 s) gewann
-            nach P5 das Rennen gegen den echten ersten Satz und behauptete
-            ein Nachschauen, das nicht stattfand. Ohne Treffer in
-            filler.vermutet() wartet der Strom auf Vorab-Satz / Antwort /
-            Werkzeug; hängt der Server, spricht der Dock-Watchdog (1,4 s)
-            eine neutrale Ansage. In der schnellen Phase ebenso: die
-            Maschine oder der Readback-Vorsatz liefert den ersten Ton."""
-            if schnelle_phase:
-                return None, "allgemein"
+            Chef 08.09.2026: erster Ton unter 2 s; danach die echte Antwort,
+            nicht dreimal „ich schaue nach". Kalender-Gruppe nur wenn
+            filler.vermutet() trifft (29.08.: „wie heißt du" darf kein
+            Nachschauen behaupten). Die Frist sitzt bewusst bei
+            FILLER_SPAET_S — ein 0,3-s-Vorab hat schnelle Maschinen-Züge
+            mit einem Extra-Satz zugedeckt. FILLER_MAX=1: kein Nachschub."""
             gruppe = filler.vermutet(gehoert, angebot_offen=bool(sit.get("offered")))
-            if gruppe:
-                return time.monotonic() + FILLER_VORAB_S, gruppe
-            return None, "allgemein"
+            if gruppe and not schnelle_phase:
+                return time.monotonic() + FILLER_SPAET_S, gruppe
+            return time.monotonic() + FILLER_SPAET_S, "allgemein"
 
         frist, vorab_gruppe = frist_setzen(text_in)
         inhalt = False    # Vorab-Satz / feste Ansage / festes Audio ist geflossen
         filler_zahl = 0   # gespielte Warte-Füller (geraten + Werkzeug)
         while True:
             try:
-                still = inhalt or filler_zahl >= FILLER_MAX or frist is None
+                # _vorabText sitzt schon, sobald vorab() gerufen wurde —
+                # kein „Einen Moment.“ über den echten Hallo-Satz legen.
+                still = (inhalt or filler_zahl >= FILLER_MAX or frist is None
+                         or bool(_s(sit.get("_vorabText"))))
                 wartezeit = None if still else max(0.02, frist - time.monotonic())
                 typ, wert = q.get(timeout=wartezeit)
             except queue.Empty:

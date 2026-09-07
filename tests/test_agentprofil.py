@@ -172,6 +172,32 @@ def test_cf_mapping_weiterleitungen_schalter_aus():
     assert t2 is not None and t2["weiterleitungen"] == []
 
 
+def test_fuer_did_geschwister_did_wenn_haupt_fehlt(monkeypatch):
+    """4101 ohne DB-Agent, 4110 mit Agent → CF ueber Geschwister-DID."""
+    agentprofil.cache_leeren()
+    pre = copy.deepcopy(CF_PRE)
+    pre["clientId"] = pre["agent"]["clientId"] = "MEe4ZQHEzOPzLcexyhdT"
+    pre["agent"]["callForwardingToolEnabled"] = True
+    pre["agent"]["callForwardings"] = [
+        {"name": "Dr. Petsas", "number": "+4921130293035", "prompt": "Petsas"},
+    ]
+    pre["agent"]["firstMessage"] = "Zahnärzte im Medical Center, guten Tag!"
+
+    def _fake(did, caller=""):
+        if tenants.nummer_norm(did) == "4921154244110":
+            return copy.deepcopy(pre)
+        return None
+
+    monkeypatch.setattr(agentprofil, "_cf_pre", _fake)
+    monkeypatch.setattr(agentprofil, "enabled", lambda: True)
+    t = agentprofil.fuer_did("+4921154244101")
+    assert t is not None
+    assert t.get("weiterleitungen") == [{
+        "name": "Dr. Petsas", "nummer": "+4921130293035", "hinweis": "Petsas",
+    }]
+    assert "begruessungText" in t and "Medical Center" in t["begruessungText"]
+
+
 def test_cf_mapping_lehnt_disabled_und_leere_antwort_ab():
     aus = copy.deepcopy(CF_PRE)
     aus["enabled"] = False

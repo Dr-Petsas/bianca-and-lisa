@@ -58,6 +58,15 @@ def test_kurze_ok_woerter_sind_kein_unklar():
         assert not r.get("unklar"), satz
 
 
+def test_zahnreinigung_allein_ist_kein_unklar():
+    """Live 06.09.: nacktes 'Zahnreinigung' darf nicht 'nicht verstanden' sein."""
+    for satz in ["Zahnreinigung", "Zahnreinigung.", "Eine Zahnreinigung", "PZR"]:
+        assert not gespraech.wirkt_unklar(satz), satz
+        sit = _sit()
+        r = gespraech.routen(sit, satz)
+        assert not r.get("unklar"), satz
+
+
 def test_kurze_frage_zieht_den_floor():
     sit = _sit()
     r = gespraech.routen(sit, "Was kostet eigentlich ein Implantat?")

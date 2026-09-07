@@ -190,8 +190,18 @@ dann erst nach namen und nummer fragen."
  echte Nummer (anonymous) nie; Docks haben das Feld nie.
 - **Buchung** (`gehirn.naechste_frage`, VOR der schonmal-Frage): steht ein
  Treffer und ist noch kein Name gefallen, kommt EINMAL
- `frage=anrufer_check` (`gehirn.anrufer_check_frage`: "Ich habe Sie an
- Ihrer Rufnummer erkannt: {Name}, unter {Ziffern}. Stimmt das so?").
+ `frage=anrufer_check` (`gehirn.anrufer_check_frage`): der
+ ziffernfreie Hallo-Satz ("Ah, Frau X, wie geht's Ihnen — wir kennen uns
+ noch nicht, ich bin die Neue, Bianca.") geht SOFORT als Vorab-Füller
+ raus (`anrufer_hallo_jetzt` → `vorab`), während Name + Nummer im
+ Hintergrund gerendert werden — nie seriell Hallo, dann Stille, dann
+ Nummer. Dann Ja/Nein ("Der Termin ist für Sie selbst, richtig?").
+ "Gut." auf das Hallo ist kein Identitäts-Ja (`ist_anrufer_wohl` → nur
+ die Schlussfrage nochmal). Fast-Pfad: der Hallo wartet NICHT auf
+ letzten Besuch oder Behandler (`anrufer_hallo_jetzt` nur Name). Die
+ Kartei startet schon zur Begrüßung (`hintergrund.kartei_von_anrufer`)
+ und fliesst danach ein: „Sie waren zuletzt bei Doktor X, richtig?“
+ (`arzt_check`), dann PZR.
  Ja (`einsammeln`): Name in Kartei-Schreibweise (buchstabiert=True,
  bekannt=True, patientId), Geschlecht als Quelle "akte", Telefon gilt als
  rückbestätigt (telefonOk), warSchonMal=True — schonmal-, Namens-,
@@ -559,7 +569,21 @@ selbst eine Zahnreinigung, Schmerz-/Notfall-Termin, oder der LETZTE
 Besuch war selbst eine PZR und liegt unter 6 Monaten zurück (frisch
 gereinigt). Der Zeitbezug in der Frage ("schon eine Weile her") wird nur
 gesprochen, wenn er stimmt. Zusage landet als "PLUS PZR heute" in der
-Termin-Notiz. Tests: `tests/test_rueckblick_pzr.py`.
+Termin-Notiz. **W-PZR-KASSEN (08.09.2026):** jeder vergebene Termin
+bekommt die PZR-Frage (`pzr_noch_fragen`, auch ohne Kartei; vor dem
+Buchen holt `_nach_ok_buchen` nach). Auf Preisfrage: ungefähr 120 Euro
+(nie „grob“), plus dass bei uns die Zahnärzte die Reinigung selbst
+machen, nicht Prophylaxehelferinnen. Dann die Krankenkasse —
+Zuschuss nur aus `kern/pzr_kassen.py` (Tabelle), immer
+„Im Einzelfall kann das abweichen.“ Zahlen nie schätzen.
+**W-KARTEI-FUELLER (08.09.2026):** liegt der letzte Besuch
+schon in der Kartei, füllt die Totzeit nur eine Feststellung ohne Frage
+(„Letztes Mal die Kontrolle — einen Moment.“ — `gehirn.kartei_fueller_satz`
+→ `sit["karteiFillerText"]` → `filler.kartei_satz`). Nie in Confirm/Slot/
+Nummern-Readback, nie ohne Fakt, nie als Frage. Die Verlaufsfrage kommt
+später im `_einschub` (dann ohne Vorsatz); die Antwort steht als
+`rueckblickAntwort` im Terminpopup. Tests: `tests/test_rueckblick_pzr.py`,
+`tests/test_pzr_kassen.py`, `test_kartei_satz_*` in `tests/test_filler.py`.
 
 ## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
 
@@ -1055,6 +1079,29 @@ Hintergrund". Modul: `kern/gedaechtnis.py`, gilt für BEIDE Stimmen.
 - **Notaus:** `MAS_GEDAECHTNIS=0` (oder leere `MAS_URL`) => kein Netz,
   Verhalten wie vor W-GEDAECHTNIS. Tests: `tests/test_gedaechtnis.py`.
 
+## Dossier + Lücken-Talk (W-DOSSIER 08.09.2026 — nicht rückbauen)
+
+Chef: Parallelität und schnelle Spurwechsel, damit Wartezeiten überbrückt
+werden — kein zweites Gesprächssystem. Job bleibt die Stimme für Termine,
+Namen, Nummern. Talk ist eine Schlange fester Takte, die Job nur in einer
+Lücke zieht.
+
+- **Drei Zeiten:** FAST (Name/Hallo, kein Warten auf Akte/MAS) → HINTERGRUND
+  (`kern/dossier.py`, gefüllt aus `anruferKartei` + Sammler + MAS-Kontext) →
+  MUND in der Lücke (höchstens EIN Takt: Verlauf, dann PZR).
+- **Lücke:** Hintergrund/Vorrat läuft oder Job hat geerntet und die nächste
+  Pflicht kann warten. **Keine Lücke:** Ziffern-Readback, Slotwahl,
+  „Soll ich so eintragen?“, Transfer. Fragen nie in die Totzeit
+  (Kartei-Füller bleibt Feststellung).
+- **Spurwechsel:** „Kontrolle“ schon gesetzt, Anrufer sagt „brauch noch ein
+  Implantat“ → Job wechselt auf Implantat-Besprechung, Slot-Vorrat weg.
+  „Letztes Mal Implantat, alles gut“ wechselt nicht. Talk bucht nie.
+- **MAS:** Lesen wie bisher (`caller-context` / `karteikarte`) landet im
+  Dossier, nicht nur im Prompt. Schreiben: Hangup-Report bleibt; dazu
+  `gedaechtnis.fakt_senden` im Hintergrund bei festem Verlauf, PZR-Ja und
+  Spurwechsel (eigene Event-Id `telefonki:fakt:<sid>:<n>`). Mund wartet nie.
+- Tests: `tests/test_dossier.py`.
+
 ## Anruf-Mitschnitt + Anrufliste (W-MITSCHNITT 30.08.2026 — nicht rückbauen)
 
 Chef: nach Anrufen bei Bianca soll der Browser eine Liste der Unterhaltungen
@@ -1095,32 +1142,32 @@ Modul `kern/mitschnitt.py`, gilt für BEIDE Stimmen.
  der Anruf-Pfad leidet nie. Notaus: `MITSCHNITT=0` => kein Ordner, kein
  Byte. Tests: `tests/test_mitschnitt.py`.
 
-## Stille-Garantie (W-STILLE 29.08.2026 — nicht rückbauen)
+## Stille-Garantie (W-STILLE 29.08.2026 / W-FUELLER-EINER 08.09.2026 — nicht rückbauen)
 
-Chef: "es darf NIE zum Schweigen kommen … nie länger als 1,5 Sekunden …
-es darf nie das Gefühl gegeben werden, dass die KI abgestürzt ist."
+Chef 29.08.: "es darf NIE zum Schweigen kommen". Chef 08.09.: erster Ton
+unter 2 s — und NIE drei Entschuldigungen hintereinander („ich schaue
+nach" / „einen Moment" / „kurzen Augenblick").
 Zwei Verteidigungslinien, beide Stimmen:
 
 - **Server-Füller nur bei Kalender/Werkzeug** (29.08. abends, Chef: auf
-  „wie heißt du" kam „einen Moment, ich schaue eben nach"): Der 0,9-s-
-  Allgemein-Füller gewann nach P5 das Rennen gegen den echten ersten
-  Satz und behauptete ein Nachschauen, das nicht stattfand. `frist_setzen`
-  feuert jetzt NUR noch nach `filler.vermutet()` (Kalender/Akte) oder
-  echtem `melde()`; Plauder- und Maschinen-Züge warten auf Vorab-Satz
-  oder Antwort. Hängt der Server, spricht der Dock-Watchdog eine
-  **neutrale** Ansage. `_ALLGEMEIN` behauptet kein Nachschauen mehr
-  („schaue nach" ist raus). Identität/Smalltalk (`_RE_PLAUSCH`) nie
-  Kalender-Füller.
-- **Füller-Nachschub:** steht die Antwort nach einem Füller weiter aus,
-  spricht alle `FILLER_NACHSCHUB_S` (2,4 s, gerechnet ab Füller-BEGINN,
-  Audio ~1,2 s => Lücke < 1,5 s) der nächste rotierte Satz — Deckel
-  `FILLER_MAX` (3). Inhalt (Vorab-Satz, `sag:`-Ansage, festes Audio)
-  beendet die Kette; ein Werkzeug-`melde()` nach einem Warte-Füller
-  schärft nur die Gruppe des NÄCHSTEN Nachschubs (nie zwei direkt
-  hintereinander).
+  „wie heißt du" kam „einen Moment, ich schaue eben nach"): geratene
+  SUCHEN/AKTE-Füller nur wenn `filler.vermutet()` trifft. `_ALLGEMEIN`
+  behauptet kein Nachschauen. Identität/Smalltalk (`_RE_PLAUSCH`) nie
+  Kalender-Füller. Hängt die schnelle Phase (Buchung/Readback), kommt
+  nach `FILLER_SPAET_S` (0,8 s) EIN neutraler Satz — sonst 7–32 s
+  Totenstille (Live 06.09.).
+- **Genau EIN Warte-Satz** (`FILLER_MAX=1`, 08.09.): kein Nachschub-
+  Sermon. Sätze kurz (`MAX_VORAB` 28 Zeichen, ~1,4 s), damit sie die
+  echte Antwort nicht hinter die 2-s-Grenze schieben. Inhalt (Vorab-Satz,
+  `sag:`-Ansage, festes Audio) beendet die Kette. Die Brücke wirft
+  ungehörte Warte-WAVs weg, sobald das Reply da ist.
+- **Kartei-Füller statt Neutral** (W-KARTEI-FUELLER, 08.09.): liegt
+  `sit["karteiFillerText"]` (kein `?`, nur Buchung, nicht Confirm/Slot/
+  Nummer), spielt `_filler_url` diesen Satz einmal — sonst „Einen Moment.“
 - **Dock-Watchdog (zweite Linie, greift auch bei totem Server/Netz):**
   beide Docks laden beim Boot `GET /api/notfall`
-  (`dienst.NOTFALL_SAETZE`, 3 Eskalationsstufen bis "bleiben Sie dran")
+  (`dienst.NOTFALL_SAETZE`, 3 Stufen — Live spielt max. EINE, `WACHT_MAX=1`,
+  und nur wenn 2 s kein Server-Ton kam; ein Füller stoppt den Wächter)
   als **BLOB** vor. Nach dem Sprechende des Anrufers (`wachtStart` in
   `hoeren`) prüft ein 150-ms-Tick: lief `WACHT_MS` (1,4 s) kein Ton
   (`kiSpricht`/`lisaSpricht`), spielt die nächste lokale Ansage über ein

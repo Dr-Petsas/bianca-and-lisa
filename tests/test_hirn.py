@@ -203,6 +203,18 @@ def test_schnellstrasse_terminwunsch_ohne_llm(monkeypatch):
     assert d["handlung"] == "ANLEGEN" and d["quelle"] == "schnell"
 
 
+def test_besprechung_ist_kein_erreichen(monkeypatch):
+    """Implantatbesprechung / ZE Besprechung ≠ 'sprechen' (Live 06.09.2026)."""
+    _llm_verboten(monkeypatch)
+    for satz in (
+        "Ich brauche eine Implantatbesprechung.",
+        "Ich brauche einen Termin zur ZE Besprechung.",
+        "Termin zur IMP Besprechung bitte.",
+    ):
+        d = intent.erkennen(_sit(), satz)
+        assert d["handlung"] != "ERREICHEN", (satz, d)
+
+
 def test_ernte_im_anliegen_ohne_llm(monkeypatch):
     _llm_verboten(monkeypatch)  # kein Wechsel-Signal -> kein LLM-Aufschlag
     sit = _sit()

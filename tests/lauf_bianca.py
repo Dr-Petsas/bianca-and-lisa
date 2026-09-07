@@ -20,6 +20,8 @@ MODULE = [
     "tests.test_notiz",
     "tests.test_versicherung_geschlecht",
     "tests.test_rueckblick_pzr",
+    "tests.test_pzr_kassen",
+    "tests.test_dossier",
     "tests.test_stille_notfall",
     "tests.test_llm_deckel",
     "tests.test_baukasten",

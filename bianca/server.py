@@ -14,7 +14,19 @@ from pydantic import BaseModel
 
 from bianca import agent, gehirn, session, weiterleiten
 from bianca.greeting import begruessung
-from kern import gedaechtnis, halbsatz, llm, sprech, stt, tenants, tts, unterbrechung
+from kern import (
+    agentprofil,
+    anrufaudio,
+    gedaechtnis,
+    halbsatz,
+    llm,
+    mitschnitt,
+    sprech,
+    stt,
+    tenants,
+    tts,
+    unterbrechung,
+)
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -74,6 +86,9 @@ if _JINGLE_PFAD.is_file():
 
 class StartIn(BaseModel):
     tenant: str = ""
+    # W-MANDANT: die ANGERUFENE Nummer (DID) — gesetzt von der SIP-Bruecke.
+    did: str = ""
+    caller: str = ""
 
 
 class TurnIn(BaseModel):
@@ -124,6 +139,8 @@ def health():
         "llmBase": LLM_BASE,
         "llmModel": LLM_MODEL,
         "gedaechtnis": gedaechtnis.anzeige(),
+        "mandant": agentprofil.anzeige(),
+        "anrufAudio": anrufaudio.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -133,13 +150,33 @@ def api_tenants():
     return {"ok": True, "tenants": tenants.liste(), "default": DEFAULT_TENANT}
 
 
+@app.post("/api/mandant-cache/leeren")
+def api_mandant_cache_leeren():
+    """W-MANDANT: DID->Agent-Cache (TTL 300 s) sofort verwerfen."""
+    agentprofil.cache_leeren()
+    print("bianca-mandant-cache geleert", flush=True)
+    return {"ok": True}
+
+
 @app.post("/api/start")
 def api_start(body: StartIn):
-    t = tenants.laden(body.tenant or DEFAULT_TENANT)
-    sit = session.neu(tenant_id=body.tenant or DEFAULT_TENANT)
+    t = None
+    if body.did:
+        t = agentprofil.fuer_did(body.did, caller=body.caller)
+        if t is None:
+            print(f"bianca-start did={body.did!r} unbekannt -> Default-Mandant", flush=True)
+    if t is None:
+        t = tenants.laden(body.tenant or DEFAULT_TENANT)
+    sit = session.neu(tenant=t)
+    if body.did:
+        # W-CALLSTATUS: phoneCallId dieses Anrufs in die Sitzung.
+        agentprofil.call_erfassen(sit, did=body.did, caller=body.caller)
+        # W-SIP-BLOCK: DID = SIP-Bruecke — Blocking-WAV am Telefon.
+        sit["clientKind"] = "sip"
     return DIENST.json_antwort(
         sit, art="start",
-        extra={"sessionId": sit["id"], "praxis": t.get("praxisName")},
+        extra={"sessionId": sit["id"], "praxis": t.get("praxisName"),
+               "tenantId": t.get("_id") or ""},
     )
 
 
@@ -201,7 +238,9 @@ def api_stille(body: HangupIn):
     if not text:
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
     url, tts_s = DIENST.stimme(text)
-    session.merke_zug(sit, art="stille", textIn="", text=text, timings={"tts": tts_s})
+    timings: dict = {"tts": tts_s}
+    session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)
+    mitschnitt.zug(sit, DIENST, art="stille", text=text, timings=timings, audio_url=url)
     print(f"bianca-stille session={body.sessionId} text={text!r}", flush=True)
     return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
 
@@ -220,6 +259,8 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     ohr = (ohrMit or "").strip() in {"1", "true", "yes", "on"}
     if live:
         print(f"bianca-listen live session={sessionId} text={live!r}", flush=True)
+        # W-MITSCHNITT: Vorab-TEXT-Zug — Audio nur archivieren.
+        mitschnitt.eingang(sit, blob, mime)
         return ndjson(DIENST.zug_stream(sit, art="turn", text_in=live,
                                         barge_url=bargeUrl, barge_ms=bargeMs, ohr=ohr))
     return ndjson(DIENST.zug_stream(sit, art="listen", stt_blob=blob, stt_mime=mime, stt_name=name,
@@ -264,6 +305,62 @@ def api_last_call():
     return {"ok": True, "writeLive": WRITE_LIVE, "call": session.last_call()}
 
 
+# --- Anrufliste (W-MITSCHNITT): Unterhaltungen mit Audio + Transkript ---------
+_MITSCHNITT_STIMME = "bianca"
+
+
+@app.get("/api/anrufe")
+def api_anrufe():
+    return {"ok": True, "anrufe": mitschnitt.liste(_MITSCHNITT_STIMME)}
+
+
+@app.get("/api/anrufe/{sid}")
+def api_anruf(sid: str):
+    m = mitschnitt.laden(_MITSCHNITT_STIMME, sid)
+    if not m:
+        raise HTTPException(404, "anruf unbekannt")
+    return {"ok": True, "anruf": m}
+
+
+@app.get("/api/anrufe/{sid}/audio/{datei}")
+def api_anruf_audio(sid: str, datei: str):
+    p = mitschnitt.audio_pfad(_MITSCHNITT_STIMME, sid, datei)
+    if p is None:
+        raise HTTPException(404)
+    mime = {"wav": "audio/wav", "mp3": "audio/mpeg", "m4a": "audio/mp4",
+            "ogg": "audio/ogg"}.get(p.suffix.lstrip("."), "audio/webm")
+    return FileResponse(p, media_type=mime)
+
+
+@app.get("/api/anrufe/{sid}/download")
+def api_anruf_download(sid: str):
+    """Kompletter Anruf als eine WAV-Datei (Download-Knopf der Anrufe-Seite)."""
+    m = mitschnitt.laden(_MITSCHNITT_STIMME, sid)
+    if not m:
+        raise HTTPException(404, "anruf unbekannt")
+    blob = mitschnitt.anruf_wav(_MITSCHNITT_STIMME, sid)
+    if not blob:
+        raise HTTPException(404, "kein Audio in diesem Mitschnitt")
+    stempel = str(m.get("startedAt") or "")[:16].replace(":", "-").replace("T", "_")
+    name = f"bianca-anruf-{stempel or sid[:8]}.wav"
+    return Response(blob, media_type="audio/wav",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/anrufe/{sid}/loeschen")
+def api_anruf_loeschen(sid: str):
+    return {"ok": mitschnitt.loeschen(_MITSCHNITT_STIMME, sid)}
+
+
+@app.get("/anrufe")
+def anrufe_seite():
+    p = BIANCA_WEB_DIR / "anrufe.html"
+    if not p.is_file():
+        raise HTTPException(404, "bianca_web/anrufe.html fehlt")
+    return FileResponse(p, media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/hangup")
 def api_hangup(body: HangupIn):
     sit = session.holen(body.sessionId)
@@ -281,8 +378,14 @@ def api_hangup(body: HangupIn):
             print(f"bianca-hangup-nacharbeit fail {e}", flush=True)
             session.merke_zug(sit, art="hangup", note="", dryRun=False)
         session.sichern(sit)
+        # W-MITSCHNITT: offene Stream-Audios einlösen, Ende-Zeit stempeln.
+        mitschnitt.ende(sit, DIENST)
         # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
         gedaechtnis.report_senden(sit)
+        # W-CALLSTATUS: PhoneCall in der Pickadoc-DB abschließen (Transkript
+        # + Zusammenfassung) — NACH mitschnitt.ende. Live 06.09.2026: fehlte
+        # seit W-LIVE 13:43 → CallR zeigte leere/inProgress-Anrufe.
+        agentprofil.call_abschliessen(sit)
 
     threading.Thread(target=_nacharbeit, daemon=True).start()
     return {"ok": True, "writeLive": WRITE_LIVE, "queued": True}

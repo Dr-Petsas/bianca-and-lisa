@@ -51,8 +51,8 @@ function bargeMerken(url, ms) {
 // beim Boot als BLOB geladene Warte-Ansagen. Sie spielen über ein EIGENES
 // Audio-Objekt (die playUrl-Kette bleibt unberührt) und verstummen, sobald
 // die echte Antwort loslegt. Blobs spielen auch bei hängendem Server.
-const WACHT_MS = 1400;
-const WACHT_MAX = 3;
+const WACHT_MS = 2000; // nur wenn der Server gar nichts schickt
+const WACHT_MAX = 1;   // eine lokale Ansage, kein Escalation-Sermon
 let notfall = [];
 let wachtTimer = null;
 let wachtAudio = null;
@@ -640,9 +640,12 @@ async function sendeZug({ text, blob, nr }) {
   let fillerLauf = null;
   const spielFiller = (url) => {
     if (!callOn || nr !== hoerNr) return;
+    // Server hat den Zug — lokale Notfall-Kette nicht noch drauflegen
+    // (sonst: „ich schaue nach" + „einen Moment" + „bleiben Sie dran").
+    wachtStopp();
     phase("ki", "Bianca spricht …");
-    // Mehrere Häppchen (Füller, dann Vorab-Satz aus dem LLM-Stream) laufen
-    // als Kette nacheinander — nichts überlappt, nichts geht verloren.
+    // Vorab-Satz aus dem LLM-Stream darf hinter dem EINEN Warte-Füller
+    // kommen — das ist die Antwort, keine zweite Entschuldigung.
     fillerLauf = fillerLauf
       ? fillerLauf.then(() => playUrl(url)).catch(() => {})
       : playUrl(url).catch(() => {});
@@ -995,8 +998,9 @@ const KOENNEN = [
     "<b>Mehrere Treffer:</b> Eingrenzen über die Behandlung, dann klare Auswahl-Liste.",
     "<b>Nicht gefunden:</b> ehrliche Ansage plus echte Praxis-Notiz — „das wird Doktor X vorgelegt“ — und im MAS entsteht ein Rückruf-Vorgang.",
     "<b>Behandlungsgrund erkennen:</b> Schmerzen/Notfall, Kontrolle, PZR, Füllung, Überweisung … — Dringend-Fälle bekommen den nächstmöglichen Platz.",
-    "<b>Rückblick auf den Vortermin:</b> ist der letzte Besuch in der Kartei gefunden, spricht Bianca ihn an („Ihr letzter Besuch ist … her — da ging es um …“) — mit Verlaufs-Frage passend zur damaligen Behandlung (verheilt? zufrieden? Zahn ruhig?).",
-    "<b>Zahnreinigung mit anbieten:</b> sobald der Vortermin gefunden ist, bietet Bianca die professionelle Zahnreinigung zum Mitbuchen an — nie bei Schmerz-/Notfall-Terminen, nie wenn der Termin selbst die Reinigung ist, nie wenn gerade erst eine war. Die Zusage steht als „PLUS PZR heute“ in der Terminnotiz.",
+    "<b>Rückblick auf den Vortermin:</b> liegt der letzte Besuch in der Kartei, füllt Bianca die Wartezeit nur mit einer Feststellung („Letztes Mal die Kontrolle — einen Moment.“) — ohne Frage. Die Verlaufsfrage kommt später, wenn sie zuhören kann; die Antwort steht im Terminpopup.",
+    "<b>Notiz für den Doktor:</b> vor dem Eintragen fragt Bianca, ob eine Notiz oder besondere Frage für den Behandler mit soll — der Wortlaut steht im Terminpopup.",
+    "<b>Zahnreinigung mit anbieten:</b> jeder Termin bekommt die PZR-Frage — auch Neupatienten, und vor dem Eintragen falls sie vorher nicht kam. Nie bei Schmerz-/Notfall, nie wenn der Termin selbst die Reinigung ist, nie wenn gerade erst eine war. Preis auf Nachfrage: ungefähr 120 Euro; bei uns machen die Zahnärzte die Reinigung selbst, nicht Prophylaxehelferinnen. Danach die Krankenkasse, Zuschuss aus der Tabelle, immer mit „Im Einzelfall kann das abweichen.“ Zusage als „PLUS PZR heute“.",
   ]},
   { t: "Patientenakte & Kartei", p: [
     "<b>Akte anlegen:</b> Vorname, Nachname, Handynummer, Geschlecht und Versichertenstatus gehen als neue Patientenakte ins System.",
@@ -1006,10 +1010,12 @@ const KOENNEN = [
     "<b>Handynummer mit Ziffern-Rückbestätigung:</b> das Readback ist immer deterministisch — nie „aus dem Bauch“.",
     "<b>Buchstabierte Namen</b> verstehen und festhalten.",
     "<b>Kartei-Suche im Hintergrund,</b> während das Gespräch normal weiterläuft: schon Patient? Letzter Besuch? Bei welchem Behandler?",
-    "<b>Anrufer an der Rufnummer erkennen:</b> steht die übermittelte Nummer in der Kartei, liest Bianca Name und Nummer zur Kontrolle vor („Ich habe Sie an Ihrer Rufnummer erkannt: …“) statt sie zu erfragen — ein Ja übernimmt beides, ein Nein fragt klassisch nach.",
+    "<b>Anrufer an der Rufnummer erkennen:</b> zuerst ein schneller Hallo-Satz ohne Nummer („Ah, Frau Berger, wie geht's Ihnen — ich bin die Neue, Bianca.“), dann Name + Nummer zur Kontrolle. Ein Ja übernimmt beides, ein Nein fragt klassisch nach. „Gut.“ auf das Hallo ist kein Identitäts-Ja.",
   ]},
   { t: "Praxisgedächtnis (MAS-Brain) & Notizen", p: [
     "<b>Gesprächs-Report nach jedem Anruf:</b> Zusammenfassung im Terminpopup-Stil ins MAS-Praxisgedächtnis („Laut Anruf (Bianca): …“).",
+    "<b>Dossier parallel zur Begrüßung:</b> letzter Besuch, Behandler und offene MAS-Zeilen liegen in der Sitzung — Job und Talk lesen dieselben Fakten, der erste Ton wartet nicht darauf.",
+    "<b>Fakten mitten im Gespräch:</b> Verlauf, mitgebuchte Zahnreinigung und ein Wechsel des Besuchsgrunds gehen sofort ins MAS, nicht erst beim Auflegen.",
     "<b>Kontext aus Vorbehandlung holen — im Hintergrund:</b> frühere Anrufe und Kontakte werden während des Gesprächs abgefragt; Rückrufer werden erkannt, statt bei Null anzufangen.",
     "<b>Terminnotiz im Termin:</b> „telefonisch Termin vereinbart wegen … // Bianca“ — direkt im Terminpopup sichtbar.",
     "<b>Besonderes automatisch heraushören</b> und notieren: Angst, Allergie, Begleitung, „bitte nur vormittags“ …",
@@ -1021,7 +1027,7 @@ const KOENNEN = [
     "<b>Unterbrechen erlaubt (Barge-in):</b> sofort „Hm.“/„Okay.“, auf den Einwand eingehen — und dann weitersprechen, wo sie stehen geblieben ist. „Stopp“ gilt sofort.",
     "<b>Halbsätze:</b> klingt ein Satz unfertig, wartet Bianca kurz und fügt die Teile zusammen, statt Halbes zu beantworten.",
     "<b>Stille-Stups:</b> nach ~4 Sekunden Funkstille meldet sie sich selbst — mit dem Stand und der offenen Frage.",
-    "<b>Nie-Stille-Garantie:</b> nie mehr als ~1,5 Sekunden Schweigen (Füller, Nachschub, lokale Notfall-Ansagen im Dock).",
+    "<b>Nie-Stille-Garantie:</b> erster Ton unter 2 Sekunden — genau EIN kurzer Satz („Einen Moment.“), dann die echte Antwort, kein dreifaches „ich schaue nach“.",
     "<b>Wiederholungs-Wächter:</b> nie zweimal wortgleich dieselbe Frage.",
     "<b>Praxiswissen:</b> Öffnungszeiten, Anfahrt, Leistungen und Preise — nur aus dem hinterlegten Wissen, nichts wird erfunden.",
     "<b>Weiterleiten ans Behandlungsteam:</b> „Kann ich Doktor Petsas sprechen?“ / „Ich möchte verbunden werden“ — Ansage, Verbinden-Jingle, und wenn der Client eine Weiterleitung eingerichtet hat (Portal: callForwardings), wird der Anruf ECHT zum Behandler durchgestellt (Asterisk wählt nach dem Jingle raus; nicht erreichbar → zurück zu Bianca). Versteht auch Hörfehler („Petzers“) und Formen ohne Titel („Herrn Petsas sprechen“). Mitarbeiter-Wünsche (Empfang, Buchhaltung, Chef) bekommen ehrlich die Personalfrei-Auskunft plus Arzt-Angebot.",
@@ -1129,6 +1135,13 @@ const PATCHES = [
   ["W-TOOL-UI (Tool-Dispatch in der Unterhaltung)", "02.09.", "Betrieb", "Jeder Cloud-Function-Aufruf (getFreeTimeSlots, Buchen, Absage …) erscheint in Dock und Anrufe-Ansicht als aufklappbare Karte: URL, Request-Body, Response, Dauer und Dynamic-Variable-Updates — wie im Portal-Tool-Dispatch."],
   ["W-VORRAT-UI (getFreeTimeSlots auch aus Hintergrund)", "02.09.", "Betrieb", "Slots aus dem Hintergrund-Vorrat (bianca-vorrat) erscheinen beim Angebot trotzdem als getFreeTimeSlots-Tool-Karte — nicht nur, wenn der Angebots-Zug die CF nochmal anruft."],
   ["W-FRISCH-ABSAGE (Storno nach frischer Buchung)", "02.09.", "Gespräch", "Nach frischer Buchung: Absage-Wunsch und Ja auf eine LLM-Storno-Frage lösen wirklich cancel_appointment aus (kein erfundenes „Der Termin ist storniert“). Erledigt-Wache greift auch bei phase=gebucht."],
+  ["W-FUELLER-EINER (kein Entschuldigungs-Sermon)", "08.09.", "Gespräch", "Pro Zug höchstens EIN kurzer Warte-Satz binnen 0,8 s („Einen Moment.“). Kein Nachschub, kein Dock-Escalation-Stapel — die drei „ich schaue nach / einen Moment / kurzen Augenblick“ sind tot. Antwort spielt, sobald sie da ist."],
+  ["W-ARZT-NOTIZ (Notiz für den Doktor)", "08.09.", "Termine", "Vor dem Buchungsabschluss: „Soll ich für den Termin noch eine Notiz für den Doktor anlegen? Irgendeine besondere Frage, auf die er eingehen soll?“ — Ja sammelt den Wortlaut, Nein bucht ohne. Der Text steht als „Anrufer an den Behandler“ im Terminpopup."],
+  ["W-KARTEI-FUELLER (letzter Besuch ohne Frage)", "08.09.", "Gespräch", "Totzeit nur mit Feststellung, wenn die Kartei schon da ist („Letztes Mal die Kontrolle — einen Moment.“). Keine Frage in die Wartezeit. Die Verlaufsfrage kommt später, wenn Bianca zuhört; die Antwort steht im Terminpopup."],
+  ["W-PZR-KASSEN (Preis + Zuschuss-Tabelle)", "08.09.", "Termine", "Jeder Termin bekommt die PZR-Frage. Auf „Was kostet die?“: ungefähr 120 Euro, plus dass bei uns die Zahnärzte die Reinigung selbst machen. Dann die Krankenkasse — Zuschuss nur aus der hinterlegten Tabelle (TK, AOK, Barmer …), immer mit Warnung: im Einzelfall kann das abweichen."],
+  ["W-ANRUFER-HALLO (erster Ton parallel)", "08.09.", "Gespräch", "Hallo nicht seriell vor der Nummer (sonst wieder Stille). Der verspielte Satz („Ah, Herr/Frau X, wie geht's Ihnen — ich bin die Neue, Bianca.“) geht sofort als Vorab-Füller raus, während Name + Nummer im Hintergrund gerendert werden. „Gut.“ bestätigt die Identität nicht."],
+  ["W-ANRUFER-FAST (Name sofort, Kartei danach)", "08.09.", "Gespräch", "Der erste Satz braucht nur den Namens-Treffer zur Rufnummer (schon beim Abheben da) — nicht letzten Termin oder Behandler. Die Kartei läuft parallel zur Begrüßung. Nach dem Ja: „Sie waren zuletzt bei Doktor X, richtig?“, dann PZR und der Rest."],
+  ["W-DOSSIER (Lücken-Talk + Spurwechsel)", "08.09.", "Gespräch", "Kein zweites Gespräch: Job bleibt tonangebend. Im Hintergrund entsteht ein Dossier (letzter Besuch, MAS). In echten Lücken kommt ein Talk-Takt statt „Einen Moment.“ — nie bei Nummer, Slot oder Confirm. Sagt der Anrufer „brauch noch ein Implantat“, wechselt der Job von der Kontrolle auf die Implantat-Besprechung. Feste Fakten gehen sofort ins MAS."],
 ];
 
 let kTab = "faehig";

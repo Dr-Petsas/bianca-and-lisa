@@ -1,11 +1,7 @@
-"""W-STILLE (Chef 29.08.2026): nie mehr als ~1,5 s Stille nach dem Sprechende.
+"""W-STILLE / W-FUELLER-EINER: erster Ton unter 2 s, genau EIN Warte-Satz.
 
-Prueft die Server-Seite: die Fueller-Frist gilt fuer JEDEN Zug (auch die
-schnelle Phase), und solange die Antwort aussteht, kommt NACHSCHUB — erst
-Inhalt (Vorab-Satz/Antwort) beendet die Kette. Die Fristen werden fuer den
-Test verkleinert (echte Werte: 0,9 s / 2,4 s), die Logik ist dieselbe.
-Die Dock-Seite (1,4-s-Watchdog mit lokalen Blob-Ansagen) ist Browser-Code
-und wird per Live-Probe abgenommen.
+Die Fristen werden fuer den Test verkleinert; die Logik ist dieselbe.
+Die Dock-Seite (Watchdog, max. 1 lokale Ansage) ist Browser-Code.
 """
 
 import json
@@ -13,8 +9,7 @@ import time
 
 import kern.dienst as dienst_mod
 from kern import filler
-from kern.dienst import (Dienst, FILLER_MAX, FILLER_NACHSCHUB_S,
-                         FILLER_SPAET_S, NOTFALL_SAETZE)
+from kern.dienst import Dienst, FILLER_MAX, FILLER_SPAET_S, NOTFALL_SAETZE
 
 
 def _dienst(*, langsam_s: float = 0.0, schnell: bool = False) -> Dienst:
@@ -46,22 +41,20 @@ def test_schneller_zug_bleibt_ohne_fueller():
     assert [z["type"] for z in out] == ["reply"]
 
 
-def test_langsamer_zug_bekommt_fueller_und_nachschub():
-    """Nur wenn wirklich Kalender erwartet wird — Plauder-Zuege bleiben
-    ohne Server-Fueller (Dock-Watchdog deckt Haenger)."""
-    alt = (dienst_mod.FILLER_VORAB_S, dienst_mod.FILLER_NACHSCHUB_S)
-    dienst_mod.FILLER_VORAB_S = 0.05
-    dienst_mod.FILLER_NACHSCHUB_S = 0.08
+def test_langsamer_zug_bekommt_genau_einen_fueller():
+    """Kalender-Haenger: EIN kurzer Satz, kein Nachschub-Sermon
+    (Chef 08.09.: nie dreimal „ich schaue nach")."""
+    alt = (dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S)
+    dienst_mod.FILLER_SPAET_S = 0.05
+    dienst_mod.FILLER_NACHSCHUB_S = 0.05
     try:
         d = _dienst(langsam_s=0.4)
         out = _zeilen(d, {}, "Haben Sie nächste Woche vormittags etwas frei?")
         arten = [z["type"] for z in out]
         assert arten[-1] == "reply"
-        assert arten.count("filler") == dienst_mod.FILLER_MAX
-        urls = [z["audioUrl"] for z in out if z["type"] == "filler"]
-        assert len(set(urls)) == len(urls)  # rotierend, nie derselbe Satz
+        assert arten.count("filler") == 1
     finally:
-        dienst_mod.FILLER_VORAB_S, dienst_mod.FILLER_NACHSCHUB_S = alt
+        dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
 
 
 def test_plauderzug_bekommt_keinen_server_fueller():
@@ -80,11 +73,57 @@ def test_schnelle_phase_ohne_geratenen_fueller():
     assert [z["type"] for z in out] == ["reply"]
 
 
+def test_schnelle_phase_bekommt_neutralen_fueller_bei_haenger():
+    """Chef 08.09.: 7–32 s Totenstille in der Buchung — nach 0,8 s
+    ein neutrales „Einen Moment.", nie Kalender behaupten, nie drei."""
+    alt = (dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S)
+    dienst_mod.FILLER_SPAET_S = 0.05
+    dienst_mod.FILLER_NACHSCHUB_S = 0.05
+    try:
+        d = _dienst(langsam_s=0.35, schnell=True)
+        out = _zeilen(d, {}, "Ja.")
+        arten = [z["type"] for z in out]
+        assert arten[-1] == "reply"
+        assert arten.count("filler") == 1
+        urls = [z["audioUrl"] for z in out if z["type"] == "filler"]
+        allgemein = set(filler.GRUPPEN["allgemein"])
+        for url in urls:
+            satz = next((s for s, u in d.filler_urls.items() if u == url), "")
+            assert satz in allgemein, satz
+    finally:
+        dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
+
+
+def test_kartei_fueller_statt_allgemein_wenn_fakt_liegt():
+    """Chef 08.09.: Totzeit mit letztem Besuch, ohne Frage, einmal."""
+    alt = (dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S)
+    dienst_mod.FILLER_SPAET_S = 0.05
+    dienst_mod.FILLER_NACHSCHUB_S = 0.05
+    satz = "Letztes Mal die Kontrolle — einen Moment."
+    try:
+        d = _dienst(langsam_s=0.35, schnell=True)
+        d.filler_urls[satz] = "/api/audio/kartei"
+        sit = {
+            "karteiFillerText": satz,
+            "sammler": {"modus": "buchen", "phase": ""},
+        }
+        out = _zeilen(d, sit, "Nächste Woche vormittags.")
+        urls = [z["audioUrl"] for z in out if z["type"] == "filler"]
+        assert urls == ["/api/audio/kartei"]
+        assert sit["karteiFillerGesagt"] is True
+        assert sit["sammler"]["karteiFuellerGesagt"] is True
+        # Zweiter Zug: kein zweiter Kartei-Satz.
+        out2 = _zeilen(d, sit, "Der erste bitte.")
+        urls2 = [z["audioUrl"] for z in out2 if z["type"] == "filler"]
+        assert "/api/audio/kartei" not in urls2
+    finally:
+        dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
+
+
 def test_produktions_fristen_halten_die_regel():
-    """Kalender-Vorab bleibt früh; Nachschub hält die 1,5-s-Lücke."""
-    assert dienst_mod.FILLER_VORAB_S <= 0.3
-    assert FILLER_NACHSCHUB_S <= 2.4
-    assert FILLER_MAX >= 2
+    """Erster Ton unter 2 s; genau ein Warte-Satz, kein Sermon."""
+    assert FILLER_SPAET_S <= 2.0
+    assert FILLER_MAX == 1
 
 
 def test_notfall_ansagen_stehen_bereit():

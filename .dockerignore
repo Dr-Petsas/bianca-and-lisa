@@ -22,6 +22,7 @@ tts_serve/
 # Image); das Parakeet-Modell (stt_serve/modell/) gehoert NIE in den Kontext.
 stt_serve/*
 !stt_serve/postcorrect.py
-tools/
+tools/*
+!tools/prod_smoke.py
 *.ps1
 *.md

@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
-from kern import motive, tenants as kern_tenants, vornamen
+from kern import dossier, motive, tenants as kern_tenants, vornamen
 from kern.patients import arzt_sprechname
 from kern.slots import parse_slot_wish
 
@@ -578,6 +578,13 @@ FELDER_START = {
     "nachname": "",
     "buchstabiert": False,
     "grundWortlaut": "",
+    # Nacktes Motiv ("Zahnreinigung"): erst nachfragen, ob ein Termin
+    # gewollt ist — nicht sofort die Buchungsmaschine starten.
+    "terminAnbieten": "",
+    # Vor dem Buchen (Chef 08.09.2026): Notiz für den Doktor — "" nie
+    # gefragt, "gefragt" / "diktat" offen, "ja" mit Text, "nein" ohne.
+    "arztNotiz": "",
+    "arztNotizFrage": "",
     "telefon": "",
     "telefonOffen": "",
     "telefonTeil": "",
@@ -619,7 +626,13 @@ FELDER_START = {
     # zur Zahnreinigung ("" | "gefragt" | "ja" | "nein").
     "letzterGrund": "",
     "rueckblick": "",
+    "rueckblickAntwort": "",
+    # Kartei-Satz als Füller schon gesprochen (ohne Frage) — der spätere
+    # Rückblick lässt den Vorsatz weg und fragt nur noch den Verlauf.
+    "karteiFuellerGesagt": False,
     "pzr": "",
+    # PZR-Kassen-Auskunft (Chef 08.09.2026): "" | "gefragt" | Kassen-Id/Name.
+    "pzrKasse": "",
     # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot zur Zahnreinigung.
     # "" = nie gefragt, "gefragt" = Angebot offen, "check" = Zahnersatz-
     # Rueckfrage offen, "ja" = kommt mit (+1 Std., 350 Euro, Notiz),
@@ -633,6 +646,9 @@ FELDER_START = {
     # rueckbestaetigt, "ja" = Name+Nummer uebernommen, "nein" = Treffer
     # verworfen (klassisch nach Name und Nummer fragen).
     "anruferCheck": "",
+    # Letzter Behandler aus der Hintergrund-Kartei: "" | "ja" | "nein".
+    # Wird erst nach dem schnellen Hallo bestaetigt, nie davor.
+    "arztCheck": "",
 }
 
 
@@ -666,10 +682,133 @@ def ist_nein(text: str) -> bool:
     return len(toks) <= 3 and any(t in {"nein", "nee", "nö", "noe"} for t in toks)
 
 
+def _telefon_sperren(s: dict, nummer: str) -> None:
+    """Abgelehnte Nummer merken — Echo/STT darf sie nicht wieder vorlesen."""
+    n = telefon.normaliert(nummer or "")
+    if not n:
+        return
+    g = s.get("telefonGesperrt")
+    if not isinstance(g, list):
+        g = []
+    if n not in g:
+        g.append(n)
+    s["telefonGesperrt"] = g
+
+
+def _telefon_gesperrt(s: dict, nummer: str) -> bool:
+    n = telefon.normaliert(nummer or "")
+    g = s.get("telefonGesperrt")
+    return bool(n and isinstance(g, list) and n in g)
+
+
 def ist_zwischenfrage(text: str) -> bool:
     """Stellt der Anrufer selbst eine Frage / schweift er ab?"""
     k = _ohne_anlauf(text)
     return bool(_ZWISCHENFRAGE_KERN_RE.search(k) or _ZWISCHENFRAGE_START_RE.match(k))
+
+
+# Nacktes Motiv ohne Terminwunsch (Live 06.09.2026: allein "Zahnreinigung"
+# wurde als STT-Muell behandelt, Chef: nicht buchen, nachfragen).
+_NACKTES_PZR_RE = re.compile(
+    r"^\s*(?:(?:eine?|die|das|bitte|professionelle)\s+)*"
+    r"(?:professionelle\s+)?"
+    r"(?:zahnreinigung|prophylaxe|\bpzr\b|zahnstein(?:reinigung)?)"
+    r"(?:\s+bitte)?"
+    r"\s*[.!,…]*\s*$",
+    re.I,
+)
+_TERMINWUNSCH_RE = re.compile(
+    r"termin|brauch|hätte|haette|möchte|moechte|\bwill\b|ausmach|"
+    r"vereinbar|\bbuch|vorbeikomm|zeitnah",
+    re.I,
+)
+
+
+def ist_nacktes_pzr(text: str) -> bool:
+    """Nur das Wort Zahnreinigung/PZR — ohne 'Termin'/'brauche'."""
+    return bool(_NACKTES_PZR_RE.match(_s(text)))
+
+
+def ist_terminwunsch(text: str) -> bool:
+    """Ausdrücklicher Terminwunsch, nicht bloß der Besuchsgrund."""
+    return bool(_TERMINWUNSCH_RE.search(_ohne_anlauf(text)))
+
+
+def termin_anbieten_frage(s: dict | None = None) -> str:
+    """Nachfrage nach nacktem PZR-Wort — Motiv gilt schon als verstanden."""
+    return "Brauchen Sie einen Termin zur Zahnreinigung?"
+
+
+# Vor dem Buchungsabschluss: Notiz für den Doktor (Chef 08.09.2026).
+_ARZT_NOTIZ_PREFIX_RE = re.compile(
+    r"^(?:ja|jawohl|jo|genau|gerne|gern|okay|ok|bitte|schon|"
+    r"klar|nein|nö|noe|nee|"
+    r"mach\w*|schreib\w*|notier\w*)[\s,.!—-]*"
+    r"(?:aber\s+|und\s+)?",
+    re.I,
+)
+_ARZT_NOTIZ_FLUFF_RE = re.compile(
+    r"^(?:dann\s+)?(?:bitte\s+)?(?:danke\s+)?"
+    r"(?:eine\s+)?(?:kurze\s+)?"
+    r"(?:notiz|dem\s+doktor|für\s+den\s+doktor|fuer\s+den\s+doktor|"
+    r"mitgeben|ausrichten|sagen|schreiben)\w*"
+    r"[\s,.!:—-]*",
+    re.I,
+)
+_ARZT_NOTIZ_LEER_RE = re.compile(
+    r"^(?:bitte|danke|gern[e]?|eintragen|festhalten|so|ja|okay|ok|"
+    r"nein|nichts|nix)+$",
+    re.I,
+)
+_ARZT_NOTIZ_NEIN_RE = re.compile(
+    r"^(?:nein|nö|noe|nee|nichts|nix|kein[es]?|ohne|"
+    r"passt\s+schon|nicht\s+nötig|nicht\s+noetig|kein\s+bedarf|"
+    r"braucht\s+nicht)\b",
+    re.I,
+)
+
+
+def arzt_notiz_frage(s: dict | None = None) -> str:
+    """Letzte Frage vor dem Eintragen — Motiv und Slot stehen schon."""
+    return (
+        "Soll ich für den Termin noch eine Notiz für den Doktor anlegen? "
+        "Irgendeine besondere Frage, auf die er eingehen soll?"
+    )
+
+
+def arzt_notiz_diktat_frage(s: dict | None = None) -> str:
+    return "Was soll ich dem Doktor mitgeben?"
+
+
+def arzt_notiz_aus(text: str) -> str:
+    """Ja/Nein/Bitte/Notiz-Vorspann weg — der Rest ist der Wortlaut fürs Popup."""
+    t = _ohne_anlauf(text)
+    for _ in range(4):
+        n = _ARZT_NOTIZ_PREFIX_RE.sub("", t).strip()
+        n = _ARZT_NOTIZ_FLUFF_RE.sub("", n).strip()
+        if n == t:
+            break
+        t = n
+    t = t.strip(" ,.!?…")
+    if len(t) > 200:
+        t = t[:197] + "…"
+    return t
+
+
+def hat_arzt_notiz_inhalt(text: str) -> bool:
+    """Mehr als ein nacktes Ja/Bitte — es gibt etwas zum Mitgeben."""
+    t = arzt_notiz_aus(text)
+    if not t or _ARZT_NOTIZ_LEER_RE.match(t):
+        return False
+    return len(t.split()) >= 2 or len(t) >= 8
+
+
+def ist_nichts_notiz(text: str) -> bool:
+    """Kein Notizwunsch — nacktes Nein/Nichts, ohne Extra-Inhalt."""
+    if hat_arzt_notiz_inhalt(text):
+        return False
+    t = _ohne_anlauf(text)
+    return bool(ist_nein(t) or _ARZT_NOTIZ_NEIN_RE.match(t))
 
 
 def _relatives_datum(t: str) -> str:
@@ -999,9 +1138,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
-        elif _TERMIN_RE.search(t):
+        elif _TERMIN_RE.search(t) and not ist_nacktes_pzr(t):
             # Neu buchen: aus dem Leeren — oder nach abgeschlossener
             # Verwaltung ("fertig": Storno erledigt, Auskunft gegeben).
+            # Nacktes "Zahnreinigung" startet KEINE Buchung (Chef 07.09.2026)
+            # — der Fluss fragt erst "Brauchen Sie einen Termin …?".
             if s["modus"] == "" or (s["modus"] != "buchen" and s["phase"] == "fertig"):
                 s["modus"] = "buchen"
                 s["phase"] = ""
@@ -1031,7 +1172,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # danach fragt der Fluss klassisch nach Name und Nummer.
     if s["frage"] == "anrufer_check" and not s["anruferCheck"]:
         a = anrufer_bekannt(sit)
-        if a and ist_ja(t) and not ist_nein(t):
+        if a and ist_anrufer_wohl(t):
+            neu.add("anruferWohl")
+        elif a and ist_ja(t) and not ist_nein(t):
             s["anruferCheck"] = "ja"
             s["warSchonMal"] = True  # steht in der Kartei => Bestand
             s["vorname"] = _s(a.get("vorname")) or s["vorname"]
@@ -1050,9 +1193,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["geschlechtQuelle"] = "akte"
                 s["geschlechtUnklar"] = False
             neu.update({"anruferCheck", "name", "warSchonMal"})
+            anrufer_kartei_uebernehmen(sit)
+            dossier.fuellen(sit)
         elif ist_nein(t):
             s["anruferCheck"] = "nein"
             neu.add("anruferCheck")
+            sit.pop("anruferKartei", None)
+            dossier.verwerfen_anrufer(sit)
             # Seed aus Rufnummer-Match verwerfen — sonst sucht list_appointments
             # weiter den abgelehnten Patienten (Bugcheck 06.09.2026).
             sit["patient"] = {}
@@ -1073,6 +1220,21 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                     and not fuer_wen_signal(t) and not _NICHT_ICH_RE.search(t)):
                 s["fuerWen"] = "andere"
                 neu.add("fuerWen")
+
+    # Letzter Behandler aus der Hintergrund-Kartei — Ja bindet, Nein fragt offen.
+    if s["frage"] == "arzt_check" and not (s.get("arzt") or {}).get("calendarId"):
+        k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+        if ist_ja(t) and not ist_nein(t) and _s(k.get("calendarId")):
+            s["arzt"] = {
+                "typ": "letzter",
+                "calendarId": _s(k.get("calendarId")),
+                "calendarName": _s(k.get("calendarName")),
+            }
+            s["arztCheck"] = "ja"
+            neu.add("arzt")
+        elif ist_nein(t):
+            s["arztCheck"] = "nein"
+            neu.add("arztCheck")
 
     # Behandler: ein Name zählt immer; "egal"/"weiß nicht" nur im Arzt-Kontext.
     tenant = sit.get("tenant") or {}
@@ -1149,6 +1311,32 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
             neu.add("grund")
+
+    # W-DOSSIER: Talk darf den Job-Grund nachziehen (Kontrolle genannt,
+    # dann „ich brauche noch ein Implantat") — nie nach dem Buchen.
+    if s["grund"] and s.get("phase") not in {"gebucht", "fertig"} and dossier.spur_signal(t):
+        kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
+        if kern_name and _grund_unglaubwuerdig(t):
+            kern_name, vm = "", None
+        if kern_name and kern_name != s["grund"]:
+            s["grund"] = kern_name
+            s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
+            if vm:
+                s["motivId"] = _s(vm.get("id"))
+                s["motivName"] = _s(vm.get("name"))
+            neu.add("grund")
+            sit["slotVorrat"] = []
+            sit["vorratKey"] = ""
+            sit["vorratGemerkt"] = False
+            sit.pop("vorratDispatch", None)
+            sit.pop("vorratFuer", None)
+            d = dossier.fuellen(sit)
+            d["spur"] = kern_name
+            try:
+                from kern import gedaechtnis as _ged
+                _ged.fakt_senden(sit, f"Anliegen gewechselt: {kern_name}.")
+            except Exception:
+                pass
 
     # Wunschzeit (mehrturnig gemischt)
     wish = _wunsch_deuten(t)
@@ -1266,14 +1454,21 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["telefonOffen"] = ""
             neu.add("telefon")
         elif ist_nein(t):
+            # Live 06.09.2026: nach Nein kam dieselbe Kette wieder (Echo/STT)
+            # und wurde erneut vorgelesen — Sperre, sonst Nummern-Schleife.
+            _telefon_sperren(s, s.get("telefonOffen") or "")
             s["telefonOffen"] = ""
+            s["telefonTeil"] = ""
             neu.add("telefonKorrektur")
     d = telefon.aus_satz(t)
     if d and d != s["telefon"]:
-        s["telefonOffen"] = d
-        s["telefonTeil"] = ""
-        s["telefonOk"] = False
-        neu.add("telefonOffen")
+        if _telefon_gesperrt(s, d):
+            neu.add("telefonKorrektur")
+        else:
+            s["telefonOffen"] = d
+            s["telefonTeil"] = ""
+            s["telefonOk"] = False
+            neu.add("telefonOffen")
     elif not d and s["frage"] in {"telefon", "telefon_check"} and not s["telefonOk"]:
         # Stückweise diktierte Nummer ("null eins sieben sieben" … Pause …
         # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
@@ -1285,10 +1480,14 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             else:
                 zusammen = (s["telefonTeil"] + stueck)[:16]
             if telefon.plausibel(zusammen):
-                s["telefonOffen"] = telefon.normaliert(zusammen)
-                s["telefonTeil"] = ""
-                s["telefonOk"] = False
-                neu.add("telefonOffen")
+                if _telefon_gesperrt(s, zusammen):
+                    s["telefonTeil"] = ""
+                    neu.add("telefonKorrektur")
+                else:
+                    s["telefonOffen"] = telefon.normaliert(zusammen)
+                    s["telefonTeil"] = ""
+                    s["telefonOk"] = False
+                    neu.add("telefonOffen")
             else:
                 s["telefonTeil"] = zusammen
                 neu.add("telefonTeil")
@@ -1298,6 +1497,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         # ohne dass der Anrufer erst durch eine Rückbestätigung muss.
         # Bei offener Akten-Nummer-Frage meint "falsch" die ALTE Nummer aus
         # der Akte — die frisch bestaetigte bleibt unangetastet (29.08.2026).
+        _telefon_sperren(s, s.get("telefonOffen") or s.get("telefon") or "")
         s["telefon"] = ""
         s["telefonOk"] = False
         s["telefonOffen"] = ""
@@ -1492,6 +1692,22 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Möchten Sie eine professionelle Zahnreinigung mit dazu?",
         "Soll die Zahnreinigung mit auf den Termin?",
     ),
+    "pzr_kasse": (
+        "Bei welcher Krankenkasse sind Sie versichert?",
+        "Welche Krankenkasse haben Sie denn?",
+    ),
+    "termin_anbieten": (
+        "Möchten Sie zur Zahnreinigung einen Termin?",
+        "Soll ich Ihnen zur Zahnreinigung einen Termin suchen?",
+    ),
+    "arzt_notiz": (
+        "Darf ich dem Doktor noch eine Notiz zum Termin mitgeben?",
+        "Soll ich ihm eine besondere Frage für den Termin notieren?",
+    ),
+    "arzt_notiz_diktat": (
+        "Was soll der Doktor zum Termin wissen?",
+        "Was soll ich dem Doktor auf den Termin schreiben?",
+    ),
     "bleaching": (
         "Möchten Sie die Zähne bei der Zahnreinigung auch gleich aufhellen lassen?",
         "Soll die Zahnaufhellung mit dazu — ja oder nein?",
@@ -1503,6 +1719,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "anrufer_check": (
         "Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt.",
         "Stimmt Name und Nummer so — oder habe ich mich vertan?",
+    ),
+    "arzt_check": (
+        "Sie waren zuletzt bei demselben Behandler, richtig?",
+        "Stimmt der letzte Behandler so — ein kurzes Ja oder Nein genügt.",
     ),
     "rueckblick": (
         "Wie ist es Ihnen seither ergangen?",
@@ -1580,6 +1800,73 @@ def readback_text(nummer: str) -> str:
 # Anrufstart in sit["anrufer"] (nur SIP mit uebermittelter Nummer; Docks
 # und unterdrueckte Nummern haben das Feld nie).
 
+# "Gut." / "Danke, gut" auf den verspielten Hallo-Satz — NICHT als
+# Identitaets-Ja (sonst waere "wie geht's Ihnen" ein Ablauf-Stoerer).
+_ANRUFER_WOHL_RE = re.compile(
+    r"^(?:danke(?:schoen|schön)?|bitte|mir\s+geht|geht'?s?\s+(?:gut|so)|"
+    r"alles\s+gut|sehr\s+gut|schon\s+gut|gut|prima|bestens|super)\b",
+    re.I,
+)
+
+
+def anrufer_anrede(sit: dict) -> str:
+    """Kurze Anrede aus dem Rufnummer-Treffer — Herr/Frau + Nachname."""
+    a = anrufer_bekannt(sit)
+    if not a:
+        return ""
+    last = _s(a.get("nachname"))
+    first = _s(a.get("vorname"))
+    g = _s(a.get("geschlecht")).lower()
+    if last and g in _HERR:
+        return f"Herr {last}"
+    if last and g in _FRAU:
+        return f"Frau {last}"
+    return f"{first} {last}".strip() or last
+
+
+def anrufer_hallo(sit: dict) -> str:
+    """Schneller erster Satz ohne Ziffern — parallel zur restlichen Antwort.
+
+    Chef 08.09.2026: seriell (Hallo, dann Stille, dann Nummer) ist falsch.
+    Dieser Satz geht als Vorab-Füller raus, während Name+Nummer im
+    Hintergrund gerendert werden. Keine Extra-Frage (Ja/Nein kommt danach)."""
+    wer = anrufer_anrede(sit)
+    if not wer:
+        return "Ah — wir kennen uns noch nicht, ich bin die Neue, Bianca."
+    return (f"Ah, {wer}, wie geht's Ihnen — wir kennen uns noch nicht, "
+            "ich bin die Neue, Bianca.")
+
+
+def anrufer_hallo_jetzt(sit: dict, text: str = "") -> str:
+    """Hallo-Satz, wenn der Namens-Treffer schon da ist — ohne Kartei-Warte.
+
+    Fast-Pfad: sit["anrufer"] kommt mit der Rufnummer (CF-pre), oft schon
+    beim Abheben. Kein naechste_frage, kein letzter Besuch, kein Behandler —
+    die holt der Hintergrund nach und fliessen spaeter ein."""
+    s = sammler(sit)
+    if s["anruferCheck"] or s["frage"] == "anrufer_check":
+        return ""
+    if s["fuerWen"] or s["nachname"] or s["warSchonMal"] is False:
+        return ""
+    if not anrufer_bekannt(sit):
+        return ""
+    if sit.get("hirnVerbinden"):
+        return ""
+    if text:
+        from bianca import weiterleiten
+        if weiterleiten.erkannt(text):
+            return ""
+    return anrufer_hallo(sit)
+
+
+def ist_anrufer_wohl(text: str) -> bool:
+    """Wohlsein-Antwort auf den Hallo-Satz, kein Identitäts-Ja."""
+    k = _ohne_anlauf(text)
+    if _JA_RE.search(k) or _NEIN_RE.search(k):
+        return False
+    return bool(_ANRUFER_WOHL_RE.match(k))
+
+
 def anrufer_bekannt(sit: dict) -> dict:
     """DB-Patient zur Anrufernummer — {} wenn keiner da oder Notaus an."""
     if os.environ.get("ANRUFER_CHECK", "1").strip() == "0":
@@ -1605,10 +1892,45 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     a = anrufer_bekannt(sit)
     name = f"{_s(a.get('vorname'))} {_s(a.get('nachname'))}".strip()
     z = telefon.sprechbar(a.get("telefon") or "")
-    schluss = ("Der Termin ist für Sie selbst, richtig?" if selbst
-               else "Stimmt das so?")
-    return (f"Ich habe Sie an Ihrer Rufnummer erkannt: {name}, "
-            f"unter {z}. {schluss}")
+    schluss = anrufer_check_schluss(selbst=selbst)
+    # Getrennte Saetze fuers Streaming: 1) Hallo ohne Ziffern (sofort Ton),
+    # 2) Name erkannt (kein Readback), 3) Nummer blocking, 4) Ja/Nein warm.
+    hallo = anrufer_hallo(sit)
+    return (f"{hallo} Ich habe Sie an Ihrer Rufnummer erkannt: {name}. "
+            f"Unter {z}. {schluss}")
+
+
+def anrufer_check_schluss(*, selbst: bool = False) -> str:
+    """Nur die Ja/Nein-Frage — nach einem Wohlsein-„Gut.“ ohne Hallo-Wiederholung."""
+    return ("Der Termin ist für Sie selbst, richtig?" if selbst
+            else "Stimmt das so?")
+
+
+def anrufer_kartei_uebernehmen(sit: dict) -> None:
+    """Nach Identitaets-Ja: letzten Besuch aus dem Hintergrund in den Sammler.
+
+    Bindet NICHT den Behandler — das macht erst die Rueckfrage
+    ('Sie waren bei Doktor X, richtig?')."""
+    k = sit.get("anruferKartei")
+    if not isinstance(k, dict) or not k:
+        return
+    s = sammler(sit)
+    if _s(k.get("letzterBesuch")) and not s["letzterBesuch"]:
+        s["letzterBesuch"] = _s(k.get("letzterBesuch"))
+        s["letzterGrund"] = _s(k.get("letzterGrund"))
+    satz = kartei_fueller_satz(s)
+    if satz:
+        sit["karteiFillerText"] = satz
+    dossier.fuellen(sit)
+
+
+def arzt_check_frage(sit: dict) -> str:
+    """Bestaetigung des letzten Behandlers, sobald der Hintergrund ihn hat."""
+    k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+    name = arzt_sprechname(_s(k.get("doctorName") or k.get("calendarName")))
+    if not name or not _s(k.get("calendarId")):
+        return ""
+    return f"Sie waren zuletzt bei {name}, richtig?"
 
 
 def patient_von_kontakt_loesen(sit: dict) -> None:
@@ -1725,6 +2047,18 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Der Termin ist für Sie selbst, richtig?",
         "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
         "War er oder sie schon einmal bei uns in der Praxis?",
+        "Brauchen Sie einen Termin zur Zahnreinigung?",
+        "Wir kennen uns noch nicht, ich bin die Neue, Bianca.",
+        "Ah — wir kennen uns noch nicht, ich bin die Neue, Bianca.",
+        "Schön!",
+        "Stimmt das so?",
+        "Die professionelle Zahnreinigung kostet bei uns ungefähr einhundertzwanzig Euro. "
+        "Bei uns führen die Zahnärzte die Zahnreinigung selbst durch, nicht die Prophylaxehelferinnen. "
+        "Bei welcher Krankenkasse sind Sie versichert?",
+        "Bei welcher Krankenkasse sind Sie versichert?",
+        "Soll ich für den Termin noch eine Notiz für den Doktor anlegen? "
+        "Irgendeine besondere Frage, auf die er eingehen soll?",
+        "Was soll ich dem Doktor mitgeben?",
     ]
     # W-FUER-WEN: die haeufigsten Dritten-Rollen mitwaermen (Namensfrage +
     # Schonmal-Frage) — seltene Rollen (Nachbar, Kollege, Chefin …)
@@ -1798,13 +2132,15 @@ def telefon_alt_frage(s: dict) -> str:
 # 1500 ms — traege genug fuer Gruppen-Pausen, ohne das Gespraech zu laehmen.
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "versicherung",
-                "versicherung_check", "pzr", "bleaching", "bleaching_check",
+                "versicherung_check", "pzr", "pzr_kasse", "bleaching", "bleaching_check",
                 "telefon_alt", "telefon_check",
-                "rueckblick", "anrufer_check", "frisch_absage_ok", "absage_ok"}
+                "rueckblick", "anrufer_check", "arzt_check",
+                "frisch_absage_ok", "absage_ok",
+                "termin_anbieten", "arzt_notiz"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.
-_STILLE_DIKTAT = {"telefon", "buchstabieren", "nachname"}
+_STILLE_DIKTAT = {"telefon", "buchstabieren", "nachname", "arzt_notiz_diktat"}
 
 
 def stille_ms(s: dict) -> int:
@@ -1860,6 +2196,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
 
     if s["warSchonMal"]:
         if not s["arzt"]:
+            if s.get("arztCheck") != "nein":
+                rq = arzt_check_frage(sit)
+                if rq:
+                    return "arzt_check", rq
             wer = fuer_wen_phrase(s)
             if wer:
                 return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
@@ -2057,8 +2397,43 @@ def rueckblick_faellig(s: dict) -> bool:
     return _besuch_tage(s) > 7
 
 
+def kartei_fueller_satz(s: dict) -> str:
+    """Kurze Kartei-Feststellung ohne Frage — nur wenn der Fakt schon da ist.
+
+    Chef 08.09.2026: Totzeit mit echtem letzten Besuch füllen, nie eine
+    Frage in die Wartezeit legen (sonst antwortet der Anrufer ins Leere
+    und der Buchungsfluss driftet). Leer = kein Füller, Fallback
+    „Einen Moment.“"""
+    if not s.get("bekannt") or not _s(s.get("letzterGrund")):
+        return ""
+    if _ist_akut(s) or _besuch_tage(s) <= 7:
+        return ""
+    if s.get("rueckblick") in {"gefragt", "fertig"}:
+        return ""
+    if s.get("karteiFuellerGesagt"):
+        return ""
+    grund = grund_sprechbar(s.get("letzterGrund") or "")
+    if not grund:
+        return ""
+    n = grund.lower()
+    if "kontroll" in n:
+        grund = "die Kontrolle"
+    elif _PZR_GRUND_RE.search(n):
+        grund = "die Zahnreinigung"
+    elif len(grund) > 22:
+        grund = grund[:20].rstrip() + "…"
+    satz = f"Letztes Mal {grund} — einen Moment."
+    return satz if "?" not in satz else ""
+
+
 def rueckblick_text(s: dict) -> str:
-    """Die Rueckblick-Ansprache: Abstand + letzter Grund + Verlaufs-Frage."""
+    """Die Rueckblick-Ansprache: Abstand + letzter Grund + Verlaufs-Frage.
+
+    War der Vorsatz schon als Füller draußen, kommt NUR die Frage —
+    sonst hört der Anrufer denselben Besuch zweimal."""
+    frage = verlaufs_frage(s.get("letzterGrund") or "")
+    if s.get("karteiFuellerGesagt"):
+        return frage
     tage = _besuch_tage(s)
     grund = grund_sprechbar(s.get("letzterGrund") or "")
     if tage >= 730:
@@ -2069,7 +2444,7 @@ def rueckblick_text(s: dict) -> str:
         # Nominativ ("etwa acht Monate") — nach "vor" braeuchte es den Dativ.
         vorsatz = (f"Ich sehe gerade: Ihr letzter Besuch ist {abstand_worte(tage)} her — "
                    f"da ging es um {grund}. ")
-    return vorsatz + verlaufs_frage(s.get("letzterGrund") or "")
+    return vorsatz + frage
 
 
 _RB_SCHLECHT_RE = re.compile(
@@ -2098,23 +2473,49 @@ def rueckblick_reaktion(text: str) -> str:
     return ""
 
 
-def pzr_faellig(s: dict) -> bool:
-    """Zahnreinigung anbieten? Sobald die Kartei den Vortermin hergibt
-    (Chef 29.08.2026: "vortermin zwar gefunden aber keine zahnreinigung mit
-    angeboten!! das solltest du tun") — Bestand im Sammel-Teil der Buchung,
-    der NEUE Termin ist selbst keine Zahnreinigung, kein Schmerz-/Notfall-
-    Termin, EINMAL pro Anruf. Einzige Zeitschranke: war der LETZTE Besuch
-    selbst eine Zahnreinigung und liegt er keine 6 Monate zurueck, ist die
-    Reinigung frisch — dann nicht noch eine anbieten."""
-    if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("pzr"):
-        return False
-    if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
+def pzr_noch_fragen(s: dict) -> bool:
+    """Muss dieser Termin noch die PZR-Abfrage bekommen (Chef 08.09.2026)?
+
+    Jeder vergebene Termin, nicht nur Bestand. Phase wird bewusst NICHT
+    geprueft — vor dem Buchen holt _nach_ok_buchen die Frage nach, wenn
+    der Einschub (Wunschzeit-Zug) sie noch nicht gestellt hat."""
+    if s.get("modus") != "buchen" or s.get("pzr"):
         return False
     if not s.get("grund") or ist_pzr_grund(s) or _ist_akut(s):
         return False
     if _PZR_GRUND_RE.search(_s(s.get("letzterGrund"))) and not besuch_lange_her(s):
         return False
     return True
+
+
+def pzr_faellig(s: dict) -> bool:
+    """Zahnreinigung im Sammel-Einschub anbieten?
+
+    Chef 29.08.2026: Vortermin gefunden => anbieten. Chef 08.09.2026:
+    jeder Termin, auch ohne Kartei-Treffer. Nicht mitten in Slot/Confirm
+    (da holt _nach_ok_buchen nach). Frische eigene PZR: nicht noch eine."""
+    if not pzr_noch_fragen(s):
+        return False
+    if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
+        return False
+    return True
+
+
+def pzr_im_kontext(s: dict, text: str = "") -> bool:
+    """Darf die Preis-/Kassen-Auskunft greifen, ohne den Pflichtpfad zu stehlen?"""
+    from kern import pzr_kassen
+    if _s(s.get("frage")) in {"pzr", "pzr_kasse", "termin_anbieten"}:
+        return True
+    if s.get("pzr") in {"ja", "gefragt"} or s.get("pzrKasse") == "gefragt":
+        return True
+    if ist_pzr_grund(s) or s.get("terminAnbieten") in {"ja", "gefragt"}:
+        return True
+    return pzr_kassen.hat_pzr_wort(text)
+
+
+def ist_pzr_preisfrage(text: str) -> bool:
+    from kern import pzr_kassen
+    return pzr_kassen.ist_preisfrage(text)
 
 
 # Chef 03.09.2026: "kosten nur bei nachfrage nennen. nicht mit den kosten

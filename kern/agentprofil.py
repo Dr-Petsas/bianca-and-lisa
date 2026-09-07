@@ -351,6 +351,39 @@ def _cf_pre(did: str, caller: str = "") -> dict[str, Any] | None:
     })
 
 
+def _cf_pre_mit_geschwistern(did: str, caller: str = "") -> dict[str, Any] | None:
+    """CF-pre: erst die angerufene DID, sonst Geschwister-DIDs derselben Praxis.
+
+    Live 06.09.2026: MedDent-Agent steht in der DB nur auf +4921154244110,
+    Asterisk routet aber auch 4101 auf Bianca → CF 404 → lokale Datei ohne
+    callForwardings → Platzhalter statt Jingle/Freizeichen. Die kuratierte
+    tenants/*.json listet alle Leitungen unter ``dids``; wir fragen die
+    Geschwister der Reihe nach (ohne die angerufene zu wiederholen).
+    """
+    norm = tenants.nummer_norm(did)
+    if not norm:
+        return None
+    pre = _cf_pre(norm, caller)
+    if pre:
+        return pre
+    lokal = tenants.von_did(norm)
+    if not lokal:
+        return None
+    roh = lokal.get("dids") if isinstance(lokal.get("dids"), list) else [lokal.get("did")]
+    gesehen = {norm}
+    for alt in roh:
+        alt_norm = tenants.nummer_norm(alt)
+        if not alt_norm or alt_norm in gesehen:
+            continue
+        gesehen.add(alt_norm)
+        pre = _cf_pre(alt_norm, caller)
+        if pre:
+            print(f"agentprofil did={norm} -> CF ueber Geschwister-DID {alt_norm}",
+                  flush=True)
+            return pre
+    return None
+
+
 def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
     """Mandant zur angerufenen Nummer — die DB ist die Wahrheit (Chef
     30.08.2026), die lokale Datei nur Rueckfall (CF aus/down/kein Agent)."""
@@ -367,7 +400,7 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
             t = dict(hit[1]) if hit[1] else None
         else:
             try:
-                pre = _cf_pre(norm, caller)
+                pre = _cf_pre_mit_geschwistern(norm, caller)
                 t = tenant_von_pre(pre, did=norm) if pre else None
             except Exception as e:
                 print(f"agentprofil cf fail did={norm}: {type(e).__name__}: {e}", flush=True)

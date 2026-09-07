@@ -339,6 +339,11 @@ def _kontext_arbeit(sit: dict, telefon: str, name: str, key: str) -> None:
         if sit.get("gedaechtnisKey") != key:
             return  # inzwischen ist mehr bekannt — der neuere Lauf gewinnt
         sit["gedaechtnis"] = text
+        try:
+            from kern import dossier
+            dossier.fuellen(sit)
+        except Exception:
+            pass
         wer = name or telefon
         if text:
             print(f"{stimme}-gedaechtnis kontext zu {wer!r}: {len(text)} Zeichen", flush=True)
@@ -349,6 +354,48 @@ def _kontext_arbeit(sit: dict, telefon: str, name: str, key: str) -> None:
         if sit.get("gedaechtnisKey") == key:
             sit["gedaechtnisKey"] = ""
         print(f"{stimme}-gedaechtnis kontext fail {e}", flush=True)
+
+
+def fakt_senden(sit: dict, zeile: str, *, art: str = "fakt") -> None:
+    """Festen Fakt mitten im Gespräch ins MAS — nie auf dem Mund-Pfad.
+
+    Eigene Event-Id je Fakt, damit der Hangup-Report unberührt bleibt.
+    Daemon-Thread, nie werfend. Notaus wie report_senden."""
+    if not enabled():
+        return
+    text = _s(zeile)
+    sid = _s(sit.get("id"))
+    if not text or not sid:
+        return
+    n = int(sit.get("gedaechtnisFaktNr") or 0) + 1
+    sit["gedaechtnisFaktNr"] = n
+    stimme = notes.stimme_von(sit).lower()
+    kanal = "bianca_call" if stimme == "bianca" else "lisa_call"
+    telefon, name = _wer(sit)
+    body = {
+        "id": f"telefonki:fakt:{sid}:{n}",
+        "channel": kanal,
+        "direction": "in" if kanal == "bianca_call" else "out",
+        "type": "note",
+        "counterparty": {"kind": "patient", "name": name, "ref": telefon or None},
+        "summary": text[:400],
+        "signals": {},
+        "status": "none",
+        "confidence": 0.9,
+        "payloadRef": {"kind": "telefonki_fakt", "id": sid, "art": art, "n": n},
+        "extractor": "telefonki@v1",
+    }
+
+    def arbeit() -> None:
+        try:
+            r = httpx.post(f"{MAS_URL}/brain/events", json=body,
+                           headers=_headers(_client_id(sit)), timeout=WARTE_S)
+            print(f"{stimme}-gedaechtnis fakt {body['id']} -> {r.status_code}",
+                  flush=True)
+        except Exception as e:
+            print(f"{stimme}-gedaechtnis fakt fail {e}", flush=True)
+
+    threading.Thread(target=arbeit, daemon=True).start()
 
 
 def kontext_anstossen(sit: dict) -> None:

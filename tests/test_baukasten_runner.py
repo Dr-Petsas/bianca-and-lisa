@@ -63,6 +63,7 @@ ALLE_FRAGEN = [
     "schonmal", "arzt", "name", "vorname", "nachname", "grund", "wunsch",
     "buchstabieren", "telefon", "telefon_check", "telefon_alt",
     "versicherung", "versicherung_check", "pzr", "slotwahl", "bestaetigung",
+    "arzt_notiz", "arzt_notiz_diktat",
     "rueckblick", "wann", "behandlung", "neubuchung", "absage_ok",
     "verschieb_ok", "terminwahl",
 ]

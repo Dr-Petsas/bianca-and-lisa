@@ -232,6 +232,40 @@ def test_kontext_arbeit_schreibt_in_sitzung():
         ged._kontext_holen = echt
 
 
+def test_fakt_senden_eigene_id_im_hintergrund():
+    posts = []
+    echt_post = ged.httpx.post
+    echt_thread = ged.threading.Thread
+
+    class _Sofort:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    def fake_post(url, json=None, **kw):
+        posts.append((url, json))
+        class _R:
+            status_code = 200
+        return _R()
+
+    ged.httpx.post = fake_post
+    ged.threading.Thread = _Sofort
+    try:
+        sit = _sit_bianca()
+        ged.fakt_senden(sit, "Verlauf letzter Besuch: alles gut verheilt.")
+        assert sit["gedaechtnisFaktNr"] == 1
+        assert posts and posts[0][1]["id"] == "telefonki:fakt:abc123:1"
+        assert posts[0][1]["type"] == "note"
+        assert "alles gut verheilt" in posts[0][1]["summary"]
+        assert posts[0][1]["id"] != ged._event(sit)["id"]
+    finally:
+        ged.httpx.post = echt_post
+        ged.threading.Thread = echt_thread
+
+
 def test_notaus_schaltet_alles_ab():
     os.environ["MAS_GEDAECHTNIS"] = "0"
     try:
@@ -240,6 +274,8 @@ def test_notaus_schaltet_alles_ab():
         sit = _sit_bianca()
         ged.kontext_anstossen(sit)
         assert "gedaechtnisKey" not in sit
+        ged.fakt_senden(sit, "sollte nicht raus")
+        assert sit.get("gedaechtnisFaktNr") in (None, 0)
     finally:
         os.environ.pop("MAS_GEDAECHTNIS", None)
     assert ged.enabled() is True

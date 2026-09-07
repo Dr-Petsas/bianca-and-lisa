@@ -2,8 +2,8 @@
 Anfahrt während der Nummer-Erfassung.
 
 Erwartung gegen den LAUFENDEN Bianca-Dienst (Port 8096, neuer Stand):
-- "Was kostet eine Zahnreinigung?" -> circa 150 Euro (gesprochen
-  "einhundertfünfzig Euro"), danach zurück zur offenen Handynummer-Frage.
+- "Was kostet eine Zahnreinigung?" -> ungefähr 120 Euro (gesprochen
+  "einhundertzwanzig Euro"), danach zurück zur offenen Handynummer-Frage.
 - Preis NICHT in der Liste (Wurzelbehandlung) -> Verweis an den Zahnarzt,
   kein erfundener Betrag.
 - "Wie komme ich zu Ihnen?" -> Wegbeschreibung (Grafenberg, Luise-Rainer-
@@ -58,10 +58,11 @@ def main() -> int:
         t3 = zug(c, sid, "P wie Paula, E wie Emil, T wie Theodor, E wie Emil, R wie Richard, S wie Samuel.")
     assert "handynummer" in t3.lower() or "nummer" in t3.lower(), f"Erwartet Telefon-Frage: {t3}"
 
-    # 1) Preis IN der Liste: Zahnreinigung -> circa 150 Euro + zurück zur Frage.
+    # 1) Preis IN der Liste: Zahnreinigung -> ungefähr 120 Euro + zurück zur Frage.
     tp = zug(c, sid, "Ähm, ganz kurz — was kostet denn eine Zahnreinigung bei Ihnen?")
     lp = tp.lower()
-    assert "hundertfünfzig" in lp or "150" in tp, f"Preis 150 fehlt: {tp}"
+    assert "hundertzwanzig" in lp or "120" in tp, f"Preis 120 fehlt: {tp}"
+    assert "grob" not in lp, f"„grob“ statt ungefähr: {tp}"
     assert "euro" in lp, f"'Euro' fehlt: {tp}"
     assert "nummer" in lp or "handy" in lp, f"Offene Telefon-Frage fehlt: {tp}"
 

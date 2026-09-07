@@ -302,6 +302,14 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         return {"text": _wahl(story, lage, "slot_annahme", saetze.SLOT_ANNAHME), "baustein": "slot_annahme"}
     if fid == "bestaetigung":
         return {"text": _wahl(story, lage, "bestaetigung", saetze.BESTAETIGUNG_JA), "baustein": "bestaetigung"}
+    if fid == "arzt_notiz":
+        frei = str(story.get("arztNotizText") or "").strip()
+        if frei:
+            return {"text": frei, "baustein": "arzt_notiz"}
+        return {"text": "Nein, danke.", "baustein": "arzt_notiz_nein"}
+    if fid == "arzt_notiz_diktat":
+        return {"text": str(story.get("arztNotizText") or "Nichts Besonderes."),
+                "baustein": "arzt_notiz_diktat"}
     if fid == "rueckblick":
         return {"text": _wahl(story, lage, "rueckblick", saetze.RUECKBLICK_GUT), "baustein": "rueckblick"}
     if fid == "wann":
@@ -363,7 +371,8 @@ def saetze_fuer_audio(story: dict) -> list[str]:
     add(_eroeffnung(story, lg).get("text"))
     for fid in ("schonmal", "arzt", "name", "vorname", "nachname", "grund",
                 "wunsch", "buchstabieren", "telefon", "telefon_check",
-                "versicherung", "pzr", "bestaetigung", "wann", "behandlung"):
+                "versicherung", "pzr", "bestaetigung", "arzt_notiz",
+                "arzt_notiz_diktat", "wann", "behandlung"):
         lg = lage_neu()
         lg["eroeffnet"] = True
         lg["frage"] = fid
