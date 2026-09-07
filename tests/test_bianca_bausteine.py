@@ -2999,6 +2999,17 @@ def test_auskunft_identitaet_bleibt_deterministisch():
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
+def test_last_call_reicht_phone_call_id():
+    """Dock/Health/bianca_last_call.json sahen nie die Portal-Id (nur die Sitzung)."""
+    from kern.sitzung import oeffentlich
+
+    sit = {"id": "abc123", "startedAt": "2026-09-08T00:00:00+00:00",
+           "phoneCallId": "pc-portal-42", "patient": {"name": "Test", "id": "p1"}}
+    out = oeffentlich(sit)
+    assert out["phoneCallId"] == "pc-portal-42"
+    assert oeffentlich({"id": "x"})["phoneCallId"] == ""
+
+
 def test_anrufer_seedet_patient_fuer_list_appointments():
     """call_erfassen spiegelt den Anrufer auch nach sit.patient/booking."""
     from kern import agentprofil

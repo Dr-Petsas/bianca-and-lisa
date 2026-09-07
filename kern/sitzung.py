@@ -89,6 +89,7 @@ def oeffentlich(sit: dict[str, Any]) -> dict[str, Any]:
     return {
         "sessionId": sit.get("id"),
         "startedAt": sit.get("startedAt"),
+        "phoneCallId": sit.get("phoneCallId") or "",
         "patientName": pat.get("name") or "",
         "patientId": pat.get("id") or "",
         "auftrag": sit.get("auftrag") or "",
