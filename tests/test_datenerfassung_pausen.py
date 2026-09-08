@@ -113,6 +113,11 @@ def test_echte_whisper_serien_ergeben_trotz_verhörern_tzannis():
             "N'Winopol", "Wie Nordpol?", "Evie Ida",
             "Swiss Samuel fertig.",
         ),
+        (
+            "T wie Theodor", "Zwiesacher Rias", "AVI Anton",
+            "N wie Nordpol", "Envy Nordpol", "IWI-IDA",
+            "Zwiesammeel fertig.",
+        ),
     )
     for serie in serien:
         sit = _sit()

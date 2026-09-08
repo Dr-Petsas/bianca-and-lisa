@@ -144,6 +144,34 @@ def _tafel_anlaute(toks: list[str]) -> list[str]:
     return anlaute
 
 
+def _fuzzy_tafel_fragment(toks: list[str]) -> str:
+    """Stark verschliffenes ``X wie Tafelwort`` als EINEN Buchstaben retten.
+
+    Whisper liefert bei isolierten Buchstabierclips unter anderem
+    ``Zwiesacher Rias`` statt ``Z wie Zacharias``. Der Abgleich ist nur bei
+    klarer bester Tafelphrase erlaubt; Gleichstände bleiben leer.
+    """
+    ignorieren = _FUELL | {"fertig", "ende", "wars", "gewesen"}
+    gehoert = "".join(t for t in toks if t not in ignorieren)
+    if len(gehoert) < 4:
+        return ""
+    pro_buchstabe: dict[str, float] = {}
+    for wort, letter in _TAFEL.items():
+        for soll in (
+            f"{letter}wie{wort}",
+            f"{letter}vi{wort}",
+            f"wie{wort}",
+            wort,
+        ):
+            score = difflib.SequenceMatcher(None, gehoert, soll).ratio()
+            pro_buchstabe[letter] = max(pro_buchstabe.get(letter, 0.0), score)
+    rang = sorted(pro_buchstabe.items(), key=lambda x: (-x[1], x[0]))
+    if not rang or rang[0][1] < 0.72:
+        return ""
+    zweit = rang[1][1] if len(rang) > 1 else 0.0
+    return rang[0][0] if rang[0][1] - zweit >= 0.08 else ""
+
+
 def deute(text: str) -> dict[str, Any] | None:
     """Buchstabierung erkennen und zusammensetzen.
 
@@ -322,6 +350,9 @@ def teil(text: str) -> str:
     tafel = _tafel_anlaute(toks)
     if tafel:
         return "".join(tafel)
+    fuzzy = _fuzzy_tafel_fragment(toks)
+    if fuzzy:
+        return fuzzy
     erlaubt = _FUELL | {
         "wie", "fertig", "ende", "wars", "war's", "gewesen",
     }
