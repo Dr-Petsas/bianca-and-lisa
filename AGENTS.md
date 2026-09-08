@@ -1418,6 +1418,29 @@ sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
 `PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
 Schaufenster.
 
+## Evidenzbasierter Fakten-/Erledigt-Wächter (W-FAKTEN-WACHE 09.09.2026 — nicht rückbauen)
+
+Wie Claras UNVERIFIED_ACTION_FALLBACK: eine gesprochene Erledigt-Behauptung
+(„Ihr Termin ist gebucht/abgesagt/verschoben", „ich habe eine Notiz gemacht",
+„in die Kartei aufgenommen") darf nur raus, wenn das passende Werkzeug
+ERFOLGREICH lief. Wahrheit ist das Tool-Ledger (`sit["tools"]` bzw. die Marken
+lastBook/lastCancel/lastMove/lastNote/lastCreate aus `kern/sitzung.merke_tool`),
+NIE der LLM-Text.
+
+- **Erkennung** (`kern/fakten_wache.py`, bianca-frei): `unbelegte_behauptung`
+  prüft je Satz gegen `AKTIONEN` (buchen/absagen/verschieben/notiz/anlegen) und
+  das jeweilige Evidenz-Prädikat. Fragen/Angebote („soll ich eintragen?",
+  „passt Ihnen?") zählen NIE als Behauptung.
+- **Nur LLM-Pfad** (`bianca/agent._fakten_wache_anwenden`, direkt nach
+  `_nachbessern`): der deterministische Fluss ist ohnehin evidenzbasiert. shadow
+  loggt nur `fakten-wache-shadow`; enforce ersetzt die unbelegte Behauptung
+  durch eine ehrliche Absicherung + die offene Pflichtfrage (durch den
+  Wiederholungs-Wächter).
+- **Notaus/Stufen** `FAKTEN_WACHE=off|shadow|enforce` (Default **off** =
+  byte-identisch, der bestehende `_ERLEDIGT_RE`-Guard bleibt unberührt).
+- Tests: `tests/test_fakten_wache.py` (offline). Rollout: erst shadow gegen
+  Replays, dann enforce.
+
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 
 Erster Schritt zur Entkopplung des ~2.000-Zeilen-`bianca/flow.py`, OHNE

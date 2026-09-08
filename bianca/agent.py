@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import antwort_wache, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import spur
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
@@ -573,6 +573,29 @@ def start_reply(sit: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+def _fakten_wache_anwenden(sit: dict, text: str) -> str:
+    """W-FAKTEN-WACHE (09.09.2026): evidenzbasierte Erledigt-Wache auf dem
+    LLM-Pfad. off: nichts. shadow: nur Waechterspur. enforce: unbelegte
+    Erledigt-Behauptung durch eine ehrliche Absicherung + offene Frage
+    ersetzen (Wahrheit = Tool-Ledger, nicht LLM-Text)."""
+    m = fakten_wache.modus()
+    if m == "off" or not _s(text):
+        return text
+    unbelegt = fakten_wache.unbelegte_behauptung(sit, text)
+    if not unbelegt:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "fakten-wache-shadow", unbelegt)
+        return text
+    spur.merken(sit, "fakten-wache", unbelegt)
+    s = sit.get("sammler") or {}
+    fid, frage = gehirn.naechste_frage(sit)
+    if fid:
+        s["frage"] = fid
+    hedge = "Da will ich nichts falsch machen — das ist noch nicht erledigt."
+    return _wiederholung_oder_presence(sit, " ".join(x for x in [hedge, frage] if x).strip())
+
+
 def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
     """W-HIRN-AUTORESUME (09.09.2026): hat die Maschine gerade ein
     eingeschobenes Anliegen abgeschlossen und liegt ein geparktes davor,
@@ -878,6 +901,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     werkzeug_lief = bool(gelaufen)
     _fluss_sync(sit, gelaufen, book)
     bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief, floor=route["floor"])
+    bewacht = _fakten_wache_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht
