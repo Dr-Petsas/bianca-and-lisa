@@ -19,7 +19,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from kern import motive
+from kern import empfehlungen, fachprofil, motive
 
 LEER: dict[str, Any] = {
     "bereit": False,
@@ -29,6 +29,9 @@ LEER: dict[str, Any] = {
     "calendarId": "",
     "masText": "",
     "masOffen": [],
+    "fachtemplate": "allgemein",
+    "layers": {},
+    "empfehlungen": [],
     "takte": [],
     "gesagt": [],
     "offen": "",
@@ -64,12 +67,23 @@ def von(sit: dict | None) -> dict[str, Any]:
     sit = sit or {}
     d = sit.get("dossier")
     if not isinstance(d, dict):
-        d = {k: (list(v) if isinstance(v, list) else v) for k, v in LEER.items()}
+        d = {
+            k: (
+                list(v) if isinstance(v, list)
+                else dict(v) if isinstance(v, dict)
+                else v
+            )
+            for k, v in LEER.items()
+        }
         sit["dossier"] = d
         return d
     for k, v in LEER.items():
         if k not in d:
-            d[k] = list(v) if isinstance(v, list) else v
+            d[k] = (
+                list(v) if isinstance(v, list)
+                else dict(v) if isinstance(v, dict)
+                else v
+            )
     return d
 
 
@@ -116,6 +130,9 @@ def fuellen(sit: dict | None) -> dict[str, Any]:
     d["calendarId"] = _s(arzt.get("calendarId")) or _s(k.get("calendarId"))
     d["masText"] = str(sit.get("gedaechtnis") or "").strip()
     d["masOffen"] = _offen_zeilen(d["masText"])
+    layers = fachprofil.aktualisieren(sit)
+    d["fachtemplate"] = str((layers.get("fach") or {}).get("id") or "allgemein")
+    d["layers"] = layers
     d["bereit"] = bool(d["letzterGrund"] or d["letzterArzt"] or d["masText"])
     takte_bauen(sit)
     return d
@@ -149,22 +166,12 @@ def takte_bauen(sit: dict | None) -> list[str]:
         gesagt.append("verlauf")
     if s.get("pzr") and "pzr" not in gesagt:
         gesagt.append("pzr")
-    wartend: list[str] = []
-    bekannt = bool(s.get("bekannt") or s.get("anruferCheck") == "ja")
-    phase = _s(s.get("phase"))
-    if (bekannt and d.get("letzterGrund") and "verlauf" not in gesagt
-            and _s(s.get("modus")) == "buchen" and phase not in _PHASE_DICHT
-            and not _AKUT_RE.search(_s(s.get("grund")))
-            and _tage(d.get("letzterBesuch") or "") > 7):
-        wartend.append("verlauf")
-    if (_s(s.get("modus")) == "buchen" and "pzr" not in gesagt
-            and _s(s.get("grund")) and phase not in _PHASE_DICHT
-            and not _PZR_RE.search(f"{s.get('grund')} {s.get('motivName')}")
-            and not _AKUT_RE.search(_s(s.get("grund")))
-            and motive.fuehrt_pzr(sit)):
-        wartend.append("pzr")
     d["gesagt"] = gesagt
-    d["takte"] = [t for t in wartend if t not in gesagt]
+    d["empfehlungen"] = empfehlungen.kandidaten(sit, d)
+    d["takte"] = [
+        t for t in empfehlungen.legacy_takte(sit, d)
+        if t not in gesagt
+    ]
     return list(d["takte"])
 
 

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from kern import hirn
+from kern import fachprofil, hirn
 from kern.sitzung import merke_tool, merke_zug, oeffentlich as _oeffentlich  # noqa: F401 - geteilt mit Bianca
 from lisa.config import DATA_DIR, DEV_PHONE
 from lisa.patients import format_de_phone
@@ -64,6 +64,7 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None,
     # ("sagen Sie Donnerstag ab"), erkennt kern/intent das und das Hirn
     # parkt den Seed, statt stur auf der Mission zu bleiben.
     hirn.init(doc, auftrag=auftrag)
+    fachprofil.aktualisieren(doc)
     _STORE[sid] = doc
     return doc
 
@@ -90,6 +91,7 @@ def holen(sid: str) -> dict[str, Any] | None:
         return None
     hit = _STORE.get(sid)
     if hit:
+        fachprofil.aktualisieren(hit)
         return hit
     pfad = _SESS_DIR / f"{sid}.json"
     try:
@@ -98,6 +100,7 @@ def holen(sid: str) -> dict[str, Any] | None:
         return None
     if not isinstance(roh.get("tenant"), dict) or not roh.get("tenant"):
         roh["tenant"] = laden(roh.get("tenantId") or "")
+    fachprofil.aktualisieren(roh)
     _STORE[sid] = roh
     return roh
 

@@ -84,6 +84,13 @@ def anstossen(sit: dict) -> None:
         kat = holen(tenant)
         if kat:
             sit["motivKatalog"] = kat
+            # Der frische Pickadoc-Katalog ist die beste Fachtemplate-Quelle.
+            # Lokaler Import vermeidet eine Modulschleife beim Start.
+            try:
+                from kern import fachprofil
+                fachprofil.aktualisieren(sit)
+            except Exception:
+                pass
             print(f"motive: Katalog frisch geladen ({len(kat)} Besuchsgruende)", flush=True)
         else:
             print("motive: Katalog-Abruf leer/fehlgeschlagen — Mandanten-Liste bleibt", flush=True)

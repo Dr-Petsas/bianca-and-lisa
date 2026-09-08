@@ -24,6 +24,7 @@ MODULE = [
     "tests.test_arzt_notiz",
     "tests.test_zahn_katalog",
     "tests.test_dossier",
+    "tests.test_fachprofil",
     "tests.test_stille_notfall",
     "tests.test_llm_deckel",
     "tests.test_slot_behandler",

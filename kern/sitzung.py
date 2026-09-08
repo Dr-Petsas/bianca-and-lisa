@@ -86,6 +86,8 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any],
 
 def oeffentlich(sit: dict[str, Any]) -> dict[str, Any]:
     pat = sit.get("patient") or {}
+    layers = sit.get("layers") if isinstance(sit.get("layers"), dict) else {}
+    fach = layers.get("fach") if isinstance(layers.get("fach"), dict) else {}
     return {
         "sessionId": sit.get("id"),
         "startedAt": sit.get("startedAt"),
@@ -100,4 +102,6 @@ def oeffentlich(sit: dict[str, Any]) -> dict[str, Any]:
         "lastMove": sit.get("lastMove"),
         "lastNote": sit.get("lastNote"),
         "lastCreate": sit.get("lastCreate"),
+        "layerVersion": layers.get("version"),
+        "fachtemplate": fach.get("id") or "allgemein",
     }

@@ -284,6 +284,14 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
         t["telefon"] = _s(agent.get("phoneNumber"))
     if not _s(t.get("sprache")):
         t["sprache"] = _s(agent.get("mainLanguage")) or "de"
+    # Optionaler Praxis-Layer: sobald Pickadoc ein Fachgebiet mitsendet,
+    # gewinnt dieser explizite Wert vor der konservativen Katalog-Erkennung.
+    # Unbekannte Werte bleiben fail-closed beim allgemeinen Template.
+    for key in ("fachtemplate", "fachgebiet", "specialty", "speciality"):
+        fach = _s(agent.get(key)) or _s(pre.get(key))
+        if fach:
+            t["fachgebiet"] = fach
+            break
 
     hot = list(t.get("sttHotwords") or []) if isinstance(t.get("sttHotwords"), list) else []
     for kw in _keywords(agent.get("keywords")):
