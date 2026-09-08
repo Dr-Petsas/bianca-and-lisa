@@ -320,6 +320,17 @@ def kartei_laeuft(sit: dict) -> bool:
     return bool(sit.setdefault("hgLaeuft", {}).get("kartei"))
 
 
+def anrufer_kartei_abwarten(sit: dict, max_s: float = 1.2) -> None:
+    """Kurz auf den letzten Behandler zur Rufnummer warten."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < max_s:
+        if sit.get("anruferKartei") is not None:
+            return
+        if not sit.setdefault("hgLaeuft", {}).get("anruferKartei"):
+            return
+        time.sleep(0.08)
+
+
 def kartei_abwarten(sit: dict, max_s: float = 3.0) -> None:
     """Kurz auf die Behandler-Recherche warten, statt global zu raten.
 

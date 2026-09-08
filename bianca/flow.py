@@ -978,6 +978,8 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
     der Rueckblick zuerst. Die offene Pflichtfrage verschiebt sich nur um
     einen Zug; naechste_frage stellt sie danach von selbst wieder."""
     s = gehirn.sammler(sit)
+    if sit.get("rueckrufBuchung"):
+        return None
     if gehirn.rueckblick_faellig(s):
         s["rueckblick"] = "gefragt"
         s["frage"] = "rueckblick"
@@ -1267,6 +1269,44 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     return {"text": "Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
 
 
+def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
+    """Rückrufer fragt nach dem Grund — mitteilen, als erledigt setzen, Zeit fragen.
+
+    Chef: erledigt in der Sekunde, in der der Angerufene zurückruft und nach
+    dem Grund fragt (erledigt weil mitgeteilt). Narval: Name, Nummer, Grund
+    und letzter Behandler stehen — nur vormittags/nachmittags fehlt."""
+    if sit.get("rueckrufMitgeteilt"):
+        return None
+    if not gehirn.fragt_anrufgrund(t):
+        return None
+    if sit.get("gedaechtnis") is None:
+        gedaechtnis.kontext_abwarten(sit, 1.5)
+    if not gehirn.rueckruf_hat_offen(sit):
+        return None
+    if sit.get("anruferKartei") is None:
+        hintergrund.anrufer_kartei_abwarten(sit, 1.0)
+    gehirn.rueckruf_starten(sit)
+    sag = gehirn.rueckruf_mitteil_satz(sit)
+    sit["rueckrufSag"] = sag
+    sit["rueckrufMitgeteilt"] = True
+    gedaechtnis.offen_erledigen(sit, "Mitgeteilt — Rückrufer informiert.")
+    neu = gehirn.einsammeln(sit, t)
+    sit["ernteZuletzt"] = sorted(neu)
+    hintergrund.anstossen(sit)
+    s = gehirn.sammler(sit)
+    fid, frage = gehirn.naechste_frage(sit)
+    s["frage"] = fid
+    if fid:
+        return {"text": f"{sag} {frage}".strip()}
+    if s.get("slotIso"):
+        return _readback(sit)
+    ang = _angebot(sit, melde)
+    if ang and _s(ang.get("text")):
+        ang["text"] = f"{sag} {ang['text']}".strip()
+        return ang
+    return {"text": sag}
+
+
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     """Ein Anrufer-Satz durch den Buchungsfluss. None => LLM übernimmt."""
     s = gehirn.sammler(sit)
@@ -1280,6 +1320,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     wl = weiterleiten.zug(sit, t, melde)
     if wl is not None:
         return wl
+
+    rr = _rueckruf_zug(sit, t, melde)
+    if rr is not None:
+        return rr
 
     # W-HIRN (03.09.2026): die Intent-Schicht hat den Modus evtl. schon vor
     # diesem Zug geschaltet — das Signal wandert in die Ernte-Menge, damit
@@ -1597,11 +1641,6 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return ein
 
     if fid:
-        if fid == "anrufer_check" and not s.get("frage"):
-            # W-MEDDENT: Anliegen im ersten Satz kurz anerkennen, dann Erkennung
-            # (Live: Öffnungszeiten+Termin → sofort „Ich habe Sie erkannt“).
-            if re.search(r"termin|offen|öffnung|oeffnung|sprechstunde|uhrzeit", t, re.I):
-                frage = "Gerne helfe ich Ihnen weiter. " + frage
         if (fid == "telefon_alt" and s["frage"] == "telefon_alt"
                 and not neu and _NOCHMAL_RE.search(t)):
             # "Welche Nummer nochmal?" — die Alt-Nummer wortgleich erneut

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import datetime
 from typing import Any
 
@@ -85,12 +86,16 @@ def _wer(sit: dict) -> tuple[str, str]:
     s = sit.get("sammler") or {}
     pat = sit.get("patient") or {}
     book = sit.get("booking") or {}
+    a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
     name = ""
     if _s(s.get("nachname")):
         name = f"{_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip()
     if not name:
         name = _s(pat.get("name"))
-    roh = _s(s.get("telefon")) or _s(s.get("aktePhone")) or _s(pat.get("phone")) or _s(book.get("phone"))
+    if not name:
+        name = f"{_s(a.get('vorname'))} {_s(a.get('nachname'))}".strip()
+    roh = (_s(s.get("telefon")) or _s(s.get("aktePhone")) or _s(pat.get("phone"))
+           or _s(book.get("phone")) or _s(a.get("telefon")))
     telefon = "".join(c for c in roh if c.isdigit())
     if len(telefon) < 7:
         telefon = ""
@@ -260,25 +265,33 @@ def report_senden(sit: dict) -> dict | None:
         return None
 
 
-def _kontext_holen(telefon: str, name: str, client_id: str = "") -> str:
-    """Synchroner Abruf: erst der Rufnummern-Endpunkt (sprechfertig),
-    hilfsweise die Gedächtnis-Suche nach der Nummer und die Karteikarte
-    nach Name (Events selbst zu Zeilen gefaltet)."""
+def _offen_ids(roh: Any) -> list[str]:
+    out: list[str] = []
+    for x in roh or []:
+        s = _s(x)
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _kontext_stand(telefon: str, name: str, client_id: str = "") -> tuple[str, list[str]]:
+    """Text + offene Event-Ids. Erledigte Einträge kommen nicht in den Mund."""
     if telefon:
         r = httpx.get(f"{MAS_URL}/brain/caller-context",
                       params={"phone": telefon}, headers=_headers(client_id),
                       timeout=KONTEXT_WARTE_S)
         d = r.json()
+        ids = _offen_ids(d.get("openEventIds"))
         if d.get("found") and _s(d.get("context")):
-            return str(d.get("context")).strip()
+            return str(d.get("context")).strip(), ids
         # caller-context liest intern queryRecent (aufsteigend, Limit): bei
         # vielen Events im 14-Tage-Fenster fallen genau die NEUESTEN raus
         # (live 29.08.2026: frisches Event unauffindbar). Die Suche laeuft
         # ueber queryLatest (neueste zuerst) und traegt counterparty.ref im
         # Suchtext — der robuste Rueckweg fuer die Rufnummer.
-        text = _suche_nach_nummer(telefon, client_id)
+        text, suche_ids = _suche_nach_nummer(telefon, client_id)
         if text:
-            return text
+            return text, suche_ids
     if name:
         r = httpx.get(f"{MAS_URL}/brain/karteikarte",
                       params={"name": name, "sinceDays": _KARTEI_TAGE},
@@ -286,39 +299,56 @@ def _kontext_holen(telefon: str, name: str, client_id: str = "") -> str:
         d = r.json()
         events = sorted(d.get("events") or [], key=lambda e: e.get("ts") or 0, reverse=True)
         zeilen: list[str] = []
+        ids: list[str] = []
         for e in events:
+            if e.get("status") != "open":
+                continue
             summ = _s(e.get("summary"))
             if not summ:
                 continue
             wann = _wann_zeile(e.get("ts"))
-            offen = " (noch offen)" if e.get("status") == "open" else ""
-            zeilen.append(f"- {wann + ': ' if wann else ''}{summ}{offen}")
+            zeilen.append(f"- {wann + ': ' if wann else ''}{summ} (noch offen)")
+            eid = _s(e.get("id"))
+            if eid:
+                ids.append(eid)
             if len(zeilen) >= _MAX_ZEILEN:
                 break
         if zeilen:
             return (f"Praxisgedächtnis zu {name}:\n" + "\n".join(zeilen)
-                    + "\nNutze das aktiv: erkenne den Zusammenhang an, statt bei Null anzufangen.")
-    return ""
+                    + "\nNutze das aktiv: erkenne den Zusammenhang an, statt bei Null anzufangen."), ids
+    return "", []
 
 
-def _suche_nach_nummer(telefon: str, client_id: str = "") -> str:
-    """GET /brain/search?q=<ziffern>&kind=event — Zeilen im caller-context-Stil."""
+def _kontext_holen(telefon: str, name: str, client_id: str = "") -> str:
+    """Synchroner Abruf: erst der Rufnummern-Endpunkt (sprechfertig),
+    hilfsweise die Gedächtnis-Suche nach der Nummer und die Karteikarte
+    nach Name (Events selbst zu Zeilen gefaltet)."""
+    return _kontext_stand(telefon, name, client_id)[0]
+
+
+def _suche_nach_nummer(telefon: str, client_id: str = "") -> tuple[str, list[str]]:
+    """GET /brain/search?q=<ziffern>&kind=event — nur offene Zeilen."""
     r = httpx.get(f"{MAS_URL}/brain/search",
                   params={"q": telefon, "kind": "event", "sinceDays": 14, "limit": 10},
                   headers=_headers(client_id), timeout=KONTEXT_WARTE_S)
     d = r.json()
     hits = sorted((d.get("results") or []), key=lambda h: h.get("ts") or 0, reverse=True)
     zeilen: list[str] = []
+    ids: list[str] = []
     wer = ""
     for h in hits:
         if h.get("kind") != "event":
+            continue
+        if h.get("status") != "open":
             continue
         summ = _s(h.get("snippet"))
         if not summ:
             continue
         wann = _wann_zeile(h.get("ts"))
-        offen = " (noch offen)" if h.get("status") == "open" else ""
-        zeilen.append(f"- {wann + ': ' if wann else ''}{summ}{offen}")
+        zeilen.append(f"- {wann + ': ' if wann else ''}{summ} (noch offen)")
+        eid = _s(h.get("id"))
+        if eid:
+            ids.append(eid)
         if not wer:
             kandidat = _s(h.get("counterpartyName")) or _s(h.get("subjectName"))
             if kandidat and not kandidat[:1].isdigit():
@@ -326,19 +356,20 @@ def _suche_nach_nummer(telefon: str, client_id: str = "") -> str:
         if len(zeilen) >= _MAX_ZEILEN:
             break
     if not zeilen:
-        return ""
-    return (f"Praxisgedächtnis zu dieser Rufnummer{f' (vermutlich {wer})' if wer else ''}:\n"
-            + "\n".join(zeilen)
-            + "\nNutze das aktiv: erkenne den Zusammenhang an, statt bei Null anzufangen.")
+        return "", []
+    return ((f"Praxisgedächtnis zu dieser Rufnummer{f' (vermutlich {wer})' if wer else ''}:\n"
+             + "\n".join(zeilen)
+             + "\nNutze das aktiv: erkenne den Zusammenhang an, statt bei Null anzufangen."), ids)
 
 
 def _kontext_arbeit(sit: dict, telefon: str, name: str, key: str) -> None:
     stimme = notes.stimme_von(sit).lower()
     try:
-        text = _kontext_holen(telefon, name, _client_id(sit))
+        text, ids = _kontext_stand(telefon, name, _client_id(sit))
         if sit.get("gedaechtnisKey") != key:
             return  # inzwischen ist mehr bekannt — der neuere Lauf gewinnt
         sit["gedaechtnis"] = text
+        sit["gedaechtnisOffen"] = ids
         try:
             from kern import dossier
             dossier.fuellen(sit)
@@ -413,6 +444,60 @@ def kontext_anstossen(sit: dict) -> None:
         return
     sit["gedaechtnisKey"] = key
     threading.Thread(target=_kontext_arbeit, args=(sit, telefon, name, key), daemon=True).start()
+
+
+def kontext_abwarten(sit: dict, max_s: float = 1.5) -> None:
+    """Kurz warten, bis der Hintergrund-Kontext da ist — nie länger als max_s.
+
+    Wenn der Rückrufer sofort nach dem Grund fragt, darf der Mund nicht
+    raten. Der Abruf läuft schon seit der Begrüßung; hier nur der Rest."""
+    if sit.get("gedaechtnis") is not None:
+        return
+    if not enabled():
+        return
+    if not sit.get("gedaechtnisKey"):
+        kontext_anstossen(sit)
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < max_s:
+        if sit.get("gedaechtnis") is not None:
+            return
+        if not sit.get("gedaechtnisKey"):
+            return
+        time.sleep(0.08)
+
+
+def offen_erledigen(sit: dict, note: str = "Mitgeteilt — Rückrufer informiert.") -> None:
+    """Offene Team-/Rückruf-Notizen zur Anrufernummer schließen.
+
+    In der Sekunde, in der der Angerufene zurückruft und nach dem Grund
+    fragt (erledigt weil mitgeteilt) — nie auf dem Mund-Pfad. Nutzt
+    POST /brain/caller-context/resolve. Notaus wie report_senden."""
+    if not enabled():
+        return
+    telefon, _name = _wer(sit)
+    ids = [x for x in (sit.get("gedaechtnisOffen") or []) if _s(x)]
+    if not telefon and not ids:
+        return
+    sit["gedaechtnisOffen"] = []
+    sit["gedaechtnis"] = ""
+    stimme = notes.stimme_von(sit)
+    body = {
+        "phone": telefon,
+        "actor": stimme or "Bianca",
+        "note": _s(note) or "Am Telefon erledigt",
+        "eventIds": ids,
+    }
+
+    def arbeit() -> None:
+        try:
+            r = httpx.post(f"{MAS_URL}/brain/caller-context/resolve", json=body,
+                           headers=_headers(_client_id(sit)), timeout=WARTE_S)
+            print(f"{stimme.lower()}-gedaechtnis erledigt {telefon or ids} -> {r.status_code}",
+                  flush=True)
+        except Exception as e:
+            print(f"{stimme.lower()}-gedaechtnis erledigt fail {e}", flush=True)
+
+    threading.Thread(target=arbeit, daemon=True).start()
 
 
 def kontext_block(sit: dict) -> str:

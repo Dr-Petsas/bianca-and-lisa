@@ -176,20 +176,22 @@ def test_kontext_karteikarte_faltet_events():
             def json():
                 assert "karteikarte" in url and params["name"] == "Martin Berger"
                 return {"ok": True, "events": [
-                    {"ts": 1000, "summary": "Alt und egal", "status": "none"},
-                    {"ts": 1767000000000, "summary": "Laut Anruf: Termin verschoben.", "status": "none"},
-                    {"ts": 1767100000000, "summary": "Rückruf erbeten.", "status": "open"},
+                    {"id": "alt", "ts": 1000, "summary": "Alt und egal", "status": "none"},
+                    {"id": "versch", "ts": 1767000000000, "summary": "Laut Anruf: Termin verschoben.", "status": "none"},
+                    {"id": "offen1", "ts": 1767100000000, "summary": "Rückruf erbeten.", "status": "open"},
+                    {"id": "erledigt", "ts": 1767200000000, "summary": "Narval abholbereit", "status": "resolved"},
                 ]}
         return _R()
 
     echt = ged.httpx.get
     ged.httpx.get = fake_get
     try:
-        text = ged._kontext_holen("", "Martin Berger")
+        text, ids = ged._kontext_stand("", "Martin Berger")
         assert text.startswith("Praxisgedächtnis zu Martin Berger:")
         assert "Rückruf erbeten. (noch offen)" in text
-        # Neuestes zuerst.
-        assert text.index("Rückruf erbeten") < text.index("Termin verschoben")
+        assert "Termin verschoben" not in text
+        assert "Narval" not in text
+        assert ids == ["offen1"]
     finally:
         ged.httpx.get = echt
 
@@ -221,15 +223,16 @@ def test_kontext_anstossen_key_gesichert():
 
 
 def test_kontext_arbeit_schreibt_in_sitzung():
-    echt = ged._kontext_holen
-    ged._kontext_holen = lambda t, n, c="": "Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten."
+    echt = ged._kontext_stand
+    ged._kontext_stand = lambda t, n, c="": ("Praxisgedächtnis zu Martin Berger: - 28.08.: Rückruf erbeten.", ["e1"])
     try:
         sit = _sit_bianca()
         sit["gedaechtnisKey"] = "01771234567|martin berger"
         ged._kontext_arbeit(sit, "01771234567", "Martin Berger", sit["gedaechtnisKey"])
         assert "Rückruf erbeten" in sit["gedaechtnis"]
+        assert sit["gedaechtnisOffen"] == ["e1"]
     finally:
-        ged._kontext_holen = echt
+        ged._kontext_stand = echt
 
 
 def test_fakt_senden_eigene_id_im_hintergrund():
@@ -360,3 +363,73 @@ def test_prompt_block_beide_stimmen():
                     patient="Martin Berger", kontext=block)
     assert "PRAXISGEDÄCHTNIS (frühere Kontakte)" in l and "Rückruf erbeten" in l
     assert ged.kontext_block({"gedaechtnis": ""}) == ""
+
+
+def test_offen_erledigen_postet_nummer():
+    posts = []
+    echt_post = ged.httpx.post
+    echt_thread = ged.threading.Thread
+
+    class _Sofort:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    class _R:
+        status_code = 200
+
+    ged.httpx.post = lambda url, json=None, **kw: posts.append((url, json)) or _R()
+    ged.threading.Thread = _Sofort
+    try:
+        sit = _sit_bianca()
+        sit["gedaechtnis"] = "noch offen: Narval"
+        sit["gedaechtnisOffen"] = ["evt-1"]
+        ged.offen_erledigen(sit)
+        assert sit["gedaechtnisOffen"] == []
+        assert sit["gedaechtnis"] == ""
+        assert posts and posts[0][0].endswith("/brain/caller-context/resolve")
+        assert posts[0][1]["phone"] == "01771234567"
+        assert posts[0][1]["actor"] == "Bianca"
+        assert "evt-1" in posts[0][1]["eventIds"]
+        assert "Mitgeteilt" in posts[0][1]["note"]
+    finally:
+        ged.httpx.post = echt_post
+        ged.threading.Thread = echt_thread
+
+
+def test_offen_erledigen_nimmt_anrufer_telefon():
+    posts = []
+    echt_post = ged.httpx.post
+    echt_thread = ged.threading.Thread
+
+    class _Sofort:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+
+        def start(self):
+            if self._target:
+                self._target()
+
+    class _R:
+        status_code = 200
+
+    ged.httpx.post = lambda url, json=None, **kw: posts.append((url, json)) or _R()
+    ged.threading.Thread = _Sofort
+    try:
+        sit = {
+            "id": "xyz",
+            "stimme": "Bianca",
+            "sammler": {},
+            "anrufer": {"vorname": "Julia", "nachname": "Berger",
+                        "telefon": "+4915253904756"},
+            "gedaechtnisOffen": ["evt-2"],
+        }
+        ged.offen_erledigen(sit, "Mitgeteilt — Rückrufer informiert.")
+        assert "15253904756" in posts[0][1]["phone"]
+        assert "Mitgeteilt" in posts[0][1]["note"]
+    finally:
+        ged.httpx.post = echt_post
+        ged.threading.Thread = echt_thread

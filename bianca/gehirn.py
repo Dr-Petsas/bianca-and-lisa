@@ -1825,16 +1825,20 @@ def anrufer_anrede(sit: dict) -> str:
 
 
 def anrufer_hallo(sit: dict) -> str:
-    """Schneller erster Satz ohne Ziffern — parallel zur restlichen Antwort.
+    """Schneller erster Block ohne Ziffern — endet auf „Ich bin die Neue!“
 
-    Chef 08.09.2026: seriell (Hallo, dann Stille, dann Nummer) ist falsch.
-    Dieser Satz geht als Vorab-Füller raus, während Name+Nummer im
-    Hintergrund gerendert werden. Keine Extra-Frage (Ja/Nein kommt danach)."""
+    Chef 08.09.2026 nachts: „ich bin die Neue!“ Pause „Bianca…“ — nie
+    „ich bin die neue Bianca“ in einem Atem. Bianca steht darum im
+    Folgesatz der Check-Frage, nicht hier. Keine Extra-Frage."""
     wer = anrufer_anrede(sit)
     if not wer:
-        return "Ah — wir kennen uns noch nicht, ich bin die Neue, Bianca."
-    return (f"Ah, {wer}, wie geht's Ihnen — wir kennen uns noch nicht, "
-            "ich bin die Neue, Bianca.")
+        return "Wir kennen uns noch nicht. Ich bin die Neue!"
+    return f"Ah, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!"
+
+
+def anrufer_hallo_merken(sit: dict) -> None:
+    """Hallo ist raus — nie wieder „Ah, Herr X“ in diesem Anruf."""
+    sit["anruferHalloGesagt"] = True
 
 
 def anrufer_hallo_jetzt(sit: dict, text: str = "") -> str:
@@ -1842,7 +1846,12 @@ def anrufer_hallo_jetzt(sit: dict, text: str = "") -> str:
 
     Fast-Pfad: sit["anrufer"] kommt mit der Rufnummer (CF-pre), oft schon
     beim Abheben. Kein naechste_frage, kein letzter Besuch, kein Behandler —
-    die holt der Hintergrund nach und fliessen spaeter ein."""
+    die holt der Hintergrund nach und fliessen spaeter ein.
+
+    Live 08.09.2026: ohne Latch lief der Vorab bei JEDEM Zug (Talk-Pfad
+    setzt nie frage=anrufer_check) — „Ah, Herr Petsas“ vor jeder Aussage."""
+    if sit.get("anruferHalloGesagt"):
+        return ""
     s = sammler(sit)
     if s["anruferCheck"] or s["frage"] == "anrufer_check":
         return ""
@@ -1889,21 +1898,179 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     selbst=True (Buchen-Fluss, W-FUER-WEN Chef 03.09.2026): "Der Termin ist
     für Sie selbst, richtig?" — deckt Identitaet UND Fuer-Wen in einem ab.
     Ein Nein heisst dann: Termin fuer jemand anderen (einsammeln)."""
-    a = anrufer_bekannt(sit)
-    name = f"{_s(a.get('vorname'))} {_s(a.get('nachname'))}".strip()
-    z = telefon.sprechbar(a.get("telefon") or "")
     schluss = anrufer_check_schluss(selbst=selbst)
-    # Getrennte Saetze fuers Streaming: 1) Hallo ohne Ziffern (sofort Ton),
-    # 2) Name erkannt (kein Readback), 3) Nummer blocking, 4) Ja/Nein warm.
+    # Kurz halten (Chef 08.09.: kein Sermon). Vorab = Hallo bis „Neue!“
+    # Rest beginnt mit „Bianca.“ — eigene TTS-Naht = hoerbare Pause.
+    # Keine Ziffern, kein Namens-Readback: das Ja auf die eine Frage
+    # uebernimmt die Akte. Nummer nur, wenn sie Nein sagt.
+    if sit.get("anruferHalloGesagt"):
+        return f"Bianca. {schluss}"
     hallo = anrufer_hallo(sit)
-    return (f"{hallo} Ich habe Sie an Ihrer Rufnummer erkannt: {name}. "
-            f"Unter {z}. {schluss}")
+    return f"{hallo} Bianca. {schluss}"
 
 
 def anrufer_check_schluss(*, selbst: bool = False) -> str:
     """Nur die Ja/Nein-Frage — nach einem Wohlsein-„Gut.“ ohne Hallo-Wiederholung."""
     return ("Der Termin ist für Sie selbst, richtig?" if selbst
             else "Stimmt das so?")
+
+
+_ANRUFGRUND_RE = re.compile(
+    r"warum.{0,28}(anruf|gerufen|erreicht)|"
+    r"weshalb.{0,28}(anruf|gerufen|erreicht)|"
+    r"(habt ihr|haben sie|habt sie).{0,24}(an)?gerufen|"
+    r"sie (haben|hattet).{0,20}(mich )?(an)?gerufen|"
+    r"(ihr|sie) (habt|haben) (versucht|wollte).{0,20}(erreichen|anrufen)|"
+    r"ich rufe zur(ü|ue)ck|"
+    r"rufe (gerade |jetzt )?zur(ü|ue)ck|"
+    r"(verpasst|verpasst[en]).{0,16}anruf|"
+    r"da war (ein |euer |ihr )?anruf|"
+    r"worum ging|"
+    r"was woll(te|ten) (sie|ihr).{0,24}(anruf|erreichen|von mir)|"
+    r"wegen (dem |des |eure[ms] |ihrem )?anruf",
+    re.I,
+)
+_RUECKRUF_BITTE_RE = re.compile(
+    r"(rufen sie|rufen sie uns|k(ö|oe)nnen sie).{0,24}zur(ü|ue)ck|"
+    r"bitte.{0,16}zur(ü|ue)ckrufen|"
+    r"ich brauche.{0,16}r(ü|ue)ckruf",
+    re.I,
+)
+_NARVAL_RE = re.compile(
+    r"narval|schnarchschiene|schlafschiene|schiene abhol",
+    re.I,
+)
+_ANRUF_KERN_RE = re.compile(r"angerufen:\s*(.+)", re.I | re.S)
+_EINGLIEDER_MUSTER = [
+    r"einglieder\w*.{0,28}(narval|schien)",
+    r"(narval|schien)\w*.{0,28}einglieder",
+    r"narval",
+    r"schien\w*.{0,16}abhol",
+    r"abhol",
+    r"slm\s+besprechung",
+    r"\bslm\b",
+]
+
+
+def fragt_anrufgrund(text: str) -> bool:
+    """Rückrufer fragt, warum die Praxis angerufen hat — nicht 'rufen Sie zurück'."""
+    t = _s(text)
+    if not t or _RUECKRUF_BITTE_RE.search(t):
+        return False
+    return bool(_ANRUFGRUND_RE.search(t))
+
+
+def rueckruf_hat_offen(sit: dict) -> bool:
+    """Liegt eine offene Team-/Rückruf-Notiz zu diesem Anrufer vor?"""
+    if any(_s(x) for x in (sit.get("gedaechtnisOffen") or [])):
+        return True
+    text = str(sit.get("gedaechtnis") or "")
+    if re.search(r"noch offen", text, re.I):
+        return True
+    d = sit.get("dossier") if isinstance(sit.get("dossier"), dict) else {}
+    return bool(d.get("masOffen"))
+
+
+def rueckruf_ist_narval(sit: dict) -> bool:
+    text = str(sit.get("gedaechtnis") or "")
+    d = sit.get("dossier") if isinstance(sit.get("dossier"), dict) else {}
+    extra = " ".join(_s(x) for x in (d.get("masOffen") or []))
+    return bool(_NARVAL_RE.search(f"{text} {extra}"))
+
+
+def rueckruf_mitteil_satz(sit: dict) -> str:
+    """Gesprochener Grund — in der Sekunde, in der gefragt wird."""
+    alt = _s(sit.get("rueckrufSag"))
+    if alt:
+        return alt
+    if rueckruf_ist_narval(sit):
+        return ("Wir haben Sie angerufen, weil Ihre Narval-Schiene abholbereit ist. "
+                "Ich mache gern einen Termin zur Eingliederung mit Ihnen fest.")
+    text = str(sit.get("gedaechtnis") or "")
+    m = _ANRUF_KERN_RE.search(text)
+    kern = _s(m.group(1) if m else "")
+    if kern:
+        kern = re.split(r"\bNicht erreicht\b|\bBitte Termin\b", kern, maxsplit=1)[0]
+        kern = _s(kern).strip(" .")
+    if not kern:
+        d = sit.get("dossier") if isinstance(sit.get("dossier"), dict) else {}
+        for zeile in (d.get("masOffen") or []):
+            z = re.sub(r"\(noch offen\)\s*$", "", _s(zeile), flags=re.I).strip(" -")
+            if z:
+                kern = z
+                break
+    if kern:
+        return f"Wir haben Sie angerufen wegen: {kern}."
+    return "Wir haben versucht, Sie zu erreichen."
+
+
+def _narval_einglieder_motiv(sit: dict) -> dict | None:
+    """Eingliederung vor SLM-Besprechung — das ist der Abhol-Rückruf, kein Erstkontakt."""
+    s = sammler(sit)
+    tenant = sit.get("tenant") or {}
+    kat = motive.katalog(sit)
+    cal = _s((s.get("arzt") or {}).get("calendarId"))
+    return (besuchsgrund.motiv_suchen(tenant, _EINGLIEDER_MUSTER, katalog=kat, calendar_id=cal)
+            or besuchsgrund.katalog_treffer("Narval-Schiene eingliedern",
+                                            katalog=kat or [], calendar_id=cal))
+
+
+def rueckruf_starten(sit: dict) -> None:
+    """Name, Nummer, Grund, letzter Behandler setzen — nur die Wunschzeit fehlt."""
+    s = sammler(sit)
+    s["modus"] = "buchen"
+    s["phase"] = ""
+    sit["rueckrufBuchung"] = True
+    a = anrufer_bekannt(sit)
+    if a and not s["nachname"]:
+        s["anruferCheck"] = "ja"
+        s["warSchonMal"] = True
+        s["vorname"] = _s(a.get("vorname")) or s["vorname"]
+        s["nachname"] = _s(a.get("nachname"))
+        s["buchstabiert"] = True
+        s["bekannt"] = True
+        if _s(a.get("patientId")):
+            s["patientId"] = _s(a.get("patientId"))
+        s["telefon"] = telefon.normaliert(a.get("telefon") or "")
+        s["telefonOk"] = True
+        s["telefonOffen"] = ""
+        s["telefonTeil"] = ""
+        g = _s(a.get("geschlecht")).lower()
+        if g in _HERR or g in _FRAU:
+            s["geschlecht"] = "m" if g in _HERR else "f"
+            s["geschlechtQuelle"] = "akte"
+            s["geschlechtUnklar"] = False
+        anrufer_kartei_uebernehmen(sit)
+    elif s["warSchonMal"] is None and s["nachname"]:
+        s["warSchonMal"] = True
+
+    k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+    if _s(k.get("calendarId")) and not (s.get("arzt") or {}).get("calendarId"):
+        s["arzt"] = {
+            "typ": "letzter",
+            "calendarId": _s(k.get("calendarId")),
+            "calendarName": _s(k.get("calendarName")),
+        }
+        s["arztCheck"] = "ja"
+
+    if rueckruf_ist_narval(sit):
+        s["grund"] = "Narval-Schiene eingliedern"
+        s["grundWortlaut"] = "Narval-Schiene eingliedern"
+        vm = _narval_einglieder_motiv(sit)
+    else:
+        kern = rueckruf_mitteil_satz(sit)
+        s["grund"] = s["grund"] or "Rückruf der Praxis"
+        s["grundWortlaut"] = s.get("grundWortlaut") or kern
+        vm = (besuchsgrund.deute(sit.get("tenant") or {}, s["grund"],
+                                 katalog=motive.katalog(sit),
+                                 calendar_id=_s((s.get("arzt") or {}).get("calendarId")))[1]
+              or besuchsgrund.fallback_motiv(sit.get("tenant") or {},
+                                             katalog=motive.katalog(sit),
+                                             calendar_id=_s((s.get("arzt") or {}).get("calendarId"))))
+    if vm:
+        s["motivId"] = _s(vm.get("id"))
+        s["motivName"] = _s(vm.get("name"))
+    dossier.fuellen(sit)
 
 
 def anrufer_kartei_uebernehmen(sit: dict) -> None:
@@ -2048,8 +2215,9 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
         "War er oder sie schon einmal bei uns in der Praxis?",
         "Brauchen Sie einen Termin zur Zahnreinigung?",
-        "Wir kennen uns noch nicht, ich bin die Neue, Bianca.",
-        "Ah — wir kennen uns noch nicht, ich bin die Neue, Bianca.",
+        "Wir kennen uns noch nicht. Ich bin die Neue!",
+        "Ich bin die Neue!",
+        "Bianca.",
         "Schön!",
         "Stimmt das so?",
         "Die professionelle Zahnreinigung kostet bei uns ungefähr einhundertzwanzig Euro. "
@@ -2217,6 +2385,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
         if s["wunsch"] is None:
             return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
+        if sit.get("rueckrufBuchung"):
+            return "", ""
         if not s["bekannt"] and not s["buchstabiert"]:
             return "buchstabieren", "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?"
         if not s["telefonOk"] and not s["telefonAkte"] and not (s["bekannt"] and s["aktePhone"]):
@@ -2541,6 +2711,14 @@ def bleaching_faellig(sit: dict) -> bool:
     if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
         return False
     if not s.get("grund") or not ist_pzr_grund(s):
+        return False
+    # Live 08.09.: nach der Arzt-Frage kam die Aufhellung zusammenhanglos,
+    # bevor jemand „Zahnreinigung" als Termin bestätigt oder eine Zeit
+    # genannt hatte. Erst anbieten, wenn die Reinigung feststeht UND
+    # der Anrufer schon gesagt hat, wann.
+    if not s.get("wunsch"):
+        return False
+    if s.get("frage") in {"anrufer_check", "arzt_check", "arzt", "schonmal", "grund"}:
         return False
     if _BLEACH_RE.search(f"{s.get('grund')} {s.get('grundWortlaut')} {s.get('motivName')}"):
         return False  # Aufhellung ist schon selbst Thema/Grund
