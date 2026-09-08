@@ -167,7 +167,31 @@ def _patient(sit: dict[str, Any]) -> dict[str, Any]:
         ),
         "letzterBesuch": _s(s.get("letzterBesuch")),
         "letzterGrund": _s(s.get("letzterGrund")),
+        "kommendeTermine": _termine(sit.get("upcoming")),
+        "vergangeneTermine": _termine(sit.get("past"), limit=3),
     })
+    return out
+
+
+def _termine(raw: Any, *, limit: int = 5) -> list[dict[str, str]]:
+    """Nur planungsrelevante Kalenderfakten, keine eingebetteten Patientendaten."""
+    out: list[dict[str, str]] = []
+    for termin in raw or []:
+        if not isinstance(termin, dict):
+            continue
+        row = {
+            "id": _s(termin.get("id") or termin.get("appointmentId")),
+            "iso": _s(termin.get("iso") or termin.get("slotIso") or termin.get("date")),
+            "calendarId": _s(termin.get("calendarId")),
+            "behandler": _s(termin.get("doctorName") or termin.get("calendarName")),
+            "motivId": _s(termin.get("motivId") or termin.get("visitMotiveId")),
+            "motiv": _s(termin.get("motivName") or termin.get("visitMotiveName")),
+            "quelle": "kalender",
+        }
+        if any(v for k, v in row.items() if k != "quelle"):
+            out.append(row)
+        if len(out) >= limit:
+            break
     return out
 
 
