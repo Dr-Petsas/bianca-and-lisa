@@ -1691,6 +1691,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # diesem Zug geschaltet — das Signal wandert in die Ernte-Menge, damit
     # verwalten seinen Einstiegs-Reset faehrt wie frueher bei der Regex.
     hirn_modus_neu = bool(sit.pop("hirnModusNeu", False))
+    task_handoff = _s(sit.pop("taskHandoff", ""))
 
     # Rueckruf-/Notiz-Anliegen (ABGEBEN): eigener deterministischer Zweig —
     # Name + Nummer einsammeln, echte Notiz schreiben, KEIN Termin-Angebot.
@@ -2015,6 +2016,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     hintergrund.anstossen(sit)
 
     fid, frage = gehirn.naechste_frage(sit)
+
+    if task_handoff == "buchen" and fid:
+        # Das LLM hat denselben Satz gerade semantisch als neue Buchung
+        # eingeordnet. Jetzt zuerst die sichere Pflichtfrage stellen. Optionale
+        # Dossier-/PZR-Takte kommen später; der Eingangssatz ist keine
+        # Zwischenfrage mehr.
+        s["frage"] = fid
+        return {"text": (_quittung(s, neu) + frage).strip()}
 
     # Rueckblick auf den letzten Besuch / Zahnreinigungs-Angebot (30.08.2026):
     # als eigener Zug, sobald die Kartei-Daten da sind — aber nie vor einer

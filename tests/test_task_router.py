@@ -2,7 +2,7 @@
 
 import json
 
-from bianca import agent, gehirn
+from bianca import agent, flow, gehirn
 from kern import hirn, task_router
 from kern.tenants import laden
 
@@ -58,6 +58,21 @@ def test_task_handoff_schaltet_nur_den_sicheren_maschinenmodus():
     assert sit["hirn"]["anliegen"][0]["handlung"] == "ANLEGEN"
     assert sit["taskRouter"][0]["quelle"] == "haupt_llm"
     assert not sit["tools"]  # select_task ist keine Kalenderaktion
+
+
+def test_live_satz_landet_nach_handoff_in_erster_pflichtfrage():
+    sit = _sit()
+    text = "Ich möchte zur Kontrolle, der Behandler ist mir egal."
+    # Der bisherige Flow erntet Grund/Standard-Behandler, erkennt aber ohne
+    # Termin-Schlüsselwort noch keine sichere Aufgabe.
+    assert flow.zug(sit, text) is None
+    assert task_router.anwenden(
+        sit, {"operation": "buchen", "reason": "Kontrolle gewünscht"}, original=text
+    )
+    antwort = flow.zug(sit, text)
+    assert antwort and "schon einmal" in antwort["text"]
+    assert sit["sammler"]["modus"] == "buchen"
+    assert sit["sammler"]["frage"] == "schonmal"
 
 
 def test_agent_reicht_unklaren_buchungswunsch_semantisch_an_flow():

@@ -113,6 +113,11 @@ def anwenden(sit: dict[str, Any], wahl: dict[str, str], *, original: str = "") -
     if isinstance(ersatz, bool):
         deutung["ersatz"] = ersatz
     ergebnis = hirn.anwenden(sit, deutung)
+    if op == "buchen":
+        # Der Satz wurde vor der semantischen Zuordnung bereits einmal vom
+        # Sammler gelesen. Beim zweiten Durchlauf direkt zur ersten fehlenden
+        # Pflichtfrage gehen, nicht als Zwischenfrage oder Upsell behandeln.
+        sit["taskHandoff"] = "buchen"
     sit.setdefault("taskRouter", []).append({
         "operation": op,
         "reason": spiegel[:180],
