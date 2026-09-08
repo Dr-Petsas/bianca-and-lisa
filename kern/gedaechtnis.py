@@ -427,6 +427,116 @@ _THEMA_RE = re.compile(
 _THEMA_KANAL = {"frontdesk", "lisa_call", "lisa_outbound", "lisa_sms"}
 _THEMA_TAGE_MS = 14 * 24 * 60 * 60 * 1000
 
+# MAS ist ein Praxisgedaechtnis, kein freies CRM-Adressbuch. Eine Rufnummer
+# kann dort auch an Test-, Rechnungs- oder Einkaufsdaten haengen. Solche
+# Zeilen duerfen nie als Patientenname/Anrede in Biancas Prompt gelangen
+# (Live 08.09.: "Herr Demo-Interessent", dazu Zoll/AWB/Onlinekauf).
+_KONTEXT_MUELL_RE = re.compile(
+    r"demo[\s-]*interessent|zollabfertig|\bawb\b|onlinekauf|"
+    r"adressbuch|rechnung(?:s|en)?(?:kontakt|adresse)",
+    re.I,
+)
+_KONTEXT_INHALT_RE = re.compile(
+    r"termin|sprechstund|behandl|patient|praxis|arzt|ärzt|zahnarzt|"
+    r"anruf|angeruf|nicht erreicht|rückruf|rueckruf|recall|"
+    r"abhol|schien|rezept|überweis|ueberweis|befund|labor|"
+    r"liefer|bestell|e-?mail|sms|nachricht|notiz|vorgang",
+    re.I,
+)
+_KONTEXT_LEER_RE = re.compile(
+    r"gespräch ohne kalenderänderung|keine kalenderänderung|"
+    r"nichts gebucht oder geändert",
+    re.I,
+)
+
+
+def zeile_inhaltlich(text: Any) -> bool:
+    """Nur praxisbezogene Fakten passieren die MAS->Prompt-Grenze.
+
+    Negative Fremdmarker gewinnen immer. Danach braucht eine Zeile einen
+    positiven Praxis-/Kontaktbezug; bloße Namen, Rollen oder Adressbuchtexte
+    sind keine Patientenfakten.
+    """
+    zeile = _s(text).lstrip("-").strip()
+    if not zeile or _KONTEXT_LEER_RE.search(zeile):
+        return False
+    if _KONTEXT_MUELL_RE.search(zeile):
+        return False
+    return bool(_KONTEXT_INHALT_RE.search(zeile))
+
+
+def _kontext_filtern(text: Any) -> str:
+    """Sprechfertigen MAS-Blob auf inhaltliche Zeilen reduzieren."""
+    out: list[str] = []
+    hat_rufnummer_header = False
+    for roh in str(text or "").splitlines():
+        zeile = _s(roh)
+        if not zeile:
+            continue
+        if zeile.lower().startswith("praxisgedächtnis zu"):
+            hat_rufnummer_header = "rufnummer" in zeile.lower()
+            # MAS liefert ältere Kontexte teils als EINZEILER
+            # ("Praxisgedächtnis ...: - gestern: Lisa hat angerufen.").
+            # Dann nur die Überschrift abschneiden, nicht den Fakt dahinter.
+            zeile = zeile.split(":", 1)[1].strip() if ":" in zeile else ""
+            if not zeile:
+                continue
+        if zeile.lower().startswith("nutze das aktiv"):
+            continue
+        if zeile_inhaltlich(zeile):
+            sauber = zeile.lstrip("-").strip()
+            if sauber not in out:
+                out.append(sauber[:400])
+        if len(out) >= _MAX_ZEILEN:
+            break
+    if not out:
+        return ""
+    kopf = "Praxisgedächtnis zu dieser Rufnummer:\n" if hat_rufnummer_header else ""
+    return kopf + "\n".join(f"- {z}" for z in out)
+
+
+def ereignisse_holen(telefon: str, name: str, client_id: str = "") -> list[dict[str, Any]]:
+    """Gefilterte MAS-Ereignisse aus Rufnummernsuche + Karteikarte.
+
+    Das ist die strukturierte Quelle fuer TurnContextV1. Der freie
+    caller-context-Text bleibt nur eine abwaertskompatible Zusatzquelle.
+    """
+    events: list[dict[str, Any]] = []
+    if telefon:
+        r = httpx.get(
+            f"{MAS_URL}/brain/search",
+            params={"q": telefon, "kind": "event", "sinceDays": 14, "limit": 20},
+            headers=_headers(client_id), timeout=KONTEXT_WARTE_S,
+        )
+        for hit in r.json().get("results") or []:
+            if not isinstance(hit, dict) or hit.get("kind") not in (None, "", "event"):
+                continue
+            summary = _s(hit.get("summary") or hit.get("snippet"))
+            if zeile_inhaltlich(summary):
+                events.append({**hit, "summary": summary, "quelle": "suche"})
+    if name:
+        r = httpx.get(
+            f"{MAS_URL}/brain/karteikarte",
+            params={"name": name, "sinceDays": _KARTEI_TAGE},
+            headers=_headers(client_id), timeout=KONTEXT_WARTE_S,
+        )
+        for event in r.json().get("events") or []:
+            if not isinstance(event, dict):
+                continue
+            summary = _s(event.get("summary") or event.get("snippet"))
+            if zeile_inhaltlich(summary):
+                events.append({**event, "summary": summary, "quelle": "karteikarte"})
+
+    out: list[dict[str, Any]] = []
+    gesehen: set[str] = set()
+    for event in sorted(events, key=lambda e: float(e.get("ts") or 0), reverse=True):
+        key = _s(event.get("id")) or _s(event.get("summary")).casefold()
+        if not key or key in gesehen:
+            continue
+        gesehen.add(key)
+        out.append(event)
+    return out
+
 
 def _event_ist_themenotiz(e: dict) -> bool:
     """Offen ODER frische Empfangs-/Lisa-Notiz mit Rückruf-Thema."""
@@ -466,7 +576,9 @@ def _kontext_stand(telefon: str, name: str, client_id: str = "") -> tuple[str, l
         d = r.json()
         ids = _offen_ids(d.get("openEventIds"))
         if d.get("found") and _s(d.get("context")):
-            return str(d.get("context")).strip(), ids
+            sauber = _kontext_filtern(d.get("context"))
+            if sauber:
+                return sauber, ids
         # caller-context liest intern queryRecent (aufsteigend, Limit): bei
         # vielen Events im 14-Tage-Fenster fallen genau die NEUESTEN raus
         # (live 29.08.2026: frisches Event unauffindbar). Die Suche laeuft

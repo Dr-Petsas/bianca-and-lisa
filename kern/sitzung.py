@@ -13,6 +13,11 @@ from typing import Any
 def merke_zug(sit: dict[str, Any], **zug: Any) -> None:
     sit.setdefault("zuege", []).append(zug)
     sit["zuege"] = sit["zuege"][-24:]
+    try:
+        from kern import turn_context
+        turn_context.aktualisieren(sit, text_in=str(zug.get("textIn") or ""))
+    except Exception:
+        pass
 
 
 def _tools_des_zugs(sit: dict[str, Any]) -> list[dict[str, Any]]:
@@ -82,12 +87,19 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any],
     elif name == "note_appointment":
         sit["lastNote"] = ein
         sit["noteWritten"] = True
+    try:
+        from kern import turn_context
+        turn_context.aktualisieren(sit)
+    except Exception:
+        pass
 
 
 def oeffentlich(sit: dict[str, Any]) -> dict[str, Any]:
     pat = sit.get("patient") or {}
     layers = sit.get("layers") if isinstance(sit.get("layers"), dict) else {}
     fach = layers.get("fach") if isinstance(layers.get("fach"), dict) else {}
+    turn = sit.get("turnContext") if isinstance(sit.get("turnContext"), dict) else {}
+    praxis = turn.get("praxis") if isinstance(turn.get("praxis"), dict) else {}
     return {
         "sessionId": sit.get("id"),
         "startedAt": sit.get("startedAt"),
@@ -104,4 +116,6 @@ def oeffentlich(sit: dict[str, Any]) -> dict[str, Any]:
         "lastCreate": sit.get("lastCreate"),
         "layerVersion": layers.get("version"),
         "fachtemplate": fach.get("id") or "allgemein",
+        "turnContextVersion": turn.get("version"),
+        "anbieter": len(praxis.get("anbieter") or []),
     }

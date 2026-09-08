@@ -87,8 +87,9 @@ def anstossen(sit: dict) -> None:
             # Der frische Pickadoc-Katalog ist die beste Fachtemplate-Quelle.
             # Lokaler Import vermeidet eine Modulschleife beim Start.
             try:
-                from kern import fachprofil
+                from kern import fachprofil, turn_context
                 fachprofil.aktualisieren(sit)
+                turn_context.aktualisieren(sit)
             except Exception:
                 pass
             print(f"motive: Katalog frisch geladen ({len(kat)} Besuchsgruende)", flush=True)
