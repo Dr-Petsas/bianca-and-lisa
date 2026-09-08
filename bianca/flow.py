@@ -1491,6 +1491,8 @@ def _nachname_korr_zug(sit: dict, t: str, melde: Melde = None) -> dict:
         s["buchstabiert"] = False
         s["buchstabenTeil"] = ""
         s["buchstabierHilfe"] = False
+        s["vornameTeil"] = ""
+        s["vornameGehoert"] = ""
         s["frage"] = "nachname_korr"
         return {"text": (
             "Gerne, dann korrigiere ich den Nachnamen. "
@@ -1833,7 +1835,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # ich …“ und fiel dem Anrufer damit fortlaufend ins Wort. Ein verwertetes
     # Teilstück ist noch KEIN Antwortzug: still weiterhören, den Job-Floor
     # halten und erst nach vollständigem Wert bzw. „fertig“ sprechen.
-    if {"buchstabenTeil", "telefonTeil"} & neu:
+    if {"buchstabenTeil", "vornameTeil", "telefonTeil"} & neu:
         return {
             "text": "",
             "warte": True,

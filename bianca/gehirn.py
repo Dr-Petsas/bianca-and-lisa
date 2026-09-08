@@ -617,6 +617,11 @@ FELDER_START = {
     "buchstabiert": False,
     "buchstabenTeil": "",
     "buchstabierHilfe": False,
+    # Vorname darf wie der Nachname in mehreren Sprechzügen buchstabiert
+    # werden. ``vornameGehoert`` ist der zuerst gesprochene Wort-Kandidat;
+    # die Buchstaben korrigieren ihn und liefern zugleich die Enderkennung.
+    "vornameTeil": "",
+    "vornameGehoert": "",
     "grundWortlaut": "",
     # Nacktes Motiv ("Zahnreinigung"): erst nachfragen, ob ein Termin
     # gewollt ist — nicht sofort die Buchungsmaschine starten.
@@ -937,6 +942,14 @@ def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) ->
 def _name_tokens(text: str) -> list[str]:
     raw = re.sub(r"[^\wäöüßÄÖÜ' -]+", " ", _s(text))
     return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
+
+
+def _einzelbuchstaben(text: str) -> str:
+    """Explizite Einzelbuchstaben aus „S, R, I“ / „N... I...“."""
+    return "".join(
+        m.group(1).casefold()
+        for m in re.finditer(r"(?<!\w)([A-Za-zÄÖÜäöü])(?!\w)", _s(text))
+    )
 
 
 _NACHSPRECH_STOP = _NAME_STOP | {
@@ -1443,6 +1456,51 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     buch = buchstaben.deute(t)
     buch_fragment = False
     name_toks = _name_tokens(t)
+    vorname_fragment = False
+
+    # Live 08.09.2026: „Srinivasa, S, R, I …“ — Bianca nahm schon den
+    # verhörten Wortanfang als fertigen Vornamen und stellte mitten in der
+    # anschließenden Buchstabierung die Telefonnummernfrage. Sobald mindestens
+    # zwei explizite Buchstaben folgen, bleibt der Mund still. Stimmen Länge
+    # und Ähnlichkeit der zusammengesetzten Buchstaben mit dem gesprochenen
+    # Kandidaten überein, ist das Ende auch OHNE „fertig“ sicher erkennbar.
+    if s["frage"] == "vorname":
+        einzeln = _einzelbuchstaben(t)
+        if s["vornameTeil"] or len(einzeln) >= 2:
+            if not s["vornameTeil"] and name_toks:
+                s["vornameGehoert"] = name_toks[0].casefold()
+            if s["vornameTeil"] and not einzeln and len(name_toks) == 1:
+                # Neustart am Stück nach einer abgebrochenen Buchstabierung.
+                s["vorname"] = name_toks[0].capitalize()
+                s["vornameTeil"] = ""
+                s["vornameGehoert"] = ""
+                neu.add("vorname")
+                vorname_fragment = True
+            if vorname_fragment:
+                teil = ""
+            else:
+                teil = einzeln or re.sub(
+                    r"[^a-zäöüß]", "", _s((buch or {}).get("name")).casefold()
+                )
+            zusammen = f"{s['vornameTeil']}{teil}"[:40]
+            erwartet = re.sub(
+                r"[^a-zäöüß]", "", _s(s["vornameGehoert"]).casefold()
+            )
+            aehnlich = (
+                bool(erwartet)
+                and max(3, len(erwartet) - 1) <= len(zusammen) <= len(erwartet) + 2
+                and SequenceMatcher(None, zusammen, erwartet).ratio() >= 0.72
+            )
+            if len(zusammen) >= 2 and (_DIKTAT_FERTIG_RE.search(t) or aehnlich):
+                s["vorname"] = zusammen[0].upper() + zusammen[1:]
+                s["vornameTeil"] = ""
+                s["vornameGehoert"] = ""
+                neu.add("vorname")
+            elif teil:
+                s["vornameTeil"] = zusammen
+                neu.add("vornameTeil")
+            vorname_fragment = True
+
     if (s["frage"] == "buchstabieren" and not s["nachname"]
             and not s["buchstabenTeil"] and not _DIKTAT_FERTIG_RE.search(t)
             and len(name_toks) >= 2 and not buch
@@ -1500,7 +1558,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["buchstabenTeil"] = ""
         s["buchstabierHilfe"] = False
         pass  # Korrektur hat Vorrang — nichts erneut ernten.
-    elif buch_fragment:
+    elif buch_fragment or vorname_fragment:
         pass  # Teilfolge bleibt offen, bis der Anrufer „fertig“ sagt.
     elif (s["frage"] == "arzt" or (
             s["frage"] != "buchstabieren"
@@ -2448,6 +2506,8 @@ def patient_von_kontakt_loesen(sit: dict) -> None:
     s["buchstabiert"] = False
     s["buchstabenTeil"] = ""
     s["buchstabierHilfe"] = False
+    s["vornameTeil"] = ""
+    s["vornameGehoert"] = ""
     s["bekannt"] = False
     s["patientId"] = ""
     s["gesucht"] = ""
@@ -2491,6 +2551,8 @@ def name_fuer_aenderung_leeren(sit: dict) -> None:
     s["buchstabiert"] = False
     s["buchstabenTeil"] = ""
     s["buchstabierHilfe"] = False
+    s["vornameTeil"] = ""
+    s["vornameGehoert"] = ""
     s["bekannt"] = False
     s["patientId"] = ""
     s["gesucht"] = ""
@@ -2668,6 +2730,11 @@ def stille_ms(s: dict) -> int:
     fid = _s((s or {}).get("frage"))
     if fid in _STILLE_KURZ:
         return 350
+    if fid == "vorname" and _s((s or {}).get("vornameTeil")):
+        # Erst wenn der Anrufer tatsächlich zu buchstabieren beginnt:
+        # großzügige Diktatpausen, ohne jeden normalen Vornamen um eine
+        # zusätzliche Sekunde zu verzögern.
+        return 1500
     if fid in _STILLE_DIKTAT:
         return 1500
     return 500

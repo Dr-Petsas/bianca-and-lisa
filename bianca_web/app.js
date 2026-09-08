@@ -1156,7 +1156,7 @@ const PATCHES = [
   ["W-ARZT-NOTIZ-EINER (einmal fragen)", "08.09.", "Termine", "Doktor-Notiz einmal: Ja → ein Diktat, Zwischenfrage ist die Notiz, Preis sagt die KI. Nie ans LLM, nie dieselbe Doktor-Frage nochmal (Petsas 08.09.)."],
   ["W-TRANSKRIPT-FUELLER (Füllsätze nachtragen)", "08.09.", "Betrieb", "Füller, die nach der Job-Zeile erst gespielt werden, kommen nachträglich in Mitschnitt, messages und CallR — nicht nur als Audio."],
   ["W-TASK-ROUTER (semantischer Handoff)", "08.09.", "Architektur", "Das LLM versteht natürliche Anliegen und Themenwechsel, übergibt aber nur an den sicheren FlowManager. Keine direkten Buchungs-, Storno-, Slot- oder Kalenderwerkzeuge im freien Gespräch; die laufende Aufgabe wird bei einem Wechsel geparkt und später wieder aufgenommen."],
-  ["W-DATEN-FLOOR (ausreden lassen)", "08.09.", "Akte", "Buchstaben- und Nummernfragmente werden still gesammelt: keine Zwischenansage nach einer Denkpause und kein Ausweichen in die Talk-Schicht. Der Nachname wird nur einmal gezielt aufgenommen, danach nur noch der Vorname; gemischte Buchstabierketten behalten alle Buchstaben."],
+  ["W-DATEN-FLOOR (ausreden lassen)", "08.09.", "Akte", "Buchstaben- und Nummernfragmente werden still gesammelt: keine Zwischenansage nach einer Denkpause und kein Ausweichen in die Talk-Schicht. Nachname und Vorname werden je nur einmal aufgenommen; beginnt nach dem gesprochenen Vornamen eine Buchstabierung, bleibt Bianca bis zum sicheren Ende still und korrigiert den Wort-Kandidaten mit den Buchstaben."],
 ];
 
 let kTab = "faehig";

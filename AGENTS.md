@@ -1737,6 +1737,12 @@ Die Namensfrage verlangt nicht mehr erst Vor- und Nachnamen und danach den
 Nachnamen ein zweites Mal: Nachname einmal (sprechen oder direkt
 buchstabieren), danach nur noch der Vorname. Gemischte Ketten wie
 „P A P A wie Anton G R“ behalten auch die Buchstaben neben dem Tafelwort.
+**W-VORNAME-FLOOR (08.09.2026, Live-Anruf Ramanujan):** beginnt der Anrufer
+nach dem gesprochenen Vornamen zu buchstabieren („Srinivasa, S, R, I …“),
+gilt das Wort noch NICHT als Turn-Ende. Bianca bleibt über die folgenden
+Sprechpausen still; die Buchstaben korrigieren einen verhörten Wortanfang
+und schließen bei passender Länge/Ähnlichkeit auch ohne „fertig“ ab. Ein
+Vorname am Stück bleibt der sofortige Schnellweg.
 Tests:
 `tests/test_datenerfassung_pausen.py`.
 

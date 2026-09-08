@@ -240,6 +240,50 @@ def test_fragmente_sind_stille_wartezuege_statt_zwischenansagen():
     assert s["telefonTeil"] == "0"
 
 
+def test_vorname_wird_beim_buchstabieren_nicht_unterbrochen_und_endet_automatisch():
+    """Live 08.09.: Wort-Kandidat + „S, R, I …“ darf nicht schon fertig sein."""
+    sit = _sit()
+    s = _bereit(sit, frage="vorname")
+    s.update({"vorname": "", "nachname": "Ramanujan", "buchstabiert": True})
+
+    z1 = flow.zug(sit, "Drinivasa, S, R, I")
+    assert z1 and z1.get("warte") is True
+    assert z1.get("text") == ""
+    assert s["vornameTeil"] == "sri"
+    assert s["vornameGehoert"] == "drinivasa"
+    assert z1["stilleMs"] == 1500
+
+    z2 = flow.zug(sit, "N I V A S A")
+    assert z2 and not z2.get("warte")
+    assert s["vorname"] == "Srinivasa"
+    assert not s["vornameTeil"]
+    assert "Handynummer" in z2["text"]
+
+
+def test_abgebrochene_vornamenfortsetzung_bleibt_still():
+    """Der reale Folgeclip „N … E …“ löst keine Zwischenansage mehr aus."""
+    sit = _sit()
+    s = _bereit(sit, frage="vorname")
+    s.update({"vorname": "", "nachname": "Ramanujan", "buchstabiert": True})
+
+    assert flow.zug(sit, "Drinivasa, S, R, I").get("warte") is True
+    z2 = flow.zug(sit, "N... E...")
+    assert z2 and z2.get("warte") is True
+    assert z2.get("text") == ""
+    assert s["vornameTeil"] == "srine"
+
+
+def test_vorname_am_stueck_bleibt_schneller_weg():
+    sit = _sit()
+    s = _bereit(sit, frage="vorname")
+    s.update({"vorname": "", "nachname": "Ramanujan", "buchstabiert": True})
+
+    z = flow.zug(sit, "Srinivasa")
+    assert z and not z.get("warte")
+    assert s["vorname"] == "Srinivasa"
+    assert "Handynummer" in z["text"]
+
+
 def test_agent_ruft_bei_nummernfragment_keine_talk_schicht():
     sit = _sit()
     sit["messages"] = [
