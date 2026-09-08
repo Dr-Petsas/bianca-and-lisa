@@ -1418,6 +1418,27 @@ sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
 `PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
 Schaufenster.
 
+## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
+
+Erster Schritt zur Entkopplung des ~2.000-Zeilen-`bianca/flow.py`, OHNE
+Fachlogik zu verschieben: `bianca/tasks.py` setzt eine typisierte Task-Grenze
+davor.
+
+- **Registry** (`tasks.REGISTRY`/`TASK_TYPEN`): die fachfreien Aufgaben
+  buchen/absagen/verschieben/auskunft/anmeldung/rueckruf, jeweils mit dem
+  bewährten Eintrittspunkt (flow/verwalten/weiterleiten). `flow.zug` bündelt
+  diese Wege bereits — die Registry ist Introspektion/Doku.
+- **Transparenter Adapter** (`tasks.zug`): ruft `flow.zug` UNVERÄNDERT auf und
+  gibt dessen Ergebnis Byte für Byte zurück (gleiche Antwort, gleiche
+  Werkzeugaufrufe). Zusätzlich nur ein inertes Ledger `sit["taskLedger"]`
+  (Typ + Lifecycle active/done/parked/failed via `tasks.lifecycle`).
+  `bianca/agent.user_turn` ruft den Fluss jetzt über `tasks.zug` statt direkt
+  `flow.zug`.
+- **Notaus** `TASK_ADAPTERS=0` => `tasks.zug` ist exakt `flow.zug` (kein
+  Ledger). Default an — der Adapter ist bewiesenermaßen pass-through
+  (`test_adapter_ist_transparent`).
+- Tests: `tests/test_tasks.py` (offline, inkl. Paritätsbeweis mit/ohne Adapter).
+
 ## Eingeschobene Anliegen fortsetzen (W-HIRN-AUTORESUME 09.09.2026 — nicht rückbauen)
 
 Wird mitten in einer Buchung ein zweites Anliegen eingeschoben (schnelle

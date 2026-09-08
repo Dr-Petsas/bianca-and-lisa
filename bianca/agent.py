@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from bianca import anstand, flow, gehirn, session, telefon
+from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
@@ -729,7 +729,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             gehirn.anrufer_hallo_merken(sit)
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
-    fl = flow.zug(sit, arbeits_text, melde)
+    #    W-TASK-GRENZE: transparenter Adapter (bianca/tasks) vor flow.zug —
+    #    gleiche Antwort/Werkzeuge, nur ein Task-Ledger obendrauf.
+    fl = tasks.zug(sit, arbeits_text, melde)
     if fl is None:
         # Live 08.09.2026: Der Motivkatalog verstand „Besprechung für eine
         # neue Prothese“, aber Intent/LLM eröffneten keinen Buchungs-Task.
