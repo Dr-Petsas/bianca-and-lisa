@@ -2048,7 +2048,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # nie mitten in einem unbeantworteten Pflichtfragen-Faden.
     # W-MEDDENT (04.09.2026): nie direkt nach frischer Wunschzeit — erst
     # Slot anbieten (Detschel-Live: PZR mitten in „Nachmittag 15.09.“).
-    if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check",
+    if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check", "arzt",
                     "name", "nachname", "vorname", "buchstabieren", "telefon"}
             and not (fid == "arzt" and "arztCheck" in neu)
             and "wunsch" not in neu

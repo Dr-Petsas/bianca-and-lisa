@@ -584,6 +584,10 @@ Nummern-Readback, nie ohne Fakt, nie als Frage. Die Verlaufsfrage kommt
 später im `_einschub` (dann ohne Vorsatz); die Antwort steht als
 `rueckblickAntwort` im Terminpopup. Tests: `tests/test_rueckblick_pzr.py`,
 `tests/test_pzr_kassen.py`, `test_kartei_satz_*` in `tests/test_filler.py`.
+**W-PZR-REIHENFOLGE (09.09.2026):** Das Zusatzangebot darf die primäre
+Terminaufnahme nicht überholen. Bei Neupatienten kommt nach „noch nie da“
+zuerst die Behandlerwahl; erst wenn der Behandler feststeht, fragt Bianca
+nach der Zahnreinigung. Das Angebot bleibt Pflicht vor dem Eintragen.
 
 ## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
 

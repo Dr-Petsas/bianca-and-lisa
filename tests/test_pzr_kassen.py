@@ -117,6 +117,32 @@ def test_nach_ok_fragt_pzr_bevor_notiz():
     assert s["frage"] == "pzr" and s["pzr"] == "gefragt"
 
 
+def test_neupatient_klaert_erst_behandler_dann_pzr():
+    """Live 09.09.: Zusatzangebot nie vor dem primären Terminrahmen."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "frage": "schonmal",
+        "grund": "Zahnersatz-Beratung",
+        "motivId": "8QCwEyR3Jyao63PmJ7vo",
+        "motivName": "ZE Besprechung",
+    })
+    echt = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda _sit: None
+    try:
+        neu = flow.zug(sit, "Nein.")
+        assert neu and "Doktor Petsas" in neu["text"]
+        assert "Zahnreinigung" not in neu["text"]
+        assert s["frage"] == "arzt"
+
+        arzt = flow.zug(sit, "Zu Doktor Petsas.")
+        assert arzt and "Zahnreinigung" in arzt["text"]
+        assert s["frage"] == "pzr"
+    finally:
+        flow.hintergrund.anstossen = echt
+
+
 def test_pzr_im_kontext_nicht_bei_fuellung():
     s = {"modus": "buchen", "frage": "grund", "grund": "Füllung", "pzr": ""}
     assert gehirn.ist_pzr_preisfrage("Was kostet die Füllung?")
