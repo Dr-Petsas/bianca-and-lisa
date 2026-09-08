@@ -1,9 +1,9 @@
 """Semantische Task-Auswahl im bestehenden Haupt-LLM-Lauf.
 
-Wenn noch keine deterministische Maschine zuständig ist, bekommt das Modell
-keine Kalender-Aktionswerkzeuge. Es darf stattdessen genau eine Aufgabe an
-den FlowManager übergeben. So bleibt die Bedeutung beim LLM, während Modus,
-Pflichtfragen und alle Schreibaktionen weiter deterministisch laufen.
+Das Modell bekommt keine direkten Kalender-Aktionswerkzeuge. Es darf eine
+Aufgabe an den FlowManager übergeben oder ein Nebenthema natürlich beantworten.
+So bleibt die Bedeutung beim LLM, während Modus, Pflichtfragen und sämtliche
+Kalenderaktionen weiter deterministisch laufen.
 
 Kein zusätzlicher LLM-Aufruf: ``select_task`` wird im ohnehin nötigen
 Antwortlauf angeboten. Praxisinfo und Smalltalk beantwortet das Modell ohne
@@ -13,21 +13,24 @@ Tool. Kalender lesen/schreiben ist vor einer Task-Zuordnung unmöglich.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
-from kern import hirn
+from kern import hirn, werkzeuge
 
 OPERATIONEN = {
     "buchen", "absagen", "verschieben", "terminauskunft", "verbinden", "rueckruf",
 }
 
 PROMPT = """TASK-AUSWAHL
-Es läuft noch keine sichere Fachaufgabe. Erkennst du ein Termin-, Weiterleitungs-
-oder Rückrufanliegen, rufe select_task auf. Das ist eine Übergabe, keine
-Erledigung. „Ich möchte zur Kontrolle/Zahnreinigung“ bedeutet buchen, auch ohne
-das Wort Termin. Bestehende Termine darfst du nur bei einer ausdrücklichen
-Auskunfts-, Absage- oder Verschiebeanfrage erwähnen. Praxiswissen und Smalltalk
-beantwortest du direkt ohne Tool."""
+Erkennst du ein neues Termin-, Weiterleitungs- oder Rückrufanliegen, rufe
+select_task auf. Das ist nur eine Übergabe an den sicheren FlowManager, niemals
+eine Erledigung. „Ich möchte zur Kontrolle/Zahnreinigung“ bedeutet buchen, auch
+ohne das Wort Termin. Bestehende Termine darfst du nur bei einer ausdrücklichen
+Auskunfts-, Absage- oder Verschiebeanfrage erwähnen. Antworten auf die laufende
+Pflichtfrage sind KEIN neuer Task. Praxiswissen, Rückfragen und Smalltalk
+beantwortest du direkt ohne Tool; der Gesprächsplan führt danach zur laufenden
+Aufgabe zurück. Du behauptest keine Kalenderaktion selbst."""
 
 TOOLS = [{
     "type": "function",
@@ -68,14 +71,72 @@ _HIRN = {
     "rueckruf": ("ABGEBEN", "SACHE", None),
 }
 
+_MODUS_OPERATION = {
+    "buchen": "buchen",
+    "absagen": "absagen",
+    "verschieben": "verschieben",
+    "auskunft": "terminauskunft",
+}
+
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
 
+def enabled() -> bool:
+    return os.environ.get("TASK_ROUTER", "1").strip().lower() not in {
+        "0", "false", "no",
+    }
+
+
 def braucht_auswahl(sit: dict[str, Any]) -> bool:
+    """Kompatibilitätsname: Router gilt jetzt auch während laufender Tasks."""
+    return enabled()
+
+
+def prompt(sit: dict[str, Any]) -> str:
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    return not _s(s.get("modus")) and not sit.get("hirnVerbinden") and not sit.get("hirnAbgeben")
+    modus = _s(s.get("modus"))
+    frage = _s(s.get("frage"))
+    if not modus:
+        stand = "Aktuell läuft noch keine sichere Fachaufgabe."
+    else:
+        op = _MODUS_OPERATION.get(modus, modus)
+        stand = f"Aktuell läuft die Aufgabe {op}."
+        if frage:
+            stand += f" Offener Dialogschritt: {frage}."
+        stand += (
+            " Nur bei einem klar anderen Anliegen select_task aufrufen; "
+            "die bisherige Aufgabe wird dann geparkt."
+        )
+    return f"{PROMPT}\n{stand}"
+
+
+def _hat_gebuchten_termin(sit: dict[str, Any]) -> bool:
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    booking = sit.get("booking") if isinstance(sit.get("booking"), dict) else {}
+    last = sit.get("lastBook") if isinstance(sit.get("lastBook"), dict) else {}
+    return bool(
+        _s(s.get("phase")) == "gebucht"
+        or _s(booking.get("appointmentId"))
+        or _s(last.get("appointmentId"))
+    )
+
+
+def werkzeuge_fuer(sit: dict[str, Any]) -> list[dict[str, Any]]:
+    """Nur Task-Handoff; nach echter Buchung zusätzlich sichere Terminnotiz."""
+    out = list(TOOLS)
+    if _hat_gebuchten_termin(sit):
+        note = next(
+            (
+                tool for tool in werkzeuge.TOOLS
+                if _s((tool.get("function") or {}).get("name")) == "note_appointment"
+            ),
+            None,
+        )
+        if note:
+            out.append(note)
+    return out
 
 
 def auswahl(llm_out: dict[str, Any] | None) -> dict[str, str]:

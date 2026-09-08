@@ -706,7 +706,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         plan = f"{plan}\n\n{anliegen_stand}" if plan else anliegen_stand
     task_auswahl = task_router.braucht_auswahl(sit)
     if task_auswahl:
-        plan = f"{plan}\n\n{task_router.PROMPT}" if plan else task_router.PROMPT
+        task_plan = task_router.prompt(sit)
+        plan = f"{plan}\n\n{task_plan}" if plan else task_plan
     if msgs and msgs[0].get("role") == "system":
         msgs[0]["content"] = system_prompt_aktuell(sit, plan=plan)
     # Kein Stream-Vorab, solange Buchung ODER Verwaltung offen ist: die Wachen
@@ -725,7 +726,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             extra[k] = max(int(extra.get(k) or 0), int(v))
         else:
             extra[k] = v
-    llm_tools = task_router.TOOLS if task_auswahl else TOOLS
+    llm_tools = task_router.werkzeuge_fuer(sit) if task_auswahl else TOOLS
     if darf_vorab:
         out = llm.chat_stream(msgs, llm_tools, erster_satz=vorab, **extra)
     else:
