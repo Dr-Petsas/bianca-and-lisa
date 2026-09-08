@@ -135,6 +135,12 @@ _ZWISCHENFRAGE_KERN_RE = re.compile(
     r"betäubung|betaeubung|nüchtern|nuechtern|mitbringen|unterlagen)\b",
     re.I,
 )
+_KURZANTWORT_RE = re.compile(
+    r"^\s*(?:ja|jawohl|genau|richtig|korrekt|stimmt|passt|okay?|"
+    r"nein|nee|n(?:ö|oe)|noch\s+nicht|noch\s+nie|leider\s+nein)"
+    r"\s*[,.!?…]*\s*$",
+    re.I,
+)
 # "Äh, nein." / "Also ja" / "Hm, nee" — Füllwörter vor dem Ja/Nein abstreifen
 # (live 27.08.2026: "Äh, nein" wurde NICHT als Nein erkannt, die Zustands-
 # maschine blieb auf der Frage hängen und das LLM übernahm mit Fantasie).
@@ -767,6 +773,12 @@ def _telefon_gesperrt(s: dict, nummer: str) -> bool:
 def ist_zwischenfrage(text: str) -> bool:
     """Stellt der Anrufer selbst eine Frage / schweift er ab?"""
     k = _ohne_anlauf(text)
+    # Whisper setzt hinter zögernden Kurzantworten häufig ein Fragezeichen
+    # („Ähm, nein?“). Das ist weiterhin eine Formularantwort, keine Frage
+    # an Bianca. Echte Mischfragen („Nein, aber was kostet das?“) passen
+    # bewusst nicht auf den Volltreffer.
+    if _KURZANTWORT_RE.match(k):
+        return False
     return bool(_ZWISCHENFRAGE_KERN_RE.search(k) or _ZWISCHENFRAGE_START_RE.match(k))
 
 

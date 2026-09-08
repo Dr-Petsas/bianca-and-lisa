@@ -57,7 +57,7 @@ def test_db_doktorform_verliert_den_titel_nicht():
 def test_patrikis_mund_hat_kurzes_a():
     tts.aussprache_zuruecksetzen()
     try:
-        assert tts._normalisieren("Doktor Patrikis") == "Doktor Pat-ri-kis"
+        assert tts._normalisieren("Doktor Patrikis") == "Doktor Patriekis"
     finally:
         tts.aussprache_zuruecksetzen()
 

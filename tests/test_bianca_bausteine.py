@@ -1257,8 +1257,10 @@ def test_zwischenfrage_erkennung():
                  "Haben Sie einen Aufzug?", "Und wieviel kostet das"]:
         assert gehirn.ist_zwischenfrage(satz), satz
     for satz in ["Das müssen Sie doch wissen.", "Das weißt du doch alles.",
-                 "Hm.", "Na gut, von mir aus.", "Ich sag dazu nichts."]:
+                 "Hm.", "Na gut, von mir aus.", "Ich sag dazu nichts.",
+                 "Ähm, nein?", "Ja?"]:
         assert not gehirn.ist_zwischenfrage(satz), satz
+    assert gehirn.ist_zwischenfrage("Nein, aber was kostet das?")
 
 
 def test_abschweifung_zaehlt_nicht_als_leerlauf():
@@ -1714,7 +1716,7 @@ def test_tts_aussprache_umschrift():
     """'Michael' wird fuer den Mund zu 'Micha-el' — Logs bleiben unveraendert."""
     from kern import tts as ttsmod
     text = "Dann halte ich fest: für Michael Peters bei Doktor Petsas."
-    for cre, ersatz in ttsmod._AUSSPRACHE:
+    for cre, ersatz in ttsmod._aussprache():
         text = cre.sub(ersatz, text)
     assert "Micha-el Peters" in text and "Michael" not in text
 

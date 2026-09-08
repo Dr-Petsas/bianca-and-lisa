@@ -143,6 +143,23 @@ def test_neupatient_klaert_erst_behandler_dann_pzr():
         flow.hintergrund.anstossen = echt
 
 
+def test_fragezeichen_nein_bleibt_im_flow_und_fragt_behandler():
+    """Live 09.09.: „Ähm, nein?“ ist ein Nein, keine freie LLM-Frage."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "schonmal"})
+    echt = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda _sit: None
+    try:
+        r = flow.zug(sit, "Ähm, nein?")
+        assert r and "Doktor Petsas" in r["text"]
+        assert "Zahnreinigung" not in r["text"]
+        assert s["warSchonMal"] is False
+        assert s["frage"] == "arzt"
+    finally:
+        flow.hintergrund.anstossen = echt
+
+
 def test_pzr_im_kontext_nicht_bei_fuellung():
     s = {"modus": "buchen", "frage": "grund", "grund": "Füllung", "pzr": ""}
     assert gehirn.ist_pzr_preisfrage("Was kostet die Füllung?")

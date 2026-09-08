@@ -38,9 +38,10 @@ _GENERISCH = (
 _BEHANDLER_FALLBACK = (
     # Qwen3 liest die Namen sonst englisch/lateinisch an.
     (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
-    # Geschlossene erste Silbe: "Pat", nicht das gedehnte "Paaah" aus
-    # der früheren offenen Umschrift "Pa-tri-kis" (Live 09.09.2026).
-    (re.compile(r"\bPatrikis\b", re.I), "Pat-ri-kis"),
+    # Deutsche Betonung mit nur leicht gedehntem i: „Patriekis“. Die
+    # Silbentrennung „Pat-ri-kis“ ließ Qwen englisch wie „Patrick“ beginnen;
+    # „Pa-tri-kis“ dehnte zuvor das a zu stark (Live-Proben 09.09.2026).
+    (re.compile(r"\bPatrikis\b", re.I), "Patriekis"),
     (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
 _AUSSPRACHE_CACHE: tuple | None = None
