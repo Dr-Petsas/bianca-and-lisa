@@ -12,7 +12,7 @@ from kern.config import CF_BASE, WRITE_LIVE
 from kern import notes, patients
 from kern.slots import REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
 from kern.sprech import slot_wort
-from kern.tenants import kalender_von, motiv_von
+from kern.tenants import ist_akut_motiv, kalender_von, motiv_von
 
 NO_CONTEXT = "Ich komme hier gerade nicht an den Kalender. Die Praxis meldet sich zeitnah mit Terminvorschlägen."
 NO_CONTEXT_REGIE = "Kein Kalenderkontext in dieser Sitzung. Biete einen Rückruf an, nenne keine erfundenen Zeiten."
@@ -128,6 +128,38 @@ def _mit_dispatch(result: dict[str, Any], dispatch: dict | None) -> dict[str, An
     if dispatch:
         result["dispatch"] = dispatch
     return result
+
+
+def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
+                         source: str = "") -> dict[str, Any]:
+    """Slots NUR in diesem Kalender. Leeres Motiv-Fenster → Kontrolle.
+
+    Chef 08.09.2026 (Lülf): die Praxis war frei, PAR-AIT-geschlossen lieferte
+    []. Gesucht wird am Behandler, unabhängig vom Spezialgrund; gebucht/
+    verschoben wird weiter mit dem Original-Motiv. Nie andere Ärzte, ausser
+    der Anrufer fragt ausdrücklich danach (dann steht deren calendarId im ctx).
+    """
+    such = dict(ctx or {})
+    found = find_slots(tenant, such, start_date=start_date, egal=False, source=source)
+    if not found.get("ok"):
+        return found
+    slots = _iso_liste(found.get("slots") or [])
+    if slots:
+        return found
+    vm = motiv_von(tenant, "Kontrolluntersuchung")
+    alt_id = _s((vm or {}).get("id"))
+    # Nie auf Notfall/Akut ausweichen, nur weil das Spezialfenster leer war
+    # (Blessing/Thaler: visitMotives[0] = Akutsprechstunde).
+    if not alt_id or alt_id == _s(such.get("visitMotiveId")) or ist_akut_motiv(vm):
+        return found
+    alt = dict(such)
+    alt["visitMotiveId"] = alt_id
+    alt["visitMotiveName"] = _s((vm or {}).get("name")) or "Kontrolluntersuchung"
+    zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source)
+    if zweit.get("ok") and _iso_liste(zweit.get("slots") or []):
+        zweit["motivFallback"] = "kontrolle"
+        return zweit
+    return found
 
 
 def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,

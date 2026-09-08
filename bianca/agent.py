@@ -63,6 +63,13 @@ _NUR_LAUT_RE = re.compile(
     r"[\s.,!?…]*$",
     re.I,
 )
+# Nach „Sind Sie noch dran?“: Ja / „ich bin noch dran“ ist KEIN Buchungs-Ja
+# (Thaler 08.09.2026: Presence-Schleife statt offener Änderungsfrage).
+_PRESENCE_ANTWORT_RE = re.compile(
+    r"ich\s+bin\s+noch\s+(?:da|dran)|noch\s+dran|sind\s+sie\s+noch",
+    re.I,
+)
+_NUR_JA_RE = re.compile(r"^\s*ja[\s.,!?…]*$", re.I)
 _ANGEBOT_ZEIT_RE = re.compile(
     r"\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b|"
     r"\b\d{1,2}\.\s?(?:\d{1,2}\.|januar|februar|märz|maerz|april|mai|juni|juli|"
@@ -92,7 +99,7 @@ _FRAGE_KERN = {
     "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",
-    "aenderung": r"ändern|aendern|korrigier|zeitpunkt|name|nummer",
+    "aenderung": r"ändern|aendern|korrigier|zeitpunkt|name|nummer|grund|besuchsgrund",
     "versicherung": r"privat|gesetzlich|versichert",
     "versicherung_check": r"privat|gesetzlich|versichert|geändert|geaendert",
     "pzr": r"zahnreinigung|prophylaxe|\bpzr\b",
@@ -103,7 +110,8 @@ _FRAGE_KERN = {
     # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot + Zahnersatz-Check.
     "bleaching": r"aufhell|bleach|zahnaufhellung",
     "bleaching_check": r"krone|brücke|bruecke|veneer|implantat|zahnersatz",
-    "rueckblick": r"seither|beruhigt|ergangen|zufrieden|verheilt",
+    "rueckblick": r"seither|beruhigt|ergangen|zufrieden|verheilt|immer\s+noch|letzten?\s+besuch|letztes\s+mal",
+    "folge_kontrolle": r"kontrolle\s+buch|kontrolle\s+eintrag",
     "frisch_absage_ok": r"absagen|stornier|wirklich",
     "absage_ok": r"absagen|stornier|wirklich",
 }
@@ -167,6 +175,10 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
     if fid == "pzr_kasse":
         from kern import pzr_kassen
         return pzr_kassen.KASSE_FRAGE
+    if fid == "folge_kontrolle":
+        return gehirn.folge_kontrolle_frage()
+    if fid == "rueckblick":
+        return gehirn.rueckblick_text(sit.get("sammler") or {}, sit)
     fid2, frage = gehirn.naechste_frage(sit)
     return frage if fid2 == fid else ""
 
@@ -208,7 +220,7 @@ _FEHLT_WORT = {
     "telefon_alt": "Ihre Entscheidung zur alten Nummer in der Akte",
     "slotwahl": "Ihre Terminwahl",
     "bestaetigung": "Ihr Okay",
-    "aenderung": "was ich ändern soll — Zeitpunkt, Name oder Nummer",
+    "aenderung": "was ich ändern soll — Zeitpunkt, Name, Nummer oder Besuchsgrund",
     "pzr": "ob die Zahnreinigung mit dazu soll",
     "bleaching": "ob die Zähne mit aufgehellt werden sollen",
     "bleaching_check": "ob Sie vorne Zahnersatz haben — Kronen, Brücken, Veneers oder Implantate",
@@ -216,6 +228,7 @@ _FEHLT_WORT = {
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
     "rueckblick": "wie es nach dem letzten Besuch war",
+    "folge_kontrolle": "ob eine Kontrolle gebucht werden soll",
 }
 
 
@@ -511,12 +524,22 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
         termine_text=_termine_zeile(sit),
         slots_text=slots_zeile(sit.get("offered") or []),
         wissen=tenant.get("wissen"),
+        sit=sit,
         plan=plan,
         kontext=gedaechtnis.kontext_block(sit),
         # W-MANDANT: Agent-Prompt aus der Pickadoc-DB (Praxis-Fakten) —
         # mehrzeilig, deshalb NICHT durch _s (das wuerde die Absaetze platten).
         db_prompt=str(tenant.get("dbPrompt") or ""),
     )
+
+
+def _letzte_war_presence(sit: dict) -> bool:
+    for m in reversed(sit.get("messages") or []):
+        if m.get("role") != "assistant":
+            continue
+        t = _s(m.get("content")).casefold()
+        return "noch dran" in t or "ich bin noch da" in t
+    return False
 
 
 def start_reply(sit: dict) -> dict[str, Any]:
@@ -563,6 +586,21 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
 
+    if _letzte_war_presence(sit) and (
+        _PRESENCE_ANTWORT_RE.search(text_in) or _NUR_JA_RE.match(text_in)
+    ):
+        # Presence bestätigt — die offene Pflichtfrage zurück, nie buchen.
+        s = gehirn.sammler(sit)
+        fid = _s(s.get("frage"))
+        frage = _kanonische_frage(sit, fid) if fid else ""
+        if not frage and fid:
+            formen = gehirn.FRAGE_VARIANTEN.get(fid) or ()
+            frage = formen[0] if formen else ""
+        if frage:
+            msgs.append({"role": "assistant", "content": frage})
+            sit["messages"] = msgs
+            return {"text": frage, "book": None}
+
     # 0) Intent-Schicht (W-HIRN/W-INTENT 03.09.2026, Chef: "erst erkennen,
     #    dann handeln"): das Session-Hirn deutet JEDEN Satz, BEVOR eine
     #    Maschine laeuft — synchron IMMER in 0 ms (Fast-Paths + Heuristik).
@@ -582,7 +620,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if vorab:
         hallo = gehirn.anrufer_hallo_jetzt(sit, text_in)
         if hallo:
+            # Vorab ging am Wächter vorbei (Live 08.09.: Hallo jeden Zug).
+            # Kurze Sätze ohne ? sind sonst Quittungen — hier streichen.
+            hallo = wiederholung.pruefen(
+                sit, hallo,
+                frueher=wiederholung.letzte_antworten(sit.get("messages") or []),
+                auch_kurz=True,
+            )
+        if hallo:
             vorab(hallo)
+            wiederholung.gesagt_merken(sit, hallo)
+            gehirn.anrufer_hallo_merken(sit)
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
@@ -598,6 +646,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # erlebt: "Zu welchem unserer Ärzte..." statt Durchstellen).
     job_sprach = bool(fl and (_s(fl.get("text")) or fl.get("hangup")
                               or fl.get("transfer")))
+    if job_sprach and "Ich bin die Neue!" in _s(fl.get("text")):
+        gehirn.anrufer_hallo_merken(sit)
     # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am
     # Sammler/Fluss aendert sie nichts, sie entscheidet nur, wie frei das
     # LLM gleich sprechen darf und ob der Frage-Anker feuert.
@@ -617,6 +667,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             if "?" in fl["text"]:
                 sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
             msgs.append({"role": "assistant", "content": fl["text"]})
+            wiederholung.gesagt_merken(sit, fl["text"])
         sit["messages"] = msgs
         gespraech.nach_antwort(sit)
         # W-GEDAECHTNIS: der Zug kann Name/Nummer geerntet haben (Sammler,
@@ -637,6 +688,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         text = gespraech.UNKLAR_ANTWORT
         msgs.append({"role": "assistant", "content": text})
         sit["messages"] = msgs
+        wiederholung.gesagt_merken(sit, text)
         gespraech.nach_antwort(sit)
         return {"text": text, "book": None}
 
@@ -685,6 +737,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             msgs[-1]["content"] = bewacht
         text = bewacht
     sit["messages"] = msgs
+    if _s(text):
+        wiederholung.gesagt_merken(sit, text)
     gespraech.nach_antwort(sit)
     # W-GEDAECHTNIS: auch LLM-Zuege koennen Fakten geerntet haben.
     gedaechtnis.kontext_anstossen(sit)

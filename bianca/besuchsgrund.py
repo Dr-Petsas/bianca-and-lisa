@@ -61,13 +61,34 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
     (re.compile(r"erstuntersuchung|erstbesuch|neupatient", re.I),
      "Erstuntersuchung/Neupatient", [r"erstuntersuchung", r"neupatient", r"\berst"]),
     # Zahnersatz-WUNSCH (nichts kaputt): Krone/Brücke/Prothese geplant.
-    (re.compile(r"krone|brücke|bruecke|prothese|zahnersatz|füllung\s+raus|inlay|veneer", re.I),
-     "Zahnersatz-Beratung", [r"ze\s+besprechung", r"zahnersatz\w*\s+(?:besprechung|beratung)", r"prothetik", r"zahnersatz"]),
+    # "Zahnarztbesprechung" ist der STT-Verhörer von "Zahnersatzbesprechung"
+    # (Thaler 08.09.2026).
+    (re.compile(
+        r"krone|brücke|bruecke|prothese|zahnersatz|zahnarztbesprech|"
+        r"füllung\s+raus|inlay|veneer",
+        re.I,
+     ),
+     "Zahnersatz-Beratung", [r"ze\s+besprechung", r"ze\s+beratung",
+                             r"zahnersatz\w*\s+(?:besprechung|beratung)",
+                             r"prothetik", r"zahnersatz"]),
     (re.compile(r"abgebrochen|abgeplatzt|ecke\s+ab|stück\s+ab|stueck\s+ab", re.I),
      "akute Beschwerden/Notfall", [r"akut", r"notfall", r"repar"]),
     (re.compile(r"kontroll|vorsorge|check|routine|durchsicht|nachschauen|nachsehen|nachgucken|halbjahr|jahresuntersuchung", re.I),
      "Kontrolluntersuchung", [r"kch\s+kontroll", r"kontrolluntersuchung", r"kontroll", r"vorsorge", r"check"]),
 ]
+
+# Nur bei Zahn-Katalog. Kontrolle/Erst/Akut bleiben fachneutral.
+_DENTAL_KERNE = {
+    "Wurzelbehandlung",
+    "Reparatur Zahnersatz",
+    "professionelle Zahnreinigung",
+    "Zahnaufhellung",
+    "Implantat-Beratung",
+    "Invisalign-Beratung",
+    "Schiene/Schnarchen",
+    "Zahnspange/KFO",
+    "Zahnersatz-Beratung",
+}
 
 # Chef 27.08.2026: "im Zweifelsfall Besprechungs- oder Kontrolltermine".
 # "KCH Kontroll…" zuerst (Allgemein-Zahnheilkunde) — sonst gewann im grossen
@@ -79,7 +100,14 @@ FALLBACK_MUSTER = [r"kch\s+kontroll", r"kontrolluntersuchung", r"kontroll", r"be
 # 29.08.2026). Die Phrase wird vor dem Matching entfernt — der Rest des
 # Satzes ("normale Kontrolle") traegt die echte Aussage.
 _VERNEINT_RE = re.compile(
-    r"(nichts|nix|nicht|kein\w*)\s+(akut\w*|notfall\w*|schlimm\w*|dringend\w*)",
+    r"(nichts|nix|nicht|kein\w*)\s+"
+    r"(akut\w*|notfall\w*|schlimm\w*|dringend\w*)"
+    r"(?:\s+beschwerden)?",
+    re.I,
+)
+_AKUT_WORT_RE = re.compile(
+    r"schmerz|zahnweh|\bweh\b|akut|notfall|dick[e]?\s+backe|geschwollen|"
+    r"entzünd|entzuend|pocht|eiter|abgebrochen|abgeplatzt",
     re.I,
 )
 
@@ -134,17 +162,21 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
     der erkannte (für Rückfrage und Notiz-Wortlaut).
     """
     text = _ohne_verneintes(text)
-    for cre, kern, muster in KONZEPTE:
-        if cre.search(text):
-            vm = (motiv_suchen(tenant, muster, katalog=katalog, calendar_id=calendar_id)
-                  or motiv_suchen(tenant, FALLBACK_MUSTER, katalog=katalog, calendar_id=calendar_id))
-            return kern, vm
-    # W-MOTIV-KATALOG (03.09.2026): kein kuratiertes Konzept — den Grund
-    # generisch gegen den frischen Katalog mappen (Namen + Erklärtexte).
-    # So treffen auch kundeneigene Besuchsgründe ("Füllung", "Botox").
     kat = katalog
     if kat is None:
         kat = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
+    zahn = motive.ist_zahn(kat)
+    for cre, kern, muster in KONZEPTE:
+        if not cre.search(text):
+            continue
+        if kern in _DENTAL_KERNE and not zahn:
+            continue
+        vm = (motiv_suchen(tenant, muster, katalog=katalog, calendar_id=calendar_id)
+              or motiv_suchen(tenant, FALLBACK_MUSTER, katalog=katalog, calendar_id=calendar_id))
+        return kern, vm
+    # W-MOTIV-KATALOG (03.09.2026): kein kuratiertes Konzept — den Grund
+    # generisch gegen den frischen Katalog mappen (Namen + Erklärtexte).
+    # So treffen auch kundeneigene Besuchsgründe ("Füllung", "Botox").
     vm = katalog_treffer(text, katalog=kat, calendar_id=calendar_id)
     if vm is not None:
         return sprechname(vm), vm
@@ -154,7 +186,11 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
 def fallback_motiv(tenant: dict, *, katalog: list[dict] | None = None,
                    calendar_id: str = "") -> dict | None:
     """Für frei formulierte Gründe ohne erkennbares Konzept ("Holzbein absägen")."""
-    return motiv_suchen(tenant, FALLBACK_MUSTER, katalog=katalog, calendar_id=calendar_id)
+    from kern.tenants import ist_akut_motiv
+    vm = motiv_suchen(tenant, FALLBACK_MUSTER, katalog=katalog, calendar_id=calendar_id)
+    if vm and ist_akut_motiv(vm):
+        return None
+    return vm
 
 
 # =============================================================================
@@ -251,10 +287,17 @@ def katalog_treffer(text: str, *, katalog: list[dict],
     Unter den Besten: "klein" schlaegt "gross" (Chef: immer klein buchen),
     online-buchbare vor internen, dann der kuerzeste Name.
     """
-    worte = _match_tokens(text)
+    roh = _ohne_verneintes(text)
+    worte = _match_tokens(roh)
     if not worte:
         return None
+    from kern.tenants import ist_akut_motiv
     pool = motive.fuer_kalender(katalog or [], calendar_id)
+    # Notfall nur, wenn der Anrufer Schmerz/Akut/Notfall gesagt hat —
+    # sonst gewann bei Blessing/Thaler das erste Akut-Motiv über ein
+    # einzelnes Restwort ("Beschwerden") nach "keine akuten …".
+    if not _AKUT_WORT_RE.search(roh or ""):
+        pool = [v for v in pool if not ist_akut_motiv(v)]
     beste: list[tuple[int, dict]] = []
     top = 0
     for vm in pool:

@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from kern.config import DEFAULT_TENANT, TENANTS_DIR
+
+# Stilles Default-Motiv: nie Akut/Notfall, nur wenn der Anrufer das gesagt hat.
+_AKUT_NAME_RE = re.compile(r"akut|notfall|schmerz|notsprech|akutsprech", re.I)
+_SAFE_NAME_RE = re.compile(
+    r"kontroll|vorsorge|screening|check.?up|nachsorge|"
+    r"besprechung|beratung|untersuchung|recall",
+    re.I,
+)
 
 
 def _sauber(v: Any) -> str:
@@ -191,14 +200,52 @@ def behandler_reihe(tenant: dict[str, Any]) -> list[dict[str, Any]]:
     return kopf + rest[::-1]
 
 
+def ist_akut_motiv(vm: dict[str, Any] | None) -> bool:
+    """True bei Akut/Notfall/Schmerz — darf nie stiller Default sein."""
+    if not isinstance(vm, dict):
+        return False
+    text = f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))} {_sauber(vm.get('id'))}"
+    return bool(_AKUT_NAME_RE.search(text))
+
+
+def _sicheres_default(vms: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Kontrolle/Besprechung/Vorsorge — nie das erste Motiv, wenn das Notfall ist.
+
+    Live 08.09.2026 Blessing + Thaler: visitMotives[0] war Akut/Notfall,
+    niemand hatte Schmerzen gesagt, die KI suchte und las trotzdem Notfall vor.
+    """
+    sicher = [v for v in vms if not ist_akut_motiv(v)]
+    if not sicher:
+        return None
+    for v in sicher:
+        n = _sauber(v.get("name")).lower()
+        if "kontroll" in n:
+            return v
+    for v in sicher:
+        if _SAFE_NAME_RE.search(_sauber(v.get("name")) or _sauber(v.get("nameForPatient"))):
+            return v
+    return sicher[0]
+
+
 def motiv_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | None:
     vms = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
     q = _sauber(name).lower()
+    suche_default = (not q) or q in {
+        "kontrolluntersuchung", "kontrolle", "vorsorge", "untersuchung",
+    }
     if q:
         for v in vms:
-            if _sauber(v.get("name")).lower() == q:
+            n = _sauber(v.get("name")).lower()
+            if n == q:
+                if suche_default and ist_akut_motiv(v):
+                    break
                 return v
-        hit = next((v for v in vms if q in _sauber(v.get("name")).lower() or _sauber(v.get("name")).lower() in q), None)
-        if hit:
-            return hit
-    return next((v for v in vms if "kontroll" in _sauber(v.get("name")).lower()), vms[0] if vms else None)
+        treffer = [
+            v for v in vms
+            if q in _sauber(v.get("name")).lower() or _sauber(v.get("name")).lower() in q
+        ]
+        if suche_default:
+            treffer = [v for v in treffer if not ist_akut_motiv(v)]
+        if treffer:
+            return treffer[0]
+    return _sicheres_default(vms)

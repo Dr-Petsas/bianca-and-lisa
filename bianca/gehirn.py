@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
-from kern import dossier, motive, tenants as kern_tenants, vornamen
+from kern import dossier, motive, sprech, tenants as kern_tenants, vornamen
 from kern.patients import arzt_sprechname
 from kern.slots import parse_slot_wish
 
@@ -627,6 +627,9 @@ FELDER_START = {
     "letzterGrund": "",
     "rueckblick": "",
     "rueckblickAntwort": "",
+    # Nicht-Zahn (Blessing/Derma): letzter Besuch → noch darum? → Kontrolle.
+    "folge": "",
+    "folgeKontroll": "",
     # Kartei-Satz als Füller schon gesprochen (ohne Frage) — der spätere
     # Rückblick lässt den Vorsatz weg und fragt nur noch den Verlauf.
     "karteiFuellerGesagt": False,
@@ -873,8 +876,10 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
     for k, v in neu.items():
         if v not in (None, 0, ""):
             out[k] = v
-    for k in ("weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date"):
+    for k in ("weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date", "tage"):
         out.setdefault(k, None if k not in ("minDaysAhead",) else 0)
+    if out.get("date") or out.get("tage"):
+        out["weekday"] = None
     return out
 
 
@@ -1544,7 +1549,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # Zahnreinigung-Mitbuchung (Chef 30.08.2026): Antwort auf die offene
     # PZR-Frage oder spontaner Wunsch. Nur wenn der Termin-Grund selbst
     # keine Zahnreinigung ist — sonst deutet der Satz den HAUPTGRUND.
-    if s["pzr"] in {"", "gefragt"} and s["grund"] and not ist_pzr_grund(s):
+    # Katalog-Wache: ohne PZR im Motivkatalog (Blessing/Derma) nie ernten.
+    if (s["pzr"] in {"", "gefragt"} and s["grund"] and not ist_pzr_grund(s)
+            and motive.fuehrt_pzr(sit)):
         if _PZR_KEINE_RE.search(t):
             if s["pzr"] == "gefragt":
                 s["pzr"] = "nein"
@@ -1654,7 +1661,7 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     ),
     "behandlung": (
         "Für welche Behandlung war der Termin denn eingetragen?",
-        "Welche Behandlung stand denn an — Kontrolle, Zahnreinigung oder etwas anderes?",
+        "Welche Behandlung stand denn an — Kontrolle oder etwas anderes?",
     ),
     "neubuchung": (
         "Soll ich Ihnen stattdessen einen neuen Termin heraussuchen?",
@@ -1677,8 +1684,8 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Soll ich es so festhalten?",
     ),
     "aenderung": (
-        "Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?",
-        "Was soll ich korrigieren — Zeitpunkt, Name oder Nummer?",
+        "Was darf ich ändern — der Zeitpunkt, der Name, die Nummer oder der Besuchsgrund?",
+        "Was soll ich korrigieren — Zeitpunkt, Name, Nummer oder Besuchsgrund?",
     ),
     "versicherung": (
         "Sind Sie privat oder gesetzlich versichert?",
@@ -1726,7 +1733,11 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     ),
     "rueckblick": (
         "Wie ist es Ihnen seither ergangen?",
-        "Hat sich das seitdem gut beruhigt?",
+        "Geht es immer noch um dasselbe wie beim letzten Besuch?",
+    ),
+    "folge_kontrolle": (
+        "Soll ich eine Kontrolle buchen?",
+        "Darf ich Ihnen eine Kontrolle eintragen?",
     ),
     "frisch_absage_ok": (
         "Soll ich den Termin wirklich absagen? Ein kurzes Ja oder Nein genügt.",
@@ -2085,7 +2096,7 @@ def anrufer_kartei_uebernehmen(sit: dict) -> None:
     if _s(k.get("letzterBesuch")) and not s["letzterBesuch"]:
         s["letzterBesuch"] = _s(k.get("letzterBesuch"))
         s["letzterGrund"] = _s(k.get("letzterGrund"))
-    satz = kartei_fueller_satz(s)
+    satz = kartei_fueller_satz(s, sit)
     if satz:
         sit["karteiFillerText"] = satz
     dossier.fuellen(sit)
@@ -2227,6 +2238,11 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Soll ich für den Termin noch eine Notiz für den Doktor anlegen? "
         "Irgendeine besondere Frage, auf die er eingehen soll?",
         "Was soll ich dem Doktor mitgeben?",
+        "Soll ich eine Kontrolle buchen?",
+        "Worum geht es denn diesmal?",
+        "Geht es immer noch um die Kontrolle?",
+        "Letztes Mal waren Sie wegen der Kontrolle bei uns. "
+        "Geht es immer noch um die Kontrolle?",
     ]
     # W-FUER-WEN: die haeufigsten Dritten-Rollen mitwaermen (Namensfrage +
     # Schonmal-Frage) — seltene Rollen (Nachbar, Kollege, Chefin …)
@@ -2302,7 +2318,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "versicherung",
                 "versicherung_check", "pzr", "pzr_kasse", "bleaching", "bleaching_check",
                 "telefon_alt", "telefon_check",
-                "rueckblick", "anrufer_check", "arzt_check",
+                "rueckblick", "folge_kontrolle", "anrufer_check", "arzt_check",
                 "frisch_absage_ok", "absage_ok",
                 "termin_anbieten", "arzt_notiz"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
@@ -2523,6 +2539,57 @@ def grund_sprechbar(name: str) -> str:
     return _s(roh.split("/")[0]) or _s(name)
 
 
+def grund_am_telefon(name: str) -> str:
+    """Wie grund_sprechbar, aber Krebs wird nie gesagt (Chef: Kontrolle)."""
+    g = sprech.ohne_krebs(grund_sprechbar(name))
+    return g or "die Kontrolle"
+
+
+def nicht_zahn(sit: dict | None) -> bool:
+    """True nur mit Sitzung und Nicht-Zahn-Katalog. Ohne sit: Zahn (alte Tests)."""
+    if not isinstance(sit, dict):
+        return False
+    if sit.get("tenant") is None and not isinstance(sit.get("motivKatalog"), list):
+        return False
+    return not motive.ist_zahn(sit)
+
+
+_KONTROLL_MUSTER = [
+    r"nachkontroll", r"kontrolluntersuchung", r"kontroll",
+    r"vorsorge", r"screening", r"nachsorge", r"check.?up", r"recall",
+]
+
+
+def kontroll_setzen(sit: dict) -> None:
+    """Aktuellen Grund auf Kontrolle legen — Motiv aus DEM Katalog der Praxis."""
+    s = sammler(sit)
+    s["grund"] = "Kontrolle"
+    if not _s(s.get("grundWortlaut")):
+        s["grundWortlaut"] = "Kontrolle"
+    tenant = sit.get("tenant") or {}
+    kat = motive.katalog(sit)
+    from kern.tenants import ist_akut_motiv, motiv_von
+    vm = (besuchsgrund.motiv_suchen(tenant, _KONTROLL_MUSTER, katalog=kat)
+          or besuchsgrund.fallback_motiv(tenant, katalog=kat)
+          or motiv_von(tenant, "Kontrolluntersuchung"))
+    if vm and not ist_akut_motiv(vm):
+        s["motivId"] = _s(vm.get("id"))
+        s["motivName"] = _s(vm.get("name"))
+
+
+def folge_thema(s: dict) -> str:
+    """Letzter Besuch, telefon-tauglich — nie Krebs."""
+    g = grund_am_telefon(s.get("letzterGrund") or "")
+    if not g or "krebs" in g.lower():
+        return "die Kontrolle"
+    low = g.lower()
+    if low in {"kontrolle", "vorsorge"}:
+        return "die Kontrolle"
+    if low == "nachkontrolle":
+        return "die Nachkontrolle"
+    return g
+
+
 def ist_pzr_grund(s: dict) -> bool:
     """Ist der NEUE Termin selbst schon eine Zahnreinigung? (Chef: dann nie fragen.)"""
     return bool(_PZR_GRUND_RE.search(f"{s.get('motivName') or ''} {s.get('grund') or ''} {s.get('grundWortlaut') or ''}"))
@@ -2567,13 +2634,14 @@ def rueckblick_faellig(s: dict) -> bool:
     return _besuch_tage(s) > 7
 
 
-def kartei_fueller_satz(s: dict) -> str:
+def kartei_fueller_satz(s: dict, sit: dict | None = None) -> str:
     """Kurze Kartei-Feststellung ohne Frage — nur wenn der Fakt schon da ist.
 
     Chef 08.09.2026: Totzeit mit echtem letzten Besuch füllen, nie eine
     Frage in die Wartezeit legen (sonst antwortet der Anrufer ins Leere
     und der Buchungsfluss driftet). Leer = kein Füller, Fallback
-    „Einen Moment.“"""
+    „Einen Moment.“ „Zahnreinigung“ nur, wenn diese Praxis PZR führt —
+    Hautkrebs-Prophylaxe darf so nicht heißen."""
     if not s.get("bekannt") or not _s(s.get("letzterGrund")):
         return ""
     if _ist_akut(s) or _besuch_tage(s) <= 7:
@@ -2582,13 +2650,14 @@ def kartei_fueller_satz(s: dict) -> str:
         return ""
     if s.get("karteiFuellerGesagt"):
         return ""
-    grund = grund_sprechbar(s.get("letzterGrund") or "")
+    grund = grund_am_telefon(s.get("letzterGrund") or "")
     if not grund:
         return ""
     n = grund.lower()
+    ctx = sit if sit is not None else _sitzung(s)
     if "kontroll" in n:
         grund = "die Kontrolle"
-    elif _PZR_GRUND_RE.search(n):
+    elif _PZR_GRUND_RE.search(n) and (ctx is None or motive.fuehrt_pzr(ctx)):
         grund = "die Zahnreinigung"
     elif len(grund) > 22:
         grund = grund[:20].rstrip() + "…"
@@ -2596,16 +2665,23 @@ def kartei_fueller_satz(s: dict) -> str:
     return satz if "?" not in satz else ""
 
 
-def rueckblick_text(s: dict) -> str:
+def rueckblick_text(s: dict, sit: dict | None = None) -> str:
     """Die Rueckblick-Ansprache: Abstand + letzter Grund + Verlaufs-Frage.
 
+    Nicht-Zahn: „Letztes Mal wegen X. Geht es immer noch um X?“ — nie Krebs.
     War der Vorsatz schon als Füller draußen, kommt NUR die Frage —
     sonst hört der Anrufer denselben Besuch zweimal."""
+    if nicht_zahn(sit):
+        thema = folge_thema(s)
+        if s.get("karteiFuellerGesagt"):
+            return f"Geht es immer noch um {thema}?"
+        return (f"Letztes Mal waren Sie wegen {thema} bei uns. "
+                f"Geht es immer noch um {thema}?")
     frage = verlaufs_frage(s.get("letzterGrund") or "")
     if s.get("karteiFuellerGesagt"):
         return frage
     tage = _besuch_tage(s)
-    grund = grund_sprechbar(s.get("letzterGrund") or "")
+    grund = grund_am_telefon(s.get("letzterGrund") or "")
     if tage >= 730:
         vorsatz = (f"Ich sehe gerade: Ihr letzter Besuch ist ja schon {abstand_worte(tage)} her — "
                    f"damals ging es um {grund}. ")
@@ -2643,12 +2719,29 @@ def rueckblick_reaktion(text: str) -> str:
     return ""
 
 
-def pzr_noch_fragen(s: dict) -> bool:
+def _sitzung(obj: dict | None) -> dict | None:
+    """sit, wenn Tenant oder Live-Katalog sichtbar — sonst None (nackter Sammler)."""
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("tenant") is not None or isinstance(obj.get("motivKatalog"), list):
+        return obj
+    return None
+
+
+def pzr_noch_fragen(s: dict, sit: dict | None = None) -> bool:
     """Muss dieser Termin noch die PZR-Abfrage bekommen (Chef 08.09.2026)?
 
-    Jeder vergebene Termin, nicht nur Bestand. Phase wird bewusst NICHT
-    geprueft — vor dem Buchen holt _nach_ok_buchen die Frage nach, wenn
-    der Einschub (Wunschzeit-Zug) sie noch nicht gestellt hat."""
+    Jeder vergebene Termin, nicht nur Bestand — aber NUR wenn der Katalog
+    der Sitzung eine Zahnreinigung fuehrt (Blessing/Derma: nie). Phase
+    wird bewusst NICHT geprueft — vor dem Buchen holt _nach_ok_buchen nach.
+    Ohne Sitzung (alte Unit-Tests mit nacktem Sammler) bleibt das MedDent-
+    Verhalten, damit bestehende Faelle nicht drehen."""
+    ctx = sit if sit is not None else _sitzung(s)
+    if ctx is not None:
+        if not motive.fuehrt_pzr(ctx):
+            return False
+        if _sitzung(s) is not None:
+            s = sammler(s)
     if s.get("modus") != "buchen" or s.get("pzr"):
         return False
     if not s.get("grund") or ist_pzr_grund(s) or _ist_akut(s):
@@ -2658,22 +2751,29 @@ def pzr_noch_fragen(s: dict) -> bool:
     return True
 
 
-def pzr_faellig(s: dict) -> bool:
+def pzr_faellig(s: dict, sit: dict | None = None) -> bool:
     """Zahnreinigung im Sammel-Einschub anbieten?
 
     Chef 29.08.2026: Vortermin gefunden => anbieten. Chef 08.09.2026:
     jeder Termin, auch ohne Kartei-Treffer. Nicht mitten in Slot/Confirm
-    (da holt _nach_ok_buchen nach). Frische eigene PZR: nicht noch eine."""
-    if not pzr_noch_fragen(s):
+    (da holt _nach_ok_buchen nach). Frische eigene PZR: nicht noch eine.
+    Katalog-Wache: ohne PZR-Motiv in der Praxis kommt die Frage nie."""
+    if not pzr_noch_fragen(s, sit):
         return False
+    ctx = sit if sit is not None else _sitzung(s)
+    if ctx is not None and _sitzung(s) is not None:
+        s = sammler(s)
     if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
         return False
     return True
 
 
-def pzr_im_kontext(s: dict, text: str = "") -> bool:
+def pzr_im_kontext(s: dict, text: str = "", sit: dict | None = None) -> bool:
     """Darf die Preis-/Kassen-Auskunft greifen, ohne den Pflichtpfad zu stehlen?"""
     from kern import pzr_kassen
+    ctx = sit if sit is not None else _sitzung(s)
+    if ctx is not None and not motive.fuehrt_pzr(ctx):
+        return False
     if _s(s.get("frage")) in {"pzr", "pzr_kasse", "termin_anbieten"}:
         return True
     if s.get("pzr") in {"ja", "gefragt"} or s.get("pzrKasse") == "gefragt":
@@ -2729,6 +2829,10 @@ def bleaching_faellig(sit: dict) -> bool:
     )
 
 
+def folge_kontrolle_frage(s: dict | None = None) -> str:
+    return "Soll ich eine Kontrolle buchen?"
+
+
 def pzr_frage(s: dict) -> str:
     """Die Mitbuch-Frage — der Zeitbezug ("schon eine Weile her") kommt nur,
     wenn er WAHR ist und der Rueckblick ihn nicht schon gesprochen hat
@@ -2778,8 +2882,11 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
 def start_datum(s: dict) -> str:
     """Ab wann suchen? Wunschdatum > 'nächste Woche' > sofort."""
     w = s.get("wunsch") or {}
+    daten = [str(d) for d in (w.get("tage") or []) if d]
     if w.get("date"):
-        return str(w["date"])
+        daten.append(str(w["date"]))
+    if daten:
+        return min(daten)
     tage = int(w.get("minDaysAhead") or 0)
     if tage:
         return (datetime.now(TZ).date() + timedelta(days=tage)).isoformat()

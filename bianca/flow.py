@@ -14,6 +14,7 @@ from typing import Any, Callable
 from bianca import besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import dossier
 from kern import gedaechtnis
+from kern import motive
 from kern import notes as kern_notes
 from kern import calendar as kal
 from kern import gespraech
@@ -21,7 +22,7 @@ from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_a
 from kern.sitzung import merke_tool
 from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
 from kern import pzr_kassen
-from kern.tenants import motiv_von
+from kern.tenants import ist_akut_motiv, motiv_von
 
 Melde = Callable[[str], None] | None
 
@@ -80,6 +81,15 @@ _AENDERUNG_ZEIT_RE = re.compile(
     r"zeitpunkt|uhrzeit|\bzeit\b|datum|\btag\b|vormittag|nachmittag|"
     r"\bslot\b|\buhr\b|montag|dienstag|mittwoch|donnerstag|freitag|"
     r"samstag|sonntag|woche|früher|spaeter|später|anderswann",
+    re.I,
+)
+# Thaler 08.09.2026: "Nein, den Besuchsgrund. Zahnersatzbesprechen" — der
+# Änderungszweig kannte nur Zeitpunkt/Name/Nummer und blieb in Presence hängen.
+_AENDERUNG_GRUND_RE = re.compile(
+    r"besuchsgrund|anliegen|\bgrund\b|"
+    r"zahnersatz|zahnarztbesprech|besprechung|beratung|"
+    r"kontroll|zahnreinigung|prophylaxe|"
+    r"keine?\s+akut|nicht\s+akut|kein\s+notfall|keine?\s+notfall",
     re.I,
 )
 # Dringlichkeit (kanonischer Grund aus gehirn._GRUND_MAP): Notfaelle bekommen
@@ -431,12 +441,19 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     def _laden() -> dict:
         if melde:
             melde("offer_slots")
-        found = kal.find_slots(
-            sit["tenant"], ctx,
-            start_date=gehirn.start_datum(s),
-            egal=egal,
-            source="pickadoc-bianca",
-        )
+        if a.get("calendarId"):
+            found = kal.find_slots_behandler(
+                sit["tenant"], ctx,
+                start_date=gehirn.start_datum(s),
+                source="pickadoc-bianca",
+            )
+        else:
+            found = kal.find_slots(
+                sit["tenant"], ctx,
+                start_date=gehirn.start_datum(s),
+                egal=egal,
+                source="pickadoc-bianca",
+            )
         if found.get("ok"):
             frisch = kal._iso_liste(found.get("slots") or [])
             if gesperrt:
@@ -627,7 +644,7 @@ def _nach_ok_buchen(sit: dict, t: str, melde: Melde = None) -> dict:
     die Notiz für den Doktor; der Wortlaut landet im Terminpopup.
     """
     s = gehirn.sammler(sit)
-    if gehirn.pzr_noch_fragen(s):
+    if gehirn.pzr_noch_fragen(s, sit):
         s["pzr"] = "gefragt"
         s["frage"] = "pzr"
         sit.pop("pzrUnklar", None)
@@ -707,7 +724,7 @@ def _pzr_kasse_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
 def _pzr_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     """Ja/Nein auf die Mitbuch-Frage — oder Preis/Kasse dazwischen."""
     s = gehirn.sammler(sit)
-    if gehirn.ist_pzr_preisfrage(t) and gehirn.pzr_im_kontext(s, t):
+    if gehirn.ist_pzr_preisfrage(t) and gehirn.pzr_im_kontext(s, t, sit):
         if gehirn.ist_ja(t) and not gehirn.ist_nein(t):
             s["pzr"] = "ja"
         return _pzr_preis_zug(sit, t, melde)
@@ -968,6 +985,86 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     return {"text": gesagt or "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.", "book": book}
 
 
+def _folge_weiter(sit: dict, vorsatz: str = "", melde: Melde = None) -> dict:
+    hintergrund.anstossen(sit)
+    ein = _einschub(sit, vorsatz)
+    if ein is not None:
+        return ein
+    fid, frage = gehirn.naechste_frage(sit)
+    s = gehirn.sammler(sit)
+    s["frage"] = fid
+    if fid:
+        return {"text": (vorsatz + frage).strip()}
+    ang = _angebot(sit, melde)
+    if ang and _s(ang.get("text")) and vorsatz:
+        ang["text"] = vorsatz + ang["text"]
+    return ang or {"text": vorsatz.strip()}
+
+
+def _folge_zug(sit: dict, t: str, neu: set, melde: Melde = None) -> dict | None:
+    """Nicht-Zahn: letzter Besuch → noch darum? → Kontrolle buchen?"""
+    s = gehirn.sammler(sit)
+    if gehirn.ist_zwischenfrage(t) and not gehirn.ist_ja(t) and not gehirn.ist_nein(t):
+        return None
+    if not gehirn.ist_zwischenfrage(t):
+        s["rueckblickAntwort"] = _s(t)[:160]
+        gedaechtnis.fakt_senden(sit, f"Verlauf letzter Besuch: {s['rueckblickAntwort']}")
+    s["rueckblick"] = "fertig"
+    dossier.markiere(sit, "verlauf")
+    if gehirn.ist_ja(t) and not gehirn.ist_nein(t):
+        s["folge"] = "ja"
+        if "grund" not in neu:
+            gehirn.kontroll_setzen(sit)
+        s["frage"] = "folge_kontrolle"
+        sit.pop("folgeUnklar", None)
+        return {"text": gehirn.folge_kontrolle_frage()}
+    if gehirn.ist_nein(t):
+        s["folge"] = "nein"
+        s["frage"] = "grund"
+        return {"text": "Worum geht es denn diesmal?"}
+    if neu:
+        s["frage"] = ""
+        return _folge_weiter(sit, "", melde)
+    z = int(sit.get("folgeUnklar") or 0) + 1
+    sit["folgeUnklar"] = z
+    if z <= 1:
+        s["rueckblick"] = "gefragt"
+        s["frage"] = "rueckblick"
+        return {"text": gehirn.rueckblick_text(s, sit)}
+    s["folge"] = "ja"
+    gehirn.kontroll_setzen(sit)
+    s["frage"] = "folge_kontrolle"
+    return {"text": gehirn.folge_kontrolle_frage()}
+
+
+def _folge_kontrolle_zug(sit: dict, t: str, neu: set, melde: Melde = None) -> dict | None:
+    s = gehirn.sammler(sit)
+    if gehirn.ist_zwischenfrage(t) and not gehirn.ist_ja(t) and not gehirn.ist_nein(t):
+        return None
+    if gehirn.ist_ja(t) and not gehirn.ist_nein(t):
+        s["folgeKontroll"] = "ja"
+        gehirn.kontroll_setzen(sit)
+        s["frage"] = ""
+        return _folge_weiter(sit, "Gerne, eine Kontrolle. ", melde)
+    if gehirn.ist_nein(t):
+        s["folgeKontroll"] = "nein"
+        s["frage"] = "grund"
+        return {"text": "Worum geht es denn diesmal?"}
+    if neu:
+        s["folgeKontroll"] = "nein"
+        s["frage"] = ""
+        return _folge_weiter(sit, "", melde)
+    z = int(sit.get("folgeKontrollUnklar") or 0) + 1
+    sit["folgeKontrollUnklar"] = z
+    if z <= 1:
+        s["frage"] = "folge_kontrolle"
+        return {"text": gehirn.folge_kontrolle_frage()}
+    s["folgeKontroll"] = "ja"
+    gehirn.kontroll_setzen(sit)
+    s["frage"] = ""
+    return _folge_weiter(sit, "Ich trage eine Kontrolle ein. ", melde)
+
+
 def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
     """Rueckblick-/PZR-Einschub, wenn einer faellig ist — sonst None.
 
@@ -984,8 +1081,8 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
         s["rueckblick"] = "gefragt"
         s["frage"] = "rueckblick"
         dossier.markiere(sit, "verlauf")
-        return {"text": (vorsatz + gehirn.rueckblick_text(s)).strip()}
-    if gehirn.pzr_faellig(s):
+        return {"text": (vorsatz + gehirn.rueckblick_text(s, sit)).strip()}
+    if gehirn.pzr_faellig(s, sit):
         s["pzr"] = "gefragt"
         s["frage"] = "pzr"
         dossier.markiere(sit, "pzr")
@@ -1023,10 +1120,16 @@ def _eskalieren(sit: dict, fid: str) -> str:
         return "Machen wir es einfach: Ich schaue, wo es am schnellsten geht. "
     if fid == "grund":
         s["grund"] = "Kontrolluntersuchung"
-        vm = motiv_von(sit.get("tenant") or {}, "Kontrolluntersuchung")
-        if vm:
+        s["grundWortlaut"] = s.get("grundWortlaut") or "Kontrolle"
+        vm = (besuchsgrund.fallback_motiv(sit.get("tenant") or {},
+                                         katalog=motive.katalog(sit))
+              or motiv_von(sit.get("tenant") or {}, "Kontrolluntersuchung"))
+        if vm and not ist_akut_motiv(vm):
             s["motivId"] = _s(vm.get("id"))
             s["motivName"] = _s(vm.get("name"))
+        else:
+            s["motivId"] = ""
+            s["motivName"] = ""
         return "Ich trage es erst einmal als Kontrolle ein — die Praxis passt das bei Bedarf an. "
     if fid == "wunsch":
         s["wunsch"] = {}
@@ -1034,6 +1137,15 @@ def _eskalieren(sit: dict, fid: str) -> str:
     if fid == "buchstabieren":
         s["buchstabiert"] = True
         return ""
+    if fid == "rueckblick" and gehirn.nicht_zahn(sit):
+        s["rueckblick"] = "fertig"
+        s["folge"] = "ja"
+        gehirn.kontroll_setzen(sit)
+        return "Alles klar. "
+    if fid == "folge_kontrolle":
+        s["folgeKontroll"] = "ja"
+        gehirn.kontroll_setzen(sit)
+        return "Ich trage eine Kontrolle ein. "
     if fid == "pzr":
         s["pzr"] = "nein"
         return "Alles gut — dann erst einmal ohne Zahnreinigung. "
@@ -1206,6 +1318,8 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
 
 def _aenderung_feld(t: str) -> str:
     """Was will der Anrufer an der Readback-Zusammenfassung ändern?"""
+    if _AENDERUNG_GRUND_RE.search(t):
+        return "grund"
     if _AENDERUNG_NAME_RE.search(t):
         return "name"
     if _AENDERUNG_NUMMER_RE.search(t):
@@ -1213,6 +1327,17 @@ def _aenderung_feld(t: str) -> str:
     if _AENDERUNG_ZEIT_RE.search(t):
         return "zeit"
     return ""
+
+
+def _vorrat_leeren(sit: dict) -> None:
+    sit["slotVorrat"] = []
+    sit["vorratKey"] = ""
+    sit["vorratGemerkt"] = False
+    sit.pop("vorratDispatch", None)
+    sit.pop("vorratFuer", None)
+    sit["offered"] = []
+    sit.pop("angebotKalender", None)
+    sit.pop("buchIntent", None)
 
 
 def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
@@ -1265,8 +1390,35 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
         s["phase"] = ""
         s["frage"] = "wunsch"
         return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
+    if feld == "grund":
+        s["grund"] = ""
+        s["grundWortlaut"] = ""
+        s["motivId"] = ""
+        s["motivName"] = ""
+        s["slotIso"] = ""
+        s["phase"] = ""
+        s["frage"] = "grund"
+        _vorrat_leeren(sit)
+        neu = gehirn.einsammeln(sit, t)
+        sit["ernteZuletzt"] = sorted(neu)
+        hintergrund.anstossen(sit)
+        if s["grund"]:
+            fid, frage = gehirn.naechste_frage(sit)
+            s["frage"] = fid
+            if fid:
+                return {"text": (_quittung(s, neu) + frage).strip()}
+            ang = _angebot(sit, melde)
+            if ang and _s(ang.get("text")):
+                q = _quittung(s, neu)
+                if q:
+                    ang["text"] = q + ang["text"]
+            return ang
+        return {"text": (
+            "Alles klar, dann der Besuchsgrund. "
+            "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
+        )}
     s["frage"] = "aenderung"
-    return {"text": "Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
+    return {"text": "Was darf ich ändern — der Zeitpunkt, der Name, die Nummer oder der Besuchsgrund?"}
 
 
 def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
@@ -1409,7 +1561,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             s["frage"] = "aenderung"
             if _aenderung_feld(t):
                 return _aenderung_zug(sit, t, melde)
-            return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name oder die Nummer?"}
+            return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name, die Nummer oder der Besuchsgrund?"}
         if _aenderung_feld(t):
             sit.pop("bestaetigenUnklar", None)
             sit.pop("buchIntent", None)
@@ -1459,7 +1611,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         r_kasse = _pzr_kasse_zug(sit, t, melde)
         if r_kasse is not None:
             return r_kasse
-    if (gehirn.ist_pzr_preisfrage(t) and gehirn.pzr_im_kontext(s, t)
+    if (gehirn.ist_pzr_preisfrage(t) and gehirn.pzr_im_kontext(s, t, sit)
             and s["frage"] not in {
                 "telefon_check", "telefon", "buchstabieren",
                 "slotwahl", "bestaetigung", "arzt_notiz", "arzt_notiz_diktat",
@@ -1493,7 +1645,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         return {"text": gehirn.termin_anbieten_frage(s)}
 
     if (not s["modus"] and "modus" not in neu
-            and gehirn.ist_nacktes_pzr(t) and gehirn.ist_pzr_grund(s)):
+            and gehirn.ist_nacktes_pzr(t) and gehirn.ist_pzr_grund(s)
+            and motive.fuehrt_pzr(sit)):
         s["frage"] = "termin_anbieten"
         s["terminAnbieten"] = "gefragt"
         return {"text": gehirn.termin_anbieten_frage(s)}
@@ -1501,7 +1654,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if s["modus"] != "buchen" and "modus" not in neu:
         return None
 
+    if s["frage"] == "folge_kontrolle":
+        return _folge_kontrolle_zug(sit, t, neu, melde)
+
     if s["frage"] == "rueckblick":
+        if gehirn.nicht_zahn(sit):
+            return _folge_zug(sit, t, neu, melde)
         # Antwort auf die Verlaufs-Frage zum letzten Besuch (30.08.2026).
         # Ernte im Satz -> die Maschine macht normal weiter (faellt durch);
         # klar positive Kurzantwort -> Mini-Empathie + naechster Schritt;
@@ -1752,6 +1910,9 @@ def status_zeile(sit: dict) -> str:
         offen += (" (Bianca fragt, ob eine Notiz für den Doktor zum Termin "
                   "soll — besondere Frage, auf die er eingehen soll. "
                   "Kein medizinischer Rat; den Wortlaut nur aufnehmen.)")
+    if s.get("frage") == "folge_kontrolle":
+        offen += (" (Bianca fragt, ob sie eine Kontrolle buchen soll. "
+                  "Nie Krebs sagen — immer Kontrolle.)")
     if s.get("frage") in {"bleaching", "bleaching_check"}:
         # W-BLEACHING (Chef 03.09.2026): Faktenwissen fuer freie Nachfragen.
         # Preis NUR auf Nachfrage nennen ("nicht mit den kosten ins haus
@@ -1769,8 +1930,9 @@ def status_zeile(sit: dict) -> str:
     # Rueckblick-Kontext (30.08.2026): das LLM plaudert ueber den letzten
     # Besuch mit — es muss wissen, wann und weswegen der Anrufer da war.
     if s.get("rueckblick") and s.get("letzterGrund"):
+        damals = gehirn.grund_am_telefon(s.get("letzterGrund") or "")
         offen += (f" Kontext: Der Anrufer war zuletzt am {_s(s.get('letzterBesuch'))[:10]} da, "
-                  f"Grund damals: {s['letzterGrund']}.")
+                  f"Grund damals: {damals}. Sage niemals Krebs — am Telefon heißt das Kontrolle.")
         if s.get("rueckblick") == "gefragt":
             offen += " Bianca hat gerade nach dem Verlauf gefragt — reagiere empathisch auf die Antwort."
     slots = "; ".join(_s(x.get("spoken")) for x in (sit.get("offered") or [])[:3])
