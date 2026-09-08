@@ -239,7 +239,9 @@ def _nur_titel(first: str) -> bool:
 def ohne_titel(name: str) -> str:
     """Fuehrende Titel-Tokens ("Dr.", "Prof.", "Herr", …) abwerfen."""
     teile = _s(name).split()
-    while teile and teile[0].lower().rstrip(".") in {"dr", "prof", "med", "herr", "frau"}:
+    while teile and teile[0].lower().rstrip(".") in {
+        "dr", "doktor", "prof", "professor", "med", "herr", "frau",
+    }:
         teile = teile[1:]
     return " ".join(teile)
 
@@ -271,8 +273,8 @@ def arzt_sprechname(name: str, tenant: dict | None = None) -> str:
     if not kern_name:
         return ""
     tokens = [t.lower().rstrip(".") for t in kern_name.replace(".", ". ").split()]
-    hat_prof = "prof" in tokens
-    hat_dr = "dr" in tokens
+    hat_prof = "prof" in tokens or "professor" in tokens
+    hat_dr = "dr" in tokens or "doktor" in tokens
     rest = ohne_titel(kern_name).split()
     nachname = rest[-1] if rest else ""
     if not nachname:

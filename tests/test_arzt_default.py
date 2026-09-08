@@ -7,7 +7,8 @@ er soll dann immer bei dr. Petsas buchen."
 """
 
 from bianca import flow, gehirn
-from kern import tenants as kern_tenants
+from kern import tenants as kern_tenants, tts
+from kern.patients import arzt_sprechname
 from kern.tenants import laden
 
 PETSAS = "zex5bmv5jfIHWVW6zHbg"
@@ -34,6 +35,31 @@ def test_behandler_alle_im_prompt_richtig_herum():
     from bianca.agent import _behandler_alle
     zeile = _behandler_alle(laden("meddent"))
     assert zeile == "Doktor Petsas, Doktor Patrikis, Doktor Nikolaou", zeile
+
+
+def test_db_doktorform_verliert_den_titel_nicht():
+    """CF liefert „Doktor Michael …“, nicht die lokale Kurzform „Dr. …“."""
+    tenant = {
+        "defaultCalendarId": PETSAS,
+        "calendars": [
+            {"id": "pat", "name": "Doktor Theodosios Patrikis, M.Sc."},
+            {"id": PETSAS, "name": "Doktor Michael Petsas"},
+        ],
+    }
+    assert arzt_sprechname("Doktor Michael Petsas", tenant) == "Doktor Petsas"
+    assert arzt_sprechname(
+        "Doktor Theodosios Patrikis, M.Sc.", tenant,
+    ) == "Doktor Patrikis"
+    frage = gehirn.arztwahl_frage(tenant)
+    assert "Doktor Petsas oder Doktor Patrikis" in frage, frage
+
+
+def test_patrikis_mund_hat_kurzes_a():
+    tts.aussprache_zuruecksetzen()
+    try:
+        assert tts._normalisieren("Doktor Patrikis") == "Doktor Pat-ri-kis"
+    finally:
+        tts.aussprache_zuruecksetzen()
 
 
 # --- "Weiss nicht zu welchem Arzt" -> Standard-Behandler ---------------------

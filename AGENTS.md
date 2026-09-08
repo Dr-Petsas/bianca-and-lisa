@@ -1541,7 +1541,13 @@ soll dann immer bei dr. Petsas buchen."
   die Kartei-Recherche nichts hergibt). Die globale Schnellster-Arzt-Suche
   (egal=True an die CF) läuft nur noch, wenn ein Tenant KEINEN
   Default-Kalender hat.
-- Tests: `tests/test_arzt_default.py` (7, offline);
+- **W-ARZT-TITEL (09.09.2026):** CF-Kalender heißen ausgeschrieben
+  „Doktor Michael Petsas“ / „Doktor Theodosios Patrikis“. `arzt_sprechname`
+  erkennt „Doktor“ genauso wie „Dr.“ und spricht die Auswahl als
+  „Doktor Petsas oder Doktor Patrikis“ — nie titellos. Die reine
+  Mund-Umschrift für Patrikis ist `Pat-ri-kis` (geschlossene, kurze
+  erste Silbe), nicht mehr `Pa-tri-kis` mit gedehntem „Paaah“.
+- Tests: `tests/test_arzt_default.py` (9, offline);
   `test_buchung_bindet_angebots_kalender` wurde auf die neue Regel gedreht
   (Bindungs-Wache selbst unverändert).
 

@@ -38,7 +38,9 @@ _GENERISCH = (
 _BEHANDLER_FALLBACK = (
     # Qwen3 liest die Namen sonst englisch/lateinisch an.
     (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
-    (re.compile(r"\bPatrikis\b", re.I), "Pa-tri-kis"),
+    # Geschlossene erste Silbe: "Pat", nicht das gedehnte "Paaah" aus
+    # der früheren offenen Umschrift "Pa-tri-kis" (Live 09.09.2026).
+    (re.compile(r"\bPatrikis\b", re.I), "Pat-ri-kis"),
     (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
 _AUSSPRACHE_CACHE: tuple | None = None
