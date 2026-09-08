@@ -203,6 +203,16 @@ def test_schnellstrasse_terminwunsch_ohne_llm(monkeypatch):
     assert d["handlung"] == "ANLEGEN" and d["quelle"] == "schnell"
 
 
+def test_leitung_check_ist_kein_erreichen(monkeypatch):
+    """Live 08.09.2026: 'Bin ich mit der Praxis Dr. Petsas verbunden?'
+    darf nicht ERREICHEN werden (Wort 'verbunden' + Name)."""
+    _llm_verboten(monkeypatch)
+    satz = "Hallo, Petsas mein Name. Bin ich mit der Praxis Dr. Petsas verbunden?"
+    d = intent.erkennen(_sit(), satz)
+    assert d["handlung"] != "ERREICHEN", d
+    assert d["handlung"] == "WISSEN"
+
+
 def test_besprechung_ist_kein_erreichen(monkeypatch):
     """Implantatbesprechung / ZE Besprechung ≠ 'sprechen' (Live 06.09.2026)."""
     _llm_verboten(monkeypatch)
@@ -213,6 +223,16 @@ def test_besprechung_ist_kein_erreichen(monkeypatch):
     ):
         d = intent.erkennen(_sit(), satz)
         assert d["handlung"] != "ERREICHEN", (satz, d)
+
+
+def test_schiene_abholen_ist_anlegen_nicht_erreichen(monkeypatch):
+    """Pourianmehr 08.09.: Abholung schlägt 'mit dem Arzt sprechen'."""
+    _llm_verboten(monkeypatch)
+    satz = ("Ich möchte meine Zahnschienen abholen und darüber "
+            "möchte ich mit einem Arzt sprechen.")
+    d = intent.erkennen(_sit(), satz)
+    assert d["handlung"] == "ANLEGEN", d
+    assert d["quelle"] in {"schnell", "heuristik"}
 
 
 def test_ernte_im_anliegen_ohne_llm(monkeypatch):
@@ -379,7 +399,8 @@ def test_weiterleiten_mit_hirnzettel():
     sit = _sit()
     sit["hirnVerbinden"] = {"person": "Doktor Petsas sprechen"}
     aus = weiterleiten.zug(sit, "Ich haette gern den Herrn Petsas.")
-    assert aus is not None and aus.get("text")
+    assert aus is not None
+    assert aus.get("text") or aus.get("transfer")
     assert "hirnVerbinden" not in sit  # Zettel verbraucht
 
 

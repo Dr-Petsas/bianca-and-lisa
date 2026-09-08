@@ -32,9 +32,13 @@ import re
 from typing import Any, Callable
 
 from bianca import arzt as arztmod
-from bianca import gehirn
+from bianca import besuchsgrund, gehirn
 from kern import wiederholung
+from kern.leitung import ist_leitung_check
 from kern.patients import arzt_sprechname
+
+# Kurze Quittung auf „Bin ich mit der Praxis … verbunden?“ — kein Jingle.
+LEITUNG_OK = "Ja, Sie sind richtig verbunden. Was kann ich für Sie tun?"
 
 Melde = Callable[[str], None] | None
 
@@ -143,7 +147,11 @@ def _s(v: Any) -> str:
 def erkannt(text: str) -> bool:
     """Will der Anrufer verbunden werden / einen Menschen sprechen?"""
     t = _s(text)
-    if not t:
+    if not t or ist_leitung_check(t):
+        return False
+    # Pourianmehr 08.09.: „Schiene abholen und darüber mit einem Arzt
+    # sprechen“ ist Buchung zur Eingliederung, kein Durchstellen.
+    if besuchsgrund.ist_schiene_abholen(t):
         return False
     return bool(_VERBINDEN_RE.search(t) or _MENSCH_RE.search(t) or _ARZT_SPRECHEN_RE.search(t))
 
@@ -297,6 +305,18 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     s = gehirn.sammler(sit)
     t = _s(gesagt)
     if not t:
+        return None
+    # Live 08.09.2026: „Bin ich mit der Praxis Dr. Petsas verbunden?“
+    # ist Leitung prüfen, nicht durchstellen — auch wenn das Hirn
+    # ERREICHEN geraten hat (Wort „verbunden“ + Name Petsas).
+    if ist_leitung_check(t):
+        sit.pop("hirnVerbinden", None)
+        return {"text": LEITUNG_OK}
+    # Offene Weiterleitung darf eine Abholung nicht verschlucken
+    # (Live Pourianmehr: frage=arzt, dann „Zahnschienen abholen“).
+    if besuchsgrund.ist_schiene_abholen(t):
+        sit["weiterleiten"] = {}
+        sit.pop("hirnVerbinden", None)
         return None
     # W-HIRN (03.09.2026): das Session-Hirn hat ERREICHEN erkannt — auch wenn
     # keine der Verbinde-Regexes den Satz fasst ("Ich haette gern Doktor X",

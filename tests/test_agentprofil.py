@@ -77,7 +77,8 @@ def test_fuer_did_db_gewinnt_vor_lokaler_datei(monkeypatch):
     pre = copy.deepcopy(CF_PRE)
     pre["clientId"] = pre["agent"]["clientId"] = "MEe4ZQHEzOPzLcexyhdT"
     pre["agent"]["firstMessage"] = "Zahnfeen im Medical Center, guten Tag!"
-    monkeypatch.setattr(agentprofil, "_cf_pre", lambda did, caller="": copy.deepcopy(pre))
+    monkeypatch.setattr(agentprofil, "_cf_pre",
+                        lambda did, caller="", lookup_only=False: copy.deepcopy(pre))
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
     t = agentprofil.fuer_did("+4921154244110")
     assert t is not None
@@ -91,7 +92,7 @@ def test_fuer_did_cf_down_faellt_auf_lokale_datei(monkeypatch):
     # CF nicht erreichbar: der Anruf laeuft ueber die kuratierte Datei weiter.
     agentprofil.cache_leeren()
 
-    def _kaputt(did, caller=""):
+    def _kaputt(did, caller="", lookup_only=False):
         raise RuntimeError("CF down")
 
     monkeypatch.setattr(agentprofil, "_cf_pre", _kaputt)
@@ -183,7 +184,7 @@ def test_fuer_did_geschwister_did_wenn_haupt_fehlt(monkeypatch):
     ]
     pre["agent"]["firstMessage"] = "Zahnärzte im Medical Center, guten Tag!"
 
-    def _fake(did, caller=""):
+    def _fake(did, caller="", lookup_only=False):
         if tenants.nummer_norm(did) == "4921154244110":
             return copy.deepcopy(pre)
         return None
@@ -210,7 +211,7 @@ def test_fuer_did_cf_weg_mit_cache(monkeypatch):
     agentprofil.cache_leeren()
     zaehler = {"n": 0}
 
-    def _fake_pre(did, caller=""):
+    def _fake_pre(did, caller="", lookup_only=False):
         zaehler["n"] += 1
         return copy.deepcopy(CF_PRE)
 
@@ -231,7 +232,7 @@ def test_fuer_did_cf_weg_mit_cache(monkeypatch):
 def test_fuer_did_cf_fehler_faellt_auf_none(monkeypatch):
     agentprofil.cache_leeren()
 
-    def _kaputt(did, caller=""):
+    def _kaputt(did, caller="", lookup_only=False):
         raise RuntimeError("CF down")
 
     monkeypatch.setattr(agentprofil, "_cf_pre", _kaputt)
@@ -297,6 +298,25 @@ def test_cf_pre_normalisiert_anrufer_auf_e164(monkeypatch):
     assert gesehen[0]["callerPhone"] == "+4915253904756"
     assert gesehen[1]["callerPhone"] == "+4915253904756"
     assert gesehen[2]["callerPhone"] == "anonymous"
+    assert "lookupOnly" not in gesehen[0]
+    agentprofil._cf_pre("4921154244101", caller="", lookup_only=True)
+    assert gesehen[3]["lookupOnly"] is True
+
+
+def test_fuer_did_holt_agent_ohne_phonecall(monkeypatch):
+    """Cache-Fuellung darf keinen CallR-Datensatz anlegen — nur call_erfassen."""
+    gesehen: list[dict] = []
+
+    def _fake(did, caller="", lookup_only=False):
+        gesehen.append({"did": did, "lookup_only": lookup_only})
+        return copy.deepcopy(CF_PRE)
+
+    monkeypatch.setattr(agentprofil, "enabled", lambda: True)
+    monkeypatch.setattr(agentprofil, "_cf_pre", _fake)
+    agentprofil.cache_leeren()
+    t = agentprofil.fuer_did("+4921154244110")
+    assert t is not None
+    assert gesehen and all(g["lookup_only"] is True for g in gesehen)
 
 
 def test_begruessung_nutzt_db_text_wenn_gesetzt():
@@ -358,7 +378,7 @@ def test_call_erfassen_frische_cf_antwort_traegt_phonecallid(monkeypatch):
 def test_call_erfassen_cache_hit_registriert_nach(monkeypatch):
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
     monkeypatch.setattr(agentprofil, "_cf_pre",
-                        lambda did, caller="": {"phoneCallId": "pc-neu"})
+                        lambda did, caller="", lookup_only=False: {"phoneCallId": "pc-neu"})
     monkeypatch.setattr(agentprofil.threading, "Thread", _SofortThread)
     t = agentprofil.tenant_von_pre(copy.deepcopy(CF_PRE), did="4930111222")
     t.pop("_phoneCallId", None)  # wie ein Cache-Treffer
@@ -404,7 +424,8 @@ def test_anrufer_landet_in_der_sitzung_nie_im_cache(monkeypatch):
     pre = copy.deepcopy(CF_PRE)
     pre["patient"] = {"id": "pat-7", "firstName": "Julia", "lastName": "Berger",
                       "gender": "female"}
-    monkeypatch.setattr(agentprofil, "_cf_pre", lambda did, caller="": copy.deepcopy(pre))
+    monkeypatch.setattr(agentprofil, "_cf_pre",
+                        lambda did, caller="", lookup_only=False: copy.deepcopy(pre))
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
     t = agentprofil.fuer_did("+4930111222", caller="015253904756")
     assert t["_anrufer"]["nachname"] == "Berger"
@@ -426,7 +447,8 @@ def test_anrufer_cache_hit_wird_nachgereicht(monkeypatch):
     den Patienten zur Anrufernummer nach — ohne echte Nummer nie."""
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
     monkeypatch.setattr(agentprofil.threading, "Thread", _SofortThread)
-    monkeypatch.setattr(agentprofil, "_cf_pre", lambda did, caller="": {
+    monkeypatch.setattr(agentprofil, "_cf_pre",
+                        lambda did, caller="", lookup_only=False: {
         "phoneCallId": "pc-neu",
         "patient": {"id": "pat-9", "firstName": "Peter", "lastName": "Schmidt"},
     })
@@ -554,6 +576,22 @@ def test_call_abschliessen_ohne_phonecallid_schweigt(monkeypatch):
     monkeypatch.setattr(agentprofil, "_cf_senden", _knall)
     sit = session.neu(tenant_id="meddent")
     agentprofil.call_abschliessen(sit)  # darf nicht werfen, nicht senden
+
+
+def test_call_abschliessen_leeres_transkript_nicht_an_callr(monkeypatch):
+    monkeypatch.setattr(agentprofil, "enabled", lambda: True)
+    gesendet: list[dict] = []
+    monkeypatch.setattr(agentprofil, "_cf_senden",
+                        lambda body: gesendet.append(body) or {"status": "success"})
+    monkeypatch.setattr(agentprofil, "_analyse_llm", lambda transcript: {})
+    monkeypatch.setattr(agentprofil, "_cf_transkript", lambda sit: ([], 0))
+    t = agentprofil.tenant_von_pre(copy.deepcopy(CF_PRE), did="4930111222")
+    sit = session.neu(tenant=t)
+    sit["phoneCallId"] = "pc-leer"
+    agentprofil.call_abschliessen(sit)
+    post = gesendet[0]
+    assert post["phase"] == "post"
+    assert "transcript" not in post
 
 
 def test_system_prompt_merged_db_profil_und_bleibt_neutral():

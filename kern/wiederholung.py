@@ -57,6 +57,21 @@ def _saetze(text: str) -> list[str]:
     return [x for x in _SATZ_ENDE_RE.split(_s(text)) if x]
 
 
+def gesagt_merken(sit: dict, text: str) -> None:
+    """Gesprochene Sätze merken — auch Vorab, der nie in messages landet.
+
+    Live 08.09.2026: „Ah, Herr Petsas…“ ging als Vorab raus, der Wächter
+    sah nur die LLM-Antwort und ließ den Hallo jeden Zug erneut durch."""
+    bag = sit.setdefault("waechterGesagt", [])
+    if not isinstance(bag, list):
+        bag = []
+        sit["waechterGesagt"] = bag
+    for satz in _saetze(text):
+        n = _norm(satz)
+        if n and n not in bag:
+            bag.append(n)
+
+
 def letzte_antworten(msgs: list[dict], n: int = FENSTER, *, ohne_letzte: bool = False) -> list[str]:
     """Die letzten n Assistenten-Antworten — ohne_letzte=True überspringt die
     jüngste (das ist auf dem LLM-Pfad der gerade geprüfte Text selbst)."""
@@ -93,7 +108,8 @@ def _variante(sit: dict, fid: str, varianten: dict, verbraucht: set[str]) -> str
 
 
 def pruefen(sit: dict, text: str, *, frueher: list[str], frage_id: str = "",
-            frage_kern: str = "", varianten: dict | None = None) -> str:
+            frage_kern: str = "", varianten: dict | None = None,
+            auch_kurz: bool = False) -> str:
     """Einen sprechfertigen Zug gegen die letzten Antworten entdoppeln.
 
     Liefert den (ggf. umformulierten/gekürzten) Text — oder '', wenn alles
@@ -101,11 +117,16 @@ def pruefen(sit: dict, text: str, *, frueher: list[str], frage_id: str = "",
     entscheidet dann über einen Rückfall (nie stumm bleiben).
     """
     t = _s(text)
-    if not t or not frueher:
+    if not t:
         return t
     if frage_id == "telefon_check":
         return t
+    if not frueher and not (sit.get("waechterGesagt") or []):
+        return t
     gehoert: set[str] = set()
+    for n in (sit.get("waechterGesagt") or []):
+        if n:
+            gehoert.add(str(n))
     for antwort in frueher:
         for satz in _saetze(antwort):
             n = _norm(satz)
@@ -119,7 +140,7 @@ def pruefen(sit: dict, text: str, *, frueher: list[str], frage_id: str = "",
     for satz in _saetze(t):
         n = _norm(satz)
         frage_satz = satz.rstrip().endswith("?")
-        kandidat = frage_satz or len(satz) >= LANGSATZ_AB
+        kandidat = frage_satz or len(satz) >= LANGSATZ_AB or auch_kurz
         if not n or not kandidat or _ZIFFER_RE.search(satz) or n not in gehoert:
             behalten.append(satz)
             continue

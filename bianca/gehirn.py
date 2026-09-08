@@ -1115,6 +1115,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     from kern import intent as _intent  # lokal: gehirn laedt vor kern.llm
     im_angebot = s["modus"] == "buchen" and s["phase"] in {"angebot", "bestaetigen"}
     hirn_regelt = "hirn" in sit and _intent.enabled()
+    # Auch mit Hirn: fertige Schiene abholen ist Job-Buchung, nicht Talk.
+    if (not im_angebot and s["phase"] not in {"gebucht", "angebot", "bestaetigen"}
+            and besuchsgrund.ist_schiene_abholen(t) and s["modus"] != "buchen"):
+        s["modus"] = "buchen"
+        s["phase"] = ""
+        s["frage"] = ""
+        neu.add("modus")
     if not im_angebot and not hirn_regelt:
         # phase "fertig" = das vorige Anliegen ist abgeschlossen (Storno
         # erledigt ODER ehrlich nicht gefunden). Ein WIEDERHOLTER Wunsch im
@@ -1143,11 +1150,12 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
-        elif _TERMIN_RE.search(t) and not ist_nacktes_pzr(t):
+        elif (_TERMIN_RE.search(t) or besuchsgrund.ist_schiene_abholen(t)) and not ist_nacktes_pzr(t):
             # Neu buchen: aus dem Leeren — oder nach abgeschlossener
             # Verwaltung ("fertig": Storno erledigt, Auskunft gegeben).
             # Nacktes "Zahnreinigung" startet KEINE Buchung (Chef 07.09.2026)
             # — der Fluss fragt erst "Brauchen Sie einen Termin …?".
+            # Pourianmehr 08.09.: „Schiene abholen“ trägt oft kein Termin-Wort.
             if s["modus"] == "" or (s["modus"] != "buchen" and s["phase"] == "fertig"):
                 s["modus"] = "buchen"
                 s["phase"] = ""
@@ -1960,11 +1968,11 @@ _NARVAL_RE = re.compile(
 )
 _ANRUF_KERN_RE = re.compile(r"angerufen:\s*(.+)", re.I | re.S)
 _EINGLIEDER_MUSTER = [
+    r"slm\s+einglieder",
     r"einglieder\w*.{0,28}(narval|schien)",
     r"(narval|schien)\w*.{0,28}einglieder",
     r"narval",
     r"schien\w*.{0,16}abhol",
-    r"abhol",
     r"slm\s+besprechung",
     r"\bslm\b",
 ]

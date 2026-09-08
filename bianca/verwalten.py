@@ -36,7 +36,7 @@ from typing import Any, Callable
 from bianca import gehirn, hintergrund
 from kern import agentprofil
 from kern import calendar as kal
-from kern import gespraech
+from kern import gespraech, motive
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
@@ -158,15 +158,27 @@ def _finden(sit: dict, melde: Melde) -> dict:
     return res
 
 
-def _arzt_uebernehmen(sit: dict, termin: dict) -> None:
-    """Behandler des Bestandstermins als Vorgabe fuer eine Folge-Buchung."""
+def _arzt_uebernehmen(sit: dict, termin: dict, *, fest: bool = False) -> None:
+    """Behandler des Bestandstermins als Vorgabe fuer eine Folge-Buchung.
+
+    fest=True: der gefundene Termin gewinnt — Slots nur bei DIESEM Arzt
+    (Chef 08.09.2026), ausser der Anrufer hat ausdrücklich einen anderen
+    genannt (typ wahl/genannt mit anderer calendarId)."""
+    if not termin.get("calendarId"):
+        return
     s = gehirn.sammler(sit)
-    if termin.get("calendarId") and not (s["arzt"] or {}).get("calendarId"):
-        s["arzt"] = {
-            "typ": "letzter",
-            "calendarId": _s(termin.get("calendarId")),
-            "calendarName": _s(termin.get("doctorName")),
-        }
+    alt = s.get("arzt") or {}
+    if (not fest and alt.get("calendarId")):
+        return
+    if (fest and alt.get("typ") in {"wahl", "genannt"}
+            and alt.get("calendarId")
+            and alt["calendarId"] != termin.get("calendarId")):
+        return
+    s["arzt"] = {
+        "typ": "letzter",
+        "calendarId": _s(termin.get("calendarId")),
+        "calendarName": _s(termin.get("doctorName")),
+    }
 
 
 def _liste_sprechbar(termine: list[dict]) -> str:
@@ -317,13 +329,43 @@ def _vorname_frage(sit: dict) -> dict:
     )}
 
 
-def _behandlung_frage(sit: dict) -> dict:
+def _behandlung_beispiele(sit: dict, treffer: list | None = None) -> list[str]:
+    """Beispiele NUR aus den gefundenen Terminen bzw. dem Katalog dieser Praxis."""
+    namen: list[str] = []
+    gesehen: set[str] = set()
+    for a in treffer or []:
+        name = gehirn.grund_am_telefon(a.get("motivName") or "")
+        key = name.casefold()
+        if not name or key in gesehen:
+            continue
+        gesehen.add(key)
+        namen.append(name)
+        if len(namen) >= 2:
+            return namen
+    for name in motive.sprech_beispiele(sit, n=2):
+        key = name.casefold()
+        if key in gesehen:
+            continue
+        gesehen.add(key)
+        namen.append(name)
+        if len(namen) >= 2:
+            break
+    return namen
+
+
+def _behandlung_frage(sit: dict, treffer: list | None = None) -> dict:
     s = gehirn.sammler(sit)
     sit["verwBehandlungGefragt"] = True
     s["frage"] = "behandlung"
+    beispiele = _behandlung_beispiele(sit, treffer)
+    if len(beispiele) >= 2:
+        extra = f" — zum Beispiel {beispiele[0]} oder {beispiele[1]}?"
+    elif beispiele:
+        extra = f" — zum Beispiel {beispiele[0]}?"
+    else:
+        extra = "?"
     return {"text": (
-        "Da finde ich mehrere. Für welche Behandlung war der Termin denn — "
-        "zum Beispiel Kontrolle oder Zahnreinigung?"
+        f"Da finde ich mehrere. Für welche Behandlung war der Termin denn{extra}"
     )}
 
 
@@ -487,18 +529,19 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     termin = _gewaehlt(sit)
     if not termin:
         return _kein_termin(sit, "verschieben")
+    _arzt_uebernehmen(sit, termin, fest=True)
     if melde:
         melde("offer_slots")
+    a = s.get("arzt") or {}
     such_ctx = {
-        "calendarId": _s(termin.get("calendarId")),
-        "calendarName": _s(termin.get("doctorName")),
+        "calendarId": _s(a.get("calendarId")) or _s(termin.get("calendarId")),
+        "calendarName": _s(a.get("calendarName")) or _s(termin.get("doctorName")),
         "visitMotiveId": _s(termin.get("motivId")),
         "visitMotiveName": _s(termin.get("motivName")) or "Kontrolluntersuchung",
     }
-    found = kal.find_slots(
+    found = kal.find_slots_behandler(
         sit["tenant"], such_ctx,
         start_date=gehirn.start_datum(s),
-        egal=not such_ctx["calendarId"],
         source="pickadoc-bianca",
     )
     merke_tool(sit, "getFreeTimeSlots", found)
@@ -632,6 +675,7 @@ def _bestaetigen(sit: dict, termin: dict, melde: Melde) -> dict:
     if s["modus"] == "absagen":
         return _absage_frage(sit, termin)
     sit["verwaltenTermin"] = _s(termin.get("id"))
+    _arzt_uebernehmen(sit, termin, fest=True)
     if s["wunsch"]:
         return _verschieb_angebot(sit, melde)
     return _verschieb_wunsch_frage(sit, termin)
@@ -679,7 +723,7 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
         # wenn die Termine sich darin ueberhaupt unterscheiden.
         motive = {_s(a.get("motivName")).lower() for a in treffer}
         if len(motive) > 1:
-            return _behandlung_frage(sit)
+            return _behandlung_frage(sit, treffer)
     verb = "absagen" if s["modus"] == "absagen" else "verschieben"
     s["phase"] = "wahl"
     s["frage"] = "terminwahl"

@@ -157,7 +157,7 @@ def kartei_anstossen(sit: dict) -> None:
                     s["letzterGrund"] = _s(besuch_info.get("grund"))
                     print(f"bianca-kartei: letzter Besuch {s['letzterBesuch'][:10]} "
                           f"({s['letzterGrund'] or 'ohne Grund'})", flush=True)
-                    satz = gehirn.kartei_fueller_satz(s)
+                    satz = gehirn.kartei_fueller_satz(s, sit)
                     if satz:
                         sit["karteiFillerText"] = satz
                         try:
@@ -265,12 +265,19 @@ def vorrat_anstossen(sit: dict) -> None:
                 "visitMotiveName": (_s(vm.get("name")) or s["motivName"]
                                     or "Kontrolluntersuchung"),
             }
-            found = calendar.find_slots(
-                tenant, ctx,
-                start_date=gehirn.start_datum(s),
-                egal=egal,
-                source="pickadoc-bianca",
-            )
+            if a.get("calendarId"):
+                found = calendar.find_slots_behandler(
+                    tenant, ctx,
+                    start_date=gehirn.start_datum(s),
+                    source="pickadoc-bianca",
+                )
+            else:
+                found = calendar.find_slots(
+                    tenant, ctx,
+                    start_date=gehirn.start_datum(s),
+                    egal=egal,
+                    source="pickadoc-bianca",
+                )
             # Nur speichern, wenn der Rahmen noch stimmt — sonst würde eine
             # überholte Suche (alter Arzt/Tag) das frische Ziel überschreiben.
             if found.get("ok") and sit.get("vorratKey") == mein_key:

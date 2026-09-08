@@ -91,25 +91,21 @@ def main() -> None:
         _fail("json_antwort ohne mitschnitt.zug")
     _ok("CallR/Mitschnitt-Pfad verdrahtet")
 
-    # --- 3) Jede DID: CF oder Geschwister liefert Agent + WL -----------------
-    agentprofil.cache_leeren()
+    # --- 3) Jede DID: lokale Datei kennt Leitung + WL -----------------------
+    # Nie fuer_did()/CF-pre ohne lookupOnly: das legt leere inProgress-
+    # CallR-Geister an (anonymous, kein Hangup, kein Transkript). Echte
+    # Anrufe registriert nur call_erfassen.
     dids = med.get("dids") or []
     if not dids:
         _fail("meddent.json ohne dids")
     for did in dids:
-        t = agentprofil.fuer_did(did)
+        t = tenants.von_did(did)
         if not t:
-            _fail(f"kein Tenant fuer DID {did}")
-        w = t.get("weiterleitungen") or []
-        if not w and agentprofil.enabled():
-            # CF tot + lokale Datei sollte WL haben — trotzdem pruefen
-            if not (med.get("weiterleitungen") or []):
-                _fail(f"DID {did}: keine weiterleitungen")
-        if agentprofil.enabled() and not w:
-            # Fallback-Datei muss WL tragen wenn CF leer
-            if t.get("_quelle") == "cf" or str(t.get("_quelle") or "").startswith("cf"):
-                _fail(f"DID {did}: CF-Tenant ohne weiterleitungen")
-        _ok(f"DID {did} -> {t.get('_quelle')} wl={len(w) or len(med.get('weiterleitungen') or [])}")
+            _fail(f"kein lokaler Tenant fuer DID {did}")
+        w = t.get("weiterleitungen") or med.get("weiterleitungen") or []
+        if not w:
+            _fail(f"DID {did}: keine weiterleitungen")
+        _ok(f"DID {did} -> datei {t.get('_id')} wl={len(w)}")
 
     # --- 4) Prefill-Konstante SIP-Bruecke ------------------------------------
     from sip_bridge import server as bruecke

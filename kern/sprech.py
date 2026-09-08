@@ -374,6 +374,23 @@ def _scrub_tech(text: str) -> str:
     return _s(out.replace("()", "").replace("( )", ""))
 
 
+# Chef 08.09.2026: Krebs wird am Telefon nie gesagt — immer Kontrolle.
+_KREBS_TOKEN_RE = re.compile(r"[A-Za-zÄÖÜäöüß\-]*[Kk]rebs[A-Za-zÄÖÜäöüß\-]*")
+
+
+def ohne_krebs(text: str) -> str:
+    """Hautkrebsscreening / Krebs → Kontrolle. Interner Motivname darf bleiben."""
+    roh = _s(text)
+    if not roh or "krebs" not in roh.lower():
+        return roh
+    out = _KREBS_TOKEN_RE.sub("Kontrolle", roh)
+    out = re.sub(r"\bzum\s+Kontrolle\b", "zur Kontrolle", out, flags=re.I)
+    out = re.sub(r"\bden\s+Kontrolle\b", "die Kontrolle", out, flags=re.I)
+    out = re.sub(r"\bein\s+Kontrolle\b", "eine Kontrolle", out, flags=re.I)
+    out = re.sub(r"(?:Kontrolle[\s\-]+){2,}", "Kontrolle ", out, flags=re.I)
+    return _s(out)
+
+
 def sanitize(text: str, *, heute: date | None = None) -> str:
     """Der EINE Filter vor der Stimme."""
     roh = _s(text)
@@ -397,4 +414,4 @@ def sanitize(text: str, *, heute: date | None = None) -> str:
     out = _ersetze_zeiten(out, heute)
     out = re.sub(r"\s+([.,;:!?])", r"\1", out)
     out = re.sub(r"\(\s*\)", "", out)
-    return _s(out)
+    return ohne_krebs(_s(out))

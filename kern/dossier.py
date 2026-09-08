@@ -19,6 +19,8 @@ import re
 from datetime import datetime
 from typing import Any
 
+from kern import motive
+
 LEER: dict[str, Any] = {
     "bereit": False,
     "letzterBesuch": "",
@@ -158,7 +160,8 @@ def takte_bauen(sit: dict | None) -> list[str]:
     if (_s(s.get("modus")) == "buchen" and "pzr" not in gesagt
             and _s(s.get("grund")) and phase not in _PHASE_DICHT
             and not _PZR_RE.search(f"{s.get('grund')} {s.get('motivName')}")
-            and not _AKUT_RE.search(_s(s.get("grund")))):
+            and not _AKUT_RE.search(_s(s.get("grund")))
+            and motive.fuehrt_pzr(sit)):
         wartend.append("pzr")
     d["gesagt"] = gesagt
     d["takte"] = [t for t in wartend if t not in gesagt]
@@ -203,10 +206,12 @@ def satz(sit: dict | None) -> str:
     grund = _s(d.get("letzterGrund"))
     if not grund or _tage(d.get("letzterBesuch") or "") <= 7:
         return ""
+    from kern import sprech as _sprech
+    grund = _sprech.ohne_krebs(grund)
     n = grund.lower()
-    if "kontroll" in n:
+    if "kontroll" in n or "krebs" in n:
         kurz = "die Kontrolle"
-    elif _PZR_RE.search(n):
+    elif _PZR_RE.search(n) and motive.fuehrt_pzr(sit):
         kurz = "die Zahnreinigung"
     elif len(grund) > 22:
         kurz = grund[:20].rstrip() + "…"
@@ -244,4 +249,10 @@ def spur_signal(text: str) -> str:
         return ""
     if _IMPLANT_NEU_RE.search(t):
         return "implantat"
+    if re.search(
+        r"(?:zahn)?schien\w*.{0,48}abhol|abhol\w*.{0,48}(?:zahn)?schien|"
+        r"narval.{0,32}abhol",
+        t, re.I,
+    ):
+        return "schiene-abhol"
     return ""

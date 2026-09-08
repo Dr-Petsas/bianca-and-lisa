@@ -33,6 +33,7 @@
     "oepnv": "Sie erreichen uns mit der U zweiundsiebzig, U dreiundsiebzig oder U dreiundachtzig sowie der Linie siebenhundertneun — Haltestellen Schlüterstraße und Arbeitsamt.",
     "hinweise": [
       "ÜBERWEISER — Doktor Grüger und Doktor Lange sind Überweiser aus dem Schlaflabor (Schlafklinik): deren Patienten kommen für eine Narval-Schiene gegen Schnarchen und Schlafapnoe. Sagt jemand, er sei von Doktor Grüger, Doktor Lange oder dem Schlaflabor überwiesen, geht es um diese Schiene — freundlich bestätigen, nichts anderes hineindeuten.",
+      "SCHIENE ABHOLEN — Wer eine fertige Schiene (Narval, Schlafschiene, Zahnschiene) abholen oder einsetzen will, braucht einen Termin zur SLM-Eingliederung. Kein Scan, keine Anfertigung, keine Besprechung. Scan und 80 Euro gelten nur für eine NEUE Schiene, die noch hergestellt wird.",
       "RATENZAHLUNG — fragt jemand nach Ratenzahlung oder Finanzierung, oder sagt er, das Geld sei knapp (Bürgergeld, Hartz vier, ‚kann ich mir nicht leisten‘, ‚zu teuer‘): Ratenzahlung ist grundsätzlich möglich; die Einzelheiten besprechen Sie direkt mit Ihrem Behandler beim Termin. KEINE Zusagen zu Beträgen, Zinsen oder Nachlässen.",
       "TAXI — Taxischeine oder Fahrtkostenübernahmen kann die Praxis leider nicht ausstellen; das Taxi müsste der Anrufer selbst bestellen. Bei Bedarf freundlich auf Bahn und Bus verweisen."
     ]
@@ -48,6 +49,7 @@
     { "id": "ltzsbKhy03hLvuF4yOWX", "name": "PRO professionelle Zahnreinigung", "duration": 30 },
     { "id": "iZvtXtkhlt4llWZiv7T1", "name": "PRO Zahnaufhellung", "duration": 45 },
     { "id": "SfSgpj8SeCSmwnAotqv4", "name": "SLM Besprechung", "duration": 15 },
+    { "id": "slm-eingliederung-local", "name": "SLM Eingliederung", "duration": 15 },
     { "id": "8QCwEyR3Jyao63PmJ7vo", "name": "ZE Besprechung", "duration": 25 }
   ]
 }

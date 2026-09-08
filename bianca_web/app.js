@@ -991,7 +991,7 @@ function zeigeLetzten(call) {
 const KOENNEN = [
   { t: "Terminverwaltung — der Kern", p: [
     "<b>Buchen:</b> Termine fest in den echten Praxiskalender (Neupatient wie Bestand), inklusive Bestätigungs-SMS der Praxis.",
-    "<b>Behandler-Wahl zu Beginn:</b> Dr. Petsas, Dr. Patrikis oder Dr. Nikolaou — „egal“ sucht global den schnellsten Termin.",
+    "<b>Behandler-Wahl zu Beginn:</b> Dr. Petsas, Dr. Patrikis oder Dr. Nikolaou — „egal“ bucht bei Dr. Petsas. Slots nur bei diesem Arzt; ein anderer nur, wenn der Anrufer ihn ausdrücklich nennt.",
     "<b>Finden &amp; ansagen:</b> „Wann ist mein Termin?“ → Bianca liest ihn vor und bietet gleich Verschieben oder Absagen an.",
     "<b>Absagen (nur der Nachname):</b> Bianca fragt einzig „Wie ist Ihr Nachname?“ und sucht sofort im Kalender; gibt es mehrere Patienten mit dem Nachnamen, grenzt der Vorname ab. Bestätigt wird mit Anrede: „Soll ich den Termin wirklich absagen, Herr Berger?“ Versteht alle Sprech-Formen: absagen, stornieren, löschen, streichen, canceln, „fällt aus“, „nicht wahrnehmen“ — und startet nach einem Fehlversuch sauber neu, statt am alten Stand zu kleben.",
     "<b>Verschieben:</b> gleiche Such-Prozedur; alter Termin und neuer Wunsch werden sauber getrennt.",
@@ -1148,6 +1148,8 @@ const PATCHES = [
   ["W-ANRUFER-FAST (Name sofort, Kartei danach)", "08.09.", "Gespräch", "Der erste Satz braucht nur den Namens-Treffer zur Rufnummer (schon beim Abheben da) — nicht letzten Termin oder Behandler. Die Kartei läuft parallel zur Begrüßung. Nach dem Ja: „Sie waren zuletzt bei Doktor X, richtig?“, dann PZR und der Rest."],
   ["W-DOSSIER (Lücken-Talk + Spurwechsel)", "08.09.", "Gespräch", "Kein zweites Gespräch: Job bleibt tonangebend. Im Hintergrund entsteht ein Dossier (letzter Besuch, MAS). In echten Lücken kommt ein Talk-Takt statt „Einen Moment.“ — nie bei Nummer, Slot oder Confirm. Sagt der Anrufer „brauch noch ein Implantat“, wechselt der Job von der Kontrolle auf die Implantat-Besprechung. Feste Fakten gehen sofort ins MAS."],
   ["W-RUECKRUF-MITTEILEN", "08.09.", "Gedächtnis", "Offene Team-Notiz gilt als erledigt in der Sekunde, in der der Angerufene zurückruft und nach dem Grund fragt (mitgeteilt). Narval: Name, Nummer, Eingliederung und letzter Behandler stehen — Bianca fragt nur vormittags/nachmittags."],
+  ["W-CALLR-LOOKUP", "08.09.", "CallR", "Agent-Lookup und Deploy-Smoke legen keinen PhoneCall mehr an (lookupOnly). Nur der echte Anruf (call_erfassen) schreibt nach CallR — sonst bleiben leere „läuft“-Zeilen ohne Transkript oben in der Liste."],
+  ["W-SLOT-BEHANDLER (Lülf)", "08.09.", "Termine", "Slots nur im Kalender des gebundenen Behandlers. Leeres Spezialfenster (PAR-AIT) → Kontrolle am selben Arzt, gebucht bleibt der Originalgrund. „der 10. oder der 21.“ wird als Wunschtage erkannt; die Uhr des Bestandstermins („heute um 14 Uhr … verschieben“) gilt nicht als Neu-Wunsch. Anderer Arzt nur, wenn der Anrufer ihn ausdrücklich nennt."],
 ];
 
 let kTab = "faehig";

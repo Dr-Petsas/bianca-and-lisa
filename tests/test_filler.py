@@ -17,6 +17,11 @@ def test_aktenfrage_wird_erkannt():
     assert filler.vermutet("Wann habe ich nochmal meinen Termin?") == "akte"
 
 
+def test_hallo_plus_termin_ist_suchen_kein_plausch():
+    """„Hallo, ich hätte gerne einen Termin." ist Buchung, kein Smalltalk."""
+    assert filler.vermutet("Hallo, ich hätte gerne einen Termin.") == "suchen"
+
+
 def test_geplauder_bekommt_keinen_fueller():
     for satz in [
         "Guten Tag.",
@@ -118,3 +123,20 @@ def test_saetze_gehen_unveraendert_durch_die_sprech_schicht():
     from lisa.sprech import sanitize
     for s in filler.alle_saetze():
         assert sanitize(s) == s, s
+
+
+def test_transkript_traegt_fueller_und_vorab():
+    """Live 08.09.: Hallo + Moment nur Audio, Protokoll zeigte nur den Job-Satz."""
+    from kern.filler import transkript_mund
+    assert transkript_mund(
+        ["Einen Moment."],
+        "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!",
+        "Für wann hätten Sie denn gern einen Termin?",
+    ) == (
+        "Einen Moment. Ah, Herr Petsas. Wir kennen uns noch nicht. "
+        "Ich bin die Neue! Für wann hätten Sie denn gern einen Termin?"
+    )
+    # Reply startet mit Vorab — nicht doppelt.
+    hallo = "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!"
+    assert transkript_mund([], hallo, hallo + " Bianca.") == hallo + " Bianca."
+    assert transkript_mund([], "", "Ja, gerne.") == "Ja, gerne."

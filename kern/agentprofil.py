@@ -766,9 +766,12 @@ def call_abschliessen(sit: dict) -> None:
         # wieder spielen (frueher setzte die ElevenLabs-CF diese URL).
         from kern import anrufaudio
         audio_url = anrufaudio.hochladen(sit)
-        post_body = {**basis, "phase": "post", "transcript": transcript,
+        post_body = {**basis, "phase": "post",
                      "callDurationSecs": dauer_s, "endReason": "hangup",
                      "categories": kategorien}
+        # Leeres Array wuerde ein vorhandenes CallR-Transkript ueberschreiben.
+        if transcript:
+            post_body["transcript"] = transcript
         if audio_url:
             post_body["audioRecordingUrl"] = audio_url
         post = _cf_senden(post_body)

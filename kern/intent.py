@@ -49,6 +49,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from kern import llm
+from kern.leitung import ist_leitung_check
 
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="intent")
 
@@ -219,6 +220,14 @@ _FB_NEU_RE = re.compile(
 # "Ich glaube, ich habe Zahnschmerzen" (Chef-Testanruf 03.09.2026 abends)
 # komplett am Buchen vorbei: Heuristik sagte KEINE, jeder Zug ging ans
 # traege Haupt-LLM — "das buchen ist im arsch".
+# Pourianmehr 08.09.: Schiene abholen + „mit dem Arzt sprechen“ ist
+# ANLEGEN (Eingliederung), nie ERREICHEN. Rezept-Abholung bleibt ABGEBEN.
+_FB_SCHIENE_ABHOL_RE = re.compile(
+    r"(?:zahn)?schien\w*.{0,48}abhol|abhol\w*.{0,48}(?:zahn)?schien|"
+    r"narval.{0,32}abhol|abhol\w*.{0,32}narval|"
+    r"schnarchschien\w*.{0,32}abhol|schlaf\s*schien\w*.{0,32}abhol",
+    re.I,
+)
 _FB_SYMPTOM_RE = re.compile(
     r"schmerz\w*|\bweh\b|wehtut|tut\s+(?:\w+\s+)?weh|"
     r"abgebrochen|abgeplatzt|rausgefallen|ausgefallen|"
@@ -243,6 +252,10 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
            "ersatz": None, "spiegel": t[:80], "quelle": "fallback"}
     if not t:
         return {**aus, "zug": "halten", "handlung": "KEINE", "gegenstand": ""}
+    if ist_leitung_check(t):
+        return {**aus, "handlung": "WISSEN", "gegenstand": "REGEL"}
+    if _FB_SCHIENE_ABHOL_RE.search(t):
+        return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     if _FB_ERREICHEN_RE.search(t):
         return {**aus, "handlung": "ERREICHEN", "gegenstand": "PERSON"}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
@@ -277,6 +290,14 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
     Deutung sofort (0 ms). Mehrdeutiges geht weiter ans LLM."""
     if len(t.split()) > 18 or _NEGATION_RE.search(t):
         return None
+    if ist_leitung_check(t):
+        return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
+                "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
+                "handlung": "WISSEN", "gegenstand": "REGEL"}
+    if _FB_SCHIENE_ABHOL_RE.search(t):
+        return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
+                "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
+                "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     treffer: list[tuple[str, dict[str, Any]]] = []
     if _FB_ERREICHEN_RE.search(t):
         treffer.append(("ERREICHEN", {"handlung": "ERREICHEN", "gegenstand": "PERSON"}))

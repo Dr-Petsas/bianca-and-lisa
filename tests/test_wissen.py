@@ -105,6 +105,8 @@ def test_bianca_prompt_traegt_preise_und_verweisregel():
     assert VERWEIS_SATZ in p
     assert "ZAHNMEDIZIN UND PREISE" in p
     assert "NUR diese" in p
+    assert "SCHIENE ABHOLEN" in p
+    assert "Eingliederung" in p
 
 
 def test_bianca_prompt_ohne_wissen_erfindet_nichts():

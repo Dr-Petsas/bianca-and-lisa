@@ -327,9 +327,10 @@ def test_stilles_ohr_liefert_zug_nach_ansage(anruf):
 def test_langes_ohr_stoppt_ansage_sofort(anruf):
     """Chef 08.09.: langer Zwischenruf (Termin für heute) — nicht die
     Rest-Saetze zu Ende spielen und erst danach reagieren."""
+    schon = 16 * 1500  # 1,5 s schon gespielt — Startschutz der Begruessung vorbei
     anruf.wiedergabe.posten = [{
-        "url": "/a.wav", "buf": bytearray(b"\x00" * 640), "done": True,
-        "sent": 0, "armed": True, "stream": False,
+        "url": "/a.wav", "buf": bytearray(b"\x00" * (schon + 640)), "done": True,
+        "sent": schon, "armed": True, "stream": False,
     }, {
         "url": "/b.wav", "buf": bytearray(b"\x00" * 640), "done": False,
         "sent": 0, "armed": False, "stream": False,

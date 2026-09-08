@@ -1450,9 +1450,10 @@ def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
             else:
                 wer = nach
         kopf = f"{wer}, ich habe Sie erkannt. " if wer else "Ich habe Sie erkannt. "
+        # Nie Abholung/Narval raten — nur wenn die Notiz das hergibt.
         return {"text": (
             f"{kopf}Den genauen Grund des Anrufs habe ich gerade nicht "
-            "in der Notiz. Worum ging es — Abholung oder ein Termin?"
+            "in der Notiz. Worum geht es denn?"
         )}
     if sit.get("anruferKartei") is None:
         hintergrund.anrufer_kartei_abwarten(sit, 1.0)

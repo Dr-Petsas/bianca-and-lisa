@@ -473,6 +473,27 @@ def test_meddent_mit_weiterleitung_verbindet_echt():
     assert weiterleiten.JINGLE_EVENT in events
 
 
+def test_live_leitung_check_petsas_ist_kein_transfer():
+    """Live 08.09.2026 01:44: 'Hallo, Petsas mein Name. Bin ich mit der
+    Praxis Dr. Petsas verbunden?' hat Jingle + echte Weiterleitung
+    ausgelöst — Name Petsas plus Verb 'verbunden' auf dem Namens-Weg.
+    Das ist eine Leitungs-Statusfrage, kein Durchstellen."""
+    satz = "Hallo, Petsas mein Name. Bin ich mit der Praxis Dr. Petsas verbunden?"
+    assert not weiterleiten.erkannt(satz)
+    assert not weiterleiten.erkannt("Bin ich mit der Praxis Dr. Petsas verbunden?")
+    assert not weiterleiten.erkannt("Spreche ich mit der Praxis?")
+    assert not weiterleiten.erkannt("Habe ich die richtige Praxis erreicht?")
+    # Echte Verbinde-Wünsche bleiben Transfer.
+    assert weiterleiten.erkannt("Könnte ich bitte mit Doktor Petsas verbunden?")
+    assert weiterleiten.erkannt("Verbinde uns mit der Praxis.")
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, satz, events.append)
+    assert z and not z.get("transfer") and not z.get("hangup"), z
+    assert weiterleiten.JINGLE_EVENT not in events
+    assert "richtig verbunden" in (z.get("text") or "").lower()
+
+
 def test_implantatbesprechung_ist_kein_weiterleiten():
     """'Implantatbesprechung' darf weder Intent-ERREICHEN noch
     weiterleiten.erkannt triggern (sprech\\w*-Bug, Live 06.09.2026)."""
@@ -483,6 +504,26 @@ def test_implantatbesprechung_ist_kein_weiterleiten():
     assert d["handlung"] != "ERREICHEN"
     d2 = intent._eindeutig("Ich brauche eine Implantatbesprechung.")
     assert d2 is None or d2.get("handlung") != "ERREICHEN"
+
+
+def test_schiene_abholen_ist_kein_weiterleiten():
+    """Pourianmehr 08.09.: Abholung + 'mit dem Arzt sprechen' = Buchung."""
+    from kern import intent
+    satz = ("Ich möchte meine Zahnschienen abholen und darüber "
+            "möchte ich mit einem Arzt sprechen.")
+    assert not weiterleiten.erkannt(satz)
+    assert not weiterleiten.erkannt("Ich möchte meine Zahnschienen abholen.")
+    d = intent._fallback(_sit(), satz)
+    assert d["handlung"] == "ANLEGEN"
+    d2 = intent._eindeutig(satz)
+    assert d2 and d2["handlung"] == "ANLEGEN"
+    sit = _sit()
+    sit["weiterleiten"] = {"frage": "arzt"}
+    sit["hirnVerbinden"] = {"person": "Arzt"}
+    z = weiterleiten.zug(sit, satz)
+    assert z is None
+    assert sit.get("weiterleiten") == {}
+    assert "hirnVerbinden" not in sit
 
 # --- Jingle-Infrastruktur ----------------------------------------------------
 

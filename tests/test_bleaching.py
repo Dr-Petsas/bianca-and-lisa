@@ -38,6 +38,7 @@ def _pzr_sammler(sit: dict) -> dict:
         "grund": "professionelle Zahnreinigung",
         "grundWortlaut": "einmal Zahnreinigung bitte",
         "motivId": "pzr-30", "motivName": "PRO professionelle Zahnreinigung",
+        "wunsch": {"wochentag": "dienstag", "tageszeit": "vormittag"},
     })
     return s
 
@@ -79,23 +80,45 @@ def test_nur_einmal_pro_anruf():
     assert not gehirn.bleaching_faellig(sit)
 
 
-def test_einschub_stellt_die_frage_mit_dauer_ohne_preis():
-    # Chef 03.09.2026: "kosten nur bei nachfrage nennen. nicht mit den
-    # kosten ins haus fallen" — die Frage nennt die Dauer, NIE den Preis.
+def test_arzt_ja_bietet_keine_aufhellung():
+    """Live 08.09.: „Ja, ist richtig.“ auf den Behandler → Aufhellung."""
     echt = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
         s = _pzr_sammler(sit)
-        r = flow.zug(sit, "Am liebsten Dienstag vormittags.")
-        assert r and "aufhellen" in r["text"].lower(), r
-        assert "eine Stunde länger" in r["text"]
-        assert "dreihundertfünfzig" not in r["text"]
-        assert "350" not in r["text"]
-        assert "Euro" not in r["text"]
-        assert s["bleaching"] == "gefragt" and s["frage"] == "bleaching"
+        s["wunsch"] = {}
+        s["arztCheck"] = "gefragt"
+        s["frage"] = "arzt_check"
+        s["arzt"] = {"typ": "akte", "calendarName": "Dr. Petsas",
+                     "calendarId": "cal-1"}
+        r = flow.zug(sit, "Ja, ist richtig.")
+        assert r and "aufhell" not in (r.get("text") or "").lower(), r
+        assert not gehirn.bleaching_faellig(sit)
     finally:
         flow.hintergrund.anstossen = echt
+
+
+def test_nicht_faellig_ohne_wunschzeit():
+    """Chef 08.09.: nicht nach der Arzt-Frage, erst nach der Wunschzeit."""
+    sit = _sit()
+    s = _pzr_sammler(sit)
+    s["wunsch"] = {}
+    assert not gehirn.bleaching_faellig(sit)
+
+
+def test_einschub_stellt_die_frage_mit_dauer_ohne_preis():
+    # Chef 03.09.2026: "kosten nur bei nachfrage nennen. nicht mit den
+    # kosten ins haus fallen" — die Frage nennt die Dauer, NIE den Preis.
+    sit = _sit()
+    s = _pzr_sammler(sit)
+    r = flow._einschub(sit)
+    assert r and "aufhellen" in r["text"].lower(), r
+    assert "eine Stunde länger" in r["text"]
+    assert "dreihundertfünfzig" not in r["text"]
+    assert "350" not in r["text"]
+    assert "Euro" not in r["text"]
+    assert s["bleaching"] == "gefragt" and s["frage"] == "bleaching"
 
 
 # --- Die Antworten ----------------------------------------------------------

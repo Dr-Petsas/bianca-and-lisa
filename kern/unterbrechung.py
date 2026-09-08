@@ -142,6 +142,14 @@ def eingang(sit: dict, barge_url: str, barge_ms: Any) -> bool:
         if _s(a.get("vorabText")):
             gesprochen.append(_s(a.get("vorabText")))
         enden = a.get("endenMs") or []
+        hat_zeiten = any(isinstance(e, (int, float)) for e in enden)
+        # Stream fuellt endenMs erst waehrend des Sprechens. Ein Knacks
+        # in den ersten 800 ms ohne Zeiten machte die GANZE Begruessung
+        # zum Rest — sie kam ein zweites Mal (Live 08.09.2026).
+        if alle and not hat_zeiten:
+            if ms < 800:
+                return False
+            return False
         for i, satz in enumerate(alle):
             ende = enden[i] if i < len(enden) else None
             if isinstance(ende, (int, float)) and float(ende) <= ms:
@@ -304,6 +312,12 @@ def wiederaufnahme(sit: dict) -> str:
     sit.pop("unterbrochen", None)
     rest = [s for s in (u.get("rest") or []) if _s(s)]
     text = " ".join(rest).strip()
+    ganz = _s((sit.get("ausspr") or {}).get("text"))
+    gesprochen = _s(u.get("gesprochen"))
+    # Nichts gehört + Rest = volle Ansage: nicht nochmal von vorn
+    # (doppelte Begrüßung nach Fehl-Barge).
+    if text and ganz and not gesprochen and _norm(text) == _norm(ganz):
+        return ""
     if text:
         nachtragen(sit, text)
     return text

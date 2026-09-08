@@ -127,7 +127,7 @@ def vermutet(text: str, *, angebot_offen: bool = False) -> str:
     t = _s(text)
     if not t:
         return ""
-    if _RE_PLAUSCH.search(t):
+    if _RE_PLAUSCH.search(t) and not _RE_SUCHEN.search(t):
         return ""
     if _RE_AKTE.search(t):
         return "akte"
@@ -177,6 +177,29 @@ def kartei_satz(sit: dict | None) -> str:
     }:
         return ""
     return text
+
+
+def transkript_mund(fueller: list[str] | None, vorab: str, antwort: str) -> str:
+    """Was wirklich gesprochen wurde — Füller + Vorab + Antwort, ohne Doppel.
+
+    Live 08.09.2026: Hallo und „Einen Moment.“ liefen nur als Audio, das
+    Transkript zeigte nur die Job-/LLM-Zeile. Chef: alles muss ins Protokoll.
+    """
+    teile: list[str] = []
+    gesehen: set[str] = set()
+    antwort = _s(antwort)
+    vorab = _s(vorab)
+    for roh in list(fueller or []) + ([vorab] if vorab else []):
+        s = _s(roh)
+        if not s or s in gesehen:
+            continue
+        if antwort and (antwort.startswith(s) or s in antwort):
+            continue
+        teile.append(s)
+        gesehen.add(s)
+    if antwort:
+        teile.append(antwort)
+    return " ".join(teile).strip()
 
 
 def alle_saetze() -> list[str]:

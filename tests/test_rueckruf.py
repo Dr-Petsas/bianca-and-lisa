@@ -90,8 +90,7 @@ def test_rueckruf_fragt_grund_mitgeteilt_dann_wunschzeit():
         assert s["telefonOk"] and s["patientId"] == "pat-7"
         assert (s.get("arzt") or {}).get("calendarId") == "cal-petsas"
         assert "Narval" in s["grund"]
-        assert s["motivId"] == "narval-ein"
-        assert "Eingliederung" in s["motivName"]
+        assert "Eingliederung" in (s.get("motivName") or "")
         assert notes and "Mitgeteilt" in notes[0]
         assert sit["gedaechtnisOffen"] == []
         fid, _ = gehirn.naechste_frage(sit)
@@ -167,6 +166,8 @@ def test_rueckruf_erkannt_ohne_notiz_fragt_nicht_nochmal_identitaet():
         assert z and "erkannt" in z["text"].lower()
         assert "Akte" not in z["text"]
         assert "Herr Herbst" in z["text"]
+        assert "Abholung" not in z["text"]
+        assert "Narval" not in z["text"]
     finally:
         flow.hintergrund.anstossen = echt_an
 

@@ -60,7 +60,7 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
     t = f" {raw.lower()} "
     wish: dict[str, Any] = {
         "weekday": None, "hourMin": None, "hourMax": None,
-        "hour": None, "minDaysAhead": 0, "date": None,
+        "hour": None, "minDaysAhead": 0, "date": None, "tage": None,
     }
     for idx, cre in WEEKDAYS:
         if cre.search(t):
@@ -100,10 +100,34 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
                 stunde = h
     if stunde is not None:
         wish["hour"] = stunde
+    # "heute um 14 Uhr einen Termin … verschieben": die Uhr gehört zum
+    # BESTANDSTERMIN, nicht zum Neu-Wunsch (Lülf 08.09.2026).
+    if _bestand_uhr_im_satz(t) and not re.search(
+            r"\b(?:auf|zu|lieber|geht(?:'s|s)?)\s+(?:um\s+)?\d", t):
+        wish["hour"] = None
     datum = datum_aus_text(raw)
-    if datum:
+    tage = tage_aus_text(raw)
+    if tage:
+        wish["date"] = tage[0]
+        if len(tage) > 1:
+            wish["tage"] = tage
+        wish["weekday"] = None
+    elif datum:
         wish["date"] = datum
+        wish["weekday"] = None
     return wish
+
+
+_BESTAND_UHR_RE = re.compile(
+    r"(?:heute|morgen).{0,28}\buhr\b.{0,80}termin|"
+    r"termin.{0,48}(?:heute|morgen).{0,28}\buhr|"
+    r"habe.{0,24}um\s+\w.{0,24}termin.{0,48}verschieb",
+    re.I | re.S,
+)
+
+
+def _bestand_uhr_im_satz(t: str) -> bool:
+    return bool(re.search(r"\bverschieb", t) and _BESTAND_UHR_RE.search(t))
 
 
 _MONAT_NAME = {
@@ -124,6 +148,20 @@ _MONAT_RE = re.compile(
 # "am 15.09" / "15.09." / "3.9.2026" — der Punkt nach dem Monat ist optional.
 # "um 9.15" und "9.15 Uhr" bleiben Uhrzeiten, kein Datum.
 _DATUM_ZAHL_RE = re.compile(r"\b(\d{1,2})\.\s*(\d{1,2})(?:\.(\d{4})?)?")
+
+# "Donnerstag der 10." / "dem 21." / "den 29." — Tag ohne Monatsname.
+# Nicht "am 3. Oktober" / "am 15.09" (das ist ein volles Datum).
+_TAG_ORD_RE = re.compile(
+    r"\b(?:am|dem|den|der)\s+(\d{1,2})\.(?!\s*\d)(?!\s*(?:"
+    + "|".join(sorted(_MONAT_NAME, key=len, reverse=True))
+    + r")\b)",
+    re.I,
+)
+# "10. oder 21." ohne zweiten Artikel.
+_TAG_ORD_MEHR_RE = re.compile(
+    r"(?:oder|,|/|und)\s+(?:(?:am|dem|den|der)\s+)?(\d{1,2})\.(?!\s*\d)",
+    re.I,
+)
 
 
 def _kalendertag(jahr: int, monat: int, tag: int):
@@ -178,6 +216,45 @@ def datum_aus_text(text: str) -> str:
             d = _jahr_rollen(d)
         return d.isoformat()
     return ""
+
+
+def _tag_im_monat(tag: int, heute: date | None = None):
+    """Nächster Kalendertag mit dieser Monatszahl (ab heute, sonst nächster Monat)."""
+    if not (1 <= tag <= 31):
+        return None
+    basis = heute or datetime.now(TZ).date()
+    d = _kalendertag(basis.year, basis.month, tag)
+    if d and d >= basis:
+        return d
+    if basis.month == 12:
+        return _kalendertag(basis.year + 1, 1, tag)
+    return _kalendertag(basis.year, basis.month + 1, tag)
+
+
+def tage_aus_text(text: str) -> list[str]:
+    """Alle 'der 10.' / 'dem 21.' im Satz → ISO-Tage, aufsteigend, ohne Duplikat."""
+    raw = _s(text)
+    if not raw:
+        return []
+    heute = datetime.now(TZ).date()
+    gefunden: list[str] = []
+    gesehen: set[str] = set()
+    t = f" {raw.lower()} "
+    zahlen: list[int] = []
+    for m in _TAG_ORD_RE.finditer(t):
+        zahlen.append(int(m.group(1)))
+    for m in _TAG_ORD_MEHR_RE.finditer(t):
+        zahlen.append(int(m.group(1)))
+    for n in zahlen:
+        d = _tag_im_monat(n, heute)
+        if not d:
+            continue
+        iso = d.isoformat()
+        if iso in gesehen:
+            continue
+        gesehen.add(iso)
+        gefunden.append(iso)
+    return gefunden
 
 
 def _region_tage(iso_date: str, radius: int = 2) -> list[str]:

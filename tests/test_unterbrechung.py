@@ -244,6 +244,20 @@ def test_wiederaufnahme_ohne_zustand_leer():
     assert unterbrechung.wiederaufnahme({"messages": []}) == ""
 
 
+def test_frueher_knacks_ohne_satzzeiten_kein_rest():
+    """Live 08.09.: Begrüßung ohne endenMs + früher Barge = ganze Ansage nochmal."""
+    sit = _sit()
+    sit["ausspr"]["endenMs"] = []
+    assert not unterbrechung.eingang(sit, "/api/audio-stream/abc.wav", 120)
+    assert "unterbrochen" not in sit
+
+
+def test_wiederaufnahme_nicht_die_ganze_ansage_nochmal():
+    sit = _sit()
+    sit["unterbrochen"] = {"rest": [S1, S2, S3], "gesprochen": ""}
+    assert unterbrechung.wiederaufnahme(sit) == ""
+
+
 if __name__ == "__main__":
     fehler = 0
     for name, fn in sorted(globals().items()):

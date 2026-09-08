@@ -57,6 +57,20 @@ def test_langsamer_zug_bekommt_genau_einen_fueller():
         dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
 
 
+def test_ja_ohne_schnellphase_bekommt_keinen_fueller():
+    """Live 08.09.: bei jedem Satz „Einen Moment bitte." — Ja/Arzt ohne
+    Slot/Confirm darf keinen allgemeinen Warte-Satz mehr auslösen."""
+    alt = (dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S)
+    dienst_mod.FILLER_SPAET_S = 0.05
+    dienst_mod.FILLER_NACHSCHUB_S = 0.05
+    try:
+        d = _dienst(langsam_s=0.35, schnell=False)
+        out = _zeilen(d, {}, "Ja?")
+        assert [z["type"] for z in out] == ["reply"]
+    finally:
+        dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
+
+
 def test_plauderzug_bekommt_keinen_server_fueller():
     """„Wie heißt du?" darf keinen Nachschau-Füller auslösen — die echte
     Antwort (P5) oder der neutrale Dock-Watchdog sprechen."""

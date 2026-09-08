@@ -10,12 +10,13 @@ from lisa.mission import identitaets_rahmen, ist_termin_auftrag, rahme_auftrag
 def system_prompt(*, praxis: str, behandler: str, auftrag: str, patient: str,
                   sprache: str = "de", termine_text: str = "", slots_text: str = "",
                   wissen: dict | None = None, plan: str = "",
-                  praxis_von: str = "", kontext: str = "") -> str:
+                  praxis_von: str = "", kontext: str = "",
+                  sit: dict | None = None) -> str:
     # Gebeugte Sprechform ("den Zahnärzten im Medical Center Düsseldorf") —
     # ohne Angabe wie frueher "der {praxisName}".
     von = praxis_von or (f"der {praxis}" if praxis else "der Praxis")
     auftrag_gerahmt = rahme_auftrag(auftrag) + identitaets_rahmen(praxis, behandler, praxis_von=von)
-    praxiswissen = wissen_block(wissen)
+    praxiswissen = wissen_block(wissen, sit=sit)
     termin_logik = ""
     if ist_termin_auftrag(auftrag):
         termin_logik = """
@@ -44,7 +45,7 @@ Sagt er etwas Besonderes zu einem bestehenden Termin: note_appointment.
     # steht hier, wie frei dieser Zug sein darf und wie es zurueckgeht.
     lage = f"\n{plan}\n" if plan else ""
 
-    return f"""Du bist Lisa, Telefonassistentin einer Zahnarztpraxis.
+    return f"""Du bist Lisa, Telefonassistentin der Praxis.
 WELCHE Praxis du vertrittst, steht in der Identität des Auftrags — stelle dich immer mit genau dieser Praxis vor und nenne niemals eine andere Praxis oder einen anderen Arzt.
 Du führst ein echtes Telefongespräch. Kein Ansageband, kein Monolog, kein Chat.
 

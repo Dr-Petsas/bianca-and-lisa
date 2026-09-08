@@ -405,6 +405,14 @@ class Dienst:
         self.notfall_urls = urls
         print(f"{self.name}-notfall bereit: {len(urls)} Saetze", flush=True)
 
+    def _fueller_merken(self, sit: dict, text: str) -> None:
+        t = _s(text)
+        if not t:
+            return
+        bag = sit.setdefault("_fuellerSaetze", [])
+        if t not in bag:
+            bag.append(t)
+
     def _filler_url(self, sit: dict, gruppe: str) -> str:
         kartei = filler.kartei_satz(sit)
         if kartei:
@@ -422,13 +430,20 @@ class Dienst:
                 s = sit.get("sammler")
                 if isinstance(s, dict):
                     s["karteiFuellerGesagt"] = True
+                self._fueller_merken(sit, kartei)
                 return url
         nr = int(sit.get("fillerNr") or 0)
         sit["fillerNr"] = nr + 1
-        url = self.filler_urls.get(filler.satz(gruppe, nr))
+        satz = filler.satz(gruppe, nr)
+        url = self.filler_urls.get(satz)
         if url:
+            self._fueller_merken(sit, satz)
             return url
-        return self.filler_urls.get(filler.satz("allgemein", nr)) or ""
+        fallback = filler.satz("allgemein", nr)
+        url = self.filler_urls.get(fallback) or ""
+        if url:
+            self._fueller_merken(sit, fallback)
+        return url
 
     # ---- Antwort-Bau -------------------------------------------------------
 
@@ -489,15 +504,19 @@ class Dienst:
             timings["total"] = round(stt_s + llm_s + tts_s, 2)
         # Waechter-Spur dieses Zugs (W-BK-3): additiv in Antwort + Protokoll.
         waechter = spur.abholen(sit)
-        self.merke_zug(sit, art=art, textIn=text_in, text=text, book=reply.get("book"),
-                       timings=timings, waechter=waechter, audioUrl=url or "")
+        fueller = list(sit.get("_fuellerSaetze") or [])
+        mund = filler.transkript_mund(fueller, gesprochen, text)
+        sit.pop("_fuellerSaetze", None)
+        self.merke_zug(sit, art=art, textIn=text_in, text=mund, book=reply.get("book"),
+                       timings=timings, waechter=waechter, audioUrl=url or "",
+                       fueller=fueller)
         antwort = {
             "ok": True,
             "empty": False,
             "sessionId": extra.get("sessionId") or sit.get("id") or "",
             "praxis": extra.get("praxis") or "",
             "textIn": text_in,
-            "text": text,
+            "text": mund,
             "audioUrl": url,
             "book": reply.get("book"),
             "writeLive": WRITE_LIVE,
@@ -527,7 +546,7 @@ class Dienst:
         # Live 06.09.2026: fehlte seit W-LIVE 13:43 → CallR ohne Audio/Transkript.
         satz_liste = sit.pop("_vorabUrlListe", None) or []
         vorab_urls = [u for u in satz_liste if u]
-        mitschnitt.zug(sit, self, art=art, text_in=text_in, text=text,
+        mitschnitt.zug(sit, self, art=art, text_in=text_in, text=mund,
                        timings=timings, waechter=waechter, audio_url=url,
                        vorab_urls=vorab_urls, book=reply.get("book"),
                        frage=str(antwort.get("frage") or ""))
@@ -601,6 +620,7 @@ class Dienst:
         # Waechter-Spur: frisch je Zug — jeder Waechter meldet sich hinein,
         # die Antwort traegt die Liste additiv als "waechter" (W-BK-3).
         spur.neu(sit)
+        sit["_fuellerSaetze"] = []
         # W-BARGE: das Dock meldet, WO es der Stimme ins Wort gefallen ist —
         # daraus entstehen Rest + gestutztes Protokoll, BEVOR der Zug laeuft.
         if _s(barge_url):
@@ -746,7 +766,12 @@ class Dienst:
             gruppe = filler.vermutet(gehoert, angebot_offen=bool(sit.get("offered")))
             if gruppe and not schnelle_phase:
                 return time.monotonic() + FILLER_SPAET_S, gruppe
-            return time.monotonic() + FILLER_SPAET_S, "allgemein"
+            # Neutraler Haenger-Satz NUR in der echten Schnell-Phase
+            # (Slot/Confirm/Ziffern). Sonst sagt sie bei jedem Ja
+            # „Einen Moment bitte." (Live 08.09.2026, Petsas).
+            if schnelle_phase:
+                return time.monotonic() + FILLER_SPAET_S, "allgemein"
+            return None, "allgemein"
 
         frist, vorab_gruppe = frist_setzen(text_in)
         inhalt = False    # Vorab-Satz / feste Ansage / festes Audio ist geflossen
@@ -788,6 +813,7 @@ class Dienst:
                     san = sprech.sanitize(wert.split(":", 1)[1])
                     url = self.stimme(san)[0] if san else ""
                     if url:
+                        self._fueller_merken(sit, san)
                         yield zeile({"type": "filler", "audioUrl": url})
                     inhalt = True
                 elif isinstance(wert, str) and wert.startswith("audio:"):

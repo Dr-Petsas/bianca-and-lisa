@@ -50,6 +50,7 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
                 termine_text=_termine_zeile(session_doc.get("past") or [], session_doc.get("upcoming") or []),
                 slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
                 wissen=tenant.get("wissen"),
+                sit=session_doc,
                 kontext=gedaechtnis.kontext_block(session_doc),
             ),
         },
@@ -197,6 +198,7 @@ def system_prompt_aktuell(session_doc: dict, plan: str = "") -> str:
         termine_text=_termine_zeile(session_doc.get("past") or [], session_doc.get("upcoming") or []),
         slots_text=calendar.slots_zeile(session_doc.get("offered") or []),
         wissen=tenant.get("wissen"),
+        sit=session_doc,
         plan=plan,
         kontext=gedaechtnis.kontext_block(session_doc),
     )

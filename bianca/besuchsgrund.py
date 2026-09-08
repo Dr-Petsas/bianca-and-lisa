@@ -49,6 +49,19 @@ KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
     (re.compile(r"invisali\w*|invizali\w*|inwisali\w*|wissal[ei]\w*|aligner"
                 r"|alleinerbehandlung", re.I),
      "Invisalign-Beratung", [r"kfo\s+besprechung", r"kfo\s+kontroll", r"\bkfo\b", r"spange", r"kieferorthop"]),
+    # Pourianmehr 08.09.2026: „Zahnschienen abholen“ ist KEINE Erstberatung
+    # und kein Scan — die Schiene liegt fertig, gebucht wird Eingliederung.
+    # Steht VOR dem allgemeinen Schienen-Konzept, sonst gewinnt Besprechung.
+    (re.compile(
+        r"(?:zahn)?schien\w*.{0,48}abhol|abhol\w*.{0,48}(?:zahn)?schien|"
+        r"narval.{0,32}abhol|abhol\w*.{0,32}narval|"
+        r"schnarchschien\w*.{0,32}abhol|schlaf\s*schien\w*.{0,32}abhol",
+        re.I,
+     ),
+     "Schiene abholen / Eingliederung",
+     [r"slm\s+einglieder", r"einglieder\w*.{0,28}(narval|schien)",
+      r"(narval|schien)\w*.{0,28}einglieder", r"narval",
+      r"slm\s+besprechung", r"\bslm\b"]),
     # Ueberweiser-Wissen (Chef 29.08.2026): Doktor Grüger und Doktor Lange
     # ueberweisen aus dem Schlaflabor fuer die Narval-Schiene. "lange" NUR
     # mit Titel davor — "ich warte schon lange" ist keine Ueberweisung.
@@ -85,6 +98,7 @@ _DENTAL_KERNE = {
     "Zahnaufhellung",
     "Implantat-Beratung",
     "Invisalign-Beratung",
+    "Schiene abholen / Eingliederung",
     "Schiene/Schnarchen",
     "Zahnspange/KFO",
     "Zahnersatz-Beratung",
@@ -346,6 +360,19 @@ def sprechname(vm: dict) -> str:
     name = _s(vm.get("name"))
     # Interne Kuerzel-Praefixe ("KCH ", "PRO ", "SLM ") nicht mit ansagen.
     return re.sub(r"^[A-ZÄÖÜ]{2,4}\s+", "", name) or name
+
+
+_SCHIENE_ABHOL_RE = re.compile(
+    r"(?:zahn)?schien\w*.{0,48}abhol|abhol\w*.{0,48}(?:zahn)?schien|"
+    r"narval.{0,32}abhol|abhol\w*.{0,32}narval|"
+    r"schnarchschien\w*.{0,32}abhol|schlaf\s*schien\w*.{0,32}abhol",
+    re.I,
+)
+
+
+def ist_schiene_abholen(text: str) -> bool:
+    """Fertige Schiene abholen — Eingliederung, kein Scan, kein Durchstellen."""
+    return bool(_SCHIENE_ABHOL_RE.search(_s(text)))
 
 
 def konzept_muster(text: str) -> list[str]:

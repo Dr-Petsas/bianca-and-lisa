@@ -132,6 +132,17 @@ def test_kein_satzende_wache():
     assert not kein_satzende("Das passt gut")        # echtes Satzende
 
 
+def test_ohne_krebs_wird_kontrolle():
+    from kern.sprech import ohne_krebs, sanitize
+
+    assert "Krebs" not in ohne_krebs("Hautkrebsscreening")
+    assert "kontrolle" in ohne_krebs("Hautkrebsscreening").lower()
+    assert "Krebs" not in ohne_krebs("Termin zur Hautkrebs-Vorsorge")
+    gesprochen = sanitize("Ich buche das Hautkrebsscreening.")
+    assert "Krebs" not in gesprochen and "krebs" not in gesprochen.lower()
+    assert "Kontrolle" in gesprochen
+
+
 def test_prompts_tragen_das_datum():
     from bianca.prompt import system_prompt as bianca_prompt
     from lisa.prompt import system_prompt as lisa_prompt

@@ -173,6 +173,22 @@ def test_maschinen_frage_wird_beim_zweiten_mal_umformuliert():
     assert "andynummer" in raus
 
 
+def test_hallo_vorab_wird_vom_waechter_gestrichen():
+    """Live 08.09.2026: „Ah, Herr Petsas. Wir kennen uns noch nicht.“
+    ging als Vorab raus — der Wächter sah nur die LLM-Antwort (kurz, ohne
+    Fragezeichen = Quittung) und ließ den Hallo jeden Zug erneut durch."""
+    hallo = "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!"
+    sit = _sit()
+    wiederholung.gesagt_merken(sit, hallo)
+    raus = wiederholung.pruefen(
+        sit, hallo, frueher=[], auch_kurz=True,
+    )
+    assert raus == "", "schon gesprochener Hallo darf nicht nochmal raus"
+    # Ohne auch_kurz bleiben kurze Sätze Quittungen (Alt-Verhalten).
+    raus2 = wiederholung.pruefen(sit, hallo, frueher=[hallo])
+    assert "Herr Petsas" in raus2
+
+
 def test_behandler_frage_nie_doppelt():
     sit = _buchungs_sit(frage="arzt")
     arzt_frage = "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"

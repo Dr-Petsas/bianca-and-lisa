@@ -220,6 +220,9 @@ OHR_FRAMES = 300        # 6 s bei 20-ms-Rahmen
 # reagiert erst im uebernaechsten Turn (Chef 08.09.2026: Nummern-Readback
 # + „Termin für heute"). Knackser/kurze Ja bleiben unter der Schwelle.
 OHR_BARGE_FRAMES = 20   # 400 ms
+# Begruessung: die ersten ~1 s nicht per Ohr-Barge stoppen — Leitungsknacks
+# / Echo starteten die Ansage neu (Live 08.09.: Begruessung doppelt).
+OHR_START_SCHUTZ_MS = 1000
 MIN_SPRACHE_FRAMES = 12 # unter 240 ms Sprachanteil: verwerfen (Knacser)
 # W-SIP-KURZJA (30.08.2026): ein gesprochenes "Ja" hat nur ~100-200 ms
 # Stimmanteil — der 240-ms-Deckel verwarf echte Antworten ("zug verworfen
@@ -388,6 +391,10 @@ class Wiedergabe:
         if p.get("stream") and len(p.get("buf") or b"") >= PREBUF_B:
             return True
         return False
+
+    def gespielt_ms(self) -> float:
+        """Schon gesendete Lautsprecher-Zeit (8 kHz slin: 16 Byte/ms)."""
+        return sum(int(p.get("sent") or 0) for p in self.posten) / 16.0
 
     @property
     def aktiv(self) -> bool:
@@ -821,7 +828,8 @@ class Anruf:
                         drop = len(self._ohr) - OHR_FRAMES
                         del self._ohr[:drop]
                     if (self._ohr_frames >= OHR_BARGE_FRAMES
-                            and self.wiedergabe.aktiv):
+                            and self.wiedergabe.aktiv
+                            and self.wiedergabe.gespielt_ms() >= OHR_START_SCHUTZ_MS):
                         url, ms = self.wiedergabe.stoppen()
                         self.barge_url, self.barge_ms = url, ms
                         self._quittung()

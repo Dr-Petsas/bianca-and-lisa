@@ -41,8 +41,8 @@ def _auftrag_prompt(sit: dict) -> list[dict]:
     praxis = _s(tenant.get("praxisName"))
     auftrag = _s(sit.get("auftrag"))
     system = (
-        "Du formulierst EINEN Gesprächseinstieg für eine Telefonassistentin einer "
-        "Zahnarztpraxis. Der Angerufene hat gerade bestätigt, dass er die richtige "
+        "Du formulierst EINEN Gesprächseinstieg für eine Telefonassistentin der "
+        "Praxis. Der Angerufene hat gerade bestätigt, dass er die richtige "
         "Person ist. Begrüßung und Namen hat die Assistentin schon gesagt — die "
         "wiederholst du NICHT.\n"
         "REGELN\n"
