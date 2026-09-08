@@ -555,6 +555,9 @@ def start_reply(sit: dict) -> dict[str, Any]:
     from bianca import hintergrund as _hg
     _hg.hallo_waermen(sit)
     _hg.kartei_von_anrufer(sit)
+    # Praxisgedächtnis schon zur Begrüßung — der Rückrufer fragt oft im
+    # ersten Satz nach dem Grund (Herbst 08.09.: Notiz lag 2 min vorher).
+    gedaechtnis.kontext_anstossen(sit)
     sit["messages"] = [
         {"role": "system", "content": system_prompt_aktuell(sit)},
         {"role": "user", "content": "(Ein Anrufer ist in der Leitung. Du hast dich gerade gemeldet.)"},

@@ -1429,12 +1429,31 @@ def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     und letzter Behandler stehen — nur vormittags/nachmittags fehlt."""
     if sit.get("rueckrufMitgeteilt"):
         return None
-    if not gehirn.fragt_anrufgrund(t):
+    if not gehirn.fragt_anrufgrund(t, sit):
         return None
     if sit.get("gedaechtnis") is None:
         gedaechtnis.kontext_abwarten(sit, 1.5)
     if not gehirn.rueckruf_hat_offen(sit):
-        return None
+        # Herbst 08.09.: erkannt, aber Notiz status=none / MAS weg —
+        # nie ans LLM (die erfand "keine Akte" / "Akte angelegt").
+        a = gehirn.anrufer_bekannt(sit)
+        if not a:
+            return None
+        nach = _s(a.get("nachname"))
+        g = _s(a.get("geschlecht")).lower()
+        wer = ""
+        if nach:
+            if g in {"m", "male", "herr"}:
+                wer = "Herr " + nach
+            elif g in {"f", "female", "frau"}:
+                wer = "Frau " + nach
+            else:
+                wer = nach
+        kopf = f"{wer}, ich habe Sie erkannt. " if wer else "Ich habe Sie erkannt. "
+        return {"text": (
+            f"{kopf}Den genauen Grund des Anrufs habe ich gerade nicht "
+            "in der Notiz. Worum ging es — Abholung oder ein Termin?"
+        )}
     if sit.get("anruferKartei") is None:
         hintergrund.anrufer_kartei_abwarten(sit, 1.0)
     gehirn.rueckruf_starten(sit)

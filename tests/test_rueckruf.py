@@ -50,6 +50,8 @@ def test_fragt_anrufgrund_live_saetze():
         "Sie haben versucht, mich zu erreichen.",
         "Weshalb habt ihr angerufen?",
         "Ich rufe gerade zurück.",
+        "Ich hatte einen Anruf von Ihnen.",
+        "Ich wollte wissen, warum ich angerufen wurde von Ihnen.",
     ]
     nein = [
         "Können Sie mich zurückrufen?",
@@ -109,6 +111,73 @@ def test_rueckruf_ohne_offene_notiz_laesst_llm():
         assert flow.zug(sit, "Warum habt ihr angerufen?") is None
     finally:
         flow.hintergrund.anstossen = echt_an
+
+
+def test_rueckruf_herbst_frontdesk_notiz_status_none():
+    """Live 08.09.: Empfangsnotiz status=none, Satz 'Ich hatte einen Anruf von Ihnen.'"""
+    notes = []
+    echt_erledigen = ged.offen_erledigen
+    echt_an = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    ged.offen_erledigen = lambda sit, note="": notes.append(note) or sit.update(
+        gedaechtnisOffen=[], gedaechtnis=""
+    )
+    try:
+        sit = _sit()
+        sit["anrufer"] = {
+            "vorname": "Patrick", "nachname": "Herbst", "patientId": "u1SB",
+            "geschlecht": "male", "telefon": "+491777074403",
+        }
+        sit["gedaechtnis"] = (
+            "Praxisgedächtnis zu dieser Rufnummer (vermutlich Patrick Herbst):\n"
+            "- 08.09.: schlaf schiene ist schon abholbreit (noch offen)"
+        )
+        sit["gedaechtnisOffen"] = ["ce68a0f5"]
+        sit["anruferKartei"] = {
+            "letzterBesuch": "2026-06-01",
+            "letzterGrund": "SLM Besprechung",
+            "calendarId": "cal-petsas",
+            "calendarName": "Dr. Petsas",
+        }
+        z = flow.zug(sit, "Ich hatte einen Anruf von Ihnen.")
+        assert z and "Narval-Schiene" in z["text"]
+        assert "vormittag" in z["text"].lower() or "Eingliederung" in z["text"]
+        s = gehirn.sammler(sit)
+        assert sit["rueckrufMitgeteilt"] is True
+        assert s["nachname"] == "Herbst" and s["anruferCheck"] == "ja"
+        assert "Narval" in s["grund"] or "Schiene" in s["grund"]
+        assert notes
+    finally:
+        ged.offen_erledigen = echt_erledigen
+        flow.hintergrund.anstossen = echt_an
+
+
+def test_rueckruf_erkannt_ohne_notiz_fragt_nicht_nochmal_identitaet():
+    echt_an = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        sit["anrufer"] = {
+            "vorname": "Patrick", "nachname": "Herbst", "patientId": "u1SB",
+            "geschlecht": "male", "telefon": "+491777074403",
+        }
+        sit["gedaechtnis"] = ""
+        sit["gedaechtnisOffen"] = []
+        z = flow.zug(sit, "Ich wollte wissen, warum ich angerufen wurde von Ihnen.")
+        assert z and "erkannt" in z["text"].lower()
+        assert "Akte" not in z["text"]
+        assert "Herr Herbst" in z["text"]
+    finally:
+        flow.hintergrund.anstossen = echt_an
+
+
+def test_fragt_anrufgrund_folge_nach_anruf_satz():
+    sit = _sit()
+    sit["messages"] = [
+        {"role": "user", "content": "Ich hatte einen Anruf von Ihnen."},
+        {"role": "assistant", "content": "Ah, Herr Herbst."},
+    ]
+    assert gehirn.fragt_anrufgrund("Ich wollte mal wissen, um was es geht.", sit)
 
 
 def test_rueckruf_vormittags_im_selben_satz():

@@ -1936,9 +1936,15 @@ _ANRUFGRUND_RE = re.compile(
     r"rufe (gerade |jetzt )?zur(ü|ue)ck|"
     r"(verpasst|verpasst[en]).{0,16}anruf|"
     r"da war (ein |euer |ihr )?anruf|"
+    r"ich (hatte|habe).{0,24}anruf|"
+    r"anruf von (ihnen|euch)|"
     r"worum ging|"
     r"was woll(te|ten) (sie|ihr).{0,24}(anruf|erreichen|von mir)|"
     r"wegen (dem |des |eure[ms] |ihrem )?anruf",
+    re.I,
+)
+_ANRUFGRUND_FOLGE_RE = re.compile(
+    r"um was es geht|worum (ging|geht)|weshalb|warum",
     re.I,
 )
 _RUECKRUF_BITTE_RE = re.compile(
@@ -1948,7 +1954,8 @@ _RUECKRUF_BITTE_RE = re.compile(
     re.I,
 )
 _NARVAL_RE = re.compile(
-    r"narval|schnarchschiene|schlafschiene|schiene abhol",
+    r"narval|schnarchschiene|schlaf\s*schiene|"
+    r"schiene.{0,24}abhol|abholbreit|abholbereit",
     re.I,
 )
 _ANRUF_KERN_RE = re.compile(r"angerufen:\s*(.+)", re.I | re.S)
@@ -1963,12 +1970,31 @@ _EINGLIEDER_MUSTER = [
 ]
 
 
-def fragt_anrufgrund(text: str) -> bool:
+def _voriges_anruferwort(sit: dict | None, jetzt: str) -> str:
+    if not sit:
+        return ""
+    jetzt = _s(jetzt)
+    for m in reversed(sit.get("messages") or []):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        t = _s(m.get("content"))
+        if t and t != jetzt and not t.startswith("("):
+            return t
+    return ""
+
+
+def fragt_anrufgrund(text: str, sit: dict | None = None) -> bool:
     """Rückrufer fragt, warum die Praxis angerufen hat — nicht 'rufen Sie zurück'."""
     t = _s(text)
     if not t or _RUECKRUF_BITTE_RE.search(t):
         return False
-    return bool(_ANRUFGRUND_RE.search(t))
+    if _ANRUFGRUND_RE.search(t):
+        return True
+    if sit and _ANRUFGRUND_FOLGE_RE.search(t):
+        vor = _voriges_anruferwort(sit, t)
+        if vor and _ANRUFGRUND_RE.search(vor) and not _RUECKRUF_BITTE_RE.search(vor):
+            return True
+    return False
 
 
 def rueckruf_hat_offen(sit: dict) -> bool:

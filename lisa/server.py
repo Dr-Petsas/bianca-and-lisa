@@ -609,9 +609,10 @@ def index():
                         headers={"Cache-Control": "no-store"})
 
 
-@app.get("/{name}")
+@app.api_route("/{name}", methods=["GET", "HEAD"])
 def web_file(name: str):
-    erlaubt = {"app.js", "styles.css", "fernsteuerung.html"}
+    # HEAD muss gehen — sonst wirkt /replay.html „gelöscht“ (405 auf Probe).
+    erlaubt = {"app.js", "styles.css", "fernsteuerung.html", "replay.html"}
     if name in erlaubt:
         p = WEB_DIR / name
         if p.is_file():

@@ -196,6 +196,83 @@ def test_kontext_karteikarte_faltet_events():
         ged.httpx.get = echt
 
 
+def test_kontext_nimmt_frische_frontdesk_themenotiz():
+    """Herbst 08.09.: Empfang schrieb status=none, caller-context fand nichts."""
+    jetzt = int(ged.time.time() * 1000)
+
+    def fake_get(url, params=None, **kw):
+        class _R:
+            @staticmethod
+            def json():
+                if "caller-context" in url:
+                    return {"ok": True, "found": False, "context": "", "openEventIds": []}
+                if "/brain/search" in url:
+                    return {"ok": True, "results": [
+                        {"kind": "event", "id": "ce68", "ts": jetzt, "status": "none",
+                         "channel": "frontdesk",
+                         "snippet": "schlaf schiene ist schon abholbreit",
+                         "counterpartyName": "Patrick Herbst"},
+                    ]}
+                raise AssertionError(url)
+        return _R()
+
+    echt = ged.httpx.get
+    ged.httpx.get = fake_get
+    try:
+        text, ids = ged._kontext_stand("491777074403", "Patrick Herbst")
+        assert "schlaf schiene" in text.lower()
+        assert "noch offen" in text
+        assert "Patrick Herbst" in text
+        assert ids == ["ce68"]
+    finally:
+        ged.httpx.get = echt
+
+
+def test_outbound_offen_legen_schreibt_open_event():
+    posts = []
+
+    def fake_post(url, json=None, **kw):
+        posts.append((url, json))
+        class _R:
+            status_code = 200
+            @staticmethod
+            def json():
+                return {"ok": True}
+        return _R()
+
+    echt = ged.httpx.post
+    echt_th = ged.threading.Thread
+
+    class _Sofort:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+        def start(self):
+            if self._target:
+                self._target()
+
+    ged.httpx.post = fake_post
+    ged.threading.Thread = _Sofort
+    try:
+        ged.outbound_offen_legen({
+            "phoneCallId": "pc-1",
+            "clientId": "MEe4ZQHEzOPzLcexyhdT",
+            "toE164": "+491777074403",
+            "auftrag": "Narval-Schiene abholbereit, Termin zur Eingliederung.",
+            "patient": {"id": "u1", "firstName": "Patrick", "lastName": "Herbst",
+                        "phone": "+491777074403"},
+        })
+        assert posts
+        url, body = posts[0]
+        assert url.endswith("/brain/events")
+        assert body["status"] == "open"
+        assert body["id"] == "telefonki:lisa_outbound:pc-1"
+        assert "Narval" in body["summary"]
+        assert body["counterparty"]["ref"] == "491777074403"
+    finally:
+        ged.httpx.post = echt
+        ged.threading.Thread = echt_th
+
+
 def test_kontext_anstossen_key_gesichert():
     laeufe = []
     echt_thread = ged.threading.Thread

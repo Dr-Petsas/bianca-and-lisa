@@ -33,6 +33,7 @@ Netz, byte-identisches Verhalten wie vor W-GEDAECHTNIS.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -95,7 +96,8 @@ def _wer(sit: dict) -> tuple[str, str]:
     if not name:
         name = f"{_s(a.get('vorname'))} {_s(a.get('nachname'))}".strip()
     roh = (_s(s.get("telefon")) or _s(s.get("aktePhone")) or _s(pat.get("phone"))
-           or _s(book.get("phone")) or _s(a.get("telefon")))
+           or _s(book.get("phone")) or _s(a.get("telefon"))
+           or _s(sit.get("callerPhone")))
     telefon = "".join(c for c in roh if c.isdigit())
     if len(telefon) < 7:
         telefon = ""
@@ -265,6 +267,60 @@ def report_senden(sit: dict) -> dict | None:
         return None
 
 
+def outbound_offen_legen(bundle: dict) -> None:
+    """Beim Lisa-Wählversuch sofort eine offene Notiz legen — bevor jemand rangeht.
+
+    Sonst weiß Bianca nichts, wenn der Patient während des Klingelns oder
+    nach einem Nicht-Erreichen zurückruft (Hangup-Report kommt dann nie)."""
+    if not enabled():
+        return
+    p = bundle.get("patient") if isinstance(bundle.get("patient"), dict) else {}
+    vor = _s(p.get("firstName") or p.get("first_name"))
+    nach = _s(p.get("lastName") or p.get("last_name"))
+    name = _s(p.get("name") or p.get("fullName") or f"{vor} {nach}")
+    roh = (_s(p.get("phone") or p.get("mobilePhoneNumber") or p.get("phoneNumber"))
+           or _s(bundle.get("toE164") or bundle.get("to")))
+    telefon = "".join(c for c in roh if c.isdigit())
+    if len(telefon) < 7:
+        telefon = ""
+    auftrag = _s(bundle.get("auftrag") or bundle.get("prompt") or bundle.get("task_prompt"))
+    grund = auftrag[:180] if auftrag else "Rückruf der Praxis"
+    pcid = _s(bundle.get("phoneCallId") or bundle.get("uuid"))
+    if not pcid:
+        return
+    body = {
+        "id": f"telefonki:lisa_outbound:{pcid}",
+        "channel": "lisa_call",
+        "direction": "out",
+        "type": "note",
+        "counterparty": {"kind": "patient", "name": name, "ref": telefon or None},
+        "subject": {
+            "patientId": _s(p.get("id") or p.get("patientId")) or None,
+            "name": name,
+            "matchStatus": "matched" if _s(p.get("id") or p.get("patientId")) else "unmatched",
+            "matchMethod": "name" if _s(p.get("id") or p.get("patientId")) else None,
+        },
+        "summary": f"Lisa hat {name or 'den Patienten'} angerufen: {grund}.",
+        "signals": {"callbackRequested": True},
+        "status": "open",
+        "confidence": 0.95,
+        "payloadRef": {"kind": "telefonki_outbound", "id": pcid},
+        "extractor": "telefonki@v1",
+    }
+    cid = _s(bundle.get("clientId") or (bundle.get("agent") or {}).get("clientId"))
+
+    def arbeit() -> None:
+        try:
+            r = httpx.post(f"{MAS_URL}/brain/events", json=body,
+                           headers=_headers(cid), timeout=WARTE_S)
+            print(f"lisa-gedaechtnis outbound {body['id']} -> {r.status_code}",
+                  flush=True)
+        except Exception as e:
+            print(f"lisa-gedaechtnis outbound fail {e}", flush=True)
+
+    threading.Thread(target=arbeit, daemon=True).start()
+
+
 def _offen_ids(roh: Any) -> list[str]:
     out: list[str] = []
     for x in roh or []:
@@ -272,6 +328,48 @@ def _offen_ids(roh: Any) -> list[str]:
         if s and s not in out:
             out.append(s)
     return out
+
+
+# Empfangs-/Lisa-Themenotiz (Herbst 08.09.2026): die Praxis schreibt
+# "schlaf schiene ist schon abholbreit" als frontdesk/note mit status=none.
+# caller-context zeigt nur status=open — ohne diesen Filter sieht Bianca
+# den Rückrufgrund nicht, obwohl die Notiz Minuten vor dem Rückruf da war.
+_THEMA_RE = re.compile(
+    r"abhol|schien|narval|schnarch|nicht erreicht|"
+    r"zur(ü|ue)ckruf|anrufen|angerufen|bitte.{0,16}ruf",
+    re.I,
+)
+_THEMA_KANAL = {"frontdesk", "lisa_call", "lisa_outbound", "lisa_sms"}
+_THEMA_TAGE_MS = 14 * 24 * 60 * 60 * 1000
+
+
+def _event_ist_themenotiz(e: dict) -> bool:
+    """Offen ODER frische Empfangs-/Lisa-Notiz mit Rückruf-Thema."""
+    if not isinstance(e, dict):
+        return False
+    st = _s(e.get("status")).lower()
+    if st in {"resolved", "done", "closed", "erledigt"}:
+        return False
+    if st == "open":
+        return True
+    if st not in {"", "none"}:
+        return False
+    kanal = _s(e.get("channel")).lower()
+    summ = _s(e.get("summary") or e.get("snippet"))
+    if not summ or not _THEMA_RE.search(summ):
+        return False
+    if kanal and kanal not in _THEMA_KANAL:
+        return False
+    try:
+        ts = float(e.get("ts") or 0)
+    except (TypeError, ValueError):
+        return False
+    if ts <= 0:
+        return False
+    if ts < 1e12:
+        ts *= 1000.0
+    age = time.time() * 1000.0 - ts
+    return 0 <= age <= _THEMA_TAGE_MS
 
 
 def _kontext_stand(telefon: str, name: str, client_id: str = "") -> tuple[str, list[str]]:
@@ -301,7 +399,7 @@ def _kontext_stand(telefon: str, name: str, client_id: str = "") -> tuple[str, l
         zeilen: list[str] = []
         ids: list[str] = []
         for e in events:
-            if e.get("status") != "open":
+            if not _event_ist_themenotiz(e):
                 continue
             summ = _s(e.get("summary"))
             if not summ:
@@ -339,9 +437,9 @@ def _suche_nach_nummer(telefon: str, client_id: str = "") -> tuple[str, list[str
     for h in hits:
         if h.get("kind") != "event":
             continue
-        if h.get("status") != "open":
+        if not _event_ist_themenotiz(h):
             continue
-        summ = _s(h.get("snippet"))
+        summ = _s(h.get("snippet") or h.get("summary"))
         if not summ:
             continue
         wann = _wann_zeile(h.get("ts"))

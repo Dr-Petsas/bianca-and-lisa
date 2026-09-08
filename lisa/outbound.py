@@ -304,6 +304,11 @@ def dial(bundle: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         pending_holen(uid)  # rollback
         raise
+    try:
+        from kern import gedaechtnis
+        gedaechtnis.outbound_offen_legen(meta)
+    except Exception as e:
+        print(f"lisa-outbound gedaechtnis fail: {e}", flush=True)
     return {
         "ok": True,
         "uuid": uid,

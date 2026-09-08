@@ -64,10 +64,15 @@ DIENST = Dienst(
     name="bianca",
     start_fn=agent.start_reply,
     turn_fn=agent.user_turn,
-    # Bis zur Buchung antwortet die Zustandsmaschine sofort — geratene
-    # Kalender-Füller wären dort falsch. Echte Werkzeug-Füller kommen
-    # weiterhin über melde(), sobald wirklich Netz-Zeit anfällt.
-    schnell_fn=lambda sit: (sit.get("sammler") or {}).get("phase") != "gebucht",
+    # Neutraler Haenger-Füller nur, wenn Slot/Buchung/Ziffern wirklich
+    # haengen können — NICHT den ganzen Anruf (Live 08.09.: bei jedem
+    # Satz „Einen Moment bitte.", weil phase bis gebucht immer „schnell" war).
+    schnell_fn=lambda sit: (
+        (sit.get("sammler") or {}).get("phase") in {"angebot", "bestaetigen"}
+        or (sit.get("sammler") or {}).get("frage") in {
+            "slotwahl", "bestaetigung", "telefon_check",
+        }
+    ),
     merke_zug=session.merke_zug,
     # W-TEMPO / W-SVETLANA: Frage-Basis (350/500/1500) an das Sprechtempo
     # des Anrufers anpassen — unbekannt/langsam nie unter 800/1100 ms, sonst
@@ -557,9 +562,10 @@ def index():
                         headers={"Cache-Control": "no-store"})
 
 
-@app.get("/{name}")
+@app.api_route("/{name}", methods=["GET", "HEAD"])
 def web_file(name: str):
-    erlaubt = {"app.js", "styles.css"}
+    # HEAD muss gehen — sonst wirkt /replay.html „gelöscht“ (405 auf Probe).
+    erlaubt = {"app.js", "styles.css", "replay.html"}
     if name in erlaubt:
         p = BIANCA_WEB_DIR / name
         if p.is_file():

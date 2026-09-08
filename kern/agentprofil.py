@@ -332,7 +332,7 @@ def _cf_senden(body: dict[str, Any]) -> dict[str, Any] | None:
     return d if isinstance(d, dict) else None
 
 
-def _cf_pre(did: str, caller: str = "") -> dict[str, Any] | None:
+def _cf_pre(did: str, caller: str = "", lookup_only: bool = False) -> dict[str, Any] | None:
     e164 = "+" + tenants.nummer_norm(did)
     call_id = f"bianca-{tenants.nummer_norm(did)}-{int(time.time())}"
     # W-ANRUFER (30.08.2026): die Bruecke liest die Anrufernummer aus dem
@@ -340,18 +340,25 @@ def _cf_pre(did: str, caller: str = "") -> dict[str, Any] | None:
     # +E164 (trimPhoneNumber matcht Patienten ueber "+49…"). Unterdrueckte
     # Nummer -> "anonymous" wie bisher: kein Patient matcht, der Agent
     # kommt trotzdem, das Portal zeigt "Unterdrueckte Nummer".
+    # lookup_only: Agent/Patient holen OHNE PhoneCall (Smoke, Cache-Fuellung).
+    # Registrieren darf nur call_erfassen — sonst bleiben leere inProgress-
+    # Zeilen in CallR (kein Hangup, kein Transkript).
     caller_norm = tenants.nummer_norm(caller)
-    return _cf_senden({
+    body: dict[str, Any] = {
         "phase": "pre",
         "callerPhone": ("+" + caller_norm) if caller_norm else "anonymous",
         "calledNumber": e164,
         "callId": call_id,
         "conversationId": call_id,
         "roomName": call_id,
-    })
+    }
+    if lookup_only:
+        body["lookupOnly"] = True
+    return _cf_senden(body)
 
 
-def _cf_pre_mit_geschwistern(did: str, caller: str = "") -> dict[str, Any] | None:
+def _cf_pre_mit_geschwistern(did: str, caller: str = "",
+                             lookup_only: bool = False) -> dict[str, Any] | None:
     """CF-pre: erst die angerufene DID, sonst Geschwister-DIDs derselben Praxis.
 
     Live 06.09.2026: MedDent-Agent steht in der DB nur auf +4921154244110,
@@ -363,7 +370,7 @@ def _cf_pre_mit_geschwistern(did: str, caller: str = "") -> dict[str, Any] | Non
     norm = tenants.nummer_norm(did)
     if not norm:
         return None
-    pre = _cf_pre(norm, caller)
+    pre = _cf_pre(norm, caller, lookup_only=lookup_only)
     if pre:
         return pre
     lokal = tenants.von_did(norm)
@@ -376,7 +383,7 @@ def _cf_pre_mit_geschwistern(did: str, caller: str = "") -> dict[str, Any] | Non
         if not alt_norm or alt_norm in gesehen:
             continue
         gesehen.add(alt_norm)
-        pre = _cf_pre(alt_norm, caller)
+        pre = _cf_pre(alt_norm, caller, lookup_only=lookup_only)
         if pre:
             print(f"agentprofil did={norm} -> CF ueber Geschwister-DID {alt_norm}",
                   flush=True)
@@ -400,7 +407,7 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
             t = dict(hit[1]) if hit[1] else None
         else:
             try:
-                pre = _cf_pre_mit_geschwistern(norm, caller)
+                pre = _cf_pre_mit_geschwistern(norm, caller, lookup_only=True)
                 t = tenant_von_pre(pre, did=norm) if pre else None
             except Exception as e:
                 print(f"agentprofil cf fail did={norm}: {type(e).__name__}: {e}", flush=True)
@@ -512,6 +519,8 @@ def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
     # W-ANRUFER-CHECK: Kartei-Treffer zur Anrufernummer in die Sitzung —
     # nur mit ECHTER Nummer (bei "anonymous" matcht die CF ohnehin nie).
     caller_norm = tenants.nummer_norm(caller)
+    if caller_norm:
+        sit["callerPhone"] = "+" + caller_norm
     pat = t.pop("_anrufer", None)
     if isinstance(pat, dict) and pat and caller_norm:
         _anrufer_in_sitzung(sit, pat, caller_norm)
