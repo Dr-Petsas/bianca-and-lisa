@@ -1157,6 +1157,7 @@ const PATCHES = [
   ["W-TRANSKRIPT-FUELLER (Füllsätze nachtragen)", "08.09.", "Betrieb", "Füller, die nach der Job-Zeile erst gespielt werden, kommen nachträglich in Mitschnitt, messages und CallR — nicht nur als Audio."],
   ["W-TASK-ROUTER (semantischer Handoff)", "08.09.", "Architektur", "Das LLM versteht natürliche Anliegen und Themenwechsel, übergibt aber nur an den sicheren FlowManager. Keine direkten Buchungs-, Storno-, Slot- oder Kalenderwerkzeuge im freien Gespräch; die laufende Aufgabe wird bei einem Wechsel geparkt und später wieder aufgenommen."],
   ["W-DATEN-FLOOR (ausreden lassen)", "08.09.", "Akte", "Buchstaben- und Nummernfragmente werden still gesammelt: keine Zwischenansage nach einer Denkpause und kein Ausweichen in die Talk-Schicht. Nachname und Vorname werden je nur einmal aufgenommen; beginnt nach dem gesprochenen Vornamen eine Buchstabierung, bleibt Bianca bis zum sicheren Ende still und korrigiert den Wort-Kandidaten mit den Buchstaben."],
+  ["W-FUER-WEN-OBJEKT (Prothese ist keine Person)", "08.09.", "Termine", "Besuchsgründe wie „für eine neue Prothese“, „für meine Krone“ oder „für ein Implantat“ lösen keinen Termin für Dritte mehr aus. Verwandte, Betreuer sowie ausdrücklich genannte andere Personen bleiben vollständig erkannt."],
 ];
 
 let kTab = "faehig";

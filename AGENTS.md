@@ -1604,13 +1604,15 @@ DREIMAL „für meinen Sohn" — Bianca buchte stur auf den Vater. Drei Löcher:
   kann auch der nachbar der bruder oder die mutter sein. du musst alle
   möglichen Fälle verstehen"): `_ROLLEN` liefert die Grammatik für die
   bekannten Fälle (Familie, Nachbar(in), Bruder, Mutter, Freund,
-  Kollege, Partner, Chef, Schwieger-, Betreuer, Pfleger …). `_FUER_WEN_RE`
-  matcht aber **jede** Besitz-Konstruktion („für meinen X", „meine X
-  braucht/möchte") — unbekanntes X (Betreuer, Peter) wird „andere" und
-  Bianca fragt „Für wen ist der Termin denn — wie heißt er oder sie?".
-  Stopwörter (Woche, Kontrolle, Donnerstag, Frau Doktor) sind kein Dritter.
+  Kollege, Partner, Chef, Schwieger-, Betreuer, Pfleger …). Unbekannte
+  Substantive nach mein/ein werden bewusst NICHT automatisch zur Person:
+  „Besprechung für eine (neue) Prothese", „für meine Krone" und „für ein
+  Implantat" sind Behandlungsgründe, keine Dritten (Live 08.09.2026).
+  Stopwörter (Woche, Kontrolle, Donnerstag, Frau Doktor) sind ebenfalls kein Dritter.
   Extra-Netze: „für ihn", „ich rufe für Peter an", „im Auftrag/Namen von",
-  „stellvertretend". Grammatik kommt NUR aus der Tabelle — nie geraten.
+  „stellvertretend". Rollen kommen aus der Tabelle, unbekannte Personen
+  brauchen ein solches eindeutiges Personensignal — nie aufgrund eines
+  beliebigen Hauptworts raten.
 - **Die Chef-Frage:** der Anrufer-Check im BUCHEN-Fluss endet mit „Der
   Termin ist für Sie selbst, richtig?" (`anrufer_check_frage(sit,
   selbst=True)`); Verwaltung (Absage/Auskunft) behält „Stimmt das so?".
@@ -1630,8 +1632,9 @@ DREIMAL „für meinen Sohn" — Bianca buchte stur auf den Vater. Drei Löcher:
   `flow.zug` (phase bestaetigen, nein) prüft jetzt `fuer_wen_signal` und
   schreibt den Patienten um, OHNE Slot/Grund/Arzt zu verwerfen.
 - **Fragen drehen sich um den Dritten:** „War Ihr Sohn schon einmal bei
-  uns?", „bei welchem Behandler Ihr Sohn zuletzt war?", „Wie heißt Ihr
-  Sohn? Bitte mit Vor- und Nachnamen.", „Und ist Ihr Sohn privat oder
+  uns?", „bei welchem Behandler Ihr Sohn zuletzt war?", „Damit ich Ihren
+  Sohn in der Kartei finde: Wie lautet der Nachname?", danach nur der
+  Vorname, „Und ist Ihr Sohn privat oder
   gesetzlich versichert?" (`fuer_wen_phrase`, Nominativ/Akkusativ). Häufige
   Rollen sind als feste Sätze vorgewärmt.
 - **Termin-Notiz:** „Telefonisch gebucht von Angehörigem (Sohn-Termin):

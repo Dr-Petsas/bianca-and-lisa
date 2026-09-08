@@ -409,7 +409,12 @@ _FUER_WEN_RE = re.compile(
 # von", "stellvertretend", "für ihn", "ich rufe für Peter an".
 _NICHT_FUER_MICH_RE = re.compile(
     r"nicht\s+f(?:ü|ue)r\s+mich|"
-    r"f(?:ü|ue)r\s+(?:jemand(?:en)?|eine[nn]?)\s+ander|"
+    r"f(?:ü|ue)r\s+jemand(?:en)?\s+ander\w*|"
+    # „für einen anderen“ nur als abgeschlossene Personenphrase oder mit
+    # ausdrücklichem Personenwort. Sonst wäre „für eine andere Prothese“
+    # erneut ein falscher Dritter.
+    r"f(?:ü|ue)r\s+eine(?:n|m|r)?\s+ander\w*"
+    r"(?:\s+(?:menschen|person|patient(?:en|in)?))?\s*(?=[.!?,]|$)|"
     r"f(?:ü|ue)r\s+(?:herrn?|frau)\s+(?!dr\b|doktor)\w{2,}|"
     r"im\s+(?:auftrag|namen)\s+von|stellvertretend|in\s+vertretung|"
     r"f(?:ü|ue)r\s+ihn\b|"
@@ -429,13 +434,16 @@ def _rolle_normal(w: str) -> str:
     """Flektierte Rolle auf den Tabellen-Schluessel bringen.
 
     Leerer String = das Wort ist KEIN Dritter (Stopwort: Woche, Kontrolle…).
-    Unbekannte Person ("Betreuer", "Peter") wird "andere"."""
+    Unbekannte Woerter gelten NICHT automatisch als Person: „für eine
+    Prothese“ und „für eine neue Krone“ beschreiben den Behandlungsgrund.
+    Rollen stehen in der Grammatik; Namen/generische Dritte haben eigene
+    eindeutige Muster („für Frau Schmidt“, „ich rufe für Peter an“)."""
     w = _s(w).lower()
     if not w or w in _FUER_WEN_STOP:
         return ""
     if w in _ROLLEN:
         return w
-    return _ROLLE_ALIAS.get(w, "andere")
+    return _ROLLE_ALIAS.get(w, "")
 
 
 def fuer_wen_signal(text: str) -> str:
@@ -2812,9 +2820,14 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:
+            wen = fuer_wen_phrase(s, fall="wen")
+            einstieg = (
+                f"Damit ich {wen} in der Kartei finde: "
+                if wen else "Damit ich Sie in der Kartei finde: "
+            )
             return (
                 "buchstabieren",
-                "Damit ich Sie in der Kartei finde: Wie lautet der Nachname? "
+                f"{einstieg}Wie lautet der Nachname? "
                 "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
                 "sagen Sie am Ende einfach fertig.",
             )
@@ -2860,9 +2873,14 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if s["wunsch"] is None:
         return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
     if not s["nachname"]:
+        wen = fuer_wen_phrase(s, fall="wen")
+        einstieg = (
+            f"Dann nehme ich die Daten für {wen} einmal auf. "
+            if wen else "Dann nehme ich die Daten einmal auf. "
+        )
         return (
             "buchstabieren",
-            "Dann nehme ich die Daten einmal auf. Wie lautet der Nachname? "
+            f"{einstieg}Wie lautet der Nachname? "
             "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
             "sagen Sie am Ende einfach fertig.",
         )

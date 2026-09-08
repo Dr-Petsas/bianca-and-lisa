@@ -108,8 +108,37 @@ def test_signal_keine_falschen_treffer():
         "Ich möchte zu Frau Doktor Petsas.",
         "Geht auch ein Termin bei Frau Doktor?",
         "Einen Termin für Frau Doktor Nikolaou bitte.",
+        # Live 08.09.2026: „eine neue“ wurde als unbekannte Rolle gelesen
+        # und machte aus Zahnersatz fälschlich einen Termin für Dritte.
+        "Ich möchte eine Besprechung für eine neue Prothese.",
+        "Ich brauche eine Besprechung für eine Prothese.",
+        "Ich brauche eine Besprechung für eine andere Prothese.",
+        "Ich brauche einen Termin für eine Füllung.",
+        "Die Anpassung ist für meine neue Krone.",
+        "Ich brauche etwas für meinen Zahnersatz.",
     ]:
         assert gehirn.fuer_wen_signal(satz) == "", satz
+
+
+def test_signal_unbekanntes_wort_ist_nicht_automatisch_eine_person():
+    # Der Dritte braucht einen belastbaren Personenhinweis. Ein beliebiges
+    # Substantiv nach mein/ein darf nicht genügen.
+    assert gehirn.fuer_wen_signal("Termin für meinen Apparat.") == ""
+    assert gehirn.fuer_wen_signal("Besprechung für ein Implantat.") == ""
+    # Bekannte Rollen und explizite Personenformen bleiben vollständig aktiv.
+    assert gehirn.fuer_wen_signal("Termin für meinen Betreuer.") == "betreuer"
+    assert gehirn.fuer_wen_signal("Termin für einen Bekannten.") == "andere"
+    assert gehirn.fuer_wen_signal("Ich rufe für Peter an.") == "andere"
+    assert gehirn.fuer_wen_signal("Der Termin ist für einen anderen.") == "andere"
+    assert gehirn.fuer_wen_signal("Der Termin ist für eine andere Person.") == "andere"
+
+
+def test_live_prothesen_satz_setzt_keinen_dritten_in_den_sammler():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "grund"})
+    gehirn.einsammeln(sit, "Ich möchte eine Besprechung für eine neue Prothese.")
+    assert not s["fuerWen"]
 
 
 def test_phrase_beugt_richtig():
@@ -136,7 +165,8 @@ def test_nachbar_fluss_fragt_nach_dem_nachbarn():
     s["warSchonMal"] = True
     s["arzt"] = {"typ": "egal", "calendarId": "c1", "calendarName": "Dr. P"}
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "name" and "Wie heißt Ihr Nachbar?" in frage, frage
+    assert fid == "buchstabieren" and "Ihren Nachbarn" in frage, frage
+    assert "Nachname" in frage and "Vor- und Nachname" not in frage
 
 
 # --- 2. Die Chef-Frage: "Der Termin ist für Sie selbst, richtig?" ------------
@@ -268,7 +298,8 @@ def test_fragen_nennen_den_dritten():
     assert fid == "arzt" and "Ihre Tochter" in frage, frage
     s["arzt"] = {"typ": "egal", "calendarId": "c1", "calendarName": "Dr. P"}
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "name" and "Wie heißt Ihre Tochter?" in frage, frage
+    assert fid == "buchstabieren" and "Ihre Tochter" in frage, frage
+    assert "Nachname" in frage and "Vor- und Nachname" not in frage
 
 
 def test_versicherungsfrage_fragt_nach_dem_dritten():

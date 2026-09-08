@@ -29,6 +29,7 @@ MODULE = [
     "tests.test_turn_plan",
     "tests.test_task_router",
     "tests.test_datenerfassung_pausen",
+    "tests.test_fuer_wen",
     "tests.test_stille_notfall",
     "tests.test_llm_deckel",
     "tests.test_slot_behandler",
