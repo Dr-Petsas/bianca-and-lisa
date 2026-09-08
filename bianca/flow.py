@@ -1489,6 +1489,8 @@ def _nachname_korr_zug(sit: dict, t: str, melde: Melde = None) -> dict:
         sit["nachnameAlt"] = _s(s.get("nachname"))
         s["nachname"] = ""
         s["buchstabiert"] = False
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = False
         s["frage"] = "nachname_korr"
         return {"text": (
             "Gerne, dann korrigiere ich den Nachnamen. "

@@ -546,6 +546,11 @@ _KORREKTUR_KONTEXT_RE = re.compile(
 _TEL_FALSCH_RE = re.compile(
     r"(?:nummer|handy|telefon)[^.!?]{0,40}(?:falsch|stimmt\s+nicht|nicht\s+richtig|verkehrt)|"
     r"falsche\s+(?:nummer|handynummer|telefonnummer)", re.I)
+_DIKTAT_FERTIG_RE = re.compile(
+    r"\b(?:fertig|ende|das\s+war(?:'s|\s+es)?|mehr\s+nicht)\b", re.I)
+_BUCHSTABIER_HILFE_RE = re.compile(
+    r"(?:kann|weiß|weiss)[^.!?]{0,24}(?:nicht|nich)[^.!?]{0,24}buchstab|"
+    r"buchstabier[^.!?]{0,24}(?:nicht|schlecht)", re.I)
 # Neupatient-/Schonmal-Floskeln und ZUSTAENDE sind KEINE Namen: "Ich bin neu
 # bei Ihnen" wurde live als Name geerntet ("Danke, Neu Ihnen" — 27.08.2026),
 # "ich bin ganz aufgeregt" als "Ganz Aufgeregt" (Talk-Probe 27.08.2026). Der
@@ -610,6 +615,8 @@ FELDER_START = {
     "vorname": "",
     "nachname": "",
     "buchstabiert": False,
+    "buchstabenTeil": "",
+    "buchstabierHilfe": False,
     "grundWortlaut": "",
     # Nacktes Motiv ("Zahnreinigung"): erst nachfragen, ob ein Termin
     # gewollt ist — nicht sofort die Buchungsmaschine starten.
@@ -1126,7 +1133,10 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         # Nur EIN Wort auf die Namensfrage: gängige Vornamen (Paul, Anna …)
         # sind der VORNAME — alles andere führen wir als Nachnamen. Live
         # 27.08.2026 wurde "Paul?" als Nachname geführt ("Herr Paul").
-        if toks[0].lower() in _VORNAMEN and not s["vorname"]:
+        if (
+            (toks[0].lower() in _VORNAMEN or vornamen.aus_liste(toks[0]))
+            and not s["vorname"]
+        ):
             s["vorname"] = toks[0].capitalize()
         else:
             s["nachname"] = toks[0].capitalize()
@@ -1431,8 +1441,44 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if _name_korrektur(s, t):
         neu.add("name")
     buch = buchstaben.deute(t)
+    buch_fragment = False
+    if s["frage"] == "buchstabieren" and _BUCHSTABIER_HILFE_RE.search(t):
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = True
+        neu.add("buchstabierHilfe")
+        buch_fragment = True
+    elif s["frage"] == "buchstabieren":
+        teil = buchstaben.teil(t)
+        erwartet = re.sub(r"[^a-zäöüß]", "", _s(s["nachname"]).casefold())
+        buch_name = re.sub(
+            r"[^a-zäöüß]", "", _s((buch or {}).get("name")).casefold()
+        )
+        ist_kurzer_anfang = bool(
+            teil and (
+                not buch_name
+                or len(buch_name) < max(3, len(erwartet) - 1)
+            )
+        )
+        if s["buchstabenTeil"] or ist_kurzer_anfang:
+            zusammen = f"{s['buchstabenTeil']}{teil}"[:40]
+            if _DIKTAT_FERTIG_RE.search(t) and len(zusammen) >= 2:
+                s["nachname"] = zusammen[0].upper() + zusammen[1:]
+                s["buchstabiert"] = True
+                s["buchstabenTeil"] = ""
+                s["buchstabierHilfe"] = False
+                s["bekannt"] = False if not s["patientId"] else s["bekannt"]
+                neu.add("nachname")
+            elif teil:
+                s["buchstabenTeil"] = zusammen
+                s["buchstabierHilfe"] = False
+                neu.add("buchstabenTeil")
+            buch_fragment = True
     if "name" in neu:
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = False
         pass  # Korrektur hat Vorrang — nichts erneut ernten.
+    elif buch_fragment:
+        pass  # Teilfolge bleibt offen, bis der Anrufer „fertig“ sagt.
     elif (s["frage"] == "arzt" or (
             s["frage"] != "buchstabieren"
             and re.search(r"\b(?:dr\.?|doktor)\b", t, re.I)
@@ -1455,6 +1501,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 name = s["nachname"]
         s["nachname"] = name
         s["buchstabiert"] = True
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = False
         s["bekannt"] = False if s["frage"] == "buchstabieren" and not s["patientId"] else s["bekannt"]
         neu.add("nachname")
         # Im selben Satz kann der Vorname stecken: "… P-A-N-Z-E-R. Der
@@ -1471,6 +1519,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["bekannt"] = False if not s["patientId"] else s["bekannt"]
             s["nachname"] = nach
             s["buchstabiert"] = True
+            s["buchstabenTeil"] = ""
+            s["buchstabierHilfe"] = False
             neu.add("nachname")
         elif _name_aufnehmen(s, t, erzwungen=False):
             # "Der Nachname ist Panzer. P-A-N-Z-E-R. Der Vorname ist Paul":
@@ -1487,6 +1537,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 if len(tok) >= len(s["nachname"]):
                     s["nachname"] = tok
                 s["buchstabiert"] = True
+                s["buchstabenTeil"] = ""
+                s["buchstabierHilfe"] = False
                 neu.add("nachname")
     elif s["frage"] in {"name", "vorname", "nachname"}:
         if _name_aufnehmen(s, t, erzwungen=True):
@@ -1546,13 +1598,32 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         # Stückweise diktierte Nummer ("null eins sieben sieben" … Pause …
         # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
         stueck = telefon.ziffern(t).replace("+", "")
-        if 2 <= len(stueck) <= 13:
+        if (
+            not stueck
+            and s["telefonTeil"]
+            and _DIKTAT_FERTIG_RE.search(t)
+            and telefon.plausibel(s["telefonTeil"])
+        ):
+            s["telefonOffen"] = telefon.normaliert(s["telefonTeil"])
+            s["telefonTeil"] = ""
+            s["telefonOk"] = False
+            neu.add("telefonOffen")
+        if 1 <= len(stueck) <= 13:
             if stueck.startswith("0") and len(stueck) >= 4:
                 # Neue Nummer beginnt — der Anrufer setzt neu an.
                 zusammen = stueck
             else:
                 zusammen = (s["telefonTeil"] + stueck)[:16]
-            if telefon.plausibel(zusammen):
+            norm = telefon.mit_fuehrender_null(zusammen)
+            # Fragmentierte deutsche Handynummern nicht schon nach zehn
+            # Ziffern abschließen: viele haben elf, und bei Einzelziffern-
+            # Pausen wäre der letzte Laut sonst weg. Kürzere Sonderfälle
+            # können mit „fertig“ ausdrücklich abgeschlossen werden.
+            fragment_fertig = bool(
+                _DIKTAT_FERTIG_RE.search(t)
+                or (norm.startswith("01") and len(norm) >= 11)
+            )
+            if telefon.plausibel(zusammen) and fragment_fertig:
                 if _telefon_gesperrt(s, zusammen):
                     s["telefonTeil"] = ""
                     neu.add("telefonKorrektur")
@@ -2352,6 +2423,8 @@ def patient_von_kontakt_loesen(sit: dict) -> None:
     s["vorname"] = ""
     s["nachname"] = ""
     s["buchstabiert"] = False
+    s["buchstabenTeil"] = ""
+    s["buchstabierHilfe"] = False
     s["bekannt"] = False
     s["patientId"] = ""
     s["gesucht"] = ""
@@ -2393,6 +2466,8 @@ def name_fuer_aenderung_leeren(sit: dict) -> None:
     s["vorname"] = ""
     s["nachname"] = ""
     s["buchstabiert"] = False
+    s["buchstabenTeil"] = ""
+    s["buchstabierHilfe"] = False
     s["bekannt"] = False
     s["patientId"] = ""
     s["gesucht"] = ""
@@ -2423,7 +2498,11 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?",
         "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
         "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?",
-        "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer.",
+        "Kein Problem. Sagen Sie den Nachnamen bitte noch einmal langsam am Stück.",
+        "Den Anfang habe ich. Bitte mit den restlichen Buchstaben weiter; "
+        "am Ende sagen Sie einfach fertig.",
+        "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die restlichen "
+        "Ziffern; am Ende können Sie einfach fertig sagen.",
         "Und unter welcher Handynummer erreichen wir Sie?",
         "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung.",
         "Und sind Sie privat oder gesetzlich versichert?",
@@ -2571,6 +2650,21 @@ def stille_ms(s: dict) -> int:
     return 500
 
 
+def _buchstabier_frage(s: dict, standard: str) -> tuple[str, str]:
+    if s.get("buchstabierHilfe"):
+        return (
+            "buchstabieren",
+            "Kein Problem. Sagen Sie den Nachnamen bitte noch einmal langsam am Stück.",
+        )
+    if s.get("buchstabenTeil"):
+        return (
+            "buchstabieren",
+            "Den Anfang habe ich. Bitte mit den restlichen Buchstaben weiter; "
+            "am Ende sagen Sie einfach fertig.",
+        )
+    return "buchstabieren", standard
+
+
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)
@@ -2641,10 +2735,17 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if sit.get("rueckrufBuchung"):
             return "", ""
         if not s["bekannt"] and not s["buchstabiert"]:
-            return "buchstabieren", "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?"
+            return _buchstabier_frage(
+                s,
+                "Ich will nichts falsch schreiben: "
+                "Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
+            )
         if not s["telefonOk"] and not s["telefonAkte"] and not (s["bekannt"] and s["aktePhone"]):
             if s["telefonTeil"]:
-                return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
+                return "telefon", (
+                    "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
+                    "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
+                )
             return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
         fid_v, frage_v = _versicherung_frage(s)
         if fid_v:
@@ -2674,10 +2775,17 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if not s["vorname"]:
         return "vorname", "Und der Vorname?"
     if not s["buchstabiert"] and not s["bekannt"]:
-        return "buchstabieren", "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?"
+        return _buchstabier_frage(
+            s,
+            "Damit ich nichts falsch schreibe: "
+            "Buchstabieren Sie den Nachnamen bitte einmal kurz?",
+        )
     if not s["telefonOk"] and not s["telefonAkte"]:
         if s["telefonTeil"]:
-            return "telefon", "Da fehlt noch ein Stück von der Nummer — sagen Sie sie bitte einmal komplett, Ziffer für Ziffer."
+            return "telefon", (
+                "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
+                "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
+            )
         return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
     fid_v, frage_v = _versicherung_frage(s)
     if fid_v:

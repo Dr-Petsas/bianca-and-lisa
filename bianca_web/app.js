@@ -1155,6 +1155,8 @@ const PATCHES = [
   ["W-ABGEBEN-NUMMER (keine Dreifach-Frage)", "08.09.", "Gespräch", "Rezept/Rückruf-Notiz: eine richtig transkribierte Nummer gilt sofort (telefonOffen → Notiz). Bekannter Anrufer aus der Leitung: Name und Nummer nicht nochmal erfragen."],
   ["W-ARZT-NOTIZ-EINER (einmal fragen)", "08.09.", "Termine", "Doktor-Notiz einmal: Ja → ein Diktat, Zwischenfrage ist die Notiz, Preis sagt die KI. Nie ans LLM, nie dieselbe Doktor-Frage nochmal (Petsas 08.09.)."],
   ["W-TRANSKRIPT-FUELLER (Füllsätze nachtragen)", "08.09.", "Betrieb", "Füller, die nach der Job-Zeile erst gespielt werden, kommen nachträglich in Mitschnitt, messages und CallR — nicht nur als Audio."],
+  ["W-TASK-ROUTER (semantischer Handoff)", "08.09.", "Architektur", "Das LLM versteht natürliche Anliegen und Themenwechsel, übergibt aber nur an den sicheren FlowManager. Keine direkten Buchungs-, Storno-, Slot- oder Kalenderwerkzeuge im freien Gespräch; die laufende Aufgabe wird bei einem Wechsel geparkt und später wieder aufgenommen."],
+  ["W-DATEN-PAUSEN (Name + Nummer in Teilen)", "08.09.", "Akte", "Unbekannte Anrufer dürfen zwischen Buchstaben oder Nummerngruppen lange pausieren. Bianca sammelt Fragmente über mehrere Züge, schließt Handynummern nicht vor der letzten Ziffer ab und bietet bei Buchstabierproblemen langsames Nachsprechen an."],
 ];
 
 let kTab = "faehig";

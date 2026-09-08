@@ -270,11 +270,14 @@ def test_fluss_fragenkette_bis_angebot():
         assert z8 and "wiederhole" in z8["text"].lower()
 
         z9 = flow.zug(sit, "Ja, stimmt.")
-        assert z9 and "frei" in z9["text"].lower().replace("wäre", "wäre")
+        assert z9 and "zahnreinigung" in z9["text"].lower()
+
+        z10 = flow.zug(sit, "Nein, danke.")
+        assert z10 and "frei" in z10["text"].lower().replace("wäre", "wäre")
         assert sit.get("offered")
 
-        z10 = flow.zug(sit, "Der erste bitte.")
-        assert z10 and "halte ich fest" in z10["text"].lower()
+        z11 = flow.zug(sit, "Der erste bitte.")
+        assert z11 and "halte ich fest" in z11["text"].lower()
         s = gehirn.sammler(sit)
         assert s["phase"] == "bestaetigen" and s["slotIso"]
     finally:

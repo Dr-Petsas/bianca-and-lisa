@@ -306,6 +306,61 @@ def deute(text: str) -> dict[str, Any] | None:
     return {"name": name, "sicher": sicher}
 
 
+def teil(text: str) -> str:
+    """Eindeutiges Buchstabier-Fragment, auch nur EIN Buchstabe.
+
+    Diese engere Deutung ist ausschließlich für eine bereits offene
+    Buchstabier-Frage gedacht. Unbekannte Wörter verwerfen das Fragment,
+    damit ein normal gesprochener Nachname nicht als Buchstabenfolge endet.
+    """
+    toks = _tokens(text)
+    if not toks:
+        return ""
+    erlaubt = _FUELL | {
+        "wie", "fertig", "ende", "wars", "war's", "gewesen",
+    }
+    letters: list[str] = []
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        if tok.startswith("doppel"):
+            rest = tok[len("doppel"):].lstrip("tes").lstrip("te")
+            letter = (
+                _als_buchstabe(rest)
+                if rest
+                else (_als_buchstabe(nxt) or _TAFEL.get(nxt, ""))
+            )
+            if not letter:
+                return ""
+            letters.append(letter * 2)
+            i += 1 if rest else 2
+            continue
+        if nxt == "wie":
+            wort = toks[i + 2] if i + 2 < len(toks) else ""
+            letter = _als_buchstabe(tok) or _TAFEL.get(tok, "")
+            if not letter and wort:
+                letter = _TAFEL.get(wort, "")
+            if not letter:
+                return ""
+            letters.append(letter)
+            i += 3
+            continue
+        letter = _als_buchstabe(tok)
+        if letter:
+            letters.append(letter)
+            i += 1
+            continue
+        if tok in _TAFEL and len(tok) > 1:
+            letters.append(_TAFEL[tok])
+            i += 1
+            continue
+        if tok not in erlaubt:
+            return ""
+        i += 1
+    return "".join(letters)
+
+
 def ist_buchstabierung(text: str) -> bool:
     return deute(text) is not None
 

@@ -755,6 +755,8 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
             s["nachname"] = ""
             s["patientId"] = ""
             s["buchstabiert"] = False
+            s["buchstabenTeil"] = ""
+            s["buchstabierHilfe"] = False
         if s["modus"] == "absagen":
             # "Ich muss meinen Termin am Dienstag absagen": die Zeitangabe
             # beschreibt den BESTANDSTERMIN — nie ein Neubuchungs-Wunsch.

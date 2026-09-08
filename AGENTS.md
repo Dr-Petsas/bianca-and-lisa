@@ -1707,6 +1707,31 @@ oder ähnliches.. sagst du..... ähhhm selber!! sonst noch was?"
 - Tests: `tests/test_anstand.py` (7, offline — Agent-Test beweist, dass
   das LLM beim Konter nie läuft).
 
+## Semantischer Task-Router + sichere Werkzeuge (08.09.2026 — nicht rückbauen)
+
+Das Haupt-LLM erkennt natürliche Anliegen über `kern/task_router.py` und
+übergibt sie an `kern/hirn.py`; es führt keine Kalenderaktion selbst aus.
+Auch während einer laufenden Aufgabe bekommt das freie Gespräch nur
+`select_task` (nach einer echten Buchung zusätzlich `note_appointment`),
+nie `book_slot`, `cancel_appointment`, `move_appointment`, `offer_slots`,
+`list_appointments` oder `create_patient`. Ein klar anderes Anliegen parkt
+die laufende Aufgabe; Smalltalk beantwortet das Modell ohne Task-Wechsel.
+Notaus: `TASK_ROUTER=0` stellt die alte Werkzeugliste wieder her. Tests:
+`tests/test_task_router.py`.
+
+## Name/Nummer mit langen Pausen (08.09.2026 — nicht rückbauen)
+
+Erkannte Rufnummern überspringen die schwierige Datenerfassung; deshalb muss
+der unbekannte Anrufer eigener Pflichtfall bleiben. `buchstabenTeil` sammelt
+eindeutige Buchstabierfragmente über mehrere Züge. Nach einem fragmentierten
+Namen sagt der Anrufer am Ende „fertig“; ein zusammenhängend buchstabierter
+Name bleibt unverändert der schnelle Weg. „Ich kann nicht buchstabieren“
+wechselt deterministisch auf langsames Nachsprechen. `telefonTeil` nimmt auch
+Einzelziffern; eine fragmentierte Mobilnummer wird nicht schon nach zehn
+Ziffern abgeschlossen, kürzere Sonderfälle enden ausdrücklich mit „fertig“.
+Jede vollständige Nummer wird weiter Ziffer für Ziffer rückbestätigt. Tests:
+`tests/test_datenerfassung_pausen.py`.
+
 ## Server-Deploy (pickadoc1) — die .env-Falle
 
 - **`.env` ist im Git GETRACKT.** Jedes `git archive` enthält sie — ein
