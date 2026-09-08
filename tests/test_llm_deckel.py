@@ -4,6 +4,8 @@ Reine Textarbeit — kein vLLM, kein Netz. Der Stream-Schnitt selbst sitzt
 in chat_stream und wird hier ueber _deckel_text geprueft (gleiche Logik).
 """
 
+import json
+
 from kern import llm
 
 
@@ -195,3 +197,91 @@ def test_vorab_fifo_verwirft_doppelten_mittelsatz():
     text = f"{a} {c}"
     assert llm.rest_nach_vorab(fifo, text) == ""
     assert llm.rest_nach_vorab(fifo, text + " Noch etwas?") == "Noch etwas?"
+
+
+def test_dienst_spielt_vorab_duplikat_nicht_und_rendert_nur_rest():
+    """Live Thaler/MedDent 08.09.: ein P5-Mittelsatz lag im Vorab und noch
+    einmal im finalen WAV. Die Dienst-Ebene muss die FIFO wirklich nutzen."""
+    from kern import dienst as dienst_mod
+    from kern.dienst import Dienst
+
+    a = (
+        "Ah, Herr Petsas. Das ist ein häufiger Grund. "
+        "Ich helfe Ihnen gerne bei der Terminvereinbarung."
+    )
+    doppelt = (
+        "Das ist ein häufiger Grund. "
+        "Ich helfe Ihnen gerne bei der Terminvereinbarung."
+    )
+    frage = "Haben Sie schon einen Termin in unserer Praxis?"
+    blockierend: list[str] = []
+    rest_render: list[str] = []
+
+    def turn(sit, text, melde=None, vorab=None):
+        assert vorab is not None
+        vorab(a)
+        vorab(doppelt)
+        return {"text": f"{a} {frage}"}
+
+    d = Dienst(name="test", start_fn=lambda sit: {}, turn_fn=turn)
+
+    def stimme(text, karte=None):
+        blockierend.append(text)
+        return f"/api/audio/v{len(blockierend)}.wav", 0.0
+
+    def stimme_stream(text, karte=None):
+        rest_render.append(text)
+        return "/api/audio/rest.wav", 0.0
+
+    d.stimme = stimme  # type: ignore[method-assign]
+    d.stimme_stream = stimme_stream  # type: ignore[method-assign]
+    mitschnitte: list[dict] = []
+    echt_mitschnitt = dienst_mod.mitschnitt.zug
+    dienst_mod.mitschnitt.zug = (  # type: ignore[method-assign]
+        lambda sit, dienst, **kw: mitschnitte.append(kw)
+    )
+    try:
+        zeilen = [
+            json.loads(z)
+            for z in d.zug_stream({}, art="turn", text_in="Ich brauche eine Füllung.")
+        ]
+    finally:
+        dienst_mod.mitschnitt.zug = echt_mitschnitt  # type: ignore[method-assign]
+    assert blockierend == [a]
+    assert rest_render == [frage]
+    assert [z["type"] for z in zeilen].count("filler") == 1
+    reply = next(z for z in zeilen if z["type"] == "reply")
+    assert reply["text"] == f"{a} {frage}"
+    assert any(w["w"] == "vorab-duplikat" for w in reply["waechter"])
+    assert mitschnitte[0]["vorab_urls"] == ["/api/audio/v1.wav"]
+    assert mitschnitte[0]["audio_url"] == "/api/audio/rest.wav"
+
+
+def test_dienst_entfernt_vorab_nur_nach_erfolgreichem_tts():
+    """Schlägt das Vorab-TTS fehl, muss der finale Render den ganzen Text
+    behalten — sonst erkauft Entdopplung einen stummen Satzverlust."""
+    from kern.dienst import Dienst
+
+    a = "Ich helfe Ihnen gerne bei der Terminvereinbarung."
+    frage = "Wann passt es Ihnen am besten?"
+    rest_render: list[str] = []
+
+    def turn(sit, text, melde=None, vorab=None):
+        assert vorab is not None
+        vorab(a)
+        return {"text": f"{a} {frage}"}
+
+    d = Dienst(name="test", start_fn=lambda sit: {}, turn_fn=turn)
+    d.stimme = lambda text, karte=None: ("", 0.0)  # type: ignore[method-assign]
+
+    def stimme_stream(text, karte=None):
+        rest_render.append(text)
+        return "/api/audio/ganz.wav", 0.0
+
+    d.stimme_stream = stimme_stream  # type: ignore[method-assign]
+    zeilen = [
+        json.loads(z)
+        for z in d.zug_stream({}, art="turn", text_in="Hallo.")
+    ]
+    assert rest_render == [f"{a} {frage}"]
+    assert not any(z["type"] == "filler" for z in zeilen)

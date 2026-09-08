@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, mitschnitt, sprech, spur, stt, tempo, tenants, tts, unterbrechung
+from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt, tempo, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 
@@ -452,6 +452,9 @@ class Dienst:
         extra = extra or {}
         sit.pop("_vorabText", None)
         sit.pop("_vorabUrl", None)
+        sit.pop("_vorabFifo", None)
+        sit.pop("_vorabGesendet", None)
+        sit.pop("_vorabUrlListe", None)
         sit.pop("_satzJobs", None)
         t0 = time.perf_counter()
         if art == "start":
@@ -476,23 +479,32 @@ class Dienst:
         # Ein Abbruch-Befehl ("Stopp.") verwirft den Rest (29.08.2026).
         text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
         # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
-        gesprochen = _s(sit.pop("_vorabText", ""))
+        # Nur erfolgreich erzeugte und vor dem Reply eingereihte URLs gelten
+        # als gesprochen. Ein TTS-Fehler darf keinen Satz aus dem finalen
+        # Audio entfernen. Die FIFO kann mehrere P5-Bloecke tragen.
+        vorab_fifo = [
+            _s(x) for x in (sit.pop("_vorabGesendet", None) or []) if _s(x)
+        ]
+        sit.pop("_vorabFifo", None)
+        sit.pop("_vorabText", None)
+        gesprochen = " ".join(vorab_fifo).strip()
         vorab_url = _s(sit.pop("_vorabUrl", ""))
+        rest = llm.rest_nach_vorab(vorab_fifo, text) if vorab_fifo else text
         karte: dict[str, Any] = {"saetze": [], "endenMs": []}
         # Ein Stück TTS (sit["ttsGanz"]): Qwen klont sonst jeden Satz neu
         # und die Stimme kippt mitten im Zug (Kampagnen-Lisa).
         ganz = bool(sit.get("ttsGanz"))
         if ganz:
-            url, tts_s = self.stimme(text, karte) if text else ("", 0.0)
-            unterbrechung.merken(sit, url=url, karte=karte, text=text)
-        elif gesprochen and text.startswith(gesprochen):
-            rest = text[len(gesprochen):].strip()
+            url, tts_s = self.stimme(rest, karte) if rest else ("", 0.0)
+            unterbrechung.merken(
+                sit, url=url, karte=karte, text=text,
+                vorab_text=gesprochen, vorab_url=vorab_url,
+            )
+        elif gesprochen:
             url, tts_s = self.stimme_stream(rest, karte) if rest else ("", 0.0)
             unterbrechung.merken(sit, url=url, karte=karte, text=text,
                                  vorab_text=gesprochen, vorab_url=vorab_url)
         else:
-            if gesprochen:
-                print(f"{self.name}-vorab verworfen (Text weicht ab)", flush=True)
             url, tts_s = self.stimme_stream(text, karte)
             unterbrechung.merken(sit, url=url, karte=karte, text=text)
         # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
@@ -638,6 +650,7 @@ class Dienst:
 
         satz_lock = threading.Lock()
         satz_urls: list[str | None] = []
+        satz_texte: list[str] = []
         satz_raus = 0
 
         def vorab(satz: str) -> None:
@@ -650,12 +663,16 @@ class Dienst:
             san = sprech.sanitize(satz)
             if not san:
                 return
-            alt = _s(sit.get("_vorabText"))
-            sit["_vorabText"] = (alt + " " + san).strip() if alt else san
+            fifo: list[str] = sit.setdefault("_vorabFifo", [])
+            if not llm.vorab_fifo_anhaengen(fifo, san):
+                spur.merken(sit, "vorab-duplikat", san[:120])
+                return
+            sit["_vorabText"] = " ".join(fifo).strip()
             jobs: list = sit.setdefault("_satzJobs", [])
             with satz_lock:
                 idx = len(satz_urls)
                 satz_urls.append(None)
+                satz_texte.append(san)
 
             def _arbeit(i: int = idx, s: str = san) -> None:
                 nonlocal satz_raus
@@ -663,11 +680,14 @@ class Dienst:
                 with satz_lock:
                     if i < len(satz_urls):
                         satz_urls[i] = url or ""
-                    if i == 0 and url:
-                        sit.setdefault("_vorabUrl", url)
                     while satz_raus < len(satz_urls) and satz_urls[satz_raus] is not None:
                         fertig_url = satz_urls[satz_raus]
                         if fertig_url:
+                            fertig_text = satz_texte[satz_raus]
+                            sit.setdefault("_vorabGesendet", []).append(fertig_text)
+                            sit.setdefault("_vorabUrlListe", []).append(fertig_url)
+                            if satz_raus == 0:
+                                sit.setdefault("_vorabUrl", fertig_url)
                             q.put(("vorab", fertig_url))
                         satz_raus += 1
 
