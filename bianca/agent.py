@@ -16,6 +16,7 @@ from bianca import anstand, flow, gehirn, session, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import spur
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
@@ -668,6 +669,21 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     fl = flow.zug(sit, text_in, melde)
+    if fl is None:
+        # Live 08.09.2026: Der Motivkatalog verstand „Besprechung für eine
+        # neue Prothese“, aber Intent/LLM eröffneten keinen Buchungs-Task.
+        # Das Modell bot daraufhin einen Termin an und fragte frei nach dem
+        # Namen — der Namenssammler kannte diese Frage nicht: Endlosschleife.
+        # Ein frisch geernteter Praxisgrund PLUS ausdrücklicher Wunsch ist
+        # bereits belastbare Evidenz; direkt an den sicheren Flow übergeben.
+        sichere_wahl = task_router.aus_sicherer_ernte(
+            sit, text_in, sit.get("ernteZuletzt") or [],
+        )
+        if sichere_wahl and task_router.anwenden(
+            sit, sichere_wahl, original=text_in, quelle="sichere_ernte",
+        ):
+            spur.merken(sit, "task-sichere-ernte", _s(sichere_wahl.get("reason"))[:80])
+            fl = flow.zug(sit, text_in, melde)
     if fl is None and not gespraech.wirkt_unklar(text_in):
         # W-ANSTAND (Chef 03.09.2026): Beschimpfung/Fluchen ohne Fach-Anliegen
         # bekommt einen kurzen, charmanten Konter statt des LLM — ein Satz
@@ -692,16 +708,54 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         job_aktiv=_job_aktiv(sit),
     )
     if job_sprach:
+        sit.pop("unklarFolge", None)
         return _maschinen_antwort(sit, fl, msgs)
 
     # W-MEDDENT (04.09.2026): kurzer STT-Muell → nachfragen, kein LLM-Plaudern.
     if route.get("unklar"):
-        text = gespraech.UNKLAR_ANTWORT
+        unklar_folge = int(sit.get("unklarFolge") or 0) + 1
+        sit["unklarFolge"] = unklar_folge
+        if unklar_folge >= 2:
+            # Zweite unverständliche Antwort darf NIE dieselbe Schleife
+            # fortsetzen. Liegt aus dem vorherigen Gespräch bereits ein
+            # kataloggestützter Besuchsgrund vor, startet jetzt der sichere
+            # Task und stellt seine echte Pflichtfrage.
+            rettung = task_router.aus_gesammeltem_grund(sit)
+            if rettung and task_router.anwenden(
+                sit, rettung,
+                original=_s((sit.get("sammler") or {}).get("grundWortlaut")),
+                quelle="schleifen_ausstieg",
+            ):
+                spur.merken(sit, "task-schleifen-ausstieg", _s(rettung.get("reason"))[:80])
+                talk = sit.get("talk")
+                if isinstance(talk, dict):
+                    talk.update({
+                        "gravity": {}, "woerter": {}, "stack": [],
+                        "floor": gespraech.JOB, "bruecke": "", "frisch": [],
+                    })
+                fl = flow.zug(
+                    sit,
+                    _s((sit.get("sammler") or {}).get("grundWortlaut")) or text_in,
+                    melde,
+                )
+                if fl and (
+                    _s(fl.get("text")) or fl.get("hangup")
+                    or fl.get("transfer") or fl.get("warte")
+                ):
+                    sit.pop("unklarFolge", None)
+                    return _maschinen_antwort(sit, fl, msgs)
+            text = (
+                "Ich möchte Sie nicht in einer Schleife festhalten. "
+                "Sagen Sie bitte noch einmal in einem Satz, wobei ich helfen soll."
+            )
+        else:
+            text = gespraech.UNKLAR_ANTWORT
         msgs.append({"role": "assistant", "content": text})
         sit["messages"] = msgs
         wiederholung.gesagt_merken(sit, text)
         gespraech.nach_antwort(sit)
         return {"text": text, "book": None}
+    sit.pop("unklarFolge", None)
 
     # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.
     plan = gespraech.plan_block(route, offene_frage=_offene_frage(sit), stimme="bianca")

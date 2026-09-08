@@ -1719,6 +1719,15 @@ Auch während einer laufenden Aufgabe bekommt das freie Gespräch nur
 nie `book_slot`, `cancel_appointment`, `move_appointment`, `offer_slots`,
 `list_appointments` oder `create_patient`. Ein klar anderes Anliegen parkt
 die laufende Aufgabe; Smalltalk beantwortet das Modell ohne Task-Wechsel.
+**W-NAMEN-SCHLEIFE (08.09.2026, Live-Anruf 0c78ca65):** Das Modell darf im
+freien Gespräch NIE selbst nach Name, Nummer, Behandler, Grund, Wunschzeit
+oder Versicherung fragen — diese Fragen gehören dem FlowManager. Ein frisch
+gegen den Praxiskatalog geernteter Besuchsgrund plus ausdrücklicher Wunsch
+startet die sichere Buchungsaufgabe sofort, auch wenn Intent/LLM das
+`select_task` versäumen („Ich möchte eine Besprechung für eine neue Prothese“).
+Zwei unverständliche Antworten hintereinander wiederholen nie dieselbe
+Aufforderung: bei vorhandenem Grund zieht Bianca in den echten Flow zurück,
+sonst fordert sie einmal zum Neustart des Anliegens auf.
 Notaus: `TASK_ROUTER=0` stellt die alte Werkzeugliste wieder her. Tests:
 `tests/test_task_router.py`.
 

@@ -1,6 +1,7 @@
 """Semantischer Task-Handoff: Bedeutung vom LLM, Ausführung vom Flow."""
 
 import json
+import os
 
 from bianca import agent, flow, gehirn
 from kern import hirn, task_router
@@ -44,6 +45,7 @@ def test_task_schema_deckt_natuerlichen_terminwunsch_ab():
     beschreibung = task_router.TOOLS[0]["function"]["description"]
     assert "ich möchte zur Kontrolle" in beschreibung
     assert "terminauskunft" in beschreibung
+    assert "NIEMALS selbst nach Name" in task_router.PROMPT
 
 
 def test_task_auswahl_verwirft_unbekannte_operation():
@@ -106,6 +108,105 @@ def test_live_satz_landet_nach_handoff_in_erster_pflichtfrage():
     assert antwort and "schon einmal" in antwort["text"]
     assert sit["sammler"]["modus"] == "buchen"
     assert sit["sammler"]["frage"] == "schonmal"
+
+
+def test_kataloggrund_plus_ausdruecklicher_wunsch_startet_sicheren_task():
+    sit = _sit()
+    text = "Ich möchte eine Besprechung für eine neue Prothese."
+    assert flow.zug(sit, text) is None
+    assert sit["sammler"]["grund"] == "Zahnersatz-Beratung"
+    wahl = task_router.aus_sicherer_ernte(
+        sit, text, sit.get("ernteZuletzt") or [],
+    )
+    assert wahl["operation"] == "buchen"
+
+    assert task_router.anwenden(
+        sit, wahl, original=text, quelle="sichere_ernte",
+    )
+    antwort = flow.zug(sit, text)
+    assert antwort and "schon einmal" in antwort["text"]
+    assert sit["sammler"]["modus"] == "buchen"
+    assert sit["taskRouter"][-1]["quelle"] == "sichere_ernte"
+
+
+def test_kataloggrund_allein_macht_aus_preisfrage_keine_buchung():
+    sit = _sit()
+    s = sit["sammler"]
+    s.update({
+        "grund": "Zahnersatz-Beratung",
+        "grundWortlaut": "Was kostet eine neue Prothese?",
+    })
+    assert task_router.aus_sicherer_ernte(
+        sit,
+        "Ich möchte wissen, was eine neue Prothese kostet.",
+        ["grund"],
+    ) == {}
+    assert task_router.aus_sicherer_ernte(
+        sit,
+        "Ich möchte keine neue Prothese.",
+        ["grund"],
+    ) == {}
+
+
+def test_live_prothesen_satz_braucht_keinen_llm_und_eroeffnet_flow():
+    sit = _sit()
+
+    def niemals_llm(*_a, **_k):
+        raise AssertionError("Der sichere Katalog-Handoff darf kein LLM brauchen")
+
+    chat_alt = agent.llm.chat
+    stream_alt = agent.llm.chat_stream
+    hg_alt = agent.flow.hintergrund.anstossen
+    env_alt = os.environ.get("INTENT_NACHZUG")
+    try:
+        agent.llm.chat = niemals_llm
+        agent.llm.chat_stream = niemals_llm
+        agent.flow.hintergrund.anstossen = lambda _sit: None
+        os.environ["INTENT_NACHZUG"] = "0"
+        antwort = agent.user_turn(
+            sit, "Ich möchte eine Besprechung für eine neue Prothese."
+        )
+    finally:
+        agent.llm.chat = chat_alt
+        agent.llm.chat_stream = stream_alt
+        agent.flow.hintergrund.anstossen = hg_alt
+        if env_alt is None:
+            os.environ.pop("INTENT_NACHZUG", None)
+        else:
+            os.environ["INTENT_NACHZUG"] = env_alt
+    assert "schon einmal" in antwort["text"]
+    assert sit["sammler"]["modus"] == "buchen"
+    assert sit["sammler"]["frage"] == "schonmal"
+    assert sit["taskRouter"][-1]["quelle"] == "sichere_ernte"
+
+
+def test_zweite_unklare_namensantwort_zieht_aus_zustandsluecke_zurueck():
+    """Wortgleicher Live-Super-GAU: freie Namensfrage darf nie endlos loopen."""
+    sit = _sit()
+    s = sit["sammler"]
+    s.update({
+        "grund": "Zahnersatz-Beratung",
+        "grundWortlaut": "Ich möchte eine Besprechung für eine neue Prothese.",
+        "fuerWen": "sohn",
+    })
+    hg_alt = agent.flow.hintergrund.anstossen
+    env_alt = os.environ.get("INTENT_NACHZUG")
+    try:
+        agent.flow.hintergrund.anstossen = lambda _sit: None
+        os.environ["INTENT_NACHZUG"] = "0"
+        z1 = agent.user_turn(sit, "Hrisovalanis Charalampopoulos")
+        z2 = agent.user_turn(sit, "Matthias Jäger")
+    finally:
+        agent.flow.hintergrund.anstossen = hg_alt
+        if env_alt is None:
+            os.environ.pop("INTENT_NACHZUG", None)
+        else:
+            os.environ["INTENT_NACHZUG"] = env_alt
+    assert z1["text"] == agent.gespraech.UNKLAR_ANTWORT
+    assert "schon einmal" in z2["text"]
+    assert "Ihr Sohn" in z2["text"]
+    assert s["modus"] == "buchen"
+    assert sit["taskRouter"][-1]["quelle"] == "schleifen_ausstieg"
 
 
 def test_agent_reicht_unklaren_buchungswunsch_semantisch_an_flow():

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from kern import hirn, werkzeuge
@@ -30,7 +31,26 @@ ohne das Wort Termin. Bestehende Termine darfst du nur bei einer ausdrücklichen
 Auskunfts-, Absage- oder Verschiebeanfrage erwähnen. Antworten auf die laufende
 Pflichtfrage sind KEIN neuer Task. Praxiswissen, Rückfragen und Smalltalk
 beantwortest du direkt ohne Tool; der Gesprächsplan führt danach zur laufenden
-Aufgabe zurück. Du behauptest keine Kalenderaktion selbst."""
+Aufgabe zurück. Du behauptest keine Kalenderaktion selbst. Du fragst im freien
+Gespräch NIEMALS selbst nach Name, Telefonnummer, Behandler, Besuchsgrund,
+Wunschzeit oder Versicherung. Solche Formularfragen darf ausschließlich der
+FlowManager nach select_task stellen."""
+
+_SICHERER_WUNSCH_RE = re.compile(
+    r"\b(?:ich|wir)\s+(?:m(?:ö|oe)chte\w*|brauch\w*|will|muss|"
+    r"h(?:ä|ae)tte?\s+gern\w*)\b",
+    re.I,
+)
+_NUR_INFO_RE = re.compile(
+    r"\b(?:wissen|erfahren|erkl(?:ä|ae)r\w*|informier\w*|"
+    r"was\s+(?:ist|kostet)|wie\s+(?:teuer|funktioniert)|preis\w*)\b",
+    re.I,
+)
+_VERNEINTER_WUNSCH_RE = re.compile(
+    r"\b(?:m(?:ö|oe)chte\w*|brauch\w*|will|muss|"
+    r"h(?:ä|ae)tte?\s+gern\w*)\b.{0,32}\bkein\w*\b",
+    re.I,
+)
 
 TOOLS = [{
     "type": "function",
@@ -156,7 +176,52 @@ def auswahl(llm_out: dict[str, Any] | None) -> dict[str, str]:
     return {}
 
 
-def anwenden(sit: dict[str, Any], wahl: dict[str, str], *, original: str = "") -> bool:
+def aus_sicherer_ernte(
+    sit: dict[str, Any], text: str, ernte: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, str]:
+    """Katalogtreffer + ausdrücklicher Wunsch => sichere Buchungsübergabe.
+
+    Das ist kein zweiter Intent-Parser: ``bianca.gehirn`` muss den
+    Besuchsgrund bereits gegen den echten Praxiskatalog geerntet haben. Die
+    kleine Sprachwache verhindert nur den gefährlichen Zustand, in dem das LLM
+    einen Termin anbietet und Formularfragen stellt, ohne den FlowManager zu
+    starten.
+    """
+    if not enabled():
+        return {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("modus")) or "grund" not in set(ernte or ()):
+        return {}
+    if not _s(s.get("grund")) or not _SICHERER_WUNSCH_RE.search(_s(text)):
+        return {}
+    if _NUR_INFO_RE.search(_s(text)) or _VERNEINTER_WUNSCH_RE.search(_s(text)):
+        return {}
+    return {
+        "operation": "buchen",
+        "reason": (_s(s.get("grundWortlaut")) or _s(text))[:180],
+    }
+
+
+def aus_gesammeltem_grund(sit: dict[str, Any]) -> dict[str, str]:
+    """Notausstieg nach einer Zustandslücke; führt selbst noch nichts aus."""
+    if not enabled():
+        return {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("modus")) or not _s(s.get("grund")):
+        return {}
+    return {
+        "operation": "buchen",
+        "reason": (_s(s.get("grundWortlaut")) or _s(s.get("grund")))[:180],
+    }
+
+
+def anwenden(
+    sit: dict[str, Any],
+    wahl: dict[str, str],
+    *,
+    original: str = "",
+    quelle: str = "haupt_llm",
+) -> bool:
     """Task ins Session-Hirn übergeben; führt selbst kein Werkzeug aus."""
     op = _s(wahl.get("operation")).lower()
     if op not in _HIRN:
@@ -169,7 +234,7 @@ def anwenden(sit: dict[str, Any], wahl: dict[str, str], *, original: str = "") -
         "handlung": handlung,
         "gegenstand": gegenstand,
         "spiegel": spiegel,
-        "quelle": "llm_task_router",
+        "quelle": "llm_task_router" if quelle == "haupt_llm" else quelle,
     }
     if isinstance(ersatz, bool):
         deutung["ersatz"] = ersatz
@@ -183,7 +248,7 @@ def anwenden(sit: dict[str, Any], wahl: dict[str, str], *, original: str = "") -
         "operation": op,
         "reason": spiegel[:180],
         "anliegenId": _s((ergebnis.get("anliegen") or {}).get("id")),
-        "quelle": "haupt_llm",
+        "quelle": _s(quelle) or "haupt_llm",
     })
     sit["taskRouter"] = sit["taskRouter"][-12:]
     return True
