@@ -1729,7 +1729,15 @@ Name bleibt unverändert der schnelle Weg. „Ich kann nicht buchstabieren“
 wechselt deterministisch auf langsames Nachsprechen. `telefonTeil` nimmt auch
 Einzelziffern; eine fragmentierte Mobilnummer wird nicht schon nach zehn
 Ziffern abgeschlossen, kürzere Sonderfälle enden ausdrücklich mit „fertig“.
-Jede vollständige Nummer wird weiter Ziffer für Ziffer rückbestätigt. Tests:
+Jede vollständige Nummer wird weiter Ziffer für Ziffer rückbestätigt.
+**W-DATEN-FLOOR (08.09.2026 spät):** Teilstücke sind stille `warte`-Züge —
+Bianca sagt nach einer Denkpause nicht mehr „Den Anfang habe ich“ und fällt
+dem Anrufer dadurch nicht ins Wort; die Talk-Schicht bekommt Fragmente nie.
+Die Namensfrage verlangt nicht mehr erst Vor- und Nachnamen und danach den
+Nachnamen ein zweites Mal: Nachname einmal (sprechen oder direkt
+buchstabieren), danach nur noch der Vorname. Gemischte Ketten wie
+„P A P A wie Anton G R“ behalten auch die Buchstaben neben dem Tafelwort.
+Tests:
 `tests/test_datenerfassung_pausen.py`.
 
 ## Server-Deploy (pickadoc1) — die .env-Falle

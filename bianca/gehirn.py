@@ -1442,19 +1442,42 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         neu.add("name")
     buch = buchstaben.deute(t)
     buch_fragment = False
-    if s["frage"] == "buchstabieren" and _BUCHSTABIER_HILFE_RE.search(t):
+    name_toks = _name_tokens(t)
+    if (s["frage"] == "buchstabieren" and not s["nachname"]
+            and not s["buchstabenTeil"] and not _DIKTAT_FERTIG_RE.search(t)
+            and len(name_toks) >= 2 and not buch
+            and _name_aufnehmen(s, t, erzwungen=True)):
+        # Auf die gezielte Nachnamenfrage darf weiterhin der vollständige
+        # natürliche Name kommen. Vor-/Nachname werden in EINEM Zug geerntet;
+        # der Fragmentdeuter darf „Martin Berger“ nicht als Einzel-B werten.
+        s["buchstabiert"] = True
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = False
+        neu.add("name")
+    elif s["frage"] == "buchstabieren" and _BUCHSTABIER_HILFE_RE.search(t):
         s["buchstabenTeil"] = ""
         s["buchstabierHilfe"] = True
         neu.add("buchstabierHilfe")
         buch_fragment = True
     elif s["frage"] == "buchstabieren":
-        teil = buchstaben.teil(t)
         erwartet = re.sub(r"[^a-zäöüß]", "", _s(s["nachname"]).casefold())
         buch_name = re.sub(
             r"[^a-zäöüß]", "", _s((buch or {}).get("name")).casefold()
         )
+        # Gemischte Ketten wie „P A P A wie Anton G R“ enthalten explizite
+        # Buchstaben UND ein Tafelwort. ``teil()`` lieferte hier nur das A aus
+        # „Anton“ und warf PAP/GR weg (Live Papagrigorius, 08.09.2026).
+        # Die vollständige Deutung gewinnt, der Ein-Buchstaben-Deuter bleibt
+        # der Rückfall für echte Einzel-Fragmente.
+        teil = buch_name or buchstaben.teil(t)
         ist_kurzer_anfang = bool(
             teil and (
+                # Bei der neuen einmaligen Nachnamenfrage kennen wir die
+                # Soll-Länge noch nicht. Eine erkennbare Buchstabierkette
+                # bleibt deshalb bis zum ausdrücklichen „fertig“ offen.
+                (not erwartet and not _DIKTAT_FERTIG_RE.search(t)
+                 and not bool((buch or {}).get("sicher")))
+                or
                 not buch_name
                 or len(buch_name) < max(3, len(erwartet) - 1)
             )
@@ -2722,10 +2745,12 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:
-            if s["vorname"]:
-                return "nachname", "Und der Nachname, bitte?"
-            wen = _fuer_wen_name_frage(s) if s["fuerWen"] else "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?"
-            return "name", wen
+            return (
+                "buchstabieren",
+                "Damit ich Sie in der Kartei finde: Wie lautet der Nachname? "
+                "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
+                "sagen Sie am Ende einfach fertig.",
+            )
         if not s["vorname"]:
             return "vorname", "Und der Vorname?"
         if not s["grund"]:
@@ -2768,10 +2793,12 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if s["wunsch"] is None:
         return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
     if not s["nachname"]:
-        if s["vorname"]:
-            return "nachname", "Und der Nachname, bitte?"
-        wen = _fuer_wen_name_frage(s) if s["fuerWen"] else "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?"
-        return "name", wen
+        return (
+            "buchstabieren",
+            "Dann nehme ich die Daten einmal auf. Wie lautet der Nachname? "
+            "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
+            "sagen Sie am Ende einfach fertig.",
+        )
     if not s["vorname"]:
         return "vorname", "Und der Vorname?"
     if not s["buchstabiert"] and not s["bekannt"]:

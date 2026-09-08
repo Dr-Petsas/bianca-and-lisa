@@ -254,6 +254,7 @@ HALTE_MAX_S = 1.0       # leiser Auslauf verlaengert hoechstens so lange
 STILLE_MS_DEFAULT = 500 # wie das Dock; Bianca sagt je Frage ihre Schwelle an
 MAX_ZUG_S = 20.0        # Deckel je Aeusserung
 STUPS_NACH_S = 4.0      # Funkstille bis /api/stille (wie Dock)
+DIKTAT_STUPS_S = 8.0    # nach gespeichertem Datenfragment wirklich ausreden lassen
 MAX_ANRUF_S = 1800.0
 
 
@@ -538,6 +539,10 @@ class Anruf:
         self.quittungen: list[bytes] = []
         self.quittung_nr = 0
         self.stups_zahl = 0
+        # Ein still bestätigtes Name-/Nummernfragment ist kein Gesprächsende.
+        # Bis zu diesem Zeitpunkt darf auch der 4-s-Stille-Stups nicht
+        # dazwischenreden (Live 08.09.: Denkpausen bis gut vier Sekunden).
+        self._diktat_bis = 0.0
         # W-SIP-VOLLBUF: offene Audio-Downloads — vor http.aclose() abwarten,
         # sonst ReadError mitten im Stream (Live 02.09. Session 219c71f2).
         self._lade_tasks: set[asyncio.Task] = set()
@@ -972,8 +977,9 @@ class Anruf:
                     elif typ == "transcript":
                         print(f"bruecke-gehoert {ev.get('textIn', '')!r}", flush=True)
                     elif typ == "warte":
-                        self.stille_ms = int(ev.get("stilleMs") or 900)
+                        self._diktat_weiterhoeren(int(ev.get("stilleMs") or 900))
                     elif typ == "reply":
+                        self._diktat_bis = 0.0
                         # Chef 08.09.: ungehörte Warte-Füller nicht noch
                         # hinter die echte Antwort klemmen.
                         async with self.wiedergabe.lock:
@@ -1010,17 +1016,29 @@ class Anruf:
             print(f"bruecke-stups {d.get('text', '')[:60]!r}", flush=True)
             self._spielen(d["audioUrl"])
 
+    def _diktat_weiterhoeren(self, stille_ms: int) -> None:
+        """Still gespeichertes Datenfragment: Pause anpassen, Stups sperren."""
+        self.stille_ms = int(stille_ms or 900)
+        self._diktat_bis = time.monotonic() + DIKTAT_STUPS_S
+
+    def _stups_bereit(self) -> bool:
+        jetzt = time.monotonic()
+        return (
+            not self.wiedergabe.spielt()
+            and not self._rec_an
+            and not self._ohr_an
+            and jetzt >= self._diktat_bis
+            and jetzt - self.wiedergabe.fertig_seit > STUPS_NACH_S
+            and jetzt - self._letzte_sprache > STUPS_NACH_S
+        )
+
     async def _dialog(self) -> None:
         ende = time.monotonic() + MAX_ANRUF_S
         while self.lebt and time.monotonic() < ende:
             try:
                 item = await asyncio.wait_for(self.zuege.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                ruhig = (not self.wiedergabe.spielt() and not self._rec_an
-                         and not self._ohr_an
-                         and time.monotonic() - self.wiedergabe.fertig_seit > STUPS_NACH_S
-                         and time.monotonic() - self._letzte_sprache > STUPS_NACH_S)
-                if ruhig and self.stups_zahl < 2:
+                if self._stups_bereit() and self.stups_zahl < 2:
                     await self._stups()
                     self.wiedergabe.fertig_seit = time.monotonic()
                 continue

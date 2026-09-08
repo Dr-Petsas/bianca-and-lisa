@@ -584,6 +584,12 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     gespraech.nach_antwort(sit)
     gedaechtnis.kontext_anstossen(sit)
     aus: dict[str, Any] = {"text": _s(fl.get("text")), "book": fl.get("book")}
+    if fl.get("warte"):
+        # Verwertetes Diktatfragment: Zustand ist fortgeschrieben, aber der
+        # Anrufer hat den Turn noch nicht abgegeben. Kein Assistenten-Text,
+        # kein LLM und kein Audio — der Dienst reicht nur „weiterhören“ durch.
+        aus["warte"] = True
+        aus["stilleMs"] = int(fl.get("stilleMs") or 1500)
     if fl.get("hangup"):
         aus["hangup"] = True
     if isinstance(fl.get("transfer"), dict) and fl["transfer"].get("nummer"):
@@ -673,7 +679,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # Maschinen-Zug, sonst wuerfe das LLM das transfer-Reply weg (live
     # erlebt: "Zu welchem unserer Ärzte..." statt Durchstellen).
     job_sprach = bool(fl and (_s(fl.get("text")) or fl.get("hangup")
-                              or fl.get("transfer")))
+                              or fl.get("transfer") or fl.get("warte")))
     if job_sprach and "Ich bin die Neue!" in _s(fl.get("text")):
         gehirn.anrufer_hallo_merken(sit)
     # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am

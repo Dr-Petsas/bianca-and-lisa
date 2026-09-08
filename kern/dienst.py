@@ -473,11 +473,15 @@ class Dienst:
                 pass
         llm_s = round(time.perf_counter() - t0, 2)
         # Sprech-Filter: Uhrzeiten/Daten als Worte, Fachbegriffe und Regie raus.
+        wartet = bool(reply.get("warte"))
         text = sprech.sanitize(reply.get("text") or "")
         # W-BARGE: war der vorige Zug unterbrochen und dieser Einwand hat den
         # Zustand nicht bewegt, kommt der ungesprochene Rest mit Bruecke dran.
         # Ein Abbruch-Befehl ("Stopp.") verwirft den Rest (29.08.2026).
-        text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
+        # Ein Diktatfragment gibt den Floor noch nicht ab. Dort darf weder ein
+        # alter Barge-Rest noch irgendein Assistenten-Audio dazwischenkommen.
+        if not wartet:
+            text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
         # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
         # Nur erfolgreich erzeugte und vor dem Reply eingereihte URLs gelten
         # als gesprochen. Ein TTS-Fehler darf keinen Satz aus dem finalen
@@ -494,7 +498,9 @@ class Dienst:
         # Ein Stück TTS (sit["ttsGanz"]): Qwen klont sonst jeden Satz neu
         # und die Stimme kippt mitten im Zug (Kampagnen-Lisa).
         ganz = bool(sit.get("ttsGanz"))
-        if ganz:
+        if wartet:
+            url, tts_s = "", 0.0
+        elif ganz:
             url, tts_s = self.stimme(rest, karte) if rest else ("", 0.0)
             unterbrechung.merken(
                 sit, url=url, karte=karte, text=text,
@@ -539,6 +545,9 @@ class Dienst:
         }
         if reply.get("hangup"):
             antwort["hangup"] = True
+        if wartet:
+            antwort["warte"] = True
+            antwort["stilleMs"] = int(reply.get("stilleMs") or 1500)
         # W-VERBINDEN-ECHT: transfer MUSS bis zur SIP-Bruecke durchreichen.
         # Live 06.09.2026: hangup ohne transfer → Jingle, CURL leer, Auflegen
         # statt Dial zu Petsas (bruecke-transfer-abfrage -> leer).
@@ -881,6 +890,17 @@ class Dienst:
                 return
             else:  # fertig
                 out = dict(wert) if isinstance(wert, dict) else {"text": ""}
+                if out.get("warte"):
+                    # Die Maschine hat ein Name-/Nummernfragment sicher
+                    # gespeichert. Kein Reply-Audio und kein Wartefüller:
+                    # der Anrufer spricht denselben Diktat-Turn weiter.
+                    sit.pop("_fuellerSaetze", None)
+                    yield zeile({
+                        "type": "warte",
+                        "textIn": _s(out.get("textIn")) or _s(out.get("text")),
+                        "stilleMs": int(out.get("stilleMs") or 1500),
+                    })
+                    return
                 fueller = list(sit.get("_fuellerSaetze") or [])
                 sit.pop("_fuellerSaetze", None)
                 mund = filler.transkript_mund(fueller, "", _s(out.get("text")))

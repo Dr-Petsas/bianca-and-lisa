@@ -261,10 +261,9 @@ def test_fluss_fragenkette_bis_angebot():
         assert z5 and "wann" in z5["text"].lower()
 
         z6 = flow.zug(sit, "Nächste Woche vormittags.")
-        assert z6 and "buchstabieren" in z6["text"].lower()
-
-        z7 = flow.zug(sit, "B wie Berta, E wie Emil, R wie Richard, G wie Gustav, E wie Emil, R wie Richard.")
-        assert z7 and "handynummer" in z7["text"].lower()
+        # Der vollständige Name wurde bereits in EINEM Zug aufgenommen:
+        # kein zweites Nachnamen-/Buchstabier-Verhör.
+        assert z6 and "handynummer" in z6["text"].lower()
 
         z8 = flow.zug(sit, "0177 600 46 00")
         assert z8 and "wiederhole" in z8["text"].lower()
@@ -2040,7 +2039,8 @@ def test_einzelner_vorname_wird_vorname():
     s["grund"] = "Kontrolluntersuchung"
     s["wunsch"] = {}
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "nachname" and "Nachname" in frage
+    assert fid == "buchstabieren" and "Nachname" in frage
+    assert "Vor- und Nachname" not in frage
 
 
 def test_explizite_vor_und_nachnamen_ansage():

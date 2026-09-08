@@ -1,6 +1,6 @@
 """Unbekannte Anrufer: Name und Nummer über lange Sprechpausen retten."""
 
-from bianca import buchstaben, flow, gehirn
+from bianca import agent, buchstaben, flow, gehirn
 from kern import hirn, task_router
 from kern.tenants import laden
 
@@ -99,6 +99,21 @@ def test_lange_pausen_zwischen_buchstaben_bauen_einen_namen():
     assert s["nachname"] == "Tzannis"
     assert s["buchstabiert"] is True
     assert not s["buchstabenTeil"]
+
+
+def test_gemischte_live_kette_verliert_keine_buchstaben_an_tafelwort():
+    """Live 08.09.: „P A P A wie Anton G R“ wurde nur als A gespeichert."""
+    sit = _sit()
+    s = _bereit(sit, frage="buchstabieren")
+    s["nachname"] = "Papagrigorius"
+    gehirn.einsammeln(sit, "P A P A wie Anton G R")
+    assert s["buchstabenTeil"] == "papagr"
+    gehirn.einsammeln(sit, "I, G, O, R, I, O, U, S")
+    assert s["buchstabenTeil"] == "papagrigorious"
+    neu = gehirn.einsammeln(sit, "Fertig")
+    assert "nachname" in neu
+    assert s["nachname"] == "Papagrigorious"
+    assert s["buchstabiert"] is True
 
 
 def test_echte_whisper_serien_ergeben_trotz_verhörern_tzannis():
@@ -208,6 +223,75 @@ def test_teilantworten_bleiben_im_diktatmodus():
     assert gehirn.stille_ms({"frage": fid2}) == 1500
 
 
+def test_fragmente_sind_stille_wartezuege_statt_zwischenansagen():
+    sit = _sit()
+    s = _bereit(sit, frage="buchstabieren")
+    s["nachname"] = "Papagrigorius"
+    z1 = flow.zug(sit, "P A P A wie Anton G R")
+    assert z1 and z1.get("warte") is True
+    assert z1.get("text") == ""
+    assert s["buchstabenTeil"] == "papagr"
+
+    s["buchstabiert"] = True
+    s["frage"] = "telefon"
+    z2 = flow.zug(sit, "null")
+    assert z2 and z2.get("warte") is True
+    assert z2.get("text") == ""
+    assert s["telefonTeil"] == "0"
+
+
+def test_agent_ruft_bei_nummernfragment_keine_talk_schicht():
+    sit = _sit()
+    sit["messages"] = [
+        {"role": "system", "content": "test"},
+        {"role": "assistant", "content": "Wie lautet Ihre Handynummer?"},
+    ]
+    s = _bereit(sit, frage="telefon")
+    s["buchstabiert"] = True
+    def niemals_llm(*_a, **_k):
+        raise AssertionError("Ein Diktatfragment darf nie an die Talk-Schicht")
+
+    echt_anstossen = flow.hintergrund.anstossen
+    echt_chat = agent.llm.chat
+    echt_stream = agent.llm.chat_stream
+    flow.hintergrund.anstossen = lambda _sit: None
+    agent.llm.chat = niemals_llm
+    agent.llm.chat_stream = niemals_llm
+    try:
+        out = agent.user_turn(sit, "Null")
+        assert out.get("warte") is True
+        assert out.get("text") == ""
+        assert s["telefonTeil"] == "0"
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+        agent.llm.chat = echt_chat
+        agent.llm.chat_stream = echt_stream
+
+
+def test_nachname_wird_nicht_nach_vor_und_nachname_erneut_gefragt():
+    sit = _sit()
+    s = _bereit(sit, frage="")
+    s.update({"vorname": "", "nachname": "", "buchstabiert": False})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "buchstabieren"
+    assert "Nachname" in frage
+    assert "Vor- und Nachname" not in frage
+
+    s["frage"] = fid
+    neu = gehirn.einsammeln(sit, "Papagrigorius")
+    assert "nachname" in neu
+    assert s["buchstabiert"] is True
+    fid2, frage2 = gehirn.naechste_frage(sit)
+    assert fid2 == "vorname"
+    assert "Vorname" in frage2
+
+    s["frage"] = fid2
+    gehirn.einsammeln(sit, "Efthimios")
+    fid3, frage3 = gehirn.naechste_frage(sit)
+    assert fid3 == "telefon"
+    assert "Nachname" not in frage3
+
+
 def test_voller_neupatientenfluss_über_fragmentierte_daten():
     sit = _sit()
     echt = flow.hintergrund.anstossen
@@ -227,9 +311,8 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
         z4 = flow.zug(sit, "Bei Doktor Petsas.")
         assert z4 and "Wann passt" in z4["text"]
         z5 = flow.zug(sit, "Vormittags bitte.")
-        assert z5 and "Vor- und Nachname" in z5["text"]
-        z6 = flow.zug(sit, "Theo Zanis.")
-        assert z6 and "Buchstabieren" in z6["text"]
+        assert z5 and "Nachname" in z5["text"]
+        assert "Vor- und Nachname" not in z5["text"]
 
         for text in (
             "T wie Theodor",
@@ -240,9 +323,11 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
             "I wie Ida",
         ):
             z = flow.zug(sit, text)
-            assert z and "restlichen Buchstaben" in z["text"]
+            assert z and z.get("warte") is True and not z["text"]
         z7 = flow.zug(sit, "S wie Samuel, fertig.")
-        assert z7 and "Handynummer" in z7["text"]
+        assert z7 and "Vorname" in z7["text"]
+        z7b = flow.zug(sit, "Theo")
+        assert z7b and "Handynummer" in z7b["text"]
 
         for text in (
             "null eins sieben sieben",
@@ -250,7 +335,7 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
             "vier sechs",
         ):
             z = flow.zug(sit, text)
-            assert z and "restlichen Ziffern" in z["text"]
+            assert z and z.get("warte") is True and not z["text"]
         z8 = flow.zug(sit, "null null")
         assert z8 and "wiederhole" in z8["text"].lower()
         z9 = flow.zug(sit, "Ja, stimmt.")

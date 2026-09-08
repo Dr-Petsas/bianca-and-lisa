@@ -392,6 +392,18 @@ def test_ungespielt_wav_wirft_nur_wartefueller_behaelt_inhalt(anruf):
     ]
 
 
+def test_diktat_warte_sperrt_stups_waehrend_langer_denkpause(anruf):
+    """Live 08.09.: nach stillem Fragment darf der 4-s-Stups nicht reinreden."""
+    anruf.wiedergabe.fertig_seit = anruf._uhr() - 20
+    anruf._letzte_sprache = anruf._uhr() - 20
+    anruf._diktat_weiterhoeren(1500)
+    assert anruf.stille_ms == 1500
+    assert not anruf._stups_bereit()
+
+    anruf._uhr.t += srv.DIKTAT_STUPS_S + 0.1
+    assert anruf._stups_bereit()
+
+
 def test_stilles_ohr_aus_bleibt_halbduplex(anruf, monkeypatch):
     """BRIDGE_OHR=0: alte Barge-Schwelle — 6 Frames waehrend Spiel = kein Zug."""
     monkeypatch.setattr(srv, "BRIDGE_OHR", False)

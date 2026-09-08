@@ -1827,6 +1827,19 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         neu.add("modus")
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
+    # Live 08.09.2026: bei langsamer Buchstabierung/Nummerndiktat beendete
+    # die SIP-VAD jeden Pausenabschnitt als eigenen Zug. Die Fragmentlogik
+    # speicherte ihn zwar, sprach danach aber jedes Mal „Den Anfang habe
+    # ich …“ und fiel dem Anrufer damit fortlaufend ins Wort. Ein verwertetes
+    # Teilstück ist noch KEIN Antwortzug: still weiterhören, den Job-Floor
+    # halten und erst nach vollständigem Wert bzw. „fertig“ sprechen.
+    if {"buchstabenTeil", "telefonTeil"} & neu:
+        return {
+            "text": "",
+            "warte": True,
+            "stilleMs": gehirn.stille_ms(s),
+        }
+
     if "anruferWohl" in neu:
         # "Gut." auf den Hallo-Satz — Identitaet bleibt offen, nur die
         # echte Ja/Nein-Frage nochmal, ohne den Verspiel-Vorsatz.
@@ -2033,7 +2046,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # nie mitten in einem unbeantworteten Pflichtfragen-Faden.
     # W-MEDDENT (04.09.2026): nie direkt nach frischer Wunschzeit — erst
     # Slot anbieten (Detschel-Live: PZR mitten in „Nachmittag 15.09.“).
-    if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check"}
+    if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check",
+                    "name", "nachname", "vorname", "buchstabieren", "telefon"}
             and not (fid == "arzt" and "arztCheck" in neu)
             and "wunsch" not in neu
             and (neu or not s["frage"])

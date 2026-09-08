@@ -131,6 +131,26 @@ def test_dienst_haelt_und_fuegt_zusammen():
         "Hallo, ich habe nächste Woche Dienstag ein einen Termin")
 
 
+def test_dienst_reicht_stilles_diktat_warten_ohne_reply_audio_durch():
+    """Live 08.09.: gespeicherte Ziffern/Buchstaben dürfen keine Ansage starten."""
+    d, _ = _dienst()
+
+    def antwort(_sit, *, art, text_in, extra=None, melde=None, vorab=None):
+        return {
+            "ok": True,
+            "empty": False,
+            "text": "",
+            "textIn": text_in,
+            "audioUrl": "",
+            "warte": True,
+            "stilleMs": 1500,
+        }
+
+    d.json_antwort = antwort
+    z = _zeilen(d, {}, art="turn", text_in="null")
+    assert z == [{"type": "warte", "textIn": "null", "stilleMs": 1500}]
+
+
 def test_dienst_flush_bei_leerem_nachzug():
     """Anrufer setzt den Satz NICHT fort (Stille-Blob, leeres Transkript):
     das gehaltene Fragment wird beantwortet — nie verschluckt."""
