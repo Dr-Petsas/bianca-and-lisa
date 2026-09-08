@@ -1,15 +1,16 @@
 """Weiterleitungs-Wunsch am Patiententelefon — deterministisch, ohne LLM.
 
-Zwei Faelle, streng getrennt (Chef 27.08.2026, zweite Fassung):
+Zwei Faelle, streng getrennt:
 
   1. NAMENTLICH genannter Arzt ("Kann ich bitte mit Doktor Patrikis
      sprechen?"): KEINE Personalfrei-Ansage, KEINE Rueckfrage — direkt
      "Einen Moment, ich stelle die Verbindung her", Jingle, verbinden.
   2. Mitarbeiter/Abteilung (Mensch, Empfang, Rezeption, Buchhaltung,
-     Patientenannahme, Verwaltung ...): erst die Wahrheit (Praxis ist
-     komplett KI-gefuehrt und personalfrei), dann das Angebot, zu einem
-     der Aerzte zu verbinden. Nennt der Anrufer daraufhin einen Arzt,
-     wird direkt verbunden.
+     Patientenannahme, Verwaltung ...): Bianca erklaert ihre Aufgabe als
+     Telefonassistentin und uebernimmt zuerst das konkrete Anliegen. Nur
+     wenn der Anrufer danach weiter auf einem Menschen besteht, darf ein
+     EXAKT fuer diese Rolle eingerichtetes Ziel verbunden werden; sonst
+     wird auf Wunsch ein Rueckrufwunsch aufgenommen.
 
 Doppelte Fragen bleiben verboten: ist der Behandler aus dem Gespraech oder
 der Akte bekannt (Sammler -> Angebots-Kalender -> arzt.letzter_behandler),
@@ -33,7 +34,7 @@ from typing import Any, Callable
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, gehirn
-from kern import wiederholung
+from kern import hirn as session_hirn, wiederholung
 from kern.leitung import ist_leitung_check
 from kern.patients import arzt_sprechname
 
@@ -47,8 +48,18 @@ Melde = Callable[[str], None] | None
 JINGLE_NAME = "verbinden"
 JINGLE_EVENT = f"audio:{JINGLE_NAME}"
 
-WAHRHEIT = (
-    "Am Empfang geht gerade niemand ran."
+ENTLASTUNG = (
+    "Ich bin die Telefonassistentin der Praxis und entlaste die Anmeldung. "
+    "Vieles kann ich direkt für Sie erledigen. Worum geht es denn?"
+)
+# Rückwärtskompatibler Name für bestehende Importe; die alte Behauptung
+# „niemand geht ran“ darf nirgends mehr gesprochen werden.
+WAHRHEIT = ENTLASTUNG
+
+SELBST_HILFE = "Ja, gern. Sagen Sie mir einfach, worum es geht."
+RUECKRUF_ANGEBOT = (
+    "Eine direkte Verbindung zur Anmeldung ist nicht eingerichtet. "
+    "Ich kann einen Rückrufwunsch für das Praxisteam aufnehmen. Soll ich das tun?"
 )
 
 # Die Antwort, wenn KEINE echte Weiterleitung eingerichtet ist. Chef
@@ -71,6 +82,37 @@ _MENSCH_WORT = (
 # Klassifikation: kommt im Satz ueberhaupt ein Mitarbeiter-/Abteilungs-Wort vor?
 # Nur DANN gibt es die Personalfrei-Ansage (Chef 27.08.2026, zweite Fassung).
 _MENSCH_NUR_RE = re.compile(_MENSCH_WORT, re.I)
+_MENSCH_BESTEHT_RE = re.compile(
+    rf"(?:trotzdem|wirklich|unbedingt|ausdrücklich|ausdruecklich|besteh\w*)"
+    rf"[^.!?]{{0,45}}{_MENSCH_WORT}|"
+    rf"{_MENSCH_WORT}[^.!?]{{0,45}}(?:trotzdem|wirklich|unbedingt|besteh\w*)",
+    re.I,
+)
+_SELBST_HELFEN_RE = re.compile(
+    r"\b(?:kannst|können|koennen)\s+(?:du|sie)\s+mir\s+(?:denn\s+)?"
+    r"(?:selbst\s+)?helfen\b|"
+    r"\b(?:hilf|helfen)\s+(?:du|sie)\s+mir\b",
+    re.I,
+)
+_ZURUECK_RE = re.compile(
+    r"\b(?:machen|gehen)\s+wir\b[^.!?]{0,35}\bweiter\b|"
+    r"\b(?:mit|beim)\s+(?:dem|meinem|unserem)?\s*termin\b[^.!?]{0,20}\bweiter\b|"
+    r"\bzurück\s+(?:zum|zur)\s+termin\b|\bzurueck\s+(?:zum|zur)\s+termin\b",
+    re.I,
+)
+
+_ROLLEN_GRUPPEN = {
+    "anmeldung": re.compile(
+        r"\banmeldung\b|\bempfang\b|\brezeption\b|\bpatientenannahme\b|"
+        r"\bannahme\b|\bsekretariat\b|\bsprechstundenhilfe\b",
+        re.I,
+    ),
+    "buchhaltung": re.compile(r"\bbuchhaltung\b|\babrechnung\b", re.I),
+    "verwaltung": re.compile(r"\bverwaltung\b", re.I),
+    "leitung": re.compile(
+        r"\bchef\w*\b|\binhaber\w*\b|\bpraxisleitung\b|\bboss\b", re.I,
+    ),
+}
 
 # Ausdruecklicher Verbinde-/Durchstell-Wunsch. Die "verbunden"-Formen ohne
 # mich/uns stammen aus dem Live-Gespraech 29.08.2026 08:44: "Könnte ich bitte
@@ -229,6 +271,52 @@ def _angebot_text(ziel: dict, tenant: dict | None = None) -> str:
     return f"Soll ich Sie zu {wer} weiterleiten?"
 
 
+def _rollen_weiterleitung(tenant: dict, text: str) -> dict:
+    """Nur ein EXAKT zur verlangten Abteilung passendes DB-Ziel liefern.
+
+    Die Ein-Ziel-Rückfallregel von ``weiterleitungs_ziel`` ist für Ärzte
+    sinnvoll, für „Anmeldung“ aber gefährlich: Ein einzelnes Arztziel darf
+    niemals still zur Anmeldung umgedeutet werden.
+    """
+    verlangt = {
+        gruppe for gruppe, muster in _ROLLEN_GRUPPEN.items()
+        if muster.search(_s(text))
+    }
+    if not verlangt:
+        return {}
+    for eintrag in tenant.get("weiterleitungen") or []:
+        if not isinstance(eintrag, dict) or not _s(eintrag.get("nummer")):
+            continue
+        beschreibung = f"{_s(eintrag.get('name'))} {_s(eintrag.get('hinweis'))}"
+        vorhanden = {
+            gruppe for gruppe, muster in _ROLLEN_GRUPPEN.items()
+            if muster.search(beschreibung)
+        }
+        if verlangt & vorhanden:
+            return {
+                "name": _s(eintrag.get("name")) or sorted(verlangt)[0],
+                "nummer": _s(eintrag.get("nummer")),
+            }
+    return {}
+
+
+def _rolle_verbinden(sit: dict, ziel: dict, melde: Melde = None) -> dict:
+    """Bereits rollenvalidiertes Ziel wirklich verbinden."""
+    sit["weiterleiten"] = {}
+    name = _s(ziel.get("name")) or "Anmeldung"
+    if melde:
+        melde("sag:Ok, einen Moment bitte — ich stelle die Verbindung zur gewünschten Stelle her.")
+        melde(JINGLE_EVENT)
+    sit["weiterleitungZiel"] = dict(ziel)
+    return {
+        "text": "",
+        "jingle": JINGLE_EVENT,
+        "ziel": {"calendarId": "", "calendarName": name},
+        "transfer": {"nummer": _s(ziel.get("nummer")), "name": name},
+        "hangup": True,
+    }
+
+
 # Fuell-/Titelwoerter, die beim Abgleich Kalendername <-> Weiterleitungs-
 # Eintrag nichts beweisen ("Dr." steht in JEDEM Eintrag).
 _TITEL_WORTE = {
@@ -349,6 +437,67 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     hirn_wunsch = sit.pop("hirnVerbinden", None)
     w = sit.get("weiterleiten") or {}
 
+    # Globales Anliegen Anmeldung/Empfang: Nach der ersten Erklärung hört
+    # Bianca auf das eigentliche Problem. Eine erneute Menschenforderung
+    # darf nur an ein exakt passendes DB-Ziel gehen — niemals ersatzweise
+    # an den einzigen Arzt-Forwarding-Eintrag.
+    if w.get("frage") == "anliegen":
+        d = arztmod.deute(t, sit.get("tenant") or {})
+        if d and d.get("typ") == "genannt":
+            sit["weiterleiten"] = {}
+            ziel = {
+                "calendarId": _s(d.get("calendarId")),
+                "calendarName": _s(d.get("calendarName")),
+            }
+            _arzt_merken(s, ziel)
+            return zaluma_weiterleitung(sit, ziel, melde)
+        if _MENSCH_NUR_RE.search(t) and (
+            erkannt(t) or _MENSCH_BESTEHT_RE.search(t)
+        ):
+            rollen_ziel = _rollen_weiterleitung(sit.get("tenant") or {}, t)
+            if rollen_ziel:
+                return _rolle_verbinden(sit, rollen_ziel, melde)
+            sit["weiterleiten"] = {
+                "frage": "rueckruf",
+                "rolle": _s(w.get("rolle")) or "Anmeldung",
+            }
+            return {"text": RUECKRUF_ANGEBOT}
+        if _SELBST_HELFEN_RE.search(t):
+            return {"text": SELBST_HILFE}
+        if gehirn.ist_nein(t):
+            sit["weiterleiten"] = {}
+            return {"text": "Alles klar. Was kann ich sonst für Sie tun?"}
+        if _ZURUECK_RE.search(t):
+            rueck = session_hirn.anwenden(sit, {"kanal": "ok", "zug": "zurueck"})
+            sit["weiterleiten"] = {}
+            if rueck.get("zug") == "zurueck":
+                return None
+            return {"text": SELBST_HILFE}
+        # Das konkrete Anliegen übernimmt ab hier der passende sichere Flow
+        # oder das Haupt-LLM. Der Frontdesk-Dialog darf es nicht verschlucken.
+        sit["weiterleiten"] = {}
+        return None
+
+    if w.get("frage") == "rueckruf":
+        if gehirn.ist_ja(t):
+            sit["weiterleiten"] = {}
+            session_hirn.anwenden(sit, {
+                "kanal": "ok",
+                "zug": "wechseln",
+                "handlung": "ABGEBEN",
+                "gegenstand": "SACHE",
+                "spiegel": "Rückrufwunsch für die Anmeldung",
+            })
+            return None
+        if gehirn.ist_nein(t):
+            sit["weiterleiten"] = {}
+            return {
+                "text": "Alles klar. Dann helfe ich Ihnen gern direkt. Worum geht es?"
+            }
+        return {
+            "text": "Soll ich einen Rückrufwunsch für das Praxisteam aufnehmen?"
+        }
+
     # Offenes Weiterleitungs-Angebot ("Soll ich Sie zu Doktor X weiterleiten?")
     if w.get("frage") == "anbieten":
         if gehirn.ist_ja(t) or erkannt(t):
@@ -442,20 +591,24 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         return zaluma_weiterleitung(sit, ziel, melde)
 
     # Fall 2: Mitarbeiter/Abteilung gewuenscht (Mensch, Empfang, Buchhaltung,
-    # Patientenannahme ...) -> erst die Wahrheit, dann das Arzt-Angebot.
+    # Patientenannahme ...). Steht im selben Satz bereits ein konkretes
+    # Termin-Anliegen, hat das Session-Hirn dessen sicheren Flow freigegeben;
+    # dann darf die vermeintliche Wunsch-Abteilung die Aufgabe nicht überholen.
     mensch = bool(_MENSCH_NUR_RE.search(t))
+    if mensch:
+        if _s(s.get("modus")) in {"buchen", "absagen", "verschieben", "auskunft"} \
+                and sit.get("hirnModusNeu"):
+            sit["weiterleiten"] = {}
+            return None
+        sit["weiterleiten"] = {"frage": "anliegen", "rolle": t[:80]}
+        return {"text": ENTLASTUNG}
+    # Fall 3: Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort
+    # ("Können Sie mich bitte weiterleiten?"): bekannten Behandler anbieten,
+    # sonst wie bisher nach dem Arzt fragen.
     ziel = _ziel_finden(sit, melde)
     if ziel:
         _arzt_merken(s, ziel)
         sit["weiterleiten"] = {"frage": "anbieten", "ziel": ziel}
-        vorsatz = (WAHRHEIT + " ") if mensch else ""
-        return {"text": vorsatz + _angebot_text(ziel, sit.get("tenant"))}
+        return {"text": _angebot_text(ziel, sit.get("tenant"))}
     sit["weiterleiten"] = {"frage": "arzt"}
-    if mensch:
-        return {"text": (
-            WAHRHEIT + " Ich kann Sie aber gern mit einem unserer Ärzte "
-            "verbinden. Zu wem darf ich Sie durchstellen?"
-        )}
-    # Fall 3: Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort
-    # ("Können Sie mich bitte weiterleiten?") -> nur nach dem Arzt fragen.
     return {"text": "Sehr gern — zu welchem unserer Ärzte darf ich Sie verbinden?"}

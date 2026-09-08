@@ -238,9 +238,9 @@ def test_verbinden_lassen_mit_namen_verbindet_direkt():
     assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
 
 
-# --- (b2) Mitarbeiter-/Abteilungs-Anfrage: Wahrheit + Arzt-Angebot ------------
+# --- (b2) Anmeldung/Abteilung: erst Anliegen übernehmen -----------------------
 
-def test_mitarbeiter_mit_bekanntem_arzt_wahrheit_und_angebot():
+def test_mitarbeiter_mit_bekanntem_arzt_wird_nicht_zum_arzt_umgeleitet():
     sit = _sit()
     s = gehirn.sammler(sit)
     s["arzt"] = {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"}
@@ -248,27 +248,26 @@ def test_mitarbeiter_mit_bekanntem_arzt_wahrheit_und_angebot():
     assert z, "Weiterleitungs-Zweig muss deterministisch antworten"
     t = z["text"]
     assert weiterleiten.WAHRHEIT in t
-    assert "zu Doktor Petsas" in t and "weiterleiten" in t
-    assert "bei wem" not in t.lower()  # NICHT nach dem Behandler fragen
+    assert "Doktor Petsas" not in t and "weiterleiten" not in t
+    assert "Worum geht es" in t
+    assert sit["weiterleiten"]["frage"] == "anliegen"
 
 
-def test_buchhaltung_bekommt_wahrheit_und_arztfrage():
-    """Abteilungs-Wunsch (Buchhaltung/Rezeption/Patientenannahme) ohne
-    bekannten Arzt: Wahrheit + Angebot, zu einem Arzt zu verbinden."""
+def test_buchhaltung_bekommt_entlastung_und_anliegenfrage():
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit der Buchhaltung sprechen?")
     assert z and weiterleiten.WAHRHEIT in z["text"]
-    assert "Ärzte" in z["text"] and "durchstellen" in z["text"]
-    # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.
+    assert "Ärzte" not in z["text"] and "durchstellen" not in z["text"]
+    assert "Worum geht es" in z["text"]
+    # Ein danach namentlich verlangter Arzt bleibt direkt erreichbar.
     events: list[str] = []
     z2 = flow.zug(sit, "Dann zu Doktor Patrikis, bitte.", events.append)
     assert z2 and z2.get("transfer", {}).get("nummer") == "+4921130293034"
     assert z2.get("hangup") and weiterleiten.JINGLE_EVENT in events
 
 
-def test_akte_liefert_letzten_behandler():
-    """Kein Arzt im Gespraech, aber Patientenakte da: letzter_behandler
-    liefert das Ziel — KEINE Rueckfrage (Chef: doppelte Fragen verboten)."""
+def test_anmeldungswunsch_nennt_keinen_inaktiven_aktenbehandler():
+    """Ein alter Kartei-Behandler ist kein Ziel für die Anmeldung."""
     echt = weiterleiten.arztmod.letzter_behandler
     weiterleiten.arztmod.letzter_behandler = lambda t, pid: {
         "ok": True, "calendarId": "GVyoyXqCYof1QrGaNNnG",
@@ -279,9 +278,9 @@ def test_akte_liefert_letzten_behandler():
         s = gehirn.sammler(sit)
         s["patientId"] = "pat-1"
         z = flow.zug(sit, "Gibt es da kein Personal?")
-        assert z and "zu Doktor Nikolaou" in z["text"]
-        assert weiterleiten.WAHRHEIT in z["text"]  # Mitarbeiter-Frage -> Wahrheit
-        assert "bei wem" not in z["text"].lower()
+        assert z and weiterleiten.WAHRHEIT in z["text"]
+        assert "Nikolaou" not in z["text"]
+        assert "Worum geht es" in z["text"]
     finally:
         weiterleiten.arztmod.letzter_behandler = echt
 
@@ -329,11 +328,94 @@ def test_infofrage_beim_angebot_verbindet_nicht():
     assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
 
 
-def test_mensch_ohne_arzt_fragt_nach_arzt():
+def test_mensch_ohne_arzt_fragt_nach_dem_anliegen():
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit einem Menschen sprechen?")
     assert z and weiterleiten.WAHRHEIT in z["text"]
-    assert "Zu wem darf ich Sie durchstellen?" in z["text"]
+    assert "Worum geht es" in z["text"]
+    assert "Ärzte" not in z["text"]
+
+
+def test_erneutes_bestehen_ohne_rollenziel_bietet_rueckruf_an():
+    sit = _sit()
+    events: list[str] = []
+    flow.zug(sit, "Ich möchte die Anmeldung sprechen.", events.append)
+    z = flow.zug(sit, "Nein, ich möchte trotzdem mit der Anmeldung sprechen.", events.append)
+    assert z and "Rückrufwunsch" in z["text"]
+    assert z.get("transfer") is None and weiterleiten.JINGLE_EVENT not in events
+    assert sit["weiterleiten"]["frage"] == "rueckruf"
+
+
+def test_erneutes_bestehen_verbindet_nur_exaktes_rollenziel():
+    sit = _sit()
+    sit["tenant"] = dict(sit["tenant"])
+    sit["tenant"]["weiterleitungen"] = [
+        {"name": "Dr. Petsas", "nummer": "+49211111111", "hinweis": ""},
+        {"name": "Anmeldung", "nummer": "+49212222222", "hinweis": "Empfang"},
+    ]
+    events: list[str] = []
+    flow.zug(sit, "Ich möchte jemanden vom Empfang sprechen.", events.append)
+    z = flow.zug(sit, "Ich bestehe auf dem Empfang.", events.append)
+    assert z and z.get("transfer", {}).get("nummer") == "+49212222222"
+    assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
+
+
+def test_rueckruf_ja_uebergibt_an_sicheren_notizfluss():
+    from kern import hirn
+
+    sit = _sit()
+    sit["stimme"] = "bianca"
+    hirn.init(sit)
+    flow.zug(sit, "Ich möchte die Anmeldung sprechen.")
+    flow.zug(sit, "Nein, wirklich die Anmeldung.")
+    z = flow.zug(sit, "Ja, bitte.")
+    assert z and "Name" in z["text"]
+    assert (hirn.aktiv(sit) or {}).get("handlung") == "ABGEBEN"
+
+
+def test_anmeldung_plus_absage_startet_absage_statt_personendialog():
+    from kern import hirn, intent
+
+    sit = _sit()
+    sit["stimme"] = "bianca"
+    hirn.init(sit)
+    deutung = intent.erkennen(sit, "Anmeldung, ich möchte meinen Termin absagen.")
+    assert deutung["handlung"] == "AENDERN" and deutung["ersatz"] is False
+    hirn.anwenden(sit, deutung)
+    z = flow.zug(sit, "Anmeldung, ich möchte meinen Termin absagen.")
+    assert z and "Nachname" in z["text"]
+    assert weiterleiten.ENTLASTUNG not in z["text"]
+    assert gehirn.sammler(sit)["modus"] == "absagen"
+
+
+def test_anmeldung_parkt_buchung_und_kehrt_auf_wunsch_zurueck():
+    from kern import hirn, intent
+
+    sit = _sit()
+    sit["stimme"] = "bianca"
+    hirn.init(sit)
+    hirn.anwenden(sit, {
+        "kanal": "ok", "zug": "wechseln", "handlung": "ANLEGEN",
+        "gegenstand": "VORGANG", "spiegel": "Kontrolltermin",
+    })
+    s = gehirn.sammler(sit)
+    s.update({
+        "grund": "Kontrolle", "motivId": "m1", "motivName": "Kontrolle",
+        "warSchonMal": False, "pzr": "nein",
+        "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg",
+                 "calendarName": "Dr. Petsas"},
+    })
+    request = "Bevor wir weitermachen, möchte ich die Anmeldung sprechen."
+    hirn.anwenden(sit, intent.erkennen(sit, request))
+    z1 = flow.zug(sit, request)
+    assert z1 and weiterleiten.ENTLASTUNG in z1["text"]
+    assert any(a.get("status") == "geparkt" for a in sit["hirn"]["anliegen"])
+
+    weiter = "Gut, dann machen wir mit dem Termin weiter."
+    hirn.anwenden(sit, intent.erkennen(sit, weiter))
+    z2 = flow.zug(sit, weiter)
+    assert z2 and ("wann" in z2["text"].lower() or "zeit" in z2["text"].lower())
+    assert (hirn.aktiv(sit) or {}).get("handlung") == "ANLEGEN"
 
 
 # --- (d) Ja -> mit Einrichtung: Jingle + transfer ------------------------------
@@ -359,7 +441,7 @@ def test_nein_bricht_sauber_ab():
     s["arzt"] = {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg", "calendarName": "Dr. Petsas"}
     flow.zug(sit, "Ich möchte jemanden vom Empfang.")
     z = flow.zug(sit, "Nein, lassen Sie mal.")
-    assert z and "sonst noch" in z["text"].lower()
+    assert z and "sonst" in z["text"].lower()
     assert not (sit.get("weiterleiten") or {})
 
 
@@ -576,5 +658,6 @@ def test_ansage_ueberlebt_sprech_filter():
     assert "Verbindung" in raus and "möglich" in raus
     assert "Kirri" not in raus and "Lappen" not in raus
     wahr = sprech.sanitize(weiterleiten.WAHRHEIT)
-    assert "Empfang" in wahr and "niemand" in wahr
+    assert "Telefonassistentin" in wahr and "Anmeldung" in wahr
+    assert "Worum geht es" in wahr and "niemand" not in wahr
     assert "personalfrei" not in wahr and "KI-geführt" not in wahr

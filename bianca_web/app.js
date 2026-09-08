@@ -1161,6 +1161,7 @@ const PATCHES = [
   ["W-NAMEN-SCHLEIFE (Flow muss die Frage besitzen)", "08.09.", "Architektur", "Das freie LLM darf keine Patienten- oder Buchungsdaten abfragen. Kataloggrund plus ausdrücklicher Wunsch startet sofort den sicheren Flow; spätestens nach zwei unverständlichen Antworten verlässt Bianca die Wiederholungsschleife und kehrt in einen echten Dialogzustand zurück."],
   ["W-ARZT-TITEL (Doktor + kurzes Pat)", "09.09.", "Stimme", "Ausgeschriebene DB-Kalendernamen behalten beim Sprechen ihren Doktortitel: „Doktor Petsas oder Doktor Patrikis“. Patrikis beginnt mit einer kurzen geschlossenen Pat-Silbe statt dem gedehnten „Paaah“."],
   ["W-PZR-REIHENFOLGE (Hauptanliegen vor Zusatz)", "09.09.", "Gespräch", "Bei Neupatienten klärt Bianca zuerst den gewünschten Behandler. Erst danach bietet sie die Zahnreinigung an — das Upselling bleibt vollständig, unterbricht aber nicht mehr den primären Terminrahmen."],
+  ["W-ANMELDUNG (Anliegen statt Zufallsweiterleitung)", "09.09.", "Architektur", "Beim Wunsch nach Anmeldung, Empfang oder Mitarbeiter erklärt Bianca ihre Rolle als Telefonassistentin und übernimmt zuerst das konkrete Anliegen. Nur bei erneutem Bestehen verbindet sie ein exakt passendes DB-Ziel; sonst kann sie auf Wunsch einen Rückruf aufnehmen. Namentliche Arzttransfers bleiben unverändert."],
 ];
 
 let kTab = "faehig";

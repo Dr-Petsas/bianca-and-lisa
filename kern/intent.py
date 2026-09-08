@@ -191,6 +191,11 @@ _FB_ERREICHEN_RE = re.compile(
     r"echte[nr]?\s+mensch\w*|richtige[nr]?\s+mensch\w*",
     re.I,
 )
+_FB_FRONTDESK_RE = re.compile(
+    r"\banmeldung\b|\bempfang\b|\brezeption\b|\bpatientenannahme\b|"
+    r"\bbuchhaltung\b|\bverwaltung\b|\babrechnung\b|\bsekretariat\b",
+    re.I,
+)
 _FB_ABSAGE_RE = re.compile(
     r"absag\w*|abzusagen|abgesagt|stornier\w*|abbestell\w*|\bcancel\w*|"
     r"nicht\s+(?:kommen|wahrnehmen|schaffen|einhalten)",
@@ -262,10 +267,28 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "WISSEN", "gegenstand": "REGEL"}
     if _FB_SCHIENE_ABHOL_RE.search(t):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-    if _FB_ERREICHEN_RE.search(t):
-        return {**aus, "handlung": "ERREICHEN", "gegenstand": "PERSON"}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     im_angebot = _s(s.get("phase")) in {"angebot", "bestaetigen"}
+    # Eine genannte Abteilung ist oft nur der vermeintliche Lösungsweg.
+    # Steht das eigentliche Anliegen im selben Satz, gewinnt die Aufgabe:
+    # „Anmeldung, ich möchte meinen Termin absagen“ => Absage-Flow, nicht
+    # Personal-/Weiterleitungsdialog. Namentliche Ärzte bleiben unberührt.
+    if _FB_FRONTDESK_RE.search(t) and not im_angebot:
+        if _FB_VERSCHIEBEN_RE.search(t):
+            return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
+        if _FB_ABSAGE_RE.search(t):
+            return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
+        if _FB_RUECKRUF_RE.search(t):
+            return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
+        if _FB_AUSKUNFT_RE.search(t):
+            gg = "VORGANG" if "termin" in t.lower() else "REGEL"
+            return {**aus, "handlung": "WISSEN", "gegenstand": gg}
+        if _FB_NEU_RE.search(t) or (
+            _FB_SYMPTOM_RE.search(t) and not _KEIN_SYMPTOM_RE.search(t)
+        ):
+            return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
+    if _FB_ERREICHEN_RE.search(t):
+        return {**aus, "handlung": "ERREICHEN", "gegenstand": "PERSON"}
     if im_angebot and (_FB_ABSAGE_RE.search(t) or _FB_VERSCHIEBEN_RE.search(t)):
         # "Passt nicht / den nicht" mitten im Slot-Angebot meint das ANGEBOT,
         # keinen Bestandstermin — die Maschine verhandelt selbst weiter.

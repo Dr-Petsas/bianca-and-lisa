@@ -1296,6 +1296,25 @@ Fake-Verbinden ohne Jingle. Seitdem gilt:
  `.data/verbinden_probe.py` (Jingle-URL + Kirri-Zeile + hangup, Preisfrage
  bleibt beim LLM).
 
+### Anmeldung als globales Anliegen (W-ANMELDUNG 09.09.2026 — nicht rückbauen)
+
+„Anmeldung“, „Empfang“, „Buchhaltung“ oder „Mitarbeiter“ bedeutet nicht
+automatisch, dass Bianca zu einem zufälligen Arzt weiterleiten soll. Beim
+ersten Wunsch erklärt sie ihre Produktrolle: Sie ist die Telefonassistentin,
+entlastet die Anmeldung und kann das konkrete Anliegen direkt übernehmen.
+Danach hört sie auf das Anliegen. Steht es schon im ersten Satz
+(`Anmeldung, ich möchte meinen Termin absagen`), gewinnt sofort der passende
+sichere Task.
+
+Besteht der Anrufer ein zweites Mal auf einem Menschen, darf Bianca nur ein
+DB-Forwarding verbinden, dessen Name/Hinweis EXAKT zur verlangten Rolle passt.
+Die Ein-Ziel-Rückfallregel für Ärzte gilt hier ausdrücklich nicht. Ohne
+Rollenziel bietet Bianca jetzt — und nur nach diesem ausdrücklichen Bestehen —
+einen echten Rückrufwunsch über den ABGEBEN-Fluss an. Direkte namentliche
+Arztwünsche, Jingle und echte Transfers bleiben unverändert. Eine geparkte
+Buchung wird auf „Dann machen wir mit dem Termin weiter“ wieder aufgenommen.
+Tests: W-ANMELDUNG-Blöcke in `tests/test_weiterleiten.py`.
+
 ## Echte Weiterleitung (W-VERBINDEN-ECHT 31.08.2026 — nicht rückbauen)
 
 Chef: "wenn ein client weiterleitungen eingerichtet hat dann müssen wir zu
