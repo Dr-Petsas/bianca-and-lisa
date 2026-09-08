@@ -140,6 +140,14 @@ def test_transkript_traegt_fueller_und_vorab():
     hallo = "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!"
     assert transkript_mund([], hallo, hallo + " Bianca.") == hallo + " Bianca."
     assert transkript_mund([], "", "Ja, gerne.") == "Ja, gerne."
+    # P5-FIFO einzeln abgleichen: ein zusaetzliches Hallo bleibt, die danach
+    # schon im finalen Text enthaltenen Vorab-Saetze erscheinen nicht doppelt.
+    prefix = "Alles klar. Ich suche den passenden Termin."
+    assert transkript_mund(
+        [],
+        [hallo, "Alles klar.", "Ich suche den passenden Termin."],
+        prefix + " Wann passt es Ihnen?",
+    ) == hallo + " " + prefix + " Wann passt es Ihnen?"
     # Später merken'd: schon im Text nicht doppelt, neuer Satz vorn.
     assert transkript_mund(
         ["Einen Moment bitte.", "Ganz kurz bitte."],

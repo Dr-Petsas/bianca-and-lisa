@@ -517,7 +517,7 @@ class Dienst:
         # Waechter-Spur dieses Zugs (W-BK-3): additiv in Antwort + Protokoll.
         waechter = spur.abholen(sit)
         fueller = list(sit.get("_fuellerSaetze") or [])
-        mund = filler.transkript_mund(fueller, gesprochen, text)
+        mund = filler.transkript_mund(fueller, vorab_fifo, text)
         # Nicht poppen: ein Füller, der NACH diesem Merge erst merken'd
         # wird (Rennen Arbeit/Hauptfaden), hängt zug_stream am fertig an.
         self.merke_zug(sit, art=art, textIn=text_in, text=mund, book=reply.get("book"),
@@ -823,8 +823,10 @@ class Dienst:
                 yield zeile({"type": "transcript", "textIn": wert})
             elif typ == "vorab":
                 # Erster Antwortsatz — läuft über den Füller-Kanal des Clients
-                # (sofort abspielen), der Rest folgt im reply-Audio.
-                yield zeile({"type": "filler", "audioUrl": wert})
+                # (sofort abspielen), der Rest folgt im reply-Audio. ``inhalt``
+                # schützt den Satz in der SIP-Brücke: nur echte Wartefüller
+                # dürfen beim Eintreffen des Reply noch verworfen werden.
+                yield zeile({"type": "filler", "audioUrl": wert, "inhalt": True})
                 inhalt = True
             elif typ == "tool":
                 if isinstance(wert, str) and wert.startswith("sag:"):
@@ -835,14 +837,14 @@ class Dienst:
                     url = self.stimme(san)[0] if san else ""
                     if url:
                         self._fueller_merken(sit, san)
-                        yield zeile({"type": "filler", "audioUrl": url})
+                        yield zeile({"type": "filler", "audioUrl": url, "inhalt": True})
                     inhalt = True
                 elif isinstance(wert, str) and wert.startswith("audio:"):
                     # Festes Audio (z. B. Verbinden-Jingle): das ist Inhalt,
                     # kein geratener Ueberbrueckungssatz — IMMER ausspielen.
                     url = self.audio_fest_url(wert.split(":", 1)[1])
                     if url:
-                        yield zeile({"type": "filler", "audioUrl": url})
+                        yield zeile({"type": "filler", "audioUrl": url, "inhalt": True})
                     inhalt = True
                 elif not inhalt:
                     if filler_zahl == 0:

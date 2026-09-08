@@ -250,6 +250,7 @@ def test_dienst_spielt_vorab_duplikat_nicht_und_rendert_nur_rest():
     assert blockierend == [a]
     assert rest_render == [frage]
     assert [z["type"] for z in zeilen].count("filler") == 1
+    assert next(z for z in zeilen if z["type"] == "filler")["inhalt"] is True
     reply = next(z for z in zeilen if z["type"] == "reply")
     assert reply["text"] == f"{a} {frage}"
     assert any(w["w"] == "vorab-duplikat" for w in reply["waechter"])

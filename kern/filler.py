@@ -204,7 +204,11 @@ def protokoll_anreichern(sit: dict, mund: str) -> None:
         pass
 
 
-def transkript_mund(fueller: list[str] | None, vorab: str, antwort: str) -> str:
+def transkript_mund(
+    fueller: list[str] | None,
+    vorab: str | list[str],
+    antwort: str,
+) -> str:
     """Was wirklich gesprochen wurde — Füller + Vorab + Antwort, ohne Doppel.
 
     Live 08.09.2026: Hallo und „Einen Moment.“ liefen nur als Audio, das
@@ -213,8 +217,8 @@ def transkript_mund(fueller: list[str] | None, vorab: str, antwort: str) -> str:
     teile: list[str] = []
     gesehen: set[str] = set()
     antwort = _s(antwort)
-    vorab = _s(vorab)
-    for roh in list(fueller or []) + ([vorab] if vorab else []):
+    vorab_liste = vorab if isinstance(vorab, list) else ([vorab] if vorab else [])
+    for roh in list(fueller or []) + list(vorab_liste):
         s = _s(roh)
         if not s or s in gesehen:
             continue

@@ -363,7 +363,7 @@ class Wiedergabe:
             ref = max(ref, w * f)
         return int(ref)
 
-    def neu(self, url: str) -> dict:
+    def neu(self, url: str, *, kappbar: bool = False) -> dict:
         # W-SIP-PREBUF (06.09.2026): Streams starten nach Prefill (nicht erst
         # bei done). Fertige WAVs (/api/audio/) weiter erst bei done — die
         # sind schnell komplett und brauchen keinen Progressiv-Start.
@@ -371,7 +371,8 @@ class Wiedergabe:
         # Stream komplett generiert = Funkloch bei laufendem Audiofile.
         stream = "/api/audio-stream/" in (url or "")
         p = {"url": url, "buf": bytearray(), "done": False, "sent": 0,
-             "armed": False, "stream": stream, "underruns": 0}
+             "armed": False, "stream": stream, "underruns": 0,
+             "kappbar": bool(kappbar)}
         self.posten.append(p)
         return p
 
@@ -379,8 +380,10 @@ class Wiedergabe:
         """Reply ist da: ungehörte fertige WAVs (Warte-Füller) nicht mehr
         in die Kette legen — Streams (Vorab-Satz) bleiben."""
         alt = len(self.posten)
-        self.posten[:] = [p for p in self.posten
-                          if p["sent"] > 0 or p.get("stream")]
+        self.posten[:] = [
+            p for p in self.posten
+            if p["sent"] > 0 or p.get("stream") or not p.get("kappbar")
+        ]
         return alt - len(self.posten)
 
     @staticmethod
@@ -626,9 +629,9 @@ class Anruf:
 
     # ---- Audio von Bianca holen -------------------------------------------
 
-    async def _laden(self, url: str) -> None:
+    async def _laden(self, url: str, *, kappbar: bool = False) -> None:
         """URL fetchen, nach 8 kHz wandeln, progressiv in die Wiedergabe."""
-        posten = self.wiedergabe.neu(url)
+        posten = self.wiedergabe.neu(url, kappbar=kappbar)
         try:
             if "/api/audio-stream/" in url:
                 zustand = None
@@ -679,10 +682,10 @@ class Anruf:
             print("bruecke-mp3 uebersprungen (kein ffmpeg)", flush=True)
             return b""
 
-    def _spielen(self, url: str) -> None:
+    def _spielen(self, url: str, *, kappbar: bool = False) -> None:
         if not url:
             return
-        t = asyncio.create_task(self._laden(url))
+        t = asyncio.create_task(self._laden(url, kappbar=kappbar))
         self._lade_tasks.add(t)
         t.add_done_callback(self._lade_tasks.discard)
 
@@ -958,7 +961,14 @@ class Anruf:
                         continue
                     typ = ev.get("type") or ""
                     if typ == "filler":
-                        self._spielen(ev.get("audioUrl") or "")
+                        # Vorab-/Werkzeugsätze sind Antwort-INHALT und müssen
+                        # vollständig vor dem Reply laufen. Nur geratene
+                        # Wartefüller sind kappbar (Live 08.09.: sonst fehlten
+                        # zwei ganze P5-Sätze mitten in der Antwort).
+                        self._spielen(
+                            ev.get("audioUrl") or "",
+                            kappbar=not bool(ev.get("inhalt")),
+                        )
                     elif typ == "transcript":
                         print(f"bruecke-gehoert {ev.get('textIn', '')!r}", flush=True)
                     elif typ == "warte":

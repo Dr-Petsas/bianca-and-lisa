@@ -53,6 +53,8 @@ def test_langsamer_zug_bekommt_genau_einen_fueller():
         arten = [z["type"] for z in out]
         assert arten[-1] == "reply"
         assert arten.count("filler") == 1
+        wartefueller = next(z for z in out if z["type"] == "filler")
+        assert not wartefueller.get("inhalt")
     finally:
         dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
 

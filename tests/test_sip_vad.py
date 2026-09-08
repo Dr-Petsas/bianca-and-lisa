@@ -365,20 +365,31 @@ def test_stilles_ohr_schneidet_naechsten_satz_nicht(anruf):
     assert anruf.zuege.qsize() == 0
 
 
-def test_ungespielt_wav_wirft_wartefueller_behaelt_stream(anruf):
-    """Reply ist da: ungehoerter Warte-Füller weg, Vorab-Stream bleibt."""
+def test_ungespielt_wav_wirft_nur_wartefueller_behaelt_inhalt(anruf):
+    """Live 08.09.: P5-Vorab kam als fertige WAV und wurde wie ein Füller
+    gekappt. Reply darf nur echte Wartefüller entfernen, niemals Inhalt."""
     anruf.wiedergabe.posten = [
         {"url": "/api/audio/fueller.wav", "buf": bytearray(b"x" * 100),
-         "done": True, "sent": 0, "armed": False, "stream": False},
+         "done": True, "sent": 0, "armed": False, "stream": False,
+         "kappbar": True},
+        {"url": "/api/audio/vorab.wav", "buf": bytearray(b"x" * 100),
+         "done": True, "sent": 0, "armed": False, "stream": False,
+         "kappbar": False},
         {"url": "/api/audio-stream/vorab.wav", "buf": bytearray(),
-         "done": False, "sent": 0, "armed": False, "stream": True},
+         "done": False, "sent": 0, "armed": False, "stream": True,
+         "kappbar": False},
         {"url": "/api/audio/gespielt.wav", "buf": bytearray(b"x" * 100),
-         "done": True, "sent": 40, "armed": True, "stream": False},
+         "done": True, "sent": 40, "armed": True, "stream": False,
+         "kappbar": True},
     ]
     weg = anruf.wiedergabe.ungespielt_wav_werfen()
     assert weg == 1
     urls = [p["url"] for p in anruf.wiedergabe.posten]
-    assert urls == ["/api/audio-stream/vorab.wav", "/api/audio/gespielt.wav"]
+    assert urls == [
+        "/api/audio/vorab.wav",
+        "/api/audio-stream/vorab.wav",
+        "/api/audio/gespielt.wav",
+    ]
 
 
 def test_stilles_ohr_aus_bleibt_halbduplex(anruf, monkeypatch):
