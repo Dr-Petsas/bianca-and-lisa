@@ -450,6 +450,10 @@ _KONTEXT_LEER_RE = re.compile(
     r"nichts gebucht oder geändert",
     re.I,
 )
+_NAME_STOP = {
+    "dr", "doktor", "prof", "herr", "herrn", "frau",
+    "sehr", "geehrter", "geehrte",
+}
 
 
 def zeile_inhaltlich(text: Any) -> bool:
@@ -465,6 +469,23 @@ def zeile_inhaltlich(text: Any) -> bool:
     if _KONTEXT_MUELL_RE.search(zeile):
         return False
     return bool(_KONTEXT_INHALT_RE.search(zeile))
+
+
+def _name_tokens(name: Any) -> list[str]:
+    return [
+        x for x in re.findall(r"[a-zäöüß]{2,}", _s(name).casefold())
+        if x not in _NAME_STOP
+    ]
+
+
+def _namen_passen(erwartet: Any, kandidat: Any) -> bool:
+    """Konservativ: gleicher Nachname; bei zwei vollen Namen auch Vorname."""
+    e, k = _name_tokens(erwartet), _name_tokens(kandidat)
+    if not e or not k or e[-1] != k[-1]:
+        return False
+    if len(e) >= 2 and len(k) >= 2:
+        return e[0] == k[0]
+    return True
 
 
 def _kontext_filtern(text: Any) -> str:
@@ -595,7 +616,7 @@ def _kontext_stand(telefon: str, name: str, client_id: str = "") -> tuple[str, l
         # (live 29.08.2026: frisches Event unauffindbar). Die Suche laeuft
         # ueber queryLatest (neueste zuerst) und traegt counterparty.ref im
         # Suchtext — der robuste Rueckweg fuer die Rufnummer.
-        text, suche_ids = _suche_nach_nummer(telefon, client_id)
+        text, suche_ids = _suche_nach_nummer(telefon, client_id, name)
         if text:
             return text, suche_ids
     if name:
@@ -632,7 +653,11 @@ def _kontext_holen(telefon: str, name: str, client_id: str = "") -> str:
     return _kontext_stand(telefon, name, client_id)[0]
 
 
-def _suche_nach_nummer(telefon: str, client_id: str = "") -> tuple[str, list[str]]:
+def _suche_nach_nummer(
+    telefon: str,
+    client_id: str = "",
+    erwarteter_name: str = "",
+) -> tuple[str, list[str]]:
     """GET /brain/search?q=<ziffern>&kind=event — nur offene Zeilen."""
     r = httpx.get(f"{MAS_URL}/brain/search",
                   params={"q": telefon, "kind": "event", "sinceDays": 14, "limit": 10},
@@ -647,6 +672,14 @@ def _suche_nach_nummer(telefon: str, client_id: str = "") -> tuple[str, list[str
             continue
         if not _event_ist_themenotiz(h):
             continue
+        kandidat = _s(h.get("counterpartyName")) or _s(h.get("subjectName"))
+        # Geteilte/zu Testzwecken wiederverwendete Rufnummern können zu
+        # mehreren Personen gehören. Sobald die Patientenakte einen Namen
+        # geliefert hat, darf ein fremder MAS-Kontakt niemals einsickern.
+        if erwarteter_name and (
+            not kandidat or not _namen_passen(erwarteter_name, kandidat)
+        ):
+            continue
         summ = _s(h.get("snippet") or h.get("summary"))
         if not summ:
             continue
@@ -656,7 +689,6 @@ def _suche_nach_nummer(telefon: str, client_id: str = "") -> tuple[str, list[str
         if eid:
             ids.append(eid)
         if not wer:
-            kandidat = _s(h.get("counterpartyName")) or _s(h.get("subjectName"))
             if kandidat and not kandidat[:1].isdigit():
                 wer = kandidat
         if len(zeilen) >= _MAX_ZEILEN:

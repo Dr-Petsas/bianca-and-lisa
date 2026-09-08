@@ -414,6 +414,44 @@ def test_fachfremder_caller_context_wird_verworfen():
         ged.httpx.get = echt
 
 
+def test_geteilte_demo_nummer_laesst_keinen_fremden_patienten_durch():
+    def fake_get(url, params=None, **kw):
+        class _R:
+            @staticmethod
+            def json():
+                if "caller-context" in url:
+                    return {
+                        "found": True,
+                        "name": "Demo-Interessent",
+                        "context": "Demo-Interessent. Zollabfertigung AWB Onlinekauf.",
+                    }
+                if "/brain/search" in url:
+                    return {"results": [{
+                        "kind": "event",
+                        "channel": "bianca_call",
+                        "status": "open",
+                        "ts": 1767100000000,
+                        "counterpartyName": "Thomas Feldkamp",
+                        "snippet": "Laut Anruf (Bianca): Termin vereinbart.",
+                    }]}
+                if "karteikarte" in url:
+                    return {"events": [{
+                        "channel": "system",
+                        "status": "open",
+                        "ts": 1767200000000,
+                        "summary": "Neuer Termin: Herr Petsas am Donnerstag.",
+                    }]}
+                raise AssertionError(url)
+        return _R()
+
+    echt = ged.httpx.get
+    ged.httpx.get = fake_get
+    try:
+        assert ged._kontext_holen("01776004600", "Michael Petsas") == ""
+    finally:
+        ged.httpx.get = echt
+
+
 def test_zeile_inhaltlich_laesst_mail_durch():
     assert ged.zeile_inhaltlich("Laut E-Mail (Nadine): Labor hat die Lieferung bestätigt.")
     assert not ged.zeile_inhaltlich("Zollabfertigung AWB Onlinekauf Demo-Interessent.")
