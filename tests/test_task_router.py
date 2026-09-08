@@ -289,3 +289,81 @@ def test_agent_parkt_laufende_buchung_bei_semantischem_taskwechsel():
     assert antwort["text"] == "Wie ist Ihr Nachname?"
     assert [a["status"] for a in sit["hirn"]["anliegen"]] == ["geparkt", "aktiv"]
     assert not sit["tools"]
+
+
+def test_agent_verliert_bei_ja_aber_weder_antwort_noch_task(monkeypatch):
+    """Die Antwort gilt noch dem alten Zustand, der Zusatz dem neuen Task."""
+    sit = _sit()
+    hirn.anwenden(sit, {
+        "kanal": "ok", "zug": "wechseln", "handlung": "ANLEGEN",
+        "gegenstand": "VORGANG", "spiegel": "neuer Termin",
+    })
+    sit.pop("hirnModusNeu", None)
+    sit["sammler"]["frage"] = "anrufer_check"
+    aufrufe: list[tuple[str, str]] = []
+
+    def flow_fake(sitzung, text, melde=None):
+        modus = sitzung["sammler"].get("modus") or ""
+        aufrufe.append((modus, text))
+        if text == "Ja":
+            sitzung["sammler"]["anruferCheck"] = "ja"
+            sitzung["sammler"]["frage"] = "grund"
+            return {"text": "Worum geht es bei dem neuen Termin?"}
+        if modus == "absagen":
+            sitzung["sammler"]["frage"] = "nachname"
+            return {"text": "Wie ist Ihr Nachname?"}
+        return None
+
+    monkeypatch.setattr(agent.flow, "zug", flow_fake)
+    monkeypatch.setattr(
+        agent.llm, "chat",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("Klarer Mischzug braucht keinen LLM-Aufruf")
+        ),
+    )
+    monkeypatch.setenv("INTENT_NACHZUG", "0")
+
+    antwort = agent.user_turn(
+        sit, "Ja, aber ich möchte meinen bestehenden Termin absagen."
+    )
+
+    assert aufrufe == [
+        ("buchen", "Ja"),
+        ("absagen", "ich möchte meinen bestehenden Termin absagen."),
+    ]
+    assert sit["sammler"]["anruferCheck"] == "ja"
+    assert antwort["text"] == "Wie ist Ihr Nachname?"
+    assert [a["status"] for a in sit["hirn"]["anliegen"]] == ["geparkt", "aktiv"]
+    assert any(w.get("w") == "mischzug" for w in sit.get("_spur") or [])
+
+
+def test_presence_ja_bestaetigt_keine_patientenidentitaet(monkeypatch):
+    sit = _sit()
+    hirn.anwenden(sit, {
+        "kanal": "ok", "zug": "wechseln", "handlung": "ANLEGEN",
+        "gegenstand": "VORGANG", "spiegel": "neuer Termin",
+    })
+    sit.pop("hirnModusNeu", None)
+    sit["sammler"]["frage"] = "anrufer_check"
+    sit["messages"].append({"role": "assistant", "content": "Sind Sie noch dran?"})
+    aufrufe: list[tuple[str, str]] = []
+
+    def flow_fake(sitzung, text, melde=None):
+        modus = sitzung["sammler"].get("modus") or ""
+        aufrufe.append((modus, text))
+        if modus == "absagen":
+            return {"text": "Wie ist Ihr Nachname?"}
+        raise AssertionError("Presence-Ja darf nicht separat geerntet werden")
+
+    monkeypatch.setattr(agent.flow, "zug", flow_fake)
+    monkeypatch.setenv("INTENT_NACHZUG", "0")
+
+    antwort = agent.user_turn(
+        sit, "Ja, aber ich möchte meinen bestehenden Termin absagen."
+    )
+
+    assert aufrufe == [(
+        "absagen", "Ja, aber ich möchte meinen bestehenden Termin absagen."
+    )]
+    assert not sit["sammler"].get("anruferCheck")
+    assert antwort["text"] == "Wie ist Ihr Nachname?"

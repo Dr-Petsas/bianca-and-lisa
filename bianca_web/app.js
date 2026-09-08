@@ -1162,6 +1162,7 @@ const PATCHES = [
   ["W-ARZT-TITEL (Doktor + kurzes Pat)", "09.09.", "Stimme", "Ausgeschriebene DB-Kalendernamen behalten beim Sprechen ihren Doktortitel: „Doktor Petsas oder Doktor Patrikis“. Patrikis beginnt mit einer kurzen geschlossenen Pat-Silbe statt dem gedehnten „Paaah“."],
   ["W-PZR-REIHENFOLGE (Hauptanliegen vor Zusatz)", "09.09.", "Gespräch", "Bei Neupatienten klärt Bianca zuerst den gewünschten Behandler. Erst danach bietet sie die Zahnreinigung an — das Upselling bleibt vollständig, unterbricht aber nicht mehr den primären Terminrahmen."],
   ["W-ANMELDUNG (Anliegen statt Zufallsweiterleitung)", "09.09.", "Architektur", "Beim Wunsch nach Anmeldung, Empfang oder Mitarbeiter erklärt Bianca ihre Rolle als Telefonassistentin und übernimmt zuerst das konkrete Anliegen. Nur bei erneutem Bestehen verbindet sie ein exakt passendes DB-Ziel; sonst kann sie auf Wunsch einen Rückruf aufnehmen. Namentliche Arzttransfers bleiben unverändert."],
+  ["W-MISCHZUG (Ja, aber …)", "09.09.", "Architektur", "Bei einer gemischten Antwort erfasst Bianca zuerst das sichere Ja oder Nein zur laufenden Frage und verarbeitet danach den zusätzlichen Wunsch als eigenes Anliegen. Nummern, Slots und Buchungsbestätigungen bleiben unteilbar; ein Presence-Ja bestätigt niemals versehentlich die Patientenidentität."],
 ];
 
 let kTab = "faehig";

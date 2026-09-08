@@ -14,7 +14,8 @@ Vater. Diese Tests decken alle drei Loecher:
      "Was darf ich ändern…" ins Leere.
 """
 
-from bianca import flow, gehirn
+from bianca import agent, flow, gehirn
+from kern import hirn
 from kern.tenants import laden
 
 # Mini-Katalog: kein Live-Abruf im Test.
@@ -208,6 +209,30 @@ def test_ja_aber_fuer_sohn_loest_identitaet():
         assert z2 and "für Ihren Sohn" in z2["text"], z2
         assert "War Ihr Sohn schon einmal bei uns" in z2["text"], z2
     _ohne_hintergrund(lauf)
+
+
+def test_agent_mischzug_ja_aber_sohn_bleibt_korrekt(monkeypatch):
+    """Der neue Präfix-Split darf den bewährten Dritten-Fluss nicht brechen."""
+    sit = _sit_mit_anrufer()
+    sit.update({
+        "id": "misch-sohn", "stimme": "Bianca", "tools": [], "zuege": [],
+    })
+    hirn.init(sit)
+    monkeypatch.setenv("INTENT_NACHZUG", "0")
+    monkeypatch.setattr(agent.flow.hintergrund, "anstossen", lambda _sit: None)
+
+    z1 = agent.user_turn(sit, "Ich möchte einen Termin buchen.")
+    assert "für Sie selbst" in z1["text"]
+    z2 = agent.user_turn(
+        sit, "Ja, aber ich brauche einen Termin für meinen Sohn."
+    )
+
+    s = gehirn.sammler(sit)
+    assert s["anruferCheck"] == "ja"
+    assert s["fuerWen"] == "sohn"
+    assert s["kontaktName"] == "Kiriakos Tzannis"
+    assert not s["patientId"] and not s["nachname"]
+    assert z2 and "Ihr Sohn" in z2["text"]
 
 
 def test_nein_ohne_rolle_fragt_fuer_wen():

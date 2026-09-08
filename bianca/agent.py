@@ -621,6 +621,27 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
 
+    # Gemischter Zug: „Ja, aber …“ enthält ZWEI Handlungen. Bei wenigen
+    # ausdrücklich sicheren Fragen erntet der bisherige Flow zuerst das
+    # Ja/Nein; nur der Zusatz geht danach durch Intent und Task-Router.
+    # Transaktionskritische Fragen werden in intent.py niemals geteilt.
+    arbeits_text = text_in
+    # Nach einem Presence-Stups beantwortet das führende „Ja“ nur
+    # „Sind Sie noch dran?“ und darf keine Identität bestätigen.
+    gemischt = (
+        None if _letzte_war_presence(sit)
+        else intent.formularantwort_mit_zusatz(sit, text_in)
+    )
+    if gemischt:
+        kurzantwort, zusatz = gemischt
+        vorfrage = _s((sit.get("sammler") or {}).get("frage"))
+        praefix = flow.zug(sit, kurzantwort, None)
+        if praefix is not None and not (
+            praefix.get("book") or praefix.get("hangup") or praefix.get("transfer")
+        ):
+            arbeits_text = zusatz
+            spur.merken(sit, "mischzug", f"{vorfrage}: {kurzantwort} + Zusatz")
+
     if _letzte_war_presence(sit) and (
         _PRESENCE_ANTWORT_RE.search(text_in) or _NUR_JA_RE.match(text_in)
     ):
@@ -646,7 +667,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         spaet = intent.nachzug(sit)
         if spaet is not None:
             hirn.anwenden(sit, spaet)
-        deutung = intent.erkennen(sit, text_in)
+        deutung = intent.erkennen(sit, arbeits_text)
         hirn.anwenden(sit, deutung)
 
     # W-ANRUFER-HALLO: den verspielten Satz SOFORT als Vorab-Füller
@@ -668,7 +689,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             gehirn.anrufer_hallo_merken(sit)
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
-    fl = flow.zug(sit, text_in, melde)
+    fl = flow.zug(sit, arbeits_text, melde)
     if fl is None:
         # Live 08.09.2026: Der Motivkatalog verstand „Besprechung für eine
         # neue Prothese“, aber Intent/LLM eröffneten keinen Buchungs-Task.
@@ -677,19 +698,19 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # Ein frisch geernteter Praxisgrund PLUS ausdrücklicher Wunsch ist
         # bereits belastbare Evidenz; direkt an den sicheren Flow übergeben.
         sichere_wahl = task_router.aus_sicherer_ernte(
-            sit, text_in, sit.get("ernteZuletzt") or [],
+            sit, arbeits_text, sit.get("ernteZuletzt") or [],
         )
         if sichere_wahl and task_router.anwenden(
             sit, sichere_wahl, original=text_in, quelle="sichere_ernte",
         ):
             spur.merken(sit, "task-sichere-ernte", _s(sichere_wahl.get("reason"))[:80])
-            fl = flow.zug(sit, text_in, melde)
+            fl = flow.zug(sit, arbeits_text, melde)
     if fl is None and not gespraech.wirkt_unklar(text_in):
         # W-ANSTAND (Chef 03.09.2026): Beschimpfung/Fluchen ohne Fach-Anliegen
         # bekommt einen kurzen, charmanten Konter statt des LLM — ein Satz
         # mit echtem Anliegen hat den Fluss oben schon gewonnen.
         # W-MEDDENT: STT-Muell ("Seht, seht!") nie als Beleidigung werten.
-        fl = anstand.zug(sit, text_in)
+        fl = anstand.zug(sit, arbeits_text)
     # W-VERBINDEN-ECHT (31.08.2026): eine echte Weiterleitung spricht ihre
     # Ansage als Filler und traegt text="" — sie ZAEHLT trotzdem als
     # Maschinen-Zug, sonst wuerfe das LLM das transfer-Reply weg (live

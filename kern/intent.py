@@ -160,6 +160,18 @@ _FORMULAR_FRAGEN = {
     "arzt_notiz",
 }
 
+# Eine knappe Ja/Nein-Antwort kann im selben Atemzug ein zweites Anliegen
+# tragen. Nur bei nicht-destruktiven Identitäts-/Historienfragen darf der
+# sichere Präfix zuerst geerntet werden. Nummern-Readback, Slotwahl und
+# Buchungsbestätigung bleiben absichtlich unteilbar.
+_GEMISCHT_SICHERE_FRAGEN = {"anrufer_check", "schonmal", "arzt_check"}
+_GEMISCHT_RE = re.compile(
+    r"^\s*(?P<antwort>ja|jawohl|genau|richtig|korrekt|nein|nee|n(?:ö|oe))"
+    r"\s*[,;:—-]?\s*(?:aber|allerdings|jedoch|nur)\s+"
+    r"(?P<zusatz>.+?)\s*$",
+    re.I,
+)
+
 
 def _ist_formular_antwort(sit: dict, text: str) -> bool:
     """True = sicher nur Ernte fuer die laufende Maschine (kein LLM noetig)."""
@@ -179,6 +191,27 @@ def _ist_formular_antwort(sit: dict, text: str) -> bool:
         # Kurzantwort auf eine offene Formular-Frage ("Berger", "Kontrolle").
         return True
     return False
+
+
+def formularantwort_mit_zusatz(sit: dict, text: str) -> tuple[str, str] | None:
+    """Sicheren Antwortpräfix und semantischen Zusatz eines Mischzugs trennen.
+
+    Beispiel: ``Ja, aber ich möchte den Termin absagen``. Das ``Ja`` wird
+    noch im bisherigen Dialogzustand geerntet; erst danach darf der Zusatz
+    das Anliegen wechseln. So geht weder die Antwort noch das neue Ziel
+    verloren. Bei transaktionskritischen Fragen wird niemals geteilt.
+    """
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("frage")) not in _GEMISCHT_SICHERE_FRAGEN:
+        return None
+    m = _GEMISCHT_RE.match(_s(text))
+    if not m:
+        return None
+    antwort = _s(m.group("antwort"))
+    zusatz = _s(m.group("zusatz"))
+    if not antwort or len(zusatz.split()) < 2:
+        return None
+    return antwort, zusatz
 
 
 # --- Fallback-Heuristik (LLM tot / unparsebar) ------------------------------

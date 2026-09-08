@@ -173,6 +173,28 @@ def test_fastpath_ja_kein_llm(monkeypatch):
     assert d["zug"] == "verfeinern"
 
 
+def test_mischzug_trennt_sichere_antwort_vom_neuen_anliegen():
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    sit["sammler"]["frage"] = "anrufer_check"
+    assert intent.formularantwort_mit_zusatz(
+        sit, "Ja, aber ich möchte meinen Termin absagen."
+    ) == ("Ja", "ich möchte meinen Termin absagen.")
+    assert intent.formularantwort_mit_zusatz(
+        sit, "Nein, allerdings ist der Termin für meinen Sohn."
+    ) == ("Nein", "ist der Termin für meinen Sohn.")
+
+
+def test_mischzug_teilt_keine_transaktionskritische_antwort():
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    for frage in ("telefon_check", "slotwahl", "bestaetigung", "telefon"):
+        sit["sammler"]["frage"] = frage
+        assert intent.formularantwort_mit_zusatz(
+            sit, "Ja, aber ändern Sie bitte noch den Namen."
+        ) is None, frage
+
+
 def test_fastpath_slotwahl_kein_llm(monkeypatch):
     _llm_verboten(monkeypatch)
     sit = _sit()

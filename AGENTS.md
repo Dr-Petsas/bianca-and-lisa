@@ -1759,6 +1759,15 @@ Aufforderung: bei vorhandenem Grund zieht Bianca in den echten Flow zurück,
 sonst fordert sie einmal zum Neustart des Anliegens auf.
 Notaus: `TASK_ROUTER=0` stellt die alte Werkzeugliste wieder her. Tests:
 `tests/test_task_router.py`.
+**W-MISCHZUG (09.09.2026):** Bei „Ja/Nein, aber …“ gehen weder die Antwort
+auf den laufenden Dialogschritt noch das neue Anliegen verloren. Nur bei
+nicht-destruktiven Fragen (`anrufer_check`, `schonmal`, `arzt_check`) erntet
+der alte Flow zuerst den kurzen Präfix; anschließend deutet Intent/Task-Router
+den Zusatz und kann die bisherige Aufgabe parken. Nummern-Readback, Slotwahl,
+Buchungsbestätigung und Datendiktat bleiben unteilbar. Nach einem
+Presence-Stups bestätigt das führende Ja ausschließlich „noch dran“ und
+niemals die Patientenidentität. Tests: Mischzug-Blöcke in `test_hirn.py`,
+`test_task_router.py` und `test_fuer_wen.py`.
 
 ## Name/Nummer mit langen Pausen (08.09.2026 — nicht rückbauen)
 
