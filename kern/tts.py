@@ -38,10 +38,11 @@ _GENERISCH = (
 _BEHANDLER_FALLBACK = (
     # Qwen3 liest die Namen sonst englisch/lateinisch an.
     (re.compile(r"\bPetsas\b", re.I), "Pet-sas"),
-    # Deutsche Betonung mit nur leicht gedehntem i: „Patriekis“. Die
+    # Deutsche Betonung mit nur leicht gedehntem i: „Pattriekis“. Das
+    # doppelte t hält das a kurz, „ie“ gibt der mittleren Silbe Gewicht.
     # Silbentrennung „Pat-ri-kis“ ließ Qwen englisch wie „Patrick“ beginnen;
     # „Pa-tri-kis“ dehnte zuvor das a zu stark (Live-Proben 09.09.2026).
-    (re.compile(r"\bPatrikis\b", re.I), "Patriekis"),
+    (re.compile(r"\bPatrikis\b", re.I), "Pattriekis"),
     (re.compile(r"\bNikolaou\b", re.I), "Ni-ko-la-u"),
 )
 _AUSSPRACHE_CACHE: tuple | None = None

@@ -1568,9 +1568,10 @@ soll dann immer bei dr. Petsas buchen."
   „Doktor Michael Petsas“ / „Doktor Theodosios Patrikis“. `arzt_sprechname`
   erkennt „Doktor“ genauso wie „Dr.“ und spricht die Auswahl als
   „Doktor Petsas oder Doktor Patrikis“ — nie titellos. Die reine
-  Mund-Umschrift für Patrikis ist `Patriekis`: kurzes deutsches „Pat“,
+  Mund-Umschrift für Patrikis ist `Pattriekis`: kurzes deutsches „Pat“,
   nur leicht betontes „rie“. `Pat-ri-kis` klang englisch wie „Patrick“,
-  `Pa-tri-kis` dehnte zuvor das „Pa“ zu stark.
+  `Pa-tri-kis` dehnte zuvor das „Pa“ zu stark. Live-Gegenprobe mit Bianca:
+  fünf von fünf Würfen wurden ohne Keyword-Hilfe als „Patrikis“ erkannt.
 - Tests: `tests/test_arzt_default.py` (9, offline);
   `test_buchung_bindet_angebots_kalender` wurde auf die neue Regel gedreht
   (Bindungs-Wache selbst unverändert).
