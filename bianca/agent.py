@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, tenants, wiederholung, zuege
+from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
@@ -572,6 +572,25 @@ def start_reply(sit: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
+    """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
+    if _s(fl.get("text")):
+        fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
+        if "?" in fl["text"]:
+            sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
+        msgs.append({"role": "assistant", "content": fl["text"]})
+        wiederholung.gesagt_merken(sit, fl["text"])
+    sit["messages"] = msgs
+    gespraech.nach_antwort(sit)
+    gedaechtnis.kontext_anstossen(sit)
+    aus: dict[str, Any] = {"text": _s(fl.get("text")), "book": fl.get("book")}
+    if fl.get("hangup"):
+        aus["hangup"] = True
+    if isinstance(fl.get("transfer"), dict) and fl["transfer"].get("nummer"):
+        aus["transfer"] = fl["transfer"]
+    return aus
+
+
 def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
@@ -667,30 +686,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         job_aktiv=_job_aktiv(sit),
     )
     if job_sprach:
-        # Wiederholungs-Wächter auch für die Maschine: fragt der Fluss die
-        # noch offene Frage erneut (z. B. weil der Anrufer erst etwas anderes
-        # beantwortet hat), kommt sie in der nächsten Formulierung — nie
-        # zweimal wortgleich (Chef 27.08.2026). Nie Original zurückholen.
-        if _s(fl.get("text")):
-            fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
-            if "?" in fl["text"]:
-                sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
-            msgs.append({"role": "assistant", "content": fl["text"]})
-            wiederholung.gesagt_merken(sit, fl["text"])
-        sit["messages"] = msgs
-        gespraech.nach_antwort(sit)
-        # W-GEDAECHTNIS: der Zug kann Name/Nummer geerntet haben (Sammler,
-        # Verwaltung) — jetzt nachsehen, damit der Kontext im NAECHSTEN Zug
-        # schon im Prompt steht.
-        gedaechtnis.kontext_anstossen(sit)
-        aus = {"text": _s(fl.get("text")), "book": fl.get("book")}
-        if fl.get("hangup"):
-            # Weiterleitung (Jingle + Kirri-Zettel): das Dock legt danach auf.
-            aus["hangup"] = True
-        if isinstance(fl.get("transfer"), dict) and fl["transfer"].get("nummer"):
-            # W-VERBINDEN-ECHT: das Ziel muss bis zur Bruecke durchreichen.
-            aus["transfer"] = fl["transfer"]
-        return aus
+        return _maschinen_antwort(sit, fl, msgs)
 
     # W-MEDDENT (04.09.2026): kurzer STT-Muell → nachfragen, kein LLM-Plaudern.
     if route.get("unklar"):
@@ -708,6 +704,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     anliegen_stand = hirn.stand_block(sit)
     if anliegen_stand:
         plan = f"{plan}\n\n{anliegen_stand}" if plan else anliegen_stand
+    task_auswahl = task_router.braucht_auswahl(sit)
+    if task_auswahl:
+        plan = f"{plan}\n\n{task_router.PROMPT}" if plan else task_router.PROMPT
     if msgs and msgs[0].get("role") == "system":
         msgs[0]["content"] = system_prompt_aktuell(sit, plan=plan)
     # Kein Stream-Vorab, solange Buchung ODER Verwaltung offen ist: die Wachen
@@ -726,16 +725,30 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             extra[k] = max(int(extra.get(k) or 0), int(v))
         else:
             extra[k] = v
+    llm_tools = task_router.TOOLS if task_auswahl else TOOLS
     if darf_vorab:
-        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab, **extra)
+        out = llm.chat_stream(msgs, llm_tools, erster_satz=vorab, **extra)
     else:
-        out = llm.chat(msgs, TOOLS, **extra)
+        out = llm.chat(msgs, llm_tools, **extra)
     if not out.get("ok"):
         return {
             "text": "Entschuldigung, da ist mir gerade etwas dazwischengekommen. Was darf ich für Sie tun?",
             "error": out.get("error"),
             "book": None,
         }
+    if task_auswahl:
+        wahl = task_router.auswahl(out)
+        if wahl and task_router.anwenden(sit, wahl, original=text_in):
+            # Das LLM hat nur semantisch zugeordnet. Der sichere Flow
+            # verarbeitet denselben Nutzersatz nun mit seinem neuen Modus;
+            # kein zweiter Modelllauf und kein Kalenderwerkzeug dazwischen.
+            fl = flow.zug(sit, text_in, melde)
+            if fl and (_s(fl.get("text")) or fl.get("hangup") or fl.get("transfer")):
+                return _maschinen_antwort(sit, fl, msgs)
+            return {
+                "text": "Gerne. Erzählen Sie mir bitte noch kurz, worum es genau geht.",
+                "book": None,
+            }
     text, msgs, book = zuege.apply_tools(sit, msgs, out, melde=melde)
     gelaufen = [_s(w.get("name")) for w in (sit.get("tools") or [])[werkzeuge_vorher:]]
     werkzeug_lief = bool(gelaufen)
