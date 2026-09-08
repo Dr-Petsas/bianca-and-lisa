@@ -31,12 +31,70 @@ anruf-uebergreifende Schicht — hier keine Ueberschneidung.
 
 from __future__ import annotations
 
+import copy
+import os
 import re
 from typing import Any
 
 HANDLUNGEN = {"ERREICHEN", "WISSEN", "AENDERN", "ANLEGEN", "ABGEBEN", "KEINE"}
 GEGENSTAENDE = {"PERSON", "VORGANG", "SACHE", "REGEL", ""}
 ZUEGE = {"halten", "verfeinern", "wechseln", "zweites", "zurueck"}
+
+# --- W-HIRN-AUTORESUME (09.09.2026): eingeschobene Anliegen zuverlaessig
+# fortsetzen. Beim Parken sichert das Hirn einen tasklokalen Checkpoint des
+# Sammlers, damit sich Patienten-/Slotzustaende verschiedener Anliegen nicht
+# ueberschreiben; nach Abschluss (phase=fertig) rueckt LIFO das zuletzt
+# geparkte Anliegen nach. Dreistufiger Notaus HIRN_AUTO_RESUME=off|shadow|
+# enforce (Default off = byte-identisches Alt-Verhalten).
+_CP_SIT_KEYS = (
+    "offered", "gefundenKey", "verschiebRichtung", "slotVorrat", "vorratFuer",
+    "upcoming", "past", "patient", "flussFrage", "slotGesperrt",
+)
+
+
+def auto_resume_modus() -> str:
+    v = (os.environ.get("HIRN_AUTO_RESUME") or "off").strip().lower()
+    return v if v in {"off", "shadow", "enforce"} else "off"
+
+
+def _checkpoint_machen(sit: dict) -> dict[str, Any]:
+    """Tasklokalen Schnappschuss des Sammlers + Suchzustands sichern."""
+    s = sit.get("sammler")
+    cp: dict[str, Any] = {"sammler": copy.deepcopy(s) if isinstance(s, dict) else {}}
+    for k in _CP_SIT_KEYS:
+        if k in sit:
+            try:
+                cp[k] = copy.deepcopy(sit.get(k))
+            except Exception:
+                cp[k] = sit.get(k)
+    return cp
+
+
+def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
+    """Gesicherten Task-Zustand wiederherstellen (nur enforce)."""
+    if not isinstance(cp, dict):
+        return
+    if isinstance(cp.get("sammler"), dict):
+        sit["sammler"] = copy.deepcopy(cp["sammler"])
+    for k in _CP_SIT_KEYS:
+        if k in cp:
+            sit[k] = copy.deepcopy(cp[k])
+
+
+_RUECKKEHR_BRUECKE = {
+    "ANLEGEN": "So, zurück zu Ihrem Termin.",
+    "AENDERN": "So, zurück zu Ihrem bestehenden Termin.",
+    "WISSEN": "So, zurück zu Ihrer Frage.",
+    "ABGEBEN": "So, zurück zu Ihrem Anliegen.",
+    "ERREICHEN": "So, zurück zu Ihrem Anliegen.",
+}
+
+
+def rueckkehr_bruecke(a: dict[str, Any] | None) -> str:
+    """Kurze, einmalige Rueckkehrbruecke fuer das reaktivierte Anliegen."""
+    if not isinstance(a, dict):
+        return ""
+    return _RUECKKEHR_BRUECKE.get(_s(a.get("handlung")), "So, zurück zu Ihrem Anliegen.")
 
 
 def _s(v: Any) -> str:
@@ -133,11 +191,27 @@ def _anhaengen(sit: dict, a: dict[str, Any], *, aktivieren: bool) -> dict[str, A
     if aktivieren:
         alt = aktiv(sit)
         if alt is not None and alt.get("status") == "aktiv":
+            if _ist_bianca(sit) and auto_resume_modus() != "off":
+                alt["checkpoint"] = _checkpoint_machen(sit)
             alt["status"] = "geparkt"
         a["status"] = "aktiv"
         h["aktiv"] = a["id"]
         _schalten(sit, a)
     return a
+
+
+def _reaktivieren(sit: dict, kand: dict[str, Any]) -> dict[str, Any]:
+    """Ein geparktes Anliegen wieder aktiv schalten. In enforce wird der
+    tasklokale Checkpoint zurueckgespielt (Name/Slot/Grund des Anliegens),
+    sonst nur der Modus gesetzt (Alt-Verhalten)."""
+    cp = kand.pop("checkpoint", None)
+    kand["status"] = "aktiv"
+    hirn(sit)["aktiv"] = kand["id"]
+    if isinstance(cp, dict) and auto_resume_modus() == "enforce":
+        _checkpoint_zuruecklegen(sit, cp)
+    else:
+        _schalten(sit, kand)
+    return kand
 
 
 def anliegen_hinzufuegen(sit: dict, a: dict[str, Any] | None,
@@ -236,10 +310,10 @@ def anwenden(sit: dict, deutung: dict[str, Any] | None) -> dict[str, Any]:
         for kand in reversed(h.get("anliegen") or []):
             if kand.get("status") == "geparkt":
                 if a is not None and a.get("status") == "aktiv":
+                    if _ist_bianca(sit) and auto_resume_modus() != "off":
+                        a["checkpoint"] = _checkpoint_machen(sit)
                     a["status"] = "geparkt"
-                kand["status"] = "aktiv"
-                h["aktiv"] = kand["id"]
-                _schalten(sit, kand)
+                _reaktivieren(sit, kand)
                 return {"zug": zug, "anliegen": kand}
         return {"zug": "halten", "anliegen": a}
 
@@ -290,6 +364,64 @@ def erledigt(sit: dict, *, naechstes: bool = True) -> dict[str, Any] | None:
     return None
 
 
+def _nach_abschluss_ruecken(sit: dict) -> dict[str, Any] | None:
+    """Nach Abschluss (phase=fertig) das naechste Anliegen aktiv schalten.
+
+    enforce: zuletzt GEPARKTES Anliegen LIFO (mit Checkpoint) vor dem naechsten
+    OFFENEN. off/shadow: nur naechstes offenes — byte-identisches Alt-Verhalten.
+    """
+    h = hirn(sit)
+    if _ist_bianca(sit) and auto_resume_modus() == "enforce":
+        for kand in reversed(h.get("anliegen") or []):
+            if kand.get("status") == "geparkt":
+                return _reaktivieren(sit, kand)
+    for kand in h.get("anliegen") or []:
+        if kand.get("status") == "offen":
+            kand["status"] = "aktiv"
+            h["aktiv"] = kand["id"]
+            _schalten(sit, kand)
+            return kand
+    return None
+
+
+def wuerde_zuruecksprigen(sit: dict) -> dict[str, Any] | None:
+    """Beobachtend (shadow/enforce): meldet, welches geparkte Anliegen jetzt
+    zurueckspringen wuerde — ohne die Sitzung zu veraendern. Kriterium: die
+    aktive Aufgabe steht auf phase=fertig (nicht gebucht) und davor liegt ein
+    geparktes Anliegen."""
+    if not _ist_bianca(sit) or "hirn" not in sit:
+        return None
+    s = sit.get("sammler") or {}
+    if _s(s.get("phase")) != "fertig":
+        return None
+    a = aktiv(sit)
+    if a is None or a.get("status") != "aktiv":
+        return None
+    for kand in reversed(hirn(sit).get("anliegen") or []):
+        if kand.get("status") == "geparkt":
+            return {"id": _s(kand.get("id")), "handlung": _s(kand.get("handlung")),
+                    "spiegel": _s(kand.get("spiegel"))}
+    return None
+
+
+def abschluss_ruecksprung_live(sit: dict) -> dict[str, Any] | None:
+    """enforce: hat die Maschine gerade ein eingeschobenes Anliegen
+    abgeschlossen (phase=fertig) und liegt ein geparktes davor, dieses
+    LIFO reaktivieren (Checkpoint zurueck) und zurueckgeben. Sonst None."""
+    if auto_resume_modus() != "enforce":
+        return None
+    if wuerde_zuruecksprigen(sit) is None:
+        return None
+    a = aktiv(sit)
+    if a is not None:
+        a["status"] = "erledigt"
+    hirn(sit)["aktiv"] = ""
+    for kand in reversed(hirn(sit).get("anliegen") or []):
+        if kand.get("status") == "geparkt":
+            return _reaktivieren(sit, kand)
+    return None
+
+
 def sync_nach_zug(sit: dict) -> None:
     """Nach jedem Maschinen-/LLM-Zug: Hirn mit dem Sammler abgleichen.
 
@@ -309,17 +441,10 @@ def sync_nach_zug(sit: dict) -> None:
         if phase in {"fertig", "gebucht"} and a.get("status") == "aktiv":
             a["status"] = "erledigt"
             hirn(sit)["aktiv"] = ""
-            naechst = None
-            for kand in hirn(sit).get("anliegen") or []:
-                if kand.get("status") == "offen":
-                    naechst = kand
-                    break
-            if naechst is not None and phase != "gebucht":
+            if phase != "gebucht":
                 # Nach 'gebucht' fragt die Maschine selbst weiter — nur nach
                 # 'fertig' rueckt das naechste Anliegen automatisch nach.
-                naechst["status"] = "aktiv"
-                hirn(sit)["aktiv"] = naechst["id"]
-                _schalten(sit, naechst)
+                _nach_abschluss_ruecken(sit)
         return
     if modus and (a is None or modus != modus_von(a)):
         # Interner Maschinen-Wechsel: nachtragen statt gegensteuern.

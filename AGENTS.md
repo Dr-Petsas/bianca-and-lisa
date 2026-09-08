@@ -1418,6 +1418,34 @@ sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
 `PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
 Schaufenster.
 
+## Eingeschobene Anliegen fortsetzen (W-HIRN-AUTORESUME 09.09.2026 — nicht rückbauen)
+
+Wird mitten in einer Buchung ein zweites Anliegen eingeschoben (schnelle
+Auskunft, kurze Absage), soll Bianca danach von selbst zur Buchung
+zurückkehren — ohne Datenverlust und ohne Schleife.
+
+- **Tasklokaler Checkpoint** (`kern/hirn.py`): beim Parken eines aktiven
+  Anliegens (`_anhaengen`/`zurueck`) sichert das Hirn einen Schnappschuss des
+  Sammlers plus Suchzustand (`_CP_SIT_KEYS`: offered, gefundenKey,
+  verschiebRichtung, slotVorrat, vorratFuer, upcoming, past, patient,
+  flussFrage, slotGesperrt) in `anliegen["checkpoint"]`. So überschreiben sich
+  Patienten-/Slotzustände verschiedener Anliegen nicht.
+- **LIFO-Rücksprung nach Abschluss**: erreicht die aktive Aufgabe
+  `phase=fertig`, reaktiviert `_nach_abschluss_ruecken`/
+  `abschluss_ruecksprung_live` das ZULETZT geparkte Anliegen (vor dem nächsten
+  offenen) und spielt dessen Checkpoint zurück. `phase=gebucht` bleibt
+  ausgenommen (die Maschine fragt dort selbst weiter).
+- **Genau eine Rückkehrbrücke** (`bianca/agent._auto_resume_anhaengen`, im
+  `_maschinen_antwort`-Pfad): `hirn.rueckkehr_bruecke` + die gespeicherte
+  Pflichtfrage werden EINMAL an die Maschinen-Antwort gehängt; nie mitten in
+  Buchung/Transfer/Diktat (book/hangup/transfer/warte).
+- **Notaus dreistufig** `HIRN_AUTO_RESUME=off|shadow|enforce` (Default **off**
+  = byte-identisches Alt-Verhalten: nächstes OFFENES Anliegen wie bisher, kein
+  Checkpoint, kein Rücksprung). `shadow` schreibt nur die Wächterspur
+  (`auto-resume-shadow`), ändert kein Verhalten; `enforce` führt zurück.
+- Tests: `tests/test_auto_resume.py` (offline). Rollout: erst `shadow` gegen
+  Replays, dann `enforce`.
+
 ## Session-Hirn + Intent-Schicht (W-HIRN / W-INTENT 03.09.2026 — nicht rückbauen)
 
 Chef: „erst erkennen, dann handeln" — Bianca rannte bei jedem Terminwort in

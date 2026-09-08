@@ -573,8 +573,48 @@ def start_reply(sit: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
+    """W-HIRN-AUTORESUME (09.09.2026): hat die Maschine gerade ein
+    eingeschobenes Anliegen abgeschlossen und liegt ein geparktes davor,
+    EINMAL kurz zurueckfuehren — Rueckkehrbruecke + gespeicherte Pflichtfrage.
+
+    off: nichts. shadow: nur die Waechterspur, kein Verhaltenswechsel.
+    enforce: Checkpoint des geparkten Anliegens zurueck, Bruecke + Frage.
+    Nie mitten in Buchung/Transfer/Diktat (book/hangup/transfer/warte).
+    """
+    if "hirn" not in sit or not intent.enabled():
+        return fl
+    modus = hirn.auto_resume_modus()
+    if modus == "off":
+        return fl
+    if fl.get("book") or fl.get("hangup") or fl.get("transfer") or fl.get("warte"):
+        return fl
+    if modus == "shadow":
+        ziel = hirn.wuerde_zuruecksprigen(sit)
+        if ziel:
+            spur.merken(sit, "auto-resume-shadow", _s(ziel.get("id")))
+        return fl
+    resumed = hirn.abschluss_ruecksprung_live(sit)
+    if not resumed:
+        return fl
+    spur.merken(sit, "auto-resume", _s(resumed.get("id")))
+    s = sit.get("sammler") or {}
+    fid = _s(s.get("frage"))
+    frage = _kanonische_frage(sit, fid) if fid else ""
+    if not frage:
+        fid2, frage2 = gehirn.naechste_frage(sit)
+        if fid2:
+            s["frage"] = fid2
+            frage = frage2
+    bruecke = hirn.rueckkehr_bruecke(resumed)
+    fl = dict(fl)
+    fl["text"] = " ".join(x for x in [_s(fl.get("text")), bruecke, frage] if x)
+    return fl
+
+
 def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
+    fl = _auto_resume_anhaengen(sit, fl)
     if _s(fl.get("text")):
         fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
         if "?" in fl["text"]:
