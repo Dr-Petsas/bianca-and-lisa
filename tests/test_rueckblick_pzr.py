@@ -350,6 +350,43 @@ def test_zug_kein_rueckblick_bei_schmerz():
         flow.hintergrund.anstossen = echt_anstossen
 
 
+def test_petsas_so_eintragen_bitte_schreibt_pzr_notiz():
+    """Live 08.09. 10:33: 'So eintragen bitte' auf die PZR-Frage = Ja + Notiz."""
+    from kern.patients import arzt_sprechname
+
+    sit = _sit()
+    s = _bestand(sit, 900, "IMP OP Implantation")
+    s.update({
+        "phase": "bestaetigen", "frage": "pzr", "pzr": "gefragt",
+        "slotIso": "2026-09-10T11:30:00+02:00",
+        "arzt": {"typ": "genannt", "calendarId": "cal-p", "calendarName": "Petsas"},
+        "telefon": "01776004600", "telefonOk": True,
+    })
+    sit["angebotKalender"] = {"calendarId": "cal-p", "calendarName": "Petsas"}
+    notes: list[str] = []
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
+        "ok": True, "booked": True, "slotIso": slot_iso,
+        "spoken": "Der Termin ist eingetragen.",
+    }
+    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    try:
+        assert gehirn.ist_pzr_zusage("So eintragen bitte")
+        assert gehirn.ist_pzr_zusage("Nimm sie mit.")
+        assert not gehirn.ist_pzr_zusage("Nein, ohne Reinigung.")
+        assert arzt_sprechname("Petsas", sit["tenant"]) == "Doktor Petsas"
+        r = flow.zug(sit, "So eintragen bitte.")
+        assert s["pzr"] == "ja"
+        assert r and "Zahnreinigung" in (r.get("text") or "")
+        gebucht = r
+        if s.get("frage") == "arzt_notiz":
+            gebucht = flow.zug(sit, "Nein, keine Notiz.")
+        assert gebucht and "PLUS PZR heute" in " ".join(notes)
+        assert "Zahnreinigung habe ich mit dazu vermerkt" in (gebucht.get("text") or "")
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+
+
 def test_buchen_traegt_plus_pzr_notiz():
     sit = _sit()
     s = _bestand(sit, 900, "IMP OP Implantation")

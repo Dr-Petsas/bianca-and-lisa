@@ -33,7 +33,7 @@ def test_arztwahl_frage_nennt_petsas_zuerst():
 def test_behandler_alle_im_prompt_richtig_herum():
     from bianca.agent import _behandler_alle
     zeile = _behandler_alle(laden("meddent"))
-    assert zeile == "Dr. Petsas, Dr. Patrikis, Dr. Nikolaou", zeile
+    assert zeile == "Doktor Petsas, Doktor Patrikis, Doktor Nikolaou", zeile
 
 
 # --- "Weiss nicht zu welchem Arzt" -> Standard-Behandler ---------------------

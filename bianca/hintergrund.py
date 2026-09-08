@@ -61,10 +61,13 @@ def kartei_von_anrufer(sit: dict) -> None:
                     "doctorName": _s(info.get("doctorName") or info.get("calendarName")),
                 }
                 name = arzt_sprechname(
-                    _s(info.get("doctorName") or info.get("calendarName")))
+                    _s(info.get("doctorName") or info.get("calendarName")),
+                    sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+                )
                 print(f"bianca-anrufer-kartei: zuletzt {name!r} "
                       f"{_s(info.get('lastIso'))[:10]}", flush=True)
-                frage = gehirn.arzt_check_frage(sit)
+                from kern import zimmer_map
+                frage = "" if zimmer_map.aktiv(sit.get("tenant") or {}) else gehirn.arzt_check_frage(sit)
                 if frage:
                     try:
                         from kern import tts as _tts
@@ -87,9 +90,37 @@ def kartei_von_anrufer(sit: dict) -> None:
     threading.Thread(target=arbeit, daemon=True).start()
 
 
+def gespraech_von_anrufer(sit: dict) -> None:
+    """Ob wir mit dieser Nummer schon gesprochen haben — nicht die Kartei.
+
+    Chef 08.09.2026: bekannt = vorheriges TELEFON-Gespraech. Ein Patient
+    in der Akte allein macht niemanden zum Bekannten."""
+    if sit.get("vorigesGespraech") is not None:
+        return
+    a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    telefon = "".join(c for c in _s(a.get("telefon") or sit.get("callerPhone")) if c.isdigit())
+    if len(telefon) < 7:
+        return
+    if _laeuft(sit, "vorigesGespraech"):
+        return
+
+    def arbeit() -> None:
+        try:
+            sit["vorigesGespraech"] = gedaechtnis.letzter_anruf_holen(
+                telefon, gedaechtnis._client_id(sit), nicht_id=_s(sit.get("id")))
+            hallo_waermen(sit)
+        except Exception as e:
+            sit.setdefault("vorigesGespraech", {})
+            print(f"bianca-voriges-gespraech fail {e}", flush=True)
+        finally:
+            _frei(sit, "vorigesGespraech")
+
+    threading.Thread(target=arbeit, daemon=True).start()
+
+
 def hallo_waermen(sit: dict) -> None:
     """Hallo-Satz zur erkannten Nummer vorwärmen, während die Begrüßung spielt."""
-    if not gehirn.anrufer_bekannt(sit):
+    if not gehirn.anrufer_bekannt(sit) and not gehirn.voriges_gespraech(sit):
         return
     hallo = gehirn.anrufer_hallo(sit)
     if not hallo:
@@ -184,7 +215,10 @@ def kartei_anstossen(sit: dict) -> None:
                             "calendarId": info["calendarId"],
                             "calendarName": info.get("calendarName") or "",
                         }
-                        name = arzt_sprechname(info.get("doctorName") or info.get("calendarName") or "")
+                        name = arzt_sprechname(
+                            info.get("doctorName") or info.get("calendarName") or "",
+                            tenant,
+                        )
                         if name:
                             sit["arztHinweis"] = (
                                 f"Ich sehe hier: Sie waren zuletzt bei {name} — "
@@ -217,11 +251,14 @@ def vorrat_schluessel(sit: dict) -> str:
     Darum: OHNE gemapptes Motiv laeuft KEINE Slot-Suche mehr los — frueher
     suchte der Vorrat blind mit dem Kontroll-Default und lieferte Zeiten
     aus den falschen Fenstern."""
+    gehirn.kalender_zu_grund(sit)
     s = gehirn.sammler(sit)
     if not s["motivId"]:
         return ""  # Besuchsgrund noch unklar — nicht ins Blaue suchen
     a = s.get("arzt") or {}
-    if a.get("calendarId"):
+    if a.get("raeume"):
+        scope = "+".join(str(x) for x in a["raeume"] if str(x).strip())
+    elif a.get("calendarId"):
         scope = a["calendarId"]
     elif a.get("typ") in {"egal"} or s["warSchonMal"] is False:
         scope = "EGAL"
@@ -265,7 +302,19 @@ def vorrat_anstossen(sit: dict) -> None:
                 "visitMotiveName": (_s(vm.get("name")) or s["motivName"]
                                     or "Kontrolluntersuchung"),
             }
-            if a.get("calendarId"):
+            from kern import zimmer_map
+            raeume = zimmer_map.raeume_am(sit)
+            if raeume:
+                found = calendar.find_slots_raeume(
+                    tenant, ctx, raeume,
+                    start_date=gehirn.start_datum(s),
+                    source="pickadoc-bianca",
+                )
+                win = found.get("calendar") if isinstance(found.get("calendar"), dict) else None
+                if win and _s(win.get("id")):
+                    sit["slotKalender"] = win
+                    a["calendarId"] = win["id"]
+            elif a.get("calendarId"):
                 found = calendar.find_slots_behandler(
                     tenant, ctx,
                     start_date=gehirn.start_datum(s),
@@ -315,6 +364,7 @@ def anstossen(sit: dict) -> None:
     # Besuchsgrund-Katalog EINMAL pro Anruf frisch von der Plattform holen
     # (behandlerspezifisches Mapping, Chef 30.08.2026) — laeuft parallel.
     motive.anstossen(sit)
+    gespraech_von_anrufer(sit)
     kartei_von_anrufer(sit)
     kartei_anstossen(sit)
     vorrat_anstossen(sit)

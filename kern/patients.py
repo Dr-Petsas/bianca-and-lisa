@@ -244,14 +244,30 @@ def ohne_titel(name: str) -> str:
     return " ".join(teile)
 
 
-def arzt_sprechname(name: str) -> str:
+def arzt_sprechname(name: str, tenant: dict | None = None) -> str:
     """"Dr. Michael Petsas, M.Sc." -> "Doktor Petsas" — fuers SPRECHEN.
 
     Der Vorname faellt bewusst weg: ElevenLabs spricht englisch klingende
     Vornamen ("Michael") trotz language_code=de gern englisch aus
     (Chef 27.08.2026). Fuer Kalender-Aufloesung den VOLLEN Namen verwenden.
+
+    Mit Tenant: nacktes "Petsas" wird gegen die Praxis-Kalender gelegt und
+    bekommt deren Titel ("Doktor Petsas") — nie "Termin bei Petsas".
     """
     kern_name = _s(name).split(",")[0].strip()
+    if tenant:
+        ziel = ohne_titel(kern_name).lower()
+        last = ziel.split()[-1] if ziel else ""
+        if last and len(last) >= 3:
+            for c in tenant.get("calendars") or []:
+                cn = _s((c or {}).get("name")).split(",")[0].strip()
+                if not cn:
+                    continue
+                a = ohne_titel(cn).lower()
+                a_last = a.split()[-1] if a else ""
+                if a == ziel or a_last == last:
+                    kern_name = cn
+                    break
     if not kern_name:
         return ""
     tokens = [t.lower().rstrip(".") for t in kern_name.replace(".", ". ").split()]
@@ -262,7 +278,17 @@ def arzt_sprechname(name: str) -> str:
     if not nachname:
         return kern_name
     titel = "Professor" if hat_prof else ("Doktor" if hat_dr else "")
-    return f"{titel} {nachname}".strip()
+    if titel:
+        return f"{titel} {nachname}".strip()
+    # Ohne Doktortitel nicht nackt "bei Thaler" — Herr/Frau aus dem Vornamen
+    # (Live 08.09.2026 Eva Thaler: Kalender "Eva Thaler" → "bei Thaler").
+    if len(rest) >= 2:
+        g = vornamen.geschlecht(rest[0])
+        if g == "m":
+            return f"Herr {nachname}"
+        if g == "f":
+            return f"Frau {nachname}"
+    return nachname
 
 
 def ist_testakte(p: dict) -> bool:

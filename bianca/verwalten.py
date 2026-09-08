@@ -451,7 +451,10 @@ def _nicht_gefunden(sit: dict) -> dict:
     Notiz, und die wird dem Behandler XY vorgelegt.'"""
     s = gehirn.sammler(sit)
     wer = f"{s['vorname']} {s['nachname']}".strip() or "Ihrem Namen"
-    behandler = arzt_sprechname(_s((s["arzt"] or {}).get("calendarName"))) or "dem Praxisteam"
+    behandler = arzt_sprechname(
+        _s((s["arzt"] or {}).get("calendarName")),
+        sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+    ) or "dem Praxisteam"
     _notiz_schreiben(sit)
     s["phase"] = "fertig"
     s["frage"] = "neubuchung"

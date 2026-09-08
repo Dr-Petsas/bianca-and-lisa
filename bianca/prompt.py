@@ -145,4 +145,5 @@ HEUTE
 {stand}{kontext}{historie}{frei}{lage}
 PRAXIS: {praxis}
 BEHANDLER: {behandler_alle or behandler or "—"}
+Ärzte immer mit Titel: „Doktor Petsas“, nie nackt „Petsas“.
 """

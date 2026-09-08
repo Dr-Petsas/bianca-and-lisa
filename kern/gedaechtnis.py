@@ -38,6 +38,7 @@ import threading
 import time
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -122,6 +123,90 @@ def _wann_zeile(ts: Any) -> str:
         return d.strftime("%d.%m.")
     except (TypeError, ValueError, OSError):
         return ""
+
+
+# Vorheriges TELEFON-Gespraech (Chef 08.09.2026): bekannt = wir haben schon
+# miteinander gesprochen. Bestandskunde in der Kartei ist etwas anderes —
+# ein Erstgespraech bleibt "Ich bin die Neue", auch wenn die Nummer matcht.
+_ANRUF_KANAL = frozenset({"bianca_call", "lisa_call", "lisa_outbound"})
+_WOCHENTAG = (
+    "Montag", "Dienstag", "Mittwoch", "Donnerstag",
+    "Freitag", "Samstag", "Sonntag",
+)
+
+
+def anruf_wann_sprechbar(ts: Any, jetzt: datetime | None = None) -> str:
+    """Relatives Wann fuer 'Sie hatten … schon einmal angerufen'."""
+    try:
+        ms = float(ts or 0)
+    except (TypeError, ValueError):
+        return "neulich"
+    if ms <= 0:
+        return "neulich"
+    if ms < 1e12:
+        ms *= 1000.0
+    tz = ZoneInfo("Europe/Berlin")
+    dann = datetime.fromtimestamp(ms / 1000.0, tz)
+    nun = jetzt or datetime.now(tz)
+    if nun.tzinfo is None:
+        nun = nun.replace(tzinfo=tz)
+    delta = (nun.date() - dann.date()).days
+    if delta <= 0:
+        return "heute"
+    if delta == 1:
+        return "gestern"
+    if delta == 2:
+        return "vorgestern"
+    if delta <= 6:
+        return f"am {_WOCHENTAG[dann.weekday()]}"
+    if delta < 14:
+        return "letzte Woche"
+    return "neulich"
+
+
+def _letzter_anruf_aus_hits(hits: list, *, nicht_id: str = "") -> dict:
+    """Neuester Telefon-Kontakt aus einer Brain-Suche — erledigte zaehlen."""
+    best: dict[str, Any] | None = None
+    skip = _s(nicht_id).lower()
+    for h in hits or []:
+        if not isinstance(h, dict):
+            continue
+        kanal = _s(h.get("channel")).lower()
+        if kanal and kanal not in _ANRUF_KANAL:
+            continue
+        eid = _s(h.get("id"))
+        if skip and skip in eid.lower():
+            continue
+        try:
+            ts = float(h.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if ts <= 0:
+            continue
+        if ts < 1e12:
+            ts *= 1000.0
+        if best is None or ts > float(best["ts"]):
+            best = {"ts": ts, "kanal": kanal, "id": eid}
+    if not best:
+        return {}
+    best["wann"] = anruf_wann_sprechbar(best["ts"])
+    return best
+
+
+def letzter_anruf_holen(telefon: str, client_id: str = "", *, nicht_id: str = "") -> dict:
+    """MAS-Suche: gab es zu dieser Nummer schon ein Telefongespraech?"""
+    ziffern = "".join(c for c in _s(telefon) if c.isdigit())
+    if not enabled() or len(ziffern) < 7:
+        return {}
+    try:
+        r = httpx.get(
+            f"{MAS_URL}/brain/search",
+            params={"q": ziffern, "kind": "event", "sinceDays": 90, "limit": 20},
+            headers=_headers(client_id), timeout=KONTEXT_WARTE_S,
+        )
+        return _letzter_anruf_aus_hits(r.json().get("results") or [], nicht_id=nicht_id)
+    except Exception:
+        return {}
 
 
 def zusammenfassung(sit: dict) -> str:

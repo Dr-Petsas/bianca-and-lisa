@@ -18,6 +18,7 @@ from bianca.prompt import TOOLS, system_prompt
 from kern import antwort_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
+from kern.patients import arzt_sprechname
 
 
 def _s(v: Any) -> str:
@@ -79,7 +80,7 @@ _ANGEBOT_ZEIT_RE = re.compile(
 )
 _FRAGE_KERN = {
     "schonmal": r"schon\s+(?:ein)?mal|bereits\s+bei\s+uns",
-    "arzt": r"behandler|arzt|ärztin|aerztin|doktor",
+    "arzt": r"behandler|arzt|ärztin|aerztin|doktor|prophylaxe|thaler",
     # auch "Vor- und Nachname": dort steht kein alleinstehendes "Name"
     "name": r"\bnamen?\b|vorname|nachname",
     "vorname": r"vorname",
@@ -124,7 +125,7 @@ _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 _GEFUELLT_WACHEN: list[tuple[re.Pattern, Any]] = [
     (re.compile(r"handynummer|telefonnummer|welcher\s+nummer|ihre\s+nummer", re.I),
      lambda s: bool(s.get("telefonOk") or s.get("telefonAkte"))),
-    (re.compile(r"bei\s+(welchem|wem)|welche[rm]?\s+(behandler|arzt|ärztin|aerztin)|zu\s+welchem\s+(arzt|behandler)", re.I),
+    (re.compile(r"bei\s+(welchem|wem)|welche[rm]?\s+(behandler|arzt|ärztin|aerztin)|zu\s+welchem\s+(arzt|behandler)|frau\s+thaler\s+oder|zur\s+prophylaxe", re.I),
      lambda s: bool((s.get("arzt") or {}).get("calendarId") or (s.get("arzt") or {}).get("typ") == "egal")),
     (re.compile(r"wie\s+(heißen|heissen)\s+sie|wie\s+(ist|lautet)\s+ihr\s+(vor.{0,6}|nach)?name|ihren\s+namen", re.I),
      lambda s: bool(s.get("vorname") and s.get("nachname"))),
@@ -194,10 +195,14 @@ def _wiederholungs_wache(sit: dict, text: str) -> str:
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
     varianten = gehirn.FRAGE_VARIANTEN
-    if fid == "arzt" and s.get("warSchonMal") is False:
-        # Neupatient: die Behandler-WAHL wiederholen, nicht "bei wem waren
-        # Sie zuletzt?" — der Anrufer war ja noch nie da.
-        varianten = {**varianten, "arzt": gehirn.ARZTWAHL_VARIANTEN}
+    if fid == "arzt":
+        from kern import zimmer_map
+        if zimmer_map.aktiv(sit.get("tenant") or {}):
+            varianten = {**varianten, "arzt": gehirn.THALER_SPUR_VARIANTEN}
+        elif s.get("warSchonMal") is False:
+            # Neupatient: die Behandler-WAHL wiederholen, nicht "bei wem waren
+            # Sie zuletzt?" — der Anrufer war ja noch nie da.
+            varianten = {**varianten, "arzt": gehirn.ARZTWAHL_VARIANTEN}
     return wiederholung.pruefen(
         sit, text,
         frueher=wiederholung.letzte_antworten(sit.get("messages") or []),
@@ -504,10 +509,10 @@ def _behandler_alle(tenant: dict) -> str:
     das LLM kannte nur den einen behandler-Eintrag und verschwieg den Rest.
     Reihenfolge seit 03.09.2026: kern.tenants.behandler_reihe (Chef:
     "Dr. Petsas, Dr. Patrikis oder Dr. Nikolaou" — nie andersherum)."""
-    haupt = _s(tenant.get("behandler"))
+    haupt = arzt_sprechname(_s(tenant.get("behandler")), tenant)
     namen = [haupt] if haupt else []
     for k in tenants.behandler_reihe(tenant):
-        n = _s((k or {}).get("name"))
+        n = arzt_sprechname(_s((k or {}).get("name")), tenant)
         if n and n not in namen:
             namen.append(n)
     return ", ".join(namen)
@@ -553,6 +558,7 @@ def start_reply(sit: dict) -> dict[str, Any]:
     # und letzten Besuch/Behandler nachziehen — parallel zur Begruessung,
     # nie auf dem Mund-Pfad.
     from bianca import hintergrund as _hg
+    _hg.gespraech_von_anrufer(sit)
     _hg.hallo_waermen(sit)
     _hg.kartei_von_anrufer(sit)
     # Praxisgedächtnis schon zur Begrüßung — der Rückrufer fragt oft im

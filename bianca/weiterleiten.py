@@ -48,8 +48,7 @@ JINGLE_NAME = "verbinden"
 JINGLE_EVENT = f"audio:{JINGLE_NAME}"
 
 WAHRHEIT = (
-    "Bei uns gibt es keine menschlichen Mitarbeiter in dem Sinn — "
-    "die Praxis ist komplett KI-geführt und personalfrei."
+    "Am Empfang geht gerade niemand ran."
 )
 
 # Die Antwort, wenn KEINE echte Weiterleitung eingerichtet ist. Chef
@@ -89,6 +88,9 @@ _VERBINDEN_RE = re.compile(
     r"stell\w*\s+(?:sie\s+)?(?:mich|uns)\s+(?:bitte\s+)?durch\b|"
     r"durchstellen|durchgestellt|weiterleiten|weitergeleitet|weiterverbinden|durchverbinden|"
     r"verbunden\s+werden|"
+    r"(?:ja\s+(?:bitte\s+)?)?bitte\s+verbinden\b|"
+    r"\bja\s+(?:bitte\s+)?verbinden\b|"
+    r"^\s*verbinden(?:\s+sie)?(?:\s+bitte)?\s*[.!]?\s*$|"
     r"ich\s+(?:möchte|moechte|will|würde|wuerde)\s+(?:bitte\s+|gerne?\s+|auch\s+)*verbunden\b|"
     r"mit\s+(?:dem\s+|der\s+|herrn\s+|frau\s+)?(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b[^.!?]{0,40}?\bverbunden\b",
     re.I,
@@ -119,6 +121,7 @@ _ARZT_SPRECHEN_RE = re.compile(
     r"mit\s+(?:dem\s+|der\s+|herrn\s+|frau\s+)?(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b"
     r"[^.!?]{0,40}?\b(?:sprechen|reden)|"
     r"\b(?:doktor|dr\.?)\s+[\wäöüß-]+\s+(?:selbst\s+|persönlich\s+|persoenlich\s+)?(?:sprechen|erreichen)|"
+    r"herrn?\s+(?:doktor|dr\.?)\s+[\wäöüß-]+\s+(?:sprechen|reden|erreichen)|"
     r"\b(?:doktor|dr\.?|prof\w*|arzt|ärztin|aerztin|zahnarzt|behandler(?:in)?)\b[^.!?]{0,40}?\ban(?:s|\s+den)\s+(?:telefon|apparat)",
     re.I,
 )
@@ -154,6 +157,24 @@ def erkannt(text: str) -> bool:
     if besuchsgrund.ist_schiene_abholen(t):
         return False
     return bool(_VERBINDEN_RE.search(t) or _MENSCH_RE.search(t) or _ARZT_SPRECHEN_RE.search(t))
+
+
+def _letzter_genannter_arzt(sit: dict) -> dict | None:
+    """Behandler aus früheren Anrufer-Sätzen — Live Schnorbus 08.09.:
+    „Herr Dr. Patrikis sprechen“ / „Dr. Patrikis“, danach nur noch
+    „Ja bitte verbinden“ ohne Namen. Ohne diesen Rückgriff fragt die
+    Maschine erneut und das LLM sagt „ich verbinde Sie“ ohne Transfer."""
+    tenant = sit.get("tenant") or {}
+    for m in reversed(sit.get("messages") or []):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        d = arztmod.deute(_s(m.get("content")), tenant)
+        if d and d.get("typ") == "genannt":
+            return {
+                "calendarId": _s(d.get("calendarId")),
+                "calendarName": _s(d.get("calendarName")),
+            }
+    return None
 
 
 def _arzt_merken(s: dict, ziel: dict) -> None:
@@ -203,8 +224,8 @@ def _ziel_finden(sit: dict, melde: Melde = None) -> dict | None:
     return None
 
 
-def _angebot_text(ziel: dict) -> str:
-    wer = arzt_sprechname(_s(ziel.get("calendarName"))) or "Ihrem Behandler"
+def _angebot_text(ziel: dict, tenant: dict | None = None) -> str:
+    wer = arzt_sprechname(_s(ziel.get("calendarName")), tenant) or "Ihrem Behandler"
     return f"Soll ich Sie zu {wer} weiterleiten?"
 
 
@@ -265,7 +286,10 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
         if melde:
             # Erst die Ansage, DANN der Jingle: beides ueber die Filler-Kette
             # (Client spielt strikt nacheinander, Abschied-Audio danach).
-            wer = arzt_sprechname(ziel_arzt["calendarName"])
+            wer = arzt_sprechname(
+                ziel_arzt["calendarName"],
+                sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+            )
             zu = f" zu {wer}" if wer else ""
             melde(f"sag:Ok, einen Moment bitte — ich stelle die Verbindung{zu} her.")
             melde(JINGLE_EVENT)
@@ -359,6 +383,13 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
             _arzt_merken(s, ziel)
             return zaluma_weiterleitung(sit, ziel, melde)
+        # „Ja bitte verbinden“ / „können Sie mich verbinden“ nach einem
+        # schon genannten Namen: nicht erneut fragen, durchstellen.
+        if erkannt(t):
+            alt = _ziel_finden(sit) or _letzter_genannter_arzt(sit)
+            if alt:
+                _arzt_merken(s, alt)
+                return zaluma_weiterleitung(sit, alt, melde)
         if gehirn.ist_nein(t) or (d and d.get("typ") in {"egal", "unbekannt"}):
             sit["weiterleiten"] = {}
             return {"text": "Kein Problem — dann helfe ich Ihnen einfach direkt weiter. Was kann ich für Sie tun?"}
@@ -418,7 +449,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         _arzt_merken(s, ziel)
         sit["weiterleiten"] = {"frage": "anbieten", "ziel": ziel}
         vorsatz = (WAHRHEIT + " ") if mensch else ""
-        return {"text": vorsatz + _angebot_text(ziel)}
+        return {"text": vorsatz + _angebot_text(ziel, sit.get("tenant"))}
     sit["weiterleiten"] = {"frage": "arzt"}
     if mensch:
         return {"text": (

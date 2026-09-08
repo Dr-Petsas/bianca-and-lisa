@@ -132,6 +132,13 @@ def _motive(pre: dict[str, Any]) -> list[dict[str, Any]]:
         if not mid or not name:
             continue
         eintrag: dict[str, Any] = {"id": mid, "name": name}
+        if _s(row.get("nameForPatient")):
+            eintrag["nameForPatient"] = _s(row.get("nameForPatient"))
+        if row.get("allowOnlineBooking") is not None:
+            eintrag["allowOnlineBooking"] = bool(row.get("allowOnlineBooking"))
+        cids = row.get("calendarIds")
+        if isinstance(cids, list) and cids:
+            eintrag["calendarIds"] = [str(x) for x in cids if str(x).strip()]
         try:
             if row.get("duration") is not None:
                 eintrag["duration"] = int(row["duration"])
@@ -261,6 +268,11 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
         t["calendars"] = cals
         if not _s(t.get("defaultCalendarId")) and cals[0].get("id"):
             t["defaultCalendarId"] = cals[0]["id"]
+    try:
+        from kern import kalender_db
+        kalender_db.in_tenant_mergen(t)
+    except Exception as e:
+        print(f"kalender-db merge {type(e).__name__}: {e}", flush=True)
     motive = _motive(pre)
     if motive:
         t["visitMotives"] = motive

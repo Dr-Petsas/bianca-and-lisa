@@ -510,3 +510,37 @@ def test_offen_erledigen_nimmt_anrufer_telefon():
     finally:
         ged.httpx.post = echt_post
         ged.threading.Thread = echt_thread
+
+
+def test_anruf_wann_sprechbar_relativ():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/Berlin")
+    jetzt = datetime(2026, 9, 8, 12, 0, tzinfo=tz)
+
+    def ms(y, m, d):
+        return datetime(y, m, d, 10, 0, tzinfo=tz).timestamp() * 1000
+
+    assert ged.anruf_wann_sprechbar(ms(2026, 9, 8), jetzt) == "heute"
+    assert ged.anruf_wann_sprechbar(ms(2026, 9, 7), jetzt) == "gestern"
+    assert ged.anruf_wann_sprechbar(ms(2026, 9, 6), jetzt) == "vorgestern"
+    assert ged.anruf_wann_sprechbar(ms(2026, 9, 4), jetzt).startswith("am ")
+    assert ged.anruf_wann_sprechbar(ms(2026, 8, 30), jetzt) == "letzte Woche"
+    assert ged.anruf_wann_sprechbar(ms(2026, 7, 1), jetzt) == "neulich"
+
+
+def test_letzter_anruf_aus_hits_nimmt_neuesten_anruf():
+    hits = [
+        {"id": "telefonki:bianca_call:alt", "channel": "bianca_call",
+         "ts": 1_000_000},
+        {"id": "telefonki:nadine_email:x", "channel": "nadine_email",
+         "ts": 9_000_000},
+        {"id": "telefonki:bianca_call:neu", "channel": "bianca_call",
+         "ts": 2_000_000},
+        {"id": "telefonki:bianca_call:jetzt", "channel": "bianca_call",
+         "ts": 3_000_000},
+    ]
+    d = ged._letzter_anruf_aus_hits(hits, nicht_id="jetzt")
+    assert d["id"] == "telefonki:bianca_call:neu"
+    assert d["kanal"] == "bianca_call"
+    assert d["wann"]

@@ -121,3 +121,38 @@ def test_pzr_im_kontext_nicht_bei_fuellung():
     s = {"modus": "buchen", "frage": "grund", "grund": "Füllung", "pzr": ""}
     assert gehirn.ist_pzr_preisfrage("Was kostet die Füllung?")
     assert not gehirn.pzr_im_kontext(s, "Was kostet die Füllung?")
+
+
+def test_preisfrage_auf_arzt_notiz_sagt_die_ki():
+    """Live Thaler Petsas 08.09.: Preis auf die Notiz-Frage — nie ‚Zahnarzt fragen‘."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "phase": "bestaetigen", "frage": "arzt_notiz",
+        "arztNotizFrage": "gefragt",
+        "grund": "professionelle Zahnreinigung",
+        "motivName": "PRO Professionelle Zahnreinigung",
+        "vorname": "Michael", "nachname": "Petsas",
+        "telefonOk": True, "telefon": "01776004600",
+        "slotIso": "2026-09-30T11:15:00+02:00",
+        "arzt": {"typ": "genannt", "calendarId": "cal-pzr",
+                 "calendarName": "Prophylaxe"},
+    })
+    sit["offered"] = [{"iso": s["slotIso"], "spoken": "Mittwoch um elf Uhr fünfzehn"}]
+    echt = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        r = flow.zug(
+            sit,
+            "Ja, was kostet die Zahnreinigung? Bitte vorher mit mir abklärend.",
+        )
+    finally:
+        flow.hintergrund.anstossen = echt
+    text = (r or {}).get("text") or ""
+    assert "einhundertzwanzig" in text
+    assert "ungefähr" in text
+    assert "Zahnärzte" in text and "Prophylaxehelferinnen" in text
+    assert "Krankenkasse" in text
+    assert "besprechen" not in text.lower()
+    assert s["arztNotizFrage"] == "nein"
+    assert s["frage"] == "pzr_kasse"

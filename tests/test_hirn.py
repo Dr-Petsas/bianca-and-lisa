@@ -372,6 +372,16 @@ def test_fallback_floskel_bucht_nie(monkeypatch):
     assert d["handlung"] == "KEINE"  # NIE Default-buchen
 
 
+def test_fallback_frueher_nach_buchung_ist_verschieben(monkeypatch):
+    """Nach gebucht: ‚früher / nach vorne‘ ohne Verb = AENDERN, nicht Talk."""
+    _llm_tot(monkeypatch)
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    gehirn.sammler(sit)["phase"] = "gebucht"
+    d = intent.erkennen(sit, "ein bisschen früher, bitte")
+    assert d["handlung"] == "AENDERN" and d.get("ersatz") is True
+
+
 def test_fallback_absage_im_angebot_ist_verfeinern(monkeypatch):
     _llm_tot(monkeypatch)
     sit = _sit()
@@ -420,6 +430,44 @@ def test_abgeben_fragt_name_dann_notiz(tmp_path, monkeypatch):
     assert (tmp_path / "praxis_notizen.jsonl").exists()
     a = [x for x in sit["hirn"]["anliegen"] if x["handlung"] == "ABGEBEN"][0]
     assert a["status"] == "erledigt"
+
+
+def test_abgeben_nimmt_diktierte_nummer_sofort(tmp_path, monkeypatch):
+    """Live Berger 08.09.: 0151 291 05931 dreimal gefragt, obwohl STT sauber."""
+    import bianca.verwalten as verwalten
+    monkeypatch.setattr(verwalten, "DATA_DIR", tmp_path)
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ABGEBEN", "SACHE", spiegel="Rezept"))
+    aus = flow.zug(sit, "Ich brauche ein Rezept.")
+    assert aus and "Name" in aus["text"]
+    s = gehirn.sammler(sit)
+    s["vorname"], s["nachname"] = "Franz-Xaver", "Berger"
+    z = flow.zug(sit, "0151 291 05931")
+    assert z and "notiert" in z["text"]
+    assert "Handynummer" not in z["text"]
+    assert "welche Nummer" not in z["text"].lower()
+    assert s["telefon"].startswith("0151")
+    assert s["telefonOk"] is True
+
+
+def test_abgeben_kennt_anrufer_fragt_nicht_name_nummer(tmp_path, monkeypatch):
+    """Bekannter Anrufer + Rezept: Notiz sofort, keine dritte Nummernfrage."""
+    import bianca.verwalten as verwalten
+    monkeypatch.setattr(verwalten, "DATA_DIR", tmp_path)
+    sit = _sit()
+    sit["anrufer"] = {
+        "vorname": "Franz-Xaver", "nachname": "Berger",
+        "telefon": "+4915129105931", "patientId": "pat-berger",
+    }
+    hirn.anwenden(sit, _deutung("ABGEBEN", "SACHE", spiegel="Rezept"))
+    z = flow.zug(sit, "Ich brauche ein Rezept.")
+    s = gehirn.sammler(sit)
+    assert z and "notiert" in z["text"]
+    assert "Ausstellen kann ich selbst nicht" in z["text"]
+    assert "Wie ist Ihr Name" not in (z.get("text") or "")
+    assert "Handynummer" not in (z.get("text") or "")
+    assert s["nachname"] == "Berger"
+    assert s["telefon"].startswith("0151")
 
 
 def test_rezept_abgeben_sagt_nicht_ausstellen(tmp_path, monkeypatch):

@@ -162,6 +162,43 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
     return found
 
 
+def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
+                      start_date: str = "", source: str = "") -> dict[str, Any]:
+    """Slots nacheinander in den gegebenen Zimmern — erster Treffer gewinnt.
+
+    Thaler: PZR Zimmer 3 dann 2, Notfall 1, Behandlung 4. Die Antwort
+    traegt ``calendar``, damit die Buchung denselben Raum trifft.
+    """
+    letzter: dict[str, Any] = {"ok": False, "slots": []}
+    for cal in raeume or []:
+        if not isinstance(cal, dict) or not _s(cal.get("id")):
+            continue
+        such = dict(ctx or {})
+        such["calendarId"] = cal["id"]
+        such["calendarName"] = _s(cal.get("name"))
+        found = find_slots(
+            tenant, such, start_date=start_date, egal=False, source=source)
+        if found.get("ok") and _iso_liste(found.get("slots") or []):
+            found["calendar"] = {
+                "id": cal["id"],
+                "name": _s(cal.get("name")),
+            }
+            return found
+        letzter = found
+    if letzter.get("ok") and not letzter.get("calendar"):
+        erster = next(
+            (c for c in (raeume or [])
+             if isinstance(c, dict) and _s(c.get("id"))),
+            None,
+        )
+        if erster:
+            letzter["calendar"] = {
+                "id": erster["id"],
+                "name": _s(erster.get("name")),
+            }
+    return letzter
+
+
 def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
                source: str = "") -> dict[str, Any]:
     body = {

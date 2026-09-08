@@ -66,7 +66,8 @@ _JOB_RE = re.compile(
     r"übermorgen|uebermorgen|\bmorgen\b|n[aä]chste\s+woche|"
     r"nummer\w*|handy\w*|telefon\w*|doktor|praxis|behandler|"
     r"buchstabier\w*|eintrag\w*|\bakte\b|besuchsgrund|"
-    r"zahnreinigung|prophylaxe|\bpzr\b",
+    r"zahnreinigung|prophylaxe|\bpzr\b|"
+    r"\bjetzt\b|\bsofort\b",
     re.I,
 )
 
@@ -91,13 +92,25 @@ _LOSLASS_RE = re.compile(
 # Kurze, klare Zuordnung — nie "nicht verstanden" (Ja/Nein, Hoeflichkeit,
 # Presence, Abschluss). W-MEDDENT 04.09.2026: STT-Schnipsel sollen nachfragen,
 # nicht plaudern — diese Liste ist die Ausnahme.
+# Live 08.09.: „Nein, danke.“ / „Vielen Dank!“ / „Danke, ciao!“ waren
+# zwei Tokens und fielen durch die Ein-Wort-Liste — Bianca sagte
+# „nicht verstanden“ statt sich zu verabschieden.
 _KURZ_OK_RE = re.compile(
     r"^\s*(?:"
-    r"ja|jaja|jap|jep|jo|joa|nein|nee|n[oö]e?|doch|klar|genau|richtig|stimmt|"
-    r"ok|okay|gut|passt|super|prima|danke|bitte|hallo|hi|hey|tsch[uü]ss|"
-    r"wiederh[oö]ren|bis\s+bald|bis\s+dann|moment|sekunde|augenblick|"
+    r"(?:ja|jaja|jap|jep|jo|joa|nein|nee|n[oö]e?|doch|klar|genau|richtig|stimmt|"
+    r"ok|okay|gut|passt|super|prima|perfekt|danke|bitte|hallo|hi|hey|"
+    r"tsch[uü]s{0,2}|"
+    r"(?:auf\s+)?wiederh[oö]ren(?:\s*[,.]?\s*\w+)?|"
+    r"bis\s+bald|bis\s+dann|moment|sekunde|augenblick|"
     r"entschuldigung|verzeihung|hm+|mhm+|aha|ach\s+so|alles\s+klar|"
-    r"in\s+ordnung|nat(?:ü|ue)rlich|gerne|gern"
+    r"in\s+ordnung|nat(?:ü|ue)rlich|sehr\s+gerne?|gerne|gern|"
+    r"jetzt|sofort|heute"
+    r")"
+    r"(?:\s*[,.]?\s*(?:danke|bitte|tsch[uü]s{0,2}|ciao|ihnen|schön|gleichfalls))*"
+    r"|"
+    r"vielen(?:\s+lieben)?\s+dank(?:e)?"
+    r"|danke(?:\s+(?:ihnen|schön|tsch[uü]s{0,2}|ciao|gleichfalls))+"
+    r"|tsch[uü]s{0,2}\s*,?\s*danke"
     r")(?:\s*[.,!?…]*\s*)*$",
     re.I,
 )

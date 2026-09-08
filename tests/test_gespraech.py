@@ -51,7 +51,11 @@ def test_stt_muell_wird_unklar_nicht_talk():
 
 
 def test_kurze_ok_woerter_sind_kein_unklar():
-    for satz in ["Ja.", "Nein!", "Danke", "Hallo", "Bis bald", "Okay"]:
+    for satz in ["Ja.", "Nein!", "Danke", "Hallo", "Bis bald", "Okay",
+                 "Auf Wiederhören", "Auf Wiederhören, Bianca", "Sehr gerne",
+                 "Jetzt", "Jetzt!", "Heute", "Sofort", "Perfekt!",
+                 "Nein, danke.", "Nein, danke", "Vielen Dank!", "Vielen Dank.",
+                 "Danke, ciao!", "Danke Ihnen", "Tschü, danke!"]:
         assert not gespraech.wirkt_unklar(satz), satz
         sit = _sit()
         r = gespraech.routen(sit, satz)

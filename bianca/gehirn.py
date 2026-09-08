@@ -60,6 +60,16 @@ _PZR_KEINE_RE = re.compile(
     r"(?:keine?|ohne|nicht)\s+(?:noch\s+)?(?:eine\s+|die\s+)?(?:professionelle\s+)?(?:zahnreinigung|prophylaxe|pzr)",
     re.I,
 )
+# Petsas 08.09. 10:33: „So eintragen bitte“ auf die PZR-Frage — kein
+# Satzanfang-Ja, deshalb blieb pzr=gefragt und die Notiz fiel aus.
+_PZR_ZUSAGE_RE = re.compile(
+    r"\b(?:so\s+)?eintragen\b|"
+    r"\bmit\s+(?:dazu|aufnehmen|buchen|eintragen)\b|"
+    r"\bmach(?:en)?\s+(?:das|es|den)\b|"
+    r"\bnimm(?:en)?\s+(?:sie|das|die|es)\s+mit\b|"
+    r"\bgerne\s+dazu\b",
+    re.I,
+)
 
 # W-BLEACHING (Chef 03.09.2026): Zahnaufhellung zur Zahnreinigung anbieten.
 # "Aufhellung/Bleaching" im Motiv- oder Anrufer-Wortlaut.
@@ -82,7 +92,8 @@ _BLEACH_UNSICHER_RE = re.compile(
 
 _JA_RE = re.compile(
     r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|yeah|yea|"
-    r"correct|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|gerne|okay|ok|"
+    r"correct|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|"
+    r"sehr\s+gerne?|gerne|okay|ok|"
     r"sicher|natürlich|natuerlich)\b",
     re.I,
 )
@@ -98,7 +109,8 @@ _NEIN_KURZ_RE = re.compile(
 # bewusst nur als Voll-Treffer: "Gut, aber ..." ist KEINE glatte Zustimmung.
 _JA_KURZ_RE = re.compile(
     r"^\s*(stark|super|perfekt|prima|top|klasse|wunderbar|bestens|schön|schoen|"
-    r"sehr\s+gut|gut|in\s+ordnung|einverstanden|von\s+mir\s+aus|meinetwegen|gebongt)\s*[.!…]*\s*$",
+    r"sehr\s+gerne?|sehr\s+gut|gut|in\s+ordnung|einverstanden|"
+    r"von\s+mir\s+aus|meinetwegen|gebongt)\s*[.!…]*\s*$",
     re.I,
 )
 # Zwischenfrage/Abschweifung des Anrufers ("Was kostet das?", "Wo parke ich?"):
@@ -177,6 +189,27 @@ _VERSCHOBEN_PASSIV_RE = re.compile(
 _VERSCHIEBEN_AKTIV_RE = re.compile(
     r"verschieben|umbuchen|umzubuchen|verlegen|umlegen|vorverlegen", re.I,
 )
+# Nach frischer Buchung: „ein bisschen früher / nach vorne“ ohne das
+# Verb „verlegen“ (Thaler Petsas 08.09.). Nacktes „später rufe ich an“
+# bleibt draussen — nur Richtung zum BESTEHENDEN Termin.
+_VERSCHIEB_RICHTUNG_RE = re.compile(
+    r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen",
+    re.I,
+)
+
+
+def ist_verschiebewunsch(text: str) -> bool:
+    """Aktiver Verschiebe-Wunsch, inkl. ‚früher‘ / ‚nach vorne‘."""
+    t = _s(text)
+    if not t:
+        return False
+    nur_passiv = (_VERSCHOBEN_PASSIV_RE.search(t)
+                  and not _VERSCHIEBEN_AKTIV_RE.search(t))
+    if nur_passiv:
+        return False
+    return bool(_VERSCHIEBEN_RE.search(t) or _VERSCHIEB_RICHTUNG_RE.search(t))
+
+
 # Meinungs-, Beschwerde- und Smalltalk-Saetze auf die Grund-Frage sind KEIN
 # Besuchsgrund (Batch 29.08.2026: "Zahngesundheit ist Luxus geworden, sage
 # ich Ihnen" wurde als Wortlaut-Grund verbucht und die Grund-Frage kam nie
@@ -675,6 +708,13 @@ def ist_ja(text: str) -> bool:
     return bool(_JA_RE.search(k) or _JA_KURZ_RE.match(k))
 
 
+def ist_pzr_zusage(text: str) -> bool:
+    """Ja auf die Mitbuch-Frage — auch 'So eintragen bitte' / 'nimm sie mit'."""
+    if ist_nein(text):
+        return False
+    return ist_ja(text) or bool(_PZR_ZUSAGE_RE.search(_ohne_anlauf(text)))
+
+
 def ist_nein(text: str) -> bool:
     k = _ohne_anlauf(text)
     if _NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k):
@@ -844,7 +884,7 @@ _WUNSCH_SOBALD_RE = re.compile(
     r"\bheute\s+noch\b|"
     r"\b(?:am\s+liebsten|lieber|gerne|am\s+besten)\s+gleich\b|"
     r"\bgleich\s+(?:heute|jetzt|noch)\b|"
-    r"(?:^|[.!?]\s+)gleich(?:\s*[.!?…]*)?$|"
+    r"(?:^|[.!?]\s+)(?:gleich|jetzt|heute)(?:\s*[.!?…]*)?$|"
     r"\bso\s+(?:fr(?:ü|ue)h|schnell|bald)\s+wie\s+m(?:ö|oe)glich\b",
     re.I,
 )
@@ -1238,10 +1278,20 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if s["frage"] == "arzt_check" and not (s.get("arzt") or {}).get("calendarId"):
         k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
         if ist_ja(t) and not ist_nein(t) and _s(k.get("calendarId")):
+            cid = _s(k.get("calendarId"))
+            cname = _s(k.get("calendarName"))
+            # Letzter Besuch in einem Zimmer/Prophylaxe: das ist kein
+            # Behandler. Neue Termine gehen erst zur Zahnaerztin, bis der
+            # Grund die Zimmer-Karte setzt (Thaler: PZR 3/2, Rest 4).
+            if kern_tenants.ist_funktionskalender(cname) or kern_tenants.zimmer_nr(cname):
+                d = kern_tenants.default_kalender(
+                    sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {})
+                if d and _s(d.get("id")):
+                    cid, cname = _s(d.get("id")), _s(d.get("name"))
             s["arzt"] = {
                 "typ": "letzter",
-                "calendarId": _s(k.get("calendarId")),
-                "calendarName": _s(k.get("calendarName")),
+                "calendarId": cid,
+                "calendarName": cname,
             }
             s["arztCheck"] = "ja"
             neu.add("arzt")
@@ -1267,6 +1317,16 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             else:
                 s["arzt"] = gedeutet
             neu.add("arzt")
+
+    # Thaler: "zur Prophylaxe" / "bei Frau Thaler" — kein Behandler-Roster.
+    from kern import zimmer_map as _zimmer_map
+    if (_zimmer_map.aktiv(tenant)
+            and not (s.get("arzt") or {}).get("calendarId")):
+        spur = _zimmer_map.spur_deute(t)
+        if spur and _zimmer_map.spur_anwenden(sit, spur):
+            neu.add("arzt")
+            if spur == "pzr":
+                neu.add("grund")
 
     # Für wen ist der Termin? (W-FUER-WEN: auch ohne "für" — "Mein Sohn
     # braucht einen Termin" — und pauschal "nicht für mich".)
@@ -1568,7 +1628,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["pzr"] = "ja"
             neu.add("pzr")
         elif s["frage"] == "pzr":
-            if ist_ja(t):
+            if ist_pzr_zusage(t):
                 s["pzr"] = "ja"
                 neu.add("pzr")
             elif ist_nein(t):
@@ -1621,6 +1681,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["geschlechtQuelle"] = "rate"
         s["geschlechtVon"] = s["vorname"]
 
+    kalender_zu_grund(sit)
+    _motiv_an_kalender(sit)
     return neu
 
 
@@ -1764,6 +1826,14 @@ ARZTWAHL_VARIANTEN: tuple[str, ...] = (
     "Haben Sie einen Wunsch-Behandler — oder soll ich einfach schauen, wo der nächste freie Termin ist?",
 )
 
+# Thaler (eine Behandlerin): keine Arztwahl, sondern Spur Frau Thaler / Prophylaxe.
+# Kern-Wörter prophylaxe|thaler in agent._FRAGE_KERN["arzt"].
+THALER_SPUR_VARIANTEN: tuple[str, ...] = (
+    "Möchten Sie einen Termin bei Frau Thaler oder zur Prophylaxe?",
+    "Soll der Termin bei Frau Thaler oder zur Prophylaxe?",
+    "Frau Thaler oder zur Prophylaxe — wo darf ich nachschauen?",
+)
+
 
 def arztwahl_frage(tenant: dict | None) -> str:
     """Behandler-Frage fuer Neupatienten MIT den Namen zur Auswahl.
@@ -1776,13 +1846,18 @@ def arztwahl_frage(tenant: dict | None) -> str:
     Standard-Behandler (arzt_default)."""
     namen: list[str] = []
     for c in kern_tenants.behandler_reihe(tenant or {}):
-        n = arzt_sprechname(_s((c or {}).get("name")))
+        n = arzt_sprechname(_s((c or {}).get("name")), tenant or {})
         if n and n not in namen:
             namen.append(n)
     if len(namen) < 2:
         return ARZTWAHL_VARIANTEN[0]
     liste = ", ".join(namen[:-1]) + " oder " + namen[-1]
     return f"Zu welchem unserer Behandler möchten Sie — {liste}?"
+
+
+def thaler_spur_frage(tenant: dict | None = None) -> str:
+    """Thaler: Termin bei Frau Thaler oder zur Prophylaxe — nie Behandlerwahl."""
+    return THALER_SPUR_VARIANTEN[0]
 
 
 def arzt_default(tenant: dict | None) -> dict | None:
@@ -1840,19 +1915,112 @@ def anrufer_anrede(sit: dict) -> str:
         return f"Herr {last}"
     if last and g in _FRAU:
         return f"Frau {last}"
+    vg = vornamen.geschlecht(first)
+    if last and vg == "m":
+        return f"Herr {last}"
+    if last and vg == "f":
+        return f"Frau {last}"
     return f"{first} {last}".strip() or last
 
 
-def anrufer_hallo(sit: dict) -> str:
-    """Schneller erster Block ohne Ziffern — endet auf „Ich bin die Neue!“
+def voriges_gespraech(sit: dict) -> dict:
+    """Vorheriges TELEFON-Gespraech — leer, wenn wir uns noch nie gesprochen haben.
 
-    Chef 08.09.2026 nachts: „ich bin die Neue!“ Pause „Bianca…“ — nie
-    „ich bin die neue Bianca“ in einem Atem. Bianca steht darum im
-    Folgesatz der Check-Frage, nicht hier. Keine Extra-Frage."""
+    Nicht die Kartei: ein Bestandskunde beim ersten Anruf bleibt unbekannt."""
+    v = sit.get("vorigesGespraech")
+    if not isinstance(v, dict):
+        return {}
+    if v.get("ts") or _s(v.get("wann")):
+        return v
+    return {}
+
+
+# Icebreaker-Varianten (Chef 08.09.2026): nicht jedes Mal derselbe Satz.
+# Index liegt an der Sitzung, damit Vorwaermen und Mund denselben Text haben.
+_HALLO_NR = 0
+HALLO_NEU = (
+    "Wir kennen uns noch nicht. Ich bin die Neue!",
+    "Schön, dass Sie anrufen — wir kennen uns noch nicht. Ich bin die Neue!",
+    "Am Telefon kennen wir uns noch nicht. Ich bin die Neue!",
+    "Wir haben uns am Telefon noch nie gesprochen. Ich bin die Neue!",
+)
+HALLO_NEU_WER = (
+    "Ah, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!",
+    "Ah, {wer} — wir kennen uns am Telefon noch nicht. Ich bin die Neue!",
+    "{wer}, schön dass Sie anrufen. Wir kennen uns noch nicht. Ich bin die Neue!",
+    "Wir kennen uns noch nicht, {wer}. Ich bin die Neue!",
+)
+HALLO_ANRUF = (
+    "Ah, {wer}, wie geht es Ihnen? Ich sehe, Sie hatten {wann} schon einmal angerufen.",
+    "Ah, {wer}, schön Sie wieder zu hören. Sie hatten {wann} schon einmal angerufen.",
+    "{wer} — schön, dass Sie nochmal da sind. Ich sehe, Sie hatten {wann} schon angerufen.",
+    "Ah, {wer}. Ich sehe, Sie hatten {wann} schon einmal in der Leitung.",
+)
+HALLO_ANRUF_OHNE = (
+    "Wie geht es Ihnen? Ich sehe, Sie hatten {wann} schon einmal angerufen.",
+    "Schön Sie wieder zu hören — Sie hatten {wann} schon einmal angerufen.",
+    "Schön, dass Sie nochmal anrufen. {wann} waren Sie schon in der Leitung.",
+    "Ich sehe, Sie hatten {wann} schon einmal angerufen.",
+)
+HALLO_BESUCH = (
+    "Ah, {wer}, wie geht es Ihnen? Ich sehe, Sie waren zuletzt bei {arzt} in Behandlung.",
+    "Ah, {wer}, schön Sie wieder zu hören. Zuletzt waren Sie bei {arzt} in Behandlung.",
+    "{wer}, wie geht's? Ich sehe, Ihr letzter Besuch war bei {arzt}.",
+    "Ah, {wer}. Ich sehe, Sie waren zuletzt bei {arzt}.",
+)
+HALLO_BESUCH_OHNE = (
+    "Wie geht es Ihnen? Ich sehe, Sie waren zuletzt bei {arzt} in Behandlung.",
+    "Schön Sie wieder zu hören — zuletzt waren Sie bei {arzt} in Behandlung.",
+    "Ich sehe, Sie waren zuletzt bei {arzt} in Behandlung.",
+    "Ihr letzter Besuch war bei {arzt} — schön, dass Sie wieder anrufen.",
+)
+
+
+def _hallo_wahl(sit: dict, formen: tuple[str, ...], **felder: str) -> str:
+    """Eine Form pro Anruf, über Anrufe hinweg weiterdrehen."""
+    global _HALLO_NR
+    i = sit.get("halloVariante")
+    if i is None:
+        i = _HALLO_NR
+        sit["halloVariante"] = i
+        _HALLO_NR += 1
+    form = formen[int(i) % len(formen)]
+    return form.format(**{k: v for k, v in felder.items() if v})
+
+
+def anrufer_hallo(sit: dict) -> str:
+    """Schneller erster Icebreaker ohne Ziffern.
+
+    Chef 08.09.2026: bekannt nur, wenn wir SCHON miteinander gesprochen
+    haben — nicht weil die Nummer in der Kartei steht.     Erstgespraech
+    bleibt „Ich bin die Neue!“. Der Name steht in der Begrüßung,
+    nicht nochmal vor der Selbst-Frage."""
     wer = anrufer_anrede(sit)
-    if not wer:
-        return "Wir kennen uns noch nicht. Ich bin die Neue!"
-    return f"Ah, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!"
+    vor = voriges_gespraech(sit)
+    if vor:
+        wann = _s(vor.get("wann"))
+        if not wann and vor.get("ts"):
+            from kern import gedaechtnis as _ged
+            wann = _ged.anruf_wann_sprechbar(vor.get("ts"))
+        k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+        arzt = arzt_sprechname(
+            _s(k.get("doctorName") or k.get("calendarName")),
+            sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+        )
+        if arzt and _s(k.get("letzterBesuch")):
+            if wer:
+                return _hallo_wahl(sit, HALLO_BESUCH, wer=wer, arzt=arzt)
+            return _hallo_wahl(sit, HALLO_BESUCH_OHNE, arzt=arzt)
+        if wann:
+            if wer:
+                return _hallo_wahl(sit, HALLO_ANRUF, wer=wer, wann=wann)
+            return _hallo_wahl(sit, HALLO_ANRUF_OHNE, wann=wann)
+        if wer:
+            return f"Ah, {wer}, wie geht es Ihnen?"
+        return "Wie geht es Ihnen?"
+    if wer:
+        return _hallo_wahl(sit, HALLO_NEU_WER, wer=wer)
+    return _hallo_wahl(sit, HALLO_NEU)
 
 
 def anrufer_hallo_merken(sit: dict) -> None:
@@ -1876,8 +2044,18 @@ def anrufer_hallo_jetzt(sit: dict, text: str = "") -> str:
         return ""
     if s["fuerWen"] or s["nachname"] or s["warSchonMal"] is False:
         return ""
-    if not anrufer_bekannt(sit):
-        return ""
+    if not anrufer_bekannt(sit) and not voriges_gespraech(sit):
+        # Lookup zur Nummer ist durch und leer: trotzdem vorstellen.
+        tel = "".join(
+            c for c in _s(
+                (sit.get("anrufer") or {}).get("telefon")
+                if isinstance(sit.get("anrufer"), dict) else ""
+            ) + _s(sit.get("callerPhone"))
+            if c.isdigit()
+        )
+        if sit.get("vorigesGespraech") is None or len(tel) < 7:
+            return ""
+        return anrufer_hallo(sit)
     if sit.get("hirnVerbinden"):
         return ""
     if text:
@@ -1918,14 +2096,15 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     für Sie selbst, richtig?" — deckt Identitaet UND Fuer-Wen in einem ab.
     Ein Nein heisst dann: Termin fuer jemand anderen (einsammeln)."""
     schluss = anrufer_check_schluss(selbst=selbst)
-    # Kurz halten (Chef 08.09.: kein Sermon). Vorab = Hallo bis „Neue!“
-    # Rest beginnt mit „Bianca.“ — eigene TTS-Naht = hoerbare Pause.
-    # Keine Ziffern, kein Namens-Readback: das Ja auf die eine Frage
-    # uebernimmt die Akte. Nummer nur, wenn sie Nein sagt.
+    # Kurz halten (Chef 08.09.: kein Sermon). Vorab = Hallo.
+    # Nie „Bianca.“ vor die Selbst-Frage hängen — das klang wie
+    # „Bianca, der Termin ist für Sie selbst“ (MedDent + Thaler, 08.09.).
     if sit.get("anruferHalloGesagt"):
-        return f"Bianca. {schluss}"
+        return schluss
     hallo = anrufer_hallo(sit)
-    return f"{hallo} Bianca. {schluss}"
+    if hallo:
+        return f"{hallo} {schluss}"
+    return schluss
 
 
 def anrufer_check_schluss(*, selbst: bool = False) -> str:
@@ -2139,8 +2318,21 @@ def anrufer_kartei_uebernehmen(sit: dict) -> None:
 def arzt_check_frage(sit: dict) -> str:
     """Bestaetigung des letzten Behandlers, sobald der Hintergrund ihn hat."""
     k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
-    name = arzt_sprechname(_s(k.get("doctorName") or k.get("calendarName")))
-    if not name or not _s(k.get("calendarId")):
+    if not _s(k.get("calendarId")):
+        return ""
+    roh = _s(k.get("calendarName") or k.get("doctorName"))
+    if kern_tenants.ist_funktionskalender(roh):
+        beim = kern_tenants.kalender_beim(roh)
+        if beim.startswith("der "):
+            return f"Sie waren zuletzt zur {beim[4:]}, richtig?"
+        if beim:
+            return f"Sie waren zuletzt bei {beim}, richtig?"
+        return "Sie waren zuletzt zur Prophylaxe, richtig?"
+    name = arzt_sprechname(
+        _s(k.get("doctorName") or k.get("calendarName")),
+        sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+    )
+    if not name:
         return ""
     return f"Sie waren zuletzt bei {name}, richtig?"
 
@@ -2260,9 +2452,8 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
         "War er oder sie schon einmal bei uns in der Praxis?",
         "Brauchen Sie einen Termin zur Zahnreinigung?",
-        "Wir kennen uns noch nicht. Ich bin die Neue!",
+        *HALLO_NEU,
         "Ich bin die Neue!",
-        "Bianca.",
         "Schön!",
         "Stimmt das so?",
         "Die professionelle Zahnreinigung kostet bei uns ungefähr einhundertzwanzig Euro. "
@@ -2295,6 +2486,10 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
     # dem Tenant (nur mit Tenant baubar), die Varianten sind statisch.
     if tenant:
         out.append(arztwahl_frage(tenant))
+        from kern import zimmer_map
+        if zimmer_map.aktiv(tenant):
+            out.append(thaler_spur_frage(tenant))
+            out.extend(THALER_SPUR_VARIANTEN)
     out.extend(ARZTWAHL_VARIANTEN)
     for varianten in FRAGE_VARIANTEN.values():
         for v in varianten:
@@ -2320,6 +2515,11 @@ def anrede(s: dict, patient: dict | None = None, *, beugen: bool = False) -> str
     if g in _HERR:
         return f"{'Herrn' if beugen else 'Herr'} {last}"
     if g in _FRAU:
+        return f"Frau {last}"
+    vg = vornamen.geschlecht(_s((patient or {}).get("firstName") or s.get("vorname")))
+    if vg == "m":
+        return f"{'Herrn' if beugen else 'Herr'} {last}"
+    if vg == "f":
         return f"Frau {last}"
     return f"{_s(s.get('vorname'))} {last}".strip()
 
@@ -2414,6 +2614,9 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
 
     if s["warSchonMal"]:
         if not s["arzt"]:
+            from kern import zimmer_map
+            if zimmer_map.aktiv(sit.get("tenant") or {}):
+                return "arzt", thaler_spur_frage(sit.get("tenant"))
             if s.get("arztCheck") != "nein":
                 rq = arzt_check_frage(sit)
                 if rq:
@@ -2453,8 +2656,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     # Anliegen und Zeit, dann sauber aufnehmen. Bei nur EINEM Kalender
     # gibt es nichts zu waehlen — dann bleibt der Default richtig.
     if not s["arzt"]:
-        cals = [c for c in (sit.get("tenant") or {}).get("calendars") or []
-                if _s((c or {}).get("id"))]
+        from kern import zimmer_map
+        if zimmer_map.aktiv(sit.get("tenant") or {}):
+            return "arzt", thaler_spur_frage(sit.get("tenant"))
+        cals = kern_tenants.behandler_kalender(sit.get("tenant") or {})
         if len(cals) >= 2:
             return "arzt", arztwahl_frage(sit.get("tenant"))
     if not s["grund"]:
@@ -2910,7 +3115,104 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
             vm = aktuell
     if not vm and s["grund"]:
         vm = besuchsgrund.fallback_motiv(tenant, katalog=kat, calendar_id=calendar_id)
-    return vm
+    return _besprechung_oder(sit, vm, calendar_id)
+
+
+def kalender_zu_grund(sit: dict) -> None:
+    """Thaler: Grund -> Zimmer. Sonst PZR auf Funktionskalender.
+
+    Chef 08.09.2026 (Thaler): PZR Zimmer 3 dann 2, Notfall Zimmer 1,
+    restliche Behandlung bei Thaler in Zimmer 4. MedDent ohne Zimmer-Karte
+    bleibt unverändert — PZR bleibt beim Arzt.
+    """
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    from kern import zimmer_map
+    if zimmer_map.aktiv(tenant):
+        zimmer_map.an_arzt(sit)
+        return
+    funk = kern_tenants.funktionskalender(tenant)
+    if not funk:
+        return
+    s = sammler(sit)
+    a = dict(s.get("arzt") or {})
+    pzr = ist_pzr_grund(s)
+    funk_id = _s(funk.get("id"))
+    if pzr:
+        if a.get("calendarId") != funk_id:
+            s["arzt"] = {
+                "typ": a.get("typ") or "funktion",
+                "calendarId": funk_id,
+                "calendarName": _s(funk.get("name")),
+            }
+            _vorrat_leeren(sit)
+        return
+    if a.get("calendarId") == funk_id:
+        d = kern_tenants.default_kalender(tenant)
+        if d and _s(d.get("id")):
+            s["arzt"] = {
+                "typ": a.get("typ") if a.get("typ") not in {"", "funktion"} else "letzter",
+                "calendarId": _s(d.get("id")),
+                "calendarName": _s(d.get("name")),
+            }
+            _vorrat_leeren(sit)
+        return
+    if not a.get("calendarId") and (s.get("grund") or s.get("motivId")):
+        personen = kern_tenants.behandler_kalender(tenant)
+        if len(personen) == 1 and _s(personen[0].get("id")):
+            s["arzt"] = {
+                "typ": a.get("typ") or "default",
+                "calendarId": _s(personen[0].get("id")),
+                "calendarName": _s(personen[0].get("name")),
+            }
+
+
+def _vorrat_leeren(sit: dict) -> None:
+    sit["slotVorrat"] = []
+    sit["vorratKey"] = ""
+    sit["vorratGemerkt"] = False
+    sit.pop("vorratDispatch", None)
+    sit.pop("vorratFuer", None)
+    sit.pop("angebotKalender", None)
+
+
+def _besprechung_oder(sit: dict, vm: dict | None, calendar_id: str) -> dict | None:
+    """Praxis mit Funktionskalender: beim Zahnarzt nur Besprechung, außer Schmerz."""
+    if not vm:
+        return vm
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    from kern import zimmer_map
+    # Thaler bucht Füllung/Kontrolle echt in Zimmer 4 — nicht auf
+    # Besprechung umbiegen (das war der Workaround ohne Raumkalender).
+    if zimmer_map.aktiv(tenant):
+        return vm
+    if not kern_tenants.hat_funktionskalender(tenant):
+        return vm
+    if kern_tenants.ist_pzr_motiv(vm):
+        return vm
+    s = sammler(sit)
+    if _ist_akut(s) and kern_tenants.ist_akut_motiv(vm):
+        return vm
+    if kern_tenants.ist_besprechung_motiv(vm):
+        return vm
+    safe = kern_tenants.besprechung_motiv(motive.katalog(sit), calendar_id)
+    return safe or vm
+
+
+def _motiv_an_kalender(sit: dict) -> None:
+    """Nach Kalender-Routing das Motiv nochmal praxisgerecht setzen."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if not kern_tenants.hat_funktionskalender(tenant):
+        return
+    s = sammler(sit)
+    if not (s.get("grund") or s.get("motivId")):
+        return
+    cid = _s((s.get("arzt") or {}).get("calendarId"))
+    vm = motiv_fuer_kalender(sit, cid)
+    if not vm:
+        return
+    if _s(vm.get("id")) != _s(s.get("motivId")):
+        s["motivId"] = _s(vm.get("id"))
+        s["motivName"] = _s(vm.get("name"))
 
 
 def start_datum(s: dict) -> str:

@@ -1283,7 +1283,8 @@ def test_abschweifung_zaehlt_nicht_als_leerlauf():
 def test_kurz_zustimmung_stark_super():
     """'Stark.' / 'Super!' als ganze Äußerung ist ein Ja — 'Gut, aber ...'
     nicht (das ist eine Rückfrage und bleibt beim LLM)."""
-    for satz in ["Stark.", "Super!", "Perfekt", "Äh, sehr gut.", "In Ordnung."]:
+    for satz in ["Stark.", "Super!", "Perfekt", "Äh, sehr gut.", "In Ordnung.",
+                 "Sehr gerne", "Sehr gern.", "Sehr gerne!"]:
         assert gehirn.ist_ja(satz), satz
     assert not gehirn.ist_ja("Gut, aber was kostet das?")
     assert gehirn.ist_zwischenfrage("Gut, aber was kostet das?")
@@ -1700,6 +1701,10 @@ def test_arzt_sprechname_ohne_vornamen():
     assert arzt_sprechname("Prof. Dr. Anna Meier") == "Professor Meier"
     assert arzt_sprechname("Dr. Petsas") == "Doktor Petsas"
     assert arzt_sprechname("Patrikis") == "Patrikis"
+    assert arzt_sprechname("Petsas", laden("meddent")) == "Doktor Petsas"
+    assert arzt_sprechname("Patrikis", laden("meddent")) == "Doktor Patrikis"
+    assert arzt_sprechname("Eva Thaler") == "Frau Thaler"
+    assert arzt_sprechname("Dr. Eva Thaler") == "Doktor Thaler"
     assert arzt_sprechname("") == ""
 
 
@@ -2738,7 +2743,7 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
     })
     assert "Frau Berger" in hallo
     assert hallo.endswith("Ich bin die Neue!")
-    assert "Bianca" not in hallo  # Pause: Bianca kommt im Folgesatz
+    assert "Bianca" not in hallo
     assert "?" not in hallo
     assert not any(c.isdigit() for c in hallo)
     from kern import sprech, tts
@@ -2749,9 +2754,8 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
     assert not tts.ziffern_satz(saetze[0])
     assert not any(tts.ziffern_satz(s) for s in saetze)
     assert "Ich bin die Neue!" in saetze
-    assert "Bianca." in saetze
-    i_neu = saetze.index("Ich bin die Neue!")
-    assert saetze[i_neu + 1] == "Bianca."
+    assert "Bianca." not in saetze
+    assert saetze[-1] == "Der Termin ist für Sie selbst, richtig?"
     assert gehirn.ist_anrufer_wohl("Gut.")
     assert gehirn.ist_anrufer_wohl("Danke, gut.")
     assert not gehirn.ist_anrufer_wohl("Ja, genau.")
@@ -2769,6 +2773,7 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
         assert s["frage"] == "anrufer_check"
         assert z and "selbst" in z["text"]
         assert "Ich bin die Neue!" not in z["text"]
+        assert "Bianca" not in z["text"]
         z2 = flow.zug(sit, "Ja, genau.")
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
         assert z2 and "Danke, Julia Berger" in z2["text"]
@@ -2776,11 +2781,115 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
         flow.hintergrund.anstossen = echt_anstossen
 
 
+def test_anrufer_hallo_nur_nach_gespraech_bekannt_nicht_wegen_kartei():
+    """Chef 08.09.2026: nicht-Bestandskunde nicht als bekannt gruessen.
+    Weiche ist das vorherige TELEFON-Gespraech, nicht die Patientenakte."""
+    sit = _sit_mit_anrufer()
+    hallo = gehirn.anrufer_hallo(sit)
+    assert "Ich bin die Neue!" in hallo
+    assert "angerufen" not in hallo
+    assert "Behandlung" not in hallo
+
+    sit["vorigesGespraech"] = {"ts": 1, "wann": "vorgestern"}
+    hallo2 = gehirn.anrufer_hallo(sit)
+    assert "Ich bin die Neue!" not in hallo2
+    assert "vorgestern" in hallo2
+    assert "angerufen" in hallo2 or "Leitung" in hallo2
+    assert "Behandlung" not in hallo2
+    frage = gehirn.anrufer_check_frage(sit, selbst=True)
+    assert "Bianca" not in frage
+    assert frage.startswith(hallo2)
+
+    sit["anruferKartei"] = {
+        "letzterBesuch": "2026-03-01T09:00:00",
+        "calendarName": "Dr. Petsas",
+        "doctorName": "Petsas",
+    }
+    hallo3 = gehirn.anrufer_hallo(sit)
+    assert "Ich bin die Neue!" not in hallo3
+    assert "Doktor Petsas" in hallo3
+    assert "Bianca" not in gehirn.anrufer_check_frage(sit, selbst=True)
+
+
+def test_anrufer_hallo_wiederanrufer_ohne_kartei():
+    """Wer schon mal angerufen hat, aber nicht in der Akte steht: Gespräch
+    erwähnen — nie so tun, als kenne man den Patienten aus der Behandlung."""
+    sit = _sit()
+    sit["callerPhone"] = "+4915253904756"
+    sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+    hallo = gehirn.anrufer_hallo(sit)
+    assert "Ich bin die Neue!" not in hallo
+    assert "gestern" in hallo
+    assert "angerufen" in hallo or "Leitung" in hallo
+    assert "Behandlung" not in hallo
+    assert gehirn.anrufer_hallo_jetzt(sit, "Ich hätte gern einen Termin.") == hallo
+
+
+def test_anrufer_hallo_icebreaker_variiert():
+    """Dieselben Fakten, andere Sätze — Icebreaker dürfen nicht kleben."""
+    sit = _sit_mit_anrufer()
+    sit["vorigesGespraech"] = {"ts": 1, "wann": "vorgestern"}
+    texte = []
+    for i in range(len(gehirn.HALLO_ANRUF)):
+        s = dict(sit)
+        s["halloVariante"] = i
+        t = gehirn.anrufer_hallo(s)
+        assert "Frau Berger" in t and "vorgestern" in t
+        assert "Ich bin die Neue!" not in t
+        texte.append(t)
+    assert len(set(texte)) == len(gehirn.HALLO_ANRUF)
+
+    neu = []
+    for i in range(len(gehirn.HALLO_NEU_WER)):
+        s = _sit_mit_anrufer()
+        s["halloVariante"] = i
+        t = gehirn.anrufer_hallo(s)
+        assert t.endswith("Ich bin die Neue!")
+        assert "Frau Berger" in t and "?" not in t
+        neu.append(t)
+    assert len(set(neu)) == len(gehirn.HALLO_NEU_WER)
+
+    besuch = []
+    for i in range(len(gehirn.HALLO_BESUCH)):
+        s = _sit_mit_anrufer()
+        s["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+        s["anruferKartei"] = {
+            "letzterBesuch": "2026-03-01T09:00:00",
+            "calendarName": "Dr. Petsas", "doctorName": "Petsas",
+        }
+        s["halloVariante"] = i
+        t = gehirn.anrufer_hallo(s)
+        assert "Doktor Petsas" in t and "Ich bin die Neue!" not in t
+        besuch.append(t)
+    assert len(set(besuch)) == len(gehirn.HALLO_BESUCH)
+
+
+def test_anrufer_check_nach_hallo_ohne_eigenen_namen():
+    """Wiederanrufer: nach dem Hallo kein zweites 'Bianca.'"""
+    sit = _sit_mit_anrufer()
+    sit["anruferHalloGesagt"] = True
+    sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+    frage = gehirn.anrufer_check_frage(sit, selbst=True)
+    assert frage == "Der Termin ist für Sie selbst, richtig?"
+    assert "Bianca" not in frage
+
+
+def test_anrufer_check_erstgespraech_kein_bianca_vorspann():
+    """Nach dem Hallo nur die Selbst-Frage — nie 'Bianca, der Termin…'."""
+    sit = _sit_mit_anrufer()
+    sit["anruferHalloGesagt"] = True
+    frage = gehirn.anrufer_check_frage(sit, selbst=True)
+    assert frage == "Der Termin ist für Sie selbst, richtig?"
+    assert "Bianca" not in frage
+    sit["vorigesGespraech"] = {}
+    assert gehirn.anrufer_check_frage(sit, selbst=True) == frage
+
+
 def test_anrufer_hallo_geht_als_vorab_nicht_seriell():
     """Hallo startet SOFORT als Vorab — nicht erst nach der Nummer-TTS.
 
     Der volle Antworttext behält den Hallo als Präfix, damit json_antwort
-    nur den Rest („Bianca.“ + Frage) vertont — die Naht ist die Pause
+    nur die Selbst-Frage vertont — die Naht ist die Pause
     nach „Ich bin die Neue!“."""
     from bianca import agent as bianca_agent
     from kern import sprech
@@ -2798,7 +2907,7 @@ def test_anrufer_hallo_geht_als_vorab_nicht_seriell():
     try:
         aus = bianca_agent.user_turn(
             sit, "Guten Tag, ich hätte gern einen Termin.", vorab=hits.append)
-        assert hits, "Hallo muss parallel raus, bevor Bianca. folgt"
+        assert hits, "Hallo muss parallel raus, bevor die Selbst-Frage folgt"
         assert hits[0].rstrip().endswith("Ich bin die Neue!")
         assert "Bianca" not in hits[0]
         assert not any(c.isdigit() for c in hits[0])
@@ -2946,7 +3055,9 @@ def test_auskunft_upgrade_nachname_zu_anrufer_check():
             "telefon": "+4915253904756",
         }
         z2 = flow.zug(sit, "Äh, Moment.")
-        assert z2 and "Julia Berger" in z2["text"]
+        assert z2 and "Frau Berger" in z2["text"]
+        assert "Stimmt das so?" in z2["text"]
+        assert "Bianca" not in z2["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
         verwalten.hintergrund.anstossen = echt_anstossen

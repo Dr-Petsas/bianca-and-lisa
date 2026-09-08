@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from kern.config import CF_BASE
-from kern.tenants import kalender_von
+from kern.tenants import ist_funktionskalender, kalender_von
 
 _EGAL_RE = re.compile(
     r"\b(egal|gleich|wurst|hauptsache|keine\s+(präferenz|praeferenz|vorliebe)|"
@@ -48,6 +48,14 @@ def _nachname(cal_name: str) -> str:
     return toks[-1] if toks else ""
 
 
+def _vornamen(cal_name: str) -> list[str]:
+    toks = [
+        t for t in _s(cal_name).lower().replace(".", " ").split()
+        if t not in {"dr", "med", "prof", "frau", "herr", "herrn"}
+    ]
+    return toks[:-1] if len(toks) >= 2 else []
+
+
 def _klang(wort: str) -> str:
     """Grobe deutsche Klang-Faltung für Nachnamen: STT-Hörfehler wie
     "Petzers"/"Petsas" oder "Patrikis"/"Patrickis" sollen zusammenfallen."""
@@ -66,7 +74,20 @@ def _klang(wort: str) -> str:
     return "".join(out)
 
 
-_DOKTOR_RE = re.compile(r"\b(dr\.?|doktor|arzt|ärztin|aerztin|behandler(?:in)?|prof\.?|professor)\b", re.I)
+_DOKTOR_RE = re.compile(
+    r"\b(dr\.?|doktor|arzt|ärztin|aerztin|behandler(?:in)?|prof\.?|professor|"
+    r"frau|herrn?)\b",
+    re.I,
+)
+# Live Thaler 08.09.2026: STT „Eva Kahler“ / „Frau Parler“ für Thaler —
+# Klang-Score reicht, aber ohne Doktor-Wort galt der Treffer nicht.
+_STT_NACHNAME = {
+    "kahler": "thaler",
+    "kaler": "thaler",
+    "parler": "thaler",
+    "tahler": "thaler",
+    "taler": "thaler",
+}
 
 
 def deute(text: str, tenant: dict) -> dict[str, Any] | None:
@@ -80,7 +101,13 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
     # Korrektur-Sätze ("nein, nicht Doktor Patrikis — ich wollte zu Doktor
     # Petsas", Chef 27.08.2026): der VERNEINTE Name fliegt vor dem Abgleich
     # raus, sonst gewinnt er den Gleichstand und Bianca wechselt nicht.
-    nachnamen = [n for n in (_nachname(c.get("name")) for c in tenant.get("calendars") or []) if n]
+    nachnamen = [
+        n for n in (
+            _nachname(c.get("name"))
+            for c in tenant.get("calendars") or []
+            if not ist_funktionskalender(c)
+        ) if n
+    ]
     if nachnamen:
         t = re.sub(
             r"\bnicht\s+(?:zu[mr]?\s+|bei\s+)?(?:dr\.?\s*|doktor\s+|prof\.?\s*|professor\s+|herrn?\s+|frau\s+)?(?:"
@@ -92,25 +119,36 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
     tokens = [w for w in re.sub(r"[^\wäöüß]+", " ", t).split() if w not in _STOP and len(w) >= 3]
     kandidaten: list[tuple[dict, float, float, int]] = []  # (cal, roh, score, position)
     for cal in tenant.get("calendars") or []:
+        if ist_funktionskalender(cal):
+            continue
         ziel = _nachname(cal.get("name"))
         if not ziel:
             continue
         roh_b, score_b, pos_b = 0.0, 0.0, -1
+        mit_vorname = bool(set(_vornamen(cal.get("name"))) & set(tokens))
         for pos, tok in enumerate(tokens):
             roh = SequenceMatcher(None, tok, ziel).ratio()
             # Klang-Faltung: "Petzers" ~ "Petsas" liegt roh bei 0,62 — nach
             # Faltung darüber. Gleicher Wortanfang gibt einen Namens-Bonus.
             r = max(roh, SequenceMatcher(None, _klang(tok), _klang(ziel)).ratio())
+            alias = _STT_NACHNAME.get(tok) or _STT_NACHNAME.get(_klang(tok))
+            if alias and (alias == ziel or _klang(alias) == _klang(ziel)):
+                roh, r = 1.0, 1.0
             if len(tok) >= 4 and tok[:3] == ziel[:3]:
                 r += 0.1
             if r > score_b:
                 roh_b, score_b, pos_b = roh, r, pos
         if score_b > 0:
-            kandidaten.append((cal, roh_b, score_b, pos_b))
+            # Vorname + ähnlicher Nachname zählt wie Doktor-Kontext
+            # („Eva Kahler“ ohne Frau/Doktor).
+            kandidaten.append((cal, roh_b, score_b, pos_b, mit_vorname))
     # Sicherer Treffer: roh eindeutig. Toleranter Treffer (Klang/Anfang) nur,
     # wenn der Satz erkennbar von einem Arzt spricht — sonst würde ein
     # Patienten-Vorname wie "Peter" auf "Petsas" springen.
-    tragfaehig = [k for k in kandidaten if k[1] >= 0.72 or (k[2] >= 0.72 and doktor_kontext)]
+    tragfaehig = [
+        k for k in kandidaten
+        if k[1] >= 0.72 or (k[2] >= 0.72 and (doktor_kontext or k[4]))
+    ]
     if tragfaehig:
         korrektur = bool(re.search(r"\bnicht\b|\bsondern\b|\bstatt\b|\blieber\b|vertan|meinte|falsch|verwechselt", t))
         if korrektur and len(tragfaehig) > 1:

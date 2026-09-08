@@ -73,6 +73,30 @@ def test_live_saetze_31_08_imperativ_und_verhoerte_namen():
         assert (s["arzt"] or {}).get("calendarName") == "Dr. Petsas", satz
 
 
+def test_herr_dr_patrikis_sprechen_ohne_mit_verbindet():
+    """Live Schnorbus 08.09.: ‚Ich würde gerne Herr Dr. Patrikis sprechen.‘
+    ohne ‚mit‘ — muss direkt durchstellen, nicht nach dem Arzt fragen."""
+    sit = _sit()
+    events: list[str] = []
+    z = flow.zug(sit, "Ich würde gerne Herr Dr. Patrikis sprechen.", events.append)
+    assert z and z.get("transfer", {}).get("nummer") == "+4921130293034"
+    assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
+
+
+def test_ja_bitte_verbinden_nach_namensnennung():
+    """Live Schnorbus: Name fiel, Maschine fragte nochmal, dann
+    ‚Ja bitte verbinden‘ — LLM sagte ‚ich verbinde Sie‘ ohne Transfer."""
+    sit = _sit()
+    sit["messages"].append({"role": "user", "content": "Herr Dr. Patrikis"})
+    sit["weiterleiten"] = {"frage": "arzt", "leer": 1}
+    events: list[str] = []
+    z = weiterleiten.zug(sit, "Ja bitte verbinden.", events.append)
+    assert z and z.get("transfer", {}).get("nummer") == "+4921130293034"
+    assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
+    assert weiterleiten.erkannt("Ja bitte verbinden.")
+    assert weiterleiten.erkannt("Ja, können Sie mich verbinden?")
+
+
 def test_kosten_verbunden_ist_kein_weiterleitungswunsch():
     """Preis-/Sachfragen mit 'verbunden' bleiben beim LLM (keine Doktor-Wörter,
     kein 'ich möchte verbunden')."""
@@ -122,7 +146,7 @@ def test_namentlich_genannt_verbindet_direkt_ohne_personalfrei():
         "nummer": "+4921130293034", "name": "Dr. Patrikis",
     }
     assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
-    assert "personalfrei" not in (z.get("text") or "") and "KI-geführt" not in (z.get("text") or "")
+    assert weiterleiten.WAHRHEIT not in (z.get("text") or "")
     assert not (sit.get("weiterleiten") or {})  # Anliegen bedient
     s = gehirn.sammler(sit)
     assert (s["arzt"] or {}).get("calendarName") == "Dr. Patrikis"
@@ -146,7 +170,7 @@ def test_verbunden_ohne_namen_fragt_nach_arzt():
     Mitarbeiter-Wort -> nur die Arzt-Frage, danach verbindet der Name."""
     sit = _sit()
     z = flow.zug(sit, "Ich möchte verbunden.")
-    assert z and "personalfrei" not in z["text"]
+    assert z and weiterleiten.WAHRHEIT not in z["text"]
     assert "zu welchem unserer" in z["text"].lower()
     events: list[str] = []
     z2 = flow.zug(sit, "Mit Doktor Petsas.", events.append)
@@ -178,7 +202,7 @@ def test_arzt_ans_telefon_verbindet():
 def test_chef_ans_telefon_bekommt_wahrheit_und_angebot():
     sit = _sit()
     z = flow.zug(sit, "Holen Sie mir mal den Chef ans Telefon.")
-    assert z and "personalfrei" in z["text"] and "KI-geführt" in z["text"]
+    assert z and weiterleiten.WAHRHEIT in z["text"]
 
 
 def test_llm_rueckfrage_name_allein_verbindet():
@@ -209,7 +233,7 @@ def test_verbinden_lassen_mit_namen_verbindet_direkt():
     z = flow.zug(sit, "Ich möchte mich direkt zu Doktor Petsas verbinden lassen.", events.append)
     assert z and z.get("transfer", {}).get("nummer") == "+4921130293035"
     assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
-    assert "personalfrei" not in (z.get("text") or "")
+    assert weiterleiten.WAHRHEIT not in (z.get("text") or "")
     s = gehirn.sammler(sit)
     assert (s["arzt"] or {}).get("calendarId") == "zex5bmv5jfIHWVW6zHbg"
 
@@ -223,7 +247,7 @@ def test_mitarbeiter_mit_bekanntem_arzt_wahrheit_und_angebot():
     z = flow.zug(sit, "Verbinden Sie mich bitte mit einem Mitarbeiter.")
     assert z, "Weiterleitungs-Zweig muss deterministisch antworten"
     t = z["text"]
-    assert "personalfrei" in t and "KI-geführt" in t
+    assert weiterleiten.WAHRHEIT in t
     assert "zu Doktor Petsas" in t and "weiterleiten" in t
     assert "bei wem" not in t.lower()  # NICHT nach dem Behandler fragen
 
@@ -233,7 +257,7 @@ def test_buchhaltung_bekommt_wahrheit_und_arztfrage():
     bekannten Arzt: Wahrheit + Angebot, zu einem Arzt zu verbinden."""
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit der Buchhaltung sprechen?")
-    assert z and "personalfrei" in z["text"] and "KI-geführt" in z["text"]
+    assert z and weiterleiten.WAHRHEIT in z["text"]
     assert "Ärzte" in z["text"] and "durchstellen" in z["text"]
     # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.
     events: list[str] = []
@@ -256,7 +280,7 @@ def test_akte_liefert_letzten_behandler():
         s["patientId"] = "pat-1"
         z = flow.zug(sit, "Gibt es da kein Personal?")
         assert z and "zu Doktor Nikolaou" in z["text"]
-        assert "personalfrei" in z["text"]  # Mitarbeiter-Frage -> Wahrheit
+        assert weiterleiten.WAHRHEIT in z["text"]  # Mitarbeiter-Frage -> Wahrheit
         assert "bei wem" not in z["text"].lower()
     finally:
         weiterleiten.arztmod.letzter_behandler = echt
@@ -269,7 +293,7 @@ def test_weiterleiten_ohne_namen_fragt_nur_nach_arzt():
     KEINE Personalfrei-Ansage, nur die Arzt-Frage."""
     sit = _sit()
     z = flow.zug(sit, "Können Sie mich bitte weiterleiten?")
-    assert z and "personalfrei" not in z["text"]
+    assert z and weiterleiten.WAHRHEIT not in z["text"]
     assert "zu welchem unserer" in z["text"].lower() and "Ärzte" in z["text"]
     # Antwort mit Behandler-Namen (Fuzzy ueber arzt.deute) -> direkt verbinden.
     events: list[str] = []
@@ -308,7 +332,7 @@ def test_infofrage_beim_angebot_verbindet_nicht():
 def test_mensch_ohne_arzt_fragt_nach_arzt():
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit einem Menschen sprechen?")
-    assert z and "personalfrei" in z["text"]
+    assert z and weiterleiten.WAHRHEIT in z["text"]
     assert "Zu wem darf ich Sie durchstellen?" in z["text"]
 
 
@@ -322,7 +346,7 @@ def test_ja_mit_einrichtung_echte_weiterleitung():
     z1 = flow.zug(sit, "Stellen Sie mich durch.", events.append)
     assert z1 and "weiterleiten" in z1["text"]
     # Kein Mitarbeiter-Wort im Satz -> keine Personalfrei-Ansage.
-    assert "personalfrei" not in z1["text"]
+    assert weiterleiten.WAHRHEIT not in z1["text"]
     z2 = flow.zug(sit, "Ja, bitte.", events.append)
     assert z2 and z2.get("transfer", {}).get("nummer") == "+4921130293035"
     assert z2.get("hangup") and weiterleiten.JINGLE_EVENT in events
@@ -552,4 +576,5 @@ def test_ansage_ueberlebt_sprech_filter():
     assert "Verbindung" in raus and "möglich" in raus
     assert "Kirri" not in raus and "Lappen" not in raus
     wahr = sprech.sanitize(weiterleiten.WAHRHEIT)
-    assert "personalfrei" in wahr and "KI-geführt" in wahr
+    assert "Empfang" in wahr and "niemand" in wahr
+    assert "personalfrei" not in wahr and "KI-geführt" not in wahr

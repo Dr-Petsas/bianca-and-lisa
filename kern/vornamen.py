@@ -27,7 +27,7 @@ hendrik henning henrik herbert hermann holger horst hubert hugo ingo jakob
 jan jannik jano jason jens joachim jochen johann johannes jonas jonathan
 joerg jörg josef joseph joshua juergen jürgen julian julius justus kai karl
 karsten kaspar kevin kilian klaus konrad konstantin kurt lars laurenz lennard
-lennart leo leon leonard leonhard levi liam linus lorenz lothar ludwig lukas
+lennart leo leon leonard leonid leonhard levi liam linus lorenz lothar ludwig lukas
 lutz magnus maik malte manfred manuel marcel marco marcus mario mark marko
 markus martin marvin mathias matthias mats max maximilian mehmet michael
 mika milan mirko moritz mustafa nick niclas nico nicolas niels niklas nils

@@ -14,6 +14,32 @@ _SAFE_NAME_RE = re.compile(
     re.I,
 )
 
+# Kalender, die KEINE Person sind: Zimmer/Prophylaxe, nicht Behandler.
+# Thaler 08.09.2026: "Prophylaxe" stand als Behandler in der Arztwahl.
+# Chef 08.09.2026: Zimmer 1 Notfall, 2/3 PZR, 4 Behandlung bei Thaler.
+_FUNKTION_KAL_RE = re.compile(
+    r"^(?:die\s+|der\s+|das\s+)?"
+    r"(?:"
+    r"prophylaxe|hygiene|\bpzr\b|zahnreinigung|prophy|"
+    r"professionelle\s+zahnreinigung|"
+    r".*(?:zimmer|zi\.?|raum)\s*[1-4].*"
+    r")\s*$",
+    re.I,
+)
+_ZIMMER_NR_RE = re.compile(
+    r"(?:zimmer|zi\.?|raum)\s*[:\-]?\s*([1-4])\b"
+    r"|[(\[]\s*zi\.?\s*([1-4])\s*[)\]]",
+    re.I,
+)
+_PZR_MOTIV_RE = re.compile(
+    r"zahnreinigung|\bpzr\b|zahnstein|professionelle\s+(?:zahn)?prophylaxe",
+    re.I,
+)
+_BESPRECH_MUSTER = [
+    r"besprechung", r"beratung", r"recall", r"check.?up",
+    r"kontrolluntersuchung", r"kontroll",
+]
+
 
 def _sauber(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
@@ -150,6 +176,104 @@ def stt_keywords(tenant: dict[str, Any]) -> list[str]:
     return out
 
 
+def zimmer_nr(cal_oder_name: Any) -> int | None:
+    """Zimmer 1-4 aus dem Kalendernamen, sonst None.
+
+    Trifft 'Zimmer 3', 'Zi 4', 'Leonita (Zi2)', 'Irem (Zi 4)'.
+    """
+    if isinstance(cal_oder_name, dict):
+        name = _sauber(cal_oder_name.get("name"))
+    else:
+        name = _sauber(cal_oder_name)
+    m = _ZIMMER_NR_RE.search(name)
+    if not m:
+        return None
+    z = m.group(1) or m.group(2)
+    try:
+        n = int(z)
+    except (TypeError, ValueError):
+        return None
+    return n if 1 <= n <= 4 else None
+
+
+def ist_funktionskalender(cal_oder_name: Any) -> bool:
+    """True bei Prophylaxe / Hygiene / Zimmer — kein Behandler-Name."""
+    if zimmer_nr(cal_oder_name):
+        return True
+    if isinstance(cal_oder_name, dict):
+        name = _sauber(cal_oder_name.get("name"))
+    else:
+        name = _sauber(cal_oder_name)
+    kern = re.sub(r"^(?:dr\.?|doktor|prof\.?)\s+", "", name, flags=re.I).strip()
+    return bool(kern and _FUNKTION_KAL_RE.match(kern))
+
+
+def behandler_kalender(tenant: dict[str, Any]) -> list[dict[str, Any]]:
+    """Nur Personen-Kalender — Funktionskalender (Prophylaxe) fliegen raus."""
+    return [
+        c for c in (tenant.get("calendars") or [])
+        if isinstance(c, dict) and _sauber(c.get("name")) and not ist_funktionskalender(c)
+    ]
+
+
+def _raum_rang(cal: dict[str, Any]) -> tuple[int, str]:
+    """Zimmer 2 vor Zimmer 3, dann der Name."""
+    name = _sauber(cal.get("name"))
+    m = _ZIMMER_NR_RE.search(name)
+    nr = int(m.group(1)) if m else 9
+    return (nr, name.lower())
+
+
+def funktionskalender_alle(tenant: dict[str, Any]) -> list[dict[str, Any]]:
+    """Alle Prophylaxe-/Zimmer-Kalender, Zimmer 2 vor Zimmer 3."""
+    out = [
+        c for c in (tenant.get("calendars") or [])
+        if isinstance(c, dict) and ist_funktionskalender(c) and _sauber(c.get("id"))
+    ]
+    out.sort(key=_raum_rang)
+    return out
+
+
+def funktionskalender(tenant: dict[str, Any]) -> dict[str, Any] | None:
+    """Der erste Prophylaxe-/Zimmer-Kalender (Zimmer 2 vor 3)."""
+    alle = funktionskalender_alle(tenant)
+    return alle[0] if alle else None
+
+
+def hat_funktionskalender(tenant: dict[str, Any]) -> bool:
+    return funktionskalender(tenant) is not None and bool(behandler_kalender(tenant))
+
+
+def ist_pzr_motiv(vm: dict[str, Any] | None) -> bool:
+    if not isinstance(vm, dict):
+        return False
+    return bool(_PZR_MOTIV_RE.search(
+        f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))}"))
+
+
+def ist_besprechung_motiv(vm: dict[str, Any] | None) -> bool:
+    """Kontrolle/Beratung/Recall — keine Füllung, keine OP, kein Notfall."""
+    if not isinstance(vm, dict) or ist_akut_motiv(vm) or ist_pzr_motiv(vm):
+        return False
+    text = f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))}"
+    return bool(_SAFE_NAME_RE.search(text))
+
+
+def kalender_beim(name: str) -> str:
+    """'bei …' — Funktionskalender als Ort, nicht als Arzt."""
+    n = _sauber(name)
+    if not n:
+        return ""
+    if not ist_funktionskalender(n):
+        return ""
+    nr = zimmer_nr(n)
+    # Nur PZR-Zimmer (2/3) oder ein Kalender namens Prophylaxe — nie
+    # "bei der Prophylaxe" fuer Notfall-Zimmer 1 oder Behandlungs-Zimmer 4.
+    if nr in {2, 3} or re.search(r"prophylaxe|hygiene|\bpzr\b", n, re.I):
+        return "der Prophylaxe"
+    return ""
+
+
 def kalender_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | None:
     cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
     q = _sauber(name).lower()
@@ -166,24 +290,24 @@ def kalender_von(tenant: dict[str, Any], name: str = "") -> dict[str, Any] | Non
                 best, score = c, s
         if best:
             return best
-    cid = _sauber(tenant.get("defaultCalendarId"))
-    if cid:
-        return next((c for c in cals if _sauber(c.get("id")) == cid), {"id": cid, "name": ""})
-    return cals[0] if cals else None
+    d = default_kalender(tenant)
+    if d:
+        return d
+    return None
 
 
 def default_kalender(tenant: dict[str, Any]) -> dict[str, Any] | None:
     """Der Standard-Behandler des Mandanten (defaultCalendarId, sonst der
-    erste Kalender). Chef 03.09.2026: "wenn jemand nicht weiss zu welchem
-    arzt er soll dann immer bei dr. Petsas buchen" — bei Meddent zeigt die
-    defaultCalendarId auf den Chef selbst."""
-    cals = tenant.get("calendars") or []
+    erste Personen-Kalender). Funktionskalender (Prophylaxe) zaehlen nicht
+    — das ist kein Arzt. Chef 03.09.2026: "wenn jemand nicht weiss zu
+    welchem arzt er soll dann immer bei dr. Petsas buchen"."""
+    personen = behandler_kalender(tenant)
     cid = _sauber(tenant.get("defaultCalendarId"))
     if cid:
-        hit = next((c for c in cals if _sauber((c or {}).get("id")) == cid), None)
+        hit = next((c for c in personen if _sauber((c or {}).get("id")) == cid), None)
         if hit:
             return hit
-    return cals[0] if cals else None
+    return personen[0] if personen else None
 
 
 def behandler_reihe(tenant: dict[str, Any]) -> list[dict[str, Any]]:
@@ -191,13 +315,40 @@ def behandler_reihe(tenant: dict[str, Any]) -> list[dict[str, Any]]:
     "erwähne nicht die Namen in dieser RehenFolge: Dr. Nikolaou, Dr.Patrikis
     und Dr. Petsas. sondern umgekehert." — der Standard-Behandler zuerst,
     die uebrigen in umgekehrter Kalender-Reihenfolge. Ergibt bei Meddent
-    exakt: Dr. Petsas, Dr. Patrikis, Dr. Nikolaou."""
-    cals = [c for c in tenant.get("calendars") or [] if _sauber((c or {}).get("name"))]
+    exakt: Dr. Petsas, Dr. Patrikis, Dr. Nikolaou. Funktionskalender
+    (Prophylaxe) stehen nie in der Liste."""
+    cals = behandler_kalender(tenant)
     d = default_kalender(tenant)
     did = _sauber((d or {}).get("id"))
     rest = [c for c in cals if _sauber((c or {}).get("id")) != did]
     kopf = [d] if d and _sauber(d.get("name")) else []
     return kopf + rest[::-1]
+
+
+def _kalender_fuehrt(vm: dict[str, Any], calendar_id: str) -> bool:
+    ids = vm.get("calendarIds") if isinstance(vm.get("calendarIds"), list) else []
+    if not calendar_id or not ids:
+        return True
+    return any(_sauber(x) == _sauber(calendar_id) for x in ids)
+
+
+def besprechung_motiv(katalog: list[dict[str, Any]] | None,
+                      calendar_id: str = "") -> dict[str, Any] | None:
+    """Erstes Besprechungs-/Kontroll-Motiv — nie Füllung, nie Notfall, nie PZR."""
+    kandidaten = [
+        v for v in (katalog or [])
+        if isinstance(v, dict) and ist_besprechung_motiv(v)
+        and _kalender_fuehrt(v, calendar_id)
+    ]
+    if not kandidaten:
+        return None
+    for muster in _BESPRECH_MUSTER:
+        rx = re.compile(muster, re.I)
+        for v in kandidaten:
+            text = f"{_sauber(v.get('name'))} {_sauber(v.get('nameForPatient'))}"
+            if rx.search(text):
+                return v
+    return kandidaten[0]
 
 
 def ist_akut_motiv(vm: dict[str, Any] | None) -> bool:

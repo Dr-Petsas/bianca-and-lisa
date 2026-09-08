@@ -100,7 +100,7 @@ _ABBRUCH_RE = re.compile(
 )
 
 
-def _wechsel_verdacht(t: str, aktiv_handlung: str) -> bool:
+def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> bool:
     """Koennte dieser Satz das Anliegen wechseln? Nur dann lohnt das LLM.
 
     Der Kern der Latenz-Rettung (Chef 03.09.2026): mitten in einem Anliegen
@@ -113,6 +113,12 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str) -> bool:
     # "Termin" ist im Buchungs-/Aenderungs-Anliegen Alltagsvokabular der
     # Ernte — bei WISSEN/ERREICHEN/ABGEBEN dagegen ein neues Fass.
     if aktiv_handlung not in {"ANLEGEN", "AENDERN"} and re.search(r"\btermin", t, re.I):
+        return True
+    # Nach frischer Buchung: „früher / nach vorne“ ohne Verb (Petsas 08.09.).
+    s = sit.get("sammler") if isinstance((sit or {}).get("sammler"), dict) else {}
+    if _s(s.get("phase")) == "gebucht" and re.search(
+        r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen", t, re.I
+    ):
         return True
     return False
 
@@ -264,7 +270,10 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         # "Passt nicht / den nicht" mitten im Slot-Angebot meint das ANGEBOT,
         # keinen Bestandstermin — die Maschine verhandelt selbst weiter.
         return {**aus, "zug": "verfeinern", "handlung": "KEINE", "gegenstand": ""}
-    if _FB_VERSCHIEBEN_RE.search(t):
+    if _FB_VERSCHIEBEN_RE.search(t) or (
+        _s(s.get("phase")) == "gebucht"
+        and re.search(r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen", t, re.I)
+    ):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
     if _FB_ABSAGE_RE.search(t):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
@@ -503,7 +512,7 @@ def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
         if _ist_formular_antwort(sit, t):
             return {"kanal": "ok", "zug": "verfeinern", "handlung": "KEINE",
                     "gegenstand": "", "quelle": "fastpath"}
-        if not _wechsel_verdacht(t, a_handlung):
+        if not _wechsel_verdacht(t, a_handlung, sit):
             # Kein Wechsel-Signal: der Satz gehoert dem laufenden Anliegen
             # (Ernte/Erzaehlung/Zwischenfrage) — Maschine und Talk-Schicht
             # verarbeiten ihn wie gewohnt.
