@@ -12,9 +12,11 @@ import re
 from typing import Any, Callable
 
 from bianca import besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
+from kern import anliegen_art
 from kern import dossier
 from kern import gedaechtnis
 from kern import motive
+from kern import spur
 from kern import notes as kern_notes
 from kern import calendar as kal
 from kern import gespraech
@@ -1177,19 +1179,33 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
         s["frage"] = "rueckblick"
         dossier.markiere(sit, "verlauf")
         return {"text": (vorsatz + gehirn.rueckblick_text(s, sit)).strip()}
+    # W-ANLIEGEN-ART (09.09.2026): kein Zusatzangebot (PZR/Bleaching), während
+    # sich jemand beschwert oder einen Notfall hat — das wäre taktlos.
+    upsell_ok = not anliegen_art.upsell_gesperrt(sit)
+    art_modus = anliegen_art.modus()
     if gehirn.pzr_faellig(s, sit):
-        s["pzr"] = "gefragt"
-        s["frage"] = "pzr"
-        dossier.markiere(sit, "pzr")
-        return {"text": (vorsatz + gehirn.pzr_frage(s)).strip()}
+        if not upsell_ok:
+            spur.merken(sit, "anliegen-art", "pzr-gesperrt")
+        else:
+            if art_modus == "shadow" and anliegen_art.aktiv(sit):
+                spur.merken(sit, "anliegen-art-shadow", "pzr")
+            s["pzr"] = "gefragt"
+            s["frage"] = "pzr"
+            dossier.markiere(sit, "pzr")
+            return {"text": (vorsatz + gehirn.pzr_frage(s)).strip()}
     # W-BLEACHING (Chef 03.09.2026): "wenn jemand anruft um eine
     # Zahnreinigung zu buchen kannst du auch fragen ob die Zähne mit
     # aufgehellt werden sollen" — einmal pro Anruf, nur wenn die Praxis
     # eine Aufhellung im Katalog fuehrt.
     if gehirn.bleaching_faellig(sit):
-        s["bleaching"] = "gefragt"
-        s["frage"] = "bleaching"
-        return {"text": (vorsatz + gehirn.BLEACHING_FRAGE).strip()}
+        if not upsell_ok:
+            spur.merken(sit, "anliegen-art", "bleaching-gesperrt")
+        else:
+            if art_modus == "shadow" and anliegen_art.aktiv(sit):
+                spur.merken(sit, "anliegen-art-shadow", "bleaching")
+            s["bleaching"] = "gefragt"
+            s["frage"] = "bleaching"
+            return {"text": (vorsatz + gehirn.BLEACHING_FRAGE).strip()}
     return None
 
 
@@ -1679,6 +1695,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     t = _s(gesagt)
     if not t:
         return None
+
+    # W-ANLIEGEN-ART (09.09.2026): Servicebeschwerde/Notfall festhalten, damit
+    # _einschub keine Zusatzangebote macht (Default off => no-op).
+    anliegen_art.merken(sit, t)
 
     # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
     # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris

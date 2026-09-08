@@ -1418,6 +1418,27 @@ sich das Overlay. Daten liegen in `bianca_web/app.js` (`KOENNEN` / `TECHNIK` /
 `PATCHES`) — bei neuen Features/Patches dort MITPFLEGEN, sonst lügt das
 Schaufenster.
 
+## Servicebeschwerde vs. Notfall, Upsell-Sperre (W-ANLIEGEN-ART 09.09.2026 — nicht rückbauen)
+
+Zusatzangebote (PZR-Mitbuchung, Bleaching) dürfen NICHT kommen, während sich
+jemand beschwert oder einen Notfall hat — das wirkt taktlos.
+
+- **Klassifikation** (`kern/anliegen_art.py`, bianca-frei): `art(text)` trennt
+  notfall (starke Schmerzen, Blutung, dicke Backe, ausgeschlagener Zahn) >
+  beschwerde (Wartezeit, Unfreundlichkeit, Reklamation, Ärger) > klinisch
+  (Schmerz/empfindlich ohne Notfallmarker). `merken(sit, text)` hält die
+  höchste gesehene Lage sticky in `sit["anliegenArt"]`.
+- **Upsell-Sperre**: `flow.zug` ruft `anliegen_art.merken`, `flow._einschub`
+  fragt `upsell_gesperrt(sit)` — bei aktiver Beschwerde/Notfall entfallen die
+  PZR-/Bleaching-Angebote (Spur `anliegen-art`). Notfall-Routing der Buchung
+  (Akut-Motive) bleibt unverändert; der Rückblick (Verlaufsfrage) ist kein
+  Zusatzangebot und bleibt erlaubt.
+- **Notaus/Stufen** `ANLIEGEN_ART=off|shadow|enforce` (Default **off** =
+  byte-identisch). shadow loggt `anliegen-art-shadow`, ändert nichts; enforce
+  sperrt.
+- Tests: `tests/test_anliegen_art.py` (offline). Rollout: erst shadow, dann
+  enforce.
+
 ## Evidenzbasierter Fakten-/Erledigt-Wächter (W-FAKTEN-WACHE 09.09.2026 — nicht rückbauen)
 
 Wie Claras UNVERIFIED_ACTION_FALLBACK: eine gesprochene Erledigt-Behauptung
