@@ -844,58 +844,47 @@ def _pzr_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     return _pzr_weiter(sit, "Alles gut — dann erst einmal ohne Zahnreinigung. ", melde)
 
 
-def _arzt_notiz_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
-    """Antwort auf die Doktor-Notiz-Frage bzw. das Diktat."""
+def _arzt_notiz_schliessen(sit: dict, *, notiz: str = "") -> None:
     s = gehirn.sammler(sit)
-    # Thaler Petsas 08.09.: „Was kostet die Zahnreinigung?“ auf die
-    # Notiz-Frage ging ans LLM — das erfand „das müssen Sie mit dem
-    # Zahnarzt besprechen“. In Zahn-Praxen sagt die KI den Preis selbst.
+    s["arztNotiz"] = _s(notiz)
+    s["arztNotizFrage"] = "ja" if s["arztNotiz"] else "nein"
+    s["frage"] = ""
+    sit.pop("arztNotizUnklar", None)
+
+
+def _arzt_notiz_zug(sit: dict, t: str, melde: Melde = None) -> dict:
+    """Antwort auf die Doktor-Notiz — einmal fragen, dann ernten oder buchen.
+
+    Live Petsas 08.09.: Zwischenfrage ging ans LLM (`return None`), danach
+    kam die Doktor-Frage immer wieder. Nie mehr ans Modell: Preis sagt die
+    KI selbst, alles andere IST die Notiz. Ein nacktes Ja → ein Diktat;
+    der nächste Satz landet im Popup. Keine zweite „Was soll ich mitgeben?“.
+    """
+    s = gehirn.sammler(sit)
     if gehirn.ist_pzr_preisfrage(t) and gehirn.pzr_im_kontext(s, t, sit):
-        s["arztNotizFrage"] = "nein"
-        s["arztNotiz"] = ""
+        _arzt_notiz_schliessen(sit)
         return _pzr_preis_zug(sit, t, melde)
-    if gehirn.ist_zwischenfrage(t):
-        return None
     if s["frage"] == "arzt_notiz":
         if gehirn.ist_nichts_notiz(t):
-            s["arztNotizFrage"] = "nein"
-            s["frage"] = ""
+            _arzt_notiz_schliessen(sit)
             return _buchen(sit, melde)
         if gehirn.ist_ja(t) and not gehirn.hat_arzt_notiz_inhalt(t):
             s["arztNotizFrage"] = "diktat"
             s["frage"] = "arzt_notiz_diktat"
             sit.pop("arztNotizUnklar", None)
             return {"text": gehirn.arzt_notiz_diktat_frage()}
-        notiz = gehirn.arzt_notiz_aus(t)
-        if notiz:
-            s["arztNotiz"] = notiz
-            s["arztNotizFrage"] = "ja"
-            s["frage"] = ""
+        if gehirn.hat_arzt_notiz_inhalt(t):
+            _arzt_notiz_schliessen(sit, notiz=gehirn.arzt_notiz_aus(t))
             return _buchen(sit, melde)
-        z = int(sit.get("arztNotizUnklar") or 0) + 1
-        sit["arztNotizUnklar"] = z
-        if z <= 1:
-            return {"text": gehirn.arzt_notiz_frage()}
-        s["arztNotizFrage"] = "nein"
-        s["frage"] = ""
+        _arzt_notiz_schliessen(sit)
         return _buchen(sit, melde)
-    # Diktat: der Satz IST die Notiz, außer nacktes Nein/Nichts.
     if gehirn.ist_nichts_notiz(t):
-        s["arztNotizFrage"] = "nein"
-        s["frage"] = ""
+        _arzt_notiz_schliessen(sit)
         return _buchen(sit, melde)
-    notiz = gehirn.arzt_notiz_aus(t)
-    if notiz:
-        s["arztNotiz"] = notiz
-        s["arztNotizFrage"] = "ja"
-        s["frage"] = ""
+    if gehirn.hat_arzt_notiz_inhalt(t):
+        _arzt_notiz_schliessen(sit, notiz=gehirn.arzt_notiz_aus(t))
         return _buchen(sit, melde)
-    z = int(sit.get("arztNotizUnklar") or 0) + 1
-    sit["arztNotizUnklar"] = z
-    if z <= 1:
-        return {"text": gehirn.arzt_notiz_diktat_frage()}
-    s["arztNotizFrage"] = "nein"
-    s["frage"] = ""
+    _arzt_notiz_schliessen(sit)
     return _buchen(sit, melde)
 
 

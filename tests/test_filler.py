@@ -140,3 +140,25 @@ def test_transkript_traegt_fueller_und_vorab():
     hallo = "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!"
     assert transkript_mund([], hallo, hallo + " Bianca.") == hallo + " Bianca."
     assert transkript_mund([], "", "Ja, gerne.") == "Ja, gerne."
+    # Später merken'd: schon im Text nicht doppelt, neuer Satz vorn.
+    assert transkript_mund(
+        ["Einen Moment bitte.", "Ganz kurz bitte."],
+        "",
+        "Einen Moment bitte. Der Termin ist fest eingetragen.",
+    ) == "Ganz kurz bitte. Einen Moment bitte. Der Termin ist fest eingetragen."
+
+
+def test_protokoll_anreichern_setzt_fueller_nach():
+    """Füller nach json_antwort — Zug, messages und Mitschnitt nachziehen."""
+    from kern.filler import protokoll_anreichern
+    sit = {
+        "zuege": [{"art": "turn", "text": "Der Termin ist fest eingetragen."}],
+        "messages": [
+            {"role": "user", "content": "Ja."},
+            {"role": "assistant", "content": "Der Termin ist fest eingetragen."},
+        ],
+    }
+    mund = "Einen Moment bitte. Der Termin ist fest eingetragen."
+    protokoll_anreichern(sit, mund)
+    assert sit["zuege"][-1]["text"] == mund
+    assert sit["messages"][-1]["content"] == mund

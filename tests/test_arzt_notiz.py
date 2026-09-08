@@ -118,7 +118,8 @@ def test_ja_mit_wortlaut_im_selben_satz_bucht_direkt():
         flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
 
 
-def test_unklar_zweimal_bucht_ohne_notiz():
+def test_unklar_einmal_bucht_ohne_notiz():
+    """Einmal fragen — „Äh.“ bucht, statt die Doktor-Frage zu wiederholen."""
     sit = _sit()
     _bereit(sit)
     echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
@@ -126,13 +127,93 @@ def test_unklar_zweimal_bucht_ohne_notiz():
     flow.kal.note_appointment = lambda *a, **k: {"ok": True}
     try:
         flow.zug(sit, "Ja.")
-        z1 = flow.zug(sit, "Äh.")
-        assert z1 and "Notiz" in z1["text"]
-        z2 = flow.zug(sit, "Hm.")
+        z = flow.zug(sit, "Äh.")
         s = gehirn.sammler(sit)
         assert s["phase"] == "gebucht"
         assert s["arztNotizFrage"] == "nein"
-        assert z2 and "eingetragen" in z2["text"].lower()
+        assert z and "eingetragen" in z["text"].lower()
+        assert "Notiz" not in (z.get("text") or "")
+        assert "mitgeben" not in (z.get("text") or "").lower()
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+
+
+def test_petsas_preis_auf_notiz_geht_nicht_ans_llm():
+    """Live Petsas 08.09.: Preisfrage auf die Notiz — KI antwortet, nie LLM."""
+    sit = _sit()
+    _bereit(sit)
+    s = gehirn.sammler(sit)
+    s["grund"] = "professionelle Zahnreinigung"
+    s["motivName"] = "PRO Professionelle Zahnreinigung"
+    s["pzr"] = "ja"
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    flow.kal.book_slot = _ok_book
+    flow.kal.note_appointment = lambda *a, **k: {"ok": True}
+    echt = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        flow.zug(sit, "Ja, bitte.")
+        assert s["frage"] == "arzt_notiz"
+        z = flow.zug(
+            sit,
+            "Ja, was kostet die Zahnreinigung? Bitte vorher mit mir abklärend.",
+        )
+        text = (z or {}).get("text") or ""
+        assert z is not None
+        assert "einhundertzwanzig" in text
+        assert "besprechen" not in text.lower()
+        assert "mitgeben" not in text.lower()
+        assert "Soll ich für den Termin noch eine Notiz" not in text
+        assert s["arztNotizFrage"] == "nein"
+        z2 = flow.zug(sit, "Ja, bitte.")
+        text2 = (z2 or {}).get("text") or ""
+        assert "mitgeben" not in text2.lower()
+        assert "Notiz für den Doktor" not in text2
+    finally:
+        flow.hintergrund.anstossen = echt
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+
+
+def test_zwischenfrage_auf_diktat_ist_die_notiz():
+    """Parkfrage aufs Diktat → Notiz, buchen — nie ans LLM, nie nochmal fragen."""
+    sit = _sit()
+    _bereit(sit)
+    notizen: list[str] = []
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    flow.kal.book_slot = _ok_book
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2=None, note="": notizen.append(note) or {"ok": True}
+    )
+    try:
+        flow.zug(sit, "Ja.")
+        flow.zug(sit, "Ja.")
+        assert gehirn.sammler(sit)["frage"] == "arzt_notiz_diktat"
+        z = flow.zug(sit, "Wo kann ich parken?")
+        s = gehirn.sammler(sit)
+        assert z is not None
+        assert s["phase"] == "gebucht"
+        assert "parken" in s["arztNotiz"].lower()
+        assert "mitgeben" not in (z.get("text") or "").lower()
+        assert any("parken" in n.lower() for n in notizen), notizen
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+
+
+def test_bitte_auf_diktat_bucht_ohne_zweite_frage():
+    sit = _sit()
+    _bereit(sit)
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    flow.kal.book_slot = _ok_book
+    flow.kal.note_appointment = lambda *a, **k: {"ok": True}
+    try:
+        flow.zug(sit, "Ja.")
+        flow.zug(sit, "Ja.")
+        z = flow.zug(sit, "Bitte?")
+        s = gehirn.sammler(sit)
+        assert s["phase"] == "gebucht"
+        assert s["arztNotizFrage"] == "nein"
+        assert z and "eingetragen" in z["text"].lower()
+        assert "mitgeben" not in z["text"].lower()
     finally:
         flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
 

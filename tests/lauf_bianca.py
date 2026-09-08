@@ -21,6 +21,7 @@ MODULE = [
     "tests.test_versicherung_geschlecht",
     "tests.test_rueckblick_pzr",
     "tests.test_pzr_kassen",
+    "tests.test_arzt_notiz",
     "tests.test_zahn_katalog",
     "tests.test_dossier",
     "tests.test_stille_notfall",

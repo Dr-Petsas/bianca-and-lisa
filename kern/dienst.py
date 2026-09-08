@@ -506,7 +506,8 @@ class Dienst:
         waechter = spur.abholen(sit)
         fueller = list(sit.get("_fuellerSaetze") or [])
         mund = filler.transkript_mund(fueller, gesprochen, text)
-        sit.pop("_fuellerSaetze", None)
+        # Nicht poppen: ein Füller, der NACH diesem Merge erst merken'd
+        # wird (Rennen Arbeit/Hauptfaden), hängt zug_stream am fertig an.
         self.merke_zug(sit, art=art, textIn=text_in, text=mund, book=reply.get("book"),
                        timings=timings, waechter=waechter, audioUrl=url or "",
                        fueller=fueller)
@@ -857,5 +858,12 @@ class Dienst:
                 yield zeile({"type": "empty", "error": wert})
                 return
             else:  # fertig
-                yield zeile({"type": "reply", **wert})
+                out = dict(wert) if isinstance(wert, dict) else {"text": ""}
+                fueller = list(sit.get("_fuellerSaetze") or [])
+                sit.pop("_fuellerSaetze", None)
+                mund = filler.transkript_mund(fueller, "", _s(out.get("text")))
+                if mund != _s(out.get("text")):
+                    out["text"] = mund
+                    filler.protokoll_anreichern(sit, mund)
+                yield zeile({"type": "reply", **out})
                 return

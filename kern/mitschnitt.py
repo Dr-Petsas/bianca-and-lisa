@@ -279,6 +279,32 @@ def zug(sit: dict, dienst, *, art: str, text_in: str = "", text: str = "",
         print(f"mitschnitt-zug fail {e}", flush=True)
 
 
+def text_nachtragen(sit: dict, text: str) -> None:
+    """Letzten Mitschnitt-Zug nachträglich mit dem gesprochenen Mund füllen.
+
+    Füller, die nach json_antwort erst gespielt wurden, fehlen sonst in CallR.
+    """
+    if not an():
+        return
+    mund = str(text or "").strip()
+    if not mund:
+        return
+    pfad = ordner(sit)
+    if pfad is None or not (pfad / "anruf.json").is_file():
+        return
+    try:
+        with _LOCK:
+            manifest = _manifest(sit, pfad)
+            zuege = manifest.get("zuege") or []
+            if not zuege or not isinstance(zuege[-1], dict):
+                return
+            zuege[-1]["text"] = mund
+            _zusammenfassung(manifest, sit)
+            _schreiben(pfad, manifest)
+    except Exception as e:
+        print(f"mitschnitt-text fail {e}", flush=True)
+
+
 def ende(sit: dict, dienst, *, warte_s: float = 10.0) -> None:
     """Beim Auflegen (in der Hangup-Nacharbeit, nie auf dem Anruf-Pfad):
     auf offene Streams warten, Rest-Audio einlösen, Ende-Zeit stempeln."""

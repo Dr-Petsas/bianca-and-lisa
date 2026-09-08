@@ -179,6 +179,31 @@ def kartei_satz(sit: dict | None) -> str:
     return text
 
 
+def protokoll_anreichern(sit: dict, mund: str) -> None:
+    """Letzten Zug + letzte Assistenten-Zeile auf den gesprochenen Mund setzen.
+
+    Live 08.09.: der Füller kam nach json_antwort (Rennen Arbeit/Hauptfaden)
+    — Mitschnitt und messages hatten nur die Job-Zeile. CallR kopiert beides.
+    """
+    text = _s(mund)
+    if not text:
+        return
+    zuege = sit.get("zuege")
+    if isinstance(zuege, list) and zuege and isinstance(zuege[-1], dict):
+        zuege[-1]["text"] = text
+    msgs = sit.get("messages")
+    if isinstance(msgs, list):
+        for m in reversed(msgs):
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                m["content"] = text
+                break
+    try:
+        from kern import mitschnitt
+        mitschnitt.text_nachtragen(sit, text)
+    except Exception:
+        pass
+
+
 def transkript_mund(fueller: list[str] | None, vorab: str, antwort: str) -> str:
     """Was wirklich gesprochen wurde — Füller + Vorab + Antwort, ohne Doppel.
 

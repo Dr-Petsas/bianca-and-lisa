@@ -213,6 +213,17 @@ def test_notaus_mitschnitt_null(monkeypatch, tmp_path):
     assert not sit.get("_mitEin")
 
 
+def test_text_nachtragen_setzt_fueller_in_letzten_zug(monkeypatch, tmp_path):
+    _umleiten(monkeypatch, tmp_path)
+    d = _dienst()
+    sit = _sit()
+    mit.zug(sit, d, art="turn", text_in="Ja.", text="Der Termin ist fest eingetragen.")
+    mund = "Einen Moment bitte. Der Termin ist fest eingetragen."
+    mit.text_nachtragen(sit, mund)
+    m = json.loads((tmp_path / "anrufe" / "bianca" / sit["id"] / "anruf.json").read_text(encoding="utf-8"))
+    assert m["zuege"][-1]["text"] == mund
+
+
 def test_audio_bytes_fertig_blocking_und_stream():
     d = _dienst()
     blob = _wav(120)

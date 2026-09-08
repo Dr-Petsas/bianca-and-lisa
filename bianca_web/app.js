@@ -1153,6 +1153,8 @@ const PATCHES = [
   ["W-ABSCHIED-OK (heute Abend)", "08.09.", "Gespräch", "„Nein, danke“, „Vielen Dank“, „Danke, ciao“, „Perfekt!“ sind kein STT-Müll mehr. Nach der Buchung heißt das Abschied, keine neue Slot-Liste. „Ja bitte verbinden“ nach einem schon genannten Arzt stellt wirklich durch — nicht nur „ich verbinde Sie“ vom LLM."],
   ["W-PZR-KI-PREIS (Praxis-KI sagt den Preis)", "08.09.", "Termine", "„Was kostet die Zahnreinigung?“ beantwortet die Praxis-KI selbst — ungefähr 120 Euro, Zahnärzte machen die Reinigung, dann die Kasse. Nie „das müssen Sie mit dem Zahnarzt besprechen“. Nach der Buchung: „verlegen / früher / nach vorne“ verschiebt den frischen Termin wirklich, ohne Nachnamen-Suche und ohne erfundene Slots."],
   ["W-ABGEBEN-NUMMER (keine Dreifach-Frage)", "08.09.", "Gespräch", "Rezept/Rückruf-Notiz: eine richtig transkribierte Nummer gilt sofort (telefonOffen → Notiz). Bekannter Anrufer aus der Leitung: Name und Nummer nicht nochmal erfragen."],
+  ["W-ARZT-NOTIZ-EINER (einmal fragen)", "08.09.", "Termine", "Doktor-Notiz einmal: Ja → ein Diktat, Zwischenfrage ist die Notiz, Preis sagt die KI. Nie ans LLM, nie dieselbe Doktor-Frage nochmal (Petsas 08.09.)."],
+  ["W-TRANSKRIPT-FUELLER (Füllsätze nachtragen)", "08.09.", "Betrieb", "Füller, die nach der Job-Zeile erst gespielt werden, kommen nachträglich in Mitschnitt, messages und CallR — nicht nur als Audio."],
 ];
 
 let kTab = "faehig";
