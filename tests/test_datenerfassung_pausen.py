@@ -54,6 +54,12 @@ def test_einzelne_buchstabenfragmente_werden_eindeutig_erkannt():
     assert buchstaben.teil("AVI Anton") == "a"
     assert buchstaben.teil("Ivi Ida") == "i"
     assert buchstaben.teil("SW Samuel fertig.") == "s"
+    assert buchstaben.teil("TV Theodor") == "t"
+    assert buchstaben.teil("Zwesacharias?") == "z"
+    assert buchstaben.teil("NV Nordpol") == "n"
+    assert buchstaben.teil("Envy Nordpol") == "n"
+    assert buchstaben.teil("E wie Ida.") == "i"
+    assert buchstaben.teil("Es wie Samuel fertig.") == "s"
     assert buchstaben.teil("Ich heiße Müller") == ""
 
 

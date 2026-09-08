@@ -316,6 +316,12 @@ def teil(text: str) -> str:
     toks = _tokens(text)
     if not toks:
         return ""
+    # Das Tafelwort ist im Telefon-ASR stabiler als der davor gesprochene
+    # Einzelbuchstabe: „I wie Ida“ kam als „E wie Ida“, „Z wie Zacharias“
+    # als „Zwesacharias“. Die bestehende fuzzy Tafelrettung löst beides.
+    tafel = _tafel_anlaute(toks)
+    if tafel:
+        return "".join(tafel)
     erlaubt = _FUELL | {
         "wie", "fertig", "ende", "wars", "war's", "gewesen",
     }
