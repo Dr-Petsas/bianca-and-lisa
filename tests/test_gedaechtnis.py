@@ -228,6 +228,26 @@ def test_kontext_nimmt_frische_frontdesk_themenotiz():
         ged.httpx.get = echt
 
 
+def test_offene_system_kalenderbeobachtung_ist_kein_rueckrufkontext():
+    assert not ged._event_ist_themenotiz({
+        "id": "appt-watch:abc:created",
+        "channel": "system",
+        "type": "observation",
+        "status": "open",
+        "summary": "Neuer Termin: Herr Petsas am Donnerstag. Notiz: Testtext.",
+    })
+
+
+def test_offene_bianca_rueckrufnotiz_bleibt_erhalten():
+    assert ged._event_ist_themenotiz({
+        "id": "telefonki:bianca_call:abc",
+        "channel": "bianca_call",
+        "type": "interaction",
+        "status": "open",
+        "summary": "Laut Anruf (Bianca): Rückruf-Notiz an die Praxis.",
+    })
+
+
 def test_outbound_offen_legen_schreibt_open_event():
     posts = []
 

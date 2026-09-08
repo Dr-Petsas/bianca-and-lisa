@@ -421,10 +421,12 @@ def _offen_ids(roh: Any) -> list[str]:
 # den Rückrufgrund nicht, obwohl die Notiz Minuten vor dem Rückruf da war.
 _THEMA_RE = re.compile(
     r"abhol|schien|narval|schnarch|nicht erreicht|"
-    r"zur(ü|ue)ckruf|anrufen|angerufen|bitte.{0,16}ruf",
+    r"(?:zur|r)(ü|ue)ckruf|anrufen|angerufen|bitte.{0,16}ruf",
     re.I,
 )
-_THEMA_KANAL = {"frontdesk", "lisa_call", "lisa_outbound", "lisa_sms"}
+_THEMA_KANAL = {
+    "frontdesk", "bianca_call", "lisa_call", "lisa_outbound", "lisa_sms",
+}
 _THEMA_TAGE_MS = 14 * 24 * 60 * 60 * 1000
 
 # MAS ist ein Praxisgedaechtnis, kein freies CRM-Adressbuch. Eine Rufnummer
@@ -543,14 +545,23 @@ def _event_ist_themenotiz(e: dict) -> bool:
     if not isinstance(e, dict):
         return False
     st = _s(e.get("status")).lower()
+    kanal = _s(e.get("channel")).lower()
+    summ = _s(e.get("summary") or e.get("snippet"))
     if st in {"resolved", "done", "closed", "erledigt"}:
         return False
     if st == "open":
-        return True
+        # appt-watch markiert Kalender-Beobachtungen als "open". Das sind
+        # keine offenen Rückrufvorgänge und sie enthalten teils alte
+        # Testnotizen. Kalenderfakten kommen aus den Kalenderwerkzeugen.
+        if kanal == "system":
+            return False
+        return bool(
+            (not kanal or kanal in _THEMA_KANAL)
+            and summ
+            and (_THEMA_RE.search(summ) or kanal in _THEMA_KANAL)
+        )
     if st not in {"", "none"}:
         return False
-    kanal = _s(e.get("channel")).lower()
-    summ = _s(e.get("summary") or e.get("snippet"))
     if not summ or not _THEMA_RE.search(summ):
         return False
     if kanal and kanal not in _THEMA_KANAL:
