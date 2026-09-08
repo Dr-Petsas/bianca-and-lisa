@@ -346,6 +346,19 @@ def teil(text: str) -> str:
             letters.append(letter)
             i += 3
             continue
+        # Whisper klebt einen Einzelbuchstaben plus „wie“ oft zu einem
+        # kurzen Vorspann vor dem Tafelwort: „AVI Anton“, „Ivi Ida“,
+        # „SW Samuel“. Der Anlaut des Vorspanns MUSS zum Tafelwort passen;
+        # dadurch wird kein beliebiges unbekanntes Wort verschluckt.
+        if (
+            nxt in _TAFEL
+            and len(nxt) > 1
+            and 2 <= len(tok) <= 5
+            and tok[:1] == _TAFEL[nxt]
+        ):
+            letters.append(_TAFEL[nxt])
+            i += 2
+            continue
         letter = _als_buchstabe(tok)
         if letter:
             letters.append(letter)
