@@ -91,7 +91,7 @@ def _s(v: Any) -> str:
 
 def _tokens(text: str) -> list[str]:
     raw = _s(text).lower()
-    raw = re.sub(r"[.,;:!?/]+", " ", raw)
+    raw = re.sub(r"[.,;:!?/'’]+", " ", raw)
     # "m-ü-l-l-e-r" -> einzelne Buchstaben; "wie-maria" bleibt trennbar
     raw = raw.replace("-", " ")
     return [t for t in raw.split() if t]
@@ -351,6 +351,13 @@ def teil(text: str) -> str:
                 return ""
             letters.append(letter)
             i += 3
+            continue
+        letter = _als_buchstabe(tok)
+        if letter and nxt.startswith(("wi", "vi")) and len(nxt) >= 3:
+            # „N wie Nordpol“ -> „N'Winopol“: der Einzelbuchstabe blieb
+            # erhalten, „wie“ klebt am verhörten Tafelwort.
+            letters.append(letter)
+            i += 2
             continue
         # Whisper klebt einen Einzelbuchstaben plus „wie“ oft zu einem
         # kurzen Vorspann vor dem Tafelwort: „AVI Anton“, „Ivi Ida“,

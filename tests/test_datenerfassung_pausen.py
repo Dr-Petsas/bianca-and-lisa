@@ -60,6 +60,7 @@ def test_einzelne_buchstabenfragmente_werden_eindeutig_erkannt():
     assert buchstaben.teil("Envy Nordpol") == "n"
     assert buchstaben.teil("E wie Ida.") == "i"
     assert buchstaben.teil("Es wie Samuel fertig.") == "s"
+    assert buchstaben.teil("N'Winopol") == "n"
     assert buchstaben.teil("Ich heiße Müller") == ""
 
 
@@ -98,6 +99,29 @@ def test_lange_pausen_zwischen_buchstaben_bauen_einen_namen():
     assert s["nachname"] == "Tzannis"
     assert s["buchstabiert"] is True
     assert not s["buchstabenTeil"]
+
+
+def test_echte_whisper_serien_ergeben_trotz_verhörern_tzannis():
+    serien = (
+        (
+            "T wie Theodor.", "Spend wie Zacharias.", "AVI Anton",
+            "N wie Nordpol.", "Wie Nordpol?", "Ivi Ida",
+            "SW Samuel fertig.",
+        ),
+        (
+            "TV Theodor", "Zwas wie Zacharias?", "Abi Anton",
+            "N'Winopol", "Wie Nordpol?", "Evie Ida",
+            "Swiss Samuel fertig.",
+        ),
+    )
+    for serie in serien:
+        sit = _sit()
+        s = _bereit(sit, frage="buchstabieren")
+        for text in serie:
+            s["frage"] = "buchstabieren"
+            gehirn.einsammeln(sit, text)
+        assert s["nachname"] == "Tzannis", (serie, s["nachname"])
+        assert s["buchstabiert"] is True
 
 
 def test_buchstabier_unvermögen_fällt_auf_langsames_nachsprechen_zurück():
