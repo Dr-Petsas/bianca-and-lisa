@@ -6,6 +6,7 @@ Parakeet-Client gefaked), nur die WAV-Direktspur nutzt echtes wave."""
 from __future__ import annotations
 
 import io
+import threading
 import time
 import wave
 
@@ -90,11 +91,11 @@ def test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause():
     _umgebung(lauf, fake_lokal=fake, whisper_ws=leer)
 
 
-def test_whisper_budget_default_spart_300_ms_ohne_normalfall_abzuschneiden():
-    # Live-Normalfall lag bei rund 1,4 s. 1,7 s lässt 300 ms Reserve, spart
-    # aber gegenüber dem eingefrorenen 2,0-s-Deckel genau 300 ms, sobald der
-    # entfernte Whisper hängt; danach übernimmt der lokale Parakeet sofort.
-    assert stt._whisper_budget_s() == 1.7 or stt.STT_WHISPER_BUDGET_S == 1.7
+def test_whisper_budget_default_spart_weitere_300_ms_bis_zum_ersten_ton():
+    # Live 22:18: Whisper-Deckel 1,714 s + serieller Parakeet 0,210 s =
+    # 1,883 s. Der 1,55-s-Deckel plus vorgezogener Rueckfall spart im
+    # gemessenen Hängefall gut 300 ms; der Morgen-p90 (~1,2 s) bleibt davor.
+    assert stt._whisper_budget_s() == 1.55 or stt.STT_WHISPER_BUDGET_S == 1.55
     alt = stt.STT_WHISPER_BUDGET_S
     try:
         stt.STT_WHISPER_BUDGET_S = 0
@@ -103,6 +104,63 @@ def test_whisper_budget_default_spart_300_ms_ohne_normalfall_abzuschneiden():
         assert stt._whisper_budget_s() == 1.5
     finally:
         stt.STT_WHISPER_BUDGET_S = alt
+
+
+def test_parakeet_startet_vor_whisper_timeout_und_ist_sofort_bereit():
+    lokal_gestartet = threading.Event()
+
+    class _SignalLokal(_FakeLokal):
+        def post(self, url, files=None, data=None, **kw):
+            lokal_gestartet.set()
+            return super().post(url, files=files, data=data, **kw)
+
+    fake = _SignalLokal(_Antwort(200, {"text": "Parakeet bereit"}))
+    alt = (stt.STT_WHISPER_BUDGET_S, stt.WHISPER_FALLBACK_LEAD_S)
+
+    def langsam_kaputt(pcm, keywords=""):
+        assert lokal_gestartet.wait(0.5), (
+            "Parakeet muss bereits VOR dem Whisper-Fehler anlaufen"
+        )
+        raise RuntimeError("stt_whisper_timeout")
+
+    def lauf():
+        assert stt.transcribe(BLOB) == "Parakeet bereit"
+        assert fake.aufrufe
+        assert stt._whisper_pause_bis > time.time()
+
+    try:
+        stt.STT_WHISPER_BUDGET_S = 0.14
+        stt.WHISPER_FALLBACK_LEAD_S = 0.08
+        _umgebung(lauf, fake_lokal=fake, whisper_ws=langsam_kaputt)
+    finally:
+        stt.STT_WHISPER_BUDGET_S, stt.WHISPER_FALLBACK_LEAD_S = alt
+
+
+def test_knappes_whisper_final_gewinnt_trotz_laufendem_parakeet():
+    lokal_gestartet = threading.Event()
+
+    class _SignalLokal(_FakeLokal):
+        def post(self, url, files=None, data=None, **kw):
+            lokal_gestartet.set()
+            return super().post(url, files=files, data=data, **kw)
+
+    fake = _SignalLokal(_Antwort(200, {"text": "Parakeet"}))
+    alt = (stt.STT_WHISPER_BUDGET_S, stt.WHISPER_FALLBACK_LEAD_S)
+
+    def knapp(pcm, keywords=""):
+        assert lokal_gestartet.wait(0.5)
+        return "Whisper genauer"
+
+    def lauf():
+        assert stt.transcribe(BLOB) == "Whisper genauer"
+        assert stt._whisper_pause_bis <= time.time()
+
+    try:
+        stt.STT_WHISPER_BUDGET_S = 0.14
+        stt.WHISPER_FALLBACK_LEAD_S = 0.08
+        _umgebung(lauf, fake_lokal=fake, whisper_ws=knapp)
+    finally:
+        stt.STT_WHISPER_BUDGET_S, stt.WHISPER_FALLBACK_LEAD_S = alt
 
 
 def test_whisper_zuerst_parakeet_bleibt_unberuehrt():
@@ -241,7 +299,9 @@ if __name__ == "__main__":
     test_whisper_pause_geht_direkt_zu_parakeet()
     test_whisper_ausfall_ohne_parakeet_wirft_statt_scribe()
     test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause()
-    test_whisper_budget_default_ist_morgen_deckel()
+    test_whisper_budget_default_spart_weitere_300_ms_bis_zum_ersten_ton()
+    test_parakeet_startet_vor_whisper_timeout_und_ist_sofort_bereit()
+    test_knappes_whisper_final_gewinnt_trotz_laufendem_parakeet()
     test_nachkorrektur_laeuft_auf_dem_whisper_pfad()
     test_kyrillische_halluzination_auch_bei_whisper_verworfen()
     test_ws_url_normalisierung()

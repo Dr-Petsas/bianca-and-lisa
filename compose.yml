@@ -23,7 +23,7 @@ x-app: &app
     STT_QWEN_KEY: ${STT_QWEN_KEY:-}
     STT_WHISPER_BASE: ${STT_WHISPER_BASE:-}
     STT_WHISPER_KEY: ${STT_WHISPER_KEY:-pickadoc-stt-dev-key}
-    STT_WHISPER_BUDGET_S: ${STT_WHISPER_BUDGET_S:-1.7}
+    STT_WHISPER_BUDGET_S: ${STT_WHISPER_BUDGET_S:-1.55}
   volumes:
     - ./tenants:/app/tenants:ro
     # Service-Account-Key (W-CALLAUDIO): Anruf-MP3 -> Firebase Storage.

@@ -13,6 +13,7 @@ als reiner Vokabular-Kontext an Qwen beziehungsweise Whisper uebergeben."""
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 import io
 import json
 import subprocess
@@ -38,6 +39,12 @@ _CLIENT: httpx.Client | None = None
 # bezahlt — solange hoert Parakeet. Naechster Versuch nach Ablauf.
 WHISPER_PAUSE_S = 30.0
 _whisper_pause_bis = 0.0
+# W-STT-VORFALLBACK (09.09.2026): Wenn Whisper sein Latenzbudget fast
+# aufgebraucht hat, Parakeet schon parallel anwerfen. Bei einem gesunden
+# Whisper bleibt dessen genauerer Text primaer; beim Timeout ist der lokale
+# Rueckfall bereits fertig und kostet nicht noch einmal ~0,2-0,3 s seriell.
+WHISPER_FALLBACK_LEAD_S = 0.30
+_FALLBACK_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="stt-fallback")
 QWEN_PAUSE_S = 30.0
 _qwen_pause_bis = 0.0
 
@@ -256,6 +263,59 @@ def _whisper(audio: bytes, *, mime: str, keywords: str = "") -> str:
     return _sauber(_nachkorrigieren(text, keywords))
 
 
+def _whisper_mit_vorgezogenem_fallback(
+    audio: bytes,
+    *,
+    mime: str,
+    name: str,
+    keywords: str = "",
+) -> tuple[str, Future | None, Exception | None]:
+    """Whisper bleibt primaer, Parakeet wird nur nahe am Deckel vorbereitet.
+
+    Das Ergebnis des Rueckfalls wird hier noch nicht verwendet: Ein gesundes,
+    knappes Whisper-Final gewinnt weiterhin. Nur bei Fehler oder leerem Final
+    nimmt ``transcribe`` das bereits laufende Parakeet-Ergebnis. Dadurch
+    aendert sich die Erkennungsqualitaet im Normalfall nicht.
+    """
+    if not STT_BASE:
+        try:
+            return _whisper(audio, mime=mime, keywords=keywords), None, None
+        except Exception as e:
+            return "", None, e
+
+    budget = _whisper_budget_s()
+    # Beim expliziten 15-s-Altpfad keinen fast 15 Sekunden spaeten
+    # Spekulationsfaden aufmachen; dieses Verhalten ist nur Teil des harten
+    # Produktionsdeckels.
+    if budget >= 15.0:
+        try:
+            return _whisper(audio, mime=mime, keywords=keywords), None, None
+        except Exception as e:
+            return "", None, e
+
+    whisper: Future = _FALLBACK_POOL.submit(
+        _whisper, audio, mime=mime, keywords=keywords
+    )
+    fallback: Future | None = None
+    vorlauf = min(max(0.05, WHISPER_FALLBACK_LEAD_S), max(0.05, budget / 2))
+    try:
+        return str(whisper.result(timeout=max(0.05, budget - vorlauf)) or ""), None, None
+    except FutureTimeout:
+        fallback = _FALLBACK_POOL.submit(
+            _lokal, audio, mime=mime, name=name, keywords=keywords
+        )
+    except Exception as e:
+        return "", None, e
+
+    try:
+        # _whisper_ws besitzt selbst den harten Deckel. Ein Final kurz vor
+        # Ablauf gewinnt weiterhin; der Future kostet beim Zurueckkehren keine
+        # Wartezeit auf den parallel laufenden Parakeet-Faden.
+        return str(whisper.result() or ""), fallback, None
+    except Exception as e:
+        return "", fallback, e
+
+
 def _qwen_aktiv() -> bool:
     return bool(STT_QWEN_BASE) and time.time() >= _qwen_pause_bis
 
@@ -294,21 +354,23 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
         # Qwen-Modus ist absichtlich hart von Whisper/ElevenLabs getrennt.
         raise RuntimeError("stt_qwen_pause_ohne_fallback")
     if _whisper_aktiv():
-        try:
-            text = _whisper(audio, mime=mime, keywords=keywords)
-            if text:
-                return text
-            # Live 09.09.: leeres Whisper-Final bei hörbarem Kurz-Zug — ohne
-            # Gegenhören verschwanden Ja/Nein. Parakeet hört einmal nach;
-            # Whisper bleibt aktiv (kein Pause-Sperren).
-            if STT_BASE:
-                print("stt-whisper: leeres Final, Parakeet hoert gegen", flush=True)
-            else:
-                return ""
-        except Exception as e:
-            _whisper_sperren(e)
+        text, fallback, fehler = _whisper_mit_vorgezogenem_fallback(
+            audio, mime=mime, name=name, keywords=keywords
+        )
+        if text:
+            return text
+        if fehler is not None:
+            _whisper_sperren(fehler)
             if not STT_BASE:
-                raise  # kein Parakeet konfiguriert — NIE still zu ElevenLabs
+                raise fehler  # kein Parakeet konfiguriert — NIE still zu ElevenLabs
+        elif STT_BASE:
+            # Live 09.09.: leeres Whisper-Final bei hörbarem Kurz-Zug — ohne
+            # Gegenhören verschwanden Ja/Nein. Whisper bleibt aktiv.
+            print("stt-whisper: leeres Final, Parakeet hoert gegen", flush=True)
+        else:
+            return ""
+        if fallback is not None:
+            return str(fallback.result() or "")
     if STT_BASE:
         return _lokal(audio, mime=mime, name=name, keywords=keywords)
     if STT_WHISPER_BASE:

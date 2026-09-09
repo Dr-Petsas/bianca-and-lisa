@@ -378,10 +378,15 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
   GESETZT = Whisper hört ZUERST; Fehlschlag (Dev-Rechner aus, Tunnel weg)
   = automatischer Rückfall auf `STT_BASE` (Parakeet, Chef 30.08.2026)
  und 30 s Whisper-Pause (`WHISPER_PAUSE_S`), damit nicht jeder Zug den
- **1,7-s-Latenzdeckel** (`STT_WHISPER_BUDGET_S`, seit 09.09.2026: 300 ms
- früher als der eingefrorene 2,0-s-Stand, Normalfall ~1,4 s) bezahlt. Leeres
- Whisper-Final fällt ohne Pause sofort auf Parakeet zurück. NIE still auf ElevenLabs: ohne STT_BASE
-  fliegt der RuntimeError hörbar. Leer = alles wie vor W-STT-WHISPER.
+ **1,55-s-Latenzdeckel** (`STT_WHISPER_BUDGET_S`, seit 09.09.2026 spät)
+ bezahlt. **W-STT-VORFALLBACK:** 300 ms vor diesem Deckel startet Parakeet
+ bereits parallel. Ein noch rechtzeitig fertiges Whisper-Final gewinnt
+ weiterhin; bei Timeout oder leerem Final ist der Rückfall schon fertig und
+ kostet nicht nochmals seriell 0,2–0,3 s. Live-Messung vor dem Patch:
+ 1,714 s Whisper-Timeout + 0,210 s Parakeet = 1,883 s; Zielpfad danach
+ höchstens etwa 1,55–1,60 s bis zum STT-Final. Leeres Whisper-Final pausiert
+ Whisper nicht. NIE still auf ElevenLabs: ohne STT_BASE fliegt der
+ RuntimeError hörbar. Leer = alles wie vor W-STT-WHISPER.
 - **Gemessen 30.08.:** Whisper über Tailscale 1,4 s je Zug (Testsatz
   wortgenau inkl. "Petsas" per Hotword-Bias), Rückfall-Zug 2,75 s
   (einmalig, danach 0,33 s Parakeet-direkt), webm-Pfad grün.
