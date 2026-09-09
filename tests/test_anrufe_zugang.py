@@ -18,15 +18,19 @@ def test_nur_patientenhaltige_anruf_api_ist_tokenpflichtig():
     assert not _bianca_transkript_auth("api/start")
 
 
-def test_viewer_reicht_fragment_token_an_alle_api_wege():
+def test_viewer_tauscht_fragment_token_gegen_pfad_cookie():
     js = (Path(__file__).parents[1] / "bianca_web" / "anrufe.js").read_text(
         encoding="utf-8"
     )
     assert 'location.hash.slice(1)' in js
-    assert 'function mitZugang(url)' in js
-    assert 'fetch(mitZugang("api/anrufe")' in js
-    assert 'return mitZugang(`api/anrufe/' in js
+    assert 'fetch("transkript-zugang"' in js
+    assert '"x-remote-token": zugangToken' in js
+    assert '?token=' not in js
     route = inspect.getsource(server.bianca_durchreichen)
     assert "_bianca_transkript_auth(pfad)" in route
-    assert "_remote_guard(request)" in route
+    assert "_bianca_transkript_guard(request)" in route
+    handschlag = inspect.getsource(server.bianca_transkript_zugang)
+    assert "_remote_guard(request)" in handschlag
+    assert "httponly=True" in handschlag
+    assert 'path="/bianca"' in handschlag
 

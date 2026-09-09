@@ -7,17 +7,24 @@
 const $ = (id) => document.getElementById(id);
 const spieler = $("spieler");
 // Der öffentliche Lisa-Proxy schützt Patientenliste, Transkripte und Audio
-// mit seinem Fernsteuerungs-Token. Es bleibt bewusst im URL-Fragment
-// (#t=...), damit es weder an den Webserver noch in Referer-Header gerät.
+// mit seinem Fernsteuerungs-Token. Der Viewer tauscht das URL-Fragment
+// einmal per Header gegen ein HttpOnly-Cookie nur unter /bianca. Dadurch
+// landet das Geheimnis weder in Access-Logs noch in Audio-URLs/Referern.
 const zugangToken = new URLSearchParams(location.hash.slice(1)).get("t") || "";
 let anrufe = [];
 let aktivId = "";
 let laufKnopf = null;
 let kette = [];
 
-function mitZugang(url) {
-  if (!zugangToken) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(zugangToken)}`;
+async function zugangAktivieren() {
+  // Direkt auf dem internen Bianca-Port ist kein Proxy-Cookie nötig.
+  if (!zugangToken || !location.pathname.startsWith("/bianca/")) return;
+  const r = await fetch("transkript-zugang", {
+    method: "POST",
+    headers: { "x-remote-token": zugangToken },
+  });
+  if (!r.ok) throw new Error(String(r.status));
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
 }
 
 function zeit(iso) {
@@ -117,7 +124,7 @@ function spieleKette(urls, knopf) {
 }
 
 function audioUrl(sid, datei) {
-  return mitZugang(`api/anrufe/${encodeURIComponent(sid)}/audio/${encodeURIComponent(datei)}`);
+  return `api/anrufe/${encodeURIComponent(sid)}/audio/${encodeURIComponent(datei)}`;
 }
 
 function zugAudios(sid, z) {
@@ -383,7 +390,7 @@ function maleDetail(a) {
     if (!confirm("Diesen Mitschnitt endgültig löschen?")) return;
     stoppTon();
     try {
-      await fetch(mitZugang(`api/anrufe/${encodeURIComponent(sid)}/loeschen`), {
+      await fetch(`api/anrufe/${encodeURIComponent(sid)}/loeschen`, {
         method: "POST",
       });
     } catch { /* */ }
@@ -454,7 +461,7 @@ async function oeffne(sid) {
   maleListe();
   stoppTon();
   try {
-    const r = await fetch(mitZugang(`api/anrufe/${encodeURIComponent(sid)}`));
+    const r = await fetch(`api/anrufe/${encodeURIComponent(sid)}`);
     if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
     if (d && d.ok) maleDetail(d.anruf);
@@ -495,7 +502,7 @@ function maleListe() {
 
 async function ladeListe() {
   try {
-    const r = await fetch(mitZugang("api/anrufe"));
+    const r = await fetch("api/anrufe");
     if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
     anrufe = (d && d.anrufe) || [];
@@ -510,4 +517,8 @@ async function ladeListe() {
 }
 
 $("neuLaden").onclick = () => { ladeListe(); if (aktivId) oeffne(aktivId); };
-ladeListe();
+zugangAktivieren()
+  .then(ladeListe)
+  .catch(() => {
+    $("liste").innerHTML = '<div class="leer">Zugriffstoken fehlt oder ist ungültig.</div>';
+  });

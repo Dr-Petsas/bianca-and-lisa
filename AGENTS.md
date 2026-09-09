@@ -1169,9 +1169,11 @@ Modul `kern/mitschnitt.py`, gilt für BEIDE Stimmen.
   Der Lisa-Tunnel reicht `/bianca/` im Compose-Netz an `http://bianca:8096`
   durch (nicht an sein eigenes `127.0.0.1`). Die statische Anrufseite ist
   sichtbar, aber alle patientenhaltigen `/bianca/api/anrufe*`-Wege verlangen
-  den privaten Fernsteuerungs-Token. Der Viewer übernimmt ihn ausschließlich
-  aus `#t=…` und hängt ihn an Liste, Details, Audio und Löschen. Direkter
-  Praxiszugang über Tailscale-Port 8096 bleibt unverändert. Test:
+  den privaten Fernsteuerungs-Token. Der Viewer tauscht `#t=…` einmal per
+  Header gegen ein 12-h-HttpOnly-Cookie nur für `/bianca`; der Token landet
+  dadurch nie in API-/Audio-URLs oder Access-Logs und wird nicht an
+  `/remote/*` geschickt. Direkter Praxiszugang über Tailscale-Port 8096
+  bleibt unverändert. Test:
   `tests/test_anrufe_zugang.py`.
 - **Nie blockierend:** alle Schreibwege fangen Fehler und verschlucken sie —
  der Anruf-Pfad leidet nie. Notaus: `MITSCHNITT=0` => kein Ordner, kein

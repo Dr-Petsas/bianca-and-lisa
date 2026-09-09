@@ -567,6 +567,7 @@ _BIANCA_ZIEL = os.environ.get(
 # read=None: die NDJSON-Stroeme (Fueller waehrend Werkzeug-Laeufen) duerfen
 # beliebig lange offen bleiben.
 _BIANCA_KANAL = httpx.AsyncClient(base_url=_BIANCA_ZIEL, timeout=httpx.Timeout(10.0, read=None))
+_TRANSKRIPT_COOKIE = "bianca_transkript"
 
 
 def _bianca_transkript_auth(pfad: str) -> bool:
@@ -580,6 +581,15 @@ def _bianca_transkript_auth(pfad: str) -> bool:
     return p == "api/anrufe" or p.startswith("api/anrufe/")
 
 
+def _bianca_transkript_guard(request: Request) -> None:
+    # Der Viewer tauscht den Fragment-Token EINMAL per Header gegen ein
+    # HttpOnly-Cookie nur unter /bianca. So steht der Token nie in API- oder
+    # Audio-URLs/Access-Logs und kann nicht für /remote/* mitgesendet werden.
+    got = (request.cookies.get(_TRANSKRIPT_COOKIE) or "").strip()
+    if not remote.token_ok(got, _von_hier(request)):
+        raise HTTPException(401, "token")
+
+
 @app.get("/bianca")
 def bianca_umleiten():
     # Ohne Schraegstrich am Ende wuerden Biancas relative Pfade ("api/...")
@@ -587,10 +597,26 @@ def bianca_umleiten():
     return RedirectResponse("/bianca/")
 
 
+@app.post("/bianca/transkript-zugang")
+def bianca_transkript_zugang(request: Request):
+    _remote_guard(request)
+    out = Response('{"ok":true}', media_type="application/json")
+    out.set_cookie(
+        _TRANSKRIPT_COOKIE,
+        remote.token(),
+        max_age=12 * 60 * 60,
+        path="/bianca",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    return out
+
+
 @app.api_route("/bianca/{pfad:path}", methods=["GET", "POST"])
 async def bianca_durchreichen(pfad: str, request: Request):
     if _bianca_transkript_auth(pfad):
-        _remote_guard(request)
+        _bianca_transkript_guard(request)
     kopf = {}
     ct = request.headers.get("content-type")
     if ct:
