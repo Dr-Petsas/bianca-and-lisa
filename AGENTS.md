@@ -1671,6 +1671,28 @@ zurückfallen.
 - Tests: `tests/test_thaler_motivgrenze.py`, dazu
   `tests/test_funktionskalender.py`/`tests/test_zimmer_map.py`.
 
+## Thaler: sichere Buchungs-/Verschiebebestätigung (W-TERMIN-BESTÄTIGUNG 09.09.2026 — nicht rückbauen)
+
+Live Helmich/Donaubauer 09.09.: Eine Bitte, die Termindaten zu wiederholen,
+löste nach zwei unklaren Antworten ohne Ja eine echte Buchung aus. Beim
+Verschieben wurde „Freitag, den 23.“ relativ zu heute als September statt
+zum Bestandstermin am 21. Oktober gelesen; ein 30-Minuten-Motiv-Fallback bot
+einen für den 60-Minuten-Bestandstermin ungültigen Slot, und nach dessen
+Ablehnung sprang die Alternative wieder in den September.
+
+- `flow._termin_nochmal`: Wiederholen/Abgleichen bleibt in `bestaetigen`;
+  falsche Uhrzeit wird gegen `slotIso` korrigiert. Ohne ausdrückliches Ja
+  niemals `book_slot`, auch nicht nach mehreren unklaren Antworten.
+- Explizit verlangte Termindaten dürfen den allgemeinen Wiederholungs-Wächter
+  passieren — sonst blieb nur „Soll ich eintragen?“ übrig.
+- Monatlose Verschiebe-Zieltage werden am bekannten Bestandstermin aufgelöst.
+- Verschiebe-Slots nutzen exakt Kalender + Motiv des Bestandstermins, ohne
+  kürzeren Kontroll-Fallback. Ein belegter Zielslot liefert Alternativen ab
+  dessen Datum und hält den deterministischen `verschieb_angebot`-Zustand;
+  das LLM darf keinen Erfolg erfinden.
+- Regressionen: Live-Sätze in `tests/test_thaler_rebrovic.py` und
+  `tests/test_slot_behandler.py`.
+
 ## Blessing: Notfall + Dokument-Vorsprache (W-BLESSING-AKUT 09.09.2026 — nicht rückbauen)
 
 - Der Live-DB-Agent (DID 4120) trägt kompakte Marker in den von der

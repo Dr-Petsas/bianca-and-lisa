@@ -217,6 +217,173 @@ def test_verschieb_angebot_sucht_nur_bestandskalender():
         verwalten.kal.find_slots_behandler = echt
 
 
+def test_verschieb_zieltag_ohne_monat_erbt_monat_des_bestandstermins():
+    """Live Donaubauer 09.09.: 21. Oktober + „Freitag, den 23.“ muss
+    23. Oktober ergeben, nicht den naechsten 23. ab heute (September)."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    wortlaut = (
+        "Richtig. Meinen Termin am 21. Oktober möchte ich um zwei Tage "
+        "auf Freitag, den 23. verschieben."
+    )
+    s.update({
+        "modus": "verschieben",
+        "wunsch": parse_slot_wish(wortlaut),
+        "wunschText": wortlaut,
+    })
+    termin = {
+        "id": "apt-oct",
+        "iso": "2026-10-21T11:00:00+02:00",
+        "calendarId": PATRIKIS,
+        "doctorName": "Dr. Patrikis",
+        "motivId": "pzr-plus-kontrolle",
+        "motivName": "Professionelle Zahnreinigung plus Kontrolle",
+        "spoken": "am Mittwoch, den einundzwanzigsten Oktober um elf Uhr",
+    }
+    sit["gefunden"] = [termin]
+    gesehen: dict = {}
+    echt = verwalten.kal.find_slots_behandler
+
+    def fake(tenant, ctx, **kw):
+        gesehen.update(kw)
+        return {"ok": True, "slots": [
+            "2026-10-23T09:00:00+02:00",
+            "2026-10-23T13:00:00+02:00",
+        ]}
+
+    verwalten.kal.find_slots_behandler = fake
+    try:
+        aus = verwalten._bestaetigen(sit, termin, None)
+    finally:
+        verwalten.kal.find_slots_behandler = echt
+    assert aus and sit.get("offered")
+    assert s["wunsch"]["date"] == "2026-10-23"
+    assert gesehen.get("start_date") == "2026-10-23"
+    assert gesehen.get("motiv_fallback") is False
+    assert all(o["iso"].startswith("2026-10-23") for o in sit["offered"])
+
+
+def test_verschieb_suche_faellt_nicht_auf_kuerzeres_kontrollmotiv():
+    """Ein 30-Minuten-Fallback darf keinen angeblich freien Platz fuer einen
+    60-Minuten-Bestandstermin erzeugen."""
+    aufrufe: list[str] = []
+    echt_find = kal.find_slots
+    echt_motiv = kal.motiv_von
+
+    def fake_find(tenant, ctx, **kw):
+        aufrufe.append(ctx.get("visitMotiveId"))
+        if ctx.get("visitMotiveId") == "pzr-60":
+            return {"ok": True, "slots": []}
+        return {"ok": True, "slots": ["2026-10-26T13:00:00+01:00"]}
+
+    kal.find_slots = fake_find
+    kal.motiv_von = lambda *a, **k: {"id": "kontrolle-30", "name": "Kontrolle"}
+    try:
+        found = kal.find_slots_behandler(
+            {"clientId": "c"},
+            {"calendarId": "cal", "visitMotiveId": "pzr-60"},
+            start_date="2026-10-23",
+            motiv_fallback=False,
+        )
+    finally:
+        kal.find_slots = echt_find
+        kal.motiv_von = echt_motiv
+    assert found.get("slots") == []
+    assert aufrufe == ["pzr-60"]
+
+
+def test_move_slot_taken_bietet_nur_ab_zieldatum_an():
+    """Der CF-Rueckfall darf nach einem belegten Oktober-Slot nicht wieder
+    September-Termine anbieten."""
+    gesehen: dict = {}
+    echt_update = kal._cf_update
+    echt_offer = kal.offer_slots
+    echt_live = kal.WRITE_LIVE
+    kal.WRITE_LIVE = True
+    kal._cf_update = lambda action, body: (
+        400,
+        {"status": "error", "message": "The slot is not available."},
+        {"route": "updateOrCancelAppointment"},
+    )
+
+    def fake_offer(tenant, ctx, **kw):
+        gesehen["ctx"] = dict(ctx)
+        gesehen.update(kw)
+        return {
+            "ok": True,
+            "spoken": "Frei ist am Dienstag, den siebenundzwanzigsten Oktober.",
+            "slots": [{"iso": "2026-10-27T09:30:00+01:00", "spoken": "am Dienstag"}],
+        }
+
+    kal.offer_slots = fake_offer
+    try:
+        res = kal.move_appointment(
+            {"clientId": "c", "locationId": "l"},
+            {
+                "appointmentId": "apt",
+                "patientName": "Quirin Donaubauer",
+                "calendarId": "cal-pzr",
+                "visitMotiveId": "pzr-60",
+            },
+            slot_iso="2026-10-26T13:00:00+01:00",
+        )
+    finally:
+        kal._cf_update = echt_update
+        kal.offer_slots = echt_offer
+        kal.WRITE_LIVE = echt_live
+    assert res.get("slotTaken") is True
+    assert res.get("slots", [])[0]["iso"].startswith("2026-10-27")
+    assert gesehen.get("start_date") == "2026-10-26"
+    assert gesehen.get("exclude_iso", "").startswith("2026-10-26T13:00")
+
+
+def test_verschieb_fail_bleibt_deterministisch_in_der_slotwahl():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "verschieben",
+        "phase": "verschieb_bestaetigen",
+        "frage": "verschieb_ok",
+        "vorname": "Quirin",
+        "nachname": "Donaubauer",
+        "slotIso": "2026-10-26T13:00:00+01:00",
+    })
+    termin = {
+        "id": "apt",
+        "iso": "2026-10-21T11:00:00+02:00",
+        "calendarId": "cal-pzr",
+        "doctorName": "Franziska Schmidt",
+        "motivId": "pzr-60",
+        "motivName": "Professionelle Zahnreinigung plus Kontrolle",
+    }
+    sit["gefunden"] = [termin]
+    sit["verwaltenTermin"] = "apt"
+    gesehen: dict = {}
+    echt = verwalten.kal.move_appointment
+
+    def fake_move(tenant, ctx, **kw):
+        gesehen.update(ctx)
+        return {
+            "ok": False,
+            "slotTaken": True,
+            "slotIso": kw["slot_iso"],
+            "spoken": "Dieser Platz ist nicht mehr frei. Frei ist am Dienstag.",
+            "slots": [{"iso": "2026-10-27T09:30:00+01:00", "spoken": "am Dienstag"}],
+        }
+
+    verwalten.kal.move_appointment = fake_move
+    try:
+        aus = verwalten._verschieben(sit, None)
+    finally:
+        verwalten.kal.move_appointment = echt
+    assert aus and "nicht mehr frei" in aus["text"]
+    assert gesehen["calendarId"] == "cal-pzr"
+    assert gesehen["visitMotiveId"] == "pzr-60"
+    assert s["phase"] == "verschieb_angebot" and s["frage"] == "slotwahl"
+    assert sit["offered"][0]["iso"].startswith("2026-10-27")
+    assert "2026-10-26T13:00:00+01:00" in sit.get("slotGesperrt", [])
+
+
 def test_hintergrund_vorrat_geht_ueber_behandler_suche():
     sit = _sit()
     s = gehirn.sammler(sit)
