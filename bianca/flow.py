@@ -16,6 +16,7 @@ from kern import anliegen_art
 from kern import dossier
 from kern import gedaechtnis
 from kern import motive
+from kern import praxisregeln
 from kern import spur
 from kern import notes as kern_notes
 from kern import calendar as kal
@@ -1457,6 +1458,16 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     s = gehirn.sammler(sit)
     ab = sit.get("hirnAbgeben") or {}
     dok = bool(_DOKUMENT_RE.search(_s(ab.get("was")) + " " + t))
+    if dok and praxisregeln.dokument_vorsprache_aktiv(sit.get("tenant")):
+        # Praxisregel (DB): Blessing nimmt am Telefon keinen Rezept-/
+        # Ueberweisungsauftrag auf. Persoenliche Vorsprache, ggf. kurze
+        # aerztliche Kontrolle — freundlich, ohne Name/Nummer-Sammelei.
+        ab["offen"] = False
+        sit["hirnAbgeben"] = ab
+        s["frage"] = ""
+        s["phase"] = "fertig"
+        kern_hirn.erledigt(sit)
+        return {"text": praxisregeln.dokument_antwort()}
     neu = gehirn.einsammeln(sit, t)
     sit["ernteZuletzt"] = sorted(neu)
     _abgeben_kontakt(sit)
@@ -1714,6 +1725,26 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # W-ANLIEGEN-ART (09.09.2026): Servicebeschwerde/Notfall festhalten, damit
     # _einschub keine Zusatzangebote macht (Default off => no-op).
     anliegen_art.merken(sit, t)
+
+    akut_text = praxisregeln.notfall_antwort(
+        sit.get("tenant"),
+        t,
+        bereits_akut=bool(sit.get("akutSofort")),
+    )
+    if akut_text:
+        # Praxisregel (DB): kein normaler Termin und keine Slot-Suche. Der
+        # Notfallpfad gewinnt auch, wenn die Intent-Schicht bereits "buchen"
+        # gesetzt hat.
+        sit["akutSofort"] = True
+        sit["offered"] = []
+        sit.pop("angebotKalender", None)
+        s["slotIso"] = ""
+        s["frage"] = ""
+        s["phase"] = "fertig"
+        s["modus"] = ""
+        from kern import hirn as kern_hirn
+        kern_hirn.erledigt(sit)
+        return {"text": akut_text}
 
     # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
     # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris

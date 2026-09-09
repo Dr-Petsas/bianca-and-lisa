@@ -1613,6 +1613,46 @@ bitte nicht vergessen [...] bei Besuchsgründen mit xy klein oder xy gross
   `.data/motiv_probe.py` gegen den echten Meddent-Katalog (133 Motive,
   102 mit Erklärtext).
 
+## Thaler: sechs buchbare Besuchsgründe (W-THALER-MOTIVE 09.09.2026 — nicht rückbauen)
+
+Chef: Thaler möchte telefonisch NUR Neupatient, Kontrolle, Schmerzen,
+Besprechung Zahnersatz, Besprechung Implantate und PZR buchbar haben.
+Andere Katalogtermine dürfen nicht angeboten oder still auf Kontrolle
+zurückfallen.
+
+- `kern/zimmer_map.buchbarer_katalog` filtert den pro Anruf frisch aus der
+  DB geholten Katalog auf exakt diese sechs stabilen Motiv-IDs/-Namen. Die
+  lokale Tenant-Datei ist nicht die Wahrheit.
+- `mapping_text` ordnet Eingriffswünsche sicher der erlaubten Erstberatung
+  zu: Füllung/Krone/Prothese -> ZE Besprechung; Implantat-Eingriffe ->
+  IMP Besprechung. Der Originalwortlaut bleibt für die Terminnotiz erhalten.
+- Klare andere Wünsche (z. B. Wurzelbehandlung/KFO/Bleaching) setzen kein
+  Motiv und starten keine Slot-Suche. Bianca nennt ausschließlich die sechs
+  freigegebenen Gruppen und bleibt bei der Besuchsgrundfrage.
+- Die Grenze greift nur bei aktivem Thaler-`zimmerMap`/Thaler-Mandant.
+  MedDent und Blessing bleiben byte-identisch.
+- Tests: `tests/test_thaler_motivgrenze.py`, dazu
+  `tests/test_funktionskalender.py`/`tests/test_zimmer_map.py`.
+
+## Blessing: Notfall + Dokument-Vorsprache (W-BLESSING-AKUT 09.09.2026 — nicht rückbauen)
+
+- Der Live-DB-Agent (DID 4120) trägt kompakte Marker in den von der
+  `onPickadocPhoneCall`-CF tatsächlich gelieferten Promptfeldern:
+  `NOTFALL-SOFORTREGEL` und `DOKUMENT-VORSPRACHEREGEL`. Nicht in eine lokale
+  Tenant-Datei verschieben — DB bleibt die Wahrheit.
+- `kern/praxisregeln.py` aktiviert den festen Weg nur bei diesen DB-Markern.
+  Andere Hautarztpraxen bleiben unverändert.
+- Akut/Notfall während der aus dem DB-Prompt gelesenen Sprechzeit: kein
+  normaler Termin, jetzt kommen, keine feste Uhrzeit, Wartezeit, garantiert
+  schnellstmöglich gesehen/versorgt. Außerhalb ohne Lebensgefahr: 116 117.
+  Atemnot/Zungen-/Mund-/Halsschwellung, Kollaps/Bewusstlosigkeit oder schwere
+  Arzneimittelreaktion: 112, nicht in die Praxis schicken.
+- Rezepte/Überweisungen/Krankmeldungen werden telefonisch nicht bestellt oder
+  zur Abholung zugesagt: persönliche Vorsprache, gegebenenfalls kurze
+  ärztliche Kontrolle. Der Flow fragt dafür weder Name noch Rückrufnummer ab.
+- Tests: `tests/test_blessing_praxisregeln.py` plus
+  `tests/test_blessing_derma.py`/`tests/test_zahn_katalog.py`.
+
 ## Erst Besuchsgrund, dann Slots (W-MOTIV-FENSTER 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn du VOR dem Besuchsgrund nach terminslots suchst,
