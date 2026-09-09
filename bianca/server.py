@@ -460,12 +460,9 @@ if BIANCA_WEB_DIR.is_dir():
 # Fenster, kein zweiter Port). API und Berichte gehen intern an den Editor
 # auf 8097 (Compose: STUDIO_BASE=http://studio:8097).
 #
-# Pfad-Falle (06./09.09.2026): Das Studio laeuft direkt unter /studio/ UND
-# oeffentlich hinter Lisas /bianca/studio/. Ein absolutes <base
-# href="/studio/"> war deshalb falsch: hinter dem Tunnel verloren ALLE
-# CSS-/JS-/API-/Ergebnislinks den /bianca-Prefix und liefen auf 404.
-# Index bekommt "./", Unterseiten "../"; Slash-lose URLs werden relativ
-# weitergeleitet, damit derselbe HTML-Stand in beiden Umgebungen funktioniert.
+# Pfad-Falle (06.09.2026): relative Links "web/stil.css" von URL /studio
+# (ohne Slash) landen auf /web/… → 404, Seite wirkt tot. Darum <base href=
+# "/studio/"> in jedes HTML und Redirect /studio → /studio/.
 _STUDIO_WEB = Path(__file__).resolve().parent.parent / "tests" / "baukasten" / "editor_web"
 _STUDIO_BASIS = os.environ.get("STUDIO_BASE", "").strip().rstrip("/") or "http://127.0.0.1:8097"
 
@@ -477,10 +474,9 @@ def _studio_seite(name: str) -> Response:
     if name.endswith(".html"):
         html = p.read_text(encoding="utf-8")
         if "<base " not in html.lower():
-            basis = "../" if name in {"ergebnisse.html", "uebergabe.html"} else "./"
-            html = html.replace("<head>", f'<head>\n<base href="{basis}">', 1)
+            html = html.replace("<head>", '<head>\n<base href="/studio/">', 1)
             if "<base " not in html.lower():
-                raise HTTPException(500, "Test-Studio-HTML hat keinen head-Block")
+                html = html.replace("<head ", '<head>\n<base href="/studio/">\n<head ', 1)
         return Response(
             html,
             media_type="text/html; charset=utf-8",
@@ -491,7 +487,7 @@ def _studio_seite(name: str) -> Response:
 
 @app.get("/studio")
 def studio_index_redirect():
-    return RedirectResponse(url="studio/", status_code=307)
+    return RedirectResponse(url="/studio/", status_code=307)
 
 
 @app.get("/studio/")
@@ -499,24 +495,16 @@ def studio_index():
     return _studio_seite("index.html")
 
 
+@app.get("/studio/ergebnisse")
 @app.get("/studio/ergebnisse/")
 def studio_ergebnisse():
     return _studio_seite("ergebnisse.html")
 
 
-@app.get("/studio/ergebnisse")
-def studio_ergebnisse_redirect():
-    return RedirectResponse(url="ergebnisse/", status_code=307)
-
-
+@app.get("/studio/uebergabe")
 @app.get("/studio/uebergabe/")
 def studio_uebergabe():
     return _studio_seite("uebergabe.html")
-
-
-@app.get("/studio/uebergabe")
-def studio_uebergabe_redirect():
-    return RedirectResponse(url="uebergabe/", status_code=307)
 
 
 @app.get("/studio/web/{name}")
@@ -577,10 +565,7 @@ def index():
 @app.api_route("/{name}", methods=["GET", "HEAD"])
 def web_file(name: str):
     # HEAD muss gehen — sonst wirkt /replay.html „gelöscht“ (405 auf Probe).
-    # /anrufe lädt sein eigenes Skript relativ als /anrufe.js. Ohne diesen
-    # Eintrag blieb die Seite live wortlos auf "lade …", obwohl API und
-    # Mitschnitte vollständig vorhanden waren (Kiriakos 09.09.2026).
-    erlaubt = {"app.js", "anrufe.js", "styles.css", "replay.html"}
+    erlaubt = {"app.js", "styles.css", "replay.html"}
     if name in erlaubt:
         p = BIANCA_WEB_DIR / name
         if p.is_file():

@@ -1,9 +1,4 @@
 const $ = (id) => document.getElementById(id);
-const anrufeLink = $("anrufeLink");
-if (anrufeLink && location.hash) {
-  // Der öffentliche Viewer trägt seinen Zugang ausschließlich im Fragment.
-  anrufeLink.href = `anrufe${location.hash}`;
-}
 
 // Alle Server-Pfade RELATIV aufloesen: die Seite laeuft direkt (Port 8096,
 // Basis "/") UND hinter Lisas Durchreiche (Basis "/bianca/"). Absolute
@@ -1169,13 +1164,6 @@ const PATCHES = [
   ["W-ANMELDUNG (Anliegen statt Zufallsweiterleitung)", "09.09.", "Architektur", "Beim Wunsch nach Anmeldung, Empfang oder Mitarbeiter erklärt Bianca ihre Rolle als Telefonassistentin und übernimmt zuerst das konkrete Anliegen. Nur bei erneutem Bestehen verbindet sie ein exakt passendes DB-Ziel; sonst kann sie auf Wunsch einen Rückruf aufnehmen. Namentliche Arzttransfers bleiben unverändert."],
   ["W-MISCHZUG (Ja, aber …)", "09.09.", "Architektur", "Bei einer gemischten Antwort erfasst Bianca zuerst das sichere Ja oder Nein zur laufenden Frage und verarbeitet danach den zusätzlichen Wunsch als eigenes Anliegen. Nummern, Slots und Buchungsbestätigungen bleiben unteilbar; ein Presence-Ja bestätigt niemals versehentlich die Patientenidentität."],
   ["W-KURZANTWORT (Fragezeichen ist kein Themenwechsel)", "09.09.", "Audio/Flow", "Eine von Whisper zögernd als „Ähm, nein?“ punktuierte Kurzantwort bleibt in der schnellen Terminmaschine. Sie löst weder freies LLM-Gerede noch mehrere unnötige TTS-Streams aus; echte Zusatzfragen wie „Nein, aber was kostet das?“ bleiben erlaubt."],
-  ["W-STT-LEER (kurzes Ja gegenhören)", "09.09.", "Ohr", "Ein leeres Whisper-Final gilt bei hörbarem Audio nicht mehr als Stille: Parakeet hört denselben Zug sofort gegen. So verschwinden kurze Ja-Antworten nicht mehr und der Dialog stockt nicht bis zum Stups."],
-  ["W-OHR-FENSTER (lange Antworten bleiben vollständig)", "09.09.", "Telefon", "Kurze Echo- oder Rauschspitzen werden beim stillen Ohr nicht mehr über eine ganze lange Ansage aufsummiert. Nur mindestens 400 ms echter Sprachanteil innerhalb von 600 ms lösen Barge-in aus; verteilte Störungen kappen Biancas Audio nicht mehr."],
-  ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
-  ["W-ARZT-BESTÄTIGUNG (kurz statt Gedächtnisfrage)", "09.09.", "Gespräch", "Ist der Behandler aus dem letzten Besuch oder einem bestehenden Folgetermin bekannt, fragt Bianca nur noch kurz: „Bei Doktor Petsas wieder, richtig?“ Ohne sicheren Fakt fragt sie neutral nach dem gewünschten Behandler."],
-  ["W-TRANSKRIPT-ZUGANG (öffentlicher Viewer)", "09.09.", "Betrieb", "Anrufe und Transkripte sind über den bestehenden Lisa-Tunnel erreichbar; Patientenliste, Texte und Audio bleiben mit dem Fernsteuerungs-Token geschützt."],
-  ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
-  ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Ich brauche eine Füllung“ öffnet auch vor dem Katalog-Laden sofort den sicheren Flow. „Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im Formular, unbelegte Aktenanlagen werden blockiert und eine leere Slotsuche läuft nicht mehr in Schleife."],
 ];
 
 let kTab = "faehig";

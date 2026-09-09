@@ -346,32 +346,6 @@ def test_langes_ohr_stoppt_ansage_sofort(anruf):
     assert len(pcm) > 1000
 
 
-def test_ohr_stoerimpulse_summieren_sich_nicht_ueber_lange_ansage(anruf):
-    """Kiriakos 09.09.: sporadisches Echo/Rauschen darf eine lange Ansage
-    nicht irgendwann kappen. Die 400 ms fuer Barge-in muessen in einem
-    kurzen zusammenhaengenden Fenster liegen, nicht ueber den ganzen Satz
-    aufsummiert werden."""
-    schon = 16 * 1500
-    anruf.wiedergabe.posten = [{
-        "url": "/lang.wav",
-        "buf": bytearray(b"\x00" * (schon + 640)),
-        "done": False,
-        "sent": schon,
-        "armed": True,
-        "stream": True,
-    }]
-    anruf.wiedergabe.zuletzt_ton = anruf._uhr()
-    # Vier kurze Stoerbursts ergeben kumuliert 480 ms. Das alte Lebenszeit-
-    # Zaehlen kappte deshalb spaetere, laengere Antworten reproduzierbar.
-    for _ in range(4):
-        _fuettern(anruf, [_frame(2000)] * 6)
-        _fuettern(anruf, [_frame(0)] * 20)
-        anruf.wiedergabe.zuletzt_ton = anruf._uhr()
-    assert anruf.wiedergabe.posten, "sporadische Stoerbursts duerfen Audio nicht kappen"
-    assert not anruf._rec_an
-    assert anruf.zuege.qsize() == 0
-
-
 def test_stilles_ohr_schneidet_naechsten_satz_nicht(anruf):
     """Folgesatz wartet (noch nicht armed) hinter einem Underrun-Zombie —
     stoppen() darf ihn nicht verwerfen, nur weil spielt() kurz False ist."""

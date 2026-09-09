@@ -294,15 +294,6 @@ _SCHONMAL_JA_RE = re.compile(
     r"bin\s+(schon\s+)?patient|bin\s+bei\s+ihnen\s+in\s+behandlung",
     re.I,
 )
-# Live Thaler/New York 08.09.2026: „Ich habe noch keinen Termin, aber ich
-# bin nicht neu“ beantwortet die Patientenfrage mit BESTAND. Das führende
-# „Nee“ verneint nur den aktuellen Termin; es darf weder Neupatient setzen
-# noch „Nicht Neu“ als Personenname ernten.
-_SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE = re.compile(
-    r"\b(?:ich\s+)?bin\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
-    r"\b(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b",
-    re.I,
-)
 # "bin neu" braucht die Wortgrenze und darf Fuellwoerter tragen: ohne \b traf
 # der Ausdruck auch "bin NEUmann" (echter Nachname!), und "bin GANZ neu bei
 # euch" fiel durch (live 27.08.2026: "Ich bin neu bei Ihnen" -> "Danke, Neu
@@ -523,13 +514,6 @@ _NAME_STOP = {
     # live (27.08.2026) als "Nee Paul" geerntet.
     "nee", "nein", "nö", "noe", "ne", "doch", "falsch", "moment", "sekunde",
     "vorname", "nachname", "familienname", "lautet",
-    # Verwaltungswörter aus einem Einstiegswunsch sind ebenfalls keine
-    # Person. Ein echter mitgesprochener Name bleibt als übriges Token stehen
-    # („Termin löschen, Müller“); ohne Name darf „entfernen“ nicht als
-    # Nachname in die Kalendersuche geraten.
-    "sie", "bitte", "termin", "termine", "kalender", "nehmen",
-    "löschen", "loeschen", "streichen", "stornieren", "canceln",
-    "entfernen", "absagen", "verschieben",
 }
 # Gängige Vornamen (nur zur Zuordnung "ein einzelnes Wort = eher Vorname?").
 # Live 27.08.2026: die Antwort "Paul?" auf die Namensfrage wurde als NACHNAME
@@ -602,8 +586,6 @@ _BUCHSTABIER_HILFE_RE = re.compile(
 # Zustandswoerter, die auch Nachnamen sein koennen (Sauer, Krank, Froh),
 # stehen BEWUSST nicht in der Liste.
 _KEIN_NAME_RE = re.compile(
-    r"(?:ich\s+)?bin\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
-    r"(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
     r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+"
     r"(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+|ja\s+|gerade\s+|heute\s+)*"
     r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+|sehr\s+|so\s+|total\s+|"
@@ -989,22 +971,7 @@ def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) ->
     from kern import zimmer_map
     kat = zimmer_map.buchbarer_katalog(tenant, katalog)
     wortlaut = zimmer_map.mapping_text(tenant, text)
-    kern, vm = besuchsgrund.deute(tenant, wortlaut, katalog=kat)
-    if kern or not zimmer_map.aktiv(tenant):
-        return kern, vm
-    # Der Thaler-Katalog wird beim Gesprächsstart parallel geladen. Trifft
-    # der allererste Satz dieses kleine Zeitfenster, darf sein bereits sicher
-    # normalisierter Grund nicht verlorengehen. Die konkrete Motiv-ID bleibt
-    # bewusst leer und wird nach dem Katalog-Lauf behandlerscharf aufgelöst.
-    ohne_katalog = {
-        "Akute Beschwerden Schmerzen Notfall": "akute Beschwerden/Notfall",
-        "Erstuntersuchung Neupatient": "Neupatient",
-        "Professionelle Zahnreinigung PZR": "Professionelle Zahnreinigung",
-        "Implantat Besprechung Beratung": "Implantat-Beratung",
-        "Zahnersatz Besprechung Beratung": "Zahnersatz-Beratung",
-        "Kontrolluntersuchung Kontrolle": "Kontrolle",
-    }
-    return ohne_katalog.get(wortlaut, ""), None
+    return besuchsgrund.deute(tenant, wortlaut, katalog=kat)
 
 
 def _name_tokens(text: str) -> list[str]:
@@ -1320,11 +1287,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 neu.add("modus")
 
     # Schon mal da gewesen?
-    if _SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE.search(t):
-        if s["warSchonMal"] is not True:
-            s["warSchonMal"] = True
-            neu.add("warSchonMal")
-    elif _SCHONMAL_NEIN_RE.search(t):
+    if _SCHONMAL_NEIN_RE.search(t):
         if s["warSchonMal"] is not False:
             s["warSchonMal"] = False
             neu.add("warSchonMal")
@@ -2083,8 +2046,8 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Stimmt Name und Nummer so — oder habe ich mich vertan?",
     ),
     "arzt_check": (
-        "Bei demselben Behandler wieder, richtig?",
-        "Wieder beim gleichen Behandler, richtig?",
+        "Sie waren zuletzt bei demselben Behandler, richtig?",
+        "Stimmt der letzte Behandler so — ein kurzes Ja oder Nein genügt.",
     ),
     "rueckblick": (
         "Wie ist es Ihnen seither ergangen?",
@@ -2609,17 +2572,17 @@ def arzt_check_frage(sit: dict) -> str:
     if kern_tenants.ist_funktionskalender(roh):
         beim = kern_tenants.kalender_beim(roh)
         if beim.startswith("der "):
-            return f"Zur {beim[4:]} wieder, richtig?"
+            return f"Sie waren zuletzt zur {beim[4:]}, richtig?"
         if beim:
-            return f"Bei {beim} wieder, richtig?"
-        return "Zur Prophylaxe wieder, richtig?"
+            return f"Sie waren zuletzt bei {beim}, richtig?"
+        return "Sie waren zuletzt zur Prophylaxe, richtig?"
     name = arzt_sprechname(
         _s(k.get("doctorName") or k.get("calendarName")),
         sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
     )
     if not name:
         return ""
-    return f"Bei {name} wieder, richtig?"
+    return f"Sie waren zuletzt bei {name}, richtig?"
 
 
 def patient_von_kontakt_loesen(sit: dict) -> None:
@@ -2707,7 +2670,7 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
     """
     erstformen = [
         "Waren Sie denn schon einmal bei uns in der Praxis?",
-        "Bei welchem Behandler soll ich für Sie schauen?",
+        "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?",
         "Und der Nachname, bitte?",
         "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?",
         "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?",
@@ -2938,10 +2901,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 rq = arzt_check_frage(sit)
                 if rq:
                     return "arzt_check", rq
-            wer = fuer_wen_phrase(s, fall="wen")
+            wer = fuer_wen_phrase(s)
             if wer:
-                return "arzt", f"Bei welchem Behandler soll ich für {wer} schauen?"
-            return "arzt", "Bei welchem Behandler soll ich für Sie schauen?"
+                return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
+            return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:

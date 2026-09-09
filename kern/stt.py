@@ -167,10 +167,10 @@ def _whisper_sperren(grund: Exception) -> None:
           f"pause {WHISPER_PAUSE_S:.0f}s", flush=True)
 
 
-def _whisper(audio: bytes, *, mime: str, keywords: str = "") -> str | None:
+def _whisper(audio: bytes, *, mime: str, keywords: str = "") -> str:
     pcm = _pcm16k(audio, mime)
     if len(pcm) < 1600:  # unter 50 ms ist nichts zu hoeren
-        return None
+        return ""
     text = _whisper_ws(pcm, keywords)
     return _sauber(_nachkorrigieren(text, keywords))
 
@@ -183,23 +183,7 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
         return ""
     if _whisper_aktiv():
         try:
-            text = _whisper(audio, mime=mime, keywords=keywords)
-            if text is None:
-                return ""
-            if text:
-                return text
-            # Live 09.09.2026 (Kiriakos): zwei saubere kurze Sprachzuege
-            # (je ~1,5 s WAV, 14/15 Sprach-Frames) erreichten Whisper, dessen
-            # gueltiges Final war aber leer. Der bisherige Rueckfall griff nur
-            # bei Exceptions — dadurch verschwanden "Ja"-Antworten komplett
-            # und Bianca stupste nach einigen Sekunden. Ein leeres Final ist
-            # fuer gesprochenes Audio ebenfalls kein belastbares Ergebnis:
-            # Parakeet darf denselben Zug einmal gegenhoeren. Whisper wird
-            # deshalb nicht pausiert; der naechste Zug versucht es normal neu.
-            if STT_BASE:
-                print("stt-whisper: leeres Final, Parakeet hoert gegen", flush=True)
-            else:
-                return ""
+            return _whisper(audio, mime=mime, keywords=keywords)
         except Exception as e:
             _whisper_sperren(e)
             if not STT_BASE:

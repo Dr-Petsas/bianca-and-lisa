@@ -228,16 +228,6 @@ dann erst nach namen und nummer fragen."
  Absage, Auskunft, Eskalation) und `tests/test_agentprofil.py`
  (Ernte, +E164, nie im Cache, Nachreichen beim Cache-Treffer).
 
-**W-ARZT-BESTÄTIGUNG (09.09.2026):** Die offene Gedächtnisfrage „Wissen Sie
-noch, bei welchem Arzt …?“ ist ausgebaut. Ist ein Kalender sicher bekannt,
-kommt kurz „Bei Doktor X wieder, richtig?“. Als sichere Quelle gilt neben dem
-letzten Besuch auch ein bereits bestehender nächster Termin aus
-`masPatientLastDoctor`; dessen Datum/Grund wird ausdrücklich NICHT als
-vergangene Behandlung übernommen. Ohne Kalender-Fakt fragt Bianca neutral,
-bei welchem Behandler sie schauen soll. Tests:
-`test_anrufer_kartei_kommt_nach_dem_hallo`,
-`test_anrufer_kartei_nimmt_behandler_aus_naechstem_termin`.
-
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.
@@ -396,14 +386,6 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
 - Tests: `tests/test_stt_whisper.py` (offline: Vorrang, Rückfall+Pause,
   nie Scribe, WAV-Direktspur, Nachkorrektur); Live-Probe:
   `tests/stt_whisper_probe.py` (echter Container + echter Rückfall).
-- **Leeres Whisper-Final ist kein Stille-Beweis (W-STT-LEER 09.09.2026):**
-  Live bei Kiriakos erreichten kurze Antworten als hörbare 1,5-s-WAVs die
-  STT, Whisper lieferte aber ohne Exception `""`; deshalb griff der alte
-  Fehler-Rückfall nicht und Bianca stockte bis zum Stups. Bei konfiguriertem
-  `STT_BASE` hört Parakeet einen solchen Zug jetzt einmal gegen. Whisper wird
-  dabei nicht pausiert (der Dienst ist erreichbar); nur ein echtes
-  Verbindungs-/Protokollproblem aktiviert weiter die 30-s-Pause. Test:
-  `test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause`.
 
 ## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
 
@@ -461,15 +443,6 @@ taub (Barge-Schwelle 1100 / 280 ms). Vier Bausteine:
 4. **Text-Echo** (`unterbrechung.ist_echo`, auch ohne Barge wenn `ohr=True`)
    gegen die Satzkarte — Freisprech-Echo startet kein LLM; Ja/Nein/Stopp
    nie als Echo. Echter Einwand bekommt den Floor (kein „Also, wo war ich“).
-5. **Barge-Fenster statt Lebenszeit-Summe (W-OHR-FENSTER 09.09.2026):**
-   Kiriakos meldete Audioaussetzer, die bei langen Antworten zunahmen.
-   Ursache: `_ohr_frames` summierte kurze Echo-/Rauschbursts über die GANZE
-   Ansage; nach insgesamt 400 ms wurde der laufende Audio-Posten gekappt,
-   auch wenn zwischen den Bursts lange Ruhe lag. Die Stopp-Schwelle gilt
-   jetzt nur noch in einem rollenden 600-ms-Fenster (mindestens 400 ms
-   Sprachanteil). Echte längere Einwände stoppen unverändert schnell,
-   verteilte Leitungsstörungen nie. Repro/Wache:
-   `test_ohr_stoerimpulse_summieren_sich_nicht_ueber_lange_ansage`.
 
 Tests: `tests/test_tempo.py`, Ohr-Block in `test_sip_vad.py`,
 `test_ist_echo_ohr_gegen_satzkarte`, Halbsatz-Punkt-Fälle.
@@ -1174,16 +1147,6 @@ Modul `kern/mitschnitt.py`, gilt für BEIDE Stimmen.
  Traversal), `POST /api/anrufe/{sid}/loeschen`. Lisa zeichnet über
  dieselben Kern-Hooks auf (`.data/anrufe/lisa/`), hat aber noch keine
  eigene Seite.
-- **Öffentlicher, geschützter Viewer (W-TRANSKRIPT-ZUGANG 09.09.2026):**
-  Der Lisa-Tunnel reicht `/bianca/` im Compose-Netz an `http://bianca:8096`
-  durch (nicht an sein eigenes `127.0.0.1`). Die statische Anrufseite ist
-  sichtbar, aber alle patientenhaltigen `/bianca/api/anrufe*`-Wege verlangen
-  den privaten Fernsteuerungs-Token. Der Viewer tauscht `#t=…` einmal per
-  Header gegen ein 12-h-HttpOnly-Cookie nur für `/bianca`; der Token landet
-  dadurch nie in API-/Audio-URLs oder Access-Logs und wird nicht an
-  `/remote/*` geschickt. Direkter Praxiszugang über Tailscale-Port 8096
-  bleibt unverändert. Test:
-  `tests/test_anrufe_zugang.py`.
 - **Nie blockierend:** alle Schreibwege fangen Fehler und verschlucken sie —
  der Anruf-Pfad leidet nie. Notaus: `MITSCHNITT=0` => kein Ordner, kein
  Byte. Tests: `tests/test_mitschnitt.py`.
@@ -1504,9 +1467,7 @@ NIE der LLM-Text.
 - **Notaus/Stufen** `FAKTEN_WACHE=off|shadow|enforce` (Default **off** =
   byte-identisch, der bestehende `_ERLEDIGT_RE`-Guard bleibt unberührt).
 - Tests: `tests/test_fakten_wache.py` (offline). Rollout: erst shadow gegen
-  Replays, dann enforce. **Live seit 09.09.2026 auf `enforce`** (pickadoc1):
-  insbesondere darf „Ich habe Ihre Akte angelegt“ nach einem Nummernfragment
-  nie ohne erfolgreiche `lastCreate`-/`lastBook`-Evidenz gesprochen werden.
+  Replays, dann enforce.
 
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 
@@ -1672,58 +1633,6 @@ zurückfallen.
   MedDent und Blessing bleiben byte-identisch.
 - Tests: `tests/test_thaler_motivgrenze.py`, dazu
   `tests/test_funktionskalender.py`/`tests/test_zimmer_map.py`.
-
-## Thaler: sichere Buchungs-/Verschiebebestätigung (W-TERMIN-BESTÄTIGUNG 09.09.2026 — nicht rückbauen)
-
-Live Helmich/Donaubauer 09.09.: Eine Bitte, die Termindaten zu wiederholen,
-löste nach zwei unklaren Antworten ohne Ja eine echte Buchung aus. Beim
-Verschieben wurde „Freitag, den 23.“ relativ zu heute als September statt
-zum Bestandstermin am 21. Oktober gelesen; ein 30-Minuten-Motiv-Fallback bot
-einen für den 60-Minuten-Bestandstermin ungültigen Slot, und nach dessen
-Ablehnung sprang die Alternative wieder in den September.
-
-- `flow._termin_nochmal`: Wiederholen/Abgleichen bleibt in `bestaetigen`;
-  falsche Uhrzeit wird gegen `slotIso` korrigiert. Ohne ausdrückliches Ja
-  niemals `book_slot`, auch nicht nach mehreren unklaren Antworten.
-- Explizit verlangte Termindaten dürfen den allgemeinen Wiederholungs-Wächter
-  passieren — sonst blieb nur „Soll ich eintragen?“ übrig.
-- Monatlose Verschiebe-Zieltage werden am bekannten Bestandstermin aufgelöst.
-- Verschiebe-Slots nutzen exakt Kalender + Motiv des Bestandstermins, ohne
-  kürzeren Kontroll-Fallback. Ein belegter Zielslot liefert Alternativen ab
-  dessen Datum und hält den deterministischen `verschieb_angebot`-Zustand;
-  das LLM darf keinen Erfolg erfinden.
-- Regressionen: Live-Sätze in `tests/test_thaler_rebrovic.py` und
-  `tests/test_slot_behandler.py`.
-
-## Thaler: New-York-Formularfaden (W-THALER-FORMULAR 09.09.2026 — nicht rückbauen)
-
-Live New-York/Andrejevic 08./09.09.: „noch keinen Termin, aber nicht neu“
-wurde als Neupatient und teils als Name „Nicht Neu“ geerntet; die Frage
-„Soll ich meinen Namen buchstabieren?“ fiel ans freie LLM, ein Reiseort
-verdrängte die offene Zeitfrage, und nach einer erfolglosen Slotsuche wurde
-dieselbe Rückrufmeldung bei jedem Folgesatz erneut gesprochen.
-
-- „nicht neu“ gewinnt auf der Schonmal-Frage deterministisch als
-  Bestandspatient; die Floskel ist für die Namens-Ernte gesperrt.
-- Ein ausdrücklicher Behandlungswunsch ohne das Wort „Termin“ („Ich brauche
-  eine Füllung“) öffnet auch während des parallelen Katalog-Ladefensters
-  sofort den sicheren Buchungsflow. Thaler merkt dabei den normalisierten
-  Grund (Füllung → Zahnersatz-Besprechung) zunächst ohne Motiv-ID; die ID wird
-  nach dem Katalog-Lauf regulär behandlerscharf aufgelöst. Kostenfragen und
-  verneinte Wünsche starten keine Buchung.
-- Meta-Fragen zum Buchstabieren bleiben im Formular und führen gezielt in
-  die sichere mehrzügige Nachnamenaufnahme.
-- Ein Reiseort ist weder Datenbestätigung noch Zeitwunsch: offene Nummern-
-  Readbacks bleiben offen; auf der Zeitfrage fragt Bianca nach den Tagen vor
-  Ort und der Tageszeit.
-- Nach leerer Slotsuche + echter Rückrufnotiz ist der Vorgang beendet.
-  Dank/Abschied startet keine erneute Suche; ein ausdrücklicher weiterer
-  Termin öffnet den Flow bewusst neu.
-- `buchstaben.deute` verlangt bei „also <Name>“ ohne echte Buchstabenkette
-  einen ähnlichen gesprochenen Namensanker. Normale Prosa wie „aus dem
-  Kalender, also entfernen“ wird nicht mehr als Nachname gespeichert.
-- Regressionen: `tests/test_thaler_new_york.py` plus
-  `test_absage_varianten_erkannt`.
 
 ## Blessing: Notfall + Dokument-Vorsprache (W-BLESSING-AKUT 09.09.2026 — nicht rückbauen)
 
@@ -1947,27 +1856,6 @@ Zusagen, Boah auf Hörfehler, PZR mitten in Wunschzeit, „Wem kann ich“):
 - **Begrüßung:** `Wem kann ich` → `Was kann ich` (DB + `gruss_saeubern`).
 - Tests: `test_gespraech` (unklar), `test_hirn` (Rezept), `test_unterbrechung`
   (Floor), `test_greeting_bianca`, `test_anstand` (STT-Müll).
-
-## Öffnungszeiten + Wegbeschreibung aus Fakten (W-PRAXISAUSKUNFT 09.09.2026 — nicht rückbauen)
-
-Session `dda01bf3b329461aac70aeb0d4a8e2b6` (technische Audio-Probe):
-Der beim Transport beschädigte Testsatz wurde als „Pflungszeiten“ und „wie ich
-die praktisch erreiche“ transkribiert. Die Talk-Schicht machte daraus einen
-Gärtnerei-Witz, obwohl Öffnungszeiten und Weg im Mandantenprofil standen.
-
-- `kern/wissen.praxis_antwort` erkennt Öffnungszeiten eng fuzzy (lange Wörter,
-  hohe Schwelle) und Anfahrtsfragen auch bei diesem STT-Verhörer.
-- Die Antwort ist deterministisch: zuerst Fakten aus `tenant["dbPrompt"]`,
-  danach `tenant["wissen"]` als lokaler Rückfall. Das LLM formuliert und rät
-  auf diesem Weg nicht.
-- Werden beide Dinge gefragt, nennt Bianca in EINEM Zug die echten Zeiten und
-  die vollständige Wegbeschreibung. In einer laufenden Aufgabe hängt sie
-  danach die offene Pflichtfrage wieder an.
-- MedDent trägt die aktuellen Zeiten zusätzlich im lokalen Rückfall:
-  Montag bis Donnerstag acht bis achtzehn Uhr, Freitag acht bis sechzehn Uhr,
-  außerdem nach Vereinbarung. Die DB gewinnt weiterhin, wenn sie erreichbar ist.
-- Regressionswachen: `tests/test_wissen.py` (Live-Verhörer, DB-Vorrang,
-  LLM-Bypass und Wegabschnitt).
 
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 

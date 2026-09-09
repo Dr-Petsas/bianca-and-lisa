@@ -290,23 +290,6 @@ _FB_NEU_RE = re.compile(
     r"(?:brauch\w*|h(?:ä|ae)tte?\s+gern\w*|m(?:ö|oe)chte\w*|will)\s+(?:\w+\s+){0,4}?termin",
     re.I,
 )
-# Behandlungswunsch OHNE das Wort „Termin“: Der Besuchsgrund-Katalog wird
-# parallel geladen und kann beim ersten Anruferzug noch leer sein. „Ich
-# brauche eine Füllung“ muss trotzdem sofort den sicheren Buchungsflow öffnen,
-# statt ins freie LLM zu fallen (Thaler/New York 08.09.2026). Eng an ein
-# ausdrückliches Wunschverb gebunden; reine Kosten-/Wissensfragen zählen nicht.
-_FB_BEHANDLUNGSWUNSCH_RE = re.compile(
-    r"\b(?:brauch\w*|ben(?:ö|oe)tig\w*|m(?:ö|oe)cht\w*|will|"
-    r"h(?:ä|ae)tt\w*\s+gern)\b[^.!?]{0,48}\b(?:"
-    r"f(?:ü|ue)llung|krone|prothese|zahnersatz|implantat|"
-    r"kontrolle|zahnreinigung|prophylaxe|pzr|bleaching|"
-    r"beratung|besprechung|behandlung)\w*\b|"
-    r"\b(?:f(?:ü|ue)llung|krone|prothese|zahnersatz|implantat|"
-    r"kontrolle|zahnreinigung|prophylaxe|pzr|bleaching|"
-    r"beratung|besprechung|behandlung)\w*\b[^.!?]{0,32}"
-    r"\b(?:brauch\w*|ben(?:ö|oe)tig\w*|m(?:ö|oe)cht\w*|will)\b",
-    re.I,
-)
 # Beschwerde/Symptom = Behandlungsbedarf = Termin. Ohne diese Regel lief
 # "Ich glaube, ich habe Zahnschmerzen" (Chef-Testanruf 03.09.2026 abends)
 # komplett am Buchen vorbei: Heuristik sagte KEINE, jeder Zug ging ans
@@ -333,12 +316,6 @@ _FB_SYMPTOM_RE = re.compile(
 _KEIN_SYMPTOM_RE = re.compile(
     r"kein\w*\s+(?:\w+\s+)?(?:schmerz\w*|beschwerden)|schmerzfrei", re.I,
 )
-
-
-def _motivkatalog_da(sit: dict) -> bool:
-    """Frischer Sitzungskatalog oder lokaler Tenant-Rückfall vorhanden."""
-    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-    return bool(sit.get("motivKatalog") or tenant.get("visitMotives"))
 
 
 def _fallback(sit: dict, text: str) -> dict[str, Any]:
@@ -369,10 +346,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         if _FB_AUSKUNFT_RE.search(t):
             gg = "VORGANG" if "termin" in t.lower() else "REGEL"
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-        if (_FB_NEU_RE.search(t)
-                or (not _motivkatalog_da(sit)
-                    and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
-                    and not _NEGATION_RE.search(t))) or (
+        if _FB_NEU_RE.search(t) or (
             _FB_SYMPTOM_RE.search(t) and not _KEIN_SYMPTOM_RE.search(t)
         ):
             return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
@@ -395,10 +369,6 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         gg = "VORGANG" if "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
     if _FB_NEU_RE.search(t):
-        return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-    if (not _motivkatalog_da(sit)
-            and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
-            and not _NEGATION_RE.search(t)):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     if _FB_SYMPTOM_RE.search(t) and not _KEIN_SYMPTOM_RE.search(t):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}

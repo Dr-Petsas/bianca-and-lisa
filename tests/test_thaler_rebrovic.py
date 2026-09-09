@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from bianca import agent, flow, gehirn, weiterleiten
+from bianca import flow, gehirn, weiterleiten
 from kern import gespraech
 from kern.tenants import laden
 
@@ -56,35 +56,6 @@ def _sit_gebucht_thaler() -> dict:
                  "calendarName": "Dr. Eva Thaler"},
         "slotIso": "2026-09-10T15:30:00+02:00",
     })
-    return sit
-
-
-def _sit_bestaetigung_thaler() -> dict:
-    sit = _sit_thaler()
-    s = gehirn.sammler(sit)
-    s.update({
-        "modus": "buchen",
-        "phase": "bestaetigen",
-        "frage": "bestaetigung",
-        "grund": "Prophylaxe",
-        "motivName": "PRO Professionelle Zahnreinigung",
-        "vorname": "Nikolas",
-        "nachname": "Helmich",
-        "slotIso": "2026-09-21T16:00:00+02:00",
-        "arzt": {
-            "typ": "funktion",
-            "calendarId": "cal-prophy",
-            "calendarName": "Prophylaxe",
-        },
-    })
-    sit["angebotKalender"] = {
-        "calendarId": "cal-prophy",
-        "calendarName": "Prophylaxe",
-    }
-    sit["offered"] = [{
-        "iso": "2026-09-21T16:00:00+02:00",
-        "spoken": "am Montag, den einundzwanzigsten September um sechzehn Uhr",
-    }]
     return sit
 
 
@@ -228,75 +199,3 @@ def test_gebucht_ein_bisschen_frueher_ohne_verlegen():
     assert s["modus"] == "verschieben"
     assert sit.get("verschiebRichtung") == "frueher"
     assert s["phase"] == "verschieb_angebot"
-
-
-def test_terminabgleich_korrigiert_uhrzeit_ohne_neue_suche():
-    """Live Helmich 09.09.: „Der Termin ist um 14 Uhr ... richtig?“ darf
-    den gewaehlten 16-Uhr-Slot weder verwerfen noch als neuen Wunsch suchen."""
-    sit = _sit_bestaetigung_thaler()
-    z = flow.zug(sit, "Der Termin ist um 14 Uhr am 21.09. Richtig?")
-    s = gehirn.sammler(sit)
-    assert z and z.get("_wiederholungErlaubt")
-    assert "Nein" in z["text"] and "sechzehn Uhr" in z["text"]
-    assert "genau diesen Termin" in z["text"]
-    assert s["slotIso"].startswith("2026-09-21T16:00")
-    assert s["phase"] == "bestaetigen"
-    assert not sit.get("lastBook")
-
-
-def test_wiederhole_termindaten_bucht_nie_und_bleibt_hoerbar():
-    """Live Helmich 09.09.: die zweite Wiederholbitte loeste book_slot aus.
-    Ohne ausdrueckliches Ja bleibt Bianca beliebig oft vor dem Schreiben."""
-    sit = _sit_bestaetigung_thaler()
-    erster = flow.zug(sit, "Wiederhole den Termin.")
-    assert erster and "einundzwanzigsten September" in erster["text"]
-    zweiter = flow.zug(sit, "Wiederhole mir zuerst die Termindaten, bitte.")
-    assert zweiter and "sechzehn Uhr" in zweiter["text"]
-    assert gehirn.sammler(sit)["phase"] == "bestaetigen"
-    assert not sit.get("lastBook")
-
-    # Auch nach einem identischen vorherigen Readback darf der globale
-    # Wiederholungs-Waechter die verlangten Termindaten nicht streichen.
-    sit["messages"].append({
-        "role": "assistant",
-        "content": "Thaler Zahnmedizin. Wie kann ich Ihnen helfen?",
-    })
-    sit["messages"].append({"role": "assistant", "content": erster["text"]})
-    aus = agent._maschinen_antwort(sit, zweiter, list(sit["messages"]))
-    assert "einundzwanzigsten September" in aus["text"]
-    assert "sechzehn Uhr" in aus["text"]
-
-
-def test_zwei_unklare_bestaetigungen_buchen_nicht_automatisch():
-    sit = _sit_bestaetigung_thaler()
-    z1 = flow.zug(sit, "Vielleicht.")
-    z2 = flow.zug(sit, "Ich bin nicht sicher.")
-    assert z1 and z2
-    assert "genau diesen Termin" in z2["text"]
-    assert gehirn.sammler(sit)["phase"] == "bestaetigen"
-    assert not sit.get("lastBook")
-
-
-def test_ja_das_stimmt_bleibt_eine_eindeutige_buchungsbestaetigung():
-    """Die Faktenfrage-Wache darf ein echtes „Ja, das stimmt“ nicht abfangen."""
-    sit = _sit_bestaetigung_thaler()
-    s = gehirn.sammler(sit)
-    s["pzr"] = "nein"
-    s["arztNotizFrage"] = "nein"
-    echt_book = flow.kal.book_slot
-    echt_note = flow.kal.note_appointment
-    flow.kal.book_slot = lambda *a, **k: {
-        "ok": True,
-        "booked": True,
-        "slotIso": s["slotIso"],
-        "appointmentId": "apt-ok",
-        "spoken": "Der Termin ist fest eingetragen.",
-    }
-    flow.kal.note_appointment = lambda *a, **k: {"ok": True}
-    try:
-        z = flow.zug(sit, "Ja, das stimmt.")
-    finally:
-        flow.kal.book_slot = echt_book
-        flow.kal.note_appointment = echt_note
-    assert z and (z.get("book") or {}).get("booked")
-    assert "fest eingetragen" in z["text"]

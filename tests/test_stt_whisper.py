@@ -99,23 +99,6 @@ def test_whisper_ausfall_faellt_auf_parakeet_und_pausiert():
     _umgebung(lauf, fake_lokal=fake, whisper_ws=kaputt)
 
 
-def test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause():
-    """Live 09.09.: Whisper lieferte fuer ein hörbares kurzes "Ja" leer.
-
-    Das ist kein gesicherter Stille-Befund: Parakeet muss denselben Zug
-    gegenhören. Whisper bleibt gesund und wird beim Folgezug erneut versucht.
-    """
-    fake = _FakeLokal(_Antwort(200, {"text": "Ja."}))
-
-    def lauf():
-        text = stt.transcribe(BLOB)
-        assert text == "Ja."
-        assert fake.aufrufe, "leeres Whisper-Final muss Parakeet ausloesen"
-        assert stt._whisper_pause_bis == 0.0
-
-    _umgebung(lauf, fake_lokal=fake, whisper_ws=lambda pcm, keywords="": "")
-
-
 def test_whisper_pause_geht_direkt_zu_parakeet():
     fake = _FakeLokal(_Antwort(200, {"text": "direkt Parakeet"}))
 
@@ -155,10 +138,7 @@ def test_kyrillische_halluzination_auch_bei_whisper_verworfen():
     def lauf():
         assert stt.transcribe(BLOB) == ""
 
-    # Ohne Parakeet bleibt das verworfene Whisper-Ergebnis leer. Mit
-    # Parakeet wuerde der sichere Gegenhoer-Pfad denselben Zug pruefen.
-    _umgebung(lauf, stt_base="",
-              whisper_ws=lambda pcm, keywords="": "Продолжение следует")
+    _umgebung(lauf, whisper_ws=lambda pcm, keywords="": "Продолжение следует")
 
 
 def test_ws_url_normalisierung():
@@ -223,7 +203,6 @@ def test_bereit_und_anzeige_mit_whisper():
 if __name__ == "__main__":
     test_whisper_zuerst_parakeet_bleibt_unberuehrt()
     test_whisper_ausfall_faellt_auf_parakeet_und_pausiert()
-    test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause()
     test_whisper_pause_geht_direkt_zu_parakeet()
     test_whisper_ausfall_ohne_parakeet_wirft_statt_scribe()
     test_nachkorrektur_laeuft_auf_dem_whisper_pfad()

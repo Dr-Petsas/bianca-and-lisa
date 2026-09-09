@@ -219,8 +219,7 @@ OHR_FRAMES = 300        # 6 s bei 20-ms-Rahmen
 # Puffer zum Zug machen — sonst spricht sie die Rest-Saetze zu Ende und
 # reagiert erst im uebernaechsten Turn (Chef 08.09.2026: Nummern-Readback
 # + „Termin für heute"). Knackser/kurze Ja bleiben unter der Schwelle.
-OHR_BARGE_FRAMES = 20   # 400 ms Sprachanteil ...
-OHR_BARGE_WINDOW_FRAMES = 30  # ... innerhalb 600 ms, nie lebenslang summiert
+OHR_BARGE_FRAMES = 20   # 400 ms
 # Begruessung: die ersten ~1 s nicht per Ohr-Barge stoppen — Leitungsknacks
 # / Echo starteten die Ansage neu (Live 08.09.: Begruessung doppelt).
 OHR_START_SCHUTZ_MS = 1000
@@ -568,7 +567,6 @@ class Anruf:
         self._ohr_an = False
         self._ohr_frames = 0
         self._ohr_peak = 0
-        self._ohr_barge_fenster: deque[int] = deque(maxlen=OHR_BARGE_WINDOW_FRAMES)
         self._ohr_zug = False      # naechster Zug kam aus dem Ohr-Puffer
         self._spielte = False
 
@@ -577,15 +575,12 @@ class Anruf:
         self._ohr_an = False
         self._ohr_frames = 0
         self._ohr_peak = 0
-        self._ohr_barge_fenster.clear()
 
     def _ohr_start(self) -> None:
         self._ohr = list(self._ring)
         self._ohr_an = True
         self._ohr_frames = self._sprech_run
         self._ohr_peak = self._peak_run
-        self._ohr_barge_fenster.clear()
-        self._ohr_barge_fenster.extend([1] * min(self._sprech_run, OHR_BARGE_WINDOW_FRAMES))
 
     def _ohr_flush_zu_rec(self, jetzt: float) -> bool:
         """Ohr-Puffer als laufende Aufnahme uebernehmen. True = gestartet."""
@@ -830,28 +825,17 @@ class Anruf:
 
             # Stilles Ohr: solange sie noch Posten hat, puffern und NIE stoppen.
             if BRIDGE_OHR and ki_dran:
-                ohr_neu = False
                 if laut and not self._ohr_an and self._sprech_run >= START_FRAMES:
                     self._ohr_start()
-                    ohr_neu = True
                 if self._ohr_an:
-                    # Der Start-Rahmen steckt bereits in _ring/_ohr und in
-                    # _sprech_run. Nicht doppelt anhaengen/zaehlen.
-                    if not ohr_neu:
-                        self._ohr.append(rahmen)
-                        self._ohr_barge_fenster.append(1 if laut else 0)
-                        if laut:
-                            self._ohr_frames += 1
-                            self._ohr_peak = max(self._ohr_peak, rms)
+                    self._ohr.append(rahmen)
+                    if laut:
+                        self._ohr_frames += 1
+                        self._ohr_peak = max(self._ohr_peak, rms)
                     if len(self._ohr) > OHR_FRAMES:
                         drop = len(self._ohr) - OHR_FRAMES
                         del self._ohr[:drop]
-                    # Vorher war _ohr_frames seit Ansagebeginn kumulativ:
-                    # vier kurze Echo-/Rauschbursts kappten daher irgendwann
-                    # jede lange Antwort. Barge-in verlangt jetzt 400 ms
-                    # Sprachanteil in den letzten 600 ms. Echte Einwaende
-                    # stoppen weiter schnell; verteilte Stoerungen nie.
-                    if (sum(self._ohr_barge_fenster) >= OHR_BARGE_FRAMES
+                    if (self._ohr_frames >= OHR_BARGE_FRAMES
                             and self.wiedergabe.aktiv
                             and self.wiedergabe.gespielt_ms() >= OHR_START_SCHUTZ_MS):
                         url, ms = self.wiedergabe.stoppen()

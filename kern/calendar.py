@@ -131,7 +131,7 @@ def _mit_dispatch(result: dict[str, Any], dispatch: dict | None) -> dict[str, An
 
 
 def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
-                         source: str = "", motiv_fallback: bool = True) -> dict[str, Any]:
+                         source: str = "") -> dict[str, Any]:
     """Slots NUR in diesem Kalender. Leeres Motiv-Fenster → Kontrolle.
 
     Chef 08.09.2026 (Lülf): die Praxis war frei, PAR-AIT-geschlossen lieferte
@@ -145,8 +145,6 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
         return found
     slots = _iso_liste(found.get("slots") or [])
     if slots:
-        return found
-    if not motiv_fallback:
         return found
     vm = motiv_von(tenant, "Kontrolluntersuchung")
     alt_id = _s((vm or {}).get("id"))
@@ -302,8 +300,7 @@ def slots_zeile(offered: list | None) -> str:
 
 
 def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: str = "",
-                exclude_isos: list | set | None = None,
-                start_date: str = "") -> dict[str, Any]:
+                exclude_isos: list | set | None = None) -> dict[str, Any]:
     if not _s(ctx.get("patientId")) and not _s(ctx.get("patientName")):
         return {"ok": False, "spoken": NO_CONTEXT, "regie": NO_CONTEXT_REGIE}
     if not _s(ctx.get("visitMotiveId")) and not _s(ctx.get("visitMotiveName")):
@@ -311,14 +308,12 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
     wish = parse_slot_wish(wish_text) if wish_text else None
     vorrat = list(ctx.get("slotVorrat") or [])
     gesperrt = list(exclude_isos or []) or list(ctx.get("slotGesperrt") or [])
-    # Explizites Startdatum bedeutet: frische Alternativen AB diesem Tag.
-    # Ein alter Vorrat aus dem laufenden Gespräch darf das nicht überstimmen.
-    nachladen = bool(_s(start_date)) or not vorrat
+    nachladen = not vorrat
     if wish and wish.get("date") and vorrat:
         if not any(str(iso).startswith(wish["date"]) for iso in vorrat):
             nachladen = True
     if nachladen:
-        start = _s(start_date) or (wish or {}).get("date") or ""
+        start = (wish or {}).get("date") or ""
         found = find_slots(tenant, ctx, start_date=start)
         if not found.get("ok") and not vorrat:
             return _mit_dispatch({
@@ -1063,22 +1058,10 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
             "spoken": f"Der Termin liegt jetzt {spoken_slot(iso)}.",
         }, dispatch)
     if status == 400:
-        # Beim Verschieben muessen Alternativen im GLEICHEN Kalender und mit
-        # dem GLEICHEN Besuchsgrund ab dem gewuenschten Tag gesucht werden.
-        # Ohne start_date sprang der Rueckfall live (Thaler 09.09.2026) von
-        # Oktober zurueck auf September; ohne Motiv im ctx wurden ausserdem
-        # unpassende Kontroll-Slots angeboten.
-        alt = offer_slots(
-            tenant, ctx,
-            exclude_iso=iso,
-            start_date=iso[:10],
-        )
+        alt = offer_slots(tenant, ctx, exclude_iso=iso)
         return _mit_dispatch({
             "ok": False,
-            "slotTaken": True,
-            "slotIso": iso,
             "spoken": "Dieser Platz ist nicht mehr frei. " + (alt.get("spoken") or ""),
-            "slots": alt.get("slots") or [],
         }, dispatch)
     return _mit_dispatch({"ok": False, "spoken": "Verschieben hat gerade nicht geklappt."}, dispatch)
 

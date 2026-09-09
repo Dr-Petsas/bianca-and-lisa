@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 
 import httpx
@@ -559,35 +558,10 @@ def api_audio_stream(name: str):
 # Der Cloudflare-Tunnel zeigt nur auf DIESEN Dienst (8095). Biancas Dienst
 # (8096) ist von aussen nicht erreichbar — darum reicht Lisa alles unter
 # /bianca/... an ihn durch. Lokal funktioniert weiterhin auch Port 8096 direkt.
-# Im Compose-Container ist localhost dagegen Lisa selbst: dort wird per Env
-# der Docker-Service "bianca" eingetragen.
-_BIANCA_ZIEL = os.environ.get(
-    "BIANCA_PROXY_BASE", "http://127.0.0.1:8096"
-).strip().rstrip("/")
+_BIANCA_ZIEL = "http://127.0.0.1:8096"
 # read=None: die NDJSON-Stroeme (Fueller waehrend Werkzeug-Laeufen) duerfen
 # beliebig lange offen bleiben.
 _BIANCA_KANAL = httpx.AsyncClient(base_url=_BIANCA_ZIEL, timeout=httpx.Timeout(10.0, read=None))
-_TRANSKRIPT_COOKIE = "bianca_transkript"
-
-
-def _bianca_transkript_auth(pfad: str) -> bool:
-    """Patientenhaltige Anruf-APIs am öffentlichen Proxy schützen.
-
-    Die statische /anrufe-Seite selbst enthält keine Daten. Liste,
-    Transkripte, Audios und Löschen brauchen denselben privaten Token wie
-    Lisas Fernsteuerung. Der interne Tailscale-Port 8096 bleibt unverändert.
-    """
-    p = str(pfad or "").strip("/").lower()
-    return p == "api/anrufe" or p.startswith("api/anrufe/")
-
-
-def _bianca_transkript_guard(request: Request) -> None:
-    # Der Viewer tauscht den Fragment-Token EINMAL per Header gegen ein
-    # HttpOnly-Cookie nur unter /bianca. So steht der Token nie in API- oder
-    # Audio-URLs/Access-Logs und kann nicht für /remote/* mitgesendet werden.
-    got = (request.cookies.get(_TRANSKRIPT_COOKIE) or "").strip()
-    if not remote.token_ok(got, _von_hier(request)):
-        raise HTTPException(401, "token")
 
 
 @app.get("/bianca")
@@ -597,26 +571,8 @@ def bianca_umleiten():
     return RedirectResponse("/bianca/")
 
 
-@app.post("/bianca/transkript-zugang")
-def bianca_transkript_zugang(request: Request):
-    _remote_guard(request)
-    out = Response('{"ok":true}', media_type="application/json")
-    out.set_cookie(
-        _TRANSKRIPT_COOKIE,
-        remote.token(),
-        max_age=12 * 60 * 60,
-        path="/bianca",
-        secure=True,
-        httponly=True,
-        samesite="strict",
-    )
-    return out
-
-
 @app.api_route("/bianca/{pfad:path}", methods=["GET", "POST"])
 async def bianca_durchreichen(pfad: str, request: Request):
-    if _bianca_transkript_auth(pfad):
-        _bianca_transkript_guard(request)
     kopf = {}
     ct = request.headers.get("content-type")
     if ct:
@@ -631,18 +587,7 @@ async def bianca_durchreichen(pfad: str, request: Request):
         antwort = await _BIANCA_KANAL.send(weiter, stream=True)
     except httpx.HTTPError:
         raise HTTPException(502, "Bianca-Dienst (Port 8096) antwortet nicht")
-    # Sichere Browser-Header 1:1 erhalten. Besonders ``location`` ist fuer
-    # relative Studio-Redirects zwingend; ohne ihn kam durch den Tunnel ein
-    # nacktes 307, auf das kein Ergebnis-/Zurueck-Link reagieren konnte.
-    erlaubt = {
-        "content-type", "cache-control", "location",
-        "content-disposition", "accept-ranges", "content-range",
-    }
-    raus = {k: v for k, v in antwort.headers.items() if k.lower() in erlaubt}
-    # Cloudflare darf insbesondere alte 404 auf neu hinzugekommenen Viewer-
-    # Assets nicht vier Stunden festhalten; Transkript-Antworten sind ohnehin
-    # patientenhaltig und gehören in keinen öffentlichen Edge-Cache.
-    raus.setdefault("cache-control", "no-store")
+    raus = {k: v for k, v in antwort.headers.items() if k.lower() in {"content-type", "cache-control"}}
     return StreamingResponse(
         antwort.aiter_raw(),
         status_code=antwort.status_code,

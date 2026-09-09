@@ -23,7 +23,7 @@ from kern import calendar as kal
 from kern import gespraech
 from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_aktualisieren
 from kern.sitzung import merke_tool
-from kern.slots import WEEKDAYS, _weekday_of, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
+from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
 from kern import pzr_kassen
 from kern import tenants as kern_tenants
 from kern.tenants import ist_akut_motiv, motiv_von
@@ -36,20 +36,6 @@ Melde = Callable[[str], None] | None
 _NOCHMAL_RE = re.compile(
     r"noch\s*ein?mal|nochmal|wiederhol|wie\s+bitte|welche\s+nummer|"
     r"nicht\s+verstanden|versteh|langsam(er)?\b|wie\s+war\s+die",
-    re.I,
-)
-_TERMIN_WIEDERHOLEN_RE = re.compile(
-    r"\bwiederhol\w*.{0,36}\b(?:termin|termindaten|datum|uhrzeit|zeit)\b|"
-    r"\b(?:termin|termindaten|datum|uhrzeit)\b.{0,36}\bwiederhol\w*|"
-    r"\bwie\s+war(?:en)?\s+(?:noch\s+einmal\s+)?(?:der\s+)?termin",
-    re.I,
-)
-_TERMIN_ABGLEICH_RE = re.compile(
-    r"\b(?:termin|termindaten|datum|uhrzeit|\d{1,2}(?:[:.]\d{1,2})?)\b"
-    r".{0,64}\b(?:richtig|stimmt|korrekt)\b|"
-    r"\b(?:richtig|stimmt|korrekt)\b.{0,36}\b(?:termin|termindaten|datum|uhrzeit)\b|"
-    r"\btermin\b.{0,48}\b(?:noch\s+frei|noch\s+zu\s+haben|noch\s+verfügbar)\b|"
-    r"\bdu\s+sagtest\b.{0,64}\btermin\b",
     re.I,
 )
 
@@ -117,8 +103,7 @@ _ABSCHIED_RE = re.compile(
     r"das\s+(?:war'?s|wars)|nichts\s+weiter|"
     r"nein\s*,?\s*danke|"
     r"danke\s*,?\s*(?:ciao|tsch[uü]s{0,2}|ihnen)|"
-    r"^\s*(?:(?:okay|ok|alles\s+klar)\s*,?\s*)?"
-    r"(?:perfekt|super|prima|danke|vielen\s+dank|vielen\s+lieben\s+dank)"
+    r"^\s*(?:perfekt|super|prima|danke|vielen\s+dank|vielen\s+lieben\s+dank)"
     r"(?:\s|,|!|\.|$)",
     re.I,
 )
@@ -131,24 +116,6 @@ _NOCH_EIN_TERMIN_RE = re.compile(
     r"noch\s+ein(?:en)?\s+termin|zweiten\s+termin|weiteren\s+termin|"
     r"neuen\s+termin",
     re.I,
-)
-# Live Thaler/New York 08.09.2026: Meta-Fragen zur sicheren Namensaufnahme
-# gehören in den Formularfluss. Das freie Modell antwortete auf „Soll ich
-# meinen Namen buchstabieren?“ ausgerechnet mit „Nein“.
-_BUCHSTABIER_META_RE = re.compile(
-    r"\b(?:soll|kann|darf)\s+ich\b[^?.!]{0,36}\b(?:namen?|nachnamen?)\b"
-    r"[^?.!]{0,24}\bbuchstabier\w*|"
-    r"\b(?:soll|kann|darf)\s+ich\b[^?.!]{0,36}\bbuchstabier\w*",
-    re.I,
-)
-# Reiseort auf der offenen Zeitfrage: kurz zur Kenntnis nehmen und nach der
-# tatsächlichen Verfügbarkeit fragen. Kein freier Reise-Smalltalk („New York
-# ist eine weite Reise …“) mitten in der Buchung.
-_REISEORT_RE = re.compile(
-    r"\b(?:komme|reise|fliege|fahre)\s+(?:gerade\s+)?(?:aus|von)\s+"
-    r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+|"
-    r"\b(?:aus|von)\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+"
-    r"(?:\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+){0,2}",
 )
 
 # Thaler 08.09.2026: "Nein, den Besuchsgrund. Zahnersatzbesprechen" — der
@@ -256,15 +223,6 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         jahr = offered[0]["iso"][:4]
         datum = f"{jahr}-{int(dm.group(2)):02d}-{int(dm.group(1)):02d}"
         c = [o for o in offered if o["iso"].startswith(datum)]
-        if len(c) == 1:
-            return c[0]["iso"]
-
-    # Ein Tag allein bezieht sich in einer angebotenen Liste auf deren
-    # Monat: „Entschuldigung, den 26.“ darf bei Oktober-Angeboten nicht als
-    # neuer Wunsch für den 26. September geparst werden.
-    tag = re.search(r"\b(?:am|dem|den|der)?\s*(\d{1,2})\.(?!\s*\d)", t)
-    if tag:
-        c = [o for o in offered if int(o["iso"][8:10]) == int(tag.group(1))]
         if len(c) == 1:
             return c[0]["iso"]
 
@@ -498,41 +456,6 @@ def _readback(sit: dict) -> dict:
     return {"text": f"Dann halte ich fest: {', '.join(teile)}. Soll ich das so eintragen?"}
 
 
-def _termin_nochmal(sit: dict, gesagt: str = "") -> dict:
-    """Ausgewaehlte Termindaten wiederholen, ohne dadurch zu buchen.
-
-    Eine Frage wie „Der Termin ist um 14 Uhr, richtig?“ gleicht nur die
-    Daten ab. Auch wiederholte Bitten gelten niemals als Buchungs-Ja.
-    """
-    s = gehirn.sammler(sit)
-    abgleich = bool(_TERMIN_ABGLEICH_RE.search(gesagt))
-    abweichend = False
-    if abgleich and _s(s.get("slotIso")):
-        w = parse_slot_wish(gesagt) or {}
-        iso = _s(s["slotIso"])
-        if w.get("date") and w["date"] != iso[:10]:
-            abweichend = True
-        if w.get("hour") is not None and int(w["hour"]) != int(iso[11:13]):
-            abweichend = True
-    rb = _readback(sit)
-    if abgleich and abweichend:
-        anfang = "Nein — ausgewählt ist:"
-    elif abgleich and re.search(r"noch\s+(?:frei|zu\s+haben|verfügbar)", gesagt, re.I):
-        anfang = "Dieser Termin wurde gerade als frei angeboten. Ausgewählt ist:"
-    elif abgleich:
-        anfang = "Ja — ausgewählt ist:"
-    else:
-        anfang = "Gerne, ich wiederhole:"
-    rb["text"] = rb["text"].replace("Dann halte ich fest:", anfang, 1)
-    rb["text"] = rb["text"].replace(
-        "Soll ich das so eintragen?", "Soll ich genau diesen Termin eintragen?", 1
-    )
-    # Der Nutzer hat die Wiederholung ausdrücklich verlangt. Der allgemeine
-    # Wiederholungs-Wächter darf die Termindaten daher nicht wieder streichen.
-    rb["_wiederholungErlaubt"] = True
-    return rb
-
-
 def _schon_gebucht(sit: dict) -> bool:
     """Echter book_slot in DIESEM Anruf — nicht ein nur gefundener Bestand."""
     if sit.get("nochEinTermin"):
@@ -722,7 +645,6 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         # Versprechen "die Praxis meldet sich" bekommt eine ECHTE Notiz.
         s["phase"] = "fertig"
         s["frage"] = ""
-        sit["keinSlotFertig"] = True
         verwalten.rueckruf_notiz(sit)
         return {"text": spoken_offer([], wish_matched=True)
                 + " Kann ich sonst noch etwas für Sie tun?"}
@@ -1158,7 +1080,6 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             s["phase"] = "fertig"
             s["frage"] = ""
             sit["offered"] = []
-            sit["keinSlotFertig"] = True
             verwalten.rueckruf_notiz(sit)
             return {
                 "text": (
@@ -1848,54 +1769,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if rr is not None:
         return rr
 
-    if (s["modus"] == "buchen" and s["frage"] in {
-            "name", "nachname", "vorname", "buchstabieren",
-        } and _BUCHSTABIER_META_RE.search(t)):
-        # Der Anrufer bietet den sicheren Weg selbst an. Bei einer bekannten
-        # Akte wäre keine Buchstabierung nötig; andernfalls gezielt beim
-        # Nachnamen bleiben, den unser Mehrzug-Sammler robust erfasst.
-        if s.get("bekannt") or s.get("patientId"):
-            fid, frage = gehirn.naechste_frage(sit)
-            s["frage"] = fid
-            return {"text": (
-                "Nein danke, ich habe Ihre Akte bereits sicher gefunden. "
-                + (frage or "Was kann ich sonst für Sie tun?")
-            ).strip()}
-        s["frage"] = "buchstabieren"
-        return {"text": (
-            "Ja, bitte. Buchstabieren Sie zuerst Ihren Nachnamen langsam. "
-            "Am Ende sagen Sie einfach fertig."
-        )}
-
     # W-HIRN (03.09.2026): die Intent-Schicht hat den Modus evtl. schon vor
     # diesem Zug geschaltet — das Signal wandert in die Ernte-Menge, damit
     # verwalten seinen Einstiegs-Reset faehrt wie frueher bei der Regex.
     hirn_modus_neu = bool(sit.pop("hirnModusNeu", False))
     task_handoff = _s(sit.pop("taskHandoff", ""))
-
-    # Kein Slot gefunden, echte Rückrufnotiz geschrieben: der Vorgang ist
-    # abgeschlossen. Dank/Abschied beendet freundlich; andere Folgesätze
-    # bestätigen höchstens die Notiz, starten aber niemals dieselbe leere
-    # Slotsuche erneut (Live Andrejevic 09.09.: viermal dieselbe Ansage).
-    kein_slot_fertig = (
-        bool(sit.get("keinSlotFertig"))
-        or "kein freier termin" in _s(sit.get("praxisNotiz")).lower()
-    )
-    if s["modus"] == "buchen" and s["phase"] == "fertig" and kein_slot_fertig:
-        if _NOCH_EIN_TERMIN_RE.search(t):
-            sit.pop("keinSlotFertig", None)
-            s["phase"] = ""
-            s["frage"] = "wunsch"
-            s["wunsch"] = None
-            s["wunschText"] = ""
-            sit["offered"] = []
-            return {"text": "Gerne. Wann passt es Ihnen für den weiteren Termin?"}
-        if _ABSCHIED_RE.search(t):
-            return {"text": "Sehr gerne. Auf Wiederhören."}
-        return {"text": (
-            "Die Rückrufbitte ist bereits für die Praxis notiert. "
-            "Kann ich sonst noch etwas für Sie tun?"
-        )}
 
     # Rueckruf-/Notiz-Anliegen (ABGEBEN): eigener deterministischer Zweig —
     # Name + Nummer einsammeln, echte Notiz schreiben, KEIN Termin-Angebot.
@@ -1972,12 +1850,6 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _pzr_kasse_zug(sit, t, melde)
         if s["frage"] == "pzr":
             return _pzr_zug(sit, t, melde)
-        # Vor Ja/Nein: „Ja, ist der Termin noch frei?“ ist eine Faktenfrage,
-        # kein Buchungs-Ja. „Wiederhole …“ darf auch beim zweiten Mal nie
-        # den Schreibaufruf ausloesen.
-        if _TERMIN_WIEDERHOLEN_RE.search(t) or _TERMIN_ABGLEICH_RE.search(t):
-            sit.pop("bestaetigenUnklar", None)
-            return _termin_nochmal(sit, t)
         if gehirn.ist_ja(t):
             sit.pop("bestaetigenUnklar", None)
             return _nach_ok_buchen(sit, t, melde)
@@ -2029,14 +1901,6 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             if sit.get("buchIntent"):
                 return _buchen(sit, melde)
             return _readback(sit)
-
-    if (s["modus"] == "buchen" and s["frage"] == "wunsch"
-            and s["wunsch"] is None and _REISEORT_RE.search(t)
-            and gehirn._wunsch_deuten(t) is None):
-        return {"text": (
-            "Verstanden. An welchen Tagen sind Sie hier, "
-            "und passt es eher vormittags oder nachmittags?"
-        )}
 
     neu = gehirn.einsammeln(sit, t)
     if hirn_modus_neu:
@@ -2193,13 +2057,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # DETERMINISTISCH: das LLM erfand hier sonst Erledigt-Meldungen,
             # und der Frage-Anker stellte die Frage danach ERNEUT — genau die
             # Doppelfrage vom 27.08.2026. Beim zweiten unklaren, nicht
-            # verneinenden Anlauf wird der Termin erneut vorgelesen. Ohne
-            # ausdrueckliches Ja wird NIEMALS geschrieben.
+            # verneinenden Anlauf gilt der Termin als gewollt (der Anrufer
+            # hat zweimal nicht widersprochen; die SMS bestätigt ihn eh).
             z = int(sit.get("bestaetigenUnklar") or 0) + 1
             sit["bestaetigenUnklar"] = z
             if z <= 1:
                 return {"text": "Entschuldigung, das habe ich akustisch nicht verstanden — soll ich den Termin so eintragen? Ein kurzes Ja genügt."}
-            return _termin_nochmal(sit)
+            sit.pop("bestaetigenUnklar", None)
+            return _nach_ok_buchen(sit, t, melde)
         else:
             return None  # Zwischenfrage — LLM antwortet, Status hält die Spur
 

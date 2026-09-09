@@ -639,13 +639,7 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
     fl = _auto_resume_anhaengen(sit, fl)
     if _s(fl.get("text")):
-        if fl.pop("_wiederholungErlaubt", False):
-            # Explizite Nutzerbitte „Wiederhole den Termin“: Datum/Uhrzeit
-            # muessen erneut hoerbar sein. Nur die allgemeinen Antwort-Wachen
-            # bleiben aktiv; der Entdoppler darf diesen Inhalt nicht streichen.
-            fl["text"] = antwort_wache.saeubern(sit, fl["text"])
-        else:
-            fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
+        fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
         if "?" in fl["text"]:
             sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
         msgs.append({"role": "assistant", "content": fl["text"]})
@@ -689,23 +683,6 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if not msgs:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
-
-    # W-PRAXISAUSKUNFT (09.09.2026): Öffnungszeiten und Wegbeschreibung
-    # kommen deterministisch aus dem Mandanten, auch wenn STT Schlüsselwörter
-    # verhört ("Pflungszeiten", "wie ich die praktisch erreiche"). Solche
-    # Praxisfakten dürfen nie als freies Talk-Thema beim LLM landen — dort
-    # entstand live der erfundene Gärtnerei-Witz statt der echten Auskunft.
-    praxis_text, praxis_themen = kern_wissen.praxis_antwort(
-        sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {},
-        text_in,
-    )
-    if praxis_text:
-        offene = _offene_frage(sit)
-        if offene:
-            praxis_text = f"{praxis_text} {offene}"
-        spur.merken(sit, "praxis-auskunft", ",".join(sorted(praxis_themen)))
-        sit.pop("unklarFolge", None)
-        return _maschinen_antwort(sit, {"text": praxis_text, "book": None}, msgs)
 
     # Gemischter Zug: „Ja, aber …“ enthält ZWEI Handlungen. Bei wenigen
     # ausdrücklich sicheren Fragen erntet der bisherige Flow zuerst das
