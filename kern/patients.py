@@ -440,7 +440,11 @@ def akte_anlegen(
     if not handy_ok(e164):
         return {
             "ok": False,
-            "spoken": "Ohne eine echte Handynummer lege ich niemanden an.",
+            "spoken": (
+                "Für die Terminbestätigung brauche ich noch eine "
+                "Handynummer, unter der wir Sie erreichen. Mögen Sie sie "
+                "mir einmal durchgeben?"
+            ),
         }
     gender = vornamen.festlegen(first, gender)
     karte = {
