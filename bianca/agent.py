@@ -639,7 +639,13 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
     fl = _auto_resume_anhaengen(sit, fl)
     if _s(fl.get("text")):
-        fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
+        if fl.pop("_wiederholungErlaubt", False):
+            # Explizite Nutzerbitte „Wiederhole den Termin“: Datum/Uhrzeit
+            # muessen erneut hoerbar sein. Nur die allgemeinen Antwort-Wachen
+            # bleiben aktiv; der Entdoppler darf diesen Inhalt nicht streichen.
+            fl["text"] = antwort_wache.saeubern(sit, fl["text"])
+        else:
+            fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
         if "?" in fl["text"]:
             sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
         msgs.append({"role": "assistant", "content": fl["text"]})

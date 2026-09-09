@@ -23,7 +23,7 @@ from kern import calendar as kal
 from kern import gespraech
 from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_aktualisieren
 from kern.sitzung import merke_tool
-from kern.slots import WEEKDAYS, _weekday_of, pick_slots, spoken_offer, spoken_slot
+from kern.slots import WEEKDAYS, _weekday_of, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
 from kern import pzr_kassen
 from kern import tenants as kern_tenants
 from kern.tenants import ist_akut_motiv, motiv_von
@@ -36,6 +36,20 @@ Melde = Callable[[str], None] | None
 _NOCHMAL_RE = re.compile(
     r"noch\s*ein?mal|nochmal|wiederhol|wie\s+bitte|welche\s+nummer|"
     r"nicht\s+verstanden|versteh|langsam(er)?\b|wie\s+war\s+die",
+    re.I,
+)
+_TERMIN_WIEDERHOLEN_RE = re.compile(
+    r"\bwiederhol\w*.{0,36}\b(?:termin|termindaten|datum|uhrzeit|zeit)\b|"
+    r"\b(?:termin|termindaten|datum|uhrzeit)\b.{0,36}\bwiederhol\w*|"
+    r"\bwie\s+war(?:en)?\s+(?:noch\s+einmal\s+)?(?:der\s+)?termin",
+    re.I,
+)
+_TERMIN_ABGLEICH_RE = re.compile(
+    r"\b(?:termin|termindaten|datum|uhrzeit|\d{1,2}(?:[:.]\d{1,2})?)\b"
+    r".{0,64}\b(?:richtig|stimmt|korrekt)\b|"
+    r"\b(?:richtig|stimmt|korrekt)\b.{0,36}\b(?:termin|termindaten|datum|uhrzeit)\b|"
+    r"\btermin\b.{0,48}\b(?:noch\s+frei|noch\s+zu\s+haben|noch\s+verfügbar)\b|"
+    r"\bdu\s+sagtest\b.{0,64}\btermin\b",
     re.I,
 )
 
@@ -223,6 +237,15 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         jahr = offered[0]["iso"][:4]
         datum = f"{jahr}-{int(dm.group(2)):02d}-{int(dm.group(1)):02d}"
         c = [o for o in offered if o["iso"].startswith(datum)]
+        if len(c) == 1:
+            return c[0]["iso"]
+
+    # Ein Tag allein bezieht sich in einer angebotenen Liste auf deren
+    # Monat: „Entschuldigung, den 26.“ darf bei Oktober-Angeboten nicht als
+    # neuer Wunsch für den 26. September geparst werden.
+    tag = re.search(r"\b(?:am|dem|den|der)?\s*(\d{1,2})\.(?!\s*\d)", t)
+    if tag:
+        c = [o for o in offered if int(o["iso"][8:10]) == int(tag.group(1))]
         if len(c) == 1:
             return c[0]["iso"]
 
@@ -454,6 +477,41 @@ def _readback(sit: dict) -> dict:
     if wer:
         teile.append(f"für {wer}")
     return {"text": f"Dann halte ich fest: {', '.join(teile)}. Soll ich das so eintragen?"}
+
+
+def _termin_nochmal(sit: dict, gesagt: str = "") -> dict:
+    """Ausgewaehlte Termindaten wiederholen, ohne dadurch zu buchen.
+
+    Eine Frage wie „Der Termin ist um 14 Uhr, richtig?“ gleicht nur die
+    Daten ab. Auch wiederholte Bitten gelten niemals als Buchungs-Ja.
+    """
+    s = gehirn.sammler(sit)
+    abgleich = bool(_TERMIN_ABGLEICH_RE.search(gesagt))
+    abweichend = False
+    if abgleich and _s(s.get("slotIso")):
+        w = parse_slot_wish(gesagt) or {}
+        iso = _s(s["slotIso"])
+        if w.get("date") and w["date"] != iso[:10]:
+            abweichend = True
+        if w.get("hour") is not None and int(w["hour"]) != int(iso[11:13]):
+            abweichend = True
+    rb = _readback(sit)
+    if abgleich and abweichend:
+        anfang = "Nein — ausgewählt ist:"
+    elif abgleich and re.search(r"noch\s+(?:frei|zu\s+haben|verfügbar)", gesagt, re.I):
+        anfang = "Dieser Termin wurde gerade als frei angeboten. Ausgewählt ist:"
+    elif abgleich:
+        anfang = "Ja — ausgewählt ist:"
+    else:
+        anfang = "Gerne, ich wiederhole:"
+    rb["text"] = rb["text"].replace("Dann halte ich fest:", anfang, 1)
+    rb["text"] = rb["text"].replace(
+        "Soll ich das so eintragen?", "Soll ich genau diesen Termin eintragen?", 1
+    )
+    # Der Nutzer hat die Wiederholung ausdrücklich verlangt. Der allgemeine
+    # Wiederholungs-Wächter darf die Termindaten daher nicht wieder streichen.
+    rb["_wiederholungErlaubt"] = True
+    return rb
 
 
 def _schon_gebucht(sit: dict) -> bool:
@@ -1850,6 +1908,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return _pzr_kasse_zug(sit, t, melde)
         if s["frage"] == "pzr":
             return _pzr_zug(sit, t, melde)
+        # Vor Ja/Nein: „Ja, ist der Termin noch frei?“ ist eine Faktenfrage,
+        # kein Buchungs-Ja. „Wiederhole …“ darf auch beim zweiten Mal nie
+        # den Schreibaufruf ausloesen.
+        if _TERMIN_WIEDERHOLEN_RE.search(t) or _TERMIN_ABGLEICH_RE.search(t):
+            sit.pop("bestaetigenUnklar", None)
+            return _termin_nochmal(sit, t)
         if gehirn.ist_ja(t):
             sit.pop("bestaetigenUnklar", None)
             return _nach_ok_buchen(sit, t, melde)
@@ -2057,14 +2121,13 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # DETERMINISTISCH: das LLM erfand hier sonst Erledigt-Meldungen,
             # und der Frage-Anker stellte die Frage danach ERNEUT — genau die
             # Doppelfrage vom 27.08.2026. Beim zweiten unklaren, nicht
-            # verneinenden Anlauf gilt der Termin als gewollt (der Anrufer
-            # hat zweimal nicht widersprochen; die SMS bestätigt ihn eh).
+            # verneinenden Anlauf wird der Termin erneut vorgelesen. Ohne
+            # ausdrueckliches Ja wird NIEMALS geschrieben.
             z = int(sit.get("bestaetigenUnklar") or 0) + 1
             sit["bestaetigenUnklar"] = z
             if z <= 1:
                 return {"text": "Entschuldigung, das habe ich akustisch nicht verstanden — soll ich den Termin so eintragen? Ein kurzes Ja genügt."}
-            sit.pop("bestaetigenUnklar", None)
-            return _nach_ok_buchen(sit, t, melde)
+            return _termin_nochmal(sit)
         else:
             return None  # Zwischenfrage — LLM antwortet, Status hält die Spur
 

@@ -40,7 +40,7 @@ from kern import gespraech, motive
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
-from kern.slots import _weekday_of, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
+from kern.slots import WEEKDAYS, _weekday_of, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
 
 Melde = Callable[[str], None] | None
 
@@ -69,6 +69,15 @@ _FRUEHER_RE = re.compile(
 )
 _SPAETER_RE = re.compile(
     r"\bspäter\b|\bspaeter\b|nach\s+hinten\b|weiter\s+hinten|hinten\s*raus",
+    re.I,
+)
+_MONATE_RE = (
+    r"januar|februar|märz|maerz|april|mai|juni|juli|august|"
+    r"september|oktober|november|dezember"
+)
+_TAG_OHNE_MONAT_RE = re.compile(
+    rf"\b(?:am|dem|den|der)\s+(\d{{1,2}})\."
+    rf"(?!\s*\d)(?!\s*(?:{_MONATE_RE})\b)",
     re.I,
 )
 
@@ -130,6 +139,57 @@ def _gewaehlt(sit: dict) -> dict:
         if _s(a.get("id")) == aid:
             return a
     return {}
+
+
+def _verschieb_datum_auf_bestand_beziehen(sit: dict, termin: dict) -> None:
+    """Monatlosen Zieltag relativ zum Bestandstermin aufloesen.
+
+    Bei „Termin am 21. Oktober auf Freitag, den 23.“ ist der 23. Oktober
+    gemeint, nicht der naechste 23. ab heute. Der allgemeine Wunschparser
+    kennt den Bestandstermin nicht und waehlt sonst im September.
+    """
+    s = gehirn.sammler(sit)
+    text = _s(s.get("wunschText"))
+    if not text:
+        return
+    m = _TAG_OHNE_MONAT_RE.search(text)
+    iso = _s(termin.get("iso"))
+    if not m or len(iso) < 10 or not isinstance(s.get("wunsch"), dict):
+        return
+    try:
+        basis = datetime.fromisoformat(iso[:10]).date()
+    except ValueError:
+        return
+    tag = int(m.group(1))
+    wd = next((idx for idx, cre in WEEKDAYS if cre.search(text.lower())), None)
+    kandidaten = []
+    for delta in (-1, 0, 1):
+        monat0 = basis.month - 1 + delta
+        jahr = basis.year + monat0 // 12
+        monat = monat0 % 12 + 1
+        try:
+            d = basis.replace(year=jahr, month=monat, day=tag)
+        except ValueError:
+            continue
+        if d < datetime.now(gehirn.TZ).date():
+            continue
+        if wd is not None and _weekday_of(d.isoformat()) != wd:
+            continue
+        kandidaten.append(d)
+    if not kandidaten:
+        return
+    if _FRUEHER_RE.search(text):
+        gerichtet = [d for d in kandidaten if d < basis]
+    elif _SPAETER_RE.search(text):
+        gerichtet = [d for d in kandidaten if d > basis]
+    else:
+        gerichtet = []
+    ziel = min(gerichtet or kandidaten, key=lambda d: abs((d - basis).days))
+    w = dict(s["wunsch"])
+    w["date"] = ziel.isoformat()
+    w["tage"] = None
+    w["weekday"] = None
+    s["wunsch"] = w
 
 
 def _finden(sit: dict, melde: Melde) -> dict:
@@ -546,6 +606,10 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
         sit["tenant"], such_ctx,
         start_date=gehirn.start_datum(s),
         source="pickadoc-bianca",
+        # Beim Verschieben muss der Bestandstermin mit seiner echten Dauer
+        # passen. Ein freier 30-Minuten-Kontrollslot beweist nicht, dass ein
+        # 60-Minuten-PZR-Termin dorthin verschoben werden kann.
+        motiv_fallback=False,
     )
     merke_tool(sit, "getFreeTimeSlots", found)
     if not found.get("ok"):
@@ -556,7 +620,11 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             "Die Praxis ruft Sie zum Verschieben kurzfristig zurück."
         )}
     termin_iso = _s(termin.get("iso"))
-    isos = [x for x in kal._iso_liste(found.get("slots") or []) if x[:16] != termin_iso[:16]]
+    gesperrt = {str(x)[:16] for x in (sit.get("slotGesperrt") or []) if x}
+    isos = [
+        x for x in kal._iso_liste(found.get("slots") or [])
+        if x[:16] != termin_iso[:16] and x[:16] not in gesperrt
+    ]
 
     # "Früher"/"später" heisst: am SELBEN Tag vor/nach dem Bestandstermin —
     # erst wenn dort nichts frei ist, kommen andere Tage dran (ehrlich gesagt).
@@ -618,6 +686,13 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
     termin = _gewaehlt(sit)
     ctx = _ctx(sit)
     ctx["appointmentId"] = _s(termin.get("id"))
+    # Der Alternativpfad in calendar.move_appointment braucht denselben
+    # Kalender und Besuchsgrund wie der gefundene Bestandstermin.
+    ctx["calendarId"] = _s(termin.get("calendarId"))
+    ctx["calendarName"] = _s(termin.get("doctorName"))
+    ctx["visitMotiveId"] = _s(termin.get("motivId"))
+    ctx["visitMotiveName"] = _s(termin.get("motivName"))
+    ctx["slotGesperrt"] = list(sit.get("slotGesperrt") or [])
     if melde:
         melde("move_appointment")
     res = kal.move_appointment(sit["tenant"], ctx, slot_iso=s["slotIso"])
@@ -641,6 +716,12 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
                     + " Kann ich sonst noch etwas für Sie tun?",
             "book": {"moved": True, "slotIso": res.get("slotIso") or "", "spoken": res.get("spoken") or ""},
         }
+    if res.get("slotTaken"):
+        fail_iso = _s(res.get("slotIso")) or _s(s.get("slotIso"))
+        gesperrt = list(sit.get("slotGesperrt") or [])
+        if fail_iso and fail_iso not in gesperrt:
+            gesperrt.append(fail_iso)
+        sit["slotGesperrt"] = gesperrt
     if res.get("slots"):
         sit["offered"] = res["slots"]
         s["phase"] = "verschieb_angebot"
@@ -680,6 +761,7 @@ def _bestaetigen(sit: dict, termin: dict, melde: Melde) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     _arzt_uebernehmen(sit, termin, fest=True)
     if s["wunsch"]:
+        _verschieb_datum_auf_bestand_beziehen(sit, termin)
         return _verschieb_angebot(sit, melde)
     return _verschieb_wunsch_frage(sit, termin)
 
