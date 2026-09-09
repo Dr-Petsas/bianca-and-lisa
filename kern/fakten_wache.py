@@ -39,6 +39,15 @@ _CLAIM_BUCHEN = re.compile(
 )
 _CLAIM_ABSAGEN = re.compile(r"\b(abgesagt|storniert|gestrichen|gel(?:ö|oe)scht)\b", re.I)
 _CLAIM_VERSCHIEBEN = re.compile(r"\b(verschoben|verlegt|umgebucht)\b", re.I)
+_CLAIM_TRANSFER = re.compile(
+    r"\bich\s+(?:werde\s+|habe\s+)?(?:sie\s+)?(?:jetzt\s+)?"
+    r"(?:zu\s+[^.!?]{1,40}\s+)?(?:durchstell\w*|verbind\w*|weiterleit\w*)\b|"
+    r"\bich\s+stell\w*\s+sie\s+(?:jetzt\s+)?(?:zu\s+[^.!?]{1,40}\s+)?durch\b|"
+    r"\bich\s+leit\w*\s+(?:die\s+verbindung|sie)\s+(?:jetzt\s+)?ein\b|"
+    r"\bich\s+stell\w*\s+(?:die\s+)?verbindung\s+(?:jetzt\s+)?her\b|"
+    r"\bsie\s+(?:werden|sind)\s+(?:jetzt\s+)?(?:durchgestellt|verbunden|weitergeleitet)\b",
+    re.I,
+)
 _CLAIM_NOTIZ = re.compile(
     r"\b(?:notiz|vermerk)\w*\s+(?:gemacht|hinterlegt|geschrieben|erstellt|angelegt)\b|"
     r"\b(?:notiert|vermerkt|ausgerichtet|weitergeleitet|weitergegeben)\b|"
@@ -68,6 +77,11 @@ def _ev_verschieben(sit: dict) -> bool:
     return _ok(sit.get("lastMove"))
 
 
+def _ev_transfer(sit: dict) -> bool:
+    ziel = sit.get("weiterleitungZiel")
+    return bool(isinstance(ziel, dict) and str(ziel.get("nummer") or "").strip())
+
+
 def _ev_notiz(sit: dict) -> bool:
     return bool(sit.get("noteWritten")) or _ok(sit.get("lastNote"))
 
@@ -81,6 +95,7 @@ AKTIONEN: list[tuple[str, re.Pattern, Callable[[dict], bool]]] = [
     ("buchen", _CLAIM_BUCHEN, _ev_buchen),
     ("absagen", _CLAIM_ABSAGEN, _ev_absagen),
     ("verschieben", _CLAIM_VERSCHIEBEN, _ev_verschieben),
+    ("transfer", _CLAIM_TRANSFER, _ev_transfer),
     ("notiz", _CLAIM_NOTIZ, _ev_notiz),
     ("anlegen", _CLAIM_ANLEGEN, _ev_anlegen),
 ]

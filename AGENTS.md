@@ -1483,13 +1483,14 @@ jemand beschwert oder einen Notfall hat — das wirkt taktlos.
 
 Wie Claras UNVERIFIED_ACTION_FALLBACK: eine gesprochene Erledigt-Behauptung
 („Ihr Termin ist gebucht/abgesagt/verschoben", „ich habe eine Notiz gemacht",
-„in die Kartei aufgenommen") darf nur raus, wenn das passende Werkzeug
+„in die Kartei aufgenommen", „ich stelle Sie jetzt durch") darf nur raus, wenn das passende Werkzeug
 ERFOLGREICH lief. Wahrheit ist das Tool-Ledger (`sit["tools"]` bzw. die Marken
-lastBook/lastCancel/lastMove/lastNote/lastCreate aus `kern/sitzung.merke_tool`),
+lastBook/lastCancel/lastMove/lastNote/lastCreate aus `kern/sitzung.merke_tool`
+oder ein echtes nummeriertes `weiterleitungZiel`),
 NIE der LLM-Text.
 
 - **Erkennung** (`kern/fakten_wache.py`, bianca-frei): `unbelegte_behauptung`
-  prüft je Satz gegen `AKTIONEN` (buchen/absagen/verschieben/notiz/anlegen) und
+  prüft je Satz gegen `AKTIONEN` (buchen/absagen/verschieben/transfer/notiz/anlegen) und
   das jeweilige Evidenz-Prädikat. Fragen/Angebote („soll ich eintragen?",
   „passt Ihnen?") zählen NIE als Behauptung.
 - **Nur LLM-Pfad** (`bianca/agent._fakten_wache_anwenden`, direkt nach
@@ -1503,6 +1504,9 @@ NIE der LLM-Text.
   Replays, dann enforce. **Live seit 09.09.2026 auf `enforce`** (pickadoc1):
   insbesondere darf „Ich habe Ihre Akte angelegt“ nach einem Nummernfragment
   nie ohne erfolgreiche `lastCreate`-/`lastBook`-Evidenz gesprochen werden.
+  Ebenso werden Thaler-Sätze wie „Ich leite die Verbindung jetzt ein“ ohne
+  echte Zielnummer ersetzt, statt den Anrufer in einer Phantom-Weiterleitung
+  warten zu lassen.
 
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 

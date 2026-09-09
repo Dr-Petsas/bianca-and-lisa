@@ -68,6 +68,32 @@ def test_akte_angelegt_mit_create_evidenz_ist_ok():
     ) == ""
 
 
+def test_fake_durchstellung_ohne_transfer_ist_unbelegt():
+    sit = _sit()
+    saetze = (
+        "Ich stelle Sie jetzt durch.",
+        "Ich leite die Verbindung jetzt ein.",
+        "Ich werde Sie jetzt zu Frau Thaler durchstellen.",
+    )
+    for text in saetze:
+        assert fakten_wache.unbelegte_behauptung(sit, text) == "transfer", text
+
+
+def test_durchstellung_mit_echtem_ziel_ist_belegt():
+    sit = _sit()
+    sit["weiterleitungZiel"] = {"name": "Frau Thaler", "nummer": "+4987512345"}
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich werde Sie jetzt zu Frau Thaler durchstellen."
+    ) == ""
+
+
+def test_nicht_moegliche_durchstellung_ist_keine_erledigt_behauptung():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich kann Sie im Moment leider nicht durchstellen."
+    ) == ""
+
+
 def test_frage_ist_keine_behauptung():
     sit = _sit()
     assert fakten_wache.unbelegte_behauptung(sit, "Soll ich den Termin so eintragen?") == ""
