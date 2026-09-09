@@ -5,6 +5,7 @@ nur, enforce schreibt um. Notaus FAKTEN_WACHE=off. Offline, kein Netz.
 
 from bianca import agent
 from kern import fakten_wache, spur
+from kern.sitzung import merke_tool
 from kern.tenants import laden
 
 
@@ -48,8 +49,39 @@ def test_notiz_ohne_evidenz():
 
 def test_notiz_mit_evidenz_ok():
     sit = _sit()
-    sit["noteWritten"] = True
+    merke_tool(sit, "note_appointment", {"ok": True})
     assert fakten_wache.unbelegte_behauptung(sit, "Ich habe eine Notiz gemacht.") == ""
+
+
+def test_praxis_notiz_ist_echte_evidenz():
+    sit = _sit()
+    merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True})
+    assert sit["noteWritten"] is True
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Die Notiz für das Team habe ich geschrieben."
+    ) == ""
+
+
+def test_gescheiterte_notiz_ist_keine_evidenz():
+    sit = _sit()
+    merke_tool(sit, "note_appointment", {"ok": False})
+    assert sit["noteWritten"] is False
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich habe eine Notiz gemacht."
+    ) == "notiz"
+
+
+def test_kurzes_notiert_ist_nur_gespraechsbestaetigung():
+    sit = _sit()
+    for text in ("Alles klar, notiert.", "Ich habe Ihre Nummer vermerkt."):
+        assert fakten_wache.unbelegte_behauptung(sit, text) == "", text
+
+
+def test_aufgenommen_ohne_aktenbezug_ist_keine_aktenanlage():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Vielen Dank, ich habe Ihre Angaben aufgenommen."
+    ) == ""
 
 
 def test_akte_angelegt_ohne_evidenz_ist_unbelegt():

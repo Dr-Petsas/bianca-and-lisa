@@ -86,6 +86,10 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any],
             sit["offered"] = result["slots"]
     elif name == "note_appointment":
         sit["lastNote"] = ein
+        sit["noteWritten"] = bool(ein.get("ok"))
+    elif name == "praxis_notiz" and ein.get("ok"):
+        # Echte Rückruf-/Praxisnotizen sind ebenfalls belastbare Evidenz für
+        # den Fakten-Wächter, auch wenn sie nicht an einem Termin hängen.
         sit["noteWritten"] = True
     try:
         from kern import turn_context

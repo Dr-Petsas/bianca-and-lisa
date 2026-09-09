@@ -1492,7 +1492,10 @@ NIE der LLM-Text.
 - **Erkennung** (`kern/fakten_wache.py`, bianca-frei): `unbelegte_behauptung`
   prüft je Satz gegen `AKTIONEN` (buchen/absagen/verschieben/transfer/notiz/anlegen) und
   das jeweilige Evidenz-Prädikat. Fragen/Angebote („soll ich eintragen?",
-  „passt Ihnen?") zählen NIE als Behauptung.
+  „passt Ihnen?") zählen NIE als Behauptung. Kurze Gesprächsbestätigungen
+  („notiert", „Ihre Angaben aufgenommen") zählen ohne ausdrücklichen
+  Notiz-/Aktenbezug ebenfalls nicht — sonst würde `enforce` legitime
+  Datenerfassung unterbrechen.
 - **Nur LLM-Pfad** (`bianca/agent._fakten_wache_anwenden`, direkt nach
   `_nachbessern`): der deterministische Fluss ist ohnehin evidenzbasiert. shadow
   loggt nur `fakten-wache-shadow`; enforce ersetzt die unbelegte Behauptung
@@ -1506,7 +1509,8 @@ NIE der LLM-Text.
   nie ohne erfolgreiche `lastCreate`-/`lastBook`-Evidenz gesprochen werden.
   Ebenso werden Thaler-Sätze wie „Ich leite die Verbindung jetzt ein“ ohne
   echte Zielnummer ersetzt, statt den Anrufer in einer Phantom-Weiterleitung
-  warten zu lassen.
+  warten zu lassen. Eine erfolgreiche `praxis_notiz` zählt wie
+  `note_appointment` als Notiz-Evidenz; fehlgeschlagene Notizwerkzeuge nie.
 
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 

@@ -49,14 +49,17 @@ _CLAIM_TRANSFER = re.compile(
     re.I,
 )
 _CLAIM_NOTIZ = re.compile(
-    r"\b(?:notiz|vermerk)\w*\s+(?:gemacht|hinterlegt|geschrieben|erstellt|angelegt)\b|"
-    r"\b(?:notiert|vermerkt|ausgerichtet|weitergeleitet|weitergegeben)\b|"
+    r"\b(?:notiz|vermerk)\w*\b[^.!?]{0,60}\b"
+    r"(?:gemacht|hinterlegt|geschrieben|erstellt|angelegt|notiert|vermerkt|"
+    r"ausgerichtet|weitergeleitet|weitergegeben)\b|"
     r"\bdem\s+(?:team|doktor|arzt)\b[^.!?]{0,30}\b(?:vorleg\w*|weitergeb\w*|ausricht\w*)",
     re.I,
 )
 _CLAIM_ANLEGEN = re.compile(
-    r"\b(?:neu\s+)?(?:angelegt|aufgenommen|neu\s+erfasst)\b|"
-    r"\bin\s+(?:unsere[rm]?\s+)?kartei\s+(?:aufgenommen|angelegt|erfasst)\b",
+    r"\b(?:akte|patient(?:enakte)?|kartei)\b[^.!?]{0,30}\b"
+    r"(?:angelegt|aufgenommen|erfasst)\b|"
+    r"\b(?:angelegt|aufgenommen|erfasst)\b[^.!?]{0,30}\b"
+    r"(?:als\s+patient|in\s+(?:unsere[rm]?\s+)?kartei)\b",
     re.I,
 )
 
@@ -83,7 +86,14 @@ def _ev_transfer(sit: dict) -> bool:
 
 
 def _ev_notiz(sit: dict) -> bool:
-    return bool(sit.get("noteWritten")) or _ok(sit.get("lastNote"))
+    if _ok(sit.get("lastNote")):
+        return True
+    return any(
+        isinstance(ein, dict)
+        and ein.get("name") in {"note_appointment", "praxis_notiz"}
+        and _ok(ein)
+        for ein in (sit.get("tools") or [])
+    )
 
 
 def _ev_anlegen(sit: dict) -> bool:
