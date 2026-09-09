@@ -1504,7 +1504,9 @@ NIE der LLM-Text.
 - **Notaus/Stufen** `FAKTEN_WACHE=off|shadow|enforce` (Default **off** =
   byte-identisch, der bestehende `_ERLEDIGT_RE`-Guard bleibt unberührt).
 - Tests: `tests/test_fakten_wache.py` (offline). Rollout: erst shadow gegen
-  Replays, dann enforce.
+  Replays, dann enforce. **Live seit 09.09.2026 auf `enforce`** (pickadoc1):
+  insbesondere darf „Ich habe Ihre Akte angelegt“ nach einem Nummernfragment
+  nie ohne erfolgreiche `lastCreate`-/`lastBook`-Evidenz gesprochen werden.
 
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 
@@ -1703,6 +1705,12 @@ dieselbe Rückrufmeldung bei jedem Folgesatz erneut gesprochen.
 
 - „nicht neu“ gewinnt auf der Schonmal-Frage deterministisch als
   Bestandspatient; die Floskel ist für die Namens-Ernte gesperrt.
+- Ein ausdrücklicher Behandlungswunsch ohne das Wort „Termin“ („Ich brauche
+  eine Füllung“) öffnet auch während des parallelen Katalog-Ladefensters
+  sofort den sicheren Buchungsflow. Thaler merkt dabei den normalisierten
+  Grund (Füllung → Zahnersatz-Besprechung) zunächst ohne Motiv-ID; die ID wird
+  nach dem Katalog-Lauf regulär behandlerscharf aufgelöst. Kostenfragen und
+  verneinte Wünsche starten keine Buchung.
 - Meta-Fragen zum Buchstabieren bleiben im Formular und führen gezielt in
   die sichere mehrzügige Nachnamenaufnahme.
 - Ein Reiseort ist weder Datenbestätigung noch Zeitwunsch: offene Nummern-

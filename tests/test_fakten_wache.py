@@ -52,6 +52,22 @@ def test_notiz_mit_evidenz_ok():
     assert fakten_wache.unbelegte_behauptung(sit, "Ich habe eine Notiz gemacht.") == ""
 
 
+def test_akte_angelegt_ohne_evidenz_ist_unbelegt():
+    """Live New York: vier Ziffern dürfen keine erfundene Aktenanlage decken."""
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Vielen Dank. Ich habe Ihre Akte angelegt."
+    ) == "anlegen"
+
+
+def test_akte_angelegt_mit_create_evidenz_ist_ok():
+    sit = _sit()
+    sit["lastCreate"] = {"ok": True, "createdPatient": True}
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Vielen Dank. Ich habe Ihre Akte angelegt."
+    ) == ""
+
+
 def test_frage_ist_keine_behauptung():
     sit = _sit()
     assert fakten_wache.unbelegte_behauptung(sit, "Soll ich den Termin so eintragen?") == ""

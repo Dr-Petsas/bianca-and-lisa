@@ -5,8 +5,8 @@ Nebenthema darf weder Patientendaten erfinden noch die offene Zeitfrage
 verlieren.
 """
 
-from bianca import flow, gehirn
-from kern import zimmer_map
+from bianca import agent, flow, gehirn
+from kern import hirn, intent, zimmer_map
 
 
 def _tenant() -> dict:
@@ -46,6 +46,41 @@ def test_kein_aktueller_termin_aber_nicht_neu_ist_bestand():
     assert s["warSchonMal"] is True
     assert "warSchonMal" in neu
     assert not s["vorname"] and not s["nachname"]
+
+
+def test_fuellung_startet_den_sicheren_flow_ohne_llm(monkeypatch):
+    """Wurzelfehler der Live-Session: Schon Turn eins muss den Job öffnen."""
+    sit = _sit()
+    hirn.init(sit)
+
+    def niemals_llm(*_a, **_k):
+        raise AssertionError("Der sichere Thaler-Handoff darf kein LLM brauchen")
+
+    monkeypatch.setattr(agent.llm, "chat", niemals_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", niemals_llm)
+    monkeypatch.setattr(agent.flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setenv("INTENT_NACHZUG", "0")
+
+    aus = agent.user_turn(sit, "Hallo, ich brauche eine Füllung.")
+
+    s = gehirn.sammler(sit)
+    assert aus
+    assert s["modus"] == "buchen"
+    assert s["frage"] == "schonmal"
+    assert s["grund"] == "Zahnersatz-Beratung"
+    assert "schon einmal" in aus["text"]
+    aktiv = next(a for a in sit["hirn"]["anliegen"] if a["id"] == sit["hirn"]["aktiv"])
+    assert aktiv["handlung"] == "ANLEGEN"
+    assert aktiv["quelle"] == "entdeckt"
+
+
+def test_fuellungsfrage_und_verneinung_starten_keine_buchung():
+    for text in (
+        "Was kostet eine Füllung?",
+        "Ich möchte keine Füllung.",
+    ):
+        deutung = intent.erkennen(_sit(), text)
+        assert deutung.get("handlung") != "ANLEGEN", (text, deutung)
 
 
 def test_buchstabier_rueckfrage_bestaetigt_den_sicheren_weg():

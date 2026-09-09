@@ -989,7 +989,22 @@ def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) ->
     from kern import zimmer_map
     kat = zimmer_map.buchbarer_katalog(tenant, katalog)
     wortlaut = zimmer_map.mapping_text(tenant, text)
-    return besuchsgrund.deute(tenant, wortlaut, katalog=kat)
+    kern, vm = besuchsgrund.deute(tenant, wortlaut, katalog=kat)
+    if kern or not zimmer_map.aktiv(tenant):
+        return kern, vm
+    # Der Thaler-Katalog wird beim Gesprächsstart parallel geladen. Trifft
+    # der allererste Satz dieses kleine Zeitfenster, darf sein bereits sicher
+    # normalisierter Grund nicht verlorengehen. Die konkrete Motiv-ID bleibt
+    # bewusst leer und wird nach dem Katalog-Lauf behandlerscharf aufgelöst.
+    ohne_katalog = {
+        "Akute Beschwerden Schmerzen Notfall": "akute Beschwerden/Notfall",
+        "Erstuntersuchung Neupatient": "Neupatient",
+        "Professionelle Zahnreinigung PZR": "Professionelle Zahnreinigung",
+        "Implantat Besprechung Beratung": "Implantat-Beratung",
+        "Zahnersatz Besprechung Beratung": "Zahnersatz-Beratung",
+        "Kontrolluntersuchung Kontrolle": "Kontrolle",
+    }
+    return ohne_katalog.get(wortlaut, ""), None
 
 
 def _name_tokens(text: str) -> list[str]:
