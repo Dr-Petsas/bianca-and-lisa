@@ -129,16 +129,19 @@ def _gefragt(sit: dict) -> dict:
     return s
 
 
-def test_ja_fuehrt_zum_zahnersatz_check():
+def test_ja_bucht_unverbindliche_besprechung_ohne_zusatzfrage():
     echt = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
         s = _gefragt(sit)
         r = flow.zug(sit, "Ja, gerne!")
-        assert r and "Sehr gerne" in r["text"], r
-        assert "Zahnersatz" in r["text"] and "Kronen" in r["text"]
-        assert s["bleaching"] == "check" and s["frage"] == "bleaching_check"
+        assert r and "Doktor entscheidet" in r["text"], r
+        assert "Zahnersatz" in r["text"] and "Frontbereich" in r["text"]
+        assert "unverbindlich als Besprechung" in r["text"]
+        assert s["bleaching"] == "beratung"
+        assert s["bleachingInfo"] == "unverbindlich"
+        assert s["frage"] != "bleaching_check"
     finally:
         flow.hintergrund.anstossen = echt
 
@@ -257,6 +260,18 @@ def test_buchen_traegt_beratungs_notiz_zahnersatz():
     s.update({"bleaching": "beratung", "bleachingInfo": "zahnersatz"})
     notes = _buchen_mit(sit)
     assert any("Zahnersatz im Frontbereich" in n and "beraten" in n for n in notes), notes
+
+
+def test_buchen_traegt_unverbindliche_bleaching_besprechung():
+    sit = _sit()
+    s = _buch_bereit(sit)
+    s.update({"bleaching": "beratung", "bleachingInfo": "unverbindlich"})
+    notes = _buchen_mit(sit)
+    assert any(
+        "Zahnaufhellung unverbindlich mitbesprechen" in n
+        and "Zahnersatz im Frontbereich" in n
+        for n in notes
+    ), notes
 
 
 def test_buchen_traegt_beratungs_notiz_unsicher():

@@ -1731,11 +1731,12 @@ an und berät sie"
   `flow._einschub`, wie die PZR-Mitbuch-Frage; nennt die Dauer, aber KEINEN
   Preis — Chef 03.09.2026: „kosten nur bei nachfrage nennen. nicht mit den
   kosten ins haus fallen", der Preis kommt nur übers LLM, wenn der Anrufer
-  fragt) → bei Ja
-  "check" (Zahnersatz-Rückfrage: Kronen/Brücken/Veneers/Implantate vorne?)
-  → "ja" | "nein" | "beratung" (+ `bleachingInfo`: "zahnersatz"/"unsicher").
-  EINMAL pro Anruf; zweimal keine klare Antwort → `_eskalieren` setzt
-  "nein" (Angebot) bzw. "beratung" (Check).
+  fragt) → bei Ja direkt `"beratung"` + `bleachingInfo="unverbindlich"`:
+  „Der Doktor entscheidet … besonders bei Zahnersatz im Frontbereich. Ich
+  buche das unverbindlich als Besprechung mit ein." Keine zusätzliche
+  Zahnersatz-Verhörfrage. Die alten `"check"`-Zustände bleiben nur für
+  laufende Sitzungen während eines Deploys kompatibel. Explizit genannter
+  Zahnersatz/Unsicherheit führt ebenfalls zur Berate-Notiz.
 - **Tenant-Wache** (`gehirn.bleaching_faellig`): nur wenn der NEUE Termin
   selbst eine Zahnreinigung ist (`ist_pzr_grund`) UND der Motiv-Katalog der
   Praxis eine Aufhellung führt (`_BLEACH_RE` gegen Namen). Derma-Praxen
@@ -1743,10 +1744,9 @@ an und berät sie"
   Chef-Ansage für SEINE Praxis — führt ein anderer Zahn-Tenant Bleaching,
   vorher Preis/Dauer klären!
 - **Gebucht wird IMMER die Zahnreinigung** (kein zweiter Slot, kein
-  Motiv-Wechsel — Meddent hat kein Kombi-Motiv): bei "ja" bekommt der Termin
-  „PLUS Zahnaufhellung/Bleaching … (ca. +1 Std., 350 Euro zusätzlich) —
-  bitte Terminlänge anpassen." als Popup-Notiz; bei "beratung" die passende
-  Berate-Notiz (Zahnersatz vorne bzw. unsicher).
+  Motiv-Wechsel — Meddent hat kein Kombi-Motiv): nach Ja bekommt der Termin
+  die unverbindliche Bleaching-Besprechung als Popup-Notiz; der Doktor prüft
+  die Machbarkeit, besonders bei Zahnersatz im Frontbereich.
 - **Bianca berät NIE selbst medizinisch:** bei Unsicherheit/Zahnersatz sagt
   sie den Chef-Satz (Notiz gemacht, der Doktor schaut es sich in Ruhe an
   und berät). Faktenwissen fürs LLM (Nachfragen wie „Was kostet das?")
@@ -1754,7 +1754,7 @@ an und berät sie"
   Prompt-Absatz, damit fremde Tenants die Meddent-Preise nie sehen.
 - Regex-Wachen: `_ZAHNERSATZ_RE` matcht NICHT „am dritten Oktober" (nur
   „die Dritten"); Zwischenfragen halten die Bleaching-Frage offen (wie pzr).
-- Tests: `tests/test_bleaching.py` (16, offline).
+- Tests: `tests/test_bleaching.py` (17, offline).
 
 ## Termin für Dritte (W-FUER-WEN 03.09.2026 — nicht rückbauen)
 

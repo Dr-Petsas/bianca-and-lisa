@@ -1894,8 +1894,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["bleachingInfo"] = "zahnersatz"
             neu.add("bleaching")
         elif ist_ja(t):
-            s["bleaching"] = "check"
-            neu.add("bleachingCheck")
+            # Chef 09.09.2026: nicht mit einer weiteren Zahnersatz-Frage
+            # verhoeren. Die Aufhellung kommt unverbindlich als Besprechung
+            # in die Terminnotiz; der Doktor entscheidet die Machbarkeit,
+            # besonders bei Zahnersatz im Frontbereich.
+            s["bleaching"] = "beratung"
+            s["bleachingInfo"] = "unverbindlich"
+            neu.add("bleaching")
         elif ist_nein(t):
             s["bleaching"] = "nein"
             neu.add("bleaching")

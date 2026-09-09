@@ -394,6 +394,12 @@ def _quittung(s: dict, neu: set[str]) -> str:
             return ("Wunderbar — dann plane ich die Aufhellung mit ein, "
                     "der Termin dauert dann etwa eine Stunde länger. ")
         if s.get("bleaching") == "beratung":
+            if s.get("bleachingInfo") == "unverbindlich":
+                return (
+                    "Okay! Der Doktor entscheidet, ob die Aufhellung bei Ihnen "
+                    "möglich ist, besonders wenn Sie im Frontbereich Zahnersatz "
+                    "tragen. Ich buche das unverbindlich als Besprechung mit ein. "
+                )
             if s.get("bleachingInfo") == "zahnersatz":
                 # Chef 03.09.2026: bei Kronen/Bruecken/Veneers/Implantaten in
                 # der Front ist die Aufhellung unter Umstaenden nicht moeglich
@@ -974,7 +980,13 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 )
                 text += " Die Zahnaufhellung habe ich mit dazu vermerkt."
             elif s["bleaching"] == "beratung":
-                if s["bleachingInfo"] == "zahnersatz":
+                if s["bleachingInfo"] == "unverbindlich":
+                    hinweise.append(
+                        "Zahnaufhellung unverbindlich mitbesprechen: Bitte prüfen, "
+                        "ob sie möglich ist, besonders bei Zahnersatz im "
+                        "Frontbereich, und den Patienten beraten."
+                    )
+                elif s["bleachingInfo"] == "zahnersatz":
                     hinweise.append(
                         "Anrufer interessiert sich für Zahnaufhellung, hat aber "
                         "Zahnersatz im Frontbereich (Kronen/Brücken/Veneers/"
