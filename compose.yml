@@ -41,6 +41,9 @@ services:
       ASTERISK_SSH: ${ASTERISK_SSH:-root@87.106.34.137}
       ASTERISK_SSH_KEY: ${ASTERISK_SSH_KEY:-/app/secrets/asterisk-cli-key}
       ASTERISK_SSH_PROXY: ${ASTERISK_SSH_PROXY:-}
+      BIANCA_PROXY_BASE: http://bianca:8096
+    depends_on:
+      - bianca
     ports:
       - "8095:8095"
     healthcheck:

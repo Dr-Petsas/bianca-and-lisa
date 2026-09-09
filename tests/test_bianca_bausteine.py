@@ -2574,14 +2574,14 @@ def test_neupatient_egal_laesst_global_suchen():
     assert fid == "grund", "nach 'egal' geht es normal weiter"
 
 
-def test_bestand_behandlerfrage_bleibt_zuletzt():
-    """Regression: Bestandspatienten behalten die Akten-Frage nach dem
-    LETZTEN Behandler — nur Neupatienten bekommen die Wahl-Frage."""
+def test_bestand_ohne_behandlerfakt_fragt_neutral():
+    """Ohne sicheren Kalenderfakt keine Gedächtnisfrage und kein Raten."""
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({"modus": "buchen", "warSchonMal": True})
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "arzt" and "zuletzt" in frage
+    assert fid == "arzt"
+    assert frage == "Bei welchem Behandler soll ich für Sie schauen?"
 
 
 def test_arztwahl_formen_tragen_kernwort():
@@ -2974,7 +2974,7 @@ def test_anrufer_kartei_kommt_nach_dem_hallo():
         k = sit.get("anruferKartei") or {}
         assert k.get("calendarId") == "cal-petsas"
         assert gehirn.sammler(sit)["letzterBesuch"] == ""
-        assert "Petsas" in gehirn.arzt_check_frage(sit)
+        assert gehirn.arzt_check_frage(sit) == "Bei Doktor Petsas wieder, richtig?"
 
         echt_anstossen = flow.hintergrund.anstossen
         flow.hintergrund.anstossen = lambda s: None
@@ -2992,6 +2992,37 @@ def test_anrufer_kartei_kommt_nach_dem_hallo():
             assert s["frage"] != "arzt_check"
         finally:
             flow.hintergrund.anstossen = echt_anstossen
+    finally:
+        hintergrund.arztmod.letzter_behandler = echt
+
+
+def test_anrufer_kartei_nimmt_behandler_aus_naechstem_termin():
+    """Kein alter Besuch: der bekannte nächste Termin reicht für die kurze
+    Behandler-Bestätigung, darf aber keine erfundene Historie erzeugen."""
+    from bianca import hintergrund
+
+    sit = _sit_mit_anrufer()
+    sit["anrufer"]["patientId"] = "pat-8"
+    echt = hintergrund.arztmod.letzter_behandler
+    hintergrund.arztmod.letzter_behandler = lambda tenant, pid: {
+        "ok": True, "war": False,
+        "calendarId": "cal-petsas", "calendarName": "Dr. Petsas",
+        "doctorName": "Dr. Petsas",
+        # arzt.letzter_behandler nutzt auch fuer den Zukunfts-Fallback das
+        # Vertragsfeld lastIso; es darf hier nicht als letzter Besuch landen.
+        "lastIso": "2026-09-10T11:30:00",
+    }
+    try:
+        hintergrund.kartei_von_anrufer(sit)
+        for _ in range(50):
+            if sit.get("anruferKartei"):
+                break
+            __import__("time").sleep(0.02)
+        k = sit.get("anruferKartei") or {}
+        assert k.get("behandlerQuelle") == "naechsterTermin"
+        assert k.get("letzterBesuch") == ""
+        assert k.get("letzterGrund") == ""
+        assert gehirn.arzt_check_frage(sit) == "Bei Doktor Petsas wieder, richtig?"
     finally:
         hintergrund.arztmod.letzter_behandler = echt
 

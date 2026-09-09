@@ -52,19 +52,29 @@ def kartei_von_anrufer(sit: dict) -> None:
     def arbeit() -> None:
         try:
             info = arztmod.letzter_behandler(sit.get("tenant") or {}, pid)
-            if info.get("ok") and info.get("war") and _s(info.get("calendarId")):
+            if info.get("ok") and _s(info.get("calendarId")):
+                # masPatientLastDoctor liefert ersatzweise den NAECHSTEN
+                # Termin, wenn noch kein vergangener Besuch vorhanden ist.
+                # Auch daraus ist der passende Behandler sicher bekannt —
+                # nur Besuchsdatum/-grund duerfen dann nicht als Historie
+                # ausgegeben werden. Live 09.09. (Kiriakos): ohne diese
+                # Trennung fiel Bianca trotz bekanntem Petsas-Kalender auf
+                # die offene Frage "Wissen Sie noch ..." zurueck.
+                war = bool(info.get("war"))
                 sit["anruferKartei"] = {
-                    "letzterBesuch": _s(info.get("lastIso")),
-                    "letzterGrund": _s(info.get("grund")),
+                    "letzterBesuch": _s(info.get("lastIso")) if war else "",
+                    "letzterGrund": _s(info.get("grund")) if war else "",
                     "calendarId": _s(info.get("calendarId")),
                     "calendarName": _s(info.get("calendarName")),
                     "doctorName": _s(info.get("doctorName") or info.get("calendarName")),
+                    "behandlerQuelle": "letzterBesuch" if war else "naechsterTermin",
                 }
                 name = arzt_sprechname(
                     _s(info.get("doctorName") or info.get("calendarName")),
                     sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
                 )
-                print(f"bianca-anrufer-kartei: zuletzt {name!r} "
+                print(f"bianca-anrufer-kartei: Behandler {name!r} "
+                      f"Quelle={sit['anruferKartei']['behandlerQuelle']} "
                       f"{_s(info.get('lastIso'))[:10]}", flush=True)
                 from kern import zimmer_map
                 frage = "" if zimmer_map.aktiv(sit.get("tenant") or {}) else gehirn.arzt_check_frage(sit)

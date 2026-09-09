@@ -228,6 +228,16 @@ dann erst nach namen und nummer fragen."
  Absage, Auskunft, Eskalation) und `tests/test_agentprofil.py`
  (Ernte, +E164, nie im Cache, Nachreichen beim Cache-Treffer).
 
+**W-ARZT-BESTÄTIGUNG (09.09.2026):** Die offene Gedächtnisfrage „Wissen Sie
+noch, bei welchem Arzt …?“ ist ausgebaut. Ist ein Kalender sicher bekannt,
+kommt kurz „Bei Doktor X wieder, richtig?“. Als sichere Quelle gilt neben dem
+letzten Besuch auch ein bereits bestehender nächster Termin aus
+`masPatientLastDoctor`; dessen Datum/Grund wird ausdrücklich NICHT als
+vergangene Behandlung übernommen. Ohne Kalender-Fakt fragt Bianca neutral,
+bei welchem Behandler sie schauen soll. Tests:
+`test_anrufer_kartei_kommt_nach_dem_hallo`,
+`test_anrufer_kartei_nimmt_behandler_aus_naechstem_termin`.
+
 ## LLM / Stimme
 
 - LLM: vLLM auf der 5090 (`LLM_BASE`, `qwen3.6:35b-a3b`). Kein Ollama.
@@ -386,6 +396,14 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
 - Tests: `tests/test_stt_whisper.py` (offline: Vorrang, Rückfall+Pause,
   nie Scribe, WAV-Direktspur, Nachkorrektur); Live-Probe:
   `tests/stt_whisper_probe.py` (echter Container + echter Rückfall).
+- **Leeres Whisper-Final ist kein Stille-Beweis (W-STT-LEER 09.09.2026):**
+  Live bei Kiriakos erreichten kurze Antworten als hörbare 1,5-s-WAVs die
+  STT, Whisper lieferte aber ohne Exception `""`; deshalb griff der alte
+  Fehler-Rückfall nicht und Bianca stockte bis zum Stups. Bei konfiguriertem
+  `STT_BASE` hört Parakeet einen solchen Zug jetzt einmal gegen. Whisper wird
+  dabei nicht pausiert (der Dienst ist erreichbar); nur ein echtes
+  Verbindungs-/Protokollproblem aktiviert weiter die 30-s-Pause. Test:
+  `test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause`.
 
 ## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
 
@@ -1147,6 +1165,14 @@ Modul `kern/mitschnitt.py`, gilt für BEIDE Stimmen.
  Traversal), `POST /api/anrufe/{sid}/loeschen`. Lisa zeichnet über
  dieselben Kern-Hooks auf (`.data/anrufe/lisa/`), hat aber noch keine
  eigene Seite.
+- **Öffentlicher, geschützter Viewer (W-TRANSKRIPT-ZUGANG 09.09.2026):**
+  Der Lisa-Tunnel reicht `/bianca/` im Compose-Netz an `http://bianca:8096`
+  durch (nicht an sein eigenes `127.0.0.1`). Die statische Anrufseite ist
+  sichtbar, aber alle patientenhaltigen `/bianca/api/anrufe*`-Wege verlangen
+  den privaten Fernsteuerungs-Token. Der Viewer übernimmt ihn ausschließlich
+  aus `#t=…` und hängt ihn an Liste, Details, Audio und Löschen. Direkter
+  Praxiszugang über Tailscale-Port 8096 bleibt unverändert. Test:
+  `tests/test_anrufe_zugang.py`.
 - **Nie blockierend:** alle Schreibwege fangen Fehler und verschlucken sie —
  der Anruf-Pfad leidet nie. Notaus: `MITSCHNITT=0` => kein Ordner, kein
  Byte. Tests: `tests/test_mitschnitt.py`.

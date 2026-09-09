@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 import httpx
@@ -558,10 +559,25 @@ def api_audio_stream(name: str):
 # Der Cloudflare-Tunnel zeigt nur auf DIESEN Dienst (8095). Biancas Dienst
 # (8096) ist von aussen nicht erreichbar — darum reicht Lisa alles unter
 # /bianca/... an ihn durch. Lokal funktioniert weiterhin auch Port 8096 direkt.
-_BIANCA_ZIEL = "http://127.0.0.1:8096"
+# Im Compose-Container ist localhost dagegen Lisa selbst: dort wird per Env
+# der Docker-Service "bianca" eingetragen.
+_BIANCA_ZIEL = os.environ.get(
+    "BIANCA_PROXY_BASE", "http://127.0.0.1:8096"
+).strip().rstrip("/")
 # read=None: die NDJSON-Stroeme (Fueller waehrend Werkzeug-Laeufen) duerfen
 # beliebig lange offen bleiben.
 _BIANCA_KANAL = httpx.AsyncClient(base_url=_BIANCA_ZIEL, timeout=httpx.Timeout(10.0, read=None))
+
+
+def _bianca_transkript_auth(pfad: str) -> bool:
+    """Patientenhaltige Anruf-APIs am öffentlichen Proxy schützen.
+
+    Die statische /anrufe-Seite selbst enthält keine Daten. Liste,
+    Transkripte, Audios und Löschen brauchen denselben privaten Token wie
+    Lisas Fernsteuerung. Der interne Tailscale-Port 8096 bleibt unverändert.
+    """
+    p = str(pfad or "").strip("/").lower()
+    return p == "api/anrufe" or p.startswith("api/anrufe/")
 
 
 @app.get("/bianca")
@@ -573,6 +589,8 @@ def bianca_umleiten():
 
 @app.api_route("/bianca/{pfad:path}", methods=["GET", "POST"])
 async def bianca_durchreichen(pfad: str, request: Request):
+    if _bianca_transkript_auth(pfad):
+        _remote_guard(request)
     kopf = {}
     ct = request.headers.get("content-type")
     if ct:

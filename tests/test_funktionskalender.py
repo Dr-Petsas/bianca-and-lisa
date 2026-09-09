@@ -242,7 +242,7 @@ def test_arzt_check_sagt_zur_prophylaxe():
     sit = _sit()
     sit["anruferKartei"] = {"calendarId": PROPHY, "calendarName": "Prophylaxe"}
     frage = gehirn.arzt_check_frage(sit)
-    assert "zur Prophylaxe" in frage
+    assert frage == "Zur Prophylaxe wieder, richtig?"
     assert "Doktor" not in frage
 
 

@@ -6,10 +6,19 @@
 
 const $ = (id) => document.getElementById(id);
 const spieler = $("spieler");
+// Der öffentliche Lisa-Proxy schützt Patientenliste, Transkripte und Audio
+// mit seinem Fernsteuerungs-Token. Es bleibt bewusst im URL-Fragment
+// (#t=...), damit es weder an den Webserver noch in Referer-Header gerät.
+const zugangToken = new URLSearchParams(location.hash.slice(1)).get("t") || "";
 let anrufe = [];
 let aktivId = "";
 let laufKnopf = null;
 let kette = [];
+
+function mitZugang(url) {
+  if (!zugangToken) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(zugangToken)}`;
+}
 
 function zeit(iso) {
   try {
@@ -108,7 +117,7 @@ function spieleKette(urls, knopf) {
 }
 
 function audioUrl(sid, datei) {
-  return `api/anrufe/${sid}/audio/${datei}`;
+  return mitZugang(`api/anrufe/${encodeURIComponent(sid)}/audio/${encodeURIComponent(datei)}`);
 }
 
 function zugAudios(sid, z) {
@@ -373,7 +382,11 @@ function maleDetail(a) {
   del.onclick = async () => {
     if (!confirm("Diesen Mitschnitt endgültig löschen?")) return;
     stoppTon();
-    try { await fetch(`api/anrufe/${sid}/loeschen`, { method: "POST" }); } catch { /* */ }
+    try {
+      await fetch(mitZugang(`api/anrufe/${encodeURIComponent(sid)}/loeschen`), {
+        method: "POST",
+      });
+    } catch { /* */ }
     aktivId = "";
     ladeListe();
     wurzel.innerHTML = '<div class="leer">gelöscht</div>';
@@ -441,7 +454,8 @@ async function oeffne(sid) {
   maleListe();
   stoppTon();
   try {
-    const r = await fetch(`api/anrufe/${sid}`);
+    const r = await fetch(mitZugang(`api/anrufe/${encodeURIComponent(sid)}`));
+    if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
     if (d && d.ok) maleDetail(d.anruf);
   } catch {
@@ -481,11 +495,16 @@ function maleListe() {
 
 async function ladeListe() {
   try {
-    const r = await fetch("api/anrufe");
+    const r = await fetch(mitZugang("api/anrufe"));
+    if (!r.ok) throw new Error(String(r.status));
     const d = await r.json();
     anrufe = (d && d.anrufe) || [];
-  } catch {
+  } catch (e) {
     anrufe = [];
+    if (String(e && e.message) === "401") {
+      $("liste").innerHTML = '<div class="leer">Zugriffstoken fehlt oder ist ungültig.</div>';
+      return;
+    }
   }
   maleListe();
 }

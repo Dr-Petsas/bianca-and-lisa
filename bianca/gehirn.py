@@ -2046,8 +2046,8 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Stimmt Name und Nummer so — oder habe ich mich vertan?",
     ),
     "arzt_check": (
-        "Sie waren zuletzt bei demselben Behandler, richtig?",
-        "Stimmt der letzte Behandler so — ein kurzes Ja oder Nein genügt.",
+        "Bei demselben Behandler wieder, richtig?",
+        "Wieder beim gleichen Behandler, richtig?",
     ),
     "rueckblick": (
         "Wie ist es Ihnen seither ergangen?",
@@ -2572,17 +2572,17 @@ def arzt_check_frage(sit: dict) -> str:
     if kern_tenants.ist_funktionskalender(roh):
         beim = kern_tenants.kalender_beim(roh)
         if beim.startswith("der "):
-            return f"Sie waren zuletzt zur {beim[4:]}, richtig?"
+            return f"Zur {beim[4:]} wieder, richtig?"
         if beim:
-            return f"Sie waren zuletzt bei {beim}, richtig?"
-        return "Sie waren zuletzt zur Prophylaxe, richtig?"
+            return f"Bei {beim} wieder, richtig?"
+        return "Zur Prophylaxe wieder, richtig?"
     name = arzt_sprechname(
         _s(k.get("doctorName") or k.get("calendarName")),
         sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
     )
     if not name:
         return ""
-    return f"Sie waren zuletzt bei {name}, richtig?"
+    return f"Bei {name} wieder, richtig?"
 
 
 def patient_von_kontakt_loesen(sit: dict) -> None:
@@ -2670,7 +2670,7 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
     """
     erstformen = [
         "Waren Sie denn schon einmal bei uns in der Praxis?",
-        "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?",
+        "Bei welchem Behandler soll ich für Sie schauen?",
         "Und der Nachname, bitte?",
         "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?",
         "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?",
@@ -2901,10 +2901,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 rq = arzt_check_frage(sit)
                 if rq:
                     return "arzt_check", rq
-            wer = fuer_wen_phrase(s)
+            wer = fuer_wen_phrase(s, fall="wen")
             if wer:
-                return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
-            return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
+                return "arzt", f"Bei welchem Behandler soll ich für {wer} schauen?"
+            return "arzt", "Bei welchem Behandler soll ich für Sie schauen?"
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:
