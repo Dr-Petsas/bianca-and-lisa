@@ -353,6 +353,49 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     return {"text": _wahl(story, lage, "abschied", saetze.ABSCHIED), "baustein": "abschied", "auflegen": True}
 
 
+def frei_saetze(story: dict) -> list[str]:
+    """Vom Studio frei eingegebene Texte und eigene Namen normalisieren.
+
+    Diese Liste ist bewusst leer, solange die Story nur Werte aus dem
+    eingebauten Katalog verwendet. Eigene Eingaben werden vor dem Lauf
+    gesammelt, damit Klang-Cache und Runner exakt denselben bereinigten
+    Wortlaut benutzen.
+    """
+    out: list[str] = []
+
+    def add(t: Any) -> None:
+        s = " ".join(str(t or "").split())
+        if s and s not in out:
+            out.append(s)
+
+    for feld in (
+        "eroeffnungText", "grundText", "wunschText",
+        "versicherungText", "slotText", "abschweiferText",
+    ):
+        roh = story.get(feld)
+        sauber = " ".join(str(roh or "").split())
+        if roh is not None:
+            story[feld] = sauber
+        add(sauber)
+
+    stimme = str(story.get("stimme") or "")
+    vorname = " ".join(str(story.get("vorname") or "").split())
+    nachname = " ".join(str(story.get("nachname") or "").split())
+    eigener_name = (
+        (vorname and vorname != str(saetze.VORNAMEN.get(stimme) or ""))
+        or (nachname and nachname not in saetze.NACHNAMEN)
+    )
+    if eigener_name and vorname and nachname:
+        add(saetze.name_satz(vorname, nachname, int(story.get("seed") or 0)))
+        add(saetze.NACHNAME_NUR[0].format(nachname=nachname))
+
+    behandler = " ".join(str(story.get("behandler") or "").split())
+    if behandler and behandler not in BEHANDLER:
+        add(saetze.arzt_satz(behandler, int(story.get("seed") or 0)))
+
+    return out
+
+
 def saetze_fuer_audio(story: dict) -> list[str]:
     """Alle Anrufer-Saetze, die dieser Story wahrscheinlich spricht —
     zum Vorwaermen (TTS) BEVOR der Anruf startet."""
@@ -363,9 +406,8 @@ def saetze_fuer_audio(story: dict) -> list[str]:
         if s and s not in out:
             out.append(s)
 
-    for feld in ("eroeffnungText", "grundText", "wunschText",
-                 "versicherungText", "slotText", "abschweiferText"):
-        add(story.get(feld))
+    for text in frei_saetze(story):
+        add(text)
 
     lg = lage_neu()
     add(_eroeffnung(story, lg).get("text"))

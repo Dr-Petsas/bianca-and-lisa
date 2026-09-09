@@ -631,7 +631,14 @@ async def bianca_durchreichen(pfad: str, request: Request):
         antwort = await _BIANCA_KANAL.send(weiter, stream=True)
     except httpx.HTTPError:
         raise HTTPException(502, "Bianca-Dienst (Port 8096) antwortet nicht")
-    raus = {k: v for k, v in antwort.headers.items() if k.lower() in {"content-type", "cache-control"}}
+    # Sichere Browser-Header 1:1 erhalten. Besonders ``location`` ist fuer
+    # relative Studio-Redirects zwingend; ohne ihn kam durch den Tunnel ein
+    # nacktes 307, auf das kein Ergebnis-/Zurueck-Link reagieren konnte.
+    erlaubt = {
+        "content-type", "cache-control", "location",
+        "content-disposition", "accept-ranges", "content-range",
+    }
+    raus = {k: v for k, v in antwort.headers.items() if k.lower() in erlaubt}
     # Cloudflare darf insbesondere alte 404 auf neu hinzugekommenen Viewer-
     # Assets nicht vier Stunden festhalten; Transkript-Antworten sind ohnehin
     # patientenhaltig und gehören in keinen öffentlichen Edge-Cache.
