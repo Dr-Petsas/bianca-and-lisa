@@ -1169,7 +1169,7 @@ const PATCHES = [
   ["W-OHR-FENSTER (lange Antworten bleiben vollständig)", "09.09.", "Telefon", "Kurze Echo- oder Rauschspitzen werden beim stillen Ohr nicht mehr über eine ganze lange Ansage aufsummiert. Nur mindestens 400 ms echter Sprachanteil innerhalb von 600 ms lösen Barge-in aus; verteilte Störungen kappen Biancas Audio nicht mehr."],
   ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
   ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
-  ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im sicheren Formular, Reiseorte verdrängen die Zeitfrage nicht und eine leere Slotsuche läuft nach der Rückrufnotiz nicht mehr in Schleife."],
+  ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Ich brauche eine Füllung“ öffnet auch vor dem Katalog-Laden sofort den sicheren Flow. „Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im Formular, unbelegte Aktenanlagen werden blockiert und eine leere Slotsuche läuft nicht mehr in Schleife."],
 ];
 
 let kTab = "faehig";
