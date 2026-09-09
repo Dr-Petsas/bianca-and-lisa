@@ -1167,6 +1167,7 @@ const PATCHES = [
   ["W-KURZANTWORT (Fragezeichen ist kein Themenwechsel)", "09.09.", "Audio/Flow", "Eine von Whisper zögernd als „Ähm, nein?“ punktuierte Kurzantwort bleibt in der schnellen Terminmaschine. Sie löst weder freies LLM-Gerede noch mehrere unnötige TTS-Streams aus; echte Zusatzfragen wie „Nein, aber was kostet das?“ bleiben erlaubt."],
   ["W-STT-LEER (kurzes Ja gegenhören)", "09.09.", "Ohr", "Ein leeres Whisper-Final gilt bei hörbarem Audio nicht mehr als Stille: Parakeet hört denselben Zug sofort gegen. So verschwinden kurze Ja-Antworten nicht mehr und der Dialog stockt nicht bis zum Stups."],
   ["W-OHR-FENSTER (lange Antworten bleiben vollständig)", "09.09.", "Telefon", "Kurze Echo- oder Rauschspitzen werden beim stillen Ohr nicht mehr über eine ganze lange Ansage aufsummiert. Nur mindestens 400 ms echter Sprachanteil innerhalb von 600 ms lösen Barge-in aus; verteilte Störungen kappen Biancas Audio nicht mehr."],
+  ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
 ];
 
 let kTab = "faehig";

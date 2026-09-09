@@ -1890,6 +1890,27 @@ Zusagen, Boah auf Hörfehler, PZR mitten in Wunschzeit, „Wem kann ich“):
 - Tests: `test_gespraech` (unklar), `test_hirn` (Rezept), `test_unterbrechung`
   (Floor), `test_greeting_bianca`, `test_anstand` (STT-Müll).
 
+## Öffnungszeiten + Wegbeschreibung aus Fakten (W-PRAXISAUSKUNFT 09.09.2026 — nicht rückbauen)
+
+Session `dda01bf3b329461aac70aeb0d4a8e2b6` (technische Audio-Probe):
+Der beim Transport beschädigte Testsatz wurde als „Pflungszeiten“ und „wie ich
+die praktisch erreiche“ transkribiert. Die Talk-Schicht machte daraus einen
+Gärtnerei-Witz, obwohl Öffnungszeiten und Weg im Mandantenprofil standen.
+
+- `kern/wissen.praxis_antwort` erkennt Öffnungszeiten eng fuzzy (lange Wörter,
+  hohe Schwelle) und Anfahrtsfragen auch bei diesem STT-Verhörer.
+- Die Antwort ist deterministisch: zuerst Fakten aus `tenant["dbPrompt"]`,
+  danach `tenant["wissen"]` als lokaler Rückfall. Das LLM formuliert und rät
+  auf diesem Weg nicht.
+- Werden beide Dinge gefragt, nennt Bianca in EINEM Zug die echten Zeiten und
+  die vollständige Wegbeschreibung. In einer laufenden Aufgabe hängt sie
+  danach die offene Pflichtfrage wieder an.
+- MedDent trägt die aktuellen Zeiten zusätzlich im lokalen Rückfall:
+  Montag bis Donnerstag acht bis achtzehn Uhr, Freitag acht bis sechzehn Uhr,
+  außerdem nach Vereinbarung. Die DB gewinnt weiterhin, wenn sie erreichbar ist.
+- Regressionswachen: `tests/test_wissen.py` (Live-Verhörer, DB-Vorrang,
+  LLM-Bypass und Wegabschnitt).
+
 ## Anstand-Konter (W-ANSTAND 03.09.2026 — nicht rückbauen)
 
 Chef (wörtlich): „wenn dich jemand beschimpft oder flucht sagst du nur....

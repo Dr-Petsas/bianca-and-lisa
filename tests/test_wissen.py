@@ -7,7 +7,7 @@ Läuft ohne Netz: Tenant kommt aus tenants/meddent.json, Prompts sind pur.
 from bianca.prompt import system_prompt as bianca_prompt
 from kern.sprech import betrag_wort, sanitize
 from kern.tenants import laden
-from kern.wissen import VERWEIS_SATZ, wissen_block
+from kern.wissen import VERWEIS_SATZ, auskunft_themen, braucht_langtext, praxis_antwort, wissen_block
 from lisa.prompt import system_prompt as lisa_prompt
 
 PREIS_KERNE = ("120 Euro", "900 bis 1400 Euro", "1600 bis 1800 Euro", "80 Euro")
@@ -84,6 +84,72 @@ def test_langtext_erkennung_nur_bei_wegfragen():
     for satz in ["Was kostet eine Zahnreinigung?", "Ich hätte gern einen Termin.",
                  "Ja, die Nummer stimmt.", "Welche Bahnlinie fährt zu Ihnen?", ""]:
         assert not braucht_langtext(satz), satz
+
+
+def test_live_verhoerer_erkennt_oeffnungszeiten_und_weg():
+    """Session dda01bf...: trotz beschädigtem Probe-Text beide Fakten finden."""
+    text = "Bitte erklär? Rennen Sie mir kurz Ihre Pflungszeiten und wie ich die praktisch erreiche."
+    assert auskunft_themen(text) == {"oeffnungszeiten", "anfahrt"}
+    assert braucht_langtext(text)
+
+
+def test_db_oeffnungszeiten_gewinnen_und_weg_kommt_aus_mandant():
+    tenant = laden("meddent")
+    tenant["dbPrompt"] = """
+# Standort:
+- Öffnungszeiten: Mo - Do: 08:00 - 18:00 Uhr, Fr: 08:00 - 16:00 Uhr und nach Vereinbarung
+"""
+    text, themen = praxis_antwort(
+        tenant,
+        "Bitte nennen Sie Ihre Pflungszeiten und wie ich die praktisch erreiche.",
+    )
+    assert themen == {"oeffnungszeiten", "anfahrt"}
+    assert "montags bis donnerstags von 08:00 bis 18:00 Uhr" in text
+    assert "freitags von 08:00 bis 16:00 Uhr" in text
+    assert "Düsseldorf-Grafenberg" in text
+    assert "Luise-Rainer-Straße" in text and "Haus B" in text
+    assert "Gärtnerei" not in text and "Pflanztermine" not in text
+
+
+def test_db_wegbeschreibung_gewinnt_vor_lokalem_rueckfall():
+    tenant = {
+        "dbPrompt": """
+Wenn dich jemand nach dem Weg fragt, sagst du:
+- „Die Praxis liegt am DB-Testweg.
+- Eingang durch Haus B.“
+
+Öffentliche Verkehrsmittel zur Klinik:
+- Linie siebenhundertneun
+""",
+        "wissen": {"anfahrt": "VERALTETER LOKALER WEG"},
+    }
+    text, themen = praxis_antwort(tenant, "Wie komme ich denn zu Ihnen?")
+    assert themen == {"anfahrt"}
+    assert "DB-Testweg" in text and "Haus B" in text
+    assert "VERALTETER" not in text and "siebenhundertneun" not in text
+
+
+def test_agent_beantwortet_live_verhoerer_ohne_llm(monkeypatch):
+    from bianca import agent
+
+    def llm_verboten(*_a, **_k):
+        raise AssertionError("Praxisfakten dürfen nicht ans LLM")
+
+    monkeypatch.setattr(agent.llm, "chat", llm_verboten)
+    monkeypatch.setattr(agent.llm, "chat_stream", llm_verboten)
+    sit = {
+        "tenant": laden("meddent"),
+        "messages": [{"role": "system", "content": "test"}],
+        "sammler": {},
+    }
+    z = agent.user_turn(
+        sit,
+        "Bitte erklär? Rennen Sie mir kurz Ihre Pflungszeiten und wie ich die praktisch erreiche.",
+    )
+    assert "Öffnungszeiten" in z["text"]
+    assert "Düsseldorf-Grafenberg" in z["text"]
+    assert "Gärtnerei" not in z["text"]
+    assert any(x.get("w") == "praxis-auskunft" for x in sit.get("_spur") or [])
 
 
 def test_wissen_block_ohne_anfahrt_kein_abschnitt():
