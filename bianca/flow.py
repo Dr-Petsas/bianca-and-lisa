@@ -1004,14 +1004,23 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             # gebucht — die Praxis sieht am Termin, WER angerufen hat und
             # dass die Kontakt-Nummer dem Anrufer gehört, nicht dem Patienten.
             if s["fuerWen"]:
-                rolle = s["fuerWen"].capitalize() if s["fuerWen"] != "andere" else "Fremd"
-                kontakt = _s(s.get("kontaktName"))
-                hinweise.append(
-                    f"Telefonisch gebucht von Angehörigem ({rolle}-Termin)"
-                    + (f": {kontakt}" if kontakt else "")
-                    + (f", Kontakt-Nummer {s['telefon']} gehört dem Anrufer."
-                       if s.get("telefon") else ".")
-                )
+                # Wer hat angerufen? Erst der beim Fuer-Wen-Wechsel gemerkte
+                # Kontaktname, sonst der erkannte Anrufer (Anrufer-ID/CF-pre)
+                # — live 09.09.2026 fehlte im Termin, dass es der Nachbar von
+                # Michael Petsas ist.
+                kontakt = _s(s.get("kontaktName")) or gehirn.anrufer_name(sit)
+                rolle_wort = gehirn.rolle_wort(s["fuerWen"])
+                if rolle_wort and kontakt:
+                    kern = f"Patient ist {rolle_wort} des Anrufers {kontakt}."
+                elif rolle_wort:
+                    kern = f"Patient ist {rolle_wort} des Anrufers."
+                elif kontakt:
+                    kern = f"Termin telefonisch gebucht vom Anrufer {kontakt}."
+                else:
+                    kern = "Termin telefonisch von einem Angehörigen gebucht."
+                if s.get("telefon"):
+                    kern += f" Kontakt-Nummer {s['telefon']} gehört dem Anrufer."
+                hinweise.append(kern)
             # W-MOTIV-KATALOG (Chef 03.09.2026): "entsprechende kurznotizen
             # bitte nicht vergessen" — deckt der gebuchte Besuchsgrund den
             # O-Ton des Anrufers nicht wörtlich ab (Fallback- oder Fuzzy-
@@ -1079,6 +1088,12 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     if "nummer" in gesagt.lower() or "handy" in gesagt.lower():
         s["frage"] = "telefon"
         s["telefonOk"] = False
+        # Slot war schon gewaehlt und bestaetigt, nur die Handynummer fehlte.
+        # Intent merken, damit die Buchung nach der Nummer DIREKT laeuft und
+        # nicht erneut Slots anbietet (live 09.09.2026: "Welcher davon passt
+        # Ihnen?" doppelt, nachdem 12:45 laengst gewaehlt war).
+        if s.get("slotIso"):
+            sit["buchIntent"] = True
     return {"text": gesagt or "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.", "book": book}
 
 
@@ -2147,6 +2162,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         return None  # nichts Verwertbares gehört — LLM klärt, Status führt zurück
 
     s["frage"] = ""
+    if sit.get("buchIntent") and s.get("slotIso"):
+        # Slot war schon gewaehlt und der Anrufer hatte Ja gesagt — nur ein
+        # Feld (z. B. die Handynummer) fehlte noch. Jetzt direkt buchen, NICHT
+        # erneut Slots anbieten (live 09.09.2026: doppelte Slotwahl-Frage).
+        return _buchen(sit, melde)
     ang = _angebot(sit, melde)
     if ang and _s(ang.get("text")):
         q = _quittung(s, neu)

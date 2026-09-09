@@ -383,6 +383,12 @@ _ROLLE_ALIAS: dict[str, str] = {
     "kleinen": "andere", "maedchen": "andere", "mädchen": "andere",
     "patient": "andere", "patienten": "andere", "patientin": "andere",
 }
+# Rollenwoerter (Nachbar/Sohn/Bruder …) sind NIE ein Patientenname. Bei
+# einer Fuer-Wen-Buchung sagte der Anrufer „Der Nachbar heisst Schmattke" —
+# „Nachbar" landete faelschlich als Vorname (live 09.09.2026). NUR im
+# Fuer-Wen-Kontext gefiltert, damit echte Nachnamen (Herr Mann) unberuehrt
+# bleiben.
+_ROLLE_WOERTER: frozenset = frozenset(_ROLLEN) | frozenset(_ROLLE_ALIAS)
 # Woerter nach "für meinen …", die KEIN Dritter sind (Wunschzeit, Grund,
 # Behandler). "sie" bleibt raus: am Telefon ist "für Sie" oft die formale
 # Anrede, nicht "für sie" = die Frau nebenan.
@@ -560,6 +566,12 @@ _KORREKTUR_KONTEXT_RE = re.compile(
 _TEL_FALSCH_RE = re.compile(
     r"(?:nummer|handy|telefon)[^.!?]{0,40}(?:falsch|stimmt\s+nicht|nicht\s+richtig|verkehrt)|"
     r"falsche\s+(?:nummer|handynummer|telefonnummer)", re.I)
+# "Nehmen Sie meine Nummer" / "unter meiner Nummer" — der Anrufer will die
+# Nummer, unter der er anruft bzw. die in seiner Kartei steht (live
+# 09.09.2026: statt sie zu erfragen und sich zu verhoeren, die bekannte
+# Nummer uebernehmen). "meine Nummer war falsch" faengt _TEL_FALSCH_RE davor.
+_MEINE_NUMMER_RE = re.compile(
+    r"\b(?:nehmen\s+sie\s+)?(?:unter\s+)?mein(?:e|er)\s+(?:handy|telefon)?nummer\b", re.I)
 _DIKTAT_FERTIG_RE = re.compile(
     r"\b(?:fertig|ende|das\s+war(?:'s|\s+es)?|mehr\s+nicht)\b", re.I)
 _BUCHSTABIER_HILFE_RE = re.compile(
@@ -964,6 +976,26 @@ def _name_tokens(text: str) -> list[str]:
     return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
 
 
+def _anrufer_nummer(sit: dict) -> str:
+    """Nummer, unter der der Anrufer anruft (Anrufer-ID/CF-pre) — oder ""."""
+    an = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    return _s(an.get("telefon")) or _s(sit.get("callerPhone"))
+
+
+def anrufer_name(sit: dict) -> str:
+    """Name des erkannten Anrufers (Anrufer-ID/CF-pre) — oder ""."""
+    an = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    return f"{_s(an.get('vorname'))} {_s(an.get('nachname'))}".strip()
+
+
+def rolle_wort(rolle: str) -> str:
+    """Rolle als lesbares Substantiv fuer die Termin-Notiz ("Nachbar")."""
+    r = _s(rolle).lower()
+    if not r or r == "andere":
+        return ""
+    return r.capitalize()
+
+
 def _einzelbuchstaben(text: str) -> str:
     """Explizite Einzelbuchstaben aus „S, R, I“ / „N... I...“."""
     return "".join(
@@ -1136,6 +1168,12 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     m = _NAME_LEADIN_RE.search(text)
     kandidat = m.group(1) if m else (text if erzwungen else "")
     toks = _name_tokens(kandidat)
+    if s.get("fuerWen") and len(toks) >= 2 and toks[0].lower() in _ROLLE_WOERTER:
+        # Fuer-Wen-Buchung: "Der Nachbar heisst Schmattke" / "Nachbar Schmattke"
+        # nennt nur den Nachnamen — das FÜHRENDE Rollenwort ist kein Vorname
+        # (live 09.09.2026). Nur das erste Token strippen: ein echter Nachname
+        # wie "Mann" (Sohn heisst Peter Mann) bleibt so unangetastet.
+        toks = toks[1:]
     if not toks:
         return False
     if m is None and erzwungen and len(toks) > 3:
@@ -1748,7 +1786,24 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["telefonOffen"] = ""
         s["telefonTeil"] = ""
         neu.add("telefonKorrektur")
-    if not d and not s["telefonOk"] and not s["telefonAkte"] and _AKTE_NUMMER_RE.search(t):
+    if (not d and not s["telefonOk"] and not s["telefonAkte"]
+            and _MEINE_NUMMER_RE.search(t) and not _TEL_FALSCH_RE.search(t)):
+        # "Nehmen Sie meine Nummer": ist die Anrufernummer bekannt (Anrufer-ID
+        # bzw. Kartei), uebernehmen wir sie deterministisch — kein Erfragen,
+        # kein Verhoeren (live 09.09.2026: STT liess eine Ziffer weg, im Termin
+        # stand die falsche Nummer, keine SMS). Sonst nicht darauf beharren.
+        bekannt = _anrufer_nummer(sit) or _s(s.get("aktePhone"))
+        ziffern = telefon.ziffern(bekannt).replace("+", "") if bekannt else ""
+        if ziffern and telefon.plausibel(ziffern):
+            s["telefon"] = telefon.normaliert(bekannt)
+            s["telefonOk"] = True
+            s["telefonOffen"] = ""
+            s["telefonTeil"] = ""
+            neu.add("telefon")
+        else:
+            s["telefonAkte"] = True
+            neu.add("telefonAkte")
+    elif not d and not s["telefonOk"] and not s["telefonAkte"] and _AKTE_NUMMER_RE.search(t):
         # "Meine Nummer haben Sie ja in der Akte" — nicht darauf beharren,
         # die Akten-Nummer (oder die Praxis-Nachpflege) übernimmt das.
         s["telefonAkte"] = True
