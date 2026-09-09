@@ -1864,6 +1864,36 @@ Presence-Stups bestätigt das führende Ja ausschließlich „noch dran“ und
 niemals die Patientenidentität. Tests: Mischzug-Blöcke in `test_hirn.py`,
 `test_task_router.py` und `test_fuer_wen.py`.
 
+## Frage nach bestehenden Terminen mitten in der Buchung (W-BESTANDSFRAGE 09.09.2026 — nicht rückbauen)
+
+Live Petsas 08.09.2026 (Anruf a1d77850): der Anrufer fragte VIERMAL nach
+seinen schon gebuchten Terminen („Habe ich noch einen anderen Termin diese
+Woche?“, „Wann ist denn der andere Termin?“, „Ich glaube, ich hatte noch
+einen anderen Termin gebucht.“) — Bianca hing im Buchungs-Slotangebot fest,
+das Frei-LLM ERFAND jedes Mal „keine weiteren Termine im System“, OHNE je den
+Kalender zu lesen (kein `agentFindPatientAppointments`). Ursache:
+`kern/intent.py` behandelte „Termin“ im laufenden ANLEGEN/AENDERN als
+Alltags-Erntewort (`_wechsel_verdacht` sprang nicht an), und `_FB_AUSKUNFT_RE`
+kannte nur „einen Termin“, nicht „einen ANDEREN Termin“/„andere Termine“.
+
+- **`_BESTANDSFRAGE_RE`** (eng gehalten) erkennt die Frage nach BESTEHENDEN
+  Terminen: „habe ich (noch/andere/weitere/schon/überhaupt/eigentlich/
+  bereits) … Termin(e)“, „wann ist/war (mein/der) (andere) Termin“, „welche
+  Termine habe ich“, „ich hatte … Termin … gebucht/vereinbart/ausgemacht“,
+  „mein/der/einen andere(r/n) Termin“. Ein blosser Terminwunsch („ich hätte
+  gern einen Termin“, „ich möchte einen Termin vereinbaren“) fällt bewusst
+  NICHT darunter.
+- **Einbau:** `_wechsel_verdacht` wertet einen Treffer auch mitten in der
+  Buchung als Wechsel-Verdacht; `_fallback` und `_eindeutig` deuten ihn als
+  WISSEN × VORGANG. Das Hirn parkt die Buchung (mit Checkpoint), schaltet auf
+  `auskunft`, `verwalten` liest die Termine WIRKLICH und sagt sie an — danach
+  führt Auto-Resume (enforce) zur Buchung zurück („So, zurück zu Ihrem
+  Termin.“). Der bekannte Anrufer wird nicht neu nach dem Namen gefragt (der
+  Nachname aus der Buchung bleibt im Sammler stehen).
+- **Notaus:** `INTENT_SCHICHT=0` (Regex-Modus, wie vor W-HIRN). Tests:
+  `tests/test_bestandsfrage.py` (Regex, Intent-Deutung, Hirn-Parken,
+  verwalten-Lookup, Agent Ende-zu-Ende OHNE LLM).
+
 ## Name/Nummer mit langen Pausen (08.09.2026 — nicht rückbauen)
 
 Erkannte Rufnummern überspringen die schwierige Datenerfassung; deshalb muss

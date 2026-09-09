@@ -110,6 +110,12 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     """
     if _WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t):
         return True
+    # Frage nach einem BESTEHENDEN Termin ("habe ich noch einen anderen
+    # Termin?") ist auch MITTEN in einer Buchung ein Wechsel-Verdacht — sonst
+    # bleibt der Satz beim Buchen haengen und das Frei-LLM erfindet eine
+    # Kalender-Auskunft (W-BESTANDSFRAGE 09.09.2026, Live Petsas 08.09.).
+    if _BESTANDSFRAGE_RE.search(t):
+        return True
     # "Termin" ist im Buchungs-/Aenderungs-Anliegen Alltagsvokabular der
     # Ernte — bei WISSEN/ERREICHEN/ABGEBEN dagegen ein neues Fass.
     if aktiv_handlung not in {"ANLEGEN", "AENDERN"} and re.search(r"\btermin", t, re.I):
@@ -255,6 +261,30 @@ _FB_AUSKUNFT_RE = re.compile(
     r"was\s+kostet|wie\s+teuer|wo\s+(?:finde|ist|sind)|wie\s+komme?\s+ich",
     re.I,
 )
+# BESTANDSTERMIN-Frage (W-BESTANDSFRAGE 09.09.2026): der Anrufer fragt nach
+# seinen SCHON GEBUCHTEN Terminen ("habe ich noch einen anderen Termin?",
+# "wann ist mein anderer Termin?", "ich hatte noch einen Termin gebucht").
+# Das ist WISSEN ueber einen bestehenden Vorgang -> Auskunft, NIE eine
+# Neubuchung — auch MITTEN in einer laufenden Buchung (Live Petsas 08.09.2026:
+# die Frage lief ans Frei-LLM, das "keine weiteren Termine im System"
+# ERFAND, ohne je den Kalender zu lesen). Bewusst eng gehalten: ein blosser
+# Terminwunsch ("ich haette gern einen Termin") faellt NICHT darunter.
+_BESTANDSFRAGE_RE = re.compile(
+    # "habe ich (noch/andere/weitere/schon/ueberhaupt/eigentlich/bereits) ... Termin(e)"
+    r"\bhab(?:e|')?\s+ich\s+(?:\w+\s+){0,2}?"
+    r"(?:noch|andere[nr]?|weitere[nr]?|schon|überhaupt|ueberhaupt|eigentlich|bereits)\b"
+    r"[^?.!]{0,30}?\btermine?\b|"
+    # "wann ist/war (mein|der) (andere) Termin"
+    r"\bwann\s+(?:ist|war|wäre|waere)\b[^?.!]{0,30}?\btermine?\b|"
+    # "welche(n) Termin(e) habe ich (noch)"
+    r"\bwelche[nr]?\s+termine?\b|"
+    # Feststellung eines BESTEHENDEN Termins mit Abschluss-Verb
+    r"\bich\s+hab(?:e|'|te)?\b[^?.!]{0,40}?\btermine?\b[^?.!]{0,30}?"
+    r"(?:gebucht|vereinbart|ausgemacht|gemacht)\b|"
+    # "mein anderer/anderen Termin", "der/die/einen andere(n) Termin"
+    r"\b(?:mein(?:en|er|e)?|der|die|einen)\s+ander\w+\s+termine?\b",
+    re.I,
+)
 _FB_NEU_RE = re.compile(
     r"(?:termin\w*)\s*(?:\w+\s+){0,4}?(?:vereinbar\w*|ausmach\w*|buch\w*|machen|haben|brauch\w*)|"
     r"(?:brauch\w*|h(?:ä|ae)tte?\s+gern\w*|m(?:ö|oe)chte\w*|will)\s+(?:\w+\s+){0,4}?termin",
@@ -335,7 +365,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
     if _FB_RUECKRUF_RE.search(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-    if _FB_AUSKUNFT_RE.search(t):
+    if _FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t):
         gg = "VORGANG" if "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
     if _FB_NEU_RE.search(t):
@@ -372,7 +402,7 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))
     if _FB_RUECKRUF_RE.search(t):
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))
-    if _FB_AUSKUNFT_RE.search(t):
+    if _FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
                                      "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
     if _FB_NEU_RE.search(t):
