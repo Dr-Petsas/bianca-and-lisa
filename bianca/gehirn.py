@@ -294,6 +294,15 @@ _SCHONMAL_JA_RE = re.compile(
     r"bin\s+(schon\s+)?patient|bin\s+bei\s+ihnen\s+in\s+behandlung",
     re.I,
 )
+# Live Thaler/New York 08.09.2026: „Ich habe noch keinen Termin, aber ich
+# bin nicht neu“ beantwortet die Patientenfrage mit BESTAND. Das führende
+# „Nee“ verneint nur den aktuellen Termin; es darf weder Neupatient setzen
+# noch „Nicht Neu“ als Personenname ernten.
+_SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE = re.compile(
+    r"\b(?:ich\s+)?bin\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
+    r"\b(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b",
+    re.I,
+)
 # "bin neu" braucht die Wortgrenze und darf Fuellwoerter tragen: ohne \b traf
 # der Ausdruck auch "bin NEUmann" (echter Nachname!), und "bin GANZ neu bei
 # euch" fiel durch (live 27.08.2026: "Ich bin neu bei Ihnen" -> "Danke, Neu
@@ -514,6 +523,13 @@ _NAME_STOP = {
     # live (27.08.2026) als "Nee Paul" geerntet.
     "nee", "nein", "nö", "noe", "ne", "doch", "falsch", "moment", "sekunde",
     "vorname", "nachname", "familienname", "lautet",
+    # Verwaltungswörter aus einem Einstiegswunsch sind ebenfalls keine
+    # Person. Ein echter mitgesprochener Name bleibt als übriges Token stehen
+    # („Termin löschen, Müller“); ohne Name darf „entfernen“ nicht als
+    # Nachname in die Kalendersuche geraten.
+    "sie", "bitte", "termin", "termine", "kalender", "nehmen",
+    "löschen", "loeschen", "streichen", "stornieren", "canceln",
+    "entfernen", "absagen", "verschieben",
 }
 # Gängige Vornamen (nur zur Zuordnung "ein einzelnes Wort = eher Vorname?").
 # Live 27.08.2026: die Antwort "Paul?" auf die Namensfrage wurde als NACHNAME
@@ -586,6 +602,8 @@ _BUCHSTABIER_HILFE_RE = re.compile(
 # Zustandswoerter, die auch Nachnamen sein koennen (Sauer, Krank, Froh),
 # stehen BEWUSST nicht in der Liste.
 _KEIN_NAME_RE = re.compile(
+    r"(?:ich\s+)?bin\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
+    r"(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
     r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+"
     r"(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+|ja\s+|gerade\s+|heute\s+)*"
     r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+|sehr\s+|so\s+|total\s+|"
@@ -1287,7 +1305,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 neu.add("modus")
 
     # Schon mal da gewesen?
-    if _SCHONMAL_NEIN_RE.search(t):
+    if _SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE.search(t):
+        if s["warSchonMal"] is not True:
+            s["warSchonMal"] = True
+            neu.add("warSchonMal")
+    elif _SCHONMAL_NEIN_RE.search(t):
         if s["warSchonMal"] is not False:
             s["warSchonMal"] = False
             neu.add("warSchonMal")

@@ -1175,6 +1175,7 @@ const PATCHES = [
   ["W-ARZT-BESTÄTIGUNG (kurz statt Gedächtnisfrage)", "09.09.", "Gespräch", "Ist der Behandler aus dem letzten Besuch oder einem bestehenden Folgetermin bekannt, fragt Bianca nur noch kurz: „Bei Doktor Petsas wieder, richtig?“ Ohne sicheren Fakt fragt sie neutral nach dem gewünschten Behandler."],
   ["W-TRANSKRIPT-ZUGANG (öffentlicher Viewer)", "09.09.", "Betrieb", "Anrufe und Transkripte sind über den bestehenden Lisa-Tunnel erreichbar; Patientenliste, Texte und Audio bleiben mit dem Fernsteuerungs-Token geschützt."],
   ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
+  ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im sicheren Formular, Reiseorte verdrängen die Zeitfrage nicht und eine leere Slotsuche läuft nach der Rückrufnotiz nicht mehr in Schleife."],
 ];
 
 let kTab = "faehig";
