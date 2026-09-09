@@ -117,7 +117,8 @@ _ABSCHIED_RE = re.compile(
     r"das\s+(?:war'?s|wars)|nichts\s+weiter|"
     r"nein\s*,?\s*danke|"
     r"danke\s*,?\s*(?:ciao|tsch[uü]s{0,2}|ihnen)|"
-    r"^\s*(?:perfekt|super|prima|danke|vielen\s+dank|vielen\s+lieben\s+dank)"
+    r"^\s*(?:(?:okay|ok|alles\s+klar)\s*,?\s*)?"
+    r"(?:perfekt|super|prima|danke|vielen\s+dank|vielen\s+lieben\s+dank)"
     r"(?:\s|,|!|\.|$)",
     re.I,
 )
@@ -130,6 +131,24 @@ _NOCH_EIN_TERMIN_RE = re.compile(
     r"noch\s+ein(?:en)?\s+termin|zweiten\s+termin|weiteren\s+termin|"
     r"neuen\s+termin",
     re.I,
+)
+# Live Thaler/New York 08.09.2026: Meta-Fragen zur sicheren Namensaufnahme
+# gehören in den Formularfluss. Das freie Modell antwortete auf „Soll ich
+# meinen Namen buchstabieren?“ ausgerechnet mit „Nein“.
+_BUCHSTABIER_META_RE = re.compile(
+    r"\b(?:soll|kann|darf)\s+ich\b[^?.!]{0,36}\b(?:namen?|nachnamen?)\b"
+    r"[^?.!]{0,24}\bbuchstabier\w*|"
+    r"\b(?:soll|kann|darf)\s+ich\b[^?.!]{0,36}\bbuchstabier\w*",
+    re.I,
+)
+# Reiseort auf der offenen Zeitfrage: kurz zur Kenntnis nehmen und nach der
+# tatsächlichen Verfügbarkeit fragen. Kein freier Reise-Smalltalk („New York
+# ist eine weite Reise …“) mitten in der Buchung.
+_REISEORT_RE = re.compile(
+    r"\b(?:komme|reise|fliege|fahre)\s+(?:gerade\s+)?(?:aus|von)\s+"
+    r"[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+|"
+    r"\b(?:aus|von)\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+"
+    r"(?:\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß'-]+){0,2}",
 )
 
 # Thaler 08.09.2026: "Nein, den Besuchsgrund. Zahnersatzbesprechen" — der
@@ -703,6 +722,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         # Versprechen "die Praxis meldet sich" bekommt eine ECHTE Notiz.
         s["phase"] = "fertig"
         s["frage"] = ""
+        sit["keinSlotFertig"] = True
         verwalten.rueckruf_notiz(sit)
         return {"text": spoken_offer([], wish_matched=True)
                 + " Kann ich sonst noch etwas für Sie tun?"}
@@ -1138,6 +1158,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             s["phase"] = "fertig"
             s["frage"] = ""
             sit["offered"] = []
+            sit["keinSlotFertig"] = True
             verwalten.rueckruf_notiz(sit)
             return {
                 "text": (
@@ -1827,11 +1848,54 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if rr is not None:
         return rr
 
+    if (s["modus"] == "buchen" and s["frage"] in {
+            "name", "nachname", "vorname", "buchstabieren",
+        } and _BUCHSTABIER_META_RE.search(t)):
+        # Der Anrufer bietet den sicheren Weg selbst an. Bei einer bekannten
+        # Akte wäre keine Buchstabierung nötig; andernfalls gezielt beim
+        # Nachnamen bleiben, den unser Mehrzug-Sammler robust erfasst.
+        if s.get("bekannt") or s.get("patientId"):
+            fid, frage = gehirn.naechste_frage(sit)
+            s["frage"] = fid
+            return {"text": (
+                "Nein danke, ich habe Ihre Akte bereits sicher gefunden. "
+                + (frage or "Was kann ich sonst für Sie tun?")
+            ).strip()}
+        s["frage"] = "buchstabieren"
+        return {"text": (
+            "Ja, bitte. Buchstabieren Sie zuerst Ihren Nachnamen langsam. "
+            "Am Ende sagen Sie einfach fertig."
+        )}
+
     # W-HIRN (03.09.2026): die Intent-Schicht hat den Modus evtl. schon vor
     # diesem Zug geschaltet — das Signal wandert in die Ernte-Menge, damit
     # verwalten seinen Einstiegs-Reset faehrt wie frueher bei der Regex.
     hirn_modus_neu = bool(sit.pop("hirnModusNeu", False))
     task_handoff = _s(sit.pop("taskHandoff", ""))
+
+    # Kein Slot gefunden, echte Rückrufnotiz geschrieben: der Vorgang ist
+    # abgeschlossen. Dank/Abschied beendet freundlich; andere Folgesätze
+    # bestätigen höchstens die Notiz, starten aber niemals dieselbe leere
+    # Slotsuche erneut (Live Andrejevic 09.09.: viermal dieselbe Ansage).
+    kein_slot_fertig = (
+        bool(sit.get("keinSlotFertig"))
+        or "kein freier termin" in _s(sit.get("praxisNotiz")).lower()
+    )
+    if s["modus"] == "buchen" and s["phase"] == "fertig" and kein_slot_fertig:
+        if _NOCH_EIN_TERMIN_RE.search(t):
+            sit.pop("keinSlotFertig", None)
+            s["phase"] = ""
+            s["frage"] = "wunsch"
+            s["wunsch"] = None
+            s["wunschText"] = ""
+            sit["offered"] = []
+            return {"text": "Gerne. Wann passt es Ihnen für den weiteren Termin?"}
+        if _ABSCHIED_RE.search(t):
+            return {"text": "Sehr gerne. Auf Wiederhören."}
+        return {"text": (
+            "Die Rückrufbitte ist bereits für die Praxis notiert. "
+            "Kann ich sonst noch etwas für Sie tun?"
+        )}
 
     # Rueckruf-/Notiz-Anliegen (ABGEBEN): eigener deterministischer Zweig —
     # Name + Nummer einsammeln, echte Notiz schreiben, KEIN Termin-Angebot.
@@ -1965,6 +2029,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             if sit.get("buchIntent"):
                 return _buchen(sit, melde)
             return _readback(sit)
+
+    if (s["modus"] == "buchen" and s["frage"] == "wunsch"
+            and s["wunsch"] is None and _REISEORT_RE.search(t)
+            and gehirn._wunsch_deuten(t) is None):
+        return {"text": (
+            "Verstanden. An welchen Tagen sind Sie hier, "
+            "und passt es eher vormittags oder nachmittags?"
+        )}
 
     neu = gehirn.einsammeln(sit, t)
     if hirn_modus_neu:

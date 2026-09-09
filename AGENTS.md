@@ -1689,6 +1689,30 @@ Ablehnung sprang die Alternative wieder in den September.
 - Regressionen: Live-Sätze in `tests/test_thaler_rebrovic.py` und
   `tests/test_slot_behandler.py`.
 
+## Thaler: New-York-Formularfaden (W-THALER-FORMULAR 09.09.2026 — nicht rückbauen)
+
+Live New-York/Andrejevic 08./09.09.: „noch keinen Termin, aber nicht neu“
+wurde als Neupatient und teils als Name „Nicht Neu“ geerntet; die Frage
+„Soll ich meinen Namen buchstabieren?“ fiel ans freie LLM, ein Reiseort
+verdrängte die offene Zeitfrage, und nach einer erfolglosen Slotsuche wurde
+dieselbe Rückrufmeldung bei jedem Folgesatz erneut gesprochen.
+
+- „nicht neu“ gewinnt auf der Schonmal-Frage deterministisch als
+  Bestandspatient; die Floskel ist für die Namens-Ernte gesperrt.
+- Meta-Fragen zum Buchstabieren bleiben im Formular und führen gezielt in
+  die sichere mehrzügige Nachnamenaufnahme.
+- Ein Reiseort ist weder Datenbestätigung noch Zeitwunsch: offene Nummern-
+  Readbacks bleiben offen; auf der Zeitfrage fragt Bianca nach den Tagen vor
+  Ort und der Tageszeit.
+- Nach leerer Slotsuche + echter Rückrufnotiz ist der Vorgang beendet.
+  Dank/Abschied startet keine erneute Suche; ein ausdrücklicher weiterer
+  Termin öffnet den Flow bewusst neu.
+- `buchstaben.deute` verlangt bei „also <Name>“ ohne echte Buchstabenkette
+  einen ähnlichen gesprochenen Namensanker. Normale Prosa wie „aus dem
+  Kalender, also entfernen“ wird nicht mehr als Nachname gespeichert.
+- Regressionen: `tests/test_thaler_new_york.py` plus
+  `test_absage_varianten_erkannt`.
+
 ## Blessing: Notfall + Dokument-Vorsprache (W-BLESSING-AKUT 09.09.2026 — nicht rückbauen)
 
 - Der Live-DB-Agent (DID 4120) trägt kompakte Marker in den von der

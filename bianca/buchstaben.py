@@ -120,6 +120,24 @@ def _name_nach_also(toks: list[str]) -> str:
     return ""
 
 
+def _name_anker_vor_also(toks: list[str], kandidat: str) -> bool:
+    """Hat der Kandidat vor „also/genau“ einen ähnlich gesprochenen Namen?
+
+    Ohne diesen Anker wurde normale Prosa wie „aus dem Kalender, also
+    entfernen“ als sicher buchstabierter Nachname „Entfernen“ gelesen.
+    """
+    stop = next(
+        (i for i, tok in enumerate(toks) if tok in {"also", "genau"}),
+        len(toks),
+    )
+    for tok in toks[:stop]:
+        if not tok.isalpha() or len(tok) < 4 or tok in _FUELL or tok in _TAFEL:
+            continue
+        if difflib.SequenceMatcher(None, tok, kandidat).ratio() >= 0.55:
+            return True
+    return False
+
+
 _TAFEL_KEYS = sorted(_TAFEL)
 
 
@@ -290,7 +308,7 @@ def deute(text: str) -> dict[str, Any] | None:
     # Buchstabenkette als Woerter gehoert — das Wort NACH "also"/"genau"
     # ist die gemeinte Schreibweise, nicht das Bruchstueck davor.
     also_name = _name_nach_also(toks)
-    if also_name and len(letters) < 2:
+    if also_name and len(letters) < 2 and _name_anker_vor_also(toks, also_name):
         return {"name": also_name[0].upper() + also_name[1:], "sicher": True}
     # Tafel-Rettung: hat STT die "X wie Y"-Paare verstuemmelt ("Kavi Kaufmann,
     # Iwi Emil …", Batch s14/s17 29.08.2026), tragen die TAFEL-WOERTER selbst
