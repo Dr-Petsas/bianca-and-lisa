@@ -565,7 +565,10 @@ def index():
 @app.api_route("/{name}", methods=["GET", "HEAD"])
 def web_file(name: str):
     # HEAD muss gehen — sonst wirkt /replay.html „gelöscht“ (405 auf Probe).
-    erlaubt = {"app.js", "styles.css", "replay.html"}
+    # /anrufe lädt sein eigenes Skript relativ als /anrufe.js. Ohne diesen
+    # Eintrag blieb die Seite live wortlos auf "lade …", obwohl API und
+    # Mitschnitte vollständig vorhanden waren (Kiriakos 09.09.2026).
+    erlaubt = {"app.js", "anrufe.js", "styles.css", "replay.html"}
     if name in erlaubt:
         p = BIANCA_WEB_DIR / name
         if p.is_file():

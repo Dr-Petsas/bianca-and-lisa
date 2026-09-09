@@ -4,6 +4,7 @@ from pathlib import Path
 
 import inspect
 
+from bianca import server as bianca_server
 from lisa import server
 from lisa.server import _bianca_transkript_auth
 
@@ -33,4 +34,9 @@ def test_viewer_tauscht_fragment_token_gegen_pfad_cookie():
     assert "_remote_guard(request)" in handschlag
     assert "httponly=True" in handschlag
     assert 'path="/bianca"' in handschlag
+
+
+def test_anrufe_javascript_wird_vom_bianca_server_ausgeliefert():
+    antwort = bianca_server.web_file("anrufe.js")
+    assert Path(antwort.path).name == "anrufe.js"
 
