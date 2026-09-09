@@ -49,6 +49,26 @@ def test_fortsetzung_mit_punkt_bleibt_unfertig():
     assert not hs.unfertig("Ich hätte gern einen Termin.")  # langer fertiger Satz
 
 
+def test_auslassungspunkte_halten_auch_bei_langem_satz():
+    """Paket 7 / Punkt 8: trailing '...' = Anrufer ist im Gedanken verstummt.
+
+    ASCII '...' endete bisher auf '.' und galt als fertiger Satz — ein langer
+    Satz mit Auslassungspunkten wurde nicht gehalten."""
+    assert hs.unfertig("Ich hätte gern einen Termin für...")
+    assert hs.unfertig("Ich hätte gern einen Termin für ...")
+    assert hs.unfertig("Also ich dachte da so an nächste Woche…")   # Unicode
+    assert hs.unfertig("Mein Name ist Berger, und dann noch...")
+    sit: dict = {}
+    assert hs.halten(sit, "Ich hätte gern einen Termin für...")
+    assert sit.get("halbsatz")
+
+
+def test_einzelner_punkt_bleibt_fertig():
+    """Nur Auslassungspunkte (>=2) halten — ein normales Satzende nicht."""
+    assert not hs.unfertig("Ich hätte gern einen Termin.")
+    assert not hs.unfertig("Das war alles.")
+
+
 def test_ziffern_zuege_werden_nie_gehalten():
     # Nummern-Diktat hat seine eigene Teil-Logik (telefonTeil) — nie halten.
     sit: dict = {}

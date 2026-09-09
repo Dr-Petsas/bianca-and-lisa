@@ -37,6 +37,11 @@ MAX_HALTEN = 2
 
 _SATZ_ENDE = (".", "!", "?", "…")
 _HALT_ZEICHEN = (",", ";", ":", "-", "–", "—")
+# Auslassungspunkte am Zug-Ende (ASCII "..." ODER Unicode "…") = der Anrufer
+# ist mitten im Gedanken verstummt (Paket 7 / Punkt 8 der Umbauliste,
+# 09.09.2026). ASCII "..." endete bisher auf "." und galt als fertiger Satz —
+# so wurde "Ich haette gern einen Termin fuer..." nicht gehalten.
+_ELLIPSE_RE = re.compile(r"(?:\.\s*){2,}$|…\s*$")
 
 # Ziffern oder zwei und mehr Ziffern-Woerter am Stueck: Nummern-Diktat —
 # dort NIE halten (eigene Teil-Nummern-Logik, Schwelle schon bei 650 ms).
@@ -96,6 +101,8 @@ def unfertig(text: str) -> bool:
     t = _s(text)
     if not t:
         return False
+    if _ELLIPSE_RE.search(t):
+        return True
     if t.endswith(_HALT_ZEICHEN):
         return True
     letztes = re.sub(r"[^a-zäöüß]", "", t.split()[-1].casefold())
