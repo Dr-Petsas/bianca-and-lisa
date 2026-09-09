@@ -906,6 +906,11 @@ Frage nach dem BESTEHENDEN Termin. Der Anrufer setzte dreimal an und legte auf.
  verschluckt: ein leeres Nach-Transkript beantwortet das Fragment direkt,
  und der Stille-Stups (`/api/stille`, beide Server) flusht es als echten
  Zug. Notaus: `SATZ_HOLD=0`. Tests: `tests/test_halbsatz.py`.
+- **Auslassungspunkte (Paket 7 / Punkt 8, 09.09.2026):** ein Zug-Ende mit
+ `...` (ASCII, >=2 Punkte) ODER `…` (Unicode) gilt IMMER als unfertig
+ (`_ELLIPSE_RE`) — der Anrufer ist mitten im Gedanken verstummt. ASCII `...`
+ endete vorher auf `.` und galt als fertiger Satz, so wurde „Ich hätte gern
+ einen Termin für…“ nicht gehalten. Einzelner Punkt unverändert.
 - **Termin-Auskunft statt Zwangs-Buchung** (`bianca/gehirn._AUSKUNFT_RE`):
  „ich habe <Zeitangabe> … einen Termin" (Feststellung ohne Wunsch-Wörter wie
  brauche/hätte/Zeit/Urlaub/Schmerzen) und „… Termin … weiß nicht (mehr)"
@@ -1437,7 +1442,9 @@ jemand beschwert oder einen Notfall hat — das wirkt taktlos.
   byte-identisch). shadow loggt `anliegen-art-shadow`, ändert nichts; enforce
   sperrt.
 - Tests: `tests/test_anliegen_art.py` (offline). Rollout: erst shadow, dann
-  enforce.
+  enforce. **Live seit 09.09.2026 auf `enforce`** (pickadoc1) — sehr
+  konservativ (`upsell_gesperrt` greift NUR bei beschwerde/notfall, nie bei
+  klinisch/Schmerz; schlimmstenfalls ein ausgelassenes Zusatzangebot).
 
 ## Evidenzbasierter Fakten-/Erledigt-Wächter (W-FAKTEN-WACHE 09.09.2026 — nicht rückbauen)
 
