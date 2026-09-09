@@ -27,6 +27,7 @@ from kern.config import (
     STT_QWEN_BASE,
     STT_QWEN_KEY,
     STT_WHISPER_BASE,
+    STT_WHISPER_BUDGET_S,
     STT_WHISPER_KEY,
 )
 
@@ -124,12 +125,13 @@ def _stream_final(
     key: str,
     keywords: str = "",
     engine: str = "stream",
+    timeout_s: float = 15.0,
 ) -> dict:
     """Ein Zug zum kompatiblen Stream-Dienst; nur ``final`` zaehlt."""
     from websockets.sync.client import connect
 
     connect_kwargs = {
-        "open_timeout": 2.0,
+        "open_timeout": min(2.0, max(0.2, float(timeout_s))),
         "close_timeout": 2.0,
         "max_size": 16 * 1024 * 1024,
     }
@@ -156,7 +158,7 @@ def _stream_final(
         for i in range(0, len(pcm), 64000):
             ws.send(pcm[i:i + 64000])
         ws.send(json.dumps({"op": "end", "req": 1}))
-        frist = time.monotonic() + 15.0
+        frist = time.monotonic() + max(0.2, float(timeout_s))
         while True:
             rest = frist - time.monotonic()
             if rest <= 0:
@@ -173,14 +175,22 @@ def _stream_final(
                 return msg
 
 
+def _whisper_budget_s() -> float:
+    """Morgen-Freeze: Whisper darf den Zug nie länger als dieses Budget
+    blockieren. 0/negativ = alter 15-s-Timeout."""
+    budget = float(STT_WHISPER_BUDGET_S or 0.0)
+    return 15.0 if budget <= 0 else budget
+
+
 def _whisper_ws(pcm: bytes, keywords: str = "") -> str:
-    """Abwaertskompatibler Whisper-Stream-Pfad."""
+    """Abwaertskompatibler Whisper-Stream-Pfad (mit Latenz-Deckel)."""
     msg = _stream_final(
         pcm,
         base=STT_WHISPER_BASE,
         key=STT_WHISPER_KEY,
         keywords=keywords,
         engine="whisper",
+        timeout_s=_whisper_budget_s(),
     )
     return str(msg.get("text") or "")
 
@@ -285,7 +295,16 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
         raise RuntimeError("stt_qwen_pause_ohne_fallback")
     if _whisper_aktiv():
         try:
-            return _whisper(audio, mime=mime, keywords=keywords)
+            text = _whisper(audio, mime=mime, keywords=keywords)
+            if text:
+                return text
+            # Live 09.09.: leeres Whisper-Final bei hörbarem Kurz-Zug — ohne
+            # Gegenhören verschwanden Ja/Nein. Parakeet hört einmal nach;
+            # Whisper bleibt aktiv (kein Pause-Sperren).
+            if STT_BASE:
+                print("stt-whisper: leeres Final, Parakeet hoert gegen", flush=True)
+            else:
+                return ""
         except Exception as e:
             _whisper_sperren(e)
             if not STT_BASE:

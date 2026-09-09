@@ -45,13 +45,15 @@ def _wav16k(ms: int = 400) -> bytes:
 
 
 def _umgebung(fn, *, whisper_base="ws://dev-test:8092", stt_base="http://stt-test:8100",
-              fake_lokal=None, whisper_ws=None, pcm=b"p" * 4000, eleven_key=""):
+              fake_lokal=None, whisper_ws=None, pcm=b"p" * 4000, eleven_key="",
+              qwen_base=""):
     """Modul-Zustand setzen, ElevenLabs verwanzen, danach alles zuruecklegen."""
-    alt = (stt.STT_WHISPER_BASE, stt.STT_BASE, stt.ELEVENLABS_API_KEY,
+    alt = (stt.STT_WHISPER_BASE, stt.STT_BASE, stt.STT_QWEN_BASE, stt.ELEVENLABS_API_KEY,
            stt._CLIENT, stt._whisper_pause_bis, stt._whisper_ws, stt._pcm16k,
            stt.httpx.post)
     stt.STT_WHISPER_BASE = whisper_base
     stt.STT_BASE = stt_base
+    stt.STT_QWEN_BASE = qwen_base  # Whisper-Tests nie ueber Qwen
     stt.ELEVENLABS_API_KEY = eleven_key
     stt._CLIENT = fake_lokal
     stt._whisper_pause_bis = 0.0
@@ -67,9 +69,37 @@ def _umgebung(fn, *, whisper_base="ws://dev-test:8092", stt_base="http://stt-tes
     try:
         fn()
     finally:
-        (stt.STT_WHISPER_BASE, stt.STT_BASE, stt.ELEVENLABS_API_KEY,
+        (stt.STT_WHISPER_BASE, stt.STT_BASE, stt.STT_QWEN_BASE, stt.ELEVENLABS_API_KEY,
          stt._CLIENT, stt._whisper_pause_bis, stt._whisper_ws, stt._pcm16k,
          stt.httpx.post) = alt
+
+
+def test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause():
+    fake = _FakeLokal(_Antwort(200, {"text": "Ja"}))
+
+    def leer(pcm, keywords=""):
+        return ""
+
+    def lauf():
+        assert stt.transcribe(BLOB) == "Ja"
+        assert fake.aufrufe, "leeres Whisper-Final muss Parakeet gegenhoeren"
+        assert stt._whisper_pause_bis <= time.time(), (
+            "leeres Final darf Whisper NICHT pausieren"
+        )
+
+    _umgebung(lauf, fake_lokal=fake, whisper_ws=leer)
+
+
+def test_whisper_budget_default_ist_morgen_deckel():
+    assert stt._whisper_budget_s() == 2.0 or stt.STT_WHISPER_BUDGET_S == 2.0
+    alt = stt.STT_WHISPER_BUDGET_S
+    try:
+        stt.STT_WHISPER_BUDGET_S = 0
+        assert stt._whisper_budget_s() == 15.0
+        stt.STT_WHISPER_BUDGET_S = 1.5
+        assert stt._whisper_budget_s() == 1.5
+    finally:
+        stt.STT_WHISPER_BUDGET_S = alt
 
 
 def test_whisper_zuerst_parakeet_bleibt_unberuehrt():
@@ -138,7 +168,9 @@ def test_kyrillische_halluzination_auch_bei_whisper_verworfen():
     def lauf():
         assert stt.transcribe(BLOB) == ""
 
-    _umgebung(lauf, whisper_ws=lambda pcm, keywords="": "Продолжение следует")
+    # ohne Parakeet-Gegenhoeren: nur Whisper-Wache pruefen
+    _umgebung(lauf, stt_base="",
+              whisper_ws=lambda pcm, keywords="": "Продолжение следует")
 
 
 def test_ws_url_normalisierung():
@@ -178,7 +210,7 @@ def test_winzige_pcm_spur_hoert_nichts():
     def lauf():
         assert stt.transcribe(BLOB) == ""
 
-    _umgebung(lauf, whisper_ws=nie, pcm=b"p" * 100)
+    _umgebung(lauf, whisper_ws=nie, pcm=b"p" * 100, stt_base="")
 
 
 def test_bereit_und_anzeige_mit_whisper():
@@ -205,6 +237,8 @@ if __name__ == "__main__":
     test_whisper_ausfall_faellt_auf_parakeet_und_pausiert()
     test_whisper_pause_geht_direkt_zu_parakeet()
     test_whisper_ausfall_ohne_parakeet_wirft_statt_scribe()
+    test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause()
+    test_whisper_budget_default_ist_morgen_deckel()
     test_nachkorrektur_laeuft_auf_dem_whisper_pfad()
     test_kyrillische_halluzination_auch_bei_whisper_verworfen()
     test_ws_url_normalisierung()
