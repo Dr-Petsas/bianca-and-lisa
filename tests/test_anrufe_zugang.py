@@ -30,6 +30,7 @@ def test_viewer_tauscht_fragment_token_gegen_pfad_cookie():
     route = inspect.getsource(server.bianca_durchreichen)
     assert "_bianca_transkript_auth(pfad)" in route
     assert "_bianca_transkript_guard(request)" in route
+    assert 'raus.setdefault("cache-control", "no-store")' in route
     handschlag = inspect.getsource(server.bianca_transkript_zugang)
     assert "_remote_guard(request)" in handschlag
     assert "httponly=True" in handschlag

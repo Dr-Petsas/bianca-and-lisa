@@ -632,6 +632,10 @@ async def bianca_durchreichen(pfad: str, request: Request):
     except httpx.HTTPError:
         raise HTTPException(502, "Bianca-Dienst (Port 8096) antwortet nicht")
     raus = {k: v for k, v in antwort.headers.items() if k.lower() in {"content-type", "cache-control"}}
+    # Cloudflare darf insbesondere alte 404 auf neu hinzugekommenen Viewer-
+    # Assets nicht vier Stunden festhalten; Transkript-Antworten sind ohnehin
+    # patientenhaltig und gehören in keinen öffentlichen Edge-Cache.
+    raus.setdefault("cache-control", "no-store")
     return StreamingResponse(
         antwort.aiter_raw(),
         status_code=antwort.status_code,
