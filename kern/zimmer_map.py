@@ -1,7 +1,19 @@
 """Thaler: Besuchsgrund -> Zimmer (Chef 08.09.2026).
 
 Die Cloud Function liefert nur einen Arztkalender (Eva). Thaler bucht
-raeumlich:
+telefonisch NUR sechs freigegebene Besuchsgrund-Gruppen:
+
+- Neupatient / Erstuntersuchung
+- Kontrolle
+- Schmerzen / Akut
+- Besprechung Zahnersatz
+- Besprechung Implantate
+- professionelle Zahnreinigung
+
+Andere Katalogtermine werden weder direkt gebucht noch angeboten. Eine
+Fuellung wird nach Chef-Vorgabe als Zahnersatz-Besprechung aufgenommen.
+
+Raeumlich gilt:
 
 - Prophylaxe / PZR     -> Kalender Prophylaxe, Zimmer 3, wenn voll Zimmer 2
 - Notfall / Schmerzen  -> bei Thaler, Zimmer 1
@@ -29,6 +41,45 @@ DEFAULT_MAP = {
     "akut": [1],
     "behandlung": [4],
 }
+
+# Harte Telefon-Freigabe fuer Thaler (Chef 09.09.2026). Absichtlich gegen
+# stabile Katalog-IDs UND Namen: Der Live-Katalog kommt pro Anruf aus der DB,
+# lokale tenants-Dateien sind nicht die Wahrheit. Eng halten — insbesondere
+# keine IMP/ZE/KFO-*Kontrollen*, keine OPs und keine PAR-PZR.
+_BUCHBARE_MOTIVE = (
+    re.compile(r"^kch-erstuntersuchung-neupatient(?:-|$)|^kch\s+erstuntersuchung\s*/\s*neupatient$", re.I),
+    re.compile(r"^kch-kontrolluntersuchung(?:-|$)|^kch\s+kontrolluntersuchung$", re.I),
+    re.compile(r"^kch-akute-beschwerden-notfall(?:-|$)|^kch\s+akute\s+beschwerden\s*/\s*notfall$", re.I),
+    re.compile(r"^imp-besprechung(?:-|$)|^imp\s+besprechung$", re.I),
+    re.compile(r"^ze-besprechung(?:-|$)|^ze\s+besprechung$", re.I),
+    re.compile(r"^pro-professionelle-zahnreinigung(?:-|$)|^pro\s+professionelle\s+zahnreinigung$", re.I),
+)
+
+_NEUPATIENT_RE = re.compile(r"\bneupatient\w*|\berst(?:untersuchung|besuch)\w*", re.I)
+_KONTROLLE_RE = re.compile(r"\bkontroll\w*|\bvorsorge\b|\bcheck-?up\b", re.I)
+_SCHMERZ_RE = re.compile(
+    r"schmerz|zahnweh|\bweh\b|\bakut\w*|\bnotfall\b|dicke\s+backe|"
+    r"geschwollen|entzünd|entzuend|pocht|eiter",
+    re.I,
+)
+_IMPLANTAT_RE = re.compile(r"\bimplant\w*", re.I)
+_ZAHNERSATZ_RE = re.compile(
+    r"\bzahnersatz\b|\bprothese\w*|\bkrone\w*|\bbrücke\w*|\bbruecke\w*|"
+    r"\bfüll\w*|\bfuell\w*|\binlay\w*|\bveneer\w*",
+    re.I,
+)
+_PZR_RE = re.compile(
+    r"\bzahnreinigung\w*|\bprophylaxe\b|\bpzr\b|\bzahnstein\w*",
+    re.I,
+)
+_NICHT_BUCHBAR_RE = re.compile(
+    r"\b(?:wurzel(?:behandlung|kanal)?|endo|zahn\s*ziehen|extraktion|"
+    r"naht(?:entfernung)?|kieferorthop|zahnspange|invisalign|schiene|cmd|"
+    r"parodont|zahnfleisch(?:behandlung|op)?|bleaching|aufhellung|"
+    r"abdruck|scan|implantation|freilegung|knochenaufbau|augmentation|"
+    r"reparatur|eingliederung|provisorium|heil-?\s*und-?\s*kostenplan)\b",
+    re.I,
+)
 
 # Spur-Frage: Frau Thaler oder Prophylaxe — kein Behandler-Roster.
 _PZR_SPUR_RE = re.compile(
@@ -61,6 +112,80 @@ def aktiv(tenant: dict[str, Any] | None) -> bool:
     if isinstance(tenant.get("zimmerMap"), dict) and tenant["zimmerMap"]:
         return True
     return _s(tenant.get("clientId")) == THALER_CLIENT
+
+
+def motiv_buchbar(vm: dict[str, Any] | None) -> bool:
+    """True nur fuer die sechs von Thaler telefonisch freigegebenen Motive."""
+    if not isinstance(vm, dict):
+        return False
+    felder = (_s(vm.get("id")), _s(vm.get("name")))
+    return any(cre.search(feld) for cre in _BUCHBARE_MOTIVE for feld in felder)
+
+
+def buchbarer_katalog(
+    tenant: dict[str, Any] | None,
+    katalog: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Thaler-Katalog hart begrenzen; alle anderen Praxen byte-identisch."""
+    pool = [vm for vm in (katalog or []) if isinstance(vm, dict)]
+    if not aktiv(tenant):
+        return pool
+    return [vm for vm in pool if motiv_buchbar(vm)]
+
+
+def mapping_text(tenant: dict[str, Any] | None, text: str) -> str:
+    """Thaler-Wunsch auf genau eine der sechs Freigaben normalisieren.
+
+    Der Originalwortlaut bleibt separat im Sammler/Termin-Hinweis. Hier wird
+    nur das sichere Katalog-Mapping eindeutig gemacht: eine Fuellung,
+    Kronenreparatur oder Implantat-OP wird telefonisch als Besprechung
+    aufgenommen, nie als Eingriff.
+    """
+    t = _s(text)
+    if not aktiv(tenant):
+        return t
+    if _SCHMERZ_RE.search(t):
+        return "Akute Beschwerden Schmerzen Notfall"
+    if _NEUPATIENT_RE.search(t):
+        return "Erstuntersuchung Neupatient"
+    if _PZR_RE.search(t):
+        return "Professionelle Zahnreinigung PZR"
+    if _IMPLANTAT_RE.search(t):
+        return "Implantat Besprechung Beratung"
+    if _ZAHNERSATZ_RE.search(t):
+        return "Zahnersatz Besprechung Beratung"
+    if _KONTROLLE_RE.search(t):
+        return "Kontrolluntersuchung Kontrolle"
+    return t
+
+
+def klar_nicht_buchbar(tenant: dict[str, Any] | None, text: str) -> bool:
+    """Expliziter, nicht freigegebener Behandlungswunsch bei Thaler."""
+    t = _s(text)
+    if not aktiv(tenant) or not t:
+        return False
+    if any(cre.search(t) for cre in (
+            _SCHMERZ_RE, _NEUPATIENT_RE, _PZR_RE,
+            _IMPLANTAT_RE, _ZAHNERSATZ_RE, _KONTROLLE_RE)):
+        return False
+    return bool(_NICHT_BUCHBAR_RE.search(t))
+
+
+def buchbare_ansage() -> str:
+    return (
+        "Telefonisch kann ich bei Frau Thaler momentan Termine für "
+        "Neupatienten, Kontrollen, Schmerzen, Besprechungen zu Zahnersatz "
+        "oder Implantaten und professionelle Zahnreinigungen buchen. "
+        "Welcher dieser Gründe passt zu Ihrem Anliegen?"
+    )
+
+
+def buchbare_frage() -> str:
+    return (
+        "Worum geht es denn — Neupatient, Kontrolle, Schmerzen, eine "
+        "Besprechung zu Zahnersatz oder Implantaten, oder eine "
+        "professionelle Zahnreinigung?"
+    )
 
 
 def karte(tenant: dict[str, Any] | None) -> dict[str, list[int]]:

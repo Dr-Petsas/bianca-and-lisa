@@ -22,19 +22,19 @@ Z4 = "cal-zi4"
 PROPHY = Z3
 
 THALER_KAT = [
-    {"id": "akut", "name": "KCH Akute Beschwerden / Notfall",
+    {"id": "kch-akute-beschwerden-notfall-30min", "name": "KCH Akute Beschwerden / Notfall",
      "nameForPatient": "Akute Beschwerden", "allowOnlineBooking": True,
      "calendarIds": [Z1]},
-    {"id": "bespr", "name": "ZE Besprechung",
+    {"id": "ze-besprechung-25min", "name": "ZE Besprechung",
      "nameForPatient": "Zahnersatz-Besprechung", "allowOnlineBooking": True,
      "calendarIds": [Z4]},
-    {"id": "recall", "name": "Recall Check-up",
-     "nameForPatient": "Kontrolle", "allowOnlineBooking": True,
+    {"id": "kch-kontrolluntersuchung-15min", "name": "KCH Kontrolluntersuchung",
+     "nameForPatient": "Kontrolle", "allowOnlineBooking": False,
      "calendarIds": [Z4]},
     {"id": "fuell", "name": "KCH Füllung klein",
      "nameForPatient": "Füllung", "allowOnlineBooking": True,
      "calendarIds": [Z4]},
-    {"id": "pzr", "name": "PRO professionelle Zahnreinigung",
+    {"id": "pro-professionelle-zahnreinigung-recall-6m", "name": "PRO professionelle Zahnreinigung",
      "nameForPatient": "Zahnreinigung", "allowOnlineBooking": True,
      "calendarIds": [Z3, Z2]},
 ]
@@ -164,7 +164,7 @@ def test_zahnreinigung_landet_auf_prophylaxe():
     s.update({
         "modus": "buchen", "warSchonMal": False,
         "arzt": {"typ": "default", "calendarId": EVA, "calendarName": "Dr. Eva Thaler"},
-        "grund": "Zahnreinigung", "motivId": "pzr",
+        "grund": "Zahnreinigung", "motivId": "pro-professionelle-zahnreinigung-recall-6m",
         "motivName": "PRO professionelle Zahnreinigung",
         "grundWortlaut": "Zahnreinigung",
     })
@@ -180,7 +180,7 @@ def test_kontrolle_bleibt_bei_eva():
     s.update({
         "modus": "buchen",
         "arzt": {"typ": "letzter", "calendarId": Z3, "calendarName": "Prophylaxe"},
-        "grund": "Kontrolle", "motivId": "recall",
+        "grund": "Kontrolle", "motivId": "kch-kontrolluntersuchung-15min",
         "motivName": "Recall Check-up",
     })
     gehirn.kalender_zu_grund(sit)
@@ -190,7 +190,7 @@ def test_kontrolle_bleibt_bei_eva():
 
 
 def test_fuellung_wird_besprechung():
-    """Thaler mit Zimmer-Karte: Füllung bleibt Füllung und geht in Zimmer 4."""
+    """Thaler: Fuellung ist nicht direkt buchbar und wird ZE-Besprechung."""
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({
@@ -201,7 +201,7 @@ def test_fuellung_wird_besprechung():
         "grundWortlaut": "Ich brauche eine Füllung",
     })
     vm = gehirn.motiv_fuer_kalender(sit, Z4)
-    assert vm and vm["id"] == "fuell", vm
+    assert vm and vm["id"] == "ze-besprechung-25min", vm
     gehirn.kalender_zu_grund(sit)
     assert s["arzt"]["calendarId"] == Z4
 
@@ -212,12 +212,12 @@ def test_schmerz_bleibt_notfall():
     s.update({
         "modus": "buchen",
         "arzt": {"typ": "default", "calendarId": EVA, "calendarName": "Dr. Eva Thaler"},
-        "grund": "akute Beschwerden", "motivId": "akut",
+        "grund": "akute Beschwerden", "motivId": "kch-akute-beschwerden-notfall-30min",
         "motivName": "KCH Akute Beschwerden / Notfall",
         "grundWortlaut": "Ich habe starke Zahnschmerzen",
     })
     vm = gehirn.motiv_fuer_kalender(sit, Z1)
-    assert vm and vm["id"] == "akut", vm
+    assert vm and vm["id"] == "kch-akute-beschwerden-notfall-30min", vm
     gehirn.kalender_zu_grund(sit)
     assert s["arzt"]["calendarId"] == Z1
     assert s["arzt"]["raeume"] == [Z1]

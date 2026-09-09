@@ -1864,6 +1864,15 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         neu.add("modus")
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
+    if "grundNichtBuchbar" in neu:
+        # Thaler: andere Behandlungen nie als Kontrolle/Besprechung tarnen
+        # und nie einen dafuer unzulaessigen Termin anbieten. Die sechs
+        # freigegebenen Gruppen klar nennen und bei der Grundfrage bleiben.
+        from kern import zimmer_map
+        s["phase"] = ""
+        s["frage"] = "grund"
+        return {"text": zimmer_map.buchbare_ansage()}
+
     # Live 08.09.2026: bei langsamer Buchstabierung/Nummerndiktat beendete
     # die SIP-VAD jeden Pausenabschnitt als eigenen Zug. Die Fragmentlogik
     # speicherte ihn zwar, sprach danach aber jedes Mal „Den Anfang habe

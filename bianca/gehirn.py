@@ -968,7 +968,10 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
 
 
 def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) -> tuple[str, dict | None]:
-    return besuchsgrund.deute(tenant, text, katalog=katalog)
+    from kern import zimmer_map
+    kat = zimmer_map.buchbarer_katalog(tenant, katalog)
+    wortlaut = zimmer_map.mapping_text(tenant, text)
+    return besuchsgrund.deute(tenant, wortlaut, katalog=kat)
 
 
 def _name_tokens(text: str) -> list[str]:
@@ -1434,12 +1437,24 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             patient_von_kontakt_loesen(sit)
             neu.add("fuerWen")
 
+    # Thaler nimmt telefonisch nur die sechs freigegebenen Motivgruppen an.
+    # Explizite andere Behandlungen werden nicht still als Kontrolle gebucht:
+    # der Flow nennt die erlaubten Gruppen und bleibt bei der Grundfrage.
+    if (_zimmer_map.klar_nicht_buchbar(tenant, t)
+            and (s["frage"] == "grund" or _ANLIEGEN_SIGNAL_RE.search(t))):
+        s["grund"] = ""
+        s["grundWortlaut"] = ""
+        s["motivId"] = ""
+        s["motivName"] = ""
+        s["frage"] = "grund"
+        neu.add("grundNichtBuchbar")
+
     # Besuchsgrund: auf die Besuchsgrund-Liste des Behandlers mappen; der
     # WORTLAUT des Patienten bleibt für die Terminnotiz erhalten (Chef 27.08.).
     # Gemappt wird gegen den FRISCH geholten Katalog der Sitzung (Chef
     # 30.08.2026: Mapping in jedem Anruf neu); die endgueltige, behandler-
     # spezifische Aufloesung macht flow._ctx_bauen vor Suche und Buchung.
-    if not s["grund"]:
+    if not s["grund"] and "grundNichtBuchbar" not in neu:
         kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
         if kern_name and _grund_unglaubwuerdig(t):
             # "Die letzte Zahnreinigung war nicht gut" traegt das PZR-Wort,
@@ -1460,7 +1475,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             # gebucht wird der Zweifelsfall-Grund (Kontrolle/Besprechung).
             s["grund"] = t if len(t) <= 90 else t[:87] + "…"
             s["grundWortlaut"] = s["grund"]
-            vm = besuchsgrund.fallback_motiv(tenant, katalog=motive.katalog(sit))
+            kat = _zimmer_map.buchbarer_katalog(tenant, motive.katalog(sit))
+            vm = besuchsgrund.fallback_motiv(tenant, katalog=kat)
             if vm:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
@@ -2901,6 +2917,9 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if not s["vorname"]:
             return "vorname", "Und der Vorname?"
         if not s["grund"]:
+            from kern import zimmer_map
+            if zimmer_map.aktiv(sit.get("tenant") or {}):
+                return "grund", zimmer_map.buchbare_frage()
             return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
         if s["wunsch"] is None:
             return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
@@ -2936,6 +2955,9 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if len(cals) >= 2:
             return "arzt", arztwahl_frage(sit.get("tenant"))
     if not s["grund"]:
+        from kern import zimmer_map
+        if zimmer_map.aktiv(sit.get("tenant") or {}):
+            return "grund", zimmer_map.buchbare_frage()
         return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
     if s["wunsch"] is None:
         return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
@@ -3385,7 +3407,13 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     kat = motive.katalog(sit)
     if not kat:
         return None
-    muster = besuchsgrund.konzept_muster(f"{s['grundWortlaut']} {s['grund']}")
+    from kern import zimmer_map
+    kat = zimmer_map.buchbarer_katalog(tenant, kat)
+    if not kat:
+        return None
+    wortlaut = zimmer_map.mapping_text(
+        tenant, f"{s['grundWortlaut']} {s['grund']}")
+    muster = besuchsgrund.konzept_muster(wortlaut)
     vm = None
     if muster:
         vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=kat, calendar_id=calendar_id)
@@ -3393,7 +3421,6 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
         # W-MOTIV-KATALOG (03.09.2026): kein Konzept-Treffer — den Wortlaut
         # generisch gegen den Behandler-Katalog mappen (Namen + Erklärtexte),
         # bevor das alte Motiv oder der Kontrolle-Fallback greift.
-        wortlaut = _s(f"{s['grundWortlaut']} {s['grund']}")
         if wortlaut:
             vm = besuchsgrund.katalog_treffer(wortlaut, katalog=kat, calendar_id=calendar_id)
     if not vm and s["motivId"]:
