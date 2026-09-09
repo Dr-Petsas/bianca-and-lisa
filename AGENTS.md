@@ -387,6 +387,30 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
   nie Scribe, WAV-Direktspur, Nachkorrektur); Live-Probe:
   `tests/stt_whisper_probe.py` (echter Container + echter Rückfall).
 
+## Qwen3-ASR-Ohr auf der 3060 (W-STT-QWEN 09.09.2026 — nicht rückbauen)
+
+Chef nach dem Rollback auf den Morgenstand: Zielpipeline ist ausdrücklich
+**Qwen3-ASR-1.7B auf der RTX 3060 -> Bianca-Worker -> Qwen-LLM + Qwen-TTS
+auf der 5090**, ohne Whisper im Sprachpfad.
+
+- `STT_QWEN_BASE=wss://paraqwenstt.pickadoc-tunnel.com` aktiviert den
+  Qwen-Modus, `STT_QWEN_KEY` trägt den Bearer-Token. Der Gateway bleibt
+  lokal auf `127.0.0.1:8222`; der bestehende Cloudflare-Tunnel transportiert
+  HTTP und WebSocket. Der kompatible Stream-Vertrag ist
+  `begin` -> PCM16 mono 16 kHz -> `end` -> genau ein `final`; Partials
+  dürfen Bianca nie steuern.
+- Solange `STT_QWEN_BASE` gesetzt ist, ruft `kern/stt.py` auch bei einem
+  alten/stale `STT_WHISPER_BASE` **nie Whisper** auf. Bei Ausfall übernimmt
+  ausschließlich `STT_BASE` (Parakeet) nach 30 s Qwen-Pause; ohne STT_BASE
+  wird der Fehler hörbar geworfen, nie ElevenLabs.
+- Der 3060-Gateway darf intern ebenfalls keinen Whisper-Vergleich starten
+  (`WHISPER_URL` leer). Sein Parakeet-Vergleich ist nur ein lokales,
+  explizit in `source`/`degraded` gemeldetes Sicherheitsnetz für Qwen.
+- Der öffentliche Tunnel ist niemals ohne Bearer-Token zu betreiben. Health
+  zeigt `Qwen3-ASR 1.7B (3060) + Parakeet-Rueckfall`.
+- Tests: `tests/test_stt_qwen.py`; verpflichtend vor Rollout zusätzlich
+  echte WAV-Probe gegen den 3060-Endpunkt und `tools/prod_smoke.py`.
+
 ## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
 
 Kollegen-Befund 30.08.: beim Transkribieren wurden manchmal die letzten

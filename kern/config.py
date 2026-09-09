@@ -68,6 +68,14 @@ TTS_BASE = _s("TTS_BASE").rstrip("/")
 # Transkription geht an den Container, OHNE ElevenLabs-Rueckfall
 # (Chef 28.08.2026: "es geht nichts mehr zu elevenlabs"). Leer = Scribe.
 STT_BASE = _s("STT_BASE").rstrip("/")
+# Qwen3-ASR auf der RTX 3060 (W-STT-QWEN 09.09.2026): GESETZT =
+# Transkription laeuft ueber den isolierten Parakeet-Qwen-Gateway. Qwen ist
+# dort die finale deutsche Erkennung; Bianca nutzt nie dessen Partials.
+# Ist der 3060-Dienst nicht erreichbar, darf nur STT_BASE (Parakeet) als
+# lokales Sicherheitsnetz uebernehmen — niemals Whisper oder ElevenLabs.
+#   produktiv: STT_QWEN_BASE=wss://paraqwenstt.pickadoc-tunnel.com
+STT_QWEN_BASE = _s("STT_QWEN_BASE").rstrip("/")
+STT_QWEN_KEY = _s("STT_QWEN_KEY")
 # Whisper-GPU-STT auf dem Dev-Rechner (W-STT-WHISPER 30.08.2026): GESETZT =
 # Transkription laeuft ZUERST ueber den Whisper-Stream-Container (WebSocket,
 # pickadoc-stt, large-v3 auf der Dev-GPU, via Tailscale). Ist er nicht

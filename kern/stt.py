@@ -1,15 +1,15 @@
-"""Spracheingabe. STT_WHISPER_BASE gesetzt = ZUERST der Whisper-Stream-
-Container auf dem Dev-Rechner (pickadoc-stt, large-v3 auf GPU, WebSocket-
-Vertrag: PCM16 16 kHz + begin/end-Ops, Bearer-Auth) — ist der Dev-Rechner
-nicht erreichbar, faellt der Zug automatisch auf STT_BASE zurueck
-(W-STT-WHISPER, Chef 30.08.2026). STT_BASE gesetzt = lokaler Parakeet-
-Container (5090, Claras bewaehrte Telefon-Engine + Fuzzy-Namens-
-Nachkorrektur), OHNE ElevenLabs-Rueckfall (Chef 28.08.2026: "es geht
-nichts mehr zu elevenlabs"). Beides leer = ElevenLabs Scribe wie frueher.
-``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen aus dem Tenant) gehen
-als Hotwords an die Nachkorrektur im Parakeet-Container; der Whisper-Pfad
-biast damit den Decoder (initial_prompt) und laeuft danach durch DIESELBE
-Nachkorrektur-Kopie (stt_serve/postcorrect.py) im Prozess."""
+"""Spracheingabe.
+
+STT_QWEN_BASE gesetzt = Qwen3-ASR-1.7B auf der RTX 3060 ist die primaere
+Final-Erkennung (PCM16 16 kHz, begin/end-WebSocket-Vertrag, Bearer-Auth).
+Dieser Modus ist hart von Whisper getrennt: bei einem Ausfall darf nur
+STT_BASE (Parakeet) als sichtbares Sicherheitsnetz uebernehmen, niemals
+Whisper oder ElevenLabs.
+
+Ohne Qwen-Konfiguration bleibt der fruehere STT_WHISPER_BASE-Pfad
+abwaertskompatibel. STT_BASE ist der lokale Parakeet-Container auf der 5090.
+``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen aus dem Tenant) werden
+als reiner Vokabular-Kontext an Qwen beziehungsweise Whisper uebergeben."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ import httpx
 from kern.config import (
     ELEVENLABS_API_KEY,
     STT_BASE,
+    STT_QWEN_BASE,
+    STT_QWEN_KEY,
     STT_WHISPER_BASE,
     STT_WHISPER_KEY,
 )
@@ -35,6 +37,8 @@ _CLIENT: httpx.Client | None = None
 # bezahlt — solange hoert Parakeet. Naechster Versuch nach Ablauf.
 WHISPER_PAUSE_S = 30.0
 _whisper_pause_bis = 0.0
+QWEN_PAUSE_S = 30.0
+_qwen_pause_bis = 0.0
 
 
 def _client() -> httpx.Client:
@@ -67,9 +71,9 @@ def _lokal(audio: bytes, *, mime: str, name: str, keywords: str = "") -> str:
 
 # ----------------------------------------------------------------- Whisper
 
-def _ws_url() -> str:
-    """STT_WHISPER_BASE (http/ws/nackt) -> ws://host:port/stream."""
-    base = STT_WHISPER_BASE
+def _stream_url(raw_base: str) -> str:
+    """HTTP-/WS-/nackte Basis -> WebSocket-Endpunkt /stream."""
+    base = raw_base
     if base.startswith("https://"):
         base = "wss://" + base[len("https://"):]
     elif base.startswith("http://"):
@@ -77,6 +81,15 @@ def _ws_url() -> str:
     elif not base.startswith(("ws://", "wss://")):
         base = "ws://" + base
     return base.rstrip("/") + "/stream"
+
+
+def _ws_url() -> str:
+    """Abwaertskompatibler Whisper-URL-Helfer fuer bestehende Tests."""
+    return _stream_url(STT_WHISPER_BASE)
+
+
+def _qwen_ws_url() -> str:
+    return _stream_url(STT_QWEN_BASE)
 
 
 def _pcm16k(audio: bytes, mime: str) -> bytes:
@@ -96,27 +109,45 @@ def _pcm16k(audio: bytes, mime: str) -> bytes:
             input=audio, capture_output=True, timeout=10,
         )
     except FileNotFoundError:
-        raise RuntimeError("stt_whisper_kein_ffmpeg")
+        raise RuntimeError("stt_stream_kein_ffmpeg")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("stt_whisper_dekodier_timeout")
+        raise RuntimeError("stt_stream_dekodier_timeout")
     if proc.returncode != 0 or not proc.stdout:
-        raise RuntimeError("stt_whisper_dekodieren")
+        raise RuntimeError("stt_stream_dekodieren")
     return proc.stdout
 
 
-def _whisper_ws(pcm: bytes, keywords: str = "") -> str:
-    """Ein Zug ueber den Whisper-Stream-Container: begin -> PCM -> end ->
-    final. Partials/ready werden ueberlesen, nur das final zaehlt."""
+def _stream_final(
+    pcm: bytes,
+    *,
+    base: str,
+    key: str,
+    keywords: str = "",
+    engine: str = "stream",
+) -> dict:
+    """Ein Zug zum kompatiblen Stream-Dienst; nur ``final`` zaehlt."""
     from websockets.sync.client import connect
 
+    connect_kwargs = {
+        "open_timeout": 2.0,
+        "close_timeout": 2.0,
+        "max_size": 16 * 1024 * 1024,
+    }
+    if key:
+        connect_kwargs["additional_headers"] = {
+            "Authorization": f"Bearer {key}"
+        }
     with connect(
-        _ws_url(),
-        additional_headers={"Authorization": f"Bearer {STT_WHISPER_KEY}"},
-        open_timeout=2.0,
-        close_timeout=2.0,
-        max_size=16 * 1024 * 1024,
+        _stream_url(base),
+        **connect_kwargs,
     ) as ws:
-        begin: dict = {"op": "begin"}
+        begin: dict = {
+            "op": "begin",
+            "sampleRate": 16000,
+            "channels": 1,
+            "format": "pcm_s16le",
+            "req": 1,
+        }
         if keywords:
             begin["prompt"] = ", ".join(
                 k.strip() for k in keywords.split(",") if k.strip()
@@ -129,13 +160,53 @@ def _whisper_ws(pcm: bytes, keywords: str = "") -> str:
         while True:
             rest = frist - time.monotonic()
             if rest <= 0:
-                raise RuntimeError("stt_whisper_timeout")
+                raise RuntimeError(f"stt_{engine}_timeout")
             raw = ws.recv(timeout=rest)
             if isinstance(raw, (bytes, bytearray)):
                 continue
             msg = json.loads(raw)
+            if msg.get("type") == "error":
+                raise RuntimeError(str(msg.get("error") or "stt_stream_error"))
             if msg.get("type") == "final" and msg.get("req") == 1:
-                return str(msg.get("text") or "")
+                if msg.get("error"):
+                    raise RuntimeError(str(msg["error"]))
+                return msg
+
+
+def _whisper_ws(pcm: bytes, keywords: str = "") -> str:
+    """Abwaertskompatibler Whisper-Stream-Pfad."""
+    msg = _stream_final(
+        pcm,
+        base=STT_WHISPER_BASE,
+        key=STT_WHISPER_KEY,
+        keywords=keywords,
+        engine="whisper",
+    )
+    return str(msg.get("text") or "")
+
+
+def _qwen_ws(pcm: bytes, keywords: str = "") -> str:
+    """Qwen-Final vom 3060-Gateway; Partials steuern Bianca nie."""
+    msg = _stream_final(
+        pcm,
+        base=STT_QWEN_BASE,
+        key=STT_QWEN_KEY,
+        keywords=keywords,
+        engine="qwen",
+    )
+    source = str(msg.get("source") or "qwen")
+    degraded = bool(msg.get("degraded"))
+    if degraded or source not in {"qwen", "consensus"}:
+        reason = str(msg.get("fallbackReason") or "qwen_result_rejected")
+        disagreements = ",".join(
+            str(x) for x in (msg.get("disagreements") or [])
+        )
+        print(
+            f"stt-qwen: source={source} degraded=1 reason={reason} "
+            f"disagreements={disagreements or '-'}",
+            flush=True,
+        )
+    return str(msg.get("text") or "")
 
 
 def _nachkorrigieren(text: str, keywords: str) -> str:
@@ -175,12 +246,43 @@ def _whisper(audio: bytes, *, mime: str, keywords: str = "") -> str:
     return _sauber(_nachkorrigieren(text, keywords))
 
 
+def _qwen_aktiv() -> bool:
+    return bool(STT_QWEN_BASE) and time.time() >= _qwen_pause_bis
+
+
+def _qwen_sperren(grund: Exception) -> None:
+    global _qwen_pause_bis
+    _qwen_pause_bis = time.time() + QWEN_PAUSE_S
+    print(
+        f"stt-qwen: fallback auf parakeet "
+        f"({type(grund).__name__}: {grund}), pause {QWEN_PAUSE_S:.0f}s",
+        flush=True,
+    )
+
+
+def _qwen(audio: bytes, *, mime: str, keywords: str = "") -> str:
+    pcm = _pcm16k(audio, mime)
+    if len(pcm) < 1600:
+        return ""
+    return _sauber(_qwen_ws(pcm, keywords))
+
+
 # ------------------------------------------------------------------ Einstieg
 
 def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
                keywords: str = "") -> str:
     if not audio or len(audio) < 800:
         return ""
+    if STT_QWEN_BASE:
+        if _qwen_aktiv():
+            try:
+                return _qwen(audio, mime=mime, keywords=keywords)
+            except Exception as e:
+                _qwen_sperren(e)
+        if STT_BASE:
+            return _lokal(audio, mime=mime, name=name, keywords=keywords)
+        # Qwen-Modus ist absichtlich hart von Whisper/ElevenLabs getrennt.
+        raise RuntimeError("stt_qwen_pause_ohne_fallback")
     if _whisper_aktiv():
         try:
             return _whisper(audio, mime=mime, keywords=keywords)
@@ -213,11 +315,22 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
 
 
 def bereit() -> bool:
-    return bool(STT_WHISPER_BASE or STT_BASE or ELEVENLABS_API_KEY)
+    return bool(
+        STT_QWEN_BASE
+        or STT_WHISPER_BASE
+        or STT_BASE
+        or ELEVENLABS_API_KEY
+    )
 
 
 def engine_anzeige() -> str:
     """Fuer die Dock-/Health-Anzeige: wer hoert gerade zu?"""
+    if STT_QWEN_BASE:
+        if not _qwen_aktiv() and STT_BASE:
+            return "Parakeet (lokal, Qwen pausiert)"
+        return "Qwen3-ASR 1.7B (3060)" + (
+            " + Parakeet-Rueckfall" if STT_BASE else ""
+        )
     if STT_WHISPER_BASE:
         if not _whisper_aktiv() and STT_BASE:
             return "Parakeet (lokal, Whisper pausiert)"

@@ -1,0 +1,16 @@
+# Persistenter Laufzeit-Override fuer den isolierten Parakeet-Qwen-Stack.
+# Aufruf aus diesem Repo (STT_QWEN_KEY kommt aus einer NICHT committeten
+# Env-Datei):
+#   docker compose --env-file .data/qwen3060.env `
+#     -f C:\Parakeet-Qwen\compose.yaml `
+#     -f deploy\qwen3060-no-whisper.override.yml `
+#     up -d --no-deps stt-gateway
+#
+# Der Gateway bleibt ausschliesslich auf 127.0.0.1:8222 gebunden. Der bereits
+# eingerichtete Tunnel paraqwenstt.pickadoc-tunnel.com transportiert HTTP und
+# WebSocket; der Bearer-Token bleibt trotzdem Pflicht.
+services:
+  stt-gateway:
+    environment:
+      HYBRID_STT_TOKEN: ${STT_QWEN_KEY:?STT_QWEN_KEY muss gesetzt sein}
+      WHISPER_URL: ""
