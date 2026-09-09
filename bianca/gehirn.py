@@ -2381,6 +2381,13 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     für Sie selbst, richtig?" — deckt Identitaet UND Fuer-Wen in einem ab.
     Ein Nein heisst dann: Termin fuer jemand anderen (einsammeln)."""
     schluss = anrufer_check_schluss(selbst=selbst)
+    modus = _s(sammler(sit).get("modus"))
+    if modus == "absagen":
+        aktion = "den Termin suchen, den Sie absagen möchten"
+    elif modus == "verschieben":
+        aktion = "den Termin suchen, den Sie verschieben möchten"
+    else:
+        aktion = "Ihre bestehenden Termine im Kalender nachsehen"
     # Kurz halten (Chef 08.09.: kein Sermon). Vorab = Hallo.
     # Nie „Bianca.“ vor die Selbst-Frage hängen — das klang wie
     # „Bianca, der Termin ist für Sie selbst“ (MedDent + Thaler, 08.09.).
@@ -2393,18 +2400,13 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
         # Die knappe Kontrollfrage nennt Identität UND nächsten sicheren
         # Schritt; erst ein Ja löst die echte Kalendersuche aus.
         wer = anrufer_anrede(sit)
-        modus = _s(sammler(sit).get("modus"))
-        if modus == "absagen":
-            aktion = "den Termin suchen, den Sie absagen möchten"
-        elif modus == "verschieben":
-            aktion = "den Termin suchen, den Sie verschieben möchten"
-        else:
-            aktion = "Ihre bestehenden Termine im Kalender nachsehen"
         if wer:
             return f"Ich habe Sie als {wer} erkannt. Soll ich unter diesem Namen {aktion}?"
         return f"Soll ich unter Ihrer bekannten Nummer {aktion}?"
     hallo = anrufer_hallo(sit)
     if hallo:
+        if not selbst:
+            return f"{hallo} Soll ich unter diesem Namen {aktion}?"
         return f"{hallo} {schluss}"
     return schluss
 

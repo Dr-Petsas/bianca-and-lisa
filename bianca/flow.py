@@ -122,6 +122,13 @@ _ABSCHIED_RE = re.compile(
     r"(?:\s|,|!|\.|$)",
     re.I,
 )
+# Telefon-STT verhörte „Vielen Dank“ live als „Seid Danke“ und „Dein
+# Danke“. Nach einem bereits abgeschlossenen Vorgang ist ein kurzer Satz,
+# der auf Danke/Dank endet, eindeutig Höflichkeit — nie ein neues Thema.
+_VERHOERTES_DANKE_RE = re.compile(
+    r"^\s*(?:[\wäöüß'-]+\s+){0,2}(?:danke|dank)\s*[.!?…]*\s*$",
+    re.I,
+)
 _SCHON_TERMIN_RE = re.compile(
     r"(schon|bereits).{0,24}termin|"
     r"termin.{0,20}(schon|gemacht|gebucht|vereinbart)",
@@ -1872,6 +1879,13 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # verwalten seinen Einstiegs-Reset faehrt wie frueher bei der Regex.
     hirn_modus_neu = bool(sit.pop("hirnModusNeu", False))
     task_handoff = _s(sit.pop("taskHandoff", ""))
+
+    if (s["phase"] == "fertig" and not s["modus"]
+            and (_ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t))):
+        # Live MedDent 09.09.: nach erfolgreicher Absage führten zwei
+        # verhörte Danke-Sätze erst in „nicht verstanden“, dann in die
+        # Schleifenbremse. Der abgeschlossene Job verabschiedet sich sofort.
+        return {"text": "Sehr gerne. Auf Wiederhören."}
 
     # Kein Slot gefunden, echte Rückrufnotiz geschrieben: der Vorgang ist
     # abgeschlossen. Dank/Abschied beendet freundlich; andere Folgesätze

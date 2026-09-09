@@ -3061,7 +3061,7 @@ def test_auskunft_upgrade_nachname_zu_anrufer_check():
         }
         z2 = flow.zug(sit, "Äh, Moment.")
         assert z2 and "Frau Berger" in z2["text"]
-        assert "Stimmt das so?" in z2["text"]
+        assert "bestehenden Termine im Kalender nachsehen" in z2["text"]
         assert "Bianca" not in z2["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
@@ -3142,6 +3142,18 @@ def test_absage_nach_schnellem_hallo_stellt_keine_nackte_stimmt_das_frage():
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
         verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_verhoertes_danke_nach_absage_beendet_sofort_ohne_schleife():
+    """Live MedDent 09.09.: „Vielen Dank“ kam als „Seid Danke“ / „Dein
+    Danke“. Nach erledigter Absage ist das eindeutig ein Abschied und darf
+    weder „nicht verstanden“ noch die Schleifenbremse auslösen."""
+    for satz in ["Seid Danke!", "Dein Danke!", "Vielen Dank."]:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "", "phase": "fertig", "frage": ""})
+        z = flow.zug(sit, satz)
+        assert z and z["text"] == "Sehr gerne. Auf Wiederhören.", (satz, z)
 
 
 def test_absage_anrufer_check_nein_fragt_nachnamen():

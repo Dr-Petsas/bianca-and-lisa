@@ -282,7 +282,11 @@ _BESTANDSFRAGE_RE = re.compile(
     r"\bich\s+hab(?:e|'|te)?\b[^?.!]{0,40}?\btermine?\b[^?.!]{0,30}?"
     r"(?:gebucht|vereinbart|ausgemacht|gemacht)\b|"
     # "mein anderer/anderen Termin", "der/die/einen andere(n) Termin"
-    r"\b(?:mein(?:en|er|e)?|der|die|einen)\s+ander\w+\s+termine?\b",
+    r"\b(?:mein(?:en|er|e)?|der|die|einen)\s+ander\w+\s+termine?\b|"
+    # Nebensatz-Wortstellung: „ich möchte wissen, OB ICH noch einen Termin
+    # HABE“. Ohne diesen Zweig gewann irrtümlich _FB_NEU_RE („Termin haben“)
+    # und das freie LLM fragte nach bestehend-vs-neu, statt nachzusehen.
+    r"\bob\s+ich\b[^?.!]{0,38}?\btermine?\b[^?.!]{0,16}?\bhab(?:e|')?\b",
     re.I,
 )
 # Freie-Slot-Frage aus Anbietersicht: „Haben Sie noch einen Termin diese
@@ -384,7 +388,8 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
                 and not _FREIER_TERMIN_RE.search(t):
             gg = "VORGANG" if "termin" in t.lower() else "REGEL"
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-        if (_FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t)
+        if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+                or _FREIER_TERMIN_RE.search(t)
                 or (not _motivkatalog_da(sit)
                     and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
                     and not _NEGATION_RE.search(t))) or (
@@ -410,7 +415,8 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             and not _FREIER_TERMIN_RE.search(t):
         gg = "VORGANG" if "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-    if _FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t):
+    if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+            or _FREIER_TERMIN_RE.search(t)):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     if (not _motivkatalog_da(sit)
             and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
@@ -452,7 +458,8 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
             and not _FREIER_TERMIN_RE.search(t):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
                                      "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
-    if _FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t):
+    if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+            or _FREIER_TERMIN_RE.search(t)):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
     if _FB_SYMPTOM_RE.search(t):
         treffer.append(("SYMPTOM", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))

@@ -2051,9 +2051,10 @@ kannte nur „einen Termin“, nicht „einen ANDEREN Termin“/„andere Termin
   Terminen: „habe ich (noch/andere/weitere/schon/überhaupt/eigentlich/
   bereits) … Termin(e)“, „wann ist/war (mein/der) (andere) Termin“, „welche
   Termine habe ich“, „ich hatte … Termin … gebucht/vereinbart/ausgemacht“,
-  „mein/der/einen andere(r/n) Termin“. Ein blosser Terminwunsch („ich hätte
-  gern einen Termin“, „ich möchte einen Termin vereinbaren“) fällt bewusst
-  NICHT darunter.
+  „mein/der/einen andere(r/n) Termin“ und die Nebensatz-Wortstellung
+  „ich möchte wissen, ob ich noch einen Termin habe“. Ein blosser
+  Terminwunsch („ich hätte gern einen Termin“, „ich möchte einen Termin
+  vereinbaren“) fällt bewusst NICHT darunter.
 - **Freie Termine sauber getrennt:** „Haben SIE noch einen Termin diese
   Woche?“ / „Welche Termine sind frei?“ ist eine Neubuchungsfrage
   (`_FREIER_TERMIN_RE`). Sie startet sofort den sicheren Formularfaden; das
@@ -2068,6 +2069,10 @@ kannte nur „einen Termin“, nicht „einen ANDEREN Termin“/„andere Termin
 - **Notaus:** `INTENT_SCHICHT=0` (Regex-Modus, wie vor W-HIRN). Tests:
   `tests/test_bestandsfrage.py` (Regex, Intent-Deutung, Hirn-Parken,
   verwalten-Lookup, Agent Ende-zu-Ende OHNE LLM).
+- **Abschluss-Hörfehler (Live 09.09.2026):** Nach einer erledigten Aufgabe
+  gelten kurze STT-Formen, die auf „Danke/Dank“ enden, als Abschied. So werden
+  „Vielen Dank“ → „Seid Danke“ / „Dein Danke“ nicht mehr mit „nicht
+  verstanden“ und anschließend der Schleifenbremse beantwortet.
 
 ## Name/Nummer mit langen Pausen (08.09.2026 — nicht rückbauen)
 

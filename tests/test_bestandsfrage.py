@@ -74,6 +74,8 @@ LIVE_TREFFER = [
     "Habe ich denn schon einen Termin?",
     "Welche Termine habe ich noch?",
     "Wann ist mein Termin?",
+    "Hallo, ich wollte ganz gerne wissen, ob ich noch einen Termin habe diese Woche?",
+    "Nein, ich möchte wissen, ob ich einen Termin habe.",
 ]
 KEIN_TREFFER = [
     "Ich hätte gerne einen Termin morgen.",
@@ -142,6 +144,53 @@ def test_agent_routet_freie_slotfrage_ohne_llm_in_sicheren_flow():
     finally:
         llm.chat = echt_chat
         llm.chat_stream = echt_stream
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_live_bestandsfrage_startet_sofort_kalenderpfad_ohne_llm():
+    """Live MedDent 09.09. 21:26: Die Nebensatz-Wortstellung „ob ich ...
+    einen Termin habe“ darf weder als Neubuchung noch als freie
+    Klärungsfrage enden. Bekannter Anrufer -> Identitätscheck -> echter
+    agentFindPatientAppointments-Lauf, ohne Haupt-LLM."""
+    from kern import llm
+
+    def _knall(*a, **k):
+        raise AssertionError("LLM darf Bestandskalender nicht klären oder erfinden")
+
+    echt_chat, echt_stream = llm.chat, llm.chat_stream
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_anstossen = flow.hintergrund.anstossen
+    llm.chat = _knall
+    llm.chat_stream = _knall
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(DONNERSTAG)
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        hirn.init(sit)
+        sit["anrufer"] = {
+            "vorname": "Michael", "nachname": "Petsas",
+            "patientId": "pat-9", "geschlecht": "male",
+            "telefon": "+491701234567",
+        }
+        aus1 = agent.user_turn(
+            sit,
+            "Hallo, ich wollte ganz gerne wissen, ob ich noch einen Termin habe diese Woche?",
+        )
+        s = gehirn.sammler(sit)
+        assert s["modus"] == "auskunft" and s["frage"] == "anrufer_check"
+        assert "bestehenden Termine im Kalender nachsehen" in aus1["text"]
+        assert "neuen vereinbaren" not in aus1["text"]
+
+        aus2 = agent.user_turn(sit, "Ja?")
+        assert "halb zwölf" in aus2["text"]
+        assert any(
+            e.get("name") == "agentFindPatientAppointments" and e.get("ok")
+            for e in (sit.get("tools") or [])
+        )
+    finally:
+        llm.chat = echt_chat
+        llm.chat_stream = echt_stream
+        verwalten.kal.find_patient_appointments = echt_find
         flow.hintergrund.anstossen = echt_anstossen
 
 
