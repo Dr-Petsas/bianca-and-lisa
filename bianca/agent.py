@@ -684,6 +684,23 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
 
+    # W-PRAXISAUSKUNFT (09.09.2026): Öffnungszeiten und Wegbeschreibung
+    # kommen deterministisch aus dem Mandanten, auch wenn STT Schlüsselwörter
+    # verhört ("Pflungszeiten", "wie ich die praktisch erreiche"). Solche
+    # Praxisfakten dürfen nie als freies Talk-Thema beim LLM landen — dort
+    # entstand live der erfundene Gärtnerei-Witz statt der echten Auskunft.
+    praxis_text, praxis_themen = kern_wissen.praxis_antwort(
+        sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {},
+        text_in,
+    )
+    if praxis_text:
+        offene = _offene_frage(sit)
+        if offene:
+            praxis_text = f"{praxis_text} {offene}"
+        spur.merken(sit, "praxis-auskunft", ",".join(sorted(praxis_themen)))
+        sit.pop("unklarFolge", None)
+        return _maschinen_antwort(sit, {"text": praxis_text, "book": None}, msgs)
+
     # Gemischter Zug: „Ja, aber …“ enthält ZWEI Handlungen. Bei wenigen
     # ausdrücklich sicheren Fragen erntet der bisherige Flow zuerst das
     # Ja/Nein; nur der Zusatz geht danach durch Intent und Task-Router.
