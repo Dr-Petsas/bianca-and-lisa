@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Echter Audiovergleich: Qwen3-ASR 1.7B gegen Whisper</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f3f6;font-family:Arial,Helvetica,sans-serif;color:#24374e;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f1f3f6;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;background:#ffffff;">
+          <tr>
+            <td align="center" style="background:#24374e;padding:22px 24px;">
+              <img src="https://pickadoc.de/images/logo-text-ai-email.png" width="190" height="48" alt="Pickadoc" style="display:block;border:0;width:190px;height:48px;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 30px 12px 30px;">
+              <div style="font-size:12px;line-height:18px;letter-spacing:1px;text-transform:uppercase;color:#d862c8;font-weight:bold;">Echter Telefon-Audiotest</div>
+              <h1 style="margin:6px 0 14px 0;font-size:25px;line-height:32px;color:#24374e;">Qwen3-ASR 1.7B hört klar besser als Whisper – aber nicht fehlerfrei</h1>
+              <p style="margin:0 0 16px 0;font-size:16px;line-height:24px;">Hallo Kiriakos,</p>
+              <p style="margin:0 0 16px 0;font-size:16px;line-height:24px;">
+                wir haben keine künstlichen Testsätze verwendet, sondern ausschließlich deine realen Anrufer-Audiospuren aus drei Telefonaten von heute Morgen. Das war exakt das aufbereitete 16-kHz-Audio, das auch Whisper erhalten hat. Diese 171 Sekunden wurden anschließend durch <strong>Qwen3-ASR 1.7B</strong> inklusive Forced Aligner transkribiert und den gespeicherten Whisper-Transkripten gegenübergestellt.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 30px 8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;">
+                <tr>
+                  <td style="padding:16px 18px;">
+                    <div style="font-size:17px;line-height:24px;font-weight:bold;color:#24374e;">Das ehrliche Ergebnis</div>
+                    <div style="margin-top:6px;font-size:15px;line-height:23px;color:#3f4d5e;">
+                      Qwen versteht die Gesprächsabsicht und kritische Zahlen insgesamt deutlich besser. Besonders wichtig: Qwen verhindert mehrere komplette Dialogentgleisungen, die bei Whisper durch grob falsche Wörter ausgelöst wurden. Bei Eigennamen und Adressen ist allerdings auch Qwen noch nicht zuverlässig genug.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:12px 30px 4px 30px;">
+              <h2 style="margin:0 0 12px 0;font-size:19px;line-height:26px;color:#24374e;">Die entscheidenden Stellen</h2>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;">
+                <tr>
+                  <td style="padding:13px 15px;background:#f7f8fa;border-left:4px solid #d862c8;font-size:15px;line-height:22px;">
+                    <strong>Terminwunsch:</strong> Qwen hörte sinngemäß „Hallo, Thomas hier. Ich brauche einen Termin.“ Whisper machte daraus „Ich habe einen guten Termin.“ – Bianca glaubte deshalb, du würdest sie loben. Klarer Sieg für Qwen.
+                  </td>
+                </tr>
+                <tr><td style="height:8px;font-size:1px;line-height:1px;">&nbsp;</td></tr>
+                <tr>
+                  <td style="padding:13px 15px;background:#f7f8fa;border-left:4px solid #d862c8;font-size:15px;line-height:22px;">
+                    <strong>Uhrzeit:</strong> Qwen hörte korrekt „Zwölf Uhr“. Whisper lieferte „Sorry for what?“ und schickte das Gespräch damit erneut in einen falschen Nebenweg.
+                  </td>
+                </tr>
+                <tr><td style="height:8px;font-size:1px;line-height:1px;">&nbsp;</td></tr>
+                <tr>
+                  <td style="padding:13px 15px;background:#f7f8fa;border-left:4px solid #d862c8;font-size:15px;line-height:22px;">
+                    <strong>Telefonnummer:</strong> Qwen erhielt die vollständige Ziffernfolge 01776004600. Whisper verlor eine Null und machte daraus 0177604600 – genau der Fehler, durch den die SMS nicht ankommen konnte.
+                  </td>
+                </tr>
+                <tr><td style="height:8px;font-size:1px;line-height:1px;">&nbsp;</td></tr>
+                <tr>
+                  <td style="padding:13px 15px;background:#f7f8fa;border-left:4px solid #d862c8;font-size:15px;line-height:22px;">
+                    <strong>„Guck selber nach“:</strong> Qwen lag mit „Fuch selber nach“ phonetisch nahe. Whisper produzierte „Fug Wellenach“, womit für die nachgelagerten Wächter praktisch nichts mehr zu retten war.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 30px 4px 30px;">
+              <h2 style="margin:0 0 10px 0;font-size:19px;line-height:26px;color:#24374e;">Wo Qwen weiterhin schwächelt</h2>
+              <p style="margin:0 0 8px 0;font-size:15px;line-height:23px;">„Tzannis“ wurde zu „Thomas“, „Petsas“ zu „Petzsch“ und „Wuppertal“ einmal zu „Dummerthal“. Qwen ist bei Namen meist näher am Klang als Whisper, braucht aber weiterhin die mandantenspezifische Namenskorrektur. Für Namen, Telefonnummern und Uhrzeiten bleibt ein zusätzlicher Parakeet-Prüflauf sinnvoll.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:12px 30px 4px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;">
+                <tr>
+                  <td style="padding:16px 18px;">
+                    <div style="font-size:17px;line-height:24px;font-weight:bold;color:#24374e;">Wichtig zum Forced Aligner</div>
+                    <div style="margin-top:6px;font-size:15px;line-height:23px;color:#3f4d5e;">
+                      Der Forced Aligner macht Qwen nicht verständiger. Er erhält Audio plus das bereits erzeugte Transkript und ergänzt nur Wort-Zeitstempel. Für die Live-Erkennung bringt er deshalb keinen Qualitätsgewinn und würde lediglich zusätzlichen Speicher und Rechenzeit kosten.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 30px 30px 30px;">
+              <p style="margin:0;font-size:16px;line-height:24px;"><strong>Unsere klare Empfehlung:</strong> Qwen3-ASR 1.7B ohne Forced Aligner als primäres Ohr, Deutsch fest vorgeben, danach Tenant-Namenskorrektur und Parakeet als Sicherheitsprüfer für Namen, Uhrzeiten und Telefonnummern.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
