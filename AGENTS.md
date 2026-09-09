@@ -467,6 +467,15 @@ taub (Barge-Schwelle 1100 / 280 ms). Vier Bausteine:
 4. **Text-Echo** (`unterbrechung.ist_echo`, auch ohne Barge wenn `ohr=True`)
    gegen die Satzkarte — Freisprech-Echo startet kein LLM; Ja/Nein/Stopp
    nie als Echo. Echter Einwand bekommt den Floor (kein „Also, wo war ich“).
+5. **Barge-Fenster statt Lebenszeit-Summe (W-OHR-FENSTER 09.09.2026):**
+   Kiriakos meldete Audioaussetzer, die bei langen Antworten zunahmen.
+   Ursache: `_ohr_frames` summierte kurze Echo-/Rauschbursts über die GANZE
+   Ansage; nach insgesamt 400 ms wurde der laufende Audio-Posten gekappt,
+   auch wenn zwischen den Bursts lange Ruhe lag. Die Stopp-Schwelle gilt
+   jetzt nur noch in einem rollenden 600-ms-Fenster (mindestens 400 ms
+   Sprachanteil). Echte längere Einwände stoppen unverändert schnell,
+   verteilte Leitungsstörungen nie. Repro/Wache:
+   `test_ohr_stoerimpulse_summieren_sich_nicht_ueber_lange_ansage`.
 
 Tests: `tests/test_tempo.py`, Ohr-Block in `test_sip_vad.py`,
 `test_ist_echo_ohr_gegen_satzkarte`, Halbsatz-Punkt-Fälle.
