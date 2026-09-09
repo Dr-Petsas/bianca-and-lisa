@@ -88,7 +88,7 @@ STT_WHISPER_KEY = _s("STT_WHISPER_KEY", "pickadoc-stt-dev-key")
 # Heute-früh lag Whisper bei ~0,9 s avg / ~1,2 s p90. Ein Hang darf den
 # Anruf nie wieder auf 5–8 s drücken — nach diesem Budget übernimmt
 # sofort Parakeet (STT_BASE). 0 = alter 15-s-Timeout (Notaus).
-STT_WHISPER_BUDGET_S = float(_s("STT_WHISPER_BUDGET_S", "2.0") or "2.0")
+STT_WHISPER_BUDGET_S = float(_s("STT_WHISPER_BUDGET_S", "1.7") or "1.7")
 # Stimmname im Container (Referenz-WAV in tts_serve/stimmen/). Leer = "lisa";
 # der Bianca-Prozess setzt sich beim Start selbst auf "bianca".
 TTS_VOICE = _s("TTS_VOICE")

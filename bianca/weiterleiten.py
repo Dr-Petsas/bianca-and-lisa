@@ -201,6 +201,23 @@ def erkannt(text: str) -> bool:
     return bool(_VERBINDEN_RE.search(t) or _MENSCH_RE.search(t) or _ARZT_SPRECHEN_RE.search(t))
 
 
+def _mensch_frueher_verlangt(sit: dict) -> bool:
+    """Hat der Anrufer in diesem Gespräch schon einen Menschen verlangt?
+
+    Der erste Wunsch bekommt bewusst die Produktrollen-Erklärung. Erklärt der
+    Anrufer danach sein Anliegen und verlangt später erneut Personal, darf der
+    Zustandswechsel nicht dieselbe Erklärung von vorn beginnen (Live Thaler
+    09.09.). Dann gilt der neue Wunsch als ausdrückliches Bestehen.
+    """
+    for m in reversed((sit.get("messages") or [])[-16:]):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        text = _s(m.get("content"))
+        if _MENSCH_NUR_RE.search(text) and erkannt(text):
+            return True
+    return False
+
+
 def _letzter_genannter_arzt(sit: dict) -> dict | None:
     """Behandler aus früheren Anrufer-Sätzen — Live Schnorbus 08.09.:
     „Herr Dr. Patrikis sprechen“ / „Dr. Patrikis“, danach nur noch
@@ -600,6 +617,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 and sit.get("hirnModusNeu"):
             sit["weiterleiten"] = {}
             return None
+        if erkannt(t) and _mensch_frueher_verlangt(sit):
+            rollen_ziel = _rollen_weiterleitung(sit.get("tenant") or {}, t)
+            if rollen_ziel:
+                return _rolle_verbinden(sit, rollen_ziel, melde)
+            sit["weiterleiten"] = {"frage": "rueckruf", "rolle": t[:80]}
+            return {"text": RUECKRUF_ANGEBOT}
         sit["weiterleiten"] = {"frage": "anliegen", "rolle": t[:80]}
         return {"text": ENTLASTUNG}
     # Fall 3: Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort

@@ -98,6 +98,53 @@ def test_bestandsfrage_regex_verschont_buchungswunsch():
         assert not intent._BESTANDSFRAGE_RE.search(satz), satz
 
 
+def test_freier_termin_aus_praxissicht_ist_neubuchung():
+    """Live MedDent 09.09.: „Haben Sie noch einen Termin diese Woche?“
+    fragt nach einem freien Slot, nicht nach einem schon gebuchten Termin."""
+    for satz in [
+        "Haben Sie noch einen Termin diese Woche bei Ihnen?",
+        "Habe Sie noch einen freien Termin?",
+        "Gibt es diese Woche noch irgendeinen Termin?",
+        "Welche Termine sind diese Woche noch frei?",
+    ]:
+        sit = _sit()
+        hirn.init(sit)
+        d = intent.erkennen(sit, satz)
+        assert d["handlung"] == "ANLEGEN", (satz, d)
+        assert d["gegenstand"] == "VORGANG", (satz, d)
+
+
+def test_agent_routet_freie_slotfrage_ohne_llm_in_sicheren_flow():
+    from kern import llm
+
+    def _knall(*a, **k):
+        raise AssertionError("LLM darf keine freie Kalenderzeit erfinden")
+
+    echt_chat, echt_stream = llm.chat, llm.chat_stream
+    echt_anstossen = flow.hintergrund.anstossen
+    llm.chat = _knall
+    llm.chat_stream = _knall
+    flow.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit()
+        hirn.init(sit)
+        sit["anrufer"] = {
+            "vorname": "Michael", "nachname": "Petsas",
+            "patientId": "pat-9", "geschlecht": "male",
+            "telefon": "+491701234567",
+        }
+        aus = agent.user_turn(sit, "Haben Sie noch einen Termin diese Woche bei Ihnen?")
+        s = gehirn.sammler(sit)
+        assert s["modus"] == "buchen"
+        assert s["frage"] == "anrufer_check"
+        assert "Herr Petsas" in aus["text"]
+        assert "selbst" in aus["text"]
+    finally:
+        llm.chat = echt_chat
+        llm.chat_stream = echt_stream
+        flow.hintergrund.anstossen = echt_anstossen
+
+
 # --- 2) Intent: mitten in der Buchung -> WISSEN x VORGANG (Auskunft) ---------
 
 def test_intent_deutet_bestandsfrage_als_wissen_vorgang():

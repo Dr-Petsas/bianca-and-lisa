@@ -114,7 +114,7 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     # Termin?") ist auch MITTEN in einer Buchung ein Wechsel-Verdacht — sonst
     # bleibt der Satz beim Buchen haengen und das Frei-LLM erfindet eine
     # Kalender-Auskunft (W-BESTANDSFRAGE 09.09.2026, Live Petsas 08.09.).
-    if _BESTANDSFRAGE_RE.search(t):
+    if _BESTANDSFRAGE_RE.search(t) or _FREIER_TERMIN_RE.search(t):
         return True
     # "Termin" ist im Buchungs-/Aenderungs-Anliegen Alltagsvokabular der
     # Ernte — bei WISSEN/ERREICHEN/ABGEBEN dagegen ein neues Fass.
@@ -285,6 +285,20 @@ _BESTANDSFRAGE_RE = re.compile(
     r"\b(?:mein(?:en|er|e)?|der|die|einen)\s+ander\w+\s+termine?\b",
     re.I,
 )
+# Freie-Slot-Frage aus Anbietersicht: „Haben Sie noch einen Termin diese
+# Woche?“ fragt nach einer NEUEN Buchung. Das Subjekt „Sie“ ist der wichtige
+# Gegenpol zu _BESTANDSFRAGE_RE („habe ICH ...?“). Ohne diesen Fast-Path lief
+# der MedDent-Live-Satz 09.09. ans freie LLM; dort wurden Verfügbarkeit und
+# später sogar ein Patientenname ohne Kalenderwerkzeug erfunden.
+_FREIER_TERMIN_RE = re.compile(
+    r"\bhab(?:e|en)\s+sie\b[^?.!]{0,32}\b"
+    r"(?:noch\s+)?(?:einen?|freie[nr]?|irgend(?:einen?)?)\s+termine?\b|"
+    r"\bgibt\s+es\b[^?.!]{0,32}\b"
+    r"(?:noch\s+)?(?:einen?|freie[nr]?|irgend(?:einen?)?)\s+termine?\b|"
+    r"\bwelche[nr]?\s+termine?\b[^?.!]{0,32}\bfrei\w*\b|"
+    r"\b(?:ist|wäre|waere)\b[^?.!]{0,24}\btermine?\b[^?.!]{0,20}\bfrei\b",
+    re.I,
+)
 _FB_NEU_RE = re.compile(
     r"(?:termin\w*)\s*(?:\w+\s+){0,4}?(?:vereinbar\w*|ausmach\w*|buch\w*|machen|haben|brauch\w*)|"
     r"(?:brauch\w*|h(?:ä|ae)tte?\s+gern\w*|m(?:ö|oe)chte\w*|will)\s+(?:\w+\s+){0,4}?termin",
@@ -366,10 +380,11 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
         if _FB_RUECKRUF_RE.search(t):
             return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-        if _FB_AUSKUNFT_RE.search(t):
+        if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
+                and not _FREIER_TERMIN_RE.search(t):
             gg = "VORGANG" if "termin" in t.lower() else "REGEL"
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-        if (_FB_NEU_RE.search(t)
+        if (_FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t)
                 or (not _motivkatalog_da(sit)
                     and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
                     and not _NEGATION_RE.search(t))) or (
@@ -391,10 +406,11 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
     if _FB_RUECKRUF_RE.search(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-    if _FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t):
+    if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
+            and not _FREIER_TERMIN_RE.search(t):
         gg = "VORGANG" if "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-    if _FB_NEU_RE.search(t):
+    if _FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     if (not _motivkatalog_da(sit)
             and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
@@ -432,10 +448,11 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))
     if _FB_RUECKRUF_RE.search(t):
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))
-    if _FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t):
+    if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
+            and not _FREIER_TERMIN_RE.search(t):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
                                      "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
-    if _FB_NEU_RE.search(t):
+    if _FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
     if _FB_SYMPTOM_RE.search(t):
         treffer.append(("SYMPTOM", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))

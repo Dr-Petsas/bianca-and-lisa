@@ -2256,11 +2256,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     fid, frage = gehirn.naechste_frage(sit)
 
-    if task_handoff == "buchen" and fid:
-        # Das LLM hat denselben Satz gerade semantisch als neue Buchung
-        # eingeordnet. Jetzt zuerst die sichere Pflichtfrage stellen. Optionale
-        # Dossier-/PZR-Takte kommen später; der Eingangssatz ist keine
-        # Zwischenfrage mehr.
+    if (task_handoff == "buchen" or hirn_modus_neu) and fid:
+        # Semantischer Router ODER synchrones Intent-Hirn haben denselben Satz
+        # gerade als neue Buchung eingeordnet. Jetzt zuerst die sichere
+        # Pflichtfrage stellen. Eine formulierte Frage wie „Haben Sie diese
+        # Woche noch einen Termin?“ ist damit kein freies LLM-Zwischenthema,
+        # das Verfügbarkeit oder Patientennamen erfinden könnte.
         s["frage"] = fid
         return {"text": (_quittung(s, neu) + frage).strip()}
 

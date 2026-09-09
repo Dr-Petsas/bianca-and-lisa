@@ -3125,6 +3125,25 @@ def test_absage_mit_erkanntem_anrufer_sucht_direkt():
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
+def test_absage_nach_schnellem_hallo_stellt_keine_nackte_stimmt_das_frage():
+    """Live MedDent 09.09.: Der Name war im Vorab-Hallo schon genannt.
+    Beim später erkannten Absagewunsch kam deshalb nur „Stimmt das so?“ —
+    ohne hörbaren Bezug zur Identität oder Absage. Der sichere Check bleibt,
+    nennt aber Name und den folgenden Kalender-Schritt."""
+    echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.hintergrund.anstossen = lambda sit: None
+    try:
+        sit = _sit_mit_anrufer()
+        sit["anruferHalloGesagt"] = True
+        z = flow.zug(sit, "Ich möchte einen Termin absagen.")
+        assert z and z["text"] != "Stimmt das so?"
+        assert "Frau Berger" in z["text"]
+        assert "absagen möchten" in z["text"]
+        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+    finally:
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
 def test_absage_anrufer_check_nein_fragt_nachnamen():
     """Nein auf den vorgelesenen Treffer: die bewaehrte Nachnamen-Frage
     (mit Buchstabier-Einladung) kommt wie vor W-ANRUFER-CHECK."""

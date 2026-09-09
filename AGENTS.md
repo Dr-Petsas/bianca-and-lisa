@@ -214,7 +214,10 @@ dann erst nach namen und nummer fragen."
 - **Absage/Verschieben/Auskunft** (`verwalten._sammeln` bzw. Auskunfts-Zweig
  in `verwalten.zug`): dieselbe Frage ersetzt die Nachnamen-Frage; ein Ja
  sucht SOFORT mit Kartei-Name, patientId und Anrufernummer
- (`agentFindPatientAppointments` bekommt phone=callerPhone mit).
+ (`agentFindPatientAppointments` bekommt phone=callerPhone mit). Wurde der
+ Name schon im schnellen Hallo genannt, lautet die spätere Kontrolle
+ aufgabenscharf („Soll ich unter diesem Namen den Termin suchen, den Sie
+ absagen möchten?“) — nie mehr das zusammenhanglose „Stimmt das so?“.
 - **Deterministisch wie telefon_check:** die Frage trägt Ziffern
  (Wiederholungs-Wächter fasst sie nie an, TTS-Ziffern-Wächter verifiziert
  den Render), Antwort-Leerlauf bleibt beim festen Text ("Habe ich Sie
@@ -374,8 +377,10 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
   `ws://100.81.214.94:8092`, `STT_WHISPER_KEY` Default pickadoc-stt-dev-key).
   GESETZT = Whisper hört ZUERST; Fehlschlag (Dev-Rechner aus, Tunnel weg)
   = automatischer Rückfall auf `STT_BASE` (Parakeet, Chef 30.08.2026)
-  und 30 s Whisper-Pause (`WHISPER_PAUSE_S`), damit nicht jeder Zug den
-  2-s-Connect-Timeout bezahlt. NIE still auf ElevenLabs: ohne STT_BASE
+ und 30 s Whisper-Pause (`WHISPER_PAUSE_S`), damit nicht jeder Zug den
+ **1,7-s-Latenzdeckel** (`STT_WHISPER_BUDGET_S`, seit 09.09.2026: 300 ms
+ früher als der eingefrorene 2,0-s-Stand, Normalfall ~1,4 s) bezahlt. Leeres
+ Whisper-Final fällt ohne Pause sofort auf Parakeet zurück. NIE still auf ElevenLabs: ohne STT_BASE
   fliegt der RuntimeError hörbar. Leer = alles wie vor W-STT-WHISPER.
 - **Gemessen 30.08.:** Whisper über Tailscale 1,4 s je Zug (Testsatz
   wortgenau inkl. "Petsas" per Hotword-Bias), Rückfall-Zug 2,75 s
@@ -1351,6 +1356,9 @@ Rollenziel bietet Bianca jetzt — und nur nach diesem ausdrücklichen Bestehen 
 einen echten Rückrufwunsch über den ABGEBEN-Fluss an. Direkte namentliche
 Arztwünsche, Jingle und echte Transfers bleiben unverändert. Eine geparkte
 Buchung wird auf „Dann machen wir mit dem Termin weiter“ wieder aufgenommen.
+Das zweite Bestehen bleibt über dazwischenliegende Anliegen-Sätze hinweg
+erkennbar: Nach „Mitarbeiter“ → Anliegen erklären → „Verbinde mich mit dem
+Personal“ beginnt die Rollen-Erklärung nicht wieder von vorn.
 Tests: W-ANMELDUNG-Blöcke in `tests/test_weiterleiten.py`.
 
 ## Echte Weiterleitung (W-VERBINDEN-ECHT 31.08.2026 — nicht rückbauen)
@@ -2046,6 +2054,10 @@ kannte nur „einen Termin“, nicht „einen ANDEREN Termin“/„andere Termin
   „mein/der/einen andere(r/n) Termin“. Ein blosser Terminwunsch („ich hätte
   gern einen Termin“, „ich möchte einen Termin vereinbaren“) fällt bewusst
   NICHT darunter.
+- **Freie Termine sauber getrennt:** „Haben SIE noch einen Termin diese
+  Woche?“ / „Welche Termine sind frei?“ ist eine Neubuchungsfrage
+  (`_FREIER_TERMIN_RE`). Sie startet sofort den sicheren Formularfaden; das
+  freie LLM darf weder Verfügbarkeit noch Patientennamen behaupten.
 - **Einbau:** `_wechsel_verdacht` wertet einen Treffer auch mitten in der
   Buchung als Wechsel-Verdacht; `_fallback` und `_eindeutig` deuten ihn als
   WISSEN × VORGANG. Das Hirn parkt die Buchung (mit Checkpoint), schaltet auf

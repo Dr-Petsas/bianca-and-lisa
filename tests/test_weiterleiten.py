@@ -346,6 +346,28 @@ def test_erneutes_bestehen_ohne_rollenziel_bietet_rueckruf_an():
     assert sit["weiterleiten"]["frage"] == "rueckruf"
 
 
+def test_thaler_personalwunsch_nach_genanntem_anliegen_startet_nicht_von_vorn():
+    """Live Thaler 09.09.: Nach der ersten Rollen-Erklärung nannte die
+    Anruferin ihr Anliegen. Beim späteren „Verbinde mich mit dem Personal“
+    darf Bianca die Erklärung nicht erneut beginnen. Ohne passendes DB-Ziel
+    folgt deterministisch der echte Rückrufweg, nie LLM/Phantom-Transfer."""
+    sit = _sit()
+    sit["tenant"] = dict(sit["tenant"])
+    sit["tenant"]["weiterleitungen"] = []
+    sit["messages"] = [
+        {"role": "system", "content": "x"},
+        {"role": "user", "content": "Ich würde gerne mit einem Mitarbeiter sprechen."},
+        {"role": "assistant", "content": weiterleiten.ENTLASTUNG},
+        {"role": "user", "content": "Um eine Krankmeldung."},
+        {"role": "assistant", "content": "Dabei helfe ich Ihnen."},
+    ]
+    z = flow.zug(sit, "Verbinde mich mit dem Personal.")
+    assert z and "Rückrufwunsch" in z["text"]
+    assert weiterleiten.ENTLASTUNG not in z["text"]
+    assert z.get("transfer") is None and not z.get("hangup")
+    assert sit["weiterleiten"]["frage"] == "rueckruf"
+
+
 def test_erneutes_bestehen_verbindet_nur_exaktes_rollenziel():
     sit = _sit()
     sit["tenant"] = dict(sit["tenant"])

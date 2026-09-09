@@ -2385,7 +2385,24 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     # Nie „Bianca.“ vor die Selbst-Frage hängen — das klang wie
     # „Bianca, der Termin ist für Sie selbst“ (MedDent + Thaler, 08.09.).
     if sit.get("anruferHalloGesagt"):
-        return schluss
+        if selbst:
+            return schluss
+        # Der Name stand zwar schon im schnellen Hallo, doch ein später
+        # erkanntes Verwaltungsanliegen darf nie mit dem zusammenhanglosen
+        # „Stimmt das so?“ beginnen (Live MedDent 09.09.: Absagewunsch).
+        # Die knappe Kontrollfrage nennt Identität UND nächsten sicheren
+        # Schritt; erst ein Ja löst die echte Kalendersuche aus.
+        wer = anrufer_anrede(sit)
+        modus = _s(sammler(sit).get("modus"))
+        if modus == "absagen":
+            aktion = "den Termin suchen, den Sie absagen möchten"
+        elif modus == "verschieben":
+            aktion = "den Termin suchen, den Sie verschieben möchten"
+        else:
+            aktion = "Ihre bestehenden Termine im Kalender nachsehen"
+        if wer:
+            return f"Ich habe Sie als {wer} erkannt. Soll ich unter diesem Namen {aktion}?"
+        return f"Soll ich unter Ihrer bekannten Nummer {aktion}?"
     hallo = anrufer_hallo(sit)
     if hallo:
         return f"{hallo} {schluss}"

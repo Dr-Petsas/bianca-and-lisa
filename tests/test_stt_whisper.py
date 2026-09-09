@@ -90,8 +90,11 @@ def test_whisper_leeres_final_faellt_auf_parakeet_ohne_pause():
     _umgebung(lauf, fake_lokal=fake, whisper_ws=leer)
 
 
-def test_whisper_budget_default_ist_morgen_deckel():
-    assert stt._whisper_budget_s() == 2.0 or stt.STT_WHISPER_BUDGET_S == 2.0
+def test_whisper_budget_default_spart_300_ms_ohne_normalfall_abzuschneiden():
+    # Live-Normalfall lag bei rund 1,4 s. 1,7 s lässt 300 ms Reserve, spart
+    # aber gegenüber dem eingefrorenen 2,0-s-Deckel genau 300 ms, sobald der
+    # entfernte Whisper hängt; danach übernimmt der lokale Parakeet sofort.
+    assert stt._whisper_budget_s() == 1.7 or stt.STT_WHISPER_BUDGET_S == 1.7
     alt = stt.STT_WHISPER_BUDGET_S
     try:
         stt.STT_WHISPER_BUDGET_S = 0
