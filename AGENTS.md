@@ -1056,6 +1056,17 @@ Notiz-Weg. `bianca/verwalten.py -> _sammeln` (BEIDE Anliegen):
  punktgenau über `agentCancelAppointmentById` abgesagt bzw. verschoben.
  Kein Fallback bei echtem `no_upcoming`. Regression:
  `test_absage_stallone_fallback_trotz_fremder_anrufernummer`.
+ **Nachlauf W-ABSAGE-SPURWECHSEL:** Nennt der Anrufer während eines neuen
+ Slotangebots ausdrücklich einen BESTANDstermin („Termin von Sylvester
+ Stallone absagen“, „meinen bereits gebuchten Termin löschen“), gewinnt die
+ Absage und parkt den neuen Buchungsfaden. Nur ein nacktes „den absagen, der
+ passt nicht“ lehnt weiter den angebotenen Slot ab. Regression:
+ `test_bestandsabsage_ueberstimmt_laufendes_slotangebot`.
+ **SIP-Sitzungssicherung:** Laufzeitobjekte mit `_`-Präfix
+ (`_anruferReady`/`threading.Event`, offene TTS-Jobs) werden bewusst nicht
+ nach JSON geschrieben. Fachzustand, erkannter Anrufer und CF-Tenant bleiben
+ vollständig erhalten; ein Event darf nie wieder die gesamte Sicherung still
+ verhindern. Regression: `test_session_persistenz.py`.
 3. **Treffer bestätigen mit Anrede** (Chef: "Herr/Frau xy, ja?"):
  "Gefunden — {Termin}. Soll ich den Termin wirklich absagen, Herr Berger?"
  (gehirn.anrede; Vornamen-Wächter/Kartei). Bei Ja löscht

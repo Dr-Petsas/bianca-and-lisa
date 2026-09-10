@@ -114,7 +114,8 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     # Termin?") ist auch MITTEN in einer Buchung ein Wechsel-Verdacht — sonst
     # bleibt der Satz beim Buchen haengen und das Frei-LLM erfindet eine
     # Kalender-Auskunft (W-BESTANDSFRAGE 09.09.2026, Live Petsas 08.09.).
-    if _BESTANDSFRAGE_RE.search(t) or _FREIER_TERMIN_RE.search(t):
+    if (_BESTANDSFRAGE_RE.search(t) or _FREIER_TERMIN_RE.search(t)
+            or _BESTANDSABSAGE_IM_ANGEBOT_RE.search(t)):
         return True
     # "Termin" ist im Buchungs-/Aenderungs-Anliegen Alltagsvokabular der
     # Ernte — bei WISSEN/ERREICHEN/ABGEBEN dagegen ein neues Fass.
@@ -238,7 +239,25 @@ _FB_FRONTDESK_RE = re.compile(
 )
 _FB_ABSAGE_RE = re.compile(
     r"absag\w*|abzusagen|abgesagt|stornier\w*|abbestell\w*|\bcancel\w*|"
+    r"\btermine?\b[^.!?]{0,24}\b(?:lösch|streich|entfern|aufheb|"
+    r"r(?:ü|ue)ckg(?:ä|ae)ng)\w*|"
     r"nicht\s+(?:kommen|wahrnehmen|schaffen|einhalten)",
+    re.I,
+)
+# Mitten in einem frischen Slotangebot bedeutet ein nacktes „den absagen,
+# der passt nicht“ nur: angebotenen Slot ablehnen. Benennt der Anrufer aber
+# seinen bereits gebuchten Termin, einen anderen Patienten oder ausdrücklich
+# „Termin löschen“, ist das ein neues Bestandsanliegen und muss den
+# Buchungsfaden überstimmen (Live Stallone 10.09.2026).
+_BESTANDSABSAGE_IM_ANGEBOT_RE = re.compile(
+    r"(?:"
+    r"\bmein\w*\b[^.!?]{0,40}\btermine?\b|"
+    r"\b(?:bestehend|gebucht|vereinbart|ander)\w*\b[^.!?]{0,30}\btermine?\b|"
+    r"\btermine?\b[^.!?]{0,32}\b(?:von|f(?:ü|ue)r)\b|"
+    r"\btermine?\b(?=[^.!?]{0,24}\b(?:lösch|streich|entfern|aufheb|"
+    r"r(?:ü|ue)ckg(?:ä|ae)ng)\w*)"
+    r")[^.!?]{0,80}\b(?:absag|stornier|abbestell|cancel|lösch|streich|"
+    r"entfern|aufheb|r(?:ü|ue)ckg(?:ä|ae)ng)\w*",
     re.I,
 )
 _FB_VERSCHIEBEN_RE = re.compile(
@@ -413,6 +432,13 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     if _FB_ERREICHEN_RE.search(t):
         return {**aus, "handlung": "ERREICHEN", "gegenstand": "PERSON"}
+    if im_angebot and _BESTANDSABSAGE_IM_ANGEBOT_RE.search(t):
+        return {
+            **aus,
+            "handlung": "AENDERN",
+            "gegenstand": "VORGANG",
+            "ersatz": False,
+        }
     if im_angebot and (_FB_ABSAGE_RE.search(t) or _FB_VERSCHIEBEN_RE.search(t)):
         # "Passt nicht / den nicht" mitten im Slot-Angebot meint das ANGEBOT,
         # keinen Bestandstermin — die Maschine verhandelt selbst weiter.

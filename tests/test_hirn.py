@@ -413,6 +413,30 @@ def test_fallback_absage_im_angebot_ist_verfeinern(monkeypatch):
     assert d["zug"] == "verfeinern" and d["handlung"] == "KEINE"
 
 
+def test_bestandsabsage_ueberstimmt_laufendes_slotangebot(monkeypatch):
+    """Live Stallone 10.09.: Ein klar benannter Bestandstermin ist nicht
+    bloß die Ablehnung des gerade angebotenen neuen Slots."""
+    _llm_tot(monkeypatch)
+    sit = _sit()
+    hirn.anwenden(sit, _deutung("ANLEGEN"))
+    sit["sammler"]["phase"] = "angebot"
+    sit["sammler"]["frage"] = "slotwahl"
+
+    d = intent.erkennen(
+        sit,
+        "Nein, ich möchte den Termin von Sylvester Stallone absagen.",
+    )
+    assert d["zug"] == "wechseln"
+    assert d["handlung"] == "AENDERN" and d["ersatz"] is False
+
+    d2 = intent.erkennen(
+        sit,
+        "Ich möchte meinen bereits gebuchten Termin löschen.",
+    )
+    assert d2["zug"] == "wechseln"
+    assert d2["handlung"] == "AENDERN" and d2["ersatz"] is False
+
+
 def test_parse_llm_json():
     d = intent._parse('Hier: {"kanal":"ok","zug":"wechseln","handlung":"WISSEN",'
                       '"gegenstand":"SACHE","fuer":"selbst","ersatz":null,'

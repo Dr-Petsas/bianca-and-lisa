@@ -62,7 +62,15 @@ def _sichern(sit: dict[str, Any]) -> None:
         return
     try:
         _SESS_DIR.mkdir(parents=True, exist_ok=True)
-        roh = {k: v for k, v in sit.items() if k != "tenant"}
+        # Laufzeit-Helfer beginnen mit "_" (Events, Threads, offene
+        # TTS-Jobs/FIFOs). Sie sind weder JSON-serialisierbar noch nach einem
+        # Prozessneustart sinnvoll. Ein einziges threading.Event in
+        # ``_anruferReady`` verhinderte bislang still die KOMPLETTE
+        # SIP-Sitzungssicherung (Live Stallone 10.09.2026).
+        roh = {
+            k: v for k, v in sit.items()
+            if k != "tenant" and not str(k).startswith("_")
+        }
         # W-MANDANT: CF-Mandanten haben keine tenants/<id>.json — ihr Dict
         # muss mit in die Datei, sonst laedt holen() den falschen Default.
         t = sit.get("tenant") or {}
