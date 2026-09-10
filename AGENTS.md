@@ -203,7 +203,10 @@ dann erst nach namen und nummer fragen."
  nimmt ein Ja an. Bei Buchungen folgt als EIGENER Schritt
  `frage=fuer_wen_check`: „Der Termin ist für Sie selbst, richtig?“.
  Identität und Terminempfänger dürfen nie wieder in eine doppeldeutige
- Ja/Nein-Frage zusammengezogen werden.
+ Ja/Nein-Frage zusammengezogen werden. Antwortet der Anrufer auf die
+ Wohlseinsfrage stattdessen eindeutig „Ich bin nicht <Name>“, wird der
+ falsche DB-Treffer sofort verworfen — keine überflüssige zweite
+ Identitätsfrage.
  Fast-Pfad: der Hallo wartet NICHT auf
  letzten Besuch oder Behandler (`anrufer_hallo_jetzt` nur Name). Die
  Kartei startet schon zur Begrüßung (`hintergrund.kartei_von_anrufer`)

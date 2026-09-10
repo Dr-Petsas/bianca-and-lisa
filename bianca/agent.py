@@ -698,7 +698,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # Wohlseinsantwort mit der fachlichen Pflichtfrage fortfahren.
     if sit.pop("anruferHalloFrageOffen", False):
         original = _s(sit.pop("anruferHalloOffenerText", ""))
+        identitaet_nein = gehirn.ist_anrufer_identitaet_nein(text_in)
         fl = tasks.zug(sit, original, melde) if original else None
+        if (identitaet_nein
+                and _s((sit.get("sammler") or {}).get("frage")) == "anrufer_check"):
+            # Live 10.09.: Auf „Wie geht es Ihnen?“ kam die wichtigere
+            # Korrektur „Ich bin nicht Phoebe Rose Kellner.“. Nicht erst
+            # mit „Danke. Habe ich Sie richtig erkannt?“ nachfragen, sondern
+            # den falschen DB-Treffer sofort sicher verwerfen.
+            ablehnung = tasks.zug(sit, "Nein.", melde)
+            if ablehnung:
+                fl = ablehnung
         if not fl or not (
             _s(fl.get("text")) or fl.get("hangup")
             or fl.get("transfer") or fl.get("warte")
@@ -706,9 +716,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             fl = {"text": "Was kann ich für Sie tun?", "book": None}
         else:
             fl = dict(fl)
-        quittung = gehirn.anrufer_wohl_quittung(text_in)
+        quittung = "" if identitaet_nein else gehirn.anrufer_wohl_quittung(text_in)
         fl["text"] = " ".join(x for x in (quittung, _s(fl.get("text"))) if x)
-        spur.merken(sit, "anrufer-hallo-pause", text_in[:80])
+        spur.merken(
+            sit,
+            "anrufer-hallo-identitaet-nein" if identitaet_nein
+            else "anrufer-hallo-pause",
+            text_in[:80],
+        )
         return _maschinen_antwort(sit, fl, msgs)
 
     # W-PRAXISAUSKUNFT (09.09.2026): Öffnungszeiten und Wegbeschreibung

@@ -2404,6 +2404,11 @@ def ist_anrufer_wohl(text: str) -> bool:
     return bool(_ANRUFER_WOHL_RE.match(k))
 
 
+def ist_anrufer_identitaet_nein(text: str) -> bool:
+    """Explizite Namenskorrektur nach dem sozialen Hallo erkennen."""
+    return bool(_NICHT_ICH_RE.search(_ohne_anlauf(text)))
+
+
 def anrufer_wohl_quittung(text: str) -> str:
     """Kurze Reaktion auf die echte Wohlseinsfrage, bevor der Job weitergeht."""
     k = _ohne_anlauf(text).lower()

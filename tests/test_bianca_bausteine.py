@@ -3140,6 +3140,25 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
         direkt = gehirn.anrufer_check_frage(sit3)
         assert "wie geht" not in direkt.lower()
         assert direkt.count("?") == 1
+
+        # Live 10.09.: Auf die soziale Frage kam keine Wohlseinsantwort,
+        # sondern „Ich bin nicht Phoebe Rose Kellner.“. Das ist bereits eine
+        # eindeutige Identitäts-Ablehnung und darf nicht noch einmal mit
+        # „Habe ich Sie richtig erkannt?“ beantwortet werden.
+        sit4 = _sit_mit_anrufer()
+        sit4["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+        sit4["halloVariante"] = 0
+        z4 = bianca_agent.user_turn(
+            sit4, "Ich hätte gern einen Termin.", vorab=lambda _text: None,
+        )
+        assert "wie geht es ihnen" in z4["text"].lower()
+        z5 = bianca_agent.user_turn(
+            sit4, "Ich bin nicht Julia Berger.", vorab=lambda _text: None,
+        )
+        assert gehirn.sammler(sit4)["anruferCheck"] == "nein"
+        assert "Daten frisch" in z5["text"]
+        assert "Waren Sie denn schon einmal" in z5["text"]
+        assert "richtig erkannt" not in z5["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 
