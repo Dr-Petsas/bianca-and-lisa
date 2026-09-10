@@ -72,6 +72,40 @@ _PRESENCE_ANTWORT_RE = re.compile(
     re.I,
 )
 _NUR_JA_RE = re.compile(r"^\s*ja[\s.,!?…]*$", re.I)
+_TERMIN_EINWORT_RE = re.compile(
+    r"^\s*(?:ein(?:en)?\s+)?termine?[\s.,!?…]*$",
+    re.I,
+)
+_TERMIN_EINWORT_AKTIONEN: tuple[tuple[re.Pattern, str], ...] = (
+    (
+        re.compile(r"\b(?:neu\w*|buch\w*|vereinbar\w*|ausmach\w*)\b", re.I),
+        "Ich möchte einen neuen Termin vereinbaren.",
+    ),
+    (
+        re.compile(r"\b(?:verschieb\w*|verleg\w*|änder\w*|aender\w*)\b", re.I),
+        "Ich möchte meinen Termin verschieben.",
+    ),
+    (
+        re.compile(r"\b(?:absag\w*|storn\w*|lösch\w*|loesch\w*|streich\w*)\b", re.I),
+        "Ich möchte meinen Termin absagen.",
+    ),
+    (
+        re.compile(r"\b(?:auskunft|nachseh\w*|prüf\w*|pruef\w*|wann)\b", re.I),
+        "Ich möchte wissen, wann mein Termin ist.",
+    ),
+)
+TERMIN_EINWORT_FRAGE = (
+    "Gerne. Möchten Sie einen neuen Termin vereinbaren, "
+    "einen Termin verschieben oder einen Termin absagen?"
+)
+TERMIN_EINWORT_NACHFRAGE = (
+    "Was möchten Sie mit dem Termin tun: neu vereinbaren, verschieben oder absagen?"
+)
+_TERMIN_EINWORT_UNKLAR_RE = re.compile(
+    r"^\s*(?:ja|nein|okay|ok|weiß\s+nicht|weiss\s+nicht|keine\s+ahnung|"
+    r"(?:ein(?:en)?\s+)?termine?)[\s.,!?…]*$",
+    re.I,
+)
 _ANGEBOT_ZEIT_RE = re.compile(
     r"\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b|"
     r"\b\d{1,2}\.\s?(?:\d{1,2}\.|januar|februar|märz|maerz|april|mai|juni|juli|"
@@ -499,6 +533,42 @@ def _job_aktiv(sit: dict) -> bool:
             and s.get("phase") not in {"gebucht", "fertig"})
 
 
+def _einwort_termin_vorbereiten(sit: dict, text: str) -> tuple[str, str]:
+    """Mehrdeutiges „Termin“ klaeren, ohne das LLM eine Absicht raten zu lassen.
+
+    Rueckgabe: (Text fuer Intent/Flow, direkte Rueckfrage). Eine Antwort auf
+    die Rueckfrage wird in einen eindeutigen Satz erweitert. Offene Formular-
+    schritte bleiben unangetastet: Dort kann ein einzelnes Wort die erwartete
+    Antwort sein und darf nie von dieser allgemeinen Klaerung ueberholt werden.
+    """
+    t = _s(text)
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    offen = bool(_s(s.get("frage")) or _job_aktiv(sit))
+
+    if sit.get("einwortTerminOffen"):
+        if offen:
+            sit.pop("einwortTerminOffen", None)
+            return t, ""
+        treffer = [satz for muster, satz in _TERMIN_EINWORT_AKTIONEN if muster.search(t)]
+        if len(treffer) == 1:
+            sit.pop("einwortTerminOffen", None)
+            spur.merken(sit, "einwort-termin", t[:40])
+            return treffer[0], ""
+        if _TERMIN_EINWORT_UNKLAR_RE.match(t):
+            return t, TERMIN_EINWORT_NACHFRAGE
+        # Ein anderes belastbares Einzelwort („Mitarbeiter“,
+        # „Zahnreinigung“ ...) ist ein Themenwechsel und geht normal durch
+        # Intent/Flow. Die alte Terminfrage darf es nicht festhalten.
+        sit.pop("einwortTerminOffen", None)
+        return t, ""
+
+    if not offen and _TERMIN_EINWORT_RE.match(t):
+        sit["einwortTerminOffen"] = True
+        spur.merken(sit, "einwort-termin-unklar", t[:40])
+        return t, TERMIN_EINWORT_FRAGE
+    return t, ""
+
+
 def _offene_frage(sit: dict) -> str:
     """Die offene Pflichtfrage des Sammlers als Satz — '' wenn keine offen."""
     s = sit.get("sammler") or {}
@@ -710,8 +780,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # Wohlseinsantwort mit der fachlichen Pflichtfrage fortfahren.
     if sit.pop("anruferHalloFrageOffen", False):
         original = _s(sit.pop("anruferHalloOffenerText", ""))
+        einwort_frage = _s(sit.pop("anruferHalloEinwortFrage", ""))
         identitaet_nein = gehirn.ist_anrufer_identitaet_nein(text_in)
-        fl = tasks.zug(sit, original, melde) if original else None
+        fl = (
+            {"text": einwort_frage, "book": None}
+            if einwort_frage
+            else (tasks.zug(sit, original, melde) if original else None)
+        )
         if (identitaet_nein
                 and _s((sit.get("sammler") or {}).get("frage")) == "anrufer_check"):
             # Live 10.09.: Auf „Wie geht es Ihnen?“ kam die wichtigere
@@ -776,6 +851,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             arbeits_text = zusatz
             spur.merken(sit, "mischzug", f"{vorfrage}: {kurzantwort} + Zusatz")
 
+    arbeits_text, einwort_frage = _einwort_termin_vorbereiten(
+        sit, arbeits_text,
+    )
+
     if _letzte_war_presence(sit) and (
         _PRESENCE_ANTWORT_RE.search(text_in) or _NUR_JA_RE.match(text_in)
     ):
@@ -796,7 +875,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     #    Maschine laeuft — synchron IMMER in 0 ms (Fast-Paths + Heuristik).
     #    Das LLM prueft mehrdeutige Saetze im Hintergrund nach; sein
     #    Nachzug vom VORIGEN Satz wird hier zuerst eingearbeitet.
-    if "hirn" in sit and intent.enabled():
+    if "hirn" in sit and intent.enabled() and not einwort_frage:
         hirn.sync_nach_zug(sit)  # Maschinen-Stand vom VORIGEN Zug abgleichen
         spaet = intent.nachzug(sit)
         if spaet is not None:
@@ -833,9 +912,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # nachgereicht. Jetzt darf akustisch nichts mehr folgen.
         sit["anruferHalloFrageOffen"] = True
         sit["anruferHalloOffenerText"] = arbeits_text
+        if einwort_frage:
+            sit["anruferHalloEinwortFrage"] = einwort_frage
         spur.merken(sit, "anrufer-hallo-fragt", hallo)
         return _maschinen_antwort(
             sit, {"text": hallo, "book": None}, msgs,
+        )
+
+    if einwort_frage:
+        sit.pop("unklarFolge", None)
+        return _maschinen_antwort(
+            sit, {"text": einwort_frage, "book": None}, msgs,
         )
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
@@ -917,12 +1004,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 ):
                     sit.pop("unklarFolge", None)
                     return _maschinen_antwort(sit, fl, msgs)
-            text = (
-                "Ich möchte Sie nicht in einer Schleife festhalten. "
-                "Sagen Sie bitte noch einmal in einem Satz, wobei ich helfen soll."
-            )
-        else:
+        if not sit.get("ganzsatzHinweisGegeben"):
+            sit["ganzsatzHinweisGegeben"] = True
             text = gespraech.UNKLAR_ANTWORT
+        else:
+            text = gespraech.UNKLAR_AUSWAHL_ANTWORT
         msgs.append({"role": "assistant", "content": text})
         sit["messages"] = msgs
         wiederholung.gesagt_merken(sit, text)

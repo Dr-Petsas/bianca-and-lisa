@@ -118,7 +118,16 @@ _KURZ_OK_RE = re.compile(
 )
 
 # Kurzer STT-Muell / Einwort-Rauschen: kein neues Talk-Thema, kein Plaudern.
-UNKLAR_ANTWORT = "Das habe ich nicht verstanden. Bitte noch einmal."
+# Die Ganzsatz-Bitte wird vom Agenten hoechstens einmal je Sitzung gesprochen;
+# danach helfen konkrete Einzelwort-Auswahlen weiter.
+UNKLAR_ANTWORT = (
+    "Ich möchte Sie richtig verstehen. Sagen Sie mir bitte kurz in einem "
+    "ganzen Satz, wobei ich helfen darf."
+)
+UNKLAR_AUSWAHL_ANTWORT = (
+    "Geht es um einen Termin, eine Auskunft oder möchten Sie mit einem "
+    "Mitarbeiter sprechen?"
+)
 
 _STOP = frozenset((
     "nicht", "haben", "hatte", "hatten", "haette", "hätte", "haetten", "hätten",
