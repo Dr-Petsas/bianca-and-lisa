@@ -1031,6 +1031,19 @@ Notiz-Weg. `bianca/verwalten.py -> _sammeln` (BEIDE Anliegen):
  `test_absage_korrektur_am_nein_zweig_vorbei`,
  `test_vorname_verworfen_kartei_schlaegt_verhoer`,
  `test_find_patient_appointments_nachfass_ohne_vorname`.
+2c. **False-404-Fallback (W-ABSAGE-STALLONE 10.09.2026 — nicht
+ rückbauen):** Live war „Stallone, S-T-A-L-L-O-N-E“ korrekt erkannt,
+ `agentFindPatientAppointments` lieferte aber `not_found`, weil zusätzlich
+ die Rufnummer des ANRUFERS (Michael Petsas) mitging und nicht zur Akte des
+ Bruders passte. `kern/calendar.find_patient_appointments` prüft einen
+ solchen 404 jetzt sicher über zwei unabhängige Lesewege:
+ `masSearchPatients` (exakter Nachname, bei mehreren Treffern weiter
+ Vornamen-Frage — nie raten) → eindeutige patientId →
+ `masPatientLastDoctor.nextAppointment`. Der so gefundene Termin wird mit
+ echter appointmentId/Kalender/Motiv normal bestätigt und anschließend
+ punktgenau über `agentCancelAppointmentById` abgesagt bzw. verschoben.
+ Kein Fallback bei echtem `no_upcoming`. Regression:
+ `test_absage_stallone_fallback_trotz_fremder_anrufernummer`.
 3. **Treffer bestätigen mit Anrede** (Chef: "Herr/Frau xy, ja?"):
  "Gefunden — {Termin}. Soll ich den Termin wirklich absagen, Herr Berger?"
  (gehirn.anrede; Vornamen-Wächter/Kartei). Bei Ja löscht

@@ -492,6 +492,118 @@ def test_absage_nachname_buchstabiert_geht_direkt_in_suche():
         verwalten.kal.find_patient_appointments = echt_find
 
 
+def test_absage_stallone_fallback_trotz_fremder_anrufernummer():
+    """Live 10.09.2026: „Stallone, S-T-A-L-L-O-N-E“ war korrekt erkannt,
+    agentFindPatientAppointments lieferte wegen der Nummer des ANRUFERS aber
+    404. Kartei-ID + masPatientLastDoctor müssen den echten 12-Uhr-Termin
+    finden und punktgenau an agentCancelAppointmentById geben."""
+    echt_cf = verwalten.kal._cf_call
+    echt_cancel = verwalten.kal.cancel_by_id
+    echt_anstossen = verwalten.hintergrund.anstossen
+    aufrufe: list[tuple[str, dict]] = []
+    storniert: dict[str, str] = {}
+
+    def _cf(route, body, timeout=None):
+        aufrufe.append((route, dict(body)))
+        dispatch = {"route": route, "request": dict(body), "httpStatus": 200}
+        if route == "agentFindPatientAppointments":
+            assert body.get("lastName") == "Stallone"
+            assert body.get("callerPhone") == "01776004600"
+            dispatch["httpStatus"] = 404
+            return 404, {"status": "not_found", "message": "Patient not found"}, dispatch
+        if route == "masSearchPatients":
+            assert body.get("query") == "Stallone"
+            return 200, {
+                "status": "success",
+                "patients": [{
+                    "id": "NUjQKBVuc4Pg6TkNy9Xz",
+                    "firstName": "Sylvester",
+                    "lastName": "Stallone",
+                }],
+            }, dispatch
+        if route == "masPatientLastDoctor":
+            assert body.get("patientId") == "NUjQKBVuc4Pg6TkNy9Xz"
+            return 200, {
+                "status": "success",
+                "nextAppointment": {
+                    "appointmentId": "1t4ni9bi5A3faIAGxrAq",
+                    "startIso": "2026-09-10T12:00",
+                    "calendarId": "zex5bmv5jfIHWVW6zHbg",
+                    "calendarName": "Dr. Petsas",
+                    "doctorName": "Dr. Michael Petsas",
+                    "visitMotiveName": "KCH Kontrolluntersuchung",
+                },
+            }, dispatch
+        raise AssertionError(route)
+
+    def _cancel(_tenant, _ctx, aid):
+        storniert["id"] = aid
+        return {
+            "ok": True, "cancelled": True, "appointmentId": aid,
+            "spoken": "Der Termin ist abgesagt.",
+        }
+
+    verwalten.kal._cf_call = _cf
+    verwalten.kal.cancel_by_id = _cancel
+    verwalten.hintergrund.anstossen = lambda _sit: None
+    try:
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        # Der Bruder ruft über Michael Petsas' Anschluss an: Kontakt-Nummer
+        # gehört bewusst NICHT zur gesuchten Patientenakte.
+        s["telefon"] = "01776004600"
+        z1 = flow.zug(sit, "Ich möchte den Termin heute um zwölf absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
+        z2 = flow.zug(sit, "Stallone, S-T-A-L-L-O-N-E.")
+        assert z2 and "wirklich absagen" in z2["text"].lower()
+        assert "zwölf Uhr" in z2["text"]
+        assert [r for r, _ in aufrufe] == [
+            "agentFindPatientAppointments", "masSearchPatients",
+            "masPatientLastDoctor",
+        ]
+        assert gehirn.sammler(sit)["patientId"] == "NUjQKBVuc4Pg6TkNy9Xz"
+        z3 = flow.zug(sit, "Ja, bitte.")
+        assert z3 and "abgesagt" in z3["text"].lower()
+        assert storniert["id"] == "1t4ni9bi5A3faIAGxrAq"
+    finally:
+        verwalten.kal._cf_call = echt_cf
+        verwalten.kal.cancel_by_id = echt_cancel
+        verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_absage_fallback_waehlt_nie_mehrere_gleichnamige_patienten():
+    """Der Rettungsweg darf den False-404 beheben, aber nie Identität raten."""
+    echt_cf = verwalten.kal._cf_call
+    aufrufe: list[str] = []
+
+    def _cf(route, body, timeout=None):
+        aufrufe.append(route)
+        dispatch = {"route": route, "request": dict(body)}
+        if route == "agentFindPatientAppointments":
+            return 404, {"status": "not_found"}, dispatch
+        if route == "masSearchPatients":
+            return 200, {
+                "status": "success",
+                "patients": [
+                    {"id": "p1", "firstName": "Sylvester", "lastName": "Stallone"},
+                    {"id": "p2", "firstName": "Frank", "lastName": "Stallone"},
+                ],
+            }, dispatch
+        raise AssertionError("Bei Mehrdeutigkeit darf kein Termin geladen werden")
+
+    verwalten.kal._cf_call = _cf
+    try:
+        res = verwalten.kal.find_patient_appointments(
+            _sit()["tenant"],
+            {"lastName": "Stallone", "phone": "01776004600"},
+        )
+        assert res.get("ok") and res.get("mehrdeutig")
+        assert res.get("appointments") == []
+        assert aufrufe == ["agentFindPatientAppointments", "masSearchPatients"]
+    finally:
+        verwalten.kal._cf_call = echt_cf
+
+
 def test_absage_mehrere_patienten_gleicher_nachname():
     """W-NACHNAME 31.08.2026: melden sich MEHRERE Patienten mit gleichem
     Nachnamen (CF 409/ambiguous), grenzt der Vorname ab — erst dann wird

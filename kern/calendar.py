@@ -638,6 +638,111 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
     return _mit_dispatch({"ok": False}, dispatch)
 
 
+def _patient_appointments_fallback(
+    tenant: dict,
+    *,
+    first: str,
+    last: str,
+    vorname_verworfen: bool,
+    primary_dispatch: dict | None,
+) -> dict[str, Any] | None:
+    """False-404-Rettung: Kartei-ID suchen, dann den nächsten Termin laden.
+
+    ``agentFindPatientAppointments`` meldete live für den eindeutig
+    vorhandenen Sylvester Stallone ``not_found``. Die beiden älteren,
+    voneinander unabhängigen Lesewege fanden dagegen Akte und Termin.
+    Eindeutigkeit ist Pflicht: bei mehreren gleichnamigen Patienten wird
+    weiter der Vorname erfragt, nie irgendeine Akte gewählt.
+    """
+    query_first = "" if vorname_verworfen else _s(first)
+    query = f"{query_first} {last}".strip()
+    status, data, search_dispatch = _cf_call("masSearchPatients", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "query": query,
+    })
+    if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
+        return None
+
+    def gleich(a: Any, b: Any) -> bool:
+        return _s(a).casefold() == _s(b).casefold()
+
+    kandidaten = [
+        p for p in (data.get("patients") or [])
+        if isinstance(p, dict)
+        and _s(p.get("id"))
+        and gleich(p.get("lastName"), last)
+        and (not query_first or gleich(p.get("firstName"), query_first))
+    ]
+    if len(kandidaten) > 1:
+        return _mit_dispatch({
+            "ok": True,
+            "mehrdeutig": True,
+            "patient": {},
+            "appointments": [],
+            "vornameVerworfen": vorname_verworfen,
+            "fallbackUsed": True,
+        }, search_dispatch)
+    if len(kandidaten) != 1:
+        return None
+
+    pat = kandidaten[0]
+    patient = {
+        "id": _s(pat.get("id")),
+        "firstName": _s(pat.get("firstName")),
+        "lastName": _s(pat.get("lastName")),
+    }
+    status, data, termin_dispatch = _cf_call("masPatientLastDoctor", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "patientId": patient["id"],
+    })
+    if isinstance(termin_dispatch, dict) and primary_dispatch:
+        termin_dispatch["fallbackFrom"] = primary_dispatch
+    if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
+        msg = _s(data.get("message")) if isinstance(data, dict) else f"http_{status}"
+        return _mit_dispatch({
+            "ok": False,
+            "patient": patient,
+            "appointments": [],
+            "error": msg or f"http_{status}",
+            "fallbackUsed": True,
+        }, termin_dispatch)
+
+    nxt = data.get("nextAppointment") or {}
+    termine: list[dict[str, str]] = []
+    if isinstance(nxt, dict) and _s(nxt.get("appointmentId")):
+        iso = _s(nxt.get("startIso")).replace(" ", "T")[:16]
+        arzt = _s(nxt.get("calendarName") or nxt.get("doctorName")).split(",")[0].strip()
+        motiv_name = _s(nxt.get("visitMotiveName"))
+        motiv = motiv_von(tenant, motiv_name) if motiv_name else None
+        gesprochen = spoken_slot(iso)
+        if arzt:
+            gesprochen += f" bei {arzt}"
+        termine.append({
+            "id": _s(nxt.get("appointmentId")),
+            "iso": iso,
+            "date": iso[:10],
+            "calendarId": _s(nxt.get("calendarId")),
+            "doctorName": arzt,
+            "motivId": _s(nxt.get("visitMotiveId") or (motiv or {}).get("id")),
+            "motivName": motiv_name,
+            "spoken": gesprochen,
+        })
+    print(
+        f"find_patient_appointments fallback patientId={patient['id']} "
+        f"appointments={len(termine)}",
+        flush=True,
+    )
+    return _mit_dispatch({
+        "ok": True,
+        "patient": patient,
+        "appointments": termine,
+        "vornameVerworfen": vorname_verworfen,
+        "fallbackUsed": True,
+    }, termin_dispatch)
+
+
 def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     """Kommende Termine zum NAMEN — ueber die warme Demo-Function
     agentFindPatientAppointments (Patient + Termine in EINEM Aufruf,
@@ -708,6 +813,15 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
         return _mit_dispatch({"ok": True, "patient": patient, "appointments": [],
                 "vornameVerworfen": vorname_verworfen}, dispatch)
     if status == 404:
+        fallback = _patient_appointments_fallback(
+            tenant,
+            first=first,
+            last=last,
+            vorname_verworfen=vorname_verworfen,
+            primary_dispatch=dispatch,
+        )
+        if fallback is not None:
+            return fallback
         return _mit_dispatch({"ok": True, "notFound": True, "patient": {}, "appointments": []}, dispatch)
     if status == 409 or _s(data.get("status")).lower() in {"conflict", "ambiguous"}:
         # Mehrere Patienten mit gleichem Nachnamen (W-NACHNAME 31.08.2026,
