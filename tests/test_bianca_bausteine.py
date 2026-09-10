@@ -2796,6 +2796,7 @@ def test_anrufer_hallo_nur_nach_gespraech_bekannt_nicht_wegen_kartei():
     assert "Behandlung" not in hallo
 
     sit["vorigesGespraech"] = {"ts": 1, "wann": "vorgestern"}
+    sit["halloVariante"] = 1  # Feststellungsvariante: darf direkt weitergehen
     hallo2 = gehirn.anrufer_hallo(sit)
     assert "Ich bin die Neue!" not in hallo2
     assert "vorgestern" in hallo2
@@ -2835,14 +2836,21 @@ def test_anrufer_hallo_icebreaker_variiert():
     sit = _sit_mit_anrufer()
     sit["vorigesGespraech"] = {"ts": 1, "wann": "vorgestern"}
     texte = []
+    fragen = 0
     for i in range(len(gehirn.HALLO_ANRUF)):
         s = dict(sit)
         s["halloVariante"] = i
         t = gehirn.anrufer_hallo(s)
-        assert "Frau Berger" in t and "vorgestern" in t
+        assert "Frau Berger" in t
+        if gehirn.anrufer_hallo_fragt(t):
+            fragen += 1
+            assert t.endswith("?") and "vorgestern" not in t
+        else:
+            assert "vorgestern" in t and "?" not in t
         assert "Ich bin die Neue!" not in t
         texte.append(t)
     assert len(set(texte)) == len(gehirn.HALLO_ANRUF)
+    assert 0 < fragen < len(gehirn.HALLO_ANRUF)
 
     neu = []
     for i in range(len(gehirn.HALLO_NEU_WER)):
@@ -2855,6 +2863,7 @@ def test_anrufer_hallo_icebreaker_variiert():
     assert len(set(neu)) == len(gehirn.HALLO_NEU_WER)
 
     besuch = []
+    besuch_fragen = 0
     for i in range(len(gehirn.HALLO_BESUCH)):
         s = _sit_mit_anrufer()
         s["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
@@ -2864,9 +2873,74 @@ def test_anrufer_hallo_icebreaker_variiert():
         }
         s["halloVariante"] = i
         t = gehirn.anrufer_hallo(s)
-        assert "Doktor Petsas" in t and "Ich bin die Neue!" not in t
+        assert "Ich bin die Neue!" not in t
+        if gehirn.anrufer_hallo_fragt(t):
+            besuch_fragen += 1
+            assert "Frau Berger" in t and "Doktor Petsas" not in t
+        else:
+            assert "Doktor Petsas" in t and "?" not in t
         besuch.append(t)
     assert len(set(besuch)) == len(gehirn.HALLO_BESUCH)
+    assert 0 < besuch_fragen < len(gehirn.HALLO_BESUCH)
+
+
+def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
+    """Chef 10.09.2026: „Wie geht es Ihnen?“ nie mit dem nächsten Satz
+    überfahren. Frage-Variante hört zu; Feststellungsvarianten laufen direkt."""
+    from bianca import agent as bianca_agent
+
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda s: None
+    try:
+        sit = _sit_mit_anrufer()
+        sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+        sit["anruferKartei"] = {
+            "letzterBesuch": "2026-03-01T09:00:00",
+            "calendarName": "Dr. Petsas", "doctorName": "Petsas",
+        }
+        sit["halloVariante"] = 0  # echte Frage
+        hits: list[str] = []
+        z1 = bianca_agent.user_turn(
+            sit, "Ich hätte gern einen Termin.", vorab=hits.append,
+        )
+        assert hits == ["Ah, Frau Berger, wie geht es Ihnen?"]
+        assert z1["text"] == hits[0]
+        assert sit.get("anruferHalloFrageOffen")
+        assert "Termin ist für Sie" not in z1["text"]
+
+        z2 = bianca_agent.user_turn(sit, "Ja, gut.", vorab=hits.append)
+        assert z2["text"].startswith("Das freut mich.")
+        assert "Der Termin ist für Sie selbst, richtig?" in z2["text"]
+        assert not sit.get("anruferHalloFrageOffen")
+        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+        assert gehirn.sammler(sit)["anruferCheck"] == ""
+        assert hits == ["Ah, Frau Berger, wie geht es Ihnen?"]
+        z2b = bianca_agent.user_turn(sit, "Ja, genau.", vorab=hits.append)
+        assert gehirn.sammler(sit)["anruferCheck"] == "ja"
+        assert z2b and "Danke, Julia Berger" in z2b["text"]
+
+        # Ohne Fragezeichen gibt es keinen Extrazug.
+        sit2 = _sit_mit_anrufer()
+        sit2["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+        sit2["halloVariante"] = 1
+        hits2: list[str] = []
+        z3 = bianca_agent.user_turn(
+            sit2, "Ich hätte gern einen Termin.", vorab=hits2.append,
+        )
+        assert hits2 and "?" not in hits2[0]
+        assert "Der Termin ist für Sie selbst, richtig?" in z3["text"]
+        assert not sit2.get("anruferHalloFrageOffen")
+
+        # Ohne Vorab-Kanal darf die soziale Frage ebenfalls nie vor einer
+        # zweiten Frage stehen; dort wird automatisch die Feststellung benutzt.
+        sit3 = _sit_mit_anrufer()
+        sit3["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+        sit3["halloVariante"] = 0
+        direkt = gehirn.anrufer_check_frage(sit3, selbst=True)
+        assert "wie geht" not in direkt.lower()
+        assert direkt.count("?") == 1
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
 
 
 def test_anrufer_check_nach_hallo_ohne_eigenen_namen():

@@ -690,6 +690,25 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
 
+    # W-HALLO-PAUSE (10.09.2026): Hat Bianca wirklich „Wie geht es Ihnen?“
+    # gefragt, war der vorherige Zug absichtlich NUR diese Frage. Jetzt erst
+    # den dort geparkten Originalwunsch in die Maschine geben und nach der
+    # Wohlseinsantwort mit der fachlichen Pflichtfrage fortfahren.
+    if sit.pop("anruferHalloFrageOffen", False):
+        original = _s(sit.pop("anruferHalloOffenerText", ""))
+        fl = tasks.zug(sit, original, melde) if original else None
+        if not fl or not (
+            _s(fl.get("text")) or fl.get("hangup")
+            or fl.get("transfer") or fl.get("warte")
+        ):
+            fl = {"text": "Was kann ich für Sie tun?", "book": None}
+        else:
+            fl = dict(fl)
+        quittung = gehirn.anrufer_wohl_quittung(text_in)
+        fl["text"] = " ".join(x for x in (quittung, _s(fl.get("text"))) if x)
+        spur.merken(sit, "anrufer-hallo-pause", text_in[:80])
+        return _maschinen_antwort(sit, fl, msgs)
+
     # W-PRAXISAUSKUNFT (09.09.2026): Öffnungszeiten und Wegbeschreibung
     # kommen deterministisch aus dem Mandanten, auch wenn STT Schlüsselwörter
     # verhört ("Pflungszeiten", "wie ich die praktisch erreiche"). Solche
@@ -759,6 +778,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # W-ANRUFER-HALLO: den verspielten Satz SOFORT als Vorab-Füller
     # sprechen, während flow + Ziffern-TTS im Hintergrund laufen.
     # Seriell (Hallo, Stille, Nummer) war der hörbare Hänger.
+    hallo_fragt = False
     if vorab:
         hallo = gehirn.anrufer_hallo_jetzt(sit, text_in)
         if hallo:
@@ -770,9 +790,24 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 auch_kurz=True,
             )
         if hallo:
+            hallo_fragt = gehirn.anrufer_hallo_fragt(hallo)
             vorab(hallo)
-            wiederholung.gesagt_merken(sit, hallo)
+            # Die alleinstehende Frage wird gleich über _maschinen_antwort
+            # protokolliert. Vorheriges Merken würde denselben Text dort als
+            # unerlaubte Wiederholung wieder entfernen.
+            if not hallo_fragt:
+                wiederholung.gesagt_merken(sit, hallo)
             gehirn.anrufer_hallo_merken(sit)
+    if hallo_fragt:
+        # Den Fachwunsch nicht verlieren: Intent ist oben bereits gesetzt,
+        # der Originalsatz wird nach der Wohlseinsantwort in tasks.zug
+        # nachgereicht. Jetzt darf akustisch nichts mehr folgen.
+        sit["anruferHalloFrageOffen"] = True
+        sit["anruferHalloOffenerText"] = arbeits_text
+        spur.merken(sit, "anrufer-hallo-fragt", hallo)
+        return _maschinen_antwort(
+            sit, {"text": hallo, "book": None}, msgs,
+        )
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     #    W-TASK-GRENZE: transparenter Adapter (bianca/tasks) vor flow.zug —

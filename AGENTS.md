@@ -191,13 +191,17 @@ dann erst nach namen und nummer fragen."
 - **Buchung** (`gehirn.naechste_frage`, VOR der schonmal-Frage): steht ein
  Treffer und ist noch kein Name gefallen, kommt EINMAL
  `frage=anrufer_check` (`gehirn.anrufer_check_frage`): der
- ziffernfreie Hallo-Satz ("Ah, Frau X, wie geht's Ihnen — wir kennen uns
- noch nicht, ich bin die Neue, Bianca.") geht SOFORT als Vorab-Füller
- raus (`anrufer_hallo_jetzt` → `vorab`), während Name + Nummer im
- Hintergrund gerendert werden — nie seriell Hallo, dann Stille, dann
- Nummer. Dann Ja/Nein ("Der Termin ist für Sie selbst, richtig?").
- "Gut." auf das Hallo ist kein Identitäts-Ja (`ist_anrufer_wohl` → nur
- die Schlussfrage nochmal). Fast-Pfad: der Hallo wartet NICHT auf
+ ziffernfreie Hallo-Satz geht SOFORT als Vorab-Füller raus
+ (`anrufer_hallo_jetzt` → `vorab`). **W-HALLO-PAUSE (10.09.2026):**
+ Feststellungsvarianten („Schön, Sie wieder zu hören“) dürfen direkt in
+ die Ja/Nein-Kontrolle übergehen. Fragt eine Variante wirklich „Wie geht
+ es Ihnen?“, endet der Zug GENAU dort und Bianca hört zu; der ursprüngliche
+ Termin-/Absage-/Auskunftswunsch bleibt in `anruferHalloOffenerText`
+ geparkt und läuft nach der Wohlseinsantwort weiter. Nie wieder eine Frage
+ stellen und im selben Atemzug selbst weiterreden. „Gut.“ oder „Ja, gut.“
+ bestätigt dabei NIE die Identität; erst die danach gestellte Kontrolle
+ („Der Termin ist für Sie selbst, richtig?“) nimmt ein Ja an.
+ Fast-Pfad: der Hallo wartet NICHT auf
  letzten Besuch oder Behandler (`anrufer_hallo_jetzt` nur Name). Die
  Kartei startet schon zur Begrüßung (`hintergrund.kartei_von_anrufer`)
  und fliesst danach ein: „Sie waren zuletzt bei Doktor X, richtig?“

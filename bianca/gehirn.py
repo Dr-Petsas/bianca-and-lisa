@@ -2236,27 +2236,27 @@ HALLO_NEU_WER = (
     "Wir kennen uns noch nicht, {wer}. Ich bin die Neue!",
 )
 HALLO_ANRUF = (
-    "Ah, {wer}, wie geht es Ihnen? Ich sehe, Sie hatten {wann} schon einmal angerufen.",
+    "Ah, {wer}, wie geht es Ihnen?",
     "Ah, {wer}, schön Sie wieder zu hören. Sie hatten {wann} schon einmal angerufen.",
-    "{wer} — schön, dass Sie nochmal da sind. Ich sehe, Sie hatten {wann} schon angerufen.",
+    "{wer} — schön, Sie wieder zu hören. Wie geht es Ihnen?",
     "Ah, {wer}. Ich sehe, Sie hatten {wann} schon einmal in der Leitung.",
 )
 HALLO_ANRUF_OHNE = (
-    "Wie geht es Ihnen? Ich sehe, Sie hatten {wann} schon einmal angerufen.",
+    "Schön, Sie wieder zu hören. Wie geht es Ihnen?",
     "Schön Sie wieder zu hören — Sie hatten {wann} schon einmal angerufen.",
-    "Schön, dass Sie nochmal anrufen. {wann} waren Sie schon in der Leitung.",
+    "Wie geht es Ihnen heute?",
     "Ich sehe, Sie hatten {wann} schon einmal angerufen.",
 )
 HALLO_BESUCH = (
-    "Ah, {wer}, wie geht es Ihnen? Ich sehe, Sie waren zuletzt bei {arzt} in Behandlung.",
+    "Ah, {wer}, wie geht es Ihnen?",
     "Ah, {wer}, schön Sie wieder zu hören. Zuletzt waren Sie bei {arzt} in Behandlung.",
-    "{wer}, wie geht's? Ich sehe, Ihr letzter Besuch war bei {arzt}.",
+    "{wer} — schön, Sie wieder zu hören. Wie geht es Ihnen?",
     "Ah, {wer}. Ich sehe, Sie waren zuletzt bei {arzt}.",
 )
 HALLO_BESUCH_OHNE = (
-    "Wie geht es Ihnen? Ich sehe, Sie waren zuletzt bei {arzt} in Behandlung.",
+    "Schön, Sie wieder zu hören. Wie geht es Ihnen?",
     "Schön Sie wieder zu hören — zuletzt waren Sie bei {arzt} in Behandlung.",
-    "Ich sehe, Sie waren zuletzt bei {arzt} in Behandlung.",
+    "Wie geht es Ihnen heute?",
     "Ihr letzter Besuch war bei {arzt} — schön, dass Sie wieder anrufen.",
 )
 
@@ -2271,6 +2271,19 @@ def _hallo_wahl(sit: dict, formen: tuple[str, ...], **felder: str) -> str:
         _HALLO_NR += 1
     form = formen[int(i) % len(formen)]
     return form.format(**{k: v for k, v in felder.items() if v})
+
+
+def anrufer_hallo_fragt(text: str) -> bool:
+    """Nur eine alleinstehende Schlussfrage darf einen eigenen Turn öffnen."""
+    t = _s(text)
+    return bool(t and t.endswith("?") and t.count("?") == 1)
+
+
+def _anrufer_hallo_feststellung(sit: dict) -> str:
+    """Neutrale Alternative, wenn hinter dem Hallo direkt Inhalt folgt."""
+    wer = anrufer_anrede(sit)
+    return (f"Schön, Sie wieder zu hören, {wer}." if wer
+            else "Schön, Sie wieder zu hören.")
 
 
 def anrufer_hallo(sit: dict) -> str:
@@ -2358,6 +2371,16 @@ def ist_anrufer_wohl(text: str) -> bool:
     return bool(_ANRUFER_WOHL_RE.match(k))
 
 
+def anrufer_wohl_quittung(text: str) -> str:
+    """Kurze Reaktion auf die echte Wohlseinsfrage, bevor der Job weitergeht."""
+    k = _ohne_anlauf(text).lower()
+    if re.search(r"\b(?:nicht\s+(?:so\s+)?gut|schlecht|mies|krank|beschissen)\b", k):
+        return "Oh, das tut mir leid."
+    if re.search(r"\b(?:gut|prima|bestens|super|wunderbar|danke)\b", k):
+        return "Das freut mich."
+    return "Danke."
+
+
 def anrufer_bekannt(sit: dict) -> dict:
     """DB-Patient zur Anrufernummer — {} wenn keiner da oder Notaus an."""
     if os.environ.get("ANRUFER_CHECK", "1").strip() == "0":
@@ -2405,6 +2428,11 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
         return f"Soll ich unter Ihrer bekannten Nummer {aktion}?"
     hallo = anrufer_hallo(sit)
     if hallo:
+        # Eine echte Wohlseinsfrage ist nur dann natürlich, wenn Bianca danach
+        # zuhört. Im direkten/alten Pfad folgt hier sofort die Pflichtfrage;
+        # deshalb dort die Feststellungsvariante verwenden.
+        if anrufer_hallo_fragt(hallo):
+            hallo = _anrufer_hallo_feststellung(sit)
         if not selbst:
             return f"{hallo} Soll ich unter diesem Namen {aktion}?"
         return f"{hallo} {schluss}"
