@@ -48,7 +48,7 @@ from collections import deque
 
 import httpx
 
-from sip_bridge.stimme import filtern as stimme_filtern
+from sip_bridge.stimme import filtern as stimme_filtern, ohr_kompakt
 
 # BIANCA_BASE / LISA_BASE: Ziel-Dienst. sipbridge-lisa setzt LISA_BASE
 # (oder BIANCA_BASE=http://lisa:8095) — gleiche Variable, anderer Host.
@@ -956,6 +956,11 @@ class Anruf:
         """Einen Anrufer-Zug an Bianca geben. False = auflegen."""
         pcm16, _ = audioop.ratecv(pcm8, 2, 1, RATE_IN, RATE_STT, None)
         pcm16 = await asyncio.to_thread(stimme_filtern, pcm16, RATE_STT)
+        if ohr:
+            # Parakeet bekommt keine sekundenlange interne Leere aus dem
+            # stillen Ohr. Normale Zuege und die Sprachsamples selbst bleiben
+            # unangetastet; Notaus sitzt in ohr_kompakt().
+            pcm16 = await asyncio.to_thread(ohr_kompakt, pcm16, RATE_STT)
         wav = _wav(pcm16, RATE_STT)
         if os.environ.get("BRIDGE_DUMP") == "1":
             pfad = f"/tmp/zug-{int(time.time())}.wav"

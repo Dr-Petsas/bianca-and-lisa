@@ -82,6 +82,18 @@ _KONS_PHRASE_FIXES: list[tuple[re.Pattern, str]] = [
 ]
 _KONS_PHRASE_MARKERS = {"kons"}
 
+# Praxisname aus dem produktiven Thaler-Anruf (10.09.2026): Parakeet hoerte
+# den Eigennamen wiederholt als "Ttola". Diese weiter entfernte phonetische
+# Form erreicht die konservative Namens-Fuzzy-Schwelle bewusst nicht.
+# Darum marker-gated: die Ersetzung existiert NUR, wenn "Thaler" als
+# Praxis-/Tenant-Hotword mitgesendet wurde; andere Mandanten bleiben gleich.
+_TENANT_PHRASE_FIXES: dict[str, list[tuple[re.Pattern, str]]] = {
+    "thaler": [
+        (re.compile(r"\b(?:tt?ola|tola|tahler|taler|thala)\b", re.IGNORECASE),
+         "Thaler"),
+    ],
+}
+
 
 # Deutsche STT-Verwechslungen am WORTANFANG (Clara-Live-Befund: "Zannis"/
 # "Tzannis", "Betsas"/"Petsas", "Gaufmann"/"Kaufmann", "Kerber"/"Gerber").
@@ -245,6 +257,15 @@ def correct_transcript(text: str, keywords: list[str]) -> tuple[str, list[tuple[
                     replacements_pre.append((m.group(0), _repl))
                 return _repl
             text = pat.sub(_kons_sub, text)
+    for marker, fixes in _TENANT_PHRASE_FIXES.items():
+        if marker not in marker_norms:
+            continue
+        for pat, repl in fixes:
+            def _tenant_sub(m: "re.Match[str]", _repl=repl) -> str:
+                if _norm(m.group(0)) != _norm(_repl):
+                    replacements_pre.append((m.group(0), _repl))
+                return _repl
+            text = pat.sub(_tenant_sub, text)
     kw = [(k, _norm(k)) for k in keywords
           if k and " " not in k.strip() and len(_norm(k)) >= 4]
     if not kw:

@@ -77,6 +77,23 @@ def test_keywords_gehen_als_hotwords_mit():
     _mit_lokal(fake, lauf)
 
 
+def test_kurze_englische_parakeet_formen_werden_deutsch_normalisiert():
+    faelle = {
+        "Yeah.": "Ja.",
+        "Yep!": "Ja.",
+        "Bitte ja.": "Ja, bitte.",
+        "Nine.": "Nein.",
+        "Hello?": "Hallo.",
+    }
+    for gehoert, erwartet in faelle.items():
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def lauf():
+            assert stt.transcribe(BLOB) == erwartet
+
+        _mit_lokal(fake, lauf)
+
+
 def test_tenant_keywords_sind_behandler_nachnamen():
     tenant = {
         "behandler": "Dr. Petsas",
@@ -90,6 +107,31 @@ def test_tenant_keywords_sind_behandler_nachnamen():
     assert kw == ["Petsas", "Nikolaou", "Patrikis"], kw
     # Marker-Keywords (Heads-up etc.) duerfen NIE dabei sein — Patiententelefon.
     assert not {k.lower() for k in kw} & {"heads-up", "headsup", "teleskopkrone", "kons"}
+
+
+def test_praxisname_ist_tenant_hotword_ohne_generische_woerter():
+    tenant = {
+        "praxisName": "Thaler Zahnmedizin",
+        "praxisNameMelde": "Praxis Thaler Zahnmedizin",
+        "calendars": [{"id": "1", "name": "Frau Schmidt"}],
+    }
+    kw = tenants.stt_keywords(tenant)
+    assert kw == ["Thaler", "Schmidt"], kw
+
+
+def test_thaler_alias_ist_nur_mit_tenant_hotword_aktiv():
+    fake = _FakeLokal(_Antwort(200, {"text": "Hier ist Ttola Zahnmedizin"}))
+
+    def lauf():
+        assert stt.transcribe(BLOB, keywords="Thaler") == "Hier ist Thaler Zahnmedizin"
+
+    _mit_lokal(fake, lauf)
+    fake2 = _FakeLokal(_Antwort(200, {"text": "Hier ist Ttola Zahnmedizin"}))
+
+    def ohne_marker():
+        assert stt.transcribe(BLOB, keywords="Petsas") == "Hier ist Ttola Zahnmedizin"
+
+    _mit_lokal(fake2, ohne_marker)
 
 
 def test_postcorrect_kopie_fixt_behandler_hoerfehler():
@@ -159,7 +201,10 @@ def test_bereit_mit_stt_base_auch_ohne_key():
 if __name__ == "__main__":
     test_lokal_transkribiert_ohne_elevenlabs()
     test_keywords_gehen_als_hotwords_mit()
+    test_kurze_englische_parakeet_formen_werden_deutsch_normalisiert()
     test_tenant_keywords_sind_behandler_nachnamen()
+    test_praxisname_ist_tenant_hotword_ohne_generische_woerter()
+    test_thaler_alias_ist_nur_mit_tenant_hotword_aktiv()
     test_postcorrect_kopie_fixt_behandler_hoerfehler()
     test_lokal_fehler_wirft_statt_zurueckzufallen()
     test_kyrillische_halluzination_wird_verworfen()

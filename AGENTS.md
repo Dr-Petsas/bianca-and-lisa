@@ -502,9 +502,19 @@ taub (Barge-Schwelle 1100 / 280 ms). Vier Bausteine:
    Sprachanteil). Echte längere Einwände stoppen unverändert schnell,
    verteilte Leitungsstörungen nie. Repro/Wache:
    `test_ohr_stoerimpulse_summieren_sich_nicht_ueber_lange_ansage`.
+6. **Interne Ohr-Pause vor Parakeet kürzen (W-STT-OHR-KOMPAKT
+   10.09.2026):** Im Thaler-Livezug lagen zwischen zwei Sprachinseln
+   5,18 Sekunden Leere (8,76 s Segment, nur 19 % Sprache). Parakeet machte
+   daraus „Mm-hmm. Mitte mir jetzt.“; nach reinem Entfernen der inneren
+   Leere wurde derselbe Ton zu „Aha, mit dem März.“. `sip_bridge.stimme.
+   ohr_kompakt` greift deshalb NUR bei Ohr-Zügen ab 4 s, höchstens 25 %
+   Sprache, GENAU einer internen Pause ab 1,2 s. Es entfernt nur
+   Pausensamples; Sprache, normale Züge, kurze Antworten und mehrteilige
+   Abschiede bleiben byte-identisch. Notaus: `STT_OHR_KOMPAKT=0`.
 
 Tests: `tests/test_tempo.py`, Ohr-Block in `test_sip_vad.py`,
-`test_ist_echo_ohr_gegen_satzkarte`, Halbsatz-Punkt-Fälle.
+`test_ist_echo_ohr_gegen_satzkarte`, `tests/test_sip_stimme.py`,
+Halbsatz-Punkt-Fälle.
 
 ## Ziel-Pipeline Lisa/Bianca (Stand 28.08.2026 spät)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 import io
 import json
+import re
 import subprocess
 import time
 import wave
@@ -61,6 +62,19 @@ def _sauber(text) -> str:
     # Nicht-lateinische Ausreisser (kyrillische Halluzinationen) verwerfen.
     if any(0x0400 <= ord(c) < 0x0500 for c in text):
         return ""
+    # Parakeet schreibt sehr kurze deutsche Antworten phonetisch gelegentlich
+    # englisch ("Ja" -> "Yeah/Yep", "Nein" -> "Nine"). Nur GANZE,
+    # eindeutige Kurzantworten normalisieren — nie Woerter in Namen, freier
+    # Prosa oder Ziffernketten ersetzen. Das ist deterministisch, kein LLM.
+    kurz = re.sub(r"[^a-z]+", " ", text.lower()).strip()
+    if kurz in {"yeah", "yep", "yea", "yes", "jep"}:
+        return "Ja."
+    if kurz in {"bitte ja", "please yes", "yes please"}:
+        return "Ja, bitte."
+    if kurz in {"no", "nope", "nine"}:
+        return "Nein."
+    if kurz in {"hello"}:
+        return "Hallo."
     return text
 
 
@@ -74,7 +88,11 @@ def _lokal(audio: bytes, *, mime: str, name: str, keywords: str = "") -> str:
     )
     if r.status_code != 200:
         raise RuntimeError(f"stt_lokal_http_{r.status_code}")
-    return _sauber(r.json().get("text"))
+    # Der Container korrigiert bereits. Die lokale, idempotente zweite Runde
+    # hält aber neue marker-gated Tenant-Aliase sofort nutzbar, ohne das
+    # bewährte Parakeet-Modell oder seinen Container neu zu starten.
+    text = _sauber(r.json().get("text"))
+    return _sauber(_nachkorrigieren(text, keywords))
 
 
 # ----------------------------------------------------------------- Whisper

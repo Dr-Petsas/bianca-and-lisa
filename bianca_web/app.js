@@ -1039,10 +1039,11 @@ const KOENNEN = [
 
 const TECHNIK = [
   { t: "Ohr — STT-Pipeline (hören)", p: [
-    "<b>Engine:</b> Qwen3-ASR-1.7B auf der RTX 3060, fest auf Deutsch — nur das finale geprüfte Transkript steuert Bianca. Der frühere Whisper-Pfad ist in dieser Pipeline abgeschaltet.",
-    "<b>Sicherheitsnetz:</b> fällt der Qwen-Dienst aus, übernimmt Parakeet auf der 5090 sichtbar nach einer kurzen Qwen-Pause. Ein stiller Rückfall auf Whisper oder ElevenLabs ist im Qwen-Modus ausgeschlossen.",
+    "<b>Engine:</b> Parakeet Primeline lokal ist der direkte Hauptweg. Qwen- und Whisper-STT sind für die laufenden Produktionstests ausgeklammert.",
+    "<b>Kein stiller Rückfall:</b> fällt Parakeet aus, wird der Fehler sichtbar; Bianca weicht weder auf Whisper/Qwen noch auf ElevenLabs aus.",
     "<b>Stille-Trim (W-STT-TRIM):</b> Vor-/Nachlauf-Stille wird vor der Inferenz energie-basiert abgeschnitten — „Ja“/„Nein“ gehen nicht mehr unter, reine Stille wird verworfen statt halluziniert.",
-    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Behandler-Namen als Hotwords („Betsas“ → „Petsas“).",
+    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Praxis- und Behandler-Namen als Tenant-Hotwords („Betsas“ → „Petsas“, „Ttola“ → „Thaler“).",
+    "<b>Ohr-Pausenverdichtung (W-STT-OHR-KOMPAKT):</b> genau eine sehr lange interne Leerstelle in einem dünnen Ohr-Zug wird vor Parakeet verkürzt; alle Sprachsamples sowie normale und mehrteilige Züge bleiben unverändert.",
     "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle je Fragetyp: 350 ms nach Ja/Nein-Fragen, 1500 ms Diktat-Geduld bei Nummern (W-STT-SCHWANZ), sonst 500 ms.",
     "<b>Echo-Wache:</b> das Lautsprecher-Echo der eigenen Stimme wird erkannt und verworfen — kurze echte Antworten („ja“, „nein“, „stopp“) nie.",
   ]},
@@ -1173,6 +1174,7 @@ const PATCHES = [
   ["W-KURZANTWORT (Fragezeichen ist kein Themenwechsel)", "09.09.", "Audio/Flow", "Eine von Whisper zögernd als „Ähm, nein?“ punktuierte Kurzantwort bleibt in der schnellen Terminmaschine. Sie löst weder freies LLM-Gerede noch mehrere unnötige TTS-Streams aus; echte Zusatzfragen wie „Nein, aber was kostet das?“ bleiben erlaubt."],
   ["W-STT-LEER (kurzes Ja gegenhören)", "09.09.", "Ohr", "Ein leeres Whisper-Final gilt bei hörbarem Audio nicht mehr als Stille: Parakeet hört denselben Zug sofort gegen. So verschwinden kurze Ja-Antworten nicht mehr und der Dialog stockt nicht bis zum Stups."],
   ["W-OHR-FENSTER (lange Antworten bleiben vollständig)", "09.09.", "Telefon", "Kurze Echo- oder Rauschspitzen werden beim stillen Ohr nicht mehr über eine ganze lange Ansage aufsummiert. Nur mindestens 400 ms echter Sprachanteil innerhalb von 600 ms lösen Barge-in aus; verteilte Störungen kappen Biancas Audio nicht mehr."],
+  ["W-STT-OHR-KOMPAKT", "10.09.", "Ohr", "Sekundenlange interne Leere in einem dünnen Ohr-Zug wird vor Parakeet konservativ gekürzt. Reales A/B: 8,76 → 3,90 s und „Mm-hmm. Mitte mir jetzt.“ → „Aha, mit dem März.“; kurze Antworten und mehrteilige Abschiede bleiben unverändert. Notaus: STT_OHR_KOMPAKT=0."],
   ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
   ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
   ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Ich brauche eine Füllung“ öffnet auch vor dem Katalog-Laden sofort den sicheren Flow. „Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im Formular, unbelegte Aktenanlagen werden blockiert und eine leere Slotsuche läuft nicht mehr in Schleife."],

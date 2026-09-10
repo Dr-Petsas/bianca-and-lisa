@@ -97,7 +97,9 @@ _LOSLASS_RE = re.compile(
 # „nicht verstanden“ statt sich zu verabschieden.
 _KURZ_OK_RE = re.compile(
     r"^\s*(?:"
-    r"(?:ja|jaja|jap|jep|jo|joa|nein|nee|n[oö]e?|doch|klar|genau|richtig|stimmt|"
+    r"(?:ja|jaja|jap|jep|jo|joa|yes|yeah|yea|yep|"
+    r"bitte\s+(?:ja|jap|jep|yes|yeah|yea|yep)|"
+    r"nein|nee|n[oö]e?|nine|nope|doch|klar|genau|richtig|stimmt|"
     r"ok|okay|gut|passt|super|prima|perfekt|danke|bitte|hallo|hi|hey|"
     r"tsch[uü]s{0,2}|"
     r"(?:auf\s+)?wiederh[oö]ren(?:\s*[,.]?\s*\w+)?|"
