@@ -683,13 +683,22 @@ FELDER_START = {
     "bekannt": False,
     "aktePhone": "",
     "telefonAlt": "",
+    # Rufnummer des erkannten Anrufers. Sie wird NICHT mehr still als
+    # bestätigt übernommen: Am normalen Nummern-Schritt fragt Bianca
+    # ausdrücklich, ob die Bestätigungs-SMS dorthin gehen soll.
+    "telefonBekannt": "",
     "gesucht": "",
     "fuerWen": "",
+    # Identität und Empfänger des Termins sind zwei getrennte Ja/Nein-
+    # Fragen. So kann „Nein“ nie zugleich „falscher Patient“ und
+    # „Termin für mein Kind“ bedeuten.
+    "fuerWenCheck": "",
     # W-FUER-WEN (03.09.2026): Name des ANRUFERS, wenn der Termin fuer einen
     # Dritten ist und die Kartei-Identitaet vom Patienten geloest wurde —
     # wandert als Kontakt in die Termin-Notiz. Dient zugleich als Riegel:
     # die Identitaet wird pro Anruf nur EINMAL geloest.
     "kontaktName": "",
+    "kontaktTelefon": "",
     "slotIso": "",
     # Geschlecht fuer die Anrede (Chef 29.08.2026): aus der Kartei ("akte")
     # oder vom Vornamen-Waechter geschaetzt ("rate"); unklare Vornamen =>
@@ -1340,10 +1349,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["warSchonMal"] = False
             neu.add("warSchonMal")
 
-    # W-ANRUFER-CHECK: Antwort auf das vorgelesene Name+Nummer-Paar. Ein Ja
-    # uebernimmt BEIDES (Kartei-Schreibweise, nichts zu buchstabieren, Nummer
-    # gilt als rueckbestaetigt); ein Nein verwirft den DB-Treffer komplett —
-    # danach fragt der Fluss klassisch nach Name und Nummer.
+    # W-ANRUFER-CHECK: Antwort auf die Identitätsfrage. Ein Ja übernimmt den
+    # Kartei-Namen, aber NICHT still die Nummer. Diese wird am normalen
+    # Telefon-Schritt separat als SMS-Ziel vorgelesen und bestätigt.
     if s["frage"] == "anrufer_check" and not s["anruferCheck"]:
         a = anrufer_bekannt(sit)
         if a and ist_anrufer_wohl(t):
@@ -1357,10 +1365,15 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["bekannt"] = True
             if _s(a.get("patientId")):
                 s["patientId"] = _s(a.get("patientId"))
-            s["telefon"] = telefon.normaliert(a.get("telefon") or "")
-            s["telefonOk"] = True
+            bekannte_nr = telefon.normaliert(a.get("telefon") or "")
+            s["telefon"] = ""
+            s["telefonOk"] = False
             s["telefonOffen"] = ""
             s["telefonTeil"] = ""
+            if bekannte_nr:
+                s["telefonBekannt"] = bekannte_nr
+                s["aktePhone"] = bekannte_nr
+                s["kontaktTelefon"] = bekannte_nr
             g = _s(a.get("geschlecht")).lower()
             if g in _HERR or g in _FRAU:
                 s["geschlecht"] = "m" if g in _HERR else "f"
@@ -1383,17 +1396,20 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             if isinstance(booking, dict):
                 for k in ("patientId", "firstName", "lastName", "patientName", "phone"):
                     booking.pop(k, None)
-            # W-FUER-WEN: die Buchen-Frage lautet "Der Termin ist für Sie
-            # selbst, richtig?" — ein Nein heisst hier meist: Termin fuer
-            # jemand anderen. Kartei bleibt verworfen, aber der Fluss fragt
-            # gleich "Für wen…?" statt stumpf nach "Ihrem" Namen. Nennt der
-            # Satz die Rolle selbst ("Nein, für meinen Sohn"), setzt der
-            # Fuer-Wen-Block unten die konkrete Rolle. "Nein, das bin ich
-            # nicht" bleibt der Identitaets-Fall (klassisch frisch aufnehmen).
-            if (s["modus"] == "buchen" and not s["fuerWen"]
-                    and not fuer_wen_signal(t) and not _NICHT_ICH_RE.search(t)):
+
+    # Erst NACH bestätigter Identität klären, für wen der Termin ist. Diese
+    # Trennung beseitigt die alte Doppeldeutigkeit: „Nein“ kann jetzt entweder
+    # nur die Identität oder nur den Terminempfänger verneinen.
+    if (s["frage"] == "fuer_wen_check" and s["anruferCheck"] == "ja"
+            and not s["fuerWenCheck"]):
+        if ist_ja(t) and not ist_nein(t):
+            s["fuerWenCheck"] = "ja"
+            neu.add("fuerWenCheck")
+        elif ist_nein(t):
+            s["fuerWenCheck"] = "nein"
+            if not s["fuerWen"]:
                 s["fuerWen"] = "andere"
-                neu.add("fuerWen")
+            neu.update({"fuerWenCheck", "fuerWen"})
 
     # Letzter Behandler aus der Hintergrund-Kartei — Ja bindet, Nein fragt offen.
     if s["frage"] == "arzt_check" and not (s.get("arzt") or {}).get("calendarId"):
@@ -1454,11 +1470,15 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     wen = fuer_wen_signal(t)
     if wen and (not s["fuerWen"] or (s["fuerWen"] == "andere" and wen != "andere")):
         s["fuerWen"] = wen
+        if s["modus"] == "buchen" and s["anruferCheck"] == "ja":
+            s["fuerWenCheck"] = "nein"
         neu.add("fuerWen")
     elif (s["fuerWen"] == "andere" and _FUER_MICH_RE.search(t)
           and not _NICHT_FUER_MICH_RE.search(t)):
         # "Doch für mich selbst" — Missverstaendnis aufgeloest.
         s["fuerWen"] = ""
+        if s["anruferCheck"] == "ja":
+            s["fuerWenCheck"] = "ja"
         neu.add("fuerWen")
 
     # W-FUER-WEN: die Patient-Identitaet kam per Rufnummer aus der Kartei des
@@ -1774,6 +1794,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             # Live 06.09.2026: nach Nein kam dieselbe Kette wieder (Echo/STT)
             # und wurde erneut vorgelesen — Sperre, sonst Nummern-Schleife.
             _telefon_sperren(s, s.get("telefonOffen") or "")
+            if (telefon.normaliert(s.get("telefonOffen") or "")
+                    == telefon.normaliert(s.get("telefonBekannt") or "")):
+                # Bekannte Nummer wurde ausdrücklich als SMS-Ziel abgelehnt.
+                # Sie darf nicht beim nächsten Schritt erneut angeboten werden.
+                s["telefonBekannt"] = ""
             s["telefonOffen"] = ""
             s["telefonTeil"] = ""
             neu.add("telefonKorrektur")
@@ -1842,17 +1867,21 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if (not d and not s["telefonOk"] and not s["telefonAkte"]
             and _MEINE_NUMMER_RE.search(t) and not _TEL_FALSCH_RE.search(t)):
         # "Nehmen Sie meine Nummer": ist die Anrufernummer bekannt (Anrufer-ID
-        # bzw. Kartei), uebernehmen wir sie deterministisch — kein Erfragen,
-        # kein Verhoeren (live 09.09.2026: STT liess eine Ziffer weg, im Termin
-        # stand die falsche Nummer, keine SMS). Sonst nicht darauf beharren.
-        bekannt = _anrufer_nummer(sit) or _s(s.get("aktePhone"))
+        # bzw. Kartei), lösen wir den relativen Bezug deterministisch auf.
+        # Bei einem Dritttermin gehört die Nummer zum Kontakt/Elternteil,
+        # nicht zur neuen Patientenakte. Vor der Verwendung liest Bianca sie
+        # trotzdem als SMS-Ziel vor — niemals still übernehmen.
+        bekannt = (
+            _s(s.get("kontaktTelefon"))
+            or _anrufer_nummer(sit)
+            or _s(s.get("aktePhone"))
+        )
         ziffern = telefon.ziffern(bekannt).replace("+", "") if bekannt else ""
         if ziffern and telefon.plausibel(ziffern):
-            s["telefon"] = telefon.normaliert(bekannt)
-            s["telefonOk"] = True
-            s["telefonOffen"] = ""
+            s["telefonBekannt"] = telefon.normaliert(bekannt)
+            s["telefonOffen"] = s["telefonBekannt"]
             s["telefonTeil"] = ""
-            neu.add("telefon")
+            neu.add("telefonBekannt")
         else:
             s["telefonAkte"] = True
             neu.add("telefonAkte")
@@ -2080,7 +2109,11 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     ),
     "anrufer_check": (
         "Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt.",
-        "Stimmt Name und Nummer so — oder habe ich mich vertan?",
+        "Habe ich die richtige Person erkannt — ja oder nein?",
+    ),
+    "fuer_wen_check": (
+        "Ist der Termin für Sie selbst?",
+        "Geht es bei dem Termin um Sie persönlich?",
     ),
     "arzt_check": (
         "Sie waren zuletzt bei demselben Behandler, richtig?",
@@ -2394,15 +2427,11 @@ def anrufer_bekannt(sit: dict) -> dict:
 
 
 def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
-    """Name + Nummer VORLESEN statt erfragen — der Anrufer bestaetigt nur.
+    """Erkannten Anrufer einmal begrüßen, danach nur noch Pronomen verwenden.
 
-    Traegt Ziffern: der Wiederholungs-Waechter fasst den Satz nie an, und
-    der TTS-Ziffern-Waechter verifiziert den Render wie jedes Readback.
-    Die Schluss-Saetze sind als feste Saetze vorgewaermt (satzweises TTS).
-
-    selbst=True (Buchen-Fluss, W-FUER-WEN Chef 03.09.2026): "Der Termin ist
-    für Sie selbst, richtig?" — deckt Identitaet UND Fuer-Wen in einem ab.
-    Ein Nein heisst dann: Termin fuer jemand anderen (einsammeln)."""
+    Identität und „Termin für Sie selbst?“ sind getrennte Fragen. So nennt
+    Bianca den Namen nicht in drei aufeinanderfolgenden Sätzen, und ein Nein
+    hat immer genau eine Bedeutung."""
     schluss = anrufer_check_schluss(selbst=selbst)
     modus = _s(sammler(sit).get("modus"))
     if modus == "absagen":
@@ -2412,20 +2441,14 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     else:
         aktion = "Ihre bestehenden Termine im Kalender nachsehen"
     # Kurz halten (Chef 08.09.: kein Sermon). Vorab = Hallo.
-    # Nie „Bianca.“ vor die Selbst-Frage hängen — das klang wie
-    # „Bianca, der Termin ist für Sie selbst“ (MedDent + Thaler, 08.09.).
+    # Der schnelle Hallo-Satz hat den Namen bereits genannt. Danach niemals
+    # erneut „Michael Petsas … Michael Petsas …“, sondern „Sie/Ihre Daten“.
     if sit.get("anruferHalloGesagt"):
         if selbst:
             return schluss
-        # Der Name stand zwar schon im schnellen Hallo, doch ein später
-        # erkanntes Verwaltungsanliegen darf nie mit dem zusammenhanglosen
-        # „Stimmt das so?“ beginnen (Live MedDent 09.09.: Absagewunsch).
-        # Die knappe Kontrollfrage nennt Identität UND nächsten sicheren
-        # Schritt; erst ein Ja löst die echte Kalendersuche aus.
-        wer = anrufer_anrede(sit)
-        if wer:
-            return f"Ich habe Sie als {wer} erkannt. Soll ich unter diesem Namen {aktion}?"
-        return f"Soll ich unter Ihrer bekannten Nummer {aktion}?"
+        if modus in {"absagen", "verschieben", "auskunft"}:
+            return f"Soll ich unter Ihren hinterlegten Daten {aktion}?"
+        return schluss
     hallo = anrufer_hallo(sit)
     if hallo:
         # Eine echte Wohlseinsfrage ist nur dann natürlich, wenn Bianca danach
@@ -2434,7 +2457,7 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
         if anrufer_hallo_fragt(hallo):
             hallo = _anrufer_hallo_feststellung(sit)
         if not selbst:
-            return f"{hallo} Soll ich unter diesem Namen {aktion}?"
+            return f"{hallo} {schluss}"
         return f"{hallo} {schluss}"
     return schluss
 
@@ -2442,7 +2465,7 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
 def anrufer_check_schluss(*, selbst: bool = False) -> str:
     """Nur die Ja/Nein-Frage — nach einem Wohlsein-„Gut.“ ohne Hallo-Wiederholung."""
     return ("Der Termin ist für Sie selbst, richtig?" if selbst
-            else "Stimmt das so?")
+            else "Habe ich Sie richtig erkannt?")
 
 
 _ANRUFGRUND_RE = re.compile(
@@ -2666,6 +2689,13 @@ def arzt_check_frage(sit: dict) -> str:
     )
     if not name:
         return ""
+    # Erkannt als Michael Petsas, zuletzt bei Doktor Petsas: den Namen nicht
+    # unmittelbar ein drittes Mal sagen. Der Bezug ist bereits eindeutig.
+    patient_nachname = _s(sammler(sit).get("nachname"))
+    if patient_nachname and re.search(
+        rf"\b{re.escape(patient_nachname)}\b", name, re.I
+    ):
+        return "Sie waren zuletzt beim selben Behandler, richtig?"
     return f"Sie waren zuletzt bei {name}, richtig?"
 
 
@@ -2681,6 +2711,22 @@ def patient_von_kontakt_loesen(sit: dict) -> None:
     s = sammler(sit)
     if not s["kontaktName"]:
         s["kontaktName"] = f"{s['vorname']} {s['nachname']}".strip()
+    kontakt_nr = (
+        telefon.normaliert(s.get("kontaktTelefon") or "")
+        or telefon.normaliert(s.get("telefonBekannt") or "")
+        or telefon.normaliert(s.get("telefon") or "")
+        or telefon.normaliert(_anrufer_nummer(sit))
+    )
+    if kontakt_nr:
+        s["kontaktTelefon"] = kontakt_nr
+        s["telefonBekannt"] = kontakt_nr
+    # Der Eltern-/Kontakt-Datensatz darf nicht als Patienten-Rufnummer in
+    # die Kinderakte geschrieben werden. Als SMS-Ziel wird dieselbe Nummer
+    # später separat vorgelesen und bestätigt.
+    s["telefon"] = ""
+    s["telefonOk"] = False
+    s["telefonOffen"] = ""
+    s["telefonTeil"] = ""
     s["vorname"] = ""
     s["nachname"] = ""
     s["buchstabiert"] = False
@@ -2792,6 +2838,7 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Buchstabieren Sie ihn am besten gleich einmal.",
         "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?",
         # W-FUER-WEN (Chef 03.09.2026): Termin fuer einen Dritten.
+        "Habe ich Sie richtig erkannt?",
         "Der Termin ist für Sie selbst, richtig?",
         "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
         "War er oder sie schon einmal bei uns in der Praxis?",
@@ -2881,6 +2928,14 @@ def telefon_alt_frage(s: dict) -> str:
     )
 
 
+def sms_nummer_frage(nummer: str) -> str:
+    """Hinterlegte/Kontakt-Nummer als SMS-Ziel bestätigen, nie neu erfragen."""
+    return (
+        "Soll ich die Bestätigungs-SMS an die "
+        f"{telefon.sprechbar(nummer)} schicken?"
+    )
+
+
 # Adaptive Stille-Schwelle fuers Dock (W-TEMPO 29.08.2026, Chef: "ich will
 # 300 ms schneller werden"): Die Maschine WEISS, was sie gefragt hat — nach
 # einer Ja/Nein- oder Wahlfrage kommt eine kurze Antwort (350 ms Ruhe
@@ -2896,7 +2951,8 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "versicherung",
                 "versicherung_check", "pzr", "pzr_kasse", "bleaching", "bleaching_check",
                 "telefon_alt", "telefon_check",
-                "rueckblick", "folge_kontrolle", "anrufer_check", "arzt_check",
+                "rueckblick", "folge_kontrolle", "anrufer_check",
+                "fuer_wen_check", "arzt_check",
                 "frisch_absage_ok", "absage_ok",
                 "termin_anbieten", "arzt_notiz"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
@@ -2941,6 +2997,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
 
     # Eine gehörte Nummer wird IMMER erst rückbestätigt (Chef: sicher aufnehmen).
     if s["telefonOffen"] and not s["telefonOk"]:
+        if (s["telefonBekannt"]
+                and telefon.normaliert(s["telefonOffen"])
+                == telefon.normaliert(s["telefonBekannt"])):
+            return "telefon_check", sms_nummer_frage(s["telefonOffen"])
         return "telefon_check", readback_text(s["telefonOffen"])
 
     # Akte gefunden, traegt aber eine ANDERE Nummer als die gerade
@@ -2957,17 +3017,16 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         return "bleaching_check", ("Haben Sie denn im Frontbereich Zahnersatz — "
                                    "also Kronen, Brücken, Veneers oder Implantate?")
 
-    # W-ANRUFER-CHECK (31.08.2026): die Rufnummer hat einen Kartei-Patienten
-    # getroffen — EINMAL Name + Nummer vorlesen statt sie zu erfragen. Nur
-    # solange noch kein Name gefallen ist, nie fuer Dritte ("Termin fuer
-    # meine Tochter") und nie, wenn sich der Anrufer schon als Neupatient
-    # zu erkennen gegeben hat (dann ist der Treffer wohl ein Angehoeriger
-    # am selben Anschluss).
+    # W-ANRUFER-CHECK: Rufnummer hat einen Kartei-Patienten getroffen. Name
+    # einmal bestätigen; Nummer und Terminempfänger folgen separat.
     if (not s["anruferCheck"] and not s["nachname"] and not s["fuerWen"]
             and s["warSchonMal"] is not False and anrufer_bekannt(sit)):
-        # W-FUER-WEN (Chef 03.09.2026): im Buchen-Fluss fragt der Check
-        # gleich mit, ob der Termin fuer den Anrufer selbst ist.
-        return "anrufer_check", anrufer_check_frage(sit, selbst=True)
+        return "anrufer_check", anrufer_check_frage(sit)
+
+    if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
+            and not s["fuerWenCheck"] and not s["fuerWen"]
+            and s["frage"] in {"", "anrufer_check", "fuer_wen_check"}):
+        return "fuer_wen_check", "Der Termin ist für Sie selbst, richtig?"
 
     if s["warSchonMal"] is None:
         if s["fuerWen"]:
@@ -3020,13 +3079,21 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 "Ich will nichts falsch schreiben: "
                 "Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
             )
-        if not s["telefonOk"] and not s["telefonAkte"] and not (s["bekannt"] and s["aktePhone"]):
-            if s["telefonTeil"]:
-                return "telefon", (
-                    "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
-                    "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
-                )
-            return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
+        if not s["telefonOk"]:
+            bekannte_nr = s["telefonBekannt"] or (
+                s["aktePhone"] if s["bekannt"] else ""
+            )
+            if bekannte_nr and not _telefon_gesperrt(s, bekannte_nr):
+                s["telefonBekannt"] = telefon.normaliert(bekannte_nr)
+                s["telefonOffen"] = s["telefonBekannt"]
+                return "telefon_check", sms_nummer_frage(s["telefonBekannt"])
+            if not s["telefonAkte"]:
+                if s["telefonTeil"]:
+                    return "telefon", (
+                        "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
+                        "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
+                    )
+                return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
         fid_v, frage_v = _versicherung_frage(s)
         if fid_v:
             return fid_v, frage_v
@@ -3070,13 +3137,17 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             "Damit ich nichts falsch schreibe: "
             "Buchstabieren Sie den Nachnamen bitte einmal kurz?",
         )
-    if not s["telefonOk"] and not s["telefonAkte"]:
-        if s["telefonTeil"]:
-            return "telefon", (
-                "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
-                "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
-            )
-        return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
+    if not s["telefonOk"]:
+        if s["telefonBekannt"] and not _telefon_gesperrt(s, s["telefonBekannt"]):
+            s["telefonOffen"] = s["telefonBekannt"]
+            return "telefon_check", sms_nummer_frage(s["telefonBekannt"])
+        if not s["telefonAkte"]:
+            if s["telefonTeil"]:
+                return "telefon", (
+                    "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
+                    "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
+                )
+            return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
     fid_v, frage_v = _versicherung_frage(s)
     if fid_v:
         return fid_v, frage_v

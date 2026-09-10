@@ -1650,7 +1650,35 @@ def test_telefon_alt_loeschen_ruft_update_und_traegt_neue_nummer_ein():
     assert rufe == [("Uz5O", "01776004600")]
     assert s["telefonAlt"] == "neu"
     assert s["aktePhone"] == "01776004600"
+    assert sit["telefonUpdateAlt"] == "0123456789"
     assert res and res["text"].startswith("Erledigt")
+
+
+def test_telefon_update_schreibt_geforderten_bianca_vermerk_an_termin():
+    sit = _konflikt_sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "telefonAlt": "neu", "aktePhone": "01776004600",
+        "phase": "bestaetigen", "frage": "bestaetigung",
+        "slotIso": "2026-09-11T09:15",
+    })
+    sit["telefonUpdateAlt"] = "0123456789"
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    notizen: list[str] = []
+    flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
+        "ok": True, "booked": True, "slotIso": slot_iso,
+        "appointmentId": "e7ho", "spoken": "Der Termin ist fest eingetragen.",
+    }
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit=None, *, note="":
+        notizen.append(note) or {"ok": True}
+    )
+    try:
+        flow._buchen(sit)
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+    assert notizen
+    assert "Alte Nummer 0123456789 aktualisiert //Bianca" in notizen[-1]
 
 
 def test_telefon_alt_sms_an_die_alte_nummer_ohne_update():
@@ -2807,11 +2835,10 @@ def _sit_mit_anrufer() -> dict:
     return sit
 
 
-def test_anrufer_check_buchung_ja_uebernimmt_name_und_nummer():
-    """Chef 31.08.2026: 'den namen und die telefonnummer bei der buchung …
-    vorzulesen als kontrolle anstatt das nochmal zu erfragen.' Ein Ja
-    uebernimmt BEIDES — danach fragt der Fluss NIE wieder nach Name,
-    Buchstabierung oder Handynummer."""
+def test_anrufer_check_buchung_trennt_identitaet_terminempfaenger_und_sms():
+    """Chef 10.09.2026: Name nur initial bestätigen, danach Pronomen. Die
+    hinterlegte Nummer wird separat als SMS-Ziel vorgelesen und erst nach
+    einem klaren Ja verwendet."""
     from bianca import agent as bianca_agent
 
     echt_anstossen = flow.hintergrund.anstossen
@@ -2835,17 +2862,77 @@ def test_anrufer_check_buchung_ja_uebernimmt_name_und_nummer():
         assert s["warSchonMal"] is True  # steht in der Kartei => Bestand
         assert s["vorname"] == "Julia" and s["nachname"] == "Berger"
         assert s["patientId"] == "pat-7" and s["bekannt"] and s["buchstabiert"]
-        assert s["telefonOk"] and s["telefon"] == "015253904756"
+        assert not s["telefonOk"] and not s["telefon"]
+        assert s["telefonBekannt"] == "015253904756"
         assert s["geschlecht"] == "f" and s["geschlechtQuelle"] == "akte"
-        assert z2 and "Danke, Julia Berger" in z2["text"]
+        assert z2 and "Danke." in z2["text"]
+        assert "Julia Berger" not in z2["text"]
+        assert "Der Termin ist für Sie selbst, richtig?" in z2["text"]
+        assert s["frage"] == "fuer_wen_check"
+
+        z3 = flow.zug(sit, "Ja.")
+        assert z3 and "Julia Berger" not in z3["text"]
         assert s["frage"] == "arzt"  # weiter im Bestand-Fluss
-        # Name/Buchstabieren/Telefon kommen NIE wieder:
+
+        # Nach den Inhaltsfeldern kommt die hinterlegte Nummer als Kontrolle.
         s["arzt"] = {"typ": "genannt", "calendarId": "cal-1", "calendarName": "Dr. Petsas"}
         s["grund"] = "Kontrolle"
         s["wunsch"] = {}
+        fid, frage = gehirn.naechste_frage(sit)
+        assert fid == "telefon_check"
+        assert "Bestätigungs-SMS" in frage
+        assert telefon.sprechbar("015253904756") in frage
+        s["frage"] = fid
+        gehirn.einsammeln(sit, "Ja.")
+        assert s["telefonOk"] and s["telefon"] == "015253904756"
+
         fid, _ = gehirn.naechste_frage(sit)
         assert fid not in {"name", "nachname", "vorname", "buchstabieren",
                            "telefon", "telefon_check", "anrufer_check"}
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_erkannt_michael_petsas_wird_nach_hallo_nur_noch_mit_sie_angesprochen():
+    """Live 10.09.2026: Nach „Ah, Herr Petsas“ den Namen nicht drei- bis
+    viermal wiederholen; auch gleicher Patienten-/Behandlername wird
+    pronomenbasiert formuliert."""
+    sit = _sit_mit_anrufer()
+    sit["anrufer"].update({
+        "vorname": "Michael", "nachname": "Petsas",
+        "geschlecht": "male", "telefon": "+491776004600",
+    })
+    sit["anruferHalloGesagt"] = True  # „Ah, Herr Petsas“ lief bereits.
+    sit["anruferKartei"] = {
+        "letzterBesuch": "2026-03-01T09:00:00", "letzterGrund": "Kontrolle",
+        "calendarId": "cal-petsas", "calendarName": "Dr. Michael Petsas",
+        "doctorName": "Dr. Michael Petsas",
+    }
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda _sit: None
+    try:
+        z1 = flow.zug(sit, "Ich hätte gern einen Termin.")
+        assert z1 and "Petsas" not in z1["text"]
+        assert "richtig erkannt" in z1["text"]
+
+        z2 = flow.zug(sit, "Ja.")
+        assert z2 and "für Sie selbst" in z2["text"]
+        assert "Petsas" not in z2["text"]
+
+        z3 = flow.zug(sit, "Ja.")
+        assert z3 and "selben Behandler" in z3["text"]
+        assert "Petsas" not in z3["text"]
+
+        s = gehirn.sammler(sit)
+        s.update({
+            "arzt": {"calendarId": "cal-petsas",
+                     "calendarName": "Dr. Michael Petsas"},
+            "motivName": "KCH Kontrolluntersuchung",
+            "slotIso": "2026-09-11T11:00:00+02:00",
+        })
+        rb = flow._readback(sit)["text"]
+        assert "für Sie" in rb
+        assert "für Herrn Petsas" not in rb
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 
@@ -2888,12 +2975,13 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
         assert s["anruferCheck"] == ""
         assert not s["nachname"]
         assert s["frage"] == "anrufer_check"
-        assert z and "selbst" in z["text"]
+        assert z and "richtig erkannt" in z["text"]
         assert "Ich bin die Neue!" not in z["text"]
         assert "Bianca" not in z["text"]
         z2 = flow.zug(sit, "Ja, genau.")
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
-        assert z2 and "Danke, Julia Berger" in z2["text"]
+        assert z2 and "Der Termin ist für Sie selbst" in z2["text"]
+        assert "Julia Berger" not in z2["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 
@@ -3022,14 +3110,15 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
 
         z2 = bianca_agent.user_turn(sit, "Ja, gut.", vorab=hits.append)
         assert z2["text"].startswith("Das freut mich.")
-        assert "Der Termin ist für Sie selbst, richtig?" in z2["text"]
+        assert "Habe ich Sie richtig erkannt?" in z2["text"]
         assert not sit.get("anruferHalloFrageOffen")
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
         assert gehirn.sammler(sit)["anruferCheck"] == ""
         assert hits == ["Ah, Frau Berger, wie geht es Ihnen?"]
         z2b = bianca_agent.user_turn(sit, "Ja, genau.", vorab=hits.append)
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
-        assert z2b and "Danke, Julia Berger" in z2b["text"]
+        assert z2b and "Der Termin ist für Sie selbst, richtig?" in z2b["text"]
+        assert "Julia Berger" not in z2b["text"]
 
         # Ohne Fragezeichen gibt es keinen Extrazug.
         sit2 = _sit_mit_anrufer()
@@ -3040,7 +3129,7 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
             sit2, "Ich hätte gern einen Termin.", vorab=hits2.append,
         )
         assert hits2 and "?" not in hits2[0]
-        assert "Der Termin ist für Sie selbst, richtig?" in z3["text"]
+        assert "Habe ich Sie richtig erkannt?" in z3["text"]
         assert not sit2.get("anruferHalloFrageOffen")
 
         # Ohne Vorab-Kanal darf die soziale Frage ebenfalls nie vor einer
@@ -3048,7 +3137,7 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
         sit3 = _sit_mit_anrufer()
         sit3["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
         sit3["halloVariante"] = 0
-        direkt = gehirn.anrufer_check_frage(sit3, selbst=True)
+        direkt = gehirn.anrufer_check_frage(sit3)
         assert "wie geht" not in direkt.lower()
         assert direkt.count("?") == 1
     finally:
@@ -3166,7 +3255,9 @@ def test_anrufer_kartei_kommt_nach_dem_hallo():
         flow.hintergrund.anstossen = lambda s: None
         try:
             flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
-            z = flow.zug(sit, "Ja, genau.")
+            z_ident = flow.zug(sit, "Ja, genau.")
+            assert z_ident and "für Sie selbst" in z_ident["text"]
+            z = flow.zug(sit, "Ja.")
             s = gehirn.sammler(sit)
             assert s["anruferCheck"] == "ja"
             assert s["letzterBesuch"].startswith("2026-03-01")
@@ -3194,6 +3285,7 @@ def test_arzt_check_nein_fragt_offen():
     try:
         flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
         flow.zug(sit, "Ja, genau.")
+        flow.zug(sit, "Ja.")
         z = flow.zug(sit, "Nein.")
         s = gehirn.sammler(sit)
         assert s["arztCheck"] == "nein"
@@ -3247,7 +3339,7 @@ def test_auskunft_upgrade_nachname_zu_anrufer_check():
         }
         z2 = flow.zug(sit, "Äh, Moment.")
         assert z2 and "Frau Berger" in z2["text"]
-        assert "bestehenden Termine im Kalender nachsehen" in z2["text"]
+        assert "richtig erkannt" in z2["text"]
         assert "Bianca" not in z2["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
@@ -3302,7 +3394,8 @@ def test_absage_mit_erkanntem_anrufer_sucht_direkt():
 
         z2 = flow.zug(sit, "Ja.")
         assert z2 and "wirklich absagen" in z2["text"].lower(), z2
-        assert "Frau Berger" in z2["text"]  # Kartei-Geschlecht traegt die Anrede
+        assert "Frau Berger" not in z2["text"]  # danach nur noch Pronomen
+        assert "Julia Berger" not in z2["text"]
         assert gesucht[-1].get("lastName") == "Berger"
         assert gesucht[-1].get("patientId") == "pat-7"
         assert gesucht[-1].get("phone") == "015253904756"
@@ -3323,7 +3416,7 @@ def test_absage_nach_schnellem_hallo_stellt_keine_nackte_stimmt_das_frage():
         sit["anruferHalloGesagt"] = True
         z = flow.zug(sit, "Ich möchte einen Termin absagen.")
         assert z and z["text"] != "Stimmt das so?"
-        assert "Frau Berger" in z["text"]
+        assert "hinterlegten Daten" in z["text"]
         assert "absagen möchten" in z["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
@@ -3455,7 +3548,8 @@ def test_auskunft_leert_stale_upcoming():
         sit = _sit_mit_anrufer()
         sit["upcoming"] = [{"id": "alt", "label": "gestern um zehn", "iso": "2020-01-01T10:00"}]
         z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
-        assert z1 and "Julia Berger" in z1["text"]
+        assert z1 and "Frau Berger" in z1["text"]
+        assert "richtig erkannt" in z1["text"]
         assert sit.get("upcoming") == []
     finally:
         verwalten.kal.find_patient_appointments = echt_find

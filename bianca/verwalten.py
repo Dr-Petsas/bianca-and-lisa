@@ -536,7 +536,7 @@ def _absage_frage(sit: dict, termin: dict) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "absage_bestaetigen"
     s["frage"] = "absage_ok"
-    wer = gehirn.anrede(s)
+    wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
         f"Gefunden — {termin.get('spoken')}. "
@@ -578,7 +578,7 @@ def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "verschieb_wunsch"
     s["frage"] = "wunsch"
-    wer = gehirn.anrede(s)
+    wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
         f"Gefunden — es geht um den Termin {termin.get('spoken')}{zusatz}. "
@@ -937,7 +937,8 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         )}
 
     quittung = ""
-    if ("name" in neu or "nachname" in neu) and s["nachname"]:
+    if (("name" in neu or "nachname" in neu)
+            and "anruferCheck" not in neu and s["nachname"]):
         voll = f"{s['vorname']} {s['nachname']}".strip()
         quittung = f"Danke, {voll}. "
     aus = _dispatch(sit, melde)
@@ -1103,7 +1104,8 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         or (s["phase"] == "" and sit.get("gefundenKey") != f"{s['vorname']}|{s['nachname']}".lower())
     ):
         quittung = ""
-        if ("name" in neu or "nachname" in neu) and s["nachname"]:
+        if (("name" in neu or "nachname" in neu)
+                and "anruferCheck" not in neu and s["nachname"]):
             voll = f"{s['vorname']} {s['nachname']}".strip()
             quittung = f"Danke, {voll}. "
         aus = _dispatch(sit, melde)

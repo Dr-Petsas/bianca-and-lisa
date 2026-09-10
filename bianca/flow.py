@@ -409,6 +409,15 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if wer:
             return f"Alles klar — der Termin ist für {wer}. "
         return "Alles klar — der Termin ist für jemand anderen. "
+    if "anruferCheck" in neu:
+        if s.get("anruferCheck") == "nein":
+            # DB-Treffer verworfen: klassisch frisch aufnehmen.
+            return "Entschuldigen Sie bitte — dann nehme ich Ihre Daten frisch auf. "
+        # Name stand unmittelbar zuvor im Hallo/Identitätscheck; danach nur
+        # noch Pronomen statt „Danke, Michael Petsas“.
+        return "Danke. "
+    if "fuerWenCheck" in neu:
+        return "Alles klar. "
     if "nachname" in neu and s["buchstabiert"]:
         return f"Danke — {s['nachname']}, notiert. "
     if "name" in neu:
@@ -418,10 +427,6 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if s["vorname"] and s["nachname"]:
             return f"Danke, {s['vorname']} {s['nachname']}. "
         return "Danke. "
-    if "anruferCheck" in neu and s.get("anruferCheck") == "nein":
-        # DB-Treffer verworfen (W-ANRUFER-CHECK): kurz entschuldigen, dann
-        # kommt direkt die klassische Frage (schonmal/Name) hinterher.
-        return "Entschuldigen Sie bitte — dann nehme ich Ihre Daten frisch auf. "
     if "telefon" in neu:
         return "Prima, die Nummer habe ich. "
     if "telefonAkte" in neu:
@@ -494,7 +499,14 @@ def _readback(sit: dict) -> dict:
         beim = arzt_sprechname(kal_name, tenant)
     # Geschlechts-Anrede (Chef 29.08.2026): "für Frau Müller" / "für Herrn
     # Müller" — ohne Geschlecht bleibt der volle Name.
-    wer = gehirn.anrede(s, sit.get("patient"), beugen=True)
+    erkannt_selbst = (
+        s.get("anruferCheck") == "ja"
+        and not s.get("fuerWen")
+        and not s.get("kontaktName")
+    )
+    wer = "Sie" if erkannt_selbst else gehirn.anrede(
+        s, sit.get("patient"), beugen=True
+    )
     s["phase"] = "bestaetigen"
     s["frage"] = "bestaetigung"
     teile = [_grund_sprechbar(s), spoken_slot(s["slotIso"])]
@@ -553,7 +565,7 @@ def _abschied_nach_buchung(sit: dict) -> dict:
     sit["offered"] = []
     s = gehirn.sammler(sit)
     s["frage"] = ""
-    an = gehirn.anrede(s)
+    an = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     return {"text": f"Gern geschehen{', ' + an if an else ''}. Auf Wiederhören."}
 
 
@@ -785,7 +797,10 @@ def _telefon_alt_ausfuehren(sit: dict, melde: Melde = None) -> str:
     res = telefon_aktualisieren(sit["tenant"], s["patientId"], s["telefon"])
     merke_tool(sit, "update_phone", res)
     if res.get("ok"):
+        alte_nummer = telefon.normaliert(s["aktePhone"])
         s["aktePhone"] = s["telefon"]
+        if not res.get("dryRun") and alte_nummer:
+            sit["telefonUpdateAlt"] = alte_nummer
         if res.get("dryRun"):
             return "Die neue Nummer hätte ich jetzt eingetragen — der Test schreibt die Kartei noch nicht. "
         return "Erledigt — die alte Nummer ist gelöscht, Ihre neue steht jetzt in der Akte. "
@@ -1049,6 +1064,11 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
             hinweise = []
+            if _s(sit.get("telefonUpdateAlt")):
+                hinweise.append(
+                    f"Alte Nummer {telefon.normaliert(sit['telefonUpdateAlt'])} "
+                    "aktualisiert //Bianca"
+                )
             if s["pzr"] == "ja":
                 # Chef 30.08.2026, exakter Wortlaut fuers Notizfeld: die
                 # Zahnreinigung wird nicht als zweiter Slot gebucht, sondern
@@ -1288,6 +1308,17 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
     s = gehirn.sammler(sit)
     if sit.get("rueckrufBuchung"):
         return None
+    if (s.get("modus") == "buchen" and s.get("anruferCheck") == "ja"
+            and not s.get("fuerWenCheck") and not s.get("fuerWen")):
+        # Identität und „für Sie selbst?“ bleiben ein zusammenhängender
+        # Dialogfaden. Kein Rückblick/PZR-Angebot darf dazwischen springen.
+        return None
+    if (s.get("modus") == "buchen" and s.get("anruferCheck") == "ja"
+            and not s.get("arzt")):
+        # Erst den passenden Kalender/letzten Behandler klären; ein
+        # Kartei-Rückblick darf diese Pflichtfrage beim erkannten Anrufer
+        # nicht überholen. Andere Bestandspfade bleiben unverändert.
+        return None
     if gehirn.rueckblick_faellig(s):
         s["rueckblick"] = "gefragt"
         s["frage"] = "rueckblick"
@@ -1394,12 +1425,29 @@ def _eskalieren(sit: dict, fid: str) -> str:
         return ("Ich habe mir eine Notiz gemacht — der Doktor schaut sich das "
                 "beim Termin in Ruhe an und berät Sie. ")
     if fid == "anrufer_check":
-        # Zweimal keine klare Antwort auf das vorgelesene Name+Nummer-Paar:
+        # Zweimal keine klare Antwort auf die erkannte Identität:
         # NICHTS uebernehmen (Sicherheit vor Tempo — falsche Identitaet waere
         # fatal), klassisch nach Name und Nummer fragen (W-ANRUFER-CHECK).
         s["anruferCheck"] = "nein"
         return "Dann gehen wir auf Nummer sicher und nehmen Ihre Daten einfach frisch auf. "
+    if fid == "fuer_wen_check":
+        # Nicht raten, ob die erkannte Person selbst Patient ist.
+        s["fuerWenCheck"] = "nein"
+        s["fuerWen"] = "andere"
+        gehirn.patient_von_kontakt_loesen(sit)
+        return "Damit ich niemanden verwechsle: Für wen ist der Termin? "
     if fid == "telefon_check" and s["telefonOffen"]:
+        if (s.get("telefonBekannt")
+                and telefon.normaliert(s["telefonOffen"])
+                == telefon.normaliert(s["telefonBekannt"])):
+            # Hinterlegte Nummer nur nach einem klaren Ja verwenden. Nach
+            # zwei unklaren Antworten lieber neu erfragen als eine SMS an
+            # die falsche Nummer zu schicken.
+            gehirn._telefon_sperren(s, s["telefonOffen"])
+            s["telefonBekannt"] = ""
+            s["telefonOffen"] = ""
+            s["telefonTeil"] = ""
+            return "Dann frage ich die Nummer lieber neu ab. "
         # Zweimal keine klare Antwort auf die Rückbestätigung, aber auch kein
         # Nein: die vorgelesene Nummer gilt — nicht zum dritten Mal fragen
         # (Chef 27.08.2026: Nummer wurde mehrfach abgefragt und bestätigt).
@@ -2081,10 +2129,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     if "anruferWohl" in neu:
         # "Gut." auf den Hallo-Satz — Identitaet bleibt offen, nur die
-        # echte Ja/Nein-Frage nochmal, ohne den Verspiel-Vorsatz.
+        # echte Ja/Nein-Frage nochmal, ohne den Verspiel-Vorsatz. Die
+        # Empfängerfrage kommt erst NACH einem klaren Identitäts-Ja.
         s["frage"] = "anrufer_check"
-        selbst = s["modus"] == "buchen"
-        return {"text": "Schön! " + gehirn.anrufer_check_schluss(selbst=selbst)}
+        return {"text": "Schön! " + gehirn.anrufer_check_schluss()}
 
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
     # eigenen deterministischen Fluss.

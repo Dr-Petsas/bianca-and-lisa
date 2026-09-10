@@ -108,6 +108,10 @@ def test_freier_termin_aus_praxissicht_ist_neubuchung():
         "Habe Sie noch einen freien Termin?",
         "Gibt es diese Woche noch irgendeinen Termin?",
         "Welche Termine sind diese Woche noch frei?",
+        "Ist heute noch etwas frei?",
+        # Live-Parakeet 10.09.2026: „Ist heute noch was frei bei Doktor
+        # Petsas?“ verlor das Wort Termin. Das darf trotzdem nie ans LLM.
+        "Hallo, sind heute doch der Wide frei bei Doktor Petzers?",
     ]:
         sit = _sit()
         hirn.init(sit)
@@ -128,19 +132,25 @@ def test_agent_routet_freie_slotfrage_ohne_llm_in_sicheren_flow():
     llm.chat_stream = _knall
     flow.hintergrund.anstossen = lambda sit: None
     try:
-        sit = _sit()
-        hirn.init(sit)
-        sit["anrufer"] = {
-            "vorname": "Michael", "nachname": "Petsas",
-            "patientId": "pat-9", "geschlecht": "male",
-            "telefon": "+491701234567",
-        }
-        aus = agent.user_turn(sit, "Haben Sie noch einen Termin diese Woche bei Ihnen?")
-        s = gehirn.sammler(sit)
-        assert s["modus"] == "buchen"
-        assert s["frage"] == "anrufer_check"
-        assert "Herr Petsas" in aus["text"]
-        assert "selbst" in aus["text"]
+        for satz in [
+            "Haben Sie noch einen Termin diese Woche bei Ihnen?",
+            "Hallo, sind heute doch der Wide frei bei Doktor Petzers?",
+        ]:
+            sit = _sit()
+            hirn.init(sit)
+            sit["anrufer"] = {
+                "vorname": "Michael", "nachname": "Petsas",
+                "patientId": "pat-9", "geschlecht": "male",
+                "telefon": "+491701234567",
+            }
+            aus = agent.user_turn(sit, satz)
+            s = gehirn.sammler(sit)
+            assert s["modus"] == "buchen"
+            assert s["frage"] == "anrufer_check"
+            assert "Herr Petsas" in aus["text"]
+            assert "richtig erkannt" in aus["text"]
+            assert "kein freier" not in aus["text"].lower()
+            assert "leider kein" not in aus["text"].lower()
     finally:
         llm.chat = echt_chat
         llm.chat_stream = echt_stream
@@ -178,7 +188,7 @@ def test_live_bestandsfrage_startet_sofort_kalenderpfad_ohne_llm():
         )
         s = gehirn.sammler(sit)
         assert s["modus"] == "auskunft" and s["frage"] == "anrufer_check"
-        assert "bestehenden Termine im Kalender nachsehen" in aus1["text"]
+        assert "richtig erkannt" in aus1["text"]
         assert "neuen vereinbaren" not in aus1["text"]
 
         aus2 = agent.user_turn(sit, "Ja?")

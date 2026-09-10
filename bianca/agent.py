@@ -95,8 +95,9 @@ _FRAGE_KERN = {
     "buchstabieren": r"buchstabier",
     "telefon": r"nummer|handy|telefon",
     "telefon_check": r"nummer|stimmt",
-    # W-ANRUFER-CHECK: das vorgelesene Name+Nummer-Paar zur Rufnummer.
-    "anrufer_check": r"rufnummer|erkannt|stimmt|selbst",
+    # Erkannte Identität und Terminempfänger sind getrennte Ja/Nein-Schritte.
+    "anrufer_check": r"erkannt|richtige\s+person",
+    "fuer_wen_check": r"selbst|persönlich|persoenlich",
     "arzt_check": r"zuletzt|behandler|richtig",
     "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
@@ -233,6 +234,7 @@ _FEHLT_WORT = {
     "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
+    "fuer_wen_check": "ob der Termin für Sie selbst ist",
     "rueckblick": "wie es nach dem letzten Besuch war",
     "folge_kontrolle": "ob eine Kontrolle gebucht werden soll",
 }

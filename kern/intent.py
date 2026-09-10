@@ -159,7 +159,8 @@ _SLOTWAHL_RE = re.compile(
 # Formular-Fragen der Maschine: Antworten darauf sind Ernte, kein Anliegen.
 _FORMULAR_FRAGEN = {
     "name", "vorname", "nachname", "telefon", "telefon_check", "telefon_alt",
-    "buchstabieren", "schonmal", "versicherung", "anrufer_check", "arzt_check",
+    "buchstabieren", "schonmal", "versicherung", "anrufer_check",
+    "fuer_wen_check", "arzt_check",
     "geburtstag",
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
     "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",
@@ -300,7 +301,21 @@ _FREIER_TERMIN_RE = re.compile(
     r"\bgibt\s+es\b[^?.!]{0,32}\b"
     r"(?:noch\s+)?(?:einen?|freie[nr]?|irgend(?:einen?)?)\s+termine?\b|"
     r"\bwelche[nr]?\s+termine?\b[^?.!]{0,32}\bfrei\w*\b|"
-    r"\b(?:ist|wäre|waere)\b[^?.!]{0,24}\btermine?\b[^?.!]{0,20}\bfrei\b",
+    r"\b(?:ist|wäre|waere)\b[^?.!]{0,24}\btermine?\b[^?.!]{0,20}\bfrei\b|"
+    # Live 10.09.2026: „Ist heute noch was frei bei Doktor Petsas?“ kam aus
+    # Parakeet als „sind heute doch der Wide frei bei Doktor Petzers?“.
+    # Das Wort „Termin“ fehlte, alle belastbaren Anker (Tag + frei +
+    # Behandler) blieben aber da. Ohne diesen engen STT-Pfad erfand das freie
+    # LLM „heute leider nichts frei“, obwohl getFreeTimeSlots danach zwei
+    # Zeiten fand. Verfügbarkeit ist immer Formular/Tool, nie LLM-Wissen.
+    r"\b(?:ist|sind|wäre|waere)\b[^?.!]{0,18}\b"
+    r"(?:heute|morgen|übermorgen|uebermorgen)\b[^?.!]{0,28}\bfrei\w*\b"
+    r"[^?.!]{0,24}\b(?:bei\s+)?(?:dr\.?|doktor|behandler)\b|"
+    # Auch die natürliche Kurzform ohne Arztname ist am Praxis-Telefon
+    # eindeutig genug: „Ist heute noch etwas frei?“.
+    r"\b(?:ist|sind|gibt\s+es)\b[^?.!]{0,18}\b"
+    r"(?:heute|morgen|übermorgen|uebermorgen)\b[^?.!]{0,18}\b"
+    r"(?:noch|irgendwas|irgendetwas|etwas|was)\b[^?.!]{0,12}\bfrei\w*\b",
     re.I,
 )
 _FB_NEU_RE = re.compile(

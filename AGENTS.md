@@ -199,36 +199,45 @@ dann erst nach namen und nummer fragen."
  Termin-/Absage-/Auskunftswunsch bleibt in `anruferHalloOffenerText`
  geparkt und läuft nach der Wohlseinsantwort weiter. Nie wieder eine Frage
  stellen und im selben Atemzug selbst weiterreden. „Gut.“ oder „Ja, gut.“
- bestätigt dabei NIE die Identität; erst die danach gestellte Kontrolle
- („Der Termin ist für Sie selbst, richtig?“) nimmt ein Ja an.
+ bestätigt dabei NIE die Identität; erst „Habe ich Sie richtig erkannt?“
+ nimmt ein Ja an. Bei Buchungen folgt als EIGENER Schritt
+ `frage=fuer_wen_check`: „Der Termin ist für Sie selbst, richtig?“.
+ Identität und Terminempfänger dürfen nie wieder in eine doppeldeutige
+ Ja/Nein-Frage zusammengezogen werden.
  Fast-Pfad: der Hallo wartet NICHT auf
  letzten Besuch oder Behandler (`anrufer_hallo_jetzt` nur Name). Die
  Kartei startet schon zur Begrüßung (`hintergrund.kartei_von_anrufer`)
  und fliesst danach ein: „Sie waren zuletzt bei Doktor X, richtig?“
  (`arzt_check`), dann PZR.
  Ja (`einsammeln`): Name in Kartei-Schreibweise (buchstabiert=True,
- bekannt=True, patientId), Geschlecht als Quelle "akte", Telefon gilt als
- rückbestätigt (telefonOk), warSchonMal=True — schonmal-, Namens-,
- Buchstabier- und Telefon-Frage entfallen komplett; die Hintergrund-Kartei
- reichert wie gehabt an (aktePhone/letzterBesuch/Versicherung → Rückblick/
- PZR laufen normal). Nein: Treffer verworfen (anruferCheck="nein", kommt
- nie wieder), klassische Fragen wie vor dem Patch. NIE gefragt: bei
- `fuerWen` (Termin für Dritte) oder warSchonMal=False (Angehöriger am
- selben Anschluss); ein Kind, das den Hörer der Mutter nutzt, verneint.
+ bekannt=True, patientId), Geschlecht als Quelle "akte", warSchonMal=True.
+ Danach nur noch Pronomen („Sie“), nicht drei- bis viermal der volle Name.
+ Die Rufnummer wird NICHT still als bestätigt übernommen: am normalen
+ Nummernschritt fragt Bianca „Soll ich die Bestätigungs-SMS an die
+ <hinterlegte Nummer> schicken?“. Ja übernimmt sie; Nein fragt eine neue
+ Nummer ab. Nach deren Readback folgt `telefon_alt`: alte Nummer löschen
+ und neue per `masUpdatePatientPhone` eintragen oder SMS doch an die alte
+ Nummer. Ein erfolgreicher Wechsel wird am Termin als
+ `Alte Nummer <alt> aktualisiert //Bianca` vermerkt. Identitäts-Nein
+ verwirft den Treffer (anruferCheck="nein"), danach klassische Fragen.
 - **Absage/Verschieben/Auskunft** (`verwalten._sammeln` bzw. Auskunfts-Zweig
  in `verwalten.zug`): dieselbe Frage ersetzt die Nachnamen-Frage; ein Ja
  sucht SOFORT mit Kartei-Name, patientId und Anrufernummer
  (`agentFindPatientAppointments` bekommt phone=callerPhone mit). Wurde der
  Name schon im schnellen Hallo genannt, lautet die spätere Kontrolle
- aufgabenscharf („Soll ich unter diesem Namen den Termin suchen, den Sie
+ aufgabenscharf („Soll ich unter Ihren hinterlegten Daten den Termin suchen,
+ den Sie
  absagen möchten?“) — nie mehr das zusammenhanglose „Stimmt das so?“.
-- **Deterministisch wie telefon_check:** die Frage trägt Ziffern
- (Wiederholungs-Wächter fasst sie nie an, TTS-Ziffern-Wächter verifiziert
- den Render), Antwort-Leerlauf bleibt beim festen Text ("Habe ich Sie
- richtig erkannt? Ein kurzes Ja oder Nein genügt."), zwei unklare Antworten
- => `flow._eskalieren` verwirft den Treffer (Sicherheit vor Tempo — nie
- eine Identität raten). Kurze Ruhe-Schwelle 350 ms (`_STILLE_KURZ`),
- Frage-Kern in `agent._FRAGE_KERN["anrufer_check"]`.
+- **Dritttermine + relative Nummer:** beim Lösen der erkannten Anruferakte
+ vom Patienten bleiben `kontaktName` und `kontaktTelefon` erhalten. „Nehmen
+ Sie meine Nummer“ bezieht sich dadurch sicher auf die Rufnummer des
+ Anrufers/Elternteils, nie auf die frisch erfasste Kinderakte; Bianca liest
+ sie als SMS-Ziel vor und verwendet sie erst nach Ja.
+- **Deterministisch wie telefon_check:** Identität, Terminempfänger und
+ SMS-Ziel bleiben feste Ja/Nein-Schritte. Zwei unklare Antworten verwerfen
+ lieber den Identitätstreffer bzw. fragen die Nummer neu, statt etwas zu
+ raten. Kurze Ruhe-Schwelle 350 ms (`_STILLE_KURZ`), Frage-Kerne in
+ `agent._FRAGE_KERN["anrufer_check"|"fuer_wen_check"]`.
 - **Notaus:** `ANRUFER_CHECK=0` (gehirn.anrufer_bekannt liefert {}) =>
  Verhalten wie vor dem Patch. Tests: W-ANRUFER-CHECK-Blöcke in
  `tests/test_bianca_bausteine.py` (Buchung ja/nein, Neupatient/Dritte,
