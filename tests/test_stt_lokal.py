@@ -120,16 +120,26 @@ def test_praxisname_ist_tenant_hotword_ohne_generische_woerter():
 
 
 def test_thaler_alias_ist_nur_mit_tenant_hotword_aktiv():
-    fake = _FakeLokal(_Antwort(200, {"text": "Hier ist Ttola Zahnmedizin"}))
+    faelle = {
+        "Hier ist Ttola Zahnmedizin": "Hier ist Thaler Zahnmedizin",
+        "Otala.": "Thaler.",
+        "Hotala": "Thaler",
+        "Oh, Tala.": "Oh, Thaler.",
+    }
+    for gehoert, erwartet in faelle.items():
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
 
-    def lauf():
-        assert stt.transcribe(BLOB, keywords="Thaler") == "Hier ist Thaler Zahnmedizin"
+        def lauf():
+            assert stt.transcribe(BLOB, keywords="Thaler") == erwartet
 
-    _mit_lokal(fake, lauf)
-    fake2 = _FakeLokal(_Antwort(200, {"text": "Hier ist Ttola Zahnmedizin"}))
+        _mit_lokal(fake, lauf)
+
+    # Die weit gefassten Realvarianten sind ausschließlich beim passenden
+    # Mandanten aktiv. Insbesondere "Tala" darf global kein Alias sein.
+    fake2 = _FakeLokal(_Antwort(200, {"text": "Oh, Tala."}))
 
     def ohne_marker():
-        assert stt.transcribe(BLOB, keywords="Petsas") == "Hier ist Ttola Zahnmedizin"
+        assert stt.transcribe(BLOB, keywords="Petsas") == "Oh, Tala."
 
     _mit_lokal(fake2, ohne_marker)
 

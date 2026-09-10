@@ -89,7 +89,13 @@ _KONS_PHRASE_MARKERS = {"kons"}
 # Praxis-/Tenant-Hotword mitgesendet wurde; andere Mandanten bleiben gleich.
 _TENANT_PHRASE_FIXES: dict[str, list[tuple[re.Pattern, str]]] = {
     "thaler": [
-        (re.compile(r"\b(?:tt?ola|tola|tahler|taler|thala)\b", re.IGNORECASE),
+        # Reale Telefonclips 10.09.: "Otala", "Hotala" und "Oh, Tala".
+        # Nur mit dem Tenant-Hotword "Thaler" aktiv; "Tala" bleibt bei
+        # allen anderen Praxen vollständig unangetastet.
+        (re.compile(
+            r"\b(?:tt?ola|tola|otala|hotala|tahler|taler|thala|tala)\b",
+            re.IGNORECASE,
+        ),
          "Thaler"),
     ],
 }
