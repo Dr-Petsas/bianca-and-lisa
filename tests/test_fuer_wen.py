@@ -401,7 +401,7 @@ def test_buchung_traegt_angehoerigen_notiz():
             "spoken": "Der Termin ist eingetragen.",
         }
         flow.kal.note_appointment = (
-            lambda tenant, ctx, sit2, note="": notes.append(note))
+            lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
         try:
             flow._buchen(sit)
         finally:

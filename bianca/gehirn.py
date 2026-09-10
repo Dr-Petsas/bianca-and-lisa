@@ -1111,11 +1111,24 @@ def _kartei_zuruecksetzen(s: dict) -> None:
     s["versicherungAkte"] = ""
     s["letzterBesuch"] = ""
     s["letzterGrund"] = ""
+    if s.get("anruferCheck") == "ja":
+        s["anruferCheck"] = "nein"
+        s["fuerWenCheck"] = ""
     if s.get("geschlechtQuelle") == "akte":
         s["geschlecht"] = ""
         s["geschlechtQuelle"] = ""
         s["geschlechtVon"] = ""
         s["geschlechtUnklar"] = False
+
+
+def _kartei_vor_namensaenderung(
+    s: dict, *, first: str | None = None, last: str | None = None
+) -> None:
+    """Löst eine alte Aktenbindung, sobald sich ein Namensteil ändert."""
+    first_changed = first is not None and _s(first).casefold() != _s(s.get("vorname")).casefold()
+    last_changed = last is not None and _s(last).casefold() != _s(s.get("nachname")).casefold()
+    if (first_changed or last_changed) and (s.get("patientId") or s.get("bekannt")):
+        _kartei_zuruecksetzen(s)
 
 
 def _name_korrektur(s: dict, text: str) -> bool:
@@ -1195,16 +1208,16 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     getroffen = False
     mv = _TEIL_VOR_RE.search(text) or _TEIL_VOR_UMGEKEHRT_RE.search(text)
     if mv and mv.group(1).lower() not in _NAME_STOP:
-        s["vorname"] = mv.group(1).capitalize()
+        neu_vor = mv.group(1).capitalize()
+        _kartei_vor_namensaenderung(s, first=neu_vor)
+        s["vorname"] = neu_vor
         getroffen = True
     mn = _TEIL_NACH_RE.search(text) or _TEIL_NACH_UMGEKEHRT_RE.search(text)
     if mn and mn.group(1).lower() not in _NAME_STOP:
         neu_nach = mn.group(1).capitalize()
-        if s["nachname"] and neu_nach != s["nachname"]:
+        if neu_nach != s["nachname"]:
             s["buchstabiert"] = False
-            _kartei_zuruecksetzen(s)
-        elif neu_nach != s["nachname"]:
-            s["buchstabiert"] = False
+            _kartei_vor_namensaenderung(s, last=neu_nach)
         s["nachname"] = neu_nach
         getroffen = True
     if getroffen:
@@ -1228,7 +1241,9 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         # Talk-Schicht, nicht der Kartei (Talk-Probe 27.08.2026).
         return False
     if s["frage"] == "vorname" and erzwungen:
-        s["vorname"] = toks[0].capitalize()
+        neu_vor = toks[0].capitalize()
+        _kartei_vor_namensaenderung(s, first=neu_vor)
+        s["vorname"] = neu_vor
         return True
     if s["frage"] == "nachname" and erzwungen:
         # Voller Name auf die Nachnamen-Frage ("Martin Berger"): den Vornamen
@@ -1236,14 +1251,20 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         # (W-NACHNAME 31.08.2026), statt ihn gleich nochmal zu erfragen. Ein
         # schon gespeicherter Vorname wird dabei ÜBERSCHRIEBEN: wer auf die
         # Korrektur-Frage den vollen Namen sagt, korrigiert beide Teile.
+        neu_vor = toks[0].capitalize() if len(toks) >= 2 else None
+        neu_nach = toks[-1].capitalize()
+        _kartei_vor_namensaenderung(s, first=neu_vor, last=neu_nach)
         if len(toks) >= 2:
-            s["vorname"] = toks[0].capitalize()
-        s["nachname"] = toks[-1].capitalize()
+            s["vorname"] = neu_vor
+        s["nachname"] = neu_nach
         s["buchstabiert"] = False
         return True
     if len(toks) >= 2:
-        s["vorname"] = toks[0].capitalize()
-        s["nachname"] = toks[-1].capitalize()
+        neu_vor = toks[0].capitalize()
+        neu_nach = toks[-1].capitalize()
+        _kartei_vor_namensaenderung(s, first=neu_vor, last=neu_nach)
+        s["vorname"] = neu_vor
+        s["nachname"] = neu_nach
         return True
     if erzwungen:
         # Nur EIN Wort auf die Namensfrage: gängige Vornamen (Paul, Anna …)
@@ -1253,9 +1274,13 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
             (toks[0].lower() in _VORNAMEN or vornamen.aus_liste(toks[0]))
             and not s["vorname"]
         ):
-            s["vorname"] = toks[0].capitalize()
+            neu_vor = toks[0].capitalize()
+            _kartei_vor_namensaenderung(s, first=neu_vor)
+            s["vorname"] = neu_vor
         else:
-            s["nachname"] = toks[0].capitalize()
+            neu_nach = toks[0].capitalize()
+            _kartei_vor_namensaenderung(s, last=neu_nach)
+            s["nachname"] = neu_nach
         return True
     return False
 
@@ -1994,6 +2019,35 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["geschlechtUnklar"] = not g
         s["geschlechtQuelle"] = "rate"
         s["geschlechtVon"] = s["vorname"]
+
+    # Eine Namenskorrektur muss die alte Akte SOFORT aus allen Spiegeln
+    # entfernen. Sonst könnte ein LLM-Notiztool noch vor flow._ctx_bauen mit
+    # dem alten, intern weiterhin konsistent aussehenden booking-Dict schreiben.
+    if {"name", "nachname", "vorname"} & neu and not s["patientId"]:
+        booking = sit.get("booking")
+        if isinstance(booking, dict):
+            for key in (
+                "patientId", "patientIdBound", "patientIdFirstName",
+                "patientIdLastName", "appointmentId",
+            ):
+                booking.pop(key, None)
+            if s["vorname"]:
+                booking["firstName"] = s["vorname"]
+            else:
+                booking.pop("firstName", None)
+            if s["nachname"]:
+                booking["lastName"] = s["nachname"]
+            else:
+                booking.pop("lastName", None)
+            name = f"{s['vorname']} {s['nachname']}".strip()
+            if name:
+                booking["patientName"] = name
+            else:
+                booking.pop("patientName", None)
+        sit["patient"] = None
+        sit.pop("upcoming", None)
+        sit.pop("past", None)
+        sit["gefundenKey"] = ""
 
     kalender_zu_grund(sit)
     _motiv_an_kalender(sit)

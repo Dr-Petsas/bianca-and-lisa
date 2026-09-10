@@ -107,7 +107,8 @@ def test_fuer_wen_notiz_nennt_anrufer_und_beziehung():
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
         "ok": True, "booked": True, "slotIso": slot_iso,
         "spoken": "Der Termin ist eingetragen."}
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     echt_hg = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda _s: None
     try:

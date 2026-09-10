@@ -37,6 +37,7 @@ from bianca import gehirn, hintergrund
 from kern import agentprofil
 from kern import calendar as kal
 from kern import gespraech, motive
+from kern import patients
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
@@ -120,13 +121,21 @@ def _ctx(sit: dict) -> dict:
         ctx.pop("firstName", None)
     if s["nachname"]:
         ctx["lastName"] = s["nachname"]
+    else:
+        ctx.pop("lastName", None)
     name = f"{s['vorname']} {s['nachname']}".strip()
     if name:
         ctx["patientName"] = name
+    else:
+        ctx.pop("patientName", None)
     if s["patientId"]:
+        if _s(ctx.get("patientId")) != _s(s["patientId"]):
+            patients.patient_id_bindung_setzen(
+                ctx, s["patientId"], s["vorname"], s["nachname"])
         ctx["patientId"] = s["patientId"]
     else:
         ctx.pop("patientId", None)
+        patients.patient_id_bindung_setzen(ctx, "", "", "")
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
@@ -489,6 +498,22 @@ def rueckruf_notiz(sit: dict) -> None:
         sit, anliegen="neubuchung",
         status="Kein freier Termin im Angebot — bitte zurueckrufen",
         dock_text=f"{name} wollte neu buchen — kein freier Termin im Angebot. Bitte zurueckrufen.",
+    )
+
+
+def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> None:
+    """HTTP-200 ohne belastbaren Read-back wird zum echten Prüf-/Rückrufvorgang."""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    wann = spoken_slot(slot_iso) if len(_s(slot_iso)) >= 16 else _s(slot_iso)
+    _notiz_schreiben(
+        sit,
+        anliegen="buchung_pruefen",
+        status="Buchungsantwort nicht eindeutig rücklesbar — Termin und SMS prüfen, bitte zurückrufen",
+        dock_text=(
+            f"{name}: Buchung für {wann or 'den gewünschten Zeitpunkt'} war nach dem "
+            "Schreiben nicht eindeutig rücklesbar. Termin und SMS prüfen, bitte zurückrufen."
+        ),
     )
 
 

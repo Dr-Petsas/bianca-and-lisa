@@ -95,3 +95,87 @@ def test_name_norm_umlaut_varianten():
     assert _name_norm("Müller") == _name_norm("Mueller") == _name_norm("Muller")
     assert _name_norm("Süß") == _name_norm("Suess")
     assert _name_norm("Peter") != _name_norm("Petra")
+
+
+def test_patient_id_bindung_blockiert_killnir_auf_kellner_akte():
+    """Live 10.09.2026, Session 2ec59b80: Der gesprochene Name darf niemals
+    mit der alten patientId des erkannten Anrufers gebucht werden."""
+    from kern import patients
+
+    ctx = {
+        "patientId": "6vCR-kellner",
+        "firstName": "Den",
+        "lastName": "Killnir",
+    }
+    patients.patient_id_bindung_setzen(
+        ctx, "6vCR-kellner", "Phoebe Rose", "Kellner")
+    assert not patients.patient_id_bindung_passt(ctx)
+
+    ctx["firstName"] = "Phoebe Rose"
+    ctx["lastName"] = "Kellner"
+    assert patients.patient_id_bindung_passt(ctx)
+
+
+def test_buchungskontext_entfernt_alte_kellner_id_nach_namenskorrektur():
+    from bianca import flow, gehirn
+    from kern import patients
+
+    sit = {
+        "tenant": {"calendars": [], "visitMotives": []},
+        "booking": {
+            "patientId": "6vCR-kellner",
+            "firstName": "Phoebe Rose",
+            "lastName": "Kellner",
+            "patientName": "Phoebe Rose Kellner",
+        },
+    }
+    patients.patient_id_bindung_setzen(
+        sit["booking"], "6vCR-kellner", "Phoebe Rose", "Kellner")
+    s = gehirn.sammler(sit)
+    s.update({"vorname": "Den", "nachname": "Killnir", "patientId": ""})
+
+    ctx = flow._ctx_bauen(sit)
+
+    assert ctx["patientName"] == "Den Killnir"
+    assert "patientId" not in ctx
+    assert "patientIdBound" not in ctx
+
+
+def test_namenskorrektur_loest_bestaetigte_akte_sofort():
+    from bianca import gehirn
+
+    sit = {
+        "booking": {
+            "patientId": "6vCR-kellner",
+            "appointmentId": "termin-kellner",
+            "firstName": "Phoebe Rose",
+            "lastName": "Kellner",
+            "patientName": "Phoebe Rose Kellner",
+        },
+        "patient": {"id": "6vCR-kellner", "name": "Phoebe Rose Kellner"},
+        "upcoming": [{"id": "termin-kellner"}],
+    }
+    from kern import patients
+    patients.patient_id_bindung_setzen(
+        sit["booking"], "6vCR-kellner", "Phoebe Rose", "Kellner")
+    s = gehirn.sammler(sit)
+    s.update({
+        "frage": "nachname",
+        "vorname": "Phoebe Rose",
+        "nachname": "Kellner",
+        "patientId": "6vCR-kellner",
+        "bekannt": True,
+        "anruferCheck": "ja",
+        "aktePhone": "01776004600",
+    })
+    gehirn.einsammeln(sit, "Den Killnir")
+    assert s["vorname"] == "Den"
+    assert s["nachname"] == "Killnir"
+    assert not s["patientId"]
+    assert not s["bekannt"]
+    assert s["anruferCheck"] == "nein"
+    assert not s["aktePhone"]
+    assert "patientId" not in sit["booking"]
+    assert "appointmentId" not in sit["booking"]
+    assert sit["patient"] is None
+    assert "upcoming" not in sit

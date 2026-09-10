@@ -503,6 +503,11 @@ def _anrufer_in_sitzung(sit: dict, pat: dict[str, str], caller_norm: str) -> Non
         return
     if pid and not _s(ctx.get("patientId")):
         ctx["patientId"] = pid
+        # Schreibschutz: patientId und der von der CF gelieferte Karteiname
+        # bleiben als unveränderliche Bindung zusammen. Ändert der Dialog
+        # später den Namen, darf diese ID nicht unter dem neuen Namen buchen.
+        from kern import patients
+        patients.patient_id_bindung_setzen(ctx, pid, vor, nach)
     if vor and not _s(ctx.get("firstName")):
         ctx["firstName"] = vor
     if nach and not _s(ctx.get("lastName")):

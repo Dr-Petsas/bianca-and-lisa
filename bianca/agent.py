@@ -575,7 +575,9 @@ def start_reply(sit: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
-def _fakten_wache_anwenden(sit: dict, text: str) -> str:
+def _fakten_wache_anwenden(
+    sit: dict, text: str, *, nutzertext: str | None = None
+) -> str:
     """W-FAKTEN-WACHE (09.09.2026): evidenzbasierte Erledigt-Wache auf dem
     LLM-Pfad. off: nichts. shadow: nur Waechterspur. enforce: unbelegte
     Erledigt-Behauptung durch eine ehrliche Absicherung + offene Frage
@@ -583,7 +585,8 @@ def _fakten_wache_anwenden(sit: dict, text: str) -> str:
     m = fakten_wache.modus()
     if m == "off" or not _s(text):
         return text
-    unbelegt = fakten_wache.unbelegte_behauptung(sit, text)
+    unbelegt = fakten_wache.unbelegte_behauptung(
+        sit, text, nutzertext=nutzertext)
     if not unbelegt:
         return text
     if m == "shadow":
@@ -594,7 +597,16 @@ def _fakten_wache_anwenden(sit: dict, text: str) -> str:
     fid, frage = gehirn.naechste_frage(sit)
     if fid:
         s["frage"] = fid
-    hedge = "Da will ich nichts falsch machen — das ist noch nicht erledigt."
+    hedge = {
+        "slots": "Das kann ich ohne eine echte Kalendersuche nicht sicher sagen.",
+        "bestand": "Ob ein Termin besteht, sage ich erst nach einer echten Kalendersuche.",
+        "sms": "Eine Bestätigungs-SMS kann ich erst nach einer bestätigten Buchung zusagen.",
+        "rueckruf": "Einen Rückruf habe ich noch nicht angelegt.",
+        "transfer": "Eine Weiterleitung habe ich noch nicht gestartet.",
+    }.get(
+        unbelegt,
+        "Da will ich nichts falsch machen — das ist noch nicht erledigt.",
+    )
     return _wiederholung_oder_presence(sit, " ".join(x for x in [hedge, frage] if x).strip())
 
 
@@ -949,7 +961,26 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             extra[k] = v
     llm_tools = task_router.werkzeuge_fuer(sit) if task_auswahl else TOOLS
     if darf_vorab:
-        out = llm.chat_stream(msgs, llm_tools, erster_satz=vorab, **extra)
+        # P5 spricht Sätze bereits während der Generierung. Die finale Wache
+        # unten käme für eine Halluzination zu spät; deshalb wird ein
+        # unbelegter Kalender-/Erledigt-Satz samt aller Folge-Sätze schon am
+        # Streaming-Ausgang zurückgehalten.
+        vorab_blockiert = False
+
+        def sicherer_vorab(satz: str) -> None:
+            nonlocal vorab_blockiert
+            if vorab_blockiert:
+                return
+            unbelegt = fakten_wache.unbelegte_behauptung(
+                sit, satz, nutzertext=text_in)
+            if fakten_wache.modus() == "enforce" and unbelegt:
+                vorab_blockiert = True
+                spur.merken(sit, "fakten-wache-vorab", unbelegt)
+                return
+            vorab(satz)
+
+        out = llm.chat_stream(
+            msgs, llm_tools, erster_satz=sicherer_vorab, **extra)
     else:
         out = llm.chat(msgs, llm_tools, **extra)
     if not out.get("ok"):
@@ -976,7 +1007,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     werkzeug_lief = bool(gelaufen)
     _fluss_sync(sit, gelaufen, book)
     bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief, floor=route["floor"])
-    bewacht = _fakten_wache_anwenden(sit, bewacht)
+    bewacht = _fakten_wache_anwenden(
+        sit, bewacht, nutzertext=text_in)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht

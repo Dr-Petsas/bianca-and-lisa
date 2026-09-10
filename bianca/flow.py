@@ -16,6 +16,7 @@ from kern import anliegen_art
 from kern import dossier
 from kern import gedaechtnis
 from kern import motive
+from kern import patients
 from kern import praxisregeln
 from kern import spur
 from kern import notes as kern_notes
@@ -371,14 +372,29 @@ def _ctx_bauen(sit: dict) -> dict:
     elif s["grund"] and not _s(ctx.get("visitMotiveName")):
         ctx["visitMotiveName"] = "Kontrolluntersuchung"
     if s["patientId"]:
+        if _s(ctx.get("patientId")) != _s(s["patientId"]):
+            # Die ID kam frisch aus einer Namens-/Karteisuche. Ihre
+            # ursprüngliche Namensbindung wird separat festgehalten und bei
+            # späteren Namenskorrekturen nicht still überschrieben.
+            patients.patient_id_bindung_setzen(
+                ctx, s["patientId"], s["vorname"], s["nachname"])
         ctx["patientId"] = s["patientId"]
+    else:
+        ctx.pop("patientId", None)
+        patients.patient_id_bindung_setzen(ctx, "", "", "")
     if s["vorname"]:
         ctx["firstName"] = s["vorname"]
+    else:
+        ctx.pop("firstName", None)
     if s["nachname"]:
         ctx["lastName"] = s["nachname"]
+    else:
+        ctx.pop("lastName", None)
     name = f"{s['vorname']} {s['nachname']}".strip()
     if name:
         ctx["patientName"] = name
+    else:
+        ctx.pop("patientName", None)
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
@@ -1050,20 +1066,38 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 else:
                     if melde:
                         melde("note_appointment")
-                    kal.note_appointment(
+                    nummer_notiz = kal.note_appointment(
                         sit["tenant"], ctx, sit,
                         note=(
                             f"Anrufer nennt neue Handynummer: {s['telefon']} — "
                             f"Akte trägt {s['aktePhone']}. Bitte Akte aktualisieren."
                         ),
                     )
-                    text += " Ihre neue Handynummer gebe ich der Praxis mit."
+                    if not isinstance(nummer_notiz, dict):
+                        nummer_notiz = {}
+                    if nummer_notiz:
+                        merke_tool(sit, "note_appointment", nummer_notiz)
+                    if nummer_notiz.get("ok"):
+                        text += " Ihre neue Handynummer habe ich der Praxis mitgegeben."
+                    else:
+                        verwalten.abgeben_notiz(
+                            sit,
+                            was=(
+                                f"Neue Handynummer {s['telefon']} statt "
+                                f"{s['aktePhone']} prüfen und aktualisieren"
+                            ),
+                        )
+                        text += (
+                            " Die neue Handynummer konnte ich nicht sicher am Termin "
+                            "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                        )
             elif s["telefon"] or s["aktePhone"]:
                 text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
             # Praxis-Notizen ans Terminpopup (29.08.2026): unklares Geschlecht
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
             hinweise = []
+            notiz_bestaetigungen = []
             if _s(sit.get("telefonUpdateAlt")):
                 hinweise.append(
                     f"Alte Nummer {telefon.normaliert(sit['telefonUpdateAlt'])} "
@@ -1074,7 +1108,8 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 # Zahnreinigung wird nicht als zweiter Slot gebucht, sondern
                 # der Praxis am Termin sichtbar gemacht.
                 hinweise.append("PLUS PZR heute")
-                text += " Die professionelle Zahnreinigung habe ich mit dazu vermerkt."
+                notiz_bestaetigungen.append(
+                    "Die professionelle Zahnreinigung habe ich mit dazu vermerkt.")
             # W-BLEACHING (Chef 03.09.2026): die Aufhellung wird nicht als
             # zweiter Slot gebucht — die Praxis sieht sie am Termin und
             # verlaengert selbst (ca. +1 Std., 350 Euro zusaetzlich).
@@ -1083,7 +1118,8 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     "PLUS Zahnaufhellung/Bleaching zur Zahnreinigung "
                     "(ca. +1 Std., 350 Euro zusätzlich) — bitte Terminlänge anpassen."
                 )
-                text += " Die Zahnaufhellung habe ich mit dazu vermerkt."
+                notiz_bestaetigungen.append(
+                    "Die Zahnaufhellung habe ich mit dazu vermerkt.")
             elif s["bleaching"] == "beratung":
                 if s["bleachingInfo"] == "unverbindlich":
                     hinweise.append(
@@ -1158,13 +1194,48 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     f"Anrufer an den Behandler: „{_s(s['arztNotiz'])}“ — "
                     "bitte beim Termin eingehen."
                 )
-                text += " Die Notiz für den Doktor habe ich zum Termin geschrieben."
+                notiz_bestaetigungen.append(
+                    "Die Notiz für den Doktor habe ich zum Termin geschrieben.")
             if hinweise:
                 if melde:
                     melde("note_appointment")
-                kal.note_appointment(sit["tenant"], ctx, sit, note=" ".join(hinweise))
+                notiz_res = kal.note_appointment(
+                    sit["tenant"], ctx, sit, note=" ".join(hinweise))
+                if not isinstance(notiz_res, dict):
+                    notiz_res = {}
+                if notiz_res:
+                    merke_tool(sit, "note_appointment", notiz_res)
+                if notiz_res.get("ok"):
+                    text += " " + " ".join(notiz_bestaetigungen)
+                else:
+                    verwalten.abgeben_notiz(
+                        sit, was="Zusatzhinweise zum gebuchten Termin prüfen")
+                    text += (
+                        " Die Zusatzhinweise konnte ich nicht sicher am Termin "
+                        "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                    )
             text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
+    if res.get("patientMismatch"):
+        # Alte Akten-ID und bestätigter Name widersprechen sich. Slot/Grund
+        # bleiben stehen, aber die Patientenidentität wird vollständig neu
+        # erfasst; ein zweiter Buchungsversuch kann erst danach entstehen.
+        gehirn.name_fuer_aenderung_leeren(sit)
+        s["anruferCheck"] = "nein"
+        s["phase"] = ""
+        s["frage"] = "nachname"
+        return {"text": res.get("spoken"), "book": book}
+    if res.get("verificationFailed"):
+        # Die Buchung KANN gelandet sein. Nie erneut buchen und weder Erfolg
+        # noch SMS behaupten; stattdessen einen echten Prüf-/Rückrufvorgang
+        # hinterlassen.
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["keinSlotFertig"] = True
+        sit["offered"] = []
+        verwalten.buchung_pruefen_notiz(
+            sit, slot_iso=_s(res.get("slotIso") or s.get("slotIso")))
+        return {"text": res.get("spoken"), "book": book}
     if res.get("slotTaken"):
         # W-BOOK-RETRY 01.09.2026: phone_agent-Deckel — max. 2 slotTaken,
         # gescheiterte ISOs sperren, Intent merken (kein zweites Confirm).

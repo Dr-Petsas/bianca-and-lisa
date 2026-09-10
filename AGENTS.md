@@ -1544,8 +1544,10 @@ NIE der LLM-Text.
 
 - **Erkennung** (`kern/fakten_wache.py`, bianca-frei): `unbelegte_behauptung`
   prüft je Satz gegen `AKTIONEN` (buchen/absagen/verschieben/transfer/notiz/anlegen) und
-  das jeweilige Evidenz-Prädikat. Fragen/Angebote („soll ich eintragen?",
-  „passt Ihnen?") zählen NIE als Behauptung. Kurze Gesprächsbestätigungen
+  das jeweilige Evidenz-Prädikat. Reine Fragen („soll ich eintragen?")
+  zählen nicht als Behauptung; ein konkretes Slotangebot oder eine
+  vorausgehende Tatsachenbehauptung wird durch ein angehängtes „passt Ihnen?"
+  aber nicht mehr entschärft. Kurze Gesprächsbestätigungen
   („notiert", „Ihre Angaben aufgenommen") zählen ohne ausdrücklichen
   Notiz-/Aktenbezug ebenfalls nicht — sonst würde `enforce` legitime
   Datenerfassung unterbrechen.
@@ -1564,6 +1566,34 @@ NIE der LLM-Text.
   echte Zielnummer ersetzt, statt den Anrufer in einer Phantom-Weiterleitung
   warten zu lassen. Eine erfolgreiche `praxis_notiz` zählt wie
   `note_appointment` als Notiz-Evidenz; fehlgeschlagene Notizwerkzeuge nie.
+
+### P0-Schreib- und Kalenderbeweis (10.09.2026 — nicht rückbauen)
+
+- **Name und `patientId` sind eine untrennbare Bindung:** `kern/patients.py`
+  merkt am Buchungskontext `patientIdBound` plus Karteinamen. Jede
+  Namenskorrektur räumt sofort Akte, Termine und alte Schreibziele.
+  `calendar.book_slot` und `note_appointment` brechen vor jedem Write ab,
+  wenn gesprochener Name und gebundene ID auseinanderlaufen. Repro:
+  Session `2ec59b80` („Killnir“ durfte nie auf die Kellner-Akte buchen).
+- **HTTP 200 reicht nicht:** `calendar.book_slot` liest jede
+  `masBookAppointment`-Antwort unabhängig über die Patienten-Terminliste
+  zurück. Patient, Startminute, Kalender und echte Termin-ID müssen gemeinsam
+  passen. Bei Abweichung: kein Buchungs-/SMS-Erfolg, kein Notiz-Write auf die
+  Antwort-ID, kein zweiter Buchungsversuch; stattdessen echter
+  Prüf-/Rückrufvorgang (`verwalten.buchung_pruefen_notiz`). Repro:
+  Tom Schumann, Antwort-ID zeigte später auf einen anderen Slot.
+- **Kalenderfakten sind ebenfalls evidenzpflichtig:** freie/volle Slots,
+  bestehende/nicht bestehende Termine, SMS, Rückruf und Transfer sind in
+  `kern/fakten_wache.py` abgedeckt. Slot- und Termin-Aussagen brauchen den
+  passenden erfolgreichen Lese-Tool-Eintrag; Transfer zusätzlich einen
+  ausdrücklichen Wunsch im aktuellen Nutzersatz. Die P5-Vorab-Ausgabe wird
+  schon satzweise geprüft, damit die Halluzination nicht vor der finalen
+  Antwortwache hörbar wird.
+- Deterministische Zusatznotizen werden erst als geschrieben angesagt, wenn
+  `masAppointmentNote` erfolgreich war und im Tool-Ledger steht. Bei Fehler
+  entsteht ein echter Rückrufvermerk statt einer leeren Zusage.
+- Regressionen: `tests/test_patients.py`, `tests/test_notiz.py`,
+  `tests/test_fakten_wache.py`.
 
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 

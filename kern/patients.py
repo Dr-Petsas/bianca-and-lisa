@@ -366,6 +366,42 @@ def _name_passt(p: dict, first: str, last: str) -> bool:
     return bool(kf or kl)
 
 
+def patient_id_bindung_setzen(ctx: dict, patient_id: str, first: str, last: str) -> None:
+    """Merkt, zu welchem Karteinamen eine patientId tatsächlich gehört.
+
+    Der gesprochene Name darf sich später ändern; die Bindung bleibt dann
+    absichtlich auf dem ursprünglichen Karteinamen stehen. So kann der
+    Schreibweg eine alte ID erkennen, statt sie unter einem neuen Namen zu
+    verwenden.
+    """
+    pid = _s(patient_id)
+    if not pid:
+        for key in ("patientIdBound", "patientIdFirstName", "patientIdLastName"):
+            ctx.pop(key, None)
+        return
+    ctx["patientIdBound"] = pid
+    ctx["patientIdFirstName"] = _s(first)
+    ctx["patientIdLastName"] = _s(last)
+
+
+def patient_id_bindung_passt(ctx: dict) -> bool:
+    """Harte lokale Name↔patientId-Invariante vor schreibenden Aufrufen."""
+    pid = _s(ctx.get("patientId"))
+    if not pid:
+        return True
+    if _s(ctx.get("patientIdBound")) != pid:
+        return False
+    first = _s(ctx.get("firstName"))
+    last = _s(ctx.get("lastName"))
+    bound_first = _s(ctx.get("patientIdFirstName"))
+    bound_last = _s(ctx.get("patientIdLastName"))
+    if not last or not bound_last or _name_norm(last) != _name_norm(bound_last):
+        return False
+    if first and bound_first and _name_norm(first) != _name_norm(bound_first):
+        return False
+    return True
+
+
 def _suche_eindeutig(tenant: dict, first: str, last: str) -> dict[str, Any] | None:
     q = f"{first} {last}".strip()
     if not q:

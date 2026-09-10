@@ -29,6 +29,10 @@ _CF_CLIENT = httpx.Client(timeout=10.0)
 # brauchte >10 s, der Client brach ab, die Buchung LANDETE trotzdem — und die
 # Ansage behauptete "Termin ist weg". Timeout-Budget: CF-Limit ist 30 s.
 _SCHREIB_TIMEOUT = 25.0
+# HTTP-200 ist noch kein Beweis, dass exakt der angeforderte Termin in der
+# Kartei steht. Kurze Nachlese-Retries fangen Replikationslatenz ab; der
+# Anrufer hört währenddessen bereits den Werkzeug-Füller.
+_BOOK_VERIFY_DELAYS = (0.0, 0.2, 0.45)
 
 # W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
 # endlos speichern — erste N reichen zur Diagnose, Rest als total.
@@ -369,9 +373,22 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         })
         patient_id = _s(auf.get("id"))
         if patient_id:
-            ctx["patientId"] = patient_id
-            ctx["firstName"] = auf.get("firstName") or ctx.get("firstName")
-            ctx["lastName"] = auf.get("lastName") or ctx.get("lastName")
+            _bind_akte(ctx, auf)
+    if patient_id and not patients.patient_id_bindung_passt(ctx):
+        # Vorfall 10.09.2026: gesprochen/bestätigt war „Killnir“, im
+        # Buchungskontext hing noch die patientId von „Kellner“. Nie unter
+        # einer alten ID schreiben, auch wenn Slot und Telefonnummer stimmen.
+        return {
+            "ok": False,
+            "booked": False,
+            "patientMismatch": True,
+            "patientId": patient_id,
+            "spoken": (
+                "Die Patientendaten passen gerade nicht eindeutig zusammen. "
+                "Wie lautet der Vor- und Nachname bitte noch einmal?"
+            ),
+            "regie": "Name und patientId widersprechen sich. Nicht buchen, Identität neu auflösen.",
+        }
     if not WRITE_LIVE:
         when = spoken_slot(iso)
         return {
@@ -407,6 +424,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             ctx["lastName"] = karte.get("lastName") or last
             ctx["patientName"] = karte.get("name") or f"{first} {last}".strip()
             ctx["phone"] = karte.get("phone") or phone
+            patients.patient_id_bindung_setzen(
+                ctx, patient_id, ctx.get("firstName"), ctx.get("lastName"))
         elif phone and first and last and not patients.ist_testname(first, last):
             gebucht = _buch_und_akte(tenant, ctx, iso, first, last, phone)
             if gebucht.get("ok"):
@@ -438,13 +457,28 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     if status == 0:
         # Netzfehler/Timeout: die Buchung kann trotzdem gelandet sein —
         # NACHSCHAUEN statt raten (sonst bucht der Anrufer doppelt).
-        landung = _buchung_pruefen(tenant, patient_id, iso)
-        if landung:
+        pruefung = _buchung_verifizieren(
+            tenant,
+            ctx,
+            patient_id=patient_id,
+            appointment_id="",
+            iso=iso,
+            calendar_id=body["calendarId"],
+        )
+        if isinstance(dispatch, dict):
+            dispatch["verification"] = {
+                k: v for k, v in pruefung.items() if k != "dispatch"
+            }
+            if isinstance(pruefung.get("dispatch"), dict):
+                dispatch["verificationDispatch"] = pruefung["dispatch"]
+        landung = _s(pruefung.get("appointmentId"))
+        if pruefung.get("ok") and landung:
             ctx["appointmentId"] = landung
             ctx["appointmentDate"] = iso[:10]
             return _mit_dispatch({
                 "ok": True,
                 "booked": True,
+                "verified": True,
                 "slotIso": iso,
                 "appointmentId": landung,
                 "patientId": patient_id,
@@ -460,15 +494,49 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "regie": "Netzfehler beim Buchen. Keinen anderen Slot anbieten, Rückruf zusagen.",
         }, dispatch)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
-        # Termin-ID behalten: daran haengt spaeter die Gespraechsnotiz
-        # (masAppointmentNote) und ein evtl. Verschieben im selben Anruf.
-        aid = _s(data.get("appointmentId"))
-        if aid:
-            ctx["appointmentId"] = aid
+        # Read-after-write: Erst eine unabhängige Kalendersuche beweist, dass
+        # Patient, Startzeit, Kalender und Termin-ID wirklich zusammengehören.
+        # So wird weder eine fremde/recycelte ID notiert noch eine SMS zugesagt.
+        aid_cf = _s(data.get("appointmentId"))
+        pruefung = _buchung_verifizieren(
+            tenant,
+            ctx,
+            patient_id=patient_id,
+            appointment_id=aid_cf,
+            iso=iso,
+            calendar_id=body["calendarId"],
+        )
+        if isinstance(dispatch, dict):
+            dispatch["verification"] = {
+                k: v for k, v in pruefung.items() if k != "dispatch"
+            }
+            if isinstance(pruefung.get("dispatch"), dict):
+                dispatch["verificationDispatch"] = pruefung["dispatch"]
+        if not pruefung.get("ok"):
+            ctx.pop("appointmentId", None)
+            return _mit_dispatch({
+                "ok": False,
+                "booked": False,
+                "verificationFailed": True,
+                "possiblyBooked": True,
+                "slotIso": iso,
+                "patientId": patient_id,
+                "appointmentId": "",
+                "spoken": (
+                    "Die Buchungsantwort ist nicht eindeutig im Kalender angekommen. "
+                    "Ich bestätige den Termin deshalb noch nicht; die Praxis prüft das "
+                    "und meldet sich bei Ihnen."
+                ),
+                "regie": "Read-after-write fehlgeschlagen. Keine Buchung und keine SMS behaupten.",
+            }, dispatch)
+        aid = _s(pruefung.get("appointmentId"))
+        ctx["appointmentId"] = aid
         ctx["appointmentDate"] = iso[:10]
         return _mit_dispatch({
             "ok": True,
             "booked": True,
+            "verified": True,
+            "idCorrected": bool(pruefung.get("idCorrected")),
             "slotIso": iso,
             "appointmentId": aid,
             "patientId": patient_id,
@@ -530,6 +598,100 @@ def _buchung_pruefen(tenant: dict, patient_id: str, iso: str) -> str:
     return ""
 
 
+def _buchung_verifizieren(
+    tenant: dict,
+    ctx: dict,
+    *,
+    patient_id: str,
+    appointment_id: str,
+    iso: str,
+    calendar_id: str,
+) -> dict[str, Any]:
+    """Liest eine erfolgreiche Buchung unabhängig zurück.
+
+    Ein Termin gilt erst als bestätigt, wenn die Patientenakte stimmt und
+    genau ein Listentreffer Startzeit + Kalender trägt. Eine von der
+    Schreibantwort abweichende ID wird nur übernommen, wenn dieser exakte
+    Termin eindeutig in der Patientenliste steht.
+    """
+    expected_iso = _s(iso).replace(" ", "T")[:16]
+    expected_cal = _s(calendar_id)
+    expected_aid = _s(appointment_id)
+    if not expected_cal:
+        return {
+            "ok": False,
+            "appointmentId": "",
+            "patientId": _s(patient_id),
+            "slotIso": expected_iso,
+            "calendarId": "",
+            "expectedAppointmentId": expected_aid,
+            "error": "Kalender-ID für die Rückleseprüfung fehlt",
+        }
+    verify_ctx = {
+        "patientId": _s(patient_id),
+        "firstName": _s(ctx.get("firstName")),
+        "lastName": _s(ctx.get("lastName")),
+        "patientName": _s(ctx.get("patientName")),
+    }
+    letzter_dispatch: dict | None = None
+    letzter_fehler = "Termin nach dem Schreiben nicht gefunden"
+    for delay in _BOOK_VERIFY_DELAYS:
+        if delay:
+            time.sleep(delay)
+        found = find_patient_appointments(tenant, verify_ctx)
+        if isinstance(found.get("dispatch"), dict):
+            letzter_dispatch = found["dispatch"]
+        if not found.get("ok"):
+            letzter_fehler = _s(found.get("error")) or letzter_fehler
+            continue
+        found_pid = _s((found.get("patient") or {}).get("id"))
+        if found_pid != _s(patient_id):
+            letzter_fehler = "Rücklese-Patient stimmt nicht"
+            continue
+        kandidaten = []
+        for termin in found.get("appointments") or []:
+            if not isinstance(termin, dict):
+                continue
+            termin_iso = _s(termin.get("iso")).replace(" ", "T")[:16]
+            termin_cal = _s(termin.get("calendarId"))
+            if termin_iso != expected_iso:
+                continue
+            # Die CF liefert den Kalender laut Vertrag mit. Fehlt er, ist
+            # die verlangte Vierfachprüfung nicht möglich.
+            if expected_cal and termin_cal != expected_cal:
+                continue
+            if not _s(termin.get("id")):
+                continue
+            kandidaten.append(termin)
+        if len(kandidaten) != 1:
+            letzter_fehler = (
+                "Termin nach dem Schreiben mehrdeutig"
+                if len(kandidaten) > 1 else
+                "Startzeit oder Kalender nach dem Schreiben abweichend"
+            )
+            continue
+        wirklich = _s(kandidaten[0].get("id"))
+        return {
+            "ok": True,
+            "appointmentId": wirklich,
+            "idCorrected": bool(expected_aid and wirklich != expected_aid),
+            "patientId": _s(patient_id),
+            "slotIso": expected_iso,
+            "calendarId": expected_cal,
+            "dispatch": letzter_dispatch,
+        }
+    return {
+        "ok": False,
+        "appointmentId": "",
+        "patientId": _s(patient_id),
+        "slotIso": expected_iso,
+        "calendarId": expected_cal,
+        "expectedAppointmentId": expected_aid,
+        "error": letzter_fehler,
+        "dispatch": letzter_dispatch,
+    }
+
+
 def _bind_akte(ctx: dict, karte: dict) -> None:
     if not karte:
         return
@@ -537,6 +699,8 @@ def _bind_akte(ctx: dict, karte: dict) -> None:
     ctx["firstName"] = _s(karte.get("firstName")) or ctx.get("firstName") or ""
     ctx["lastName"] = _s(karte.get("lastName")) or ctx.get("lastName") or ""
     ctx["patientName"] = _s(karte.get("name")) or f"{ctx.get('firstName', '')} {ctx.get('lastName', '')}".strip()
+    patients.patient_id_bindung_setzen(
+        ctx, ctx.get("patientId"), ctx.get("firstName"), ctx.get("lastName"))
     if karte.get("phone"):
         ctx["phone"] = karte["phone"]
     if karte.get("birthDate"):
@@ -1220,6 +1384,13 @@ def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: 
         text = notes.zusammenfassung(sit)
     if not text:
         return {"ok": False, "spoken": "Es gab nichts Besonderes für die Terminnotiz."}
+    if _s(ctx.get("patientId")) and not patients.patient_id_bindung_passt(ctx):
+        return {
+            "ok": False,
+            "patientMismatch": True,
+            "spoken": "Die Patientendaten passen nicht eindeutig zur Terminnotiz.",
+            "regie": "Name und patientId widersprechen sich. Keine Notiz an einen möglicherweise fremden Termin schreiben.",
+        }
     wer = notes.stimme_von(sit or {})
     zeile = text if "\n" in text else notes.notiz_anhaengen("", text, herkunft=wer)
     kurz = _s(text.splitlines()[0])

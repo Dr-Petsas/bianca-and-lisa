@@ -42,9 +42,20 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any],
             (result.get("patient") or {}).get("id") if isinstance(result.get("patient"), dict) else ""
         ) or "",
         "createdPatient": bool(result.get("createdPatient") or result.get("created")),
+        "verified": bool(result.get("verified")),
+        "verificationFailed": bool(result.get("verificationFailed")),
+        "patientMismatch": bool(result.get("patientMismatch")),
         "spoken": result.get("spoken") or "",
         "note": result.get("note") or "",
     }
+    if isinstance(result.get("slots"), list):
+        ein["resultCount"] = len(result["slots"])
+    elif isinstance(result.get("appointments"), list):
+        ein["resultCount"] = len(result["appointments"])
+    if result.get("notFound"):
+        ein["notFound"] = True
+    if result.get("mehrdeutig"):
+        ein["mehrdeutig"] = True
     if args:
         ein["args"] = args
     if dispatch:
@@ -58,6 +69,10 @@ def merke_tool(sit: dict[str, Any], name: str, result: dict[str, Any],
             "response": dispatch.get("response"),
             "updates": dispatch.get("updates") or [],
         }
+        if isinstance(dispatch.get("verification"), dict):
+            ein["dispatch"]["verification"] = dispatch["verification"]
+        if isinstance(dispatch.get("verificationDispatch"), dict):
+            ein["dispatch"]["verificationDispatch"] = dispatch["verificationDispatch"]
         if dispatch.get("route"):
             ein["cf"] = dispatch["route"]
         if dispatch.get("ms") is not None:

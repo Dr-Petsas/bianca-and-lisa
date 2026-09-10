@@ -369,7 +369,8 @@ def test_petsas_so_eintragen_bitte_schreibt_pzr_notiz():
         "ok": True, "booked": True, "slotIso": slot_iso,
         "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         assert gehirn.ist_pzr_zusage("So eintragen bitte")
         assert gehirn.ist_pzr_zusage("Nimm sie mit.")
@@ -396,7 +397,8 @@ def test_buchen_traegt_plus_pzr_notiz():
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
         "ok": True, "booked": True, "slotIso": slot_iso, "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         r = flow._buchen(sit)
     finally:
@@ -449,7 +451,8 @@ def test_buchen_traegt_rueckblick_antwort_ins_popup():
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
         "ok": True, "booked": True, "slotIso": slot_iso, "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         flow._buchen(sit)
     finally:
