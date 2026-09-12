@@ -765,10 +765,10 @@ def _fachlich_abgeschlossen(story: dict[str, Any], lage: dict[str, Any],
         return True
     art = str(story.get("anliegen") or geschichten.TERMIN)
     if art in geschichten.DOKU_ARTEN:
-        return baustein == "doku_abschied" or (
-            baustein == "abschied" and "nichts_mehr" in lage.get("gemacht", set())
-        )
-    return baustein == "abschied" and "nichts_mehr" in lage.get("gemacht", set())
+        return baustein == "doku_abschied"
+    return str(lage.get("fachlichErledigt") or "") in {
+        "kein_slot", "notfall_auskunft",
+    }
 
 
 def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],

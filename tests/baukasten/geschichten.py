@@ -306,7 +306,9 @@ def _frage_aus_text(text: str) -> str:
         return "schonmal"
     if any(x in t for x in ("welchen arzt", "welche ärztin", "welchem arzt",
                             "welcher ärztin", "welchen behandler",
-                            "welchem behandler", "arzt oder welche")):
+                            "welchem behandler", "arzt oder welche",
+                            "bestimmten arzt", "arzt im blick", "ärzte suchen",
+                            "arzt suchen", "arzt frei lassen")):
         return "arzt"
     if "nachname" in t:
         return "nachname"
@@ -330,12 +332,12 @@ def _frage_aus_text(text: str) -> str:
     if any(x in t for x in ("so eintragen", "fest eintragen", "verbindlich buchen",
                             "soll ich den termin", "darf ich den termin")):
         return "bestaetigung"
+    if "zahnreinigung" in t and "?" in t:
+        return "pzr"
     if any(x in t for x in ("wunschtermin", "wann passt", "wann es ihnen",
                             "welche woche", "tageszeit", "vormittag oder",
                             "nachmittag oder")):
         return "wunsch"
-    if "zahnreinigung" in t and "?" in t:
-        return "pzr"
     return ""
 
 
@@ -366,11 +368,18 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     direkt_antworten = False
     if rueckkehr_frage is not None:
         lage.pop("rueckkehrFrage", None)
-        rueckkehr_modus = str(lage.pop("rueckkehrModus", "") or "")
+        lage.pop("rueckkehrModus", None)
+        # Dieselbe oder eine spätere Formular-Pflichtfrage führt den
+        # Hauptfaden fort. Ein neues Zusatzthema (z. B. PZR statt Behandler)
+        # darf das ursprüngliche Anliegen dagegen nicht verdrängen.
+        hauptfragen = {
+            "schonmal", "arzt", "name", "vorname", "nachname", "grund",
+            "wunsch", "buchstabieren", "telefon", "telefon_check",
+            "telefon_alt", "versicherung", "versicherung_check",
+            "slotwahl", "bestaetigung", "wann", "behandlung",
+        }
         gleicher_faden = bool(fid) and (
-            fid == rueckkehr_frage
-            or not rueckkehr_modus
-            or str(lage.get("modus") or "") == rueckkehr_modus
+            fid == rueckkehr_frage or fid in hauptfragen
         )
         if not gleicher_faden:
             lage["letzterBaustein"] = "rueckkehr_hauptanliegen"
@@ -458,6 +467,7 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
             # Leeres Angebot ("die Praxis meldet sich"): nichts zu waehlen,
             # nicht schieben — sauber abschliessen (Batch s09 29.08.2026).
             lage["gemacht"].add("nichts_mehr")
+            lage["fachlichErledigt"] = "kein_slot"
             return {"text": _wahl(story, lage, "nichts_mehr", saetze.NICHTS_MEHR),
                     "baustein": "nichts_mehr"}
         lage["slotZuege"] += 1
@@ -514,6 +524,17 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     # Keine offene Maschinen-Frage: LLM-Zug oder Abschluss.
     text = (lage["biancaText"] or "").lower()
     if any(x in text for x in (
+            "116 117", "116117", "ärztlichen bereitschaftsdienst",
+            "aerztlichen bereitschaftsdienst", "wählen sie sofort die 112",
+            "waehlen sie sofort die 112")):
+        lage["fachlichErledigt"] = "notfall_auskunft"
+        lage["gemacht"].add("abschied")
+        return {
+            "text": "Verstanden, vielen Dank für die klare Auskunft. Auf Wiederhören.",
+            "baustein": "notfall_abschied",
+            "auflegen": True,
+        }
+    if any(x in text for x in (
             "persönlich vorsprechen", "persoenlich vorsprechen",
             "nicht telefonisch bestellen", "nur persönlich")):
         lage["gemacht"].add("abschied")
@@ -541,6 +562,11 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if "?" in text and leer <= _FRAGE_LEER_MAX:
         return {"text": _wahl(story, lage, "ja_generisch", ["Ja, gerne.", "Ja, das passt.", "Gerne, ja."]),
                 "baustein": "ja_generisch"}
+    if leer <= _FRAGE_LEER_MAX:
+        return {
+            "text": _rueckkehr_text(story),
+            "baustein": "rueckkehr_hauptanliegen",
+        }
     lage["gemacht"].add("abschied")
     return {"text": _wahl(story, lage, "abschied", saetze.ABSCHIED), "baustein": "abschied", "auflegen": True}
 

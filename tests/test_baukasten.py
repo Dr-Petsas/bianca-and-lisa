@@ -482,12 +482,43 @@ def test_lasttest_verabschiedung_braucht_fachlichen_endzustand():
         story, lage, {"baustein": "abschied", "auflegen": True},
     )
     lage["gemacht"].add("nichts_mehr")
+    assert not lasttest._fachlich_abgeschlossen(
+        story, lage, {"baustein": "abschied", "auflegen": True},
+    )
+    lage["fachlichErledigt"] = "kein_slot"
     assert lasttest._fachlich_abgeschlossen(
         story, lage, {"baustein": "abschied", "auflegen": True},
     )
     assert lasttest._fachlich_abgeschlossen(
         story, lage, {"baustein": "lasttest_keine_buchung", "auflegen": True},
     )
+
+
+def test_story_runner_kehrt_bei_freier_llm_antwort_zum_anliegen_zurueck():
+    from tests.baukasten import geschichten
+
+    story = {
+        "anliegen": geschichten.TERMIN,
+        "grund": "Kontrolle",
+        "grundErwartet": "Kontrolle",
+    }
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "biancaText": "Wir haben gerade interessante Zahnpasta ausprobiert.",
+    })
+    zug = geschichten.naechster_baustein(story, lage)
+    assert zug["baustein"] == "rueckkehr_hauptanliegen"
+    assert "termin" in zug["text"].lower()
+    assert not zug.get("auflegen")
+
+
+def test_story_runner_erkennt_natuerliche_behandlerfrage():
+    from tests.baukasten import geschichten
+
+    assert geschichten._frage_aus_text(
+        "Haben Sie schon einen bestimmten Arzt im Blick?"
+    ) == "arzt"
 
 
 def test_lasttest_write_evidenz_macht_lauf_rot():
