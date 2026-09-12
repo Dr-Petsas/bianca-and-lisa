@@ -342,9 +342,158 @@ def test_lasttest_zusammenfassung_zaehlt():
     assert s["dauerS"] == 5.1
     assert s["ersterTonP50"] in (0.8, 1.5)
     assert s["ersterTonP95"] == 1.5
-    assert any("kein Buchen" in h.lower() or "Kein Buchen" in h for h in s["hinweise"])
+    assert any("vor dem write" in h.lower() for h in s["hinweise"])
     assert "blasen" in s
     assert s["plan"]["n"] == 3
+
+
+def test_lasttest_baut_unterschiedliche_vollgeschichten_pro_mandant():
+    from tests.baukasten import lasttest
+
+    med = lasttest.story_fuer_sitz({
+        "nr": 1, "tenant": "meddent", "seed": 101, "anliegen": "termin",
+    })
+    thaler = lasttest.story_fuer_sitz({
+        "nr": 2, "tenant": "thaler", "seed": 202, "anliegen": "termin",
+    })
+    assert med["tenant"] == "meddent"
+    assert thaler["tenant"] == "thaler"
+    assert med["id"] != thaler["id"]
+    assert (med["vorname"], med["nachname"], med["grund"]) != (
+        thaler["vorname"], thaler["nachname"], thaler["grund"])
+    assert med["lasttestKeinSchreiben"] is True
+    assert thaler["lasttestKeinSchreiben"] is True
+
+
+def test_lasttest_antwortet_auf_offene_frage_und_bestaetigt_keinen_write():
+    from tests.baukasten import geschichten, lasttest
+
+    story = lasttest.story_fuer_sitz({
+        "nr": 1, "tenant": "meddent", "seed": 303, "anliegen": "termin",
+    })
+    lage = geschichten.lage_neu()
+    lage["eroeffnet"] = True
+    lage["frage"] = "telefon"
+    telefon = geschichten.naechster_baustein(story, lage)
+    assert telefon["baustein"] == "telefon"
+    assert len(telefon["text"].split()) >= 6
+
+    lage["frage"] = "bestaetigung"
+    stopp = geschichten.naechster_baustein(story, lage)
+    assert stopp["auflegen"] is True
+    assert "nicht eintragen" in stopp["text"].lower()
+    assert stopp["baustein"] == "lasttest_keine_buchung"
+
+
+def test_lasttest_statistik_vergleicht_einzel_und_last_nach_mandant():
+    from tests.baukasten import lasttest
+
+    latenz = []
+    for phase, werte in (("baseline", [0.4, 0.6]), ("last", [0.8, 1.2, 1.6])):
+        for i, wert in enumerate(werte, 1):
+            latenz.append({
+                "phase": phase, "tenant": "meddent", "nr": i,
+                "metrik": "stt", "wert": wert, "stufe": "telefon",
+                "sttWinner": "Parakeet",
+            })
+            latenz.append({
+                "phase": phase, "tenant": "meddent", "nr": i,
+                "metrik": "antwort", "wert": wert * 3, "stufe": "telefon",
+            })
+            latenz.append({
+                "phase": phase, "tenant": "meddent", "nr": i,
+                "metrik": "start", "wert": 0.2,
+            })
+    blasen = [
+        {"phase": "last", "tenant": "meddent", "art": "audio_luecke"},
+        {"phase": "last", "tenant": "meddent", "art": "ersterTon"},
+    ]
+    stat = lasttest.statistik_von(latenz, blasen)
+    assert stat["baseline"]["gesamt"]["gespraeche"] == 2
+    assert stat["last"]["mandanten"]["meddent"]["gespraeche"] == 3
+    assert stat["last"]["mandanten"]["meddent"]["dropouts"] == 1
+    assert stat["last"]["mandanten"]["meddent"]["warnungen"] == 1
+    assert stat["last"]["gesamt"]["metriken"]["stt"]["mittel"] == 1.2
+    assert stat["last"]["gesamt"]["stufen"][0]["stufe"] == "telefon"
+    assert stat["last"]["gesamt"]["sttEngines"]["Parakeet"]["n"] == 3
+    rows = {r["metrik"]: r for r in lasttest.vergleich_von(latenz)["gesamt"]}
+    assert rows["stt"]["lastP95"] == 1.6
+    assert rows["stt"]["einzelP95"] == 0.6
+    assert rows["stt"]["deltaP95"] == 1.0
+    assert rows["stt"]["deltaPct"] > 100
+
+
+def test_lasttest_eine_fuehrt_dialog_bis_zur_sicheren_absage(monkeypatch, tmp_path):
+    from tests.baukasten import lasttest
+
+    story = lasttest.story_fuer_sitz({
+        "nr": 1, "tenant": "meddent", "seed": 404, "anliegen": "termin",
+    })
+    story.update({
+        "halbsatz": False, "abschweifer": [], "zwischenfragePreis": False,
+        "readbackFehler": False, "slotAnnahme": 1,
+    })
+    fragen = [
+        "schonmal", "arzt", "grund", "name", "telefon", "telefon_check",
+        "versicherung", "wunsch", "slotwahl", "bestaetigung", "aenderung",
+    ]
+    gehoerte_solltexte = []
+    wav = tmp_path / "zug.wav"
+    wav.write_bytes(b"RIFF" + b"\0" * 80)
+
+    class Antwort:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"sessionId": "last-sid", "text": "Guten Tag", "audioUrl": "/start.wav"}
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return Antwort()
+
+    def fake_listen(client, basis, sid, audio, *, zieh):
+        idx = len(gehoerte_solltexte)
+        gehoerte_solltexte.append(audio)
+        frage = fragen[min(idx, len(fragen) - 1)]
+        return {
+            "type": "reply", "text": f"Frage {frage}", "frage": frage,
+            "_ersterTonS": 0.5, "_latenzS": 1.0,
+            "_gehoert": f"Audiozug {idx + 1}",
+            "_stt": {"pipeline": "audio", "winner": "parakeet"},
+            "_audio": [{"ok": True, "dauerS": 0.2, "gaps": []}],
+            "timings": {"stt": 0.2, "llm": 0.3, "tts": 0.4},
+        }
+
+    monkeypatch.setattr(lasttest.httpx, "Client", Client)
+    monkeypatch.setattr(lasttest.httpx, "post", lambda *a, **k: Antwort())
+    monkeypatch.setattr(lasttest, "_audio_messen", lambda *a, **k: {
+        "ok": True, "dauerS": 0.1, "gaps": [],
+    })
+    monkeypatch.setattr(lasttest, "_wav_fuer_zug", lambda *a, **k: wav)
+    monkeypatch.setattr(lasttest, "_listen", fake_listen)
+
+    plan = lasttest.verteile(1, [{"id": "meddent", "kurz": "M", "farbe": "#fff"}])
+    sam = lasttest._Sammler(plan, None)
+    erg = lasttest._eine(
+        plan["sitze"][0], basis="http://test", story=story, start_tor=None,
+        welle_t0=lasttest.time.perf_counter(), sam=sam, phase="last",
+    )
+    assert erg["ok"] is True
+    assert len(erg["zuege"]) >= 9
+    assert erg["zuege"][-1]["baustein"] == "lasttest_keine_buchung"
+    assert "nicht eintragen" in erg["zuege"][-1]["soll"].lower()
+    assert all(z["stt"]["pipeline"] == "audio" for z in erg["zuege"])
+    assert sam.fertig == 1
 
 
 def test_dauer_s_liest_8khz_header():

@@ -423,6 +423,12 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
             return {"text": frei, "baustein": "slot_frei"}
         return {"text": _wahl(story, lage, "slot_annahme", saetze.SLOT_ANNAHME), "baustein": "slot_annahme"}
     if fid == "bestaetigung":
+        if story.get("lasttestKeinSchreiben"):
+            return {
+                "text": "Nein, bitte nicht eintragen. Das war nur ein Test. Vielen Dank und auf Wiederhören.",
+                "baustein": "lasttest_keine_buchung",
+                "auflegen": True,
+            }
         return {"text": _wahl(story, lage, "bestaetigung", saetze.BESTAETIGUNG_JA), "baustein": "bestaetigung"}
     if fid == "arzt_notiz":
         frei = str(story.get("arztNotizText") or "").strip()

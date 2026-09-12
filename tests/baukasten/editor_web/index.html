@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="web/stil.css?v=15">
+<link rel="stylesheet" href="web/stil.css?v=16">
 </head>
 <body class="studio">
 <header class="kopf">
@@ -121,7 +121,7 @@
     <div class="anruf-kopf">
       <div class="anruf-kopf-text">
         <div class="anruf-titel">Belastungstest</div>
-        <div class="klein">Gleichzeitige Gespräche gegen die Test-Bianca. Kein Buchen. Audio läuft in der Pipeline, der Monitor bleibt stumm.</div>
+        <div class="klein">Vollständige zufällige Audio-Gespräche aller Praxen. Vorher läuft je Praxis ein Einzelgespräch als Vergleich; Kalenderbuchungen werden vor dem Write abgebrochen.</div>
       </div>
       <button class="gross" id="last-setup-zu" type="button">Schließen</button>
     </div>
@@ -153,9 +153,10 @@
       <div class="mon-tab-reihe" id="mon-tabs"></div>
       <button class="mon-nav" id="mon-next" type="button" aria-label="Nächster Kunde">→</button>
     </div>
+    <div class="mon-vergleich" id="mon-vergleich"></div>
     <div class="mon-charts">
       <div class="mon-chart">
-        <div class="mon-chart-titel">Latenz-Offset gegen Norm</div>
+        <div class="mon-chart-titel">Lastwelle — Latenz gegen Einzel-Baseline</div>
         <canvas id="mon-latenz" width="640" height="180"></canvas>
       </div>
       <div class="mon-chart">
@@ -166,6 +167,6 @@
     <div class="mon-trans" id="mon-trans"></div>
   </div>
 </div>
-<script src="web/app.js?v=17"></script>
+  <script src="web/app.js?v=18"></script>
 </body>
 </html>

@@ -618,6 +618,23 @@ a.gross.leiste-link {
 }
 .mon-tab.an { background: var(--akzent); border-color: var(--akzent); color: #08121f; font-weight: 650; }
 .mon-nav { min-width: 40px; min-height: 40px; font-weight: 700; }
+.mon-vergleich {
+  margin: 0 12px 10px; background: #121820; border: 1px solid #2a3442;
+  border-radius: 12px; padding: 8px 10px; overflow: hidden;
+}
+.mon-vergleich-scroll { overflow-x: auto; }
+.mon-vergleich table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mon-vergleich th, .mon-vergleich td {
+  padding: 6px 8px; border-bottom: 1px solid #27313e;
+  text-align: right; white-space: nowrap;
+}
+.mon-vergleich th:first-child { text-align: left; }
+.mon-vergleich thead th { color: var(--dim); font-weight: 600; }
+.mon-vergleich tbody tr:last-child th, .mon-vergleich tbody tr:last-child td { border-bottom: 0; }
+.mon-vergleich .ok { color: var(--gruen); }
+.mon-vergleich .warn { color: var(--gelb); }
+.mon-vergleich .bad { color: var(--rot); }
+.mon-subtitel { margin: 9px 0 4px; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
 .mon-charts {
   display: grid; grid-template-columns: 1fr; gap: 10px;
   padding: 0 12px 10px;

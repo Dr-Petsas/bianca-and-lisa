@@ -185,7 +185,8 @@ def _lasttest_thread(n: int, zuege: int, leitung: dict | None,
             "lasttest": {"phase": "start", "n": n, "fertig": 0,
                          "plan": plan, "ergebnis": None,
                          "blasen": [], "transkript": [], "latenz": [],
-                         "kpis": {}, "norm": dict(lasttest.NORM)},
+                         "kpis": {}, "statistik": {}, "vergleich": {},
+                         "baseline": {}, "norm": dict(lasttest.NORM)},
         })
 
     def fortschritt(d: dict[str, Any]) -> None:
@@ -220,6 +221,9 @@ def _lasttest_thread(n: int, zuege: int, leitung: dict | None,
                 "transkript": erg.get("transkript") or [],
                 "latenz": erg.get("latenz") or [],
                 "kpis": erg.get("kpis") or {},
+                "statistik": erg.get("statistik") or {},
+                "vergleich": erg.get("vergleich") or {},
+                "baseline": erg.get("baseline") or {},
                 "norm": erg.get("norm") or dict(lasttest.NORM),
             }
             _zustand["fertig"] = kurz
@@ -435,13 +439,15 @@ def lasttest_starten(w: LasttestWunsch) -> JSONResponse:
             return JSONResponse({"ok": False, "fehler": "es läuft schon ein Lauf"},
                                 status_code=409)
     n = lasttest._kappe(w.n, lasttest.MAX_PARALLEL)
-    zuege = lasttest._kappe(w.zuege, 3)
+    # Kompatibles Request-Feld; der neue Lasttest führt seine Geschichten
+    # immer vollständig bis zum sicheren Abschluss.
+    zuege = max(1, int(w.zuege or 1))
     plan = lasttest.verteile(n, _lasttest_kunden())
     L = klang.leitung_norm(w.leitung) if w.leitung else None
     t = threading.Thread(target=_lasttest_thread, args=(n, zuege, L, plan),
                          daemon=True)
     t.start()
-    return JSONResponse({"ok": True, "n": n, "zuege": zuege, "plan": plan,
+    return JSONResponse({"ok": True, "n": n, "zuege": "vollständig", "plan": plan,
                          "max": lasttest.MAX_PARALLEL})
 
 

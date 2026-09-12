@@ -138,7 +138,7 @@ body.frame-aktiv #tab-studio {
 }
 .global-modal[hidden] { display: none !important; }
 .global-modal-karte {
-  width: min(560px, 100%); max-height: 90dvh; overflow: auto;
+  width: min(980px, 100%); max-height: 90dvh; overflow: auto;
   background: #19211e; border: 1px solid #3b4943; border-radius: 16px;
   box-shadow: 0 24px 80px rgba(0,0,0,.5); padding: 17px;
 }
@@ -160,6 +160,26 @@ body.frame-aktiv #tab-studio {
 .last-verteilung > div { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; }
 .last-punkt { width: 10px; height: 10px; border-radius: 50%; }
 .last-status { min-height: 24px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+.last-auswertung { margin-top: 14px; display: grid; gap: 10px; }
+.last-auswertung h3 { margin: 5px 0 0; font-size: 13px; color: var(--text); }
+.last-karten { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.last-karten > div {
+  display: grid; gap: 3px; padding: 10px; border: 1px solid var(--line);
+  border-radius: 10px; background: #101614;
+}
+.last-karten span { font-size: 11px; color: var(--muted); }
+.last-karten strong { font-size: 20px; }
+.last-auswertung .ok { color: var(--lisa); }
+.last-auswertung .warn { color: var(--warn); }
+.last-auswertung .bad { color: var(--strike); }
+.last-tabelle { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.last-tabelle table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.last-tabelle th, .last-tabelle td {
+  padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap;
+}
+.last-tabelle th:first-child { text-align: left; }
+.last-tabelle thead th { color: var(--muted); font-weight: 600; background: #101614; }
+.last-tabelle tbody tr:last-child th, .last-tabelle tbody tr:last-child td { border-bottom: 0; }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 h1 { font-size: 22px; font-weight: 650; margin: 0; }
@@ -253,6 +273,7 @@ body.incall .wrap, body.incall .dock { display: none; }
   }
   .global-praxis select { flex: 1; min-width: 0; max-width: none; }
   .last-global { margin-left: auto; }
+  .last-karten { grid-template-columns: 1fr 1fr; }
   .grid, .appts { grid-template-columns: 1fr; }
   header { flex-direction: column; }
   .wrap { padding: 12px 12px 20px; }

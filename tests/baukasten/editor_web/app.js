@@ -504,6 +504,47 @@ function monTabsZeichnen(plan) {
   });
 }
 
+function monSek(v) {
+  const n = Number(v || 0);
+  return `${n.toFixed(n >= 10 ? 1 : 2)}s`;
+}
+
+function monVergleichZeichnen(lt) {
+  const box = $("mon-vergleich");
+  if (!box) return;
+  const e = lt.ergebnis || {};
+  const v = lt.vergleich || e.vergleich || {};
+  const stat = lt.statistik || e.statistik || {};
+  const id = MON_TABS[monTab] || "alle";
+  const rows = id === "alle" ? (v.gesamt || []) : ((v.mandanten || {})[id] || []);
+  const block = id === "alle"
+    ? (((stat.last || {}).gesamt) || {})
+    : ((((stat.last || {}).mandanten || {})[id]) || {});
+  const sichtbar = rows.filter((r) => Number(r.lastP95 || 0) || Number(r.einzelP95 || 0));
+  if (!sichtbar.length) {
+    box.innerHTML = `<div class="klein">Einzel-Baseline wird noch gemessen …</div>`;
+    return;
+  }
+  const stufen = (block.stufen || []).filter((s) => s.turns).slice(0, 8);
+  box.innerHTML = `<div class="mon-vergleich-scroll"><table>
+    <thead><tr><th>Stufe</th><th>Einzel p50</th><th>Einzel p95</th>
+      <th>Last p50</th><th>Last p95</th><th>Δ p95</th></tr></thead>
+    <tbody>${sichtbar.map((r) => {
+      const d = Number(r.deltaPct || 0);
+      const kl = d > 30 ? "bad" : (d > 10 ? "warn" : "ok");
+      return `<tr><th>${r.label || r.metrik}</th><td>${monSek(r.einzelP50)}</td>` +
+        `<td>${monSek(r.einzelP95)}</td><td>${monSek(r.lastP50)}</td>` +
+        `<td>${monSek(r.lastP95)}</td><td class="${kl}">${d > 0 ? "+" : ""}${d.toFixed(1)}%</td></tr>`;
+    }).join("")}</tbody></table></div>` +
+    (stufen.length ? `<div class="mon-subtitel">Langsamste Gesprächsstufen</div>` +
+      `<div class="mon-vergleich-scroll"><table><thead><tr><th>Stufe</th><th>Turns</th>` +
+      `<th>STT p95</th><th>Ton p95</th><th>Antwort p95</th></tr></thead><tbody>` +
+      stufen.map((s) => `<tr><th>${s.stufe}</th><td>${s.turns}</td>` +
+        `<td>${monSek((s.stt || {}).p95)}</td><td>${monSek((s.ersterTon || {}).p95)}</td>` +
+        `<td>${monSek((s.antwort || {}).p95)}</td></tr>`).join("") +
+      `</tbody></table></div>` : "");
+}
+
 function canvasFit(cv) {
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || 320;
@@ -525,7 +566,8 @@ function monLatenzZeichnen(punkte, norm) {
   const pad = { l: 36, r: 10, t: 10, b: 22 };
   const innerW = w - pad.l - pad.r;
   const innerH = h - pad.t - pad.b;
-  const series = monFilter(punkte).filter((p) => p.metrik !== "start");
+  const series = monFilter(punkte).filter((p) =>
+    p.metrik !== "start" && (p.phase || "last") === "last");
   const maxT = Math.max(8, ...series.map((p) => Number(p.tS) || 0));
   const maxY = Math.max(3, ...(series.map((p) => Number(p.wert) || 0)), Number((norm && norm.antwortS) || 2));
   const xOf = (t) => pad.l + (t / maxT) * innerW;
@@ -584,7 +626,7 @@ function monDropZeichnen(blasen) {
   const pad = { l: 36, r: 12, t: 12, b: 22 };
   const innerW = w - pad.l - pad.r;
   const innerH = h - pad.t - pad.b;
-  const items = monFilter(blasen);
+  const items = monFilter(blasen).filter((b) => (b.phase || "last") === "last");
   const maxT = Math.max(8, ...items.map((b) => Number(b.tS) || 0));
   const maxD = Math.max(2, ...items.map((b) => Number(b.dauerS) || 0));
   const xOf = (t) => pad.l + (t / maxT) * innerW;
@@ -627,7 +669,7 @@ function monTransZeichnen(zeilen) {
     const div = document.createElement("div");
     div.className = "mon-zeile " + (z.wer || "system");
     const t = Number(z.tS || 0).toFixed(1);
-    div.innerHTML = `<div class="meta">${t}s<br>#${z.nr || "?"} ${z.kurz || ""}</div>
+    div.innerHTML = `<div class="meta">${t}s<br>#${z.nr || "?"} ${z.kurz || ""}<br>${z.phase === "baseline" ? "Einzel" : "Last"}</div>
       <div class="txt">${String(z.text || "").replace(/</g, "&lt;")}</div>`;
     box.appendChild(div);
   }
@@ -645,21 +687,35 @@ function lasttestZeichnen(lt) {
   const fertig = lt.fertig || 0;
   const k = lt.kpis || {};
   const e = lt.ergebnis || {};
-  const gehalten = e.gehalten != null ? e.gehalten : fertig;
-  const off = k.offsetPct || 0;
-  $("mon-status").textContent = lt.phase === "fertig"
-    ? `fertig · ${gehalten}/${n} gehalten · Offset ${off > 0 ? "+" : ""}${off} %`
-    : `läuft · ${fertig}/${n} Sessions · Offset ${off > 0 ? "+" : ""}${off} %`;
+  const stat = lt.statistik || e.statistik || {};
+  const id = MON_TABS[monTab] || "alle";
+  const block = id === "alle"
+    ? (((stat.last || {}).gesamt) || {})
+    : ((((stat.last || {}).mandanten || {})[id]) || {});
+  const vergl = lt.vergleich || e.vergleich || {};
+  const vrows = id === "alle" ? (vergl.gesamt || []) : ((vergl.mandanten || {})[id] || []);
+  const antwortVergleich = vrows.find((r) => r.metrik === "antwort") || {};
+  const off = Number(antwortVergleich.deltaPct != null
+    ? antwortVergleich.deltaPct : (k.offsetPct || 0));
+  const phasenText = lt.phase === "vorwaermen"
+    ? "Anrufer-Audio wird vorgerendert"
+    : (lt.phase === "baseline"
+      ? `Einzelgespräche ${lt.baselineFertig || 0}/${lt.baselineGesamt || 0}`
+      : (lt.phase === "fertig" ? "fertig" : `Lastwelle ${fertig}/${n}`));
+  $("mon-status").textContent = `${phasenText} · ${block.turns || 0} Turns · ${block.dropouts || 0} Audio-Dropouts`;
   $("mon-kpis").innerHTML = [
-    ["Sessions", `${fertig}/${n}`],
+    ["Gespräche", `${block.gespraeche || 0}/${id === "alle" ? n : ((lt.plan?.counts || {})[id] || 0)}`],
+    ["Turns", String(block.turns || 0)],
     ["Offset", `${off > 0 ? "+" : ""}${off} %`, monKpiKlasse(off)],
-    ["Erster Ton p50", `${(k.ersterTonP50 || 0).toFixed(2)}s`],
-    ["Antwort p95", `${(k.antwortP95 || 0).toFixed(2)}s`],
-    ["Dropouts", String(k.dropouts || 0), (k.dropouts || 0) ? "bad" : "ok"],
+    ["STT p95", monSek((((block.metriken || {}).stt || {}).p95))],
+    ["Erster Ton p95", monSek((((block.metriken || {}).ersterTon || {}).p95))],
+    ["Antwort p95", monSek((((block.metriken || {}).antwort || {}).p95))],
+    ["Dropouts", String(block.dropouts || 0), (block.dropouts || 0) ? "bad" : "ok"],
   ].map(([lbl, val, kl]) =>
     `<div class="mon-kpi"><div class="lbl">${lbl}</div><div class="val ${kl || ""}">${val}</div></div>`
   ).join("");
   monTabsZeichnen(lt.plan);
+  monVergleichZeichnen(lt);
   monLatenzZeichnen(lt.latenz || (e.latenz || []), lt.norm || e.norm);
   monDropZeichnen(lt.blasen || e.blasen || []);
   const trans = (lt.transkript && lt.transkript.length)

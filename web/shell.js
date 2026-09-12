@@ -161,13 +161,83 @@
     }
   }
 
+  function lastSek(v) {
+    const n = Number(v || 0);
+    return `${n.toFixed(n >= 10 ? 1 : 2)} s`;
+  }
+
+  function lastAuswertungZeichnen(lt) {
+    const box = $("lasttestAuswertung");
+    if (!box) return;
+    const e = lt.ergebnis || {};
+    const stat = lt.statistik || e.statistik || {};
+    const last = (stat.last || {}).gesamt || {};
+    const mandanten = (stat.last || {}).mandanten || {};
+    const vergleich = lt.vergleich || e.vergleich || {};
+    const rows = vergleich.gesamt || [];
+    if (!rows.length && !(last.turns || 0)) {
+      box.innerHTML = "";
+      return;
+    }
+    const namen = {};
+    (((lt.plan || e.plan || {}).kunden) || []).forEach((k) => {
+      namen[k.id] = k.kurz || k.id;
+    });
+    const delta = (r) => {
+      const d = Number(r.deltaPct || 0);
+      const kl = d > 30 ? "bad" : (d > 10 ? "warn" : "ok");
+      return `<span class="${kl}">${d > 0 ? "+" : ""}${d.toFixed(1)} %</span>`;
+    };
+    const metrikRows = rows.filter((r) => Number(r.lastP95 || 0) || Number(r.einzelP95 || 0))
+      .map((r) => `<tr><th>${r.label || r.metrik}</th>` +
+        `<td>${lastSek(r.einzelP50)}</td><td>${lastSek(r.einzelP95)}</td>` +
+        `<td>${lastSek(r.lastP50)}</td><td>${lastSek(r.lastP95)}</td><td>${delta(r)}</td></tr>`)
+      .join("");
+    const tenantRows = Object.entries(mandanten).map(([id, s]) => {
+      const m = s.metriken || {};
+      return `<tr><th>${namen[id] || id}</th><td>${s.gespraeche || 0}</td>` +
+        `<td>${s.turns || 0}</td><td>${lastSek((m.stt || {}).p95)}</td>` +
+        `<td>${lastSek((m.ersterTon || {}).p95)}</td>` +
+        `<td>${lastSek((m.antwort || {}).p95)}</td><td>${s.dropouts || 0}</td></tr>`;
+    }).join("");
+    const stufenRows = (last.stufen || []).filter((s) => s.turns).slice(0, 10).map((s) =>
+      `<tr><th>${s.stufe}</th><td>${s.turns}</td><td>${lastSek((s.stt || {}).p50)}</td>` +
+      `<td>${lastSek((s.ersterTon || {}).p95)}</td><td>${lastSek((s.antwort || {}).p95)}</td></tr>`
+    ).join("");
+    const engineRows = Object.entries(last.sttEngines || {}).map(([engine, s]) =>
+      `<tr><th>${engine}</th><td>${s.n || 0}</td><td>${lastSek(s.mittel)}</td>` +
+      `<td>${lastSek(s.p50)}</td><td>${lastSek(s.p95)}</td><td>${lastSek(s.max)}</td></tr>`
+    ).join("");
+    box.innerHTML =
+      `<div class="last-karten">` +
+      `<div><span>Gespräche</span><strong>${last.gespraeche || 0}</strong></div>` +
+      `<div><span>Turns</span><strong>${last.turns || 0}</strong></div>` +
+      `<div><span>Audio-Dropouts</span><strong class="${last.dropouts ? "bad" : "ok"}">${last.dropouts || 0}</strong></div>` +
+      `<div><span>Warnungen</span><strong>${last.warnungen || 0}</strong></div></div>` +
+      (metrikRows ? `<h3>Last gegen Einzelgespräch</h3><div class="last-tabelle"><table>` +
+        `<thead><tr><th>Stufe</th><th>Einzel p50</th><th>Einzel p95</th>` +
+        `<th>Last p50</th><th>Last p95</th><th>langsamer</th></tr></thead>` +
+        `<tbody>${metrikRows}</tbody></table></div>` : "") +
+      (tenantRows ? `<h3>Nach Praxis</h3><div class="last-tabelle"><table>` +
+        `<thead><tr><th>Praxis</th><th>Gespr.</th><th>Turns</th><th>STT p95</th>` +
+        `<th>Ton p95</th><th>Antwort p95</th><th>Dropouts</th></tr></thead>` +
+        `<tbody>${tenantRows}</tbody></table></div>` : "") +
+      (stufenRows ? `<h3>Langsamste Gesprächsstufen</h3><div class="last-tabelle"><table>` +
+        `<thead><tr><th>Stufe</th><th>Turns</th><th>STT p50</th><th>Ton p95</th>` +
+        `<th>Antwort p95</th></tr></thead><tbody>${stufenRows}</tbody></table></div>` : "") +
+      (engineRows ? `<h3>STT-Gewinner</h3><div class="last-tabelle"><table>` +
+        `<thead><tr><th>Engine</th><th>Turns</th><th>Mittel</th><th>p50</th><th>p95</th>` +
+        `<th>Maximum</th></tr></thead><tbody>${engineRows}</tbody></table></div>` : "");
+  }
+
   function lastStatusZeichnen(lt) {
     if (!lt) return;
     const box = $("lasttestStatus");
     const e = lt.ergebnis || {};
+    lastAuswertungZeichnen(lt);
     if (lt.phase === "fertig") {
       box.innerHTML = `<strong>Fertig: ${e.gehalten || 0}/${lt.n || 0} gehalten</strong>` +
-        `<span> · Fehler ${e.fehler || 0} · erster Ton P95 ${e.ersterTonP95 || 0}s</span>`;
+        `<span> · ${e.turns || 0} Turns · Fehler ${e.fehler || 0} · Audio-Dropouts ${(e.kpis || {}).dropouts || 0}</span>`;
       $("lasttestStart").disabled = false;
       if (lastPoller) clearInterval(lastPoller);
       lastPoller = null;
@@ -180,7 +250,13 @@
       lastPoller = null;
       return;
     }
-    box.textContent = `Läuft: ${lt.fertig || 0}/${lt.n || 0} Gespräche abgeschlossen`;
+    if (lt.phase === "vorwaermen") {
+      box.textContent = "Anrufer-Audio wird vorgerendert — diese Zeit fließt nicht in die Messung.";
+    } else if (lt.phase === "baseline") {
+      box.textContent = `Einzelgespräche als Referenz: ${lt.baselineFertig || 0}/${lt.baselineGesamt || 0} Praxen`;
+    } else {
+      box.textContent = `Lastwelle: ${lt.fertig || 0}/${lt.n || 0} vollständige Gespräche abgeschlossen`;
+    }
   }
 
   async function lastPoll() {
@@ -195,6 +271,7 @@
     const n = Number($("lasttestN").value || 6);
     $("lasttestStart").disabled = true;
     $("lasttestStatus").textContent = "Startet …";
+    $("lasttestAuswertung").innerHTML = "";
     try {
       const r = await fetch("/bianca/studio/api/lasttest", {
         method: "POST",
@@ -233,6 +310,7 @@
     $("lasttestGlobal").addEventListener("click", () => {
       $("lasttestModal").hidden = false;
       $("lasttestStatus").textContent = "";
+      $("lasttestAuswertung").innerHTML = "";
       lastPlanLaden();
     });
     $("lasttestZu").addEventListener("click", () => {
