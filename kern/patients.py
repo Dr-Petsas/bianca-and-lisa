@@ -494,7 +494,7 @@ def akte_anlegen(
         "gender": gender,
         "privateInsurance": private_insurance,
     }
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or tenant.get("_testNoWrite"):
         return {
             "ok": True,
             "created": False,
@@ -542,7 +542,7 @@ def akte_loeschen(tenant: dict, patient_id: str) -> dict[str, Any]:
     pid = _s(patient_id)
     if not pid:
         return {"ok": False, "deleted": False, "error": "patientId fehlt"}
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or tenant.get("_testNoWrite"):
         return {"ok": True, "deleted": False, "dryRun": True, "patientId": pid}
     try:
         r = httpx.post(
@@ -576,7 +576,7 @@ def telefon_aktualisieren(tenant: dict, patient_id: str, phone: str) -> dict[str
     e164 = handy_e164(phone)
     if not pid or not handy_ok(e164):
         return {"ok": False, "error": "patientId oder Nummer fehlt"}
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or tenant.get("_testNoWrite"):
         return {"ok": True, "dryRun": True, "patientId": pid, "mobilePhoneNumber": e164, "previous": ""}
     try:
         r = httpx.post(
@@ -612,7 +612,7 @@ def versicherung_aktualisieren(tenant: dict, patient_id: str, privat: bool) -> d
     pid = _s(patient_id)
     if not pid:
         return {"ok": False, "error": "patientId fehlt"}
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or tenant.get("_testNoWrite"):
         return {"ok": True, "dryRun": True, "patientId": pid,
                 "privateInsurance": bool(privat), "previous": None}
     try:

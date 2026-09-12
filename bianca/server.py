@@ -186,6 +186,10 @@ def api_start(body: StartIn):
         sit["clientKind"] = "studio"
         if body.testNoWrite:
             sit["testNoWrite"] = True
+            sit["tenant"] = {
+                **(sit.get("tenant") or {}),
+                "_testNoWrite": True,
+            }
         name = " ".join(str(body.testName or "").split())
         if name:
             sit["testName"] = name

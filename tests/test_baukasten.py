@@ -536,28 +536,50 @@ def test_lasttest_setzt_diktat_wartezug_mit_fertig_fort():
 
 
 def test_lasttest_no_write_blockiert_alle_schreibklassen(monkeypatch, tmp_path):
-    from bianca import flow, verwalten
-    from kern import gedaechtnis, tenants
+    from bianca import verwalten
+    from kern import calendar, gedaechtnis, patients, tenants
 
+    tenant = {**tenants.laden("meddent"), "_testNoWrite": True}
     sit = {
         "id": "last-no-write",
         "testAnruf": True,
         "testNoWrite": True,
-        "tenant": tenants.laden("meddent"),
+        "tenant": tenant,
     }
 
     def nie(*args, **kwargs):
         raise AssertionError("Schreibweg im testNoWrite-Lauf aufgerufen")
 
-    monkeypatch.setattr(flow.kal, "book_slot", nie)
-    monkeypatch.setattr(verwalten.kal, "cancel_by_id", nie)
-    monkeypatch.setattr(verwalten.kal, "move_appointment", nie)
+    monkeypatch.setattr(calendar, "_cf_call", nie)
+    monkeypatch.setattr(calendar, "_cf_post", nie)
+    monkeypatch.setattr(patients, "_suche_eindeutig", lambda *a, **k: None)
+    monkeypatch.setattr(patients.httpx, "post", nie)
     monkeypatch.setattr(verwalten, "DATA_DIR", tmp_path)
     monkeypatch.setattr(gedaechtnis.httpx, "post", nie)
 
-    assert flow._buchen(sit)["book"]["blocked"] == "testNoWrite"
-    assert "nicht abgesagt" in verwalten._absagen(sit, None)["text"]
-    assert "nicht verschoben" in verwalten._verschieben(sit, None)["text"]
+    ctx = {
+        "patientId": "pat-test", "patientName": "Max Muster",
+        "firstName": "Max", "lastName": "Muster",
+        "calendarId": "cal-test", "visitMotiveId": "motiv-test",
+        "slotIso": "2026-09-21T09:00:00+02:00",
+        "appointmentId": "apt-test",
+    }
+    patients.patient_id_bindung_setzen(ctx, "pat-test", "Max", "Muster")
+    assert calendar.book_slot(
+        tenant, ctx, slot_iso=ctx["slotIso"])["dryRun"] is True
+    assert calendar.cancel_by_id(
+        tenant, ctx, "apt-test")["dryRun"] is True
+    assert calendar.move_appointment(
+        tenant, ctx, slot_iso="2026-09-22T09:00:00+02:00")["dryRun"] is True
+    assert calendar.note_appointment(
+        tenant, ctx, sit, note="synthetisch")["dryRun"] is True
+    assert patients.akte_anlegen(
+        tenant, first="Max", last="Muster", phone="01761234567")["dryRun"] is True
+    assert patients.telefon_aktualisieren(
+        tenant, "pat-test", "01761234567")["dryRun"] is True
+    assert patients.versicherung_aktualisieren(
+        tenant, "pat-test", False)["dryRun"] is True
+    assert patients.akte_loeschen(tenant, "pat-test")["dryRun"] is True
     verwalten.abgeben_notiz(sit, was="synthetischer Rückruf")
     assert not (tmp_path / "praxis_notizen.jsonl").exists()
     assert not sit.get("tools")

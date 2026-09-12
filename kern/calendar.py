@@ -18,6 +18,11 @@ NO_CONTEXT = "Ich komme hier gerade nicht an den Kalender. Die Praxis meldet sic
 NO_CONTEXT_REGIE = "Kein Kalenderkontext in dieser Sitzung. Biete einen Rückruf an, nenne keine erfundenen Zeiten."
 
 
+def _test_no_write(tenant: dict) -> bool:
+    """Sitzungs-lokaler Schreibstopp für Lasttests; WRITE_LIVE bleibt global an."""
+    return bool((tenant or {}).get("_testNoWrite"))
+
+
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
@@ -389,7 +394,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             ),
             "regie": "Name und patientId widersprechen sich. Nicht buchen, Identität neu auflösen.",
         }
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or _test_no_write(tenant):
         when = spoken_slot(iso)
         return {
             "ok": True,
@@ -1006,7 +1011,7 @@ def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]
     aid = _s(appointment_id)
     if not aid:
         return {"ok": False, "spoken": "Welchen Termin soll ich absagen?"}
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or _test_no_write(tenant):
         return {
             "ok": True, "cancelled": False, "dryRun": True, "appointmentId": aid,
             "spoken": "Den Termin hätte ich jetzt abgesagt.",
@@ -1203,7 +1208,7 @@ def cancel_appointment(tenant: dict, ctx: dict, *, date: str = "") -> dict[str, 
         }
     if not day:
         return {"ok": False, "spoken": "Welchen Termin soll ich absagen?"}
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or _test_no_write(tenant):
         return {
             "ok": True,
             "cancelled": False,
@@ -1312,7 +1317,7 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
             "spoken": "Welchen Termin möchten Sie verschieben?",
             "regie": "appointmentId fehlt. Erst den bestehenden Termin klären (list_appointments oder Datum erfragen).",
         }
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or _test_no_write(tenant):
         return {
             "ok": True,
             "moved": False,
@@ -1394,7 +1399,7 @@ def note_appointment(tenant: dict, ctx: dict, sit: dict | None = None, *, note: 
     wer = notes.stimme_von(sit or {})
     zeile = text if "\n" in text else notes.notiz_anhaengen("", text, herkunft=wer)
     kurz = _s(text.splitlines()[0])
-    if not WRITE_LIVE:
+    if not WRITE_LIVE or _test_no_write(tenant):
         return {
             "ok": True,
             "noted": False,
