@@ -352,6 +352,24 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if not lage["eroeffnet"]:
         return _eroeffnung(story, lage)
 
+    antwort_text = " ".join(str(lage.get("biancaText") or "").lower().split())
+    if any(x in antwort_text for x in (
+            "keinen freien termin", "keine freien termine",
+            "leider keinen termin", "leider keine termine")):
+        lage["fachlichErledigt"] = "kein_slot"
+        if "nichts_mehr" not in lage["gemacht"]:
+            lage["gemacht"].add("nichts_mehr")
+            return {
+                "text": _wahl(story, lage, "nichts_mehr", saetze.NICHTS_MEHR),
+                "baustein": "nichts_mehr",
+            }
+        lage["gemacht"].add("abschied")
+        return {
+            "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
+            "baustein": "abschied",
+            "auflegen": True,
+        }
+
     fid = lage["frage"]
     if not fid:
         fid = _frage_aus_text(lage.get("biancaText") or "")
@@ -530,10 +548,19 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
             "nicht ausstellen", "nicht telefonisch ausstellen",
             "kann ich am telefon nicht", "kann ich selbst nicht",
             "persönlich vorsprechen", "persoenlich vorsprechen",
+            "persönlicher vorsprach", "persoenlicher vorsprach",
             "nicht telefonisch bestellen", "nur persönlich")):
         lage["fachlichErledigt"] = "doku_auskunft"
     if lage.get("fachlichErledigt") == "doku_auskunft" and (
             "nichts_mehr" in lage["gemacht"]):
+        lage["gemacht"].add("abschied")
+        return {
+            "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
+            "baustein": "doku_abschied",
+            "auflegen": True,
+        }
+    if lage.get("fachlichErledigt") == "doku_auskunft" and not any(
+            x in text for x in ("sonst noch", "noch etwas")):
         lage["gemacht"].add("abschied")
         return {
             "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),

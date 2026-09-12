@@ -541,6 +541,37 @@ def test_story_runner_erkennt_sicher_erledigtes_dokumentanliegen():
     assert ende["auflegen"] is True
 
 
+def test_story_runner_beendet_keine_slots_und_persoenliche_vorsprache_sauber():
+    from tests.baukasten import geschichten, lasttest
+
+    termin = {"anliegen": geschichten.TERMIN, "seed": 8}
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "biancaText": (
+            "Im Moment habe ich leider keinen freien Termin. "
+            "Die Praxis meldet sich kurzfristig bei Ihnen."
+        ),
+    })
+    nichts = geschichten.naechster_baustein(termin, lage)
+    assert nichts["baustein"] == "nichts_mehr"
+    assert lasttest._fachlich_abgeschlossen(
+        termin, lage, {"baustein": "abschied"},
+    )
+
+    doku = {"anliegen": "rezept", "seed": 9}
+    lage2 = geschichten.lage_neu()
+    lage2.update({
+        "eroeffnet": True,
+        "biancaText": (
+            "Rezepte gibt es nur nach persönlicher Vorsprache in der Praxis. "
+            "Kommen Sie bitte während der Sprechzeiten vorbei."
+        ),
+    })
+    ende = geschichten.naechster_baustein(doku, lage2)
+    assert ende["baustein"] == "doku_abschied"
+
+
 def test_lasttest_write_evidenz_macht_lauf_rot():
     from tests.baukasten import lasttest
 
