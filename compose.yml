@@ -182,7 +182,7 @@ services:
 
   # Oeffentlicher Cloudflare-Tunnel fuer Lisa-Outbound (CF -> pickadoc1:8095).
   # Named Tunnel (Zero Trust), Token in .env: CLOUDFLARE_TELEFONKI_TOKEN
-  # Public Hostname in CF-UI: lisa-live.pickadoc-tunnel.com -> http://localhost:8095
+  # Public Hostname: bianca-and-lisa.pickadoc-tunnel.com -> http://localhost:8095
   # (network_mode:host, damit localhost die Host-Lisa meint).
   lisa-public:
     image: cloudflare/cloudflared:latest

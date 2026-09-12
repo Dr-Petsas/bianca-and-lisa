@@ -7,6 +7,7 @@ const wahl = {
   stimme: "", nachname: "", anliegen: "termin", grund: "", behandler: null,
   versicherung: "", tag: "Mittwoch", slotAnnahme: 0, slotRichtung: "",
   abschweifer: new Set(), extras: new Set(), einzelwoerter: new Set(),
+  sprecher: new Set(),
 };
 let storyNr = 1;
 let poller = null;
@@ -240,6 +241,11 @@ function chipsBauen() {
     { wert: "pzr", text: "PZR mitbuchen" },
   ], wahl.extras);
   mehrfachwahl("chips-einzelwort", KATALOG.einzelwoerter || [], wahl.einzelwoerter);
+  mehrfachwahl("chips-sprecher", KATALOG.sprecherKategorien || [], wahl.sprecher);
+  const sp = $("chips-sprecher");
+  if (sp) {
+    [...sp.children].forEach((c) => c.addEventListener("click", sprecherVorschauPlanen));
+  }
 }
 
 function eigen(id) {
@@ -310,7 +316,16 @@ function storyBauen() {
   if (woerter.length) s.einzelwoerter = woerter;
   if (anzahl > 0) s.einzelwortAnzahl = anzahl;
   else if (woerter.length) s.einzelwortAnzahl = woerter.length;
+  s.sprecher = sprecherLesen();
   return s;
+}
+
+function sprecherLesen() {
+  const sl = $("sp-staerke");
+  return {
+    staerke: Math.max(0, Math.min(100, Number((sl && sl.value) || 0) || 0)),
+    kategorien: [...wahl.sprecher],
+  };
 }
 
 function leitungLesen() {
@@ -349,6 +364,39 @@ function leitungZeichnen() {
     const out = $("lt-" + k + "-w");
     if (sl && out) out.textContent = sl.value + " %";
   });
+}
+
+function sprecherZeichnen() {
+  const sl = $("sp-staerke");
+  if ($("sp-staerke-w") && sl) $("sp-staerke-w").textContent = sl.value + " %";
+}
+
+let sprecherVorschauTimer = null;
+
+function sprecherVorschauPlanen() {
+  sprecherZeichnen();
+  if (sprecherVorschauTimer) clearTimeout(sprecherVorschauTimer);
+  sprecherVorschauTimer = setTimeout(sprecherVorschauLaden, 120);
+}
+
+async function sprecherVorschauLaden() {
+  const box = $("sprecher-vorschau");
+  if (!box || !KATALOG) return;
+  try {
+    const r = await fetch("api/sprecher-vorschau", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: KATALOG.demoSatz || "",
+        sprecher: sprecherLesen(),
+      }),
+    });
+    const d = await r.json();
+    box.textContent = d.text && d.text !== d.klar
+      ? `Gesprochen: ${d.text}`
+      : "Originalsprache — Stärke oder Eigenschaft auswählen";
+  } catch {
+    box.textContent = "Vorschau nicht erreichbar";
+  }
 }
 
 const MON_TABS = ["alle", "meddent", "thaler", "blessing"];
@@ -658,6 +706,7 @@ async function laufStarten(anzahl) {
     mithoeren: true,
     tenant: praxisId(),
     leitung: leitungLesen(),
+    sprecher: sprecherLesen(),
   };
   if (anzahl === 1) body.story = storyBauen();
   const r = await fetch("api/lauf", {
@@ -693,6 +742,9 @@ function bubbleBauen(z) {
   });
   if (z.frage) meta.insertAdjacentHTML("beforeend", `<span class="tag">frage=${z.frage}</span>`);
   if (z.baustein) meta.insertAdjacentHTML("beforeend", `<span class="tag">${z.baustein}</span>`);
+  if (z.gesprochen && z.gesprochen !== z.text) {
+    meta.insertAdjacentHTML("beforeend", `<span class="tag gesprochen">gesprochen: ${z.gesprochen}</span>`);
+  }
   if (z.gehoert && z.gehoert !== z.text) {
     meta.insertAdjacentHTML("beforeend", `<span class="tag gehoert">gehört: ${z.gehoert}</span>`);
   }
@@ -805,6 +857,35 @@ async function demoSpielen() {
   }
 }
 
+async function sprecherProbeSpielen() {
+  $("fehler").textContent = "";
+  await ohrOeffnen();
+  await sprecherVorschauLaden();
+  const r = await fetch("api/sprecher-probe", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: (KATALOG && KATALOG.demoSatz) || "",
+      sprecher: sprecherLesen(),
+      leitung: leitungLesen(),
+    }),
+  });
+  if (!r.ok) {
+    let msg = "Sprecherprobe fehlgeschlagen";
+    try { const d = await r.json(); if (d.fehler) msg = d.fehler; } catch { /* */ }
+    $("fehler").textContent = msg;
+    return;
+  }
+  const blob = await r.blob();
+  const obj = URL.createObjectURL(blob);
+  try {
+    lautsprecher.src = obj;
+    await lautsprecher.play();
+  } catch (e) {
+    $("fehler").textContent = "Wiedergabe blockiert — einmal ins Fenster tippen.";
+    console.warn("studio-sprecherprobe", e);
+  }
+}
+
 async function boot() {
   try {
     const data = await (await fetch("api/tenants")).json();
@@ -847,14 +928,17 @@ async function boot() {
     if (ev.key === PRAXIS_KEY && ev.newValue) tenantWechsel(ev.newValue);
   });
   leitungZeichnen();
+  sprecherZeichnen();
   einzelwortAnzahlZeichnen();
   ["lt-hz", "lt-rauschen", "lt-artefakte", "lt-dropouts", "lt-pegel"].forEach((id) => {
     if ($(id)) $(id).addEventListener("input", leitungZeichnen);
   });
+  if ($("sp-staerke")) $("sp-staerke").addEventListener("input", sprecherVorschauPlanen);
   if ($("ew-n")) $("ew-n").addEventListener("input", einzelwortAnzahlZeichnen);
   if ($("last-n")) $("last-n").addEventListener("input", lastPlanAktualisieren);
   $("knopf-automatik").addEventListener("click", automatik);
   $("knopf-demo").addEventListener("click", demoSpielen);
+  $("knopf-sprecher-probe").addEventListener("click", sprecherProbeSpielen);
   $("knopf-start").addEventListener("click", () => laufStarten(1));
   $("knopf-batch").addEventListener("click", () => laufStarten(10));
   if ($("knopf-lasttest")) $("knopf-lasttest").addEventListener("click", () => {

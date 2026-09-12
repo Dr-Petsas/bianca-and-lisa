@@ -1,4 +1,4 @@
-"""lisa-live.pickadoc-tunnel.com: globale Navigation und Bianca-Proxy."""
+"""bianca-and-lisa.pickadoc-tunnel.com: globale Navigation und Bianca-Proxy."""
 
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ def test_bianca_ziel_kommt_aus_env(monkeypatch):
 def test_compose_setzt_bianca_auf_geschwister():
     text = open("compose.yml", encoding="utf-8").read()
     assert "LISA_BIANCA_URL: ${LISA_BIANCA_URL:-http://bianca:8096}" in text
+
+
+def test_demo_praxis_kommt_aus_keiner_globalen_kundenauswahl():
+    from bianca import server as bianca_server
+    from tests.baukasten import editor
+
+    for antwort in (server.api_tenants(), bianca_server.api_tenants(), editor.api_tenants()):
+        assert "demo" not in {str(t.get("id") or "") for t in antwort["tenants"]}
 
 
 def test_kampagne_route_und_dateien_existieren():

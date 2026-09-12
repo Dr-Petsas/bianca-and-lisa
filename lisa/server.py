@@ -267,7 +267,8 @@ def health():
 
 @app.get("/api/tenants")
 def api_tenants():
-    return {"ok": True, "tenants": tenants.liste(), "default": DEFAULT_TENANT}
+    sichtbar = [t for t in tenants.liste() if str((t or {}).get("id") or "") != "demo"]
+    return {"ok": True, "tenants": sichtbar, "default": DEFAULT_TENANT}
 
 
 @app.post("/api/patients")

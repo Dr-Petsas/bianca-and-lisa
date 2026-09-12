@@ -361,6 +361,121 @@ def test_dauer_s_liest_8khz_header():
         assert 0.95 <= klang.dauer_s(p) <= 1.05
 
 
+def test_leitungseffekte_veraendern_die_stimme_nicht_den_hintergrund():
+    import array
+    import struct
+
+    from tests.baukasten import klang
+
+    rate = 8000
+    still = [0] * 800
+    stimme = [9000 if (i // 10) % 2 else -9000 for i in range(4000)]
+    samples = array.array("h", still + stimme + still)
+    wav = klang._wav_pcm16_header(len(samples) * 2, rate) + samples.tobytes()
+    basis = {
+        "hz": rate, "rauschen": 0, "artefakte": 0,
+        "dropouts": 0, "pegel": 50, "g711": False,
+    }
+    roh = klang.telefon_wav(wav, leitung=basis)
+    start = 44
+    stille_bytes = len(still) * 2
+    stimme_start = start + stille_bytes
+    stimme_ende = stimme_start + len(stimme) * 2
+    for effekt in ("rauschen", "artefakte", "dropouts", "pegel"):
+        einstellung = dict(basis)
+        einstellung[effekt] = 100
+        kaputt = klang.telefon_wav(wav, leitung=einstellung)
+        assert kaputt[start:stimme_start] == roh[start:stimme_start], effekt
+        assert kaputt[stimme_start:stimme_ende] != roh[stimme_start:stimme_ende], effekt
+    noisy = klang.telefon_wav(wav, leitung={**basis, "rauschen": 100})
+    delta = [
+        struct.unpack_from("<h", noisy, i)[0] - struct.unpack_from("<h", roh, i)[0]
+        for i in range(stimme_start, stimme_ende, 2)
+    ]
+    assert min(delta) < 0 < max(delta)
+    assert len(set(delta)) > 100, "Rauschen muss breitbandig statt periodisch sein"
+
+
+def test_sprechereigenschaften_verfremden_deterministisch():
+    from tests.baukasten import deutlichkeit
+
+    text = "Ich beginne die Behandlung gleich und freundlich."
+    einstellung = {
+        "staerke": 100,
+        "kategorien": ["chsch", "hart", "anlaut", "auslaut", "einfuegen"],
+    }
+    a = deutlichkeit.verfremden(text, einstellung, seed=19)
+    b = deutlichkeit.verfremden(text, einstellung, seed=19)
+    assert a == b
+    assert a["text"] != text
+    assert a["hits"]
+    assert deutlichkeit._chsch("ich", __import__("random").Random(1)) == "isch"
+    assert deutlichkeit._hart("Baba", __import__("random").Random(1)).startswith("P")
+    assert len(deutlichkeit._anlaut("Termin", __import__("random").Random(1))) > len("Termin")
+    assert deutlichkeit._auslaut("Behandlung", __import__("random").Random(1)).endswith("unk")
+
+
+def test_statistik_zaehlt_zeitverlauf_und_mandant():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from tests.baukasten import statistik
+
+    def schreiben(p: Path, data: dict) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as d:
+        basis = Path(d)
+        lauf1 = basis / "20260901-100000"
+        schreiben(lauf1 / "lauf.json", {
+            "laufId": lauf1.name, "tenant": "meddent",
+            "gestartet": "2026-09-01T10:00:00",
+            "stories": [{"id": "ok-1", "ok": True}, {"id": "rot-1", "ok": False}],
+        })
+        for sid, ok, check in (("ok-1", True, "kein Fehler"), ("rot-1", False, "Telefon")):
+            schreiben(lauf1 / sid / "bericht.json", {
+                "id": sid, "start": "2026-09-01T10:00:00",
+                "story": {"tenant": "meddent"},
+                "zuege": [
+                    {"wer": "anrufer", "text": "Hallo", "gehoert": "Hallo"},
+                    {"wer": "bianca", "text": "Guten Tag", "latenzS": 2.0, "ersterTonS": 1.0},
+                ],
+                "ergebnis": {"ok": ok, "checks": [{"name": check, "ok": ok}]},
+            })
+        lauf2 = basis / "20260902-100000"
+        schreiben(lauf2 / "lauf.json", {
+            "laufId": lauf2.name, "tenant": "meddent",
+            "gestartet": "2026-09-02T10:00:00",
+            "stories": [{"id": "ok-2", "ok": True}],
+        })
+        schreiben(lauf2 / "ok-2" / "bericht.json", {
+            "id": "ok-2", "start": "2026-09-02T10:00:00",
+            "story": {"tenant": "meddent"},
+            "zuege": [{"wer": "anrufer", "text": "Termin", "gehoert": "Termin"}],
+            "ergebnis": {"ok": True, "checks": [{"name": "kein Fehler", "ok": True}]},
+        })
+        last = basis / "last-20260903-100000"
+        schreiben(last / "lasttest.json", {
+            "laufId": last.name,
+            "laeufe": [
+                {"nr": 1, "tenant": "meddent", "ok": True, "antwortS": 1.2,
+                 "ersterTonS": 0.8, "zuege": [{"text": "ok"}, {"text": "ok"}]},
+                {"nr": 2, "tenant": "thaler", "ok": False, "fehler": "timeout", "zuege": []},
+            ],
+        })
+        s = statistik.aus_berichten(basis, "meddent")
+        assert s["gesamt"]["gespraeche"] == 4
+        assert s["gesamt"]["turns"] == 5
+        assert s["gesamt"]["erfolgreich"] == 3
+        assert s["gesamt"]["fehlgeschlagen"] == 1
+        assert len(s["zeitreihe"]) == 3
+        assert s["probleme"][0]["problem"] == "Telefon"
+        assert s["analysen"][0]["storyId"] == "rot-1"
+        assert statistik.aus_berichten(basis, "thaler")["gesamt"]["gespraeche"] == 1
+
+
 if __name__ == "__main__":
     fehler = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

@@ -12,11 +12,11 @@ import re
 from typing import Any
 
 KATEGORIEN = (
-    ("hart", "Hart/weich — g↔k, d↔t, b↔p"),
-    ("anlaut", "Anlaut — Mitarbeiter → Witarbeiter"),
-    ("auslaut", "Auslaut — Ende weich oder weg"),
-    ("chsch", "Dialekt — ch↔sch, ich→isch"),
-    ("einfuegen", "Buchstaben dazumischen — Grönkenpid"),
+    ("chsch", "ch → sch — ich → isch"),
+    ("hart", "g → k, d → t, b → p"),
+    ("anlaut", "Konsonant am Wortanfang hinzufügen"),
+    ("auslaut", "Endung klangähnlich verändern"),
+    ("einfuegen", "Konsonant im Wort einstreuen"),
     ("vertauschen", "Buchstaben vertauschen"),
     ("vokal", "Ähnlichklang — ei/ai, ä/e, ü/i"),
     ("verschlucken", "Laute verschlucken"),
@@ -32,15 +32,21 @@ _DIKTAT = frozenset({
     "telefon", "telefon_check", "buchstabieren", "name", "vorname", "nachname",
 })
 
-_HART = (("g", "k"), ("k", "g"), ("d", "t"), ("t", "d"), ("b", "p"), ("p", "b"))
-_ANLAUT = {
-    "m": "w", "w": "m", "b": "p", "p": "b", "g": "k", "k": "g",
-    "d": "t", "t": "d", "r": "l", "l": "r", "f": "v", "v": "f",
-}
+_HART = (("g", "k"), ("d", "t"), ("b", "p"))
+_ANLAUT_EXTRA = ("k", "t", "p", "sch", "r", "n")
 _AUSLAUT = {
     "r": "l", "l": "r", "t": "d", "d": "t", "n": "m", "m": "n",
     "k": "g", "g": "k", "b": "p", "p": "b", "s": "sch",
 }
+_ENDUNGEN = (
+    ("lich", "lisch"),
+    ("ung", "unk"),
+    ("chen", "schen"),
+    ("ieren", "iern"),
+    ("en", "em"),
+    ("er", "el"),
+    ("ig", "ik"),
+)
 
 
 def _norm(d: dict | None) -> dict[str, Any]:
@@ -55,6 +61,11 @@ def _norm(d: dict | None) -> dict[str, Any]:
     if staerke and not kats:
         kats = [k for k, _ in KATEGORIEN]
     return {"staerke": staerke, "kategorien": kats}
+
+
+def normalisieren(d: dict | None) -> dict[str, Any]:
+    """Öffentlicher Vertrag für Editor, Runner und Tests."""
+    return _norm(d)
 
 
 def aktiv(d: dict | None) -> bool:
@@ -96,22 +107,22 @@ def _hart(wort: str, rnd: random.Random) -> str:
 def _anlaut(wort: str, rnd: random.Random) -> str:
     if len(wort) < 3:
         return wort
-    k = _klein(wort[0])
-    neu = _ANLAUT.get(k)
-    if not neu:
-        neu = rnd.choice(list(_ANLAUT.values()))
-    return _gross_wie(wort, neu + wort[1:])
+    extra = rnd.choice(_ANLAUT_EXTRA)
+    return _gross_wie(wort, extra + wort.lower())
 
 
 def _auslaut(wort: str, rnd: random.Random) -> str:
     if len(wort) < 5:
         return wort
-    if rnd.random() < 0.45:
-        return wort[:-1]
+    klein = wort.lower()
+    endungen = [(alt, neu) for alt, neu in _ENDUNGEN if klein.endswith(alt)]
+    if endungen:
+        alt, neu = rnd.choice(endungen)
+        return wort[:-len(alt)] + neu
     k = _klein(wort[-1])
     neu = _AUSLAUT.get(k)
     if not neu:
-        return wort[:-1]
+        return wort[:-1] + rnd.choice(("n", "t", "sch"))
     return wort[:-1] + (neu.upper() if wort[-1].isupper() else neu)
 
 
@@ -119,9 +130,6 @@ def _chsch(wort: str, rnd: random.Random) -> str:
     k = wort.lower()
     if k == "ich":
         return _gross_wie(wort, "isch")
-    if "sch" in k:
-        i = k.find("sch")
-        return wort[:i] + ("Ch" if wort[i].isupper() else "ch") + wort[i + 3:]
     if "ch" in k:
         i = k.find("ch")
         return wort[:i] + ("Sch" if wort[i].isupper() else "sch") + wort[i + 2:]

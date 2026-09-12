@@ -31,7 +31,10 @@ from pydantic import BaseModel  # noqa: E402
 from kern.config import DEFAULT_TENANT  # noqa: E402
 from kern.patients import arzt_sprechname  # noqa: E402
 from kern import tenants, zimmer_map  # noqa: E402
-from tests.baukasten import aufraeumen, geschichten, klang, lasttest, runner, saetze  # noqa: E402
+from tests.baukasten import (  # noqa: E402
+    aufraeumen, deutlichkeit, geschichten, klang, lasttest, runner, saetze,
+    statistik,
+)
 
 WEB_PRAXIS_JS = Path(__file__).resolve().parent.parent.parent / "bianca_web" / "praxis.js"
 
@@ -103,9 +106,18 @@ def _audio_vorwaermen(story: dict) -> None:
                 "i": i + 1, "n": n, "text": t,
             }
         try:
-            pfad = klang.audio_holen(stimme, t)
-            if story.get("leitung") or story.get("telefonQualitaet"):
-                klang.telefon_datei(pfad, leitung=story.get("leitung"))
+            varianten = [t]
+            v = deutlichkeit.verfremden(
+                t, story.get("sprecher"),
+                seed=int(story.get("seed") or story.get("nr") or 0),
+            )
+            gesprochen = str(v.get("text") or t)
+            if gesprochen != t:
+                varianten.append(gesprochen)
+            for text in varianten:
+                pfad = klang.audio_holen(stimme, text)
+                if story.get("leitung") or story.get("telefonQualitaet"):
+                    klang.telefon_datei(pfad, leitung=story.get("leitung"))
         except Exception as e:
             print(f"baukasten-warm: {type(e).__name__}: {e}", flush=True)
     with _lock:
@@ -262,6 +274,9 @@ def _katalog_fuer(tenant_id: str) -> dict[str, Any]:
         "biancaBasis": BIANCA_BASIS,
         "leitung": dict(klang.LEITUNG_DEFAULT),
         "demoSatz": klang.DEMO_SATZ,
+        "sprecherKategorien": [
+            {"id": k, "text": text} for k, text in deutlichkeit.KATEGORIEN
+        ],
         "einzelwoerter": geschichten.einzelwoerter_liste(behandler),
         "lasttestMax": lasttest.MAX_PARALLEL,
     }
@@ -269,7 +284,8 @@ def _katalog_fuer(tenant_id: str) -> dict[str, Any]:
 
 @app.get("/api/tenants")
 def api_tenants() -> dict[str, Any]:
-    return {"ok": True, "tenants": tenants.liste(), "default": DEFAULT_TENANT}
+    sichtbar = [t for t in tenants.liste() if str((t or {}).get("id") or "") != "demo"]
+    return {"ok": True, "tenants": sichtbar, "default": DEFAULT_TENANT}
 
 
 @app.get("/api/katalog")
@@ -289,6 +305,41 @@ class LeitungWunsch(BaseModel):
     dropouts: int = 6
     pegel: int = 75
     g711: bool = True
+
+
+class SprecherProbeWunsch(BaseModel):
+    sprecher: dict[str, Any] = {}
+    leitung: dict[str, Any] = {}
+    text: str = klang.DEMO_SATZ
+
+
+@app.post("/api/sprecher-vorschau")
+def sprecher_vorschau(w: SprecherProbeWunsch) -> dict[str, Any]:
+    return deutlichkeit.verfremden(
+        w.text or klang.DEMO_SATZ, w.sprecher, seed=4242,
+    )
+
+
+@app.post("/api/sprecher-probe")
+def sprecher_probe(w: SprecherProbeWunsch) -> Response:
+    v = deutlichkeit.verfremden(
+        w.text or klang.DEMO_SATZ, w.sprecher, seed=4242,
+    )
+    try:
+        pfad = klang.audio_holen(
+            klang.DEMO_STIMME, str(v.get("text") or klang.DEMO_SATZ),
+        )
+        tel = klang.telefon_datei(
+            pfad, leitung=klang.leitung_norm(w.leitung or klang.LEITUNG_DEFAULT),
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "fehler": f"{type(e).__name__}: {e}"},
+            status_code=503,
+        )
+    return FileResponse(
+        tel, media_type="audio/wav", headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/leitung-probe")
@@ -311,6 +362,7 @@ class LaufWunsch(BaseModel):
     mithoeren: bool = False
     tenant: str = ""
     leitung: dict[str, Any] = {}
+    sprecher: dict[str, Any] = {}
     telefonQualitaet: bool = False  # Alt-Feld, ignoriert wenn leitung da ist
     story: dict[str, Any] | None = None  # manuell gebaute Story (Chips)
 
@@ -323,6 +375,7 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
     tid = (w.tenant or "").strip()
     kat = _katalog_fuer(tid)
     L = klang.leitung_norm(w.leitung or klang.LEITUNG_DEFAULT)
+    sprecher = deutlichkeit.normalisieren(w.sprecher)
     if w.story:
         basis = geschichten.automatik(
             int(w.story.get("nr") or w.ab), tag=w.tag, tenant=tid,
@@ -341,6 +394,7 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
     for s in stories:
         s["tenant"] = tid or s.get("tenant") or ""
         s["leitung"] = L
+        s["sprecher"] = sprecher
         s["telefonQualitaet"] = True
         if s.get("grund") and not s.get("grundErwartet"):
             s["grundErwartet"] = kat["gruende"].get(s["grund"]) or s["grund"]
@@ -446,6 +500,11 @@ def laeufe(tenant: str = "") -> dict[str, Any]:
                     "gruen": sum(1 for s in stories if s.get("ok")),
                     "gesamt": len(stories)})
     return {"laeufe": out}
+
+
+@app.get("/api/statistik")
+def api_statistik(tenant: str = "") -> dict[str, Any]:
+    return statistik.aus_berichten(BERICHTE_DIR, tenant)
 
 
 @app.get("/api/lauf/{lauf_id}")

@@ -33,7 +33,7 @@ PCM_RATE = 24000
 TEL_RATE = 8000  # Schmalband-Telefon (G.711)
 TEL_BITS = 8     # 8 kHz × 8 bit μ-law = 64 kbit/s wie Zaluma
 # Cache-Bruch, wenn sich die Leitungssimulation aendert.
-TEL_DATEI_SUFFIX = ".tel-g711.wav"
+TEL_DATEI_SUFFIX = ".tel-g711-v2.wav"
 # Heisse Leitung: Zaluma kam live mit Clipping an.
 TEL_GAIN = 1.18
 TEL_RAUSCHEN = 90  # PCM16-Amplituden, Leitungszischen
@@ -212,13 +212,28 @@ def leitung_suffix(leitung: dict | None) -> str:
     L = leitung_norm(leitung)
     g = "g711" if L["g711"] else "pcm"
     return (
-        f".tel-h{L['hz']}-r{L['rauschen']}-a{L['artefakte']}"
+        f".tel-v2-h{L['hz']}-r{L['rauschen']}-a{L['artefakte']}"
         f"-d{L['dropouts']}-p{L['pegel']}-{g}.wav"
     )
 
 
 def _rng(n: int) -> int:
     return ((n * 1103515245 + 12345) >> 16) & 0xFF
+
+
+class _WeissesRauschen:
+    """Deterministischer xorshift32-Generator mit flachem Spektrum."""
+
+    def __init__(self, seed: int = 0xA341316C):
+        self.state = seed & 0xFFFFFFFF or 1
+
+    def wert(self) -> float:
+        x = self.state
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        self.state = x & 0xFFFFFFFF
+        return (self.state / 2147483647.5) - 1.0
 
 
 def _resample(samples: array.array, src: int, dst: int) -> array.array:
@@ -239,31 +254,11 @@ def _resample(samples: array.array, src: int, dst: int) -> array.array:
 
 
 def _telefon_wav_klassisch(blob: bytes, src_rate: int) -> bytes:
-    """Fester 8-kHz-G.711-Pfad — bleibt der Default ohne Regler."""
-    if not blob or blob[:4] != b"RIFF" or len(blob) < 44:
-        return blob
-    rate = struct.unpack_from("<I", blob, 24)[0] or src_rate
-    pcm = blob[44:]
-    samples = array.array("h")
-    samples.frombytes(pcm[: len(pcm) // 2 * 2])
-    if not samples:
-        return blob
-    step = max(1, int(round(rate / TEL_RATE)))
-    prev_x = 0
-    prev_y = 0.0
-    out = array.array("h")
-    n = 0
-    for i in range(0, len(samples) - step + 1, step):
-        acc = sum(samples[i:i + step]) // step
-        y = acc - prev_x + 0.86 * prev_y
-        prev_x = acc
-        prev_y = y
-        rausch = (_rng(n) - 128) * TEL_RAUSCHEN // 128
-        heiss = _clip16(y * TEL_GAIN + rausch)
-        out.append(_ulaw_decode(_ulaw_encode(heiss)))
-        n += 1
-    data = out.tobytes()
-    return _wav_pcm16_header(len(data), TEL_RATE) + data
+    """Fester 8-kHz-G.711-Pfad mit denselben stimmgebundenen Effekten."""
+    return _telefon_wav_leitung(blob, src_rate, {
+        "hz": TEL_RATE, "rauschen": 28, "artefakte": 12,
+        "dropouts": 0, "pegel": 75, "g711": True,
+    })
 
 
 def _telefon_wav_leitung(blob: bytes, src_rate: int, L: dict) -> bytes:
@@ -287,34 +282,55 @@ def _telefon_wav_leitung(blob: bytes, src_rate: int, L: dict) -> bytes:
             prev_y = y
             gefiltert.append(_clip16(y))
         out = gefiltert
-    gain = 0.85 + (int(L["pegel"]) / 100.0) * 0.55
-    rausch_amp = int(L["rauschen"]) * 320 // 100
-    click_p = int(L["artefakte"]) / 100.0 * 0.18
+    gain = 0.72 + (int(L["pegel"]) / 100.0) * 1.05
+    rausch = int(L["rauschen"]) / 100.0
+    artefakt = int(L["artefakte"]) / 100.0
     drop_p = int(L["dropouts"]) / 100.0 * 0.35
     frame = max(1, ziel // 50)
     drop_bis = -1
-    n = 0
+    artefakt_bis = -1
+    artefakt_wert = 0.0
+    huelle = 0.0
+    weiss = _WeissesRauschen()
     fertig = array.array("h")
     for i, s in enumerate(out):
+        # Kurze Hüllkurve bindet jeden Effekt an die Stimme. In Pausen
+        # bleibt das Signal wirklich still; es wird kein Rauschteppich
+        # hinter die Aufnahme gemischt.
+        huelle = max(abs(float(s)), huelle * 0.997)
+        stimme = abs(float(s)) >= 96.0
         if i <= drop_bis:
             fertig.append(0)
-            n += 1
             continue
-        if drop_p and i % frame == 0 and (_rng(n + 9000) / 255.0) < drop_p:
+        if drop_p and stimme and i % frame == 0 and (weiss.wert() + 1.0) * 0.5 < drop_p:
             drop_bis = i + frame - 1
             fertig.append(0)
-            n += 1
             continue
         y = s * gain
-        if rausch_amp:
-            y += (_rng(n) - 128) * rausch_amp / 128.0
-        if click_p and (_rng(n + 4000) / 255.0) < (click_p / 40.0):
-            y += 16000 if _rng(n + 7) >= 128 else -16000
+        if stimme and rausch:
+            # Zwei unabhängige White-Noise-Anteile rauen die Stimme selbst
+            # auf: schnelle Amplitudenmodulation plus rauschige Hüllkurve.
+            # Die Stärke folgt dem Sprachpegel, nicht einer Hintergrundspur.
+            y *= 1.0 + weiss.wert() * (0.48 * rausch)
+            y += weiss.wert() * huelle * (0.32 * rausch)
+        if stimme and artefakt:
+            # Codec-/Leitungsartefakte greifen in die Sprachsamples ein:
+            # Bitcrush, begrenzte Dynamik und kurze Sample-Holds. Keine
+            # künstlichen Klicks in stillen Passagen.
+            stufe = 1 << max(0, min(9, round(artefakt * 9)))
+            y = round(y / stufe) * stufe
+            limit = 32767.0 * (1.0 - 0.42 * artefakt)
+            y = max(-limit, min(limit, y))
+            if i > artefakt_bis and i % max(1, frame // 2) == 0:
+                if (weiss.wert() + 1.0) * 0.5 < artefakt * 0.24:
+                    artefakt_bis = i + max(1, int(ziel * (0.0015 + artefakt * 0.004)))
+                    artefakt_wert = y
+            if i <= artefakt_bis:
+                y = artefakt_wert
         heiss = _clip16(y)
         if L["g711"]:
             heiss = _ulaw_decode(_ulaw_encode(heiss))
         fertig.append(heiss)
-        n += 1
     data = fertig.tobytes()
     return _wav_pcm16_header(len(data), ziel) + data
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="web/stil.css?v=13">
+<link rel="stylesheet" href="web/stil.css?v=14">
 </head>
 <body class="studio">
 <header class="kopf">
@@ -64,13 +64,23 @@
     <div class="chips" id="chips-einzelwort"></div>
     <textarea class="eigen" id="eigen-einzelwort" rows="2" placeholder="eigene Wörter, kommagetrennt — zusätzlich zu den Chips"></textarea>
   </section>
+  <section class="block block-breit sprecher">
+    <h2>Sprechereigenschaften — Wortverfremdung</h2>
+    <p class="klein">Verändert die tatsächlich gesprochenen Wörter vor der Spracherkennung. Mehrfach wählbar.</p>
+    <label>Stärke <input type="range" id="sp-staerke" min="0" max="100" value="0"> <span id="sp-staerke-w">0 %</span></label>
+    <div class="chips" id="chips-sprecher"></div>
+    <div class="sprecher-probe">
+      <button class="gross" id="knopf-sprecher-probe" type="button">Sprecherprobe vorspielen</button>
+      <div class="klein" id="sprecher-vorschau">Originalsprache</div>
+    </div>
+  </section>
   <section class="block block-breit leitung">
-    <h2>Audioqualität — Telefonleitung</h2>
-    <p class="klein">Echte G.711 μ-law hin und zurück (8 bit, 64 kbit/s). Demosatz: <em id="demo-satz"></em></p>
+    <h2>Audioqualität — Stimme &amp; Telefonleitung</h2>
+    <p class="klein">Alle Effekte greifen in die Stimme selbst ein; in Sprechpausen wird kein Rauschteppich zugemischt. Echte G.711 μ-law hin und zurück (8 bit, 64 kbit/s). Demosatz: <em id="demo-satz"></em></p>
     <label>Samplefrequenz <input type="range" id="lt-hz" min="8000" max="24000" step="8000" value="8000"> <span id="lt-hz-w">8000 Hz</span></label>
-    <label>Rauschen <input type="range" id="lt-rauschen" min="0" max="100" value="28"> <span id="lt-rauschen-w">28 %</span></label>
-    <label>Artefakte <input type="range" id="lt-artefakte" min="0" max="100" value="12"> <span id="lt-artefakte-w">12 %</span></label>
-    <label>Dropouts <input type="range" id="lt-dropouts" min="0" max="100" value="6"> <span id="lt-dropouts-w">6 %</span></label>
+    <label>White-Noise-Stimmrauhigkeit <input type="range" id="lt-rauschen" min="0" max="100" value="28"> <span id="lt-rauschen-w">28 %</span></label>
+    <label>Stimm-/Codec-Artefakte <input type="range" id="lt-artefakte" min="0" max="100" value="12"> <span id="lt-artefakte-w">12 %</span></label>
+    <label>Sprach-Dropouts <input type="range" id="lt-dropouts" min="0" max="100" value="6"> <span id="lt-dropouts-w">6 %</span></label>
     <label>Pegel / Übersteuerung <input type="range" id="lt-pegel" min="0" max="100" value="75"> <span id="lt-pegel-w">75 %</span></label>
     <div class="leitung-zeile">
       <label class="schalter"><input type="checkbox" id="lt-g711" checked> G.711 μ-law</label>
@@ -156,6 +166,6 @@
     <div class="mon-trans" id="mon-trans"></div>
   </div>
 </div>
-<script src="web/app.js?v=15"></script>
+<script src="web/app.js?v=16"></script>
 </body>
 </html>

@@ -30,7 +30,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tests.baukasten import aufraeumen, geschichten, klang, saetze  # noqa: E402
+from tests.baukasten import aufraeumen, deutlichkeit, geschichten, klang, saetze  # noqa: E402
 
 BASIS = "http://127.0.0.1:8096"
 BERICHTE_DIR = Path(__file__).resolve().parent / "berichte"
@@ -99,10 +99,16 @@ class Anruf:
         dauer = max(0.0, (len(blob) - 44) / (klang.PCM_RATE * 2)) if blob[:4] == b"RIFF" else len(blob) / 4000.0
         return f"audio/{name}", dauer
 
-    def _anrufer_audio(self, text: str) -> tuple[Path, str, float]:
-        """Anrufer-WAV aus dem Klang-Cache holen und im Bericht ablegen."""
+    def _anrufer_audio(self, text: str, baustein: str) -> tuple[Path, str, float, dict]:
+        """Anrufer-WAV mit den gewählten Sprechereigenschaften bauen."""
         text = " ".join((text or "").split())
-        pfad = klang.audio_holen(self.story["stimme"], text)
+        sprecher = deutlichkeit.verfremden(
+            text, self.story.get("sprecher"),
+            seed=int(self.story.get("seed") or self.story.get("nr") or 0),
+            baustein=baustein,
+        )
+        gesprochen = str(sprecher.get("text") or text)
+        pfad = klang.audio_holen(self.story["stimme"], gesprochen)
         if self.story.get("leitung"):
             pfad = klang.telefon_datei(pfad, leitung=self.story.get("leitung"))
         elif self.story.get("telefonQualitaet"):
@@ -112,7 +118,7 @@ class Anruf:
         ziel = self.audio_dir / name
         if not ziel.is_file():
             shutil.copyfile(pfad, ziel)
-        return pfad, f"audio/{name}", klang.dauer_s(pfad)
+        return pfad, f"audio/{name}", klang.dauer_s(pfad), sprecher
 
     def _abspielen(self, relativ: str) -> None:
         if not self.mithoeren or not relativ:
@@ -200,15 +206,20 @@ class Anruf:
         return dauer
 
     def _merke_anrufer(self, text: str, baustein: str, rel: str, dauer: float,
-                       gehoert: str = "") -> None:
-        self.zuege.append({
+                       gehoert: str = "", sprecher: dict | None = None) -> None:
+        eintrag = {
             "wer": "anrufer",
             "text": text,
             "gehoert": gehoert,
             "baustein": baustein,
             "audio": rel,
             "dauerS": round(dauer, 2),
-        })
+        }
+        gesprochen = str((sprecher or {}).get("text") or "")
+        if gesprochen and gesprochen != text:
+            eintrag["gesprochen"] = gesprochen
+            eintrag["sprecherHits"] = list((sprecher or {}).get("hits") or [])
+        self.zuege.append(eintrag)
 
     # ---- Hauptlauf ----------------------------------------------------------
 
@@ -233,7 +244,8 @@ class Anruf:
                 text = " ".join(str(zug.get("text") or "").split())
                 if not text:
                     break
-                wav, rel, dauer_a = self._anrufer_audio(text)
+                baustein = str(zug.get("baustein") or "")
+                wav, rel, dauer_a, sprecher = self._anrufer_audio(text, baustein)
                 self._abspielen(rel)
                 final = self._listen(wav)
                 typ = str(final.get("type") or "")
@@ -241,7 +253,9 @@ class Anruf:
                 for ev in final.get("_ereignisse") or []:
                     if ev.get("type") == "transcript":
                         gehoert = str(ev.get("textIn") or "")
-                self._merke_anrufer(text, str(zug.get("baustein") or ""), rel, dauer_a, gehoert)
+                self._merke_anrufer(
+                    text, baustein, rel, dauer_a, gehoert, sprecher,
+                )
 
                 if typ == "warte":
                     # Halbsatz-Wache: kein Ton von Bianca, weiterhoeren.
