@@ -10,6 +10,7 @@ offline testbar; Audio und HTTP passieren ausschliesslich im Runner.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from typing import Any
 
@@ -159,7 +160,10 @@ def _wahl(story: dict, lage: dict, key: str, liste: list[str]) -> str:
     """Reproduzierbare Variante: Story-Seed + Rotationszaehler je Baustein."""
     z = lage["zaehler"].get(key, 0)
     lage["zaehler"][key] = z + 1
-    rnd = random.Random((story.get("seed") or 0) * 31 + hash(key) % 997)
+    key_seed = int.from_bytes(
+        hashlib.blake2s(key.encode("utf-8"), digest_size=4).digest(), "big",
+    )
+    rnd = random.Random((story.get("seed") or 0) * 31 + key_seed)
     start = rnd.randrange(len(liste))
     return liste[(start + z) % len(liste)]
 

@@ -445,6 +445,91 @@ def test_lasttest_statistik_vergleicht_einzel_und_last_nach_mandant():
     assert rows["stt"]["deltaPct"] > 100
 
 
+def test_lasttest_vergleich_bleibt_waehrend_baseline_pending():
+    from tests.baukasten import lasttest
+
+    rows = lasttest._vergleich_rows(
+        {"metriken": {"stt": {"n": 2, "p50": 0.4, "p95": 0.6}}},
+        {"metriken": {"stt": {"n": 0, "p50": 0.0, "p95": 0.0}}},
+    )
+    stt = next(r for r in rows if r["metrik"] == "stt")
+    assert stt["einzelN"] == 2
+    assert stt["lastN"] == 0
+    assert stt["deltaPct"] is None
+    assert stt["deltaP95"] is None
+
+
+def test_lasttest_playout_misst_pcm_statt_header_und_nur_leeren_puffer():
+    from tests.baukasten import lasttest
+
+    # WAV-Kopf bei 0,1 s, erstes PCM erst bei 0,3 s. Der erste lange
+    # Lieferabstand ist dank 1 s Audiopuffer nicht hörbar; erst danach
+    # entsteht eine echte 1,0-s-Lücke.
+    first, gaps = lasttest._playout_luecken(
+        [(0.1, 44), (0.3, 48_000), (1.0, 4_800), (2.4, 4_800)],
+        data_offset=44, byte_rate=48_000,
+    )
+    assert first == 0.3
+    assert gaps == [1.0]
+
+
+def test_lasttest_verabschiedung_braucht_fachlichen_endzustand():
+    from tests.baukasten import geschichten, lasttest
+
+    story = {"anliegen": geschichten.TERMIN}
+    lage = geschichten.lage_neu()
+    assert not lasttest._fachlich_abgeschlossen(
+        story, lage, {"baustein": "abschied", "auflegen": True},
+    )
+    lage["gemacht"].add("nichts_mehr")
+    assert lasttest._fachlich_abgeschlossen(
+        story, lage, {"baustein": "abschied", "auflegen": True},
+    )
+    assert lasttest._fachlich_abgeschlossen(
+        story, lage, {"baustein": "lasttest_keine_buchung", "auflegen": True},
+    )
+
+
+def test_lasttest_write_evidenz_macht_lauf_rot():
+    from tests.baukasten import lasttest
+
+    assert "Write-Evidenz" in lasttest._test_audit_fehler({
+        "testAudit": {
+            "marker": ["lastBook"],
+            "writeTools": ["book_slot"],
+        },
+    })
+    assert lasttest._test_audit_fehler({
+        "testAudit": {"marker": [], "writeTools": []},
+    }) == ""
+
+
+def test_lasttest_start_reserviert_atomar_vor_thread(monkeypatch):
+    from tests.baukasten import editor
+
+    class ThreadOhneStart:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(editor.threading, "Thread", ThreadOhneStart)
+    monkeypatch.setattr(editor, "_lasttest_kunden", lambda: [
+        {"id": "meddent", "kurz": "M", "farbe": "#fff"},
+    ])
+    with editor._lock:
+        editor._zustand["laeuft"] = False
+    try:
+        erste = editor.lasttest_starten(editor.LasttestWunsch(n=1))
+        zweite = editor.lasttest_starten(editor.LasttestWunsch(n=1))
+        assert erste.status_code == 200
+        assert zweite.status_code == 409
+    finally:
+        with editor._lock:
+            editor._zustand["laeuft"] = False
+
+
 def test_lasttest_eine_fuehrt_dialog_bis_zur_sicheren_absage(monkeypatch, tmp_path):
     from tests.baukasten import lasttest
 

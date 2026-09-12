@@ -562,6 +562,25 @@ class Dienst:
         if sammler.get("frage") or sammler.get("modus"):
             antwort["frage"] = str(sammler.get("frage") or "")
             antwort["modus"] = str(sammler.get("modus") or "")
+        if sit.get("testNoWrite"):
+            schreibnamen = {
+                "book_slot", "cancel_appointment", "move_appointment",
+                "note_appointment", "praxis_notiz", "create_patient",
+                "update_phone", "update_insurance", "delete_patient",
+            }
+            antwort["testAudit"] = {
+                "marker": [
+                    key for key in (
+                        "lastBook", "lastCancel", "lastMove", "lastNote", "lastCreate",
+                    )
+                    if sit.get(key)
+                ],
+                "writeTools": [
+                    str(t.get("name") or "")
+                    for t in (sit.get("tools") or [])
+                    if isinstance(t, dict) and str(t.get("name") or "") in schreibnamen
+                ],
+            }
         antwort.update(self._stille_feld(sit))
         # W-MITSCHNITT: Zug samt Audio auf die Platte (.data/anrufe).
         # Live 06.09.2026: fehlte seit W-LIVE 13:43 → CallR ohne Audio/Transkript.

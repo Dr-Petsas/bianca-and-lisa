@@ -184,14 +184,18 @@
       namen[k.id] = k.kurz || k.id;
     });
     const delta = (r) => {
+      if (r.deltaPct == null) return `<span>—</span>`;
       const d = Number(r.deltaPct || 0);
       const kl = d > 30 ? "bad" : (d > 10 ? "warn" : "ok");
       return `<span class="${kl}">${d > 0 ? "+" : ""}${d.toFixed(1)} %</span>`;
     };
-    const metrikRows = rows.filter((r) => Number(r.lastP95 || 0) || Number(r.einzelP95 || 0))
+    const wert = (r, feld, nFeld) =>
+      Number(r[nFeld] || 0) ? lastSek(r[feld]) : "—";
+    const metrikRows = rows.filter((r) => Number(r.lastN || 0) || Number(r.einzelN || 0))
       .map((r) => `<tr><th>${r.label || r.metrik}</th>` +
-        `<td>${lastSek(r.einzelP50)}</td><td>${lastSek(r.einzelP95)}</td>` +
-        `<td>${lastSek(r.lastP50)}</td><td>${lastSek(r.lastP95)}</td><td>${delta(r)}</td></tr>`)
+        `<td>${wert(r, "einzelP50", "einzelN")}</td><td>${wert(r, "einzelP95", "einzelN")}</td>` +
+        `<td>${wert(r, "lastP50", "lastN")}</td><td>${wert(r, "lastP95", "lastN")}</td>` +
+        `<td>${delta(r)}</td></tr>`)
       .join("");
     const tenantRows = Object.entries(mandanten).map(([id, s]) => {
       const m = s.metriken || {};
@@ -253,7 +257,7 @@
     if (lt.phase === "vorwaermen") {
       box.textContent = "Anrufer-Audio wird vorgerendert — diese Zeit fließt nicht in die Messung.";
     } else if (lt.phase === "baseline") {
-      box.textContent = `Einzelgespräche als Referenz: ${lt.baselineFertig || 0}/${lt.baselineGesamt || 0} Praxen`;
+      box.textContent = `Einzelgespräche als Referenz: ${lt.baselineFertig || 0}/${lt.baselineGesamt || 0}`;
     } else {
       box.textContent = `Lastwelle: ${lt.fertig || 0}/${lt.n || 0} vollständige Gespräche abgeschlossen`;
     }
@@ -309,9 +313,11 @@
     });
     $("lasttestGlobal").addEventListener("click", () => {
       $("lasttestModal").hidden = false;
-      $("lasttestStatus").textContent = "";
-      $("lasttestAuswertung").innerHTML = "";
+      $("lasttestStatus").textContent = "Letzten Stand laden …";
       lastPlanLaden();
+      if (lastPoller) clearInterval(lastPoller);
+      lastPoller = setInterval(lastPoll, 450);
+      lastPoll();
     });
     $("lasttestZu").addEventListener("click", () => {
       $("lasttestModal").hidden = true;

@@ -415,8 +415,19 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
         s["telefonQualitaet"] = True
         if s.get("grund") and not s.get("grundErwartet"):
             s["grundErwartet"] = kat["gruende"].get(s["grund"]) or s["grund"]
+    with _lock:
+        if _zustand["laeuft"]:
+            return JSONResponse({"ok": False, "fehler": "es läuft schon ein Lauf"}, status_code=409)
+        # Vor Threadstart reservieren: zwei nahezu gleichzeitige POSTs
+        # dürfen nie zwei Testwellen starten.
+        _zustand["laeuft"] = True
     t = threading.Thread(target=_lauf_thread, args=(stories, w.mithoeren), daemon=True)
-    t.start()
+    try:
+        t.start()
+    except Exception:
+        with _lock:
+            _zustand["laeuft"] = False
+        raise
     return JSONResponse({"ok": True, "stories": [s["id"] for s in stories],
                          "tenant": tid})
 
@@ -444,9 +455,19 @@ def lasttest_starten(w: LasttestWunsch) -> JSONResponse:
     zuege = max(1, int(w.zuege or 1))
     plan = lasttest.verteile(n, _lasttest_kunden())
     L = klang.leitung_norm(w.leitung) if w.leitung else None
+    with _lock:
+        if _zustand["laeuft"]:
+            return JSONResponse({"ok": False, "fehler": "es läuft schon ein Lauf"},
+                                status_code=409)
+        _zustand["laeuft"] = True
     t = threading.Thread(target=_lasttest_thread, args=(n, zuege, L, plan),
                          daemon=True)
-    t.start()
+    try:
+        t.start()
+    except Exception:
+        with _lock:
+            _zustand["laeuft"] = False
+        raise
     return JSONResponse({"ok": True, "n": n, "zuege": "vollständig", "plan": plan,
                          "max": lasttest.MAX_PARALLEL})
 

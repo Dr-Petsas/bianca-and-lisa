@@ -563,6 +563,7 @@ a.gross.leiste-link {
   .dialog-werkzeuge .chip { flex: 1 1 auto; min-height: 44px; }
 
   .bubble .meta button { min-height: 36px; min-width: 36px; }
+
 }
 
 /* ---- Belastungstest / Monitor ------------------------------------------ */
@@ -675,4 +676,29 @@ a.gross.leiste-link {
   .mon-kpis { grid-template-columns: repeat(5, 1fr); }
   .mon-charts { grid-template-columns: 1fr 1fr; }
   .mon-chart canvas { height: 180px; }
+}
+
+@media (max-width: 719px) {
+  .mon-karte {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mon-kopf {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+  }
+  .mon-tabs {
+    overflow-x: auto;
+    align-items: flex-start;
+  }
+  .mon-tab-reihe {
+    flex-wrap: nowrap;
+    min-width: max-content;
+  }
+  .mon-trans {
+    flex: none;
+    min-height: 280px;
+    overflow: visible;
+  }
 }

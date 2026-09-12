@@ -416,9 +416,9 @@ async function sprecherVorschauLaden() {
   }
 }
 
-const MON_TABS = ["alle", "meddent", "thaler", "blessing"];
+let MON_TABS = ["alle"];
 let monTab = 0;
-let monTransN = 0;
+let monTransKey = "";
 let monStand = null;
 
 function lastN() {
@@ -476,6 +476,16 @@ function monFilter(items, key) {
   return (items || []).filter((x) => x[key || "tenant"] === tab);
 }
 
+function monTabsAktualisieren(plan) {
+  const bisher = MON_TABS[monTab] || "alle";
+  const ids = ((plan && plan.kunden) || [])
+    .map((k) => String(k.id || "").trim())
+    .filter(Boolean);
+  MON_TABS = ["alle", ...new Set(ids)];
+  const idx = MON_TABS.indexOf(bisher);
+  monTab = idx < 0 ? 0 : idx;
+}
+
 function monKpiKlasse(pct) {
   if (pct > 80) return "bad";
   if (pct > 25) return "warn";
@@ -497,7 +507,7 @@ function monTabsZeichnen(plan) {
       const id = b.getAttribute("data-tab");
       const idx = MON_TABS.indexOf(id);
       monTab = idx < 0 ? 0 : idx;
-      monTransN = 0;
+      monTransKey = "";
       if ($("mon-trans")) $("mon-trans").innerHTML = "";
       if (monStand) lasttestZeichnen(monStand);
     });
@@ -520,28 +530,40 @@ function monVergleichZeichnen(lt) {
   const block = id === "alle"
     ? (((stat.last || {}).gesamt) || {})
     : ((((stat.last || {}).mandanten || {})[id]) || {});
-  const sichtbar = rows.filter((r) => Number(r.lastP95 || 0) || Number(r.einzelP95 || 0));
-  if (!sichtbar.length) {
+  const sichtbar = rows.filter((r) => Number(r.lastN || 0) || Number(r.einzelN || 0));
+  const engines = Object.entries(block.sttEngines || {});
+  if (!sichtbar.length && !engines.length) {
     box.innerHTML = `<div class="klein">Einzel-Baseline wird noch gemessen …</div>`;
     return;
   }
   const stufen = (block.stufen || []).filter((s) => s.turns).slice(0, 8);
-  box.innerHTML = `<div class="mon-vergleich-scroll"><table>
+  const wert = (r, feld, nFeld) => Number(r[nFeld] || 0) ? monSek(r[feld]) : "—";
+  const vergleichTabelle = sichtbar.length ? `<div class="mon-vergleich-scroll"><table>
     <thead><tr><th>Stufe</th><th>Einzel p50</th><th>Einzel p95</th>
       <th>Last p50</th><th>Last p95</th><th>Δ p95</th></tr></thead>
     <tbody>${sichtbar.map((r) => {
+      const pending = r.deltaPct == null;
       const d = Number(r.deltaPct || 0);
       const kl = d > 30 ? "bad" : (d > 10 ? "warn" : "ok");
-      return `<tr><th>${r.label || r.metrik}</th><td>${monSek(r.einzelP50)}</td>` +
-        `<td>${monSek(r.einzelP95)}</td><td>${monSek(r.lastP50)}</td>` +
-        `<td>${monSek(r.lastP95)}</td><td class="${kl}">${d > 0 ? "+" : ""}${d.toFixed(1)}%</td></tr>`;
-    }).join("")}</tbody></table></div>` +
+      return `<tr><th>${r.label || r.metrik}</th><td>${wert(r, "einzelP50", "einzelN")}</td>` +
+        `<td>${wert(r, "einzelP95", "einzelN")}</td><td>${wert(r, "lastP50", "lastN")}</td>` +
+        `<td>${wert(r, "lastP95", "lastN")}</td><td class="${pending ? "" : kl}">` +
+        `${pending ? "—" : `${d > 0 ? "+" : ""}${d.toFixed(1)}%`}</td></tr>`;
+    }).join("")}</tbody></table></div>` : `<div class="klein">Lastwelle steht noch aus …</div>`;
+  box.innerHTML = vergleichTabelle +
     (stufen.length ? `<div class="mon-subtitel">Langsamste Gesprächsstufen</div>` +
       `<div class="mon-vergleich-scroll"><table><thead><tr><th>Stufe</th><th>Turns</th>` +
       `<th>STT p95</th><th>Ton p95</th><th>Antwort p95</th></tr></thead><tbody>` +
       stufen.map((s) => `<tr><th>${s.stufe}</th><td>${s.turns}</td>` +
         `<td>${monSek((s.stt || {}).p95)}</td><td>${monSek((s.ersterTon || {}).p95)}</td>` +
         `<td>${monSek((s.antwort || {}).p95)}</td></tr>`).join("") +
+      `</tbody></table></div>` : "") +
+    (engines.length ? `<div class="mon-subtitel">STT-Gewinner</div>` +
+      `<div class="mon-vergleich-scroll"><table><thead><tr><th>Engine</th><th>Turns</th>` +
+      `<th>Mittel</th><th>p50</th><th>p95</th><th>Maximum</th></tr></thead><tbody>` +
+      engines.map(([engine, s]) => `<tr><th>${engine}</th><td>${s.n || 0}</td>` +
+        `<td>${monSek(s.mittel)}</td><td>${monSek(s.p50)}</td>` +
+        `<td>${monSek(s.p95)}</td><td>${monSek(s.max)}</td></tr>`).join("") +
       `</tbody></table></div>` : "");
 }
 
@@ -660,29 +682,31 @@ function monTransZeichnen(zeilen) {
   const box = $("mon-trans");
   if (!box) return;
   const list = monFilter(zeilen);
-  if (list.length < monTransN) {
-    box.innerHTML = "";
-    monTransN = 0;
-  }
-  for (let i = monTransN; i < list.length; i++) {
-    const z = list[i];
+  const key = list.map((z) =>
+    `${z.phase || ""}|${z.nr || ""}|${z.wer || ""}|${z.tS || ""}|${z.text || ""}`
+  ).join("\n");
+  if (key === monTransKey) return;
+  const warUnten = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  box.innerHTML = "";
+  list.forEach((z) => {
     const div = document.createElement("div");
     div.className = "mon-zeile " + (z.wer || "system");
     const t = Number(z.tS || 0).toFixed(1);
     div.innerHTML = `<div class="meta">${t}s<br>#${z.nr || "?"} ${z.kurz || ""}<br>${z.phase === "baseline" ? "Einzel" : "Last"}</div>
       <div class="txt">${String(z.text || "").replace(/</g, "&lt;")}</div>`;
     box.appendChild(div);
-  }
-  if (list.length > monTransN) {
+  });
+  if (warUnten || !monTransKey) {
     box.lastElementChild?.scrollIntoView({ block: "end" });
   }
-  monTransN = list.length;
+  monTransKey = key;
 }
 
 function lasttestZeichnen(lt) {
   if (!lt) return;
   monStand = lt;
   if ($("mon-popup").hidden) return;
+  monTabsAktualisieren(lt.plan);
   const n = lt.n || 0;
   const fertig = lt.fertig || 0;
   const k = lt.kpis || {};
@@ -728,7 +752,7 @@ async function lasttestStarten() {
   $("fehler").textContent = "";
   lastSetupZu();
   monTab = 0;
-  monTransN = 0;
+  monTransKey = "";
   if ($("mon-trans")) $("mon-trans").innerHTML = "";
   monAuf();
   $("mon-status").textContent = "startet …";
@@ -1059,13 +1083,13 @@ async function boot() {
   if ($("mon-zu")) $("mon-zu").addEventListener("click", monZu);
   if ($("mon-prev")) $("mon-prev").addEventListener("click", () => {
     monTab = (monTab + MON_TABS.length - 1) % MON_TABS.length;
-    monTransN = 0;
+    monTransKey = "";
     if ($("mon-trans")) $("mon-trans").innerHTML = "";
     if (monStand) lasttestZeichnen(monStand);
   });
   if ($("mon-next")) $("mon-next").addEventListener("click", () => {
     monTab = (monTab + 1) % MON_TABS.length;
-    monTransN = 0;
+    monTransKey = "";
     if ($("mon-trans")) $("mon-trans").innerHTML = "";
     if (monStand) lasttestZeichnen(monStand);
   });

@@ -9,8 +9,10 @@ Kalenderbuchungen werden an der letzten Bestaetigung bewusst abgebrochen.
 from __future__ import annotations
 
 import json
+import re
 import queue
 import random
+import struct
 import threading
 import time
 from pathlib import Path
@@ -58,11 +60,16 @@ METRIK_LABEL = {
 
 def _tenant_katalog(tenant_id: str) -> tuple[list[str], list[str]]:
     tenant = tenants.laden(tenant_id)
-    behandler = [
-        str(c.get("name") or "").strip()
-        for c in tenants.behandler_kalender(tenant)
-        if isinstance(c, dict) and str(c.get("name") or "").strip()
-    ]
+    behandler = []
+    for c in tenants.behandler_kalender(tenant):
+        roh = str((c or {}).get("name") or "").strip() if isinstance(c, dict) else ""
+        teile = [
+            x for x in re.split(r"\s+", roh)
+            if x and x.lower().rstrip(".") not in {"dr", "doktor", "frau", "herr"}
+        ]
+        name = teile[-1].strip(".,") if teile else ""
+        if name and name not in behandler:
+            behandler.append(name)
     motive = list(tenant.get("visitMotives") or [])
     if zimmer_map.aktiv(tenant):
         motive = zimmer_map.buchbarer_katalog(tenant, motive)
@@ -251,17 +258,63 @@ def _abs_url(basis: str, url: str) -> str:
     return basis.rstrip("/") + "/" + u.lstrip("/")
 
 
+def _wav_layout(kopf: bytes) -> tuple[int, int]:
+    """Beginn und Byte-Rate der PCM-Daten aus einem WAV-Kopf lesen."""
+    data_at = kopf.find(b"data")
+    data_offset = data_at + 8 if data_at >= 0 else 44
+    try:
+        byte_rate = struct.unpack_from("<I", kopf, 28)[0]
+    except (struct.error, IndexError):
+        byte_rate = 48_000
+    return data_offset, max(1, int(byte_rate or 48_000))
+
+
+def _playout_luecken(lieferungen: list[tuple[float, int]], *,
+                     data_offset: int, byte_rate: int) -> tuple[float, list[float]]:
+    """HTTP-Lieferungen wie einen PCM-Wiedergabepuffer abspielen.
+
+    Nur wenn der bereits gelieferte Ton vor dem nächsten PCM-Stück
+    aufgebraucht ist, ist es ein hörbarer Dropout. Reine Chunk-Abstände
+    bei noch gefülltem Puffer zählen nicht.
+    """
+    pos = 0
+    letzter = 0.0
+    puffer_s = 0.0
+    erster_pcm: float | None = None
+    luecken: list[float] = []
+    for ankunft, groesse in lieferungen:
+        ende = pos + max(0, int(groesse))
+        pcm_bytes = max(0, ende - max(pos, data_offset))
+        pos = ende
+        if not pcm_bytes:
+            continue
+        if erster_pcm is None:
+            erster_pcm = float(ankunft)
+        if letzter:
+            vergangen = max(0.0, float(ankunft) - letzter)
+            if vergangen > puffer_s:
+                leer_s = vergangen - puffer_s
+                if leer_s >= AUDIO_GAP_S:
+                    luecken.append(round(leer_s, 3))
+                puffer_s = 0.0
+            else:
+                puffer_s -= vergangen
+        puffer_s += pcm_bytes / max(1, byte_rate)
+        letzter = float(ankunft)
+    return round(erster_pcm or 0.0, 3), luecken
+
+
 def _audio_messen(basis: str, url: str) -> dict[str, Any]:
-    """Progressiven Antwortstrom komplett ziehen und echte Lieferluecken messen."""
+    """Progressiven Antwortstrom ziehen und den hörbaren PCM-Puffer messen."""
     ziel = _abs_url(basis, url)
     if not ziel:
         return {"ok": False, "bytes": 0, "dauerS": 0.0, "firstByteS": 0.0,
                 "maxGapS": 0.0, "gaps": [], "error": "audioUrl fehlt"}
     t0 = time.perf_counter()
     first = 0.0
-    vorher = 0.0
     groesse = 0
-    gaps: list[float] = []
+    kopf = bytearray()
+    lieferungen: list[tuple[float, int]] = []
     try:
         with httpx.Client(timeout=40.0) as client:
             with client.stream("GET", ziel) as r:
@@ -272,27 +325,37 @@ def _audio_messen(basis: str, url: str) -> dict[str, Any]:
                     jetzt = time.perf_counter()
                     if not first:
                         first = jetzt
-                    elif vorher:
-                        gap = jetzt - vorher
-                        if gap >= AUDIO_GAP_S:
-                            gaps.append(round(gap, 3))
-                    vorher = jetzt
+                    lieferungen.append((jetzt - t0, len(teil)))
+                    if len(kopf) < 512:
+                        kopf.extend(teil[:512 - len(kopf)])
                     groesse += len(teil)
         ende = time.perf_counter()
+        data_offset, byte_rate = _wav_layout(bytes(kopf))
+        first_pcm, gaps = _playout_luecken(
+            lieferungen, data_offset=data_offset, byte_rate=byte_rate,
+        )
         return {
-            "ok": groesse > 44,
+            "ok": groesse > data_offset and first_pcm > 0,
             "bytes": groesse,
             "dauerS": round(ende - t0, 3),
             "firstByteS": round((first - t0) if first else 0.0, 3),
+            "firstPcmS": first_pcm,
+            "byteRate": byte_rate,
             "maxGapS": max(gaps) if gaps else 0.0,
             "gaps": gaps,
-            "error": "" if groesse > 44 else "leeres Audio",
+            "error": "" if groesse > data_offset else "leeres Audio",
         }
     except Exception as exc:
+        data_offset, byte_rate = _wav_layout(bytes(kopf))
+        first_pcm, gaps = _playout_luecken(
+            lieferungen, data_offset=data_offset, byte_rate=byte_rate,
+        )
         return {
             "ok": False, "bytes": groesse,
             "dauerS": round(time.perf_counter() - t0, 3),
             "firstByteS": round((first - t0) if first else 0.0, 3),
+            "firstPcmS": first_pcm,
+            "byteRate": byte_rate,
             "maxGapS": max(gaps) if gaps else 0.0,
             "gaps": gaps,
             "error": f"{type(exc).__name__}: {exc}",
@@ -334,7 +397,7 @@ def _listen(client: httpx.Client, basis: str, sid: str, wav: Path,
             messung = _audio_messen(basis, url)
             messung["art"] = art
             messung["tonBeiS"] = round(
-                arbeits_start + float(messung.get("firstByteS") or 0), 3)
+                arbeits_start + float(messung.get("firstPcmS") or 0), 3)
             audio_messungen.append(messung)
 
     audio_thread = threading.Thread(target=audio_arbeit, daemon=True)
@@ -404,7 +467,8 @@ def _listen(client: httpx.Client, basis: str, sid: str, wav: Path,
 
 
 class _Sammler:
-    def __init__(self, plan: dict[str, Any], fortschritt: Fortschritt | None):
+    def __init__(self, plan: dict[str, Any], fortschritt: Fortschritt | None,
+                 baseline_total: int | None = None):
         self.plan = plan
         self.fortschritt = fortschritt
         self.lock = threading.Lock()
@@ -415,6 +479,11 @@ class _Sammler:
         self.fertig = 0
         self.baseline_fertig = 0
         self.baseline: dict[str, Any] = {}
+        self.baseline_total = (
+            int(baseline_total) if baseline_total is not None
+            else sum(1 for k in (plan.get("kunden") or []) if int(k.get("n") or 0) > 0)
+        )
+        self._blasen_keys: set[tuple[Any, ...]] = set()
         self.phase = "start"
         self._last_meld = 0.0
 
@@ -424,9 +493,7 @@ class _Sammler:
             "n": self.plan["n"],
             "fertig": self.fertig,
             "baselineFertig": self.baseline_fertig,
-            "baselineGesamt": sum(
-                1 for k in (self.plan.get("kunden") or []) if int(k.get("n") or 0) > 0
-            ),
+            "baselineGesamt": self.baseline_total,
             "baseline": dict(self.baseline),
             "plan": self.plan,
             "norm": dict(NORM),
@@ -466,7 +533,16 @@ class _Sammler:
         if not items:
             return
         with self.lock:
-            self.blasen.extend(items)
+            for item in items:
+                key = (
+                    item.get("phase", "last"), item.get("tenant"),
+                    item.get("nr"), item.get("turn"), item.get("art"),
+                    str(item.get("detail") or ""),
+                )
+                if key in self._blasen_keys:
+                    continue
+                self._blasen_keys.add(key)
+                self.blasen.append(item)
         self._tipp()
 
     def ende_sitzung(self) -> None:
@@ -601,18 +677,25 @@ def _vergleich_rows(basis: dict[str, Any], last: dict[str, Any]) -> list[dict[st
     for m in METRIKEN:
         b = (basis.get("metriken") or {}).get(m) or {}
         last_m = (last.get("metriken") or {}).get(m) or {}
+        basis_n = int(b.get("n") or 0)
+        last_n = int(last_m.get("n") or 0)
         bp50, lp50 = float(b.get("p50") or 0), float(last_m.get("p50") or 0)
         bp95, lp95 = float(b.get("p95") or 0), float(last_m.get("p95") or 0)
         rows.append({
             "metrik": m,
             "label": METRIK_LABEL.get(m, m),
+            "einzelN": basis_n,
+            "lastN": last_n,
             "einzelP50": bp50,
             "einzelP95": bp95,
             "lastP50": lp50,
             "lastP95": lp95,
-            "deltaP50": round(lp50 - bp50, 3),
-            "deltaP95": round(lp95 - bp95, 3),
-            "deltaPct": round(((lp95 / bp95) - 1) * 100, 1) if bp95 else 0.0,
+            "deltaP50": round(lp50 - bp50, 3) if basis_n and last_n else None,
+            "deltaP95": round(lp95 - bp95, 3) if basis_n and last_n else None,
+            "deltaPct": (
+                round(((lp95 / bp95) - 1) * 100, 1)
+                if basis_n and last_n and bp95 else None
+            ),
         })
     return rows
 
@@ -661,11 +744,39 @@ def _warte_fortsetzung(zug: dict[str, Any]) -> str:
     return ""
 
 
+def _test_audit_fehler(ev: dict[str, Any]) -> str:
+    audit = ev.get("testAudit") if isinstance(ev.get("testAudit"), dict) else {}
+    marker = [str(x) for x in (audit.get("marker") or []) if str(x)]
+    tools = [str(x) for x in (audit.get("writeTools") or []) if str(x)]
+    if marker or tools:
+        teile = []
+        if marker:
+            teile.append("Marker " + ", ".join(marker))
+        if tools:
+            teile.append("Schreibwerkzeuge " + ", ".join(tools))
+        return "Test erzeugte Write-Evidenz: " + "; ".join(teile)
+    return ""
+
+
+def _fachlich_abgeschlossen(story: dict[str, Any], lage: dict[str, Any],
+                            letzter_zug: dict[str, Any]) -> bool:
+    baustein = str(letzter_zug.get("baustein") or "")
+    if baustein == "lasttest_keine_buchung":
+        return True
+    art = str(story.get("anliegen") or geschichten.TERMIN)
+    if art in geschichten.DOKU_ARTEN:
+        return baustein == "doku_abschied" or (
+            baustein == "abschied" and "nichts_mehr" in lage.get("gemacht", set())
+        )
+    return baustein == "abschied" and "nichts_mehr" in lage.get("gemacht", set())
+
+
 def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
           start_tor: threading.Barrier | None, welle_t0: float,
           sam: _Sammler, phase: str = "last",
           leitung: dict | None = None,
-          normen: dict[str, float] | None = None) -> dict[str, Any]:
+          normen: dict[str, float] | None = None,
+          abbruch: threading.Event | None = None) -> dict[str, Any]:
     nr = int(sitz["nr"])
     tenant = str(sitz["tenant"])
     k = {
@@ -698,6 +809,7 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
     stufe = "start"
     stt_winner = ""
     natuerlich_beendet = False
+    letzter_zug: dict[str, Any] = {}
 
     def punkt(metrik: str, wert: float, t_abs: float, **extra: Any) -> None:
         norm = float((normen or {}).get(metrik) or _norm_metrik(metrik))
@@ -752,11 +864,14 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
             sam.blase(audio_stoerungen([start_audio], t_abs))
 
             for _ in range(MAX_DIALOG_ZUEGE):
+                if abbruch is not None and abbruch.is_set():
+                    raise RuntimeError("Belastungstest wegen Zeitlimit abgebrochen")
                 if halbsatz_rest:
                     zug = {"text": halbsatz_rest, "baustein": "halbsatz_rest"}
                     halbsatz_rest = ""
                 else:
                     zug = geschichten.naechster_baustein(story, lage)
+                letzter_zug = zug
                 if zug.get("auflegen") and not str(zug.get("text") or "").strip():
                     natuerlich_beendet = True
                     break
@@ -840,6 +955,9 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
                     raise RuntimeError(str(ev.get("error") or "leerer Zug"))
                 if not gehoert:
                     raise RuntimeError("Audio ergab kein STT-Transkript")
+                audit_fehler = _test_audit_fehler(ev)
+                if audit_fehler:
+                    raise RuntimeError(audit_fehler)
                 if wartet:
                     halbsatz_rest = _warte_fortsetzung(zug)
                     if not halbsatz_rest:
@@ -856,6 +974,9 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
             if not natuerlich_beendet:
                 raise RuntimeError(
                     f"Dialog fand nach {MAX_DIALOG_ZUEGE} Zügen keinen Abschluss")
+            if not _fachlich_abgeschlossen(story, lage, letzter_zug):
+                raise RuntimeError(
+                    "Dialog verabschiedete sich ohne fachlich gültigen Endzustand")
             out["ersterTonS"] = max(toene) if toene else 0.0
             out["antwortS"] = max(antworten) if antworten else 0.0
             out["turns"] = len(out["zuege"])
@@ -957,17 +1078,21 @@ def welle(*, n: int = 6, zuege: int = 2, basis: str, tenant: str = "",
     for sitz in plan["sitze"]:
         sitz.setdefault("seed", random.SystemRandom().randrange(1, 2_000_000_000))
     stories = [story_fuer_sitz(s) for s in plan["sitze"]]
-    aktive_tenants: dict[str, dict[str, Any]] = {}
-    for sitz in plan["sitze"]:
-        aktive_tenants.setdefault(str(sitz["tenant"]), sitz)
     baseline_sitze: list[dict[str, Any]] = []
     baseline_stories: list[dict[str, Any]] = []
-    for i, sitz in enumerate(aktive_tenants.values(), 1):
-        bs = {**sitz, "nr": -i, "seed": 900_000 + i, "anliegen": geschichten.TERMIN}
+    for i, (sitz, story) in enumerate(zip(plan["sitze"], stories), 1):
+        # Exakt dieselbe Praxis, Persona und Aufgabe zuerst ohne Parallel-
+        # Last ausführen. Nur so ist der spätere Offset stufengleich.
+        bs = {**sitz, "nr": -i}
+        baseline_story = {
+            **story,
+            "id": f"baseline-{i:02d}-{story.get('id') or sitz.get('tenant')}",
+            "lasttestBaseline": True,
+        }
         baseline_sitze.append(bs)
-        baseline_stories.append(story_fuer_sitz(bs, baseline=True))
+        baseline_stories.append(baseline_story)
 
-    sam = _Sammler(plan, fortschritt)
+    sam = _Sammler(plan, fortschritt, baseline_total=len(baseline_sitze))
     gesamt_t0 = time.perf_counter()
     sam.meld("vorwaermen")
 
@@ -983,14 +1108,15 @@ def welle(*, n: int = 6, zuege: int = 2, basis: str, tenant: str = "",
             _wav_fuer_zug(story, text, leitung)
         sam.meld("vorwaermen")
 
-    # Einzelgespräch je aktivem Mandanten: echte, mandantenscharfe Baseline.
+    # Jedes geplante Gespräch einmal einzeln: mandanten- und stufengleiche
+    # Baseline für den direkten Vergleich mit demselben Dialog unter Last.
     sam.meld("baseline")
-    for sitz, story in zip(baseline_sitze, baseline_stories):
+    for i, (sitz, story) in enumerate(zip(baseline_sitze, baseline_stories), 1):
         ergebnis = _eine(
             sitz, basis=basis, story=story, start_tor=None,
             welle_t0=gesamt_t0, sam=sam, phase="baseline", leitung=leitung,
         )
-        sam.ende_baseline(str(sitz["tenant"]), ergebnis)
+        sam.ende_baseline(f"{sitz['tenant']}:{i}", ergebnis)
 
     normen_je_tenant: dict[str, dict[str, float]] = {}
     basis_stat = statistik_von(sam.latenz, sam.blasen)["baseline"]["mandanten"]
@@ -1002,6 +1128,7 @@ def welle(*, n: int = 6, zuege: int = 2, basis: str, tenant: str = "",
 
     sam.meld("last")
     start_tor = threading.Barrier(n)
+    abbruch = threading.Event()
     laeufe: list[dict[str, Any] | None] = [None] * n
     welle_t0 = time.perf_counter()
 
@@ -1011,6 +1138,7 @@ def welle(*, n: int = 6, zuege: int = 2, basis: str, tenant: str = "",
             start_tor=start_tor, welle_t0=welle_t0, sam=sam, phase="last",
             leitung=leitung,
             normen=normen_je_tenant.get(str(plan["sitze"][i]["tenant"])) or {},
+            abbruch=abbruch,
         )
 
     threads = [threading.Thread(target=arbeit, args=(i,), daemon=True) for i in range(n)]
@@ -1019,6 +1147,16 @@ def welle(*, n: int = 6, zuege: int = 2, basis: str, tenant: str = "",
     deadline = time.perf_counter() + 1_200
     for t in threads:
         t.join(timeout=max(0.0, deadline - time.perf_counter()))
+    if any(t.is_alive() for t in threads):
+        abbruch.set()
+        try:
+            start_tor.abort()
+        except threading.BrokenBarrierError:
+            pass
+        # Jeder externe Schritt besitzt ein eigenes Timeout. Nach dem
+        # Abbruchsignal vollständig drainen, bevor eine Auswertung entsteht.
+        for t in threads:
+            t.join()
     for i, x in enumerate(laeufe):
         if x is None:
             sitz = plan["sitze"][i]
