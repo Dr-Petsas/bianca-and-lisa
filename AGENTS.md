@@ -2282,6 +2282,22 @@ bleibt stehen („Gerne. Ich buche Ihnen einen Termin").
 - Tests: `tests/test_anrede_wache.py` — die Gegenprobe (belegte Anrede bleibt
   unangetastet) ist der teurere Fehler und deshalb breiter abgedeckt.
 
+## Rückrollpunkte (Produktionsstände)
+
+| Stand | Tag | Anleitung |
+| --- | --- | --- |
+| V2.0, 13.09.2026 | `telefonki-produktionsstand-v2.0-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
+| V1.0, 10.09.2026 | `telefonki-produktionsstand-v1.0-2026-09-10` | nur Git-/Image-Tags |
+
+Ein Produktionsstand besteht aus VIER Teilen — Code allein reicht nicht:
+annotierter Git-Tag, Docker-Image-Tags `produktionsstand-vX-JJJJMMTT` der
+laufenden Container auf pickadoc1, ein Schnappschuss von Live-`.env`,
+`secrets/`, `tenants/`, Compose-Konfiguration, Asterisk-Dialplan und den
+Docker-Volumes unter `/home/cursor/telefonki-backups/produktionsstand-…`
+sowie eine lokale Kopie samt Git-Bundle in `_snapshot-produktionsstand-…`
+(gitignoriert). Tokens, Service-Account-Key und Patientendaten aus den
+Mitschnitten gehen NIE nach GitHub. Skripte: `tools/_produktionsstand_v2_server.sh`.
+
 ## Server-Deploy (pickadoc1) — die .env-Falle
 
 - **`.env` ist im Git GETRACKT.** Jedes `git archive` enthält sie — ein
