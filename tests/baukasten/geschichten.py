@@ -317,7 +317,8 @@ def _frage_aus_text(text: str) -> str:
         return "versicherung"
     if any(x in t for x in ("grund für ihren besuch", "grund ihres besuch",
                             "worum geht es", "weshalb möchten", "behandlungsgrund",
-                            "wobei ich helfen", "was genau möchten")):
+                            "wobei ich helfen", "was genau möchten",
+                            "kontrolle oder zahnreinigung", "akute schmerzen")):
         return "grund"
     if any(x in t for x in ("welchen termin", "welcher termin", "ersten oder",
                             "zweiten oder", "welche uhrzeit davon")):

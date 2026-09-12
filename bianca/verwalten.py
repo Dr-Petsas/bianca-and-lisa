@@ -454,6 +454,9 @@ def _kein_termin(sit: dict, modus: str) -> dict:
 def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
                      dock_text: str = "") -> None:
     """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock."""
+    if sit.get("testNoWrite"):
+        sit["testNotizUnterdrueckt"] = True
+        return
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     eintrag = {
@@ -570,6 +573,11 @@ def _absage_frage(sit: dict, termin: dict) -> dict:
 
 
 def _absagen(sit: dict, melde: Melde) -> dict:
+    if sit.get("testNoWrite"):
+        s = gehirn.sammler(sit)
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        return {"text": "Der Testlauf ist beendet; der Termin wurde nicht abgesagt."}
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
     if melde:
@@ -707,6 +715,11 @@ def _verschieb_readback(sit: dict, neu_iso: str) -> dict:
 
 
 def _verschieben(sit: dict, melde: Melde) -> dict:
+    if sit.get("testNoWrite"):
+        s = gehirn.sammler(sit)
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        return {"text": "Der Testlauf ist beendet; der Termin wurde nicht verschoben."}
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
     ctx = _ctx(sit)

@@ -363,6 +363,12 @@ def test_lasttest_baut_unterschiedliche_vollgeschichten_pro_mandant():
         thaler["vorname"], thaler["nachname"], thaler["grund"])
     assert med["lasttestKeinSchreiben"] is True
     assert thaler["lasttestKeinSchreiben"] is True
+    baseline = lasttest.story_fuer_sitz({
+        "nr": -1, "tenant": "thaler", "seed": 999, "anliegen": "termin",
+    }, baseline=True)
+    assert (baseline["stimme"], baseline["vorname"], baseline["nachname"]) == (
+        "markus", "Markus", "Müller")
+    assert baseline["halbsatz"] is False
 
 
 def test_lasttest_antwortet_auf_offene_frage_und_bestaetigt_keinen_write():
@@ -510,6 +516,53 @@ def test_lasttest_eine_fuehrt_dialog_bis_zur_sicheren_absage(monkeypatch, tmp_pa
     assert "nicht eintragen" in erg["zuege"][-1]["soll"].lower()
     assert all(z["stt"]["pipeline"] == "audio" for z in erg["zuege"])
     assert sam.fertig == 1
+
+
+def test_lasttest_setzt_diktat_wartezug_mit_fertig_fort():
+    from tests.baukasten import lasttest
+
+    assert lasttest._warte_fortsetzung({
+        "baustein": "eroeffnung_halbsatz", "halbsatzRest": "einen Termin.",
+    }) == "einen Termin."
+    assert lasttest._warte_fortsetzung({
+        "baustein": "buchstabieren",
+    }) == "Fertig."
+    assert lasttest._warte_fortsetzung({
+        "baustein": "telefon",
+    }) == "Fertig."
+    assert lasttest._warte_fortsetzung({
+        "baustein": "abschweifer",
+    }) == ""
+
+
+def test_lasttest_no_write_blockiert_alle_schreibklassen(monkeypatch, tmp_path):
+    from bianca import flow, verwalten
+    from kern import gedaechtnis, tenants
+
+    sit = {
+        "id": "last-no-write",
+        "testAnruf": True,
+        "testNoWrite": True,
+        "tenant": tenants.laden("meddent"),
+    }
+
+    def nie(*args, **kwargs):
+        raise AssertionError("Schreibweg im testNoWrite-Lauf aufgerufen")
+
+    monkeypatch.setattr(flow.kal, "book_slot", nie)
+    monkeypatch.setattr(verwalten.kal, "cancel_by_id", nie)
+    monkeypatch.setattr(verwalten.kal, "move_appointment", nie)
+    monkeypatch.setattr(verwalten, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(gedaechtnis.httpx, "post", nie)
+
+    assert flow._buchen(sit)["book"]["blocked"] == "testNoWrite"
+    assert "nicht abgesagt" in verwalten._absagen(sit, None)["text"]
+    assert "nicht verschoben" in verwalten._verschieben(sit, None)["text"]
+    verwalten.abgeben_notiz(sit, was="synthetischer Rückruf")
+    assert not (tmp_path / "praxis_notizen.jsonl").exists()
+    assert not sit.get("tools")
+    assert gedaechtnis.report_senden(sit) is None
+    gedaechtnis.fakt_senden(sit, "synthetischer Fakt")
 
 
 def test_dauer_s_liest_8khz_header():

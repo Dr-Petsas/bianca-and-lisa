@@ -98,6 +98,9 @@ class StartIn(BaseModel):
     # Teststudio: Anrufliste zeigt "Testanruf", nie "Unbekannter Anrufer".
     test: bool = False
     testName: str = ""
+    # Belastungstest: Testanruf sichtbar mitschneiden, aber weder Kalender,
+    # Patienten, Praxisnotizen noch MAS-Gedächtnis verändern.
+    testNoWrite: bool = False
 
 
 class TurnIn(BaseModel):
@@ -181,6 +184,8 @@ def api_start(body: StartIn):
     if body.test:
         sit["testAnruf"] = True
         sit["clientKind"] = "studio"
+        if body.testNoWrite:
+            sit["testNoWrite"] = True
         name = " ".join(str(body.testName or "").split())
         if name:
             sit["testName"] = name

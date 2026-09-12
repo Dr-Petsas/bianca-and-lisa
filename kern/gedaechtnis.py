@@ -330,7 +330,7 @@ def report_senden(sit: dict) -> dict | None:
     Läuft dort schon in einem Daemon-Thread; hier wird also blockierend
     gepostet (Timeout), nie geworfen. Idempotent über die Event-Id — ein
     zweites Auflegen derselben Sitzung erzeugt kein zweites Event."""
-    if not enabled():
+    if not enabled() or sit.get("testNoWrite"):
         return None
     name = notes.stimme_von(sit).lower()
     if not notes.nutzer_saetze(sit) and not (sit.get("tools") or []):
@@ -730,7 +730,7 @@ def fakt_senden(sit: dict, zeile: str, *, art: str = "fakt") -> None:
 
     Eigene Event-Id je Fakt, damit der Hangup-Report unberührt bleibt.
     Daemon-Thread, nie werfend. Notaus wie report_senden."""
-    if not enabled():
+    if not enabled() or sit.get("testNoWrite"):
         return
     text = _s(zeile)
     sid = _s(sit.get("id"))

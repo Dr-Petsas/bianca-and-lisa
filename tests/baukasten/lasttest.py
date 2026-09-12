@@ -105,6 +105,20 @@ def story_fuer_sitz(sitz: dict[str, Any], *, baseline: bool = False) -> dict[str
         story["halbsatz"] = False
     else:
         story["id"] = f"last-{nr:02d}-{tenant}-{story['grund']}"
+    if baseline:
+        # Die Referenz misst Infrastruktur, nicht zufällige Härtefälle. Ein
+        # stabil verständlicher Sprecher/Name hält den Einzelvergleich nutzbar.
+        story.update({
+            "stimme": "markus",
+            "vorname": "Markus",
+            "nachname": "Müller",
+            "halbsatz": False,
+            "abschweifer": [],
+            "zwischenfragePreis": False,
+            "readbackFehler": False,
+            "slotAnnahme": 1,
+            "pzr": False,
+        })
     story["lasttestKeinSchreiben"] = True
     story["lasttestBaseline"] = baseline
     return story
@@ -637,6 +651,16 @@ def _wav_fuer_zug(story: dict[str, Any], text: str, leitung: dict | None) -> Pat
     return klang.telefon_datei(pfad, leitung=leitung or klang.LEITUNG_DEFAULT)
 
 
+def _warte_fortsetzung(zug: dict[str, Any]) -> str:
+    rest = " ".join(str(zug.get("halbsatzRest") or "").split())
+    if rest:
+        return rest
+    baustein = str(zug.get("baustein") or "")
+    if baustein in {"buchstabieren", "telefon", "name", "vorname", "nachname"}:
+        return "Fertig."
+    return ""
+
+
 def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
           start_tor: threading.Barrier | None, welle_t0: float,
           sam: _Sammler, phase: str = "last",
@@ -707,6 +731,7 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
         with httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0)) as c:
             r = c.post(f"{basis}/api/start", json={
                 "tenant": tenant, "test": True,
+                "testNoWrite": True,
                 "testName": f"Last {k['kurz']} {nr} {story.get('anliegen')}",
             })
             r.raise_for_status()
@@ -816,7 +841,10 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
                 if not gehoert:
                     raise RuntimeError("Audio ergab kein STT-Transkript")
                 if wartet:
-                    halbsatz_rest = str(zug.get("halbsatzRest") or "")
+                    halbsatz_rest = _warte_fortsetzung(zug)
+                    if not halbsatz_rest:
+                        raise RuntimeError(
+                            f"Bianca wartet ohne passende Fortsetzung ({stufe})")
                     continue
                 geschichten.lage_update(lage, ev)
                 if ev.get("hangup") or zug.get("auflegen"):
