@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
-from kern import dossier, motive, sprech, tenants as kern_tenants, vornamen
+from kern import dossier, fachprofil, motive, sprech, tenants as kern_tenants, vornamen
 from kern.patients import arzt_sprechname
 from kern.slots import parse_slot_wish
 
@@ -687,6 +687,10 @@ FELDER_START = {
     # bestätigt übernommen: Am normalen Nummern-Schritt fragt Bianca
     # ausdrücklich, ob die Bestätigungs-SMS dorthin gehen soll.
     "telefonBekannt": "",
+    # Dritttermin: zuerst festlegen, wohin die Bestätigungs-SMS gehen soll.
+    # "anrufer" nutzt die bereits erkannte Kontakt-Nummer; nur "patient"
+    # öffnet danach die Aufnahme einer Nummer für die dritte Person.
+    "smsEmpfaenger": "",
     "gesucht": "",
     "fuerWen": "",
     # Identität und Empfänger des Termins sind zwei getrennte Ja/Nein-
@@ -717,6 +721,9 @@ FELDER_START = {
     "versicherungWechsel": False,
     "versicherungNotiz": False,
     "letzterBesuch": "",
+    # Explizit im Gespräch genannter früherer Praxisbesuch, auch wenn die
+    # Kartei im Hintergrund noch nicht eindeutig aufgelöst ist.
+    "besuchErzaehlt": False,
     # Rueckblick auf den letzten Besuch (Chef 30.08.2026): Grund des letzten
     # Termins aus der Historie; "rueckblick" haelt den Gespraechs-Zustand
     # ("" = noch nicht angesprochen, "gefragt" = Verlaufs-Frage offen,
@@ -1353,6 +1360,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["frage"] = ""
                 neu.add("modus")
 
+    # Eine bereits BESTÄTIGTE Anruferidentität bleibt gebunden. Der bloße
+    # Rufnummer-Treffer darf die ausdrückliche Identitätskontrolle dagegen
+    # nie überspringen.
+    if s["anruferCheck"] == "ja" and ist_anrufer_identitaet_nein(t):
+        anrufer_daten_verwerfen(sit)
+        neu.add("anruferCheck")
+
     # Schon mal da gewesen?
     if _SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE.search(t):
         if s["warSchonMal"] is not True:
@@ -1374,6 +1388,32 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["warSchonMal"] = False
             neu.add("warSchonMal")
 
+    # Eine ausdrückliche, datierte Besuchserinnerung schlägt ein vorheriges
+    # „erstes Mal“: Das Gespräch darf den Patienten nicht als Neupatienten
+    # weiterführen, wenn er gerade einen früheren Besuch bei dieser Praxis
+    # beschreibt.
+    besuch = re.search(
+        r"\b(?:letzte[rmn]?\s+besuch|damals)\b[^.!?]{0,100}\bbei\s+(?:ihnen|euch)\b|"
+        r"\bbei\s+(?:ihnen|euch)\b[^.!?]{0,100}\b(?:letzte[rmn]?\s+besuch|damals)\b",
+        t,
+        re.I,
+    )
+    if besuch:
+        s["warSchonMal"] = True
+        s["besuchErzaehlt"] = True
+        jahr = re.search(r"\b(20\d{2})\b", t)
+        if jahr:
+            s["letzterBesuch"] = f"{jahr.group(1)}-01-01"
+        if re.search(r"\bimplant\w*", t, re.I):
+            s["letzterGrund"] = "Implantat"
+        elif _PZR_GRUND_RE.search(t):
+            s["letzterGrund"] = "Zahnreinigung"
+        elif re.search(r"\bkontroll\w*", t, re.I):
+            s["letzterGrund"] = "Kontrolle"
+        elif not s["letzterGrund"]:
+            s["letzterGrund"] = "früherer Besuch"
+        neu.update({"warSchonMal", "letzterBesuch"})
+
     # W-ANRUFER-CHECK: Antwort auf die Identitätsfrage. Ein Ja übernimmt den
     # Kartei-Namen, aber NICHT still die Nummer. Diese wird am normalen
     # Telefon-Schritt separat als SMS-Ziel vorgelesen und bestätigt.
@@ -1382,45 +1422,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         if a and ist_anrufer_wohl(t):
             neu.add("anruferWohl")
         elif a and ist_ja(t) and not ist_nein(t):
-            s["anruferCheck"] = "ja"
-            s["warSchonMal"] = True  # steht in der Kartei => Bestand
-            s["vorname"] = _s(a.get("vorname")) or s["vorname"]
-            s["nachname"] = _s(a.get("nachname"))
-            s["buchstabiert"] = True
-            s["bekannt"] = True
-            if _s(a.get("patientId")):
-                s["patientId"] = _s(a.get("patientId"))
-            bekannte_nr = telefon.normaliert(a.get("telefon") or "")
-            s["telefon"] = ""
-            s["telefonOk"] = False
-            s["telefonOffen"] = ""
-            s["telefonTeil"] = ""
-            if bekannte_nr:
-                s["telefonBekannt"] = bekannte_nr
-                s["aktePhone"] = bekannte_nr
-                s["kontaktTelefon"] = bekannte_nr
-            g = _s(a.get("geschlecht")).lower()
-            if g in _HERR or g in _FRAU:
-                s["geschlecht"] = "m" if g in _HERR else "f"
-                s["geschlechtQuelle"] = "akte"
-                s["geschlechtUnklar"] = False
+            anrufer_daten_uebernehmen(sit)
             neu.update({"anruferCheck", "name", "warSchonMal"})
-            anrufer_kartei_uebernehmen(sit)
-            dossier.fuellen(sit)
         elif ist_nein(t):
-            s["anruferCheck"] = "nein"
+            anrufer_daten_verwerfen(sit)
             neu.add("anruferCheck")
-            sit.pop("anruferKartei", None)
-            dossier.verwerfen_anrufer(sit)
-            # Seed aus Rufnummer-Match verwerfen — sonst sucht list_appointments
-            # weiter den abgelehnten Patienten (Bugcheck 06.09.2026).
-            sit["patient"] = {}
-            sit["upcoming"] = []
-            sit.pop("anrufer", None)
-            booking = sit.get("booking")
-            if isinstance(booking, dict):
-                for k in ("patientId", "firstName", "lastName", "patientName", "phone"):
-                    booking.pop(k, None)
 
     # Erst NACH bestätigter Identität klären, für wen der Termin ist. Diese
     # Trennung beseitigt die alte Doppeldeutigkeit: „Nein“ kann jetzt entweder
@@ -1429,12 +1435,45 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             and not s["fuerWenCheck"]):
         if ist_ja(t) and not ist_nein(t):
             s["fuerWenCheck"] = "ja"
+            anrufer_behandler_uebernehmen(sit)
             neu.add("fuerWenCheck")
         elif ist_nein(t):
             s["fuerWenCheck"] = "nein"
             if not s["fuerWen"]:
                 s["fuerWen"] = "andere"
             neu.update({"fuerWenCheck", "fuerWen"})
+
+    if s["frage"] == "sms_empfaenger" and s["fuerWen"]:
+        if re.search(
+            r"\b(?:an\s+)?(?:mich|mir|meine\s+nummer|den\s+anrufer|die\s+anruferin)\b",
+            t,
+            re.I,
+        ):
+            nr = (
+                telefon.normaliert(s.get("kontaktTelefon") or "")
+                or telefon.normaliert(_anrufer_nummer(sit))
+            )
+            if nr:
+                s["smsEmpfaenger"] = "anrufer"
+                s["telefon"] = nr
+                s["telefonOk"] = True
+                s["telefonOffen"] = ""
+                s["telefonTeil"] = ""
+                neu.update({"smsEmpfaenger", "telefon"})
+        elif re.search(
+            r"\b(?:an\s+)?(?:den\s+patienten|die\s+patientin|"
+            r"ihn|die\s+dritte\s+person|"
+            r"frau\s+\w+|herrn?\s+\w+)\b",
+            t,
+            re.I,
+        ):
+            s["smsEmpfaenger"] = "patient"
+            s["telefon"] = ""
+            s["telefonOk"] = False
+            s["telefonOffen"] = ""
+            s["telefonTeil"] = ""
+            s["telefonBekannt"] = ""
+            neu.add("smsEmpfaenger")
 
     # Letzter Behandler aus der Hintergrund-Kartei — Ja bindet, Nein fragt offen.
     if s["frage"] == "arzt_check" and not (s.get("arzt") or {}).get("calendarId"):
@@ -1519,16 +1558,32 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             patient_von_kontakt_loesen(sit)
             neu.add("fuerWen")
 
-    # Thaler nimmt telefonisch nur die sechs freigegebenen Motivgruppen an.
-    # Explizite andere Behandlungen werden nicht still als Kontrolle gebucht:
-    # der Flow nennt die erlaubten Gruppen und bleibt bei der Grundfrage.
-    if (_zimmer_map.klar_nicht_buchbar(tenant, t)
+    katalog = motive.katalog(sit)
+
+    # Fachgrenze: ein Zahnwunsch bei Blessing oder einer anderen
+    # nicht-zahnärztlichen Praxis darf nie zum generischen Kontrolltermin
+    # werden. Der Flow antwortet anschließend aus dem passenden Fachtemplate.
+    if (besuchsgrund.fachfremder_zahngrund(tenant, t, katalog=katalog)
             and (s["frage"] == "grund" or _ANLIEGEN_SIGNAL_RE.search(t))):
         s["grund"] = ""
         s["grundWortlaut"] = ""
         s["motivId"] = ""
         s["motivName"] = ""
         s["frage"] = "grund"
+        sit["grundNichtBuchbarArt"] = "fachfremd"
+        neu.add("grundNichtBuchbar")
+
+    # Thaler nimmt telefonisch nur die sechs freigegebenen Motivgruppen an.
+    # Explizite andere Behandlungen werden nicht still als Kontrolle gebucht:
+    # der Flow nennt die erlaubten Gruppen und bleibt bei der Grundfrage.
+    elif (_zimmer_map.klar_nicht_buchbar(tenant, t)
+            and (s["frage"] == "grund" or _ANLIEGEN_SIGNAL_RE.search(t))):
+        s["grund"] = ""
+        s["grundWortlaut"] = ""
+        s["motivId"] = ""
+        s["motivName"] = ""
+        s["frage"] = "grund"
+        sit["grundNichtBuchbarArt"] = "mandantengrenze"
         neu.add("grundNichtBuchbar")
 
     # Besuchsgrund: auf die Besuchsgrund-Liste des Behandlers mappen; der
@@ -1537,7 +1592,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # 30.08.2026: Mapping in jedem Anruf neu); die endgueltige, behandler-
     # spezifische Aufloesung macht flow._ctx_bauen vor Suche und Buchung.
     if not s["grund"] and "grundNichtBuchbar" not in neu:
-        kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
+        kern_name, vm = _grund_deuten(tenant, t, katalog=katalog)
         if kern_name and _grund_unglaubwuerdig(t):
             # "Die letzte Zahnreinigung war nicht gut" traegt das PZR-Wort,
             # ist aber Beschwerde ueber FRUEHER — kein Anliegen ernten.
@@ -1553,8 +1608,18 @@ def einsammeln(sit: dict, text: str) -> set[str]:
               and not ist_nein(t) and not _KEIN_GRUND_RE.search(t)
               and not _grund_unglaubwuerdig(t)
               and (len(t.split()) <= 5 or _ANLIEGEN_SIGNAL_RE.search(t))):
-            # Frei formulierter Grund ("Holzbein absägen"): Wortlaut behalten,
-            # gebucht wird der Zweifelsfall-Grund (Kontrolle/Besprechung).
+            # Nicht-zahnärztliche Praxen buchen unbekannte/fachfremde Wünsche
+            # nie als Kontrolle. Zahnmandanten behalten den bewährten
+            # Besprechungs-/Kontrollfallback samt O-Ton-Notiz.
+            if katalog and not motive.ist_zahn(katalog):
+                s["grund"] = ""
+                s["grundWortlaut"] = ""
+                s["motivId"] = ""
+                s["motivName"] = ""
+                s["frage"] = "grund"
+                sit["grundNichtBuchbarArt"] = "nicht_im_katalog"
+                neu.add("grundNichtBuchbar")
+                return neu
             s["grund"] = t if len(t) <= 90 else t[:87] + "…"
             s["grundWortlaut"] = s["grund"]
             kat = _zimmer_map.buchbarer_katalog(tenant, motive.katalog(sit))
@@ -2067,8 +2132,8 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Kurz zur Einordnung: Waren Sie schon mal in unserer Praxis?",
     ),
     "arzt": (
-        "Bei welchem Behandler waren Sie zuletzt?",
-        "Wissen Sie den Namen Ihres Behandlers noch?",
+        "Bei welchem Arzt waren Sie zuletzt?",
+        "Wissen Sie den Namen Ihres Arztes noch?",
     ),
     "name": (
         "Sagen Sie mir bitte noch Ihren Namen — Vor- und Nachname?",
@@ -2170,8 +2235,8 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Geht es bei dem Termin um Sie persönlich?",
     ),
     "arzt_check": (
-        "Sie waren zuletzt bei demselben Behandler, richtig?",
-        "Stimmt der letzte Behandler so — ein kurzes Ja oder Nein genügt.",
+        "Soll der neue Termin wieder beim Behandler aus Ihrer Kartei sein?",
+        "Möchten Sie für den neuen Termin wieder zu Ihrem bisherigen Behandler?",
     ),
     "rueckblick": (
         "Wie ist es Ihnen seither ergangen?",
@@ -2373,6 +2438,34 @@ def _anrufer_hallo_feststellung(sit: dict) -> str:
             else "Schön, Sie wieder zu hören.")
 
 
+def hallo_frage_unpassend(sit: dict, text: str = "") -> bool:
+    """Darf der Eisbrecher eine echte Frage stellen — oder nur feststellen?
+
+    Chef 12.09.2026 (wörtlich): „sie fragt manchmal immer noch wie geht es
+    Ihnen, was unklug ist, da fragen vom job ablenken."
+
+    Die Wohlseinsfrage ist ein Eisbrecher für den Moment, in dem noch kein
+    Anliegen auf dem Tisch liegt. Sobald der Anrufer gesagt hat, was er
+    will — oder sich beschwert bzw. Schmerzen hat — kostet sie einen ganzen
+    Gesprächszug und lenkt vom Auftrag ab (Live 11.09.2026: der Anrufer
+    verlangte dringend einen Mitarbeiter und wurde gefragt, wie es ihm
+    geht). Dann bleibt nur die Feststellung."""
+    from kern import anliegen_art, hirn
+    if anliegen_art.art(text) in {"notfall", "beschwerde"}:
+        return True
+    a = hirn.aktiv(sit)
+    if a is not None and _s(a.get("handlung")):
+        return True
+    return bool(sammler(sit)["modus"])
+
+
+def _hallo_form(sit: dict, text: str = "") -> str:
+    hallo = anrufer_hallo(sit)
+    if anrufer_hallo_fragt(hallo) and hallo_frage_unpassend(sit, text):
+        return _anrufer_hallo_feststellung(sit)
+    return hallo
+
+
 def anrufer_hallo(sit: dict) -> str:
     """Schneller erster Icebreaker ohne Ziffern.
 
@@ -2440,14 +2533,39 @@ def anrufer_hallo_jetzt(sit: dict, text: str = "") -> str:
         )
         if sit.get("vorigesGespraech") is None or len(tel) < 7:
             return ""
-        return anrufer_hallo(sit)
+        return _hallo_form(sit, text)
     if sit.get("hirnVerbinden"):
         return ""
     if text:
         from bianca import weiterleiten
         if weiterleiten.erkannt(text):
             return ""
-    return anrufer_hallo(sit)
+    return _hallo_form(sit, text)
+
+
+# Reine Wohlseins-Wörter: was hiernach übrig bleibt, ist eigener Inhalt.
+_WOHL_WORT_RE = re.compile(
+    r"\b(?:ja|jaja|jo|joa|nein|nee|danke(?:sch(?:ö|oe)n)?|vielen|lieben|dank|"
+    r"bitte|mir|mich|ich|es|geht|gehts|so|gut|sehr|schon|alles|na|ach|tja|"
+    r"prima|bestens|super|wunderbar|gro(?:ß|ss)artig|passt|einigerma(?:ß|ss)en|"
+    r"ok|okay|und|ihnen|selbst|auch|soweit|nicht|besonders|schlecht|mies|"
+    r"krank|beschissen|m(?:ü|ue)de|kaputt|bin|geht'?s)\b",
+    re.I,
+)
+
+
+def ist_nur_wohlsein(text: str) -> bool:
+    """Reine Antwort auf „Wie geht es Ihnen?" — ohne eigenen Inhalt.
+
+    „Gut, danke." / „Schlecht!" => True. „Gut, aber mein Zahn tut weh."
+    => False: dieser Satz trägt Inhalt, der nicht verloren gehen darf
+    (W-HALLO-ANTWORT 12.09.2026)."""
+    t = _s(text)
+    if not t:
+        return True
+    rest = _WOHL_WORT_RE.sub(" ", t)
+    rest = re.sub(r"[^\wäöüßÄÖÜ ]+", " ", rest)
+    return not rest.split()
 
 
 def ist_anrufer_wohl(text: str) -> bool:
@@ -2483,6 +2601,103 @@ def anrufer_bekannt(sit: dict) -> dict:
     if not (_s(a.get("nachname")) and _s(a.get("telefon"))):
         return {}
     return a
+
+
+def patientenkontext_aktualisieren(sit: dict) -> dict:
+    """Alle bestätigten Patientenfakten als Teil des Session-Hirns spiegeln."""
+    try:
+        from kern import turn_context
+        patient = turn_context.projekt(sit).get("patient") or {}
+        h = sit.get("hirn")
+        if isinstance(h, dict):
+            h["patient"] = patient
+        return patient if isinstance(patient, dict) else {}
+    except Exception:
+        return {}
+
+
+def anrufer_daten_uebernehmen(sit: dict) -> bool:
+    """Bestätigten Rufnummer-Treffer binden; SMS-Ziel separat bestätigen."""
+    a = anrufer_bekannt(sit)
+    if not a:
+        return False
+    s = sammler(sit)
+    s["anruferCheck"] = "ja"
+    s["warSchonMal"] = True
+    s["vorname"] = _s(a.get("vorname")) or s["vorname"]
+    s["nachname"] = _s(a.get("nachname")) or s["nachname"]
+    s["buchstabiert"] = True
+    s["bekannt"] = True
+    s["patientId"] = _s(a.get("patientId")) or s["patientId"]
+    bekannte_nr = telefon.normaliert(a.get("telefon") or "")
+    s["telefon"] = ""
+    s["telefonOk"] = False
+    s["telefonOffen"] = ""
+    s["telefonTeil"] = ""
+    if bekannte_nr:
+        s["telefonBekannt"] = bekannte_nr
+        s["aktePhone"] = bekannte_nr
+        s["kontaktTelefon"] = bekannte_nr
+    g = _s(a.get("geschlecht")).lower()
+    if g in _HERR or g in _FRAU:
+        s["geschlecht"] = "m" if g in _HERR else "f"
+        s["geschlechtQuelle"] = "akte"
+        s["geschlechtUnklar"] = False
+    alt_patient = sit.get("patient") if isinstance(sit.get("patient"), dict) else {}
+    sit["patient"] = {
+        **alt_patient,
+        "id": s["patientId"],
+        "firstName": s["vorname"],
+        "lastName": s["nachname"],
+        "name": f"{s['vorname']} {s['nachname']}".strip(),
+        "phone": bekannte_nr,
+        "gender": s["geschlecht"],
+        "birthDate": _s(a.get("geburtsdatum")) or _s(alt_patient.get("birthDate")),
+    }
+    anrufer_kartei_uebernehmen(sit)
+    dossier.fuellen(sit)
+    patientenkontext_aktualisieren(sit)
+    return True
+
+
+def anrufer_daten_verwerfen(sit: dict) -> None:
+    """Explizite Korrektur schlägt den automatischen Rufnummer-Treffer."""
+    s = sammler(sit)
+    s["anruferCheck"] = "nein"
+    s["warSchonMal"] = None
+    s["fuerWenCheck"] = ""
+    s["vorname"] = ""
+    s["nachname"] = ""
+    s["buchstabiert"] = False
+    s["bekannt"] = False
+    s["patientId"] = ""
+    s["telefon"] = ""
+    s["telefonOk"] = False
+    s["telefonOffen"] = ""
+    s["telefonTeil"] = ""
+    s["telefonBekannt"] = ""
+    s["aktePhone"] = ""
+    s["kontaktTelefon"] = ""
+    s["arzt"] = None
+    s["arztCheck"] = ""
+    s["letzterBesuch"] = ""
+    s["letzterGrund"] = ""
+    booking = sit.get("booking")
+    if isinstance(booking, dict):
+        for key in (
+            "patientId", "patientIdBound", "patientIdFirstName",
+            "patientIdLastName", "appointmentId", "firstName", "lastName",
+            "patientName", "phone", "gender", "birthDate",
+            "privateInsurance",
+        ):
+            booking.pop(key, None)
+    sit["patient"] = {}
+    sit["upcoming"] = []
+    sit["past"] = []
+    sit.pop("anruferKartei", None)
+    sit.pop("anrufer", None)
+    dossier.verwerfen_anrufer(sit)
+    patientenkontext_aktualisieren(sit)
 
 
 def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
@@ -2727,10 +2942,42 @@ def anrufer_kartei_uebernehmen(sit: dict) -> None:
     if satz:
         sit["karteiFillerText"] = satz
     dossier.fuellen(sit)
+    patientenkontext_aktualisieren(sit)
+
+
+def anrufer_behandler_uebernehmen(sit: dict) -> bool:
+    """Kartei-Behandler nach bestätigter Identität automatisch übernehmen."""
+    s = sammler(sit)
+    if (s.get("arzt") or {}).get("calendarId"):
+        return False
+    from kern import zimmer_map
+    if zimmer_map.aktiv(sit.get("tenant") or {}):
+        return False
+    k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+    cid = _s(k.get("calendarId"))
+    cname = _s(k.get("calendarName") or k.get("doctorName"))
+    if not cid:
+        return False
+    if kern_tenants.ist_funktionskalender(cname) or kern_tenants.zimmer_nr(cname):
+        default = kern_tenants.default_kalender(
+            sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+        )
+        if not default or not _s(default.get("id")):
+            return False
+        cid, cname = _s(default.get("id")), _s(default.get("name"))
+    s["arzt"] = {
+        "typ": "letzter",
+        "calendarId": cid,
+        "calendarName": cname,
+        "quelle": "anruferKartei",
+    }
+    s["arztCheck"] = "ja"
+    patientenkontext_aktualisieren(sit)
+    return True
 
 
 def arzt_check_frage(sit: dict) -> str:
-    """Bestaetigung des letzten Behandlers, sobald der Hintergrund ihn hat."""
+    """Sinnvolle Terminpräferenz, falls die automatische Übernahme ausbleibt."""
     k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
     if not _s(k.get("calendarId")):
         return ""
@@ -2748,14 +2995,7 @@ def arzt_check_frage(sit: dict) -> str:
     )
     if not name:
         return ""
-    # Erkannt als Michael Petsas, zuletzt bei Doktor Petsas: den Namen nicht
-    # unmittelbar ein drittes Mal sagen. Der Bezug ist bereits eindeutig.
-    patient_nachname = _s(sammler(sit).get("nachname"))
-    if patient_nachname and re.search(
-        rf"\b{re.escape(patient_nachname)}\b", name, re.I
-    ):
-        return "Sie waren zuletzt beim selben Behandler, richtig?"
-    return f"Sie waren zuletzt bei {name}, richtig?"
+    return f"Soll der neue Termin wieder bei {name} sein?"
 
 
 def patient_von_kontakt_loesen(sit: dict) -> None:
@@ -2799,6 +3039,7 @@ def patient_von_kontakt_loesen(sit: dict) -> None:
     s["aktePhone"] = ""
     s["telefonAkte"] = False
     s["telefonAlt"] = ""
+    s["smsEmpfaenger"] = ""
     s["geschlecht"] = ""
     s["geschlechtQuelle"] = ""
     s["geschlechtVon"] = ""
@@ -2857,6 +3098,20 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
     lokalen Synthese (~1,2 s). Bei Textänderungen in naechste_frage HIER
     mitziehen; ein vergessener Satz ist nur langsamer, nie falsch.
     """
+    sit_fach = {"tenant": tenant} if isinstance(tenant, dict) else None
+    grund_frage = (
+        fachprofil.besuchsgrund_frage(sit_fach)
+        if sit_fach is not None
+        else "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
+    )
+    pzr_verfuegbar = (
+        tenant is None or motive.fuehrt_pzr({"tenant": tenant})
+    )
+    bleaching_verfuegbar = tenant is None or any(
+        _BLEACH_RE.search(f"{_s(v.get('name'))} {_s(v.get('nameForPatient'))}")
+        for v in ((tenant or {}).get("visitMotives") or [])
+        if isinstance(v, dict)
+    )
     erstformen = [
         "Waren Sie denn schon einmal bei uns in der Praxis?",
         "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?",
@@ -2864,7 +3119,7 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?",
         "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?",
         "Und der Vorname?",
-        "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?",
+        grund_frage,
         "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?",
         "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
         "Damit ich nichts falsch schreibe: Buchstabieren Sie den Nachnamen bitte einmal kurz?",
@@ -2881,9 +3136,6 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
          "Unterlagen: Sind Sie weiterhin privat versichert, oder hat sich da etwas geändert?"),
         ("Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
          "Unterlagen: Sind Sie weiterhin gesetzlich versichert, oder hat sich da etwas geändert?"),
-        "Soll ich Ihnen direkt eine professionelle Zahnreinigung mit dazu buchen?",
-        ("Ihr letzter Besuch ist ja schon eine Weile her — soll ich Ihnen "
-         "direkt eine professionelle Zahnreinigung mit dazu buchen?"),
         # P1 Readback-Parallelisierung: Vorsatz + Schlussfrage der Nummern-
         # Rückbestätigung (readback_text) — gewärmt spielt der Vorsatz
         # sofort, während der Ziffern-Satz rendert und nachgehört wird.
@@ -2901,14 +3153,10 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Der Termin ist für Sie selbst, richtig?",
         "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
         "War er oder sie schon einmal bei uns in der Praxis?",
-        "Brauchen Sie einen Termin zur Zahnreinigung?",
         *HALLO_NEU,
         "Ich bin die Neue!",
         "Schön!",
         "Stimmt das so?",
-        "Die professionelle Zahnreinigung kostet bei uns ungefähr einhundertzwanzig Euro. "
-        "Bei uns führen die Zahnärzte die Zahnreinigung selbst durch, nicht die Prophylaxehelferinnen. "
-        "Bei welcher Krankenkasse sind Sie versichert?",
         "Bei welcher Krankenkasse sind Sie versichert?",
         "Soll ich für den Termin noch eine Notiz für den Doktor anlegen? "
         "Irgendeine besondere Frage, auf die er eingehen soll?",
@@ -2919,6 +3167,21 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Letztes Mal waren Sie wegen der Kontrolle bei uns. "
         "Geht es immer noch um die Kontrolle?",
     ]
+    if pzr_verfuegbar:
+        erstformen.extend([
+            "Soll ich Ihnen direkt eine professionelle Zahnreinigung mit dazu buchen?",
+            ("Ihr letzter Besuch ist ja schon eine Weile her — soll ich Ihnen "
+             "direkt eine professionelle Zahnreinigung mit dazu buchen?"),
+            "Brauchen Sie einen Termin zur Zahnreinigung?",
+            (
+                "Die professionelle Zahnreinigung kostet bei uns ungefähr "
+                "einhundertzwanzig Euro. Bei uns führen die Zahnärzte die "
+                "Zahnreinigung selbst durch, nicht die Prophylaxehelferinnen. "
+                "Bei welcher Krankenkasse sind Sie versichert?"
+            ),
+        ])
+    if bleaching_verfuegbar:
+        erstformen.append(BLEACHING_FRAGE)
     # W-FUER-WEN: die haeufigsten Dritten-Rollen mitwaermen (Namensfrage +
     # Schonmal-Frage) — seltene Rollen (Nachbar, Kollege, Chefin …)
     # synthetisieren live (langsamer, nie falsch).
@@ -2941,7 +3204,14 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
             out.append(thaler_spur_frage(tenant))
             out.extend(THALER_SPUR_VARIANTEN)
     out.extend(ARZTWAHL_VARIANTEN)
-    for varianten in FRAGE_VARIANTEN.values():
+    dental_fragen = {
+        "pzr", "pzr_kasse", "termin_anbieten", "bleaching", "bleaching_check",
+    }
+    for frage_id, varianten in FRAGE_VARIANTEN.items():
+        if not pzr_verfuegbar and frage_id in dental_fragen:
+            continue
+        if not bleaching_verfuegbar and frage_id in {"bleaching", "bleaching_check"}:
+            continue
         for v in varianten:
             if v not in out:
                 out.append(v)
@@ -2995,6 +3265,14 @@ def sms_nummer_frage(nummer: str) -> str:
     )
 
 
+def sms_empfaenger_frage(s: dict) -> str:
+    """Beim Dritttermin erst den SMS-Empfänger wählen, dann ggf. Nummer fragen."""
+    patient = anrede(s) or f"{_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip()
+    if patient:
+        return f"Soll die Bestätigungs-SMS an {patient} oder an Sie gehen?"
+    return "Soll die Bestätigungs-SMS an die Patientin oder den Patienten oder an Sie gehen?"
+
+
 # Adaptive Stille-Schwelle fuers Dock (W-TEMPO 29.08.2026, Chef: "ich will
 # 300 ms schneller werden"): Die Maschine WEISS, was sie gefragt hat — nach
 # einer Ja/Nein- oder Wahlfrage kommt eine kurze Antwort (350 ms Ruhe
@@ -3010,6 +3288,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "versicherung",
                 "versicherung_check", "pzr", "pzr_kasse", "bleaching", "bleaching_check",
                 "telefon_alt", "telefon_check",
+                "sms_empfaenger",
                 "rueckblick", "folge_kontrolle", "anrufer_check",
                 "fuer_wen_check", "arzt_check",
                 "frisch_absage_ok", "absage_ok",
@@ -3087,6 +3366,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             and s["frage"] in {"", "anrufer_check", "fuer_wen_check"}):
         return "fuer_wen_check", "Der Termin ist für Sie selbst, richtig?"
 
+    if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
+            and s["fuerWenCheck"] == "ja" and not s["fuerWen"]):
+        anrufer_behandler_uebernehmen(sit)
+
     if s["warSchonMal"] is None:
         if s["fuerWen"]:
             wer = fuer_wen_phrase(s)
@@ -3098,15 +3381,18 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if not s["arzt"]:
             from kern import zimmer_map
             if zimmer_map.aktiv(sit.get("tenant") or {}):
-                return "arzt", thaler_spur_frage(sit.get("tenant"))
-            if s.get("arztCheck") != "nein":
-                rq = arzt_check_frage(sit)
-                if rq:
-                    return "arzt_check", rq
-            wer = fuer_wen_phrase(s)
-            if wer:
-                return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
-            return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
+                # Keine Arztfrage bei Thaler; der Grund routet zu Zimmer 4
+                # beziehungsweise PZR zu Zimmer 3/2.
+                pass
+            else:
+                if s.get("arztCheck") != "nein":
+                    rq = arzt_check_frage(sit)
+                    if rq:
+                        return "arzt_check", rq
+                wer = fuer_wen_phrase(s)
+                if wer:
+                    return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
+                return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:
@@ -3123,11 +3409,13 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             )
         if not s["vorname"]:
             return "vorname", "Und der Vorname?"
+        if s["fuerWen"] and not s["smsEmpfaenger"]:
+            return "sms_empfaenger", sms_empfaenger_frage(s)
         if not s["grund"]:
             from kern import zimmer_map
             if zimmer_map.aktiv(sit.get("tenant") or {}):
                 return "grund", zimmer_map.buchbare_frage()
-            return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
+            return "grund", fachprofil.besuchsgrund_frage(sit)
         if s["wunsch"] is None:
             return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
         if sit.get("rueckrufBuchung"):
@@ -3165,15 +3453,18 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if not s["arzt"]:
         from kern import zimmer_map
         if zimmer_map.aktiv(sit.get("tenant") or {}):
-            return "arzt", thaler_spur_frage(sit.get("tenant"))
-        cals = kern_tenants.behandler_kalender(sit.get("tenant") or {})
-        if len(cals) >= 2:
-            return "arzt", arztwahl_frage(sit.get("tenant"))
+            # Thaler kennt keine Arztwahl: der Besuchsgrund entscheidet
+            # deterministisch Zimmer 4 beziehungsweise PZR Zimmer 3/2.
+            pass
+        else:
+            cals = kern_tenants.behandler_kalender(sit.get("tenant") or {})
+            if len(cals) >= 2:
+                return "arzt", arztwahl_frage(sit.get("tenant"))
     if not s["grund"]:
         from kern import zimmer_map
         if zimmer_map.aktiv(sit.get("tenant") or {}):
             return "grund", zimmer_map.buchbare_frage()
-        return "grund", "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"
+        return "grund", fachprofil.besuchsgrund_frage(sit)
     if s["wunsch"] is None:
         return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
     if not s["nachname"]:
@@ -3190,6 +3481,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         )
     if not s["vorname"]:
         return "vorname", "Und der Vorname?"
+    if s["fuerWen"] and not s["smsEmpfaenger"]:
+        return "sms_empfaenger", sms_empfaenger_frage(s)
     if not s["buchstabiert"] and not s["bekannt"]:
         return _buchstabier_frage(
             s,
@@ -3392,7 +3685,16 @@ def rueckblick_faellig(s: dict) -> bool:
     Nur Bestandsakte mit Historie (Datum + Grund), nur im Sammel-Teil der
     Buchung, nie bei akuten Beschwerden (Schmerzpatienten plaudert man
     nicht voll) und nie, wenn der Besuch erst wenige Tage her ist."""
-    if s.get("modus") != "buchen" or not s.get("bekannt") or s.get("rueckblick"):
+    if (
+        s.get("modus") != "buchen"
+        or not (s.get("bekannt") or s.get("besuchErzaehlt"))
+        or s.get("rueckblick")
+    ):
+        return False
+    if s.get("anruferCheck") == "ja":
+        # Erkannter Anrufer: letzter Besuch darf als kurze Feststellung in
+        # die Suchzeit, aber nicht als soziale/klinische Zusatzfrage den
+        # Terminauftrag aufhalten.
         return False
     if s.get("phase") in {"angebot", "bestaetigen", "gebucht", "fertig"}:
         return False
@@ -3428,7 +3730,31 @@ def kartei_fueller_satz(s: dict, sit: dict | None = None) -> str:
         grund = "die Zahnreinigung"
     elif len(grund) > 22:
         grund = grund[:20].rstrip() + "…"
-    satz = f"Letztes Mal {grund} — einen Moment."
+    behandlung = (
+        "zur Kontrolle" if grund == "die Kontrolle"
+        else "zur Zahnreinigung" if grund == "die Zahnreinigung"
+        else f"wegen {grund}"
+    )
+    k = (
+        sit.get("anruferKartei")
+        if isinstance(sit, dict) and isinstance(sit.get("anruferKartei"), dict)
+        else {}
+    )
+    arzt = arzt_sprechname(
+        _s((s.get("arzt") or {}).get("calendarName"))
+        or _s(k.get("doctorName") or k.get("calendarName")),
+        sit.get("tenant") if isinstance(sit, dict) else None,
+    )
+    if arzt:
+        satz = (
+            f"Sie waren zuletzt bei {arzt} {behandlung}. "
+            "Ich schaue direkt, wann etwas frei ist."
+        )
+    else:
+        satz = (
+            f"Zuletzt waren Sie {behandlung} bei uns. "
+            "Ich schaue direkt, wann etwas frei ist."
+        )
     return satz if "?" not in satz else ""
 
 
@@ -3633,8 +3959,9 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     wortlaut = zimmer_map.mapping_text(
         tenant, f"{s['grundWortlaut']} {s['grund']}")
     muster = besuchsgrund.konzept_muster(wortlaut)
-    vm = None
-    if muster:
+    vm = besuchsgrund.katalog_exakt(
+        wortlaut, katalog=kat, calendar_id=calendar_id)
+    if not vm and muster:
         vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=kat, calendar_id=calendar_id)
     if not vm:
         # W-MOTIV-KATALOG (03.09.2026): kein Konzept-Treffer — den Wortlaut
@@ -3646,7 +3973,7 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
         aktuell = next((v for v in kat if _s(v.get("id")) == s["motivId"]), None)
         if aktuell and motive.erlaubt(aktuell, calendar_id):
             vm = aktuell
-    if not vm and s["grund"]:
+    if not vm and s["grund"] and motive.ist_zahn(kat):
         vm = besuchsgrund.fallback_motiv(tenant, katalog=kat, calendar_id=calendar_id)
     return _besprechung_oder(sit, vm, calendar_id)
 
@@ -3654,8 +3981,8 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
 def kalender_zu_grund(sit: dict) -> None:
     """Thaler: Grund -> Zimmer. Sonst PZR auf Funktionskalender.
 
-    Chef 08.09.2026 (Thaler): PZR Zimmer 3 dann 2, Notfall Zimmer 1,
-    restliche Behandlung bei Thaler in Zimmer 4. MedDent ohne Zimmer-Karte
+    Thaler: PZR Zimmer 3 dann 2, alle Haupttermine in Zimmer 4.
+    MedDent ohne Zimmer-Karte
     bleibt unverändert — PZR bleibt beim Arzt.
     """
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}

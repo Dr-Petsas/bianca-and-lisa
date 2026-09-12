@@ -42,6 +42,13 @@ _ZIFFER_RE = re.compile(
 )
 LANGSATZ_AB = 60      # Aussagesätze ab dieser Länge gelten als Wiederholungs-Kandidat
 FENSTER = 3           # gegen wie viele letzte Bot-Antworten verglichen wird
+# W-REPEAT-FENSTER 12.09.2026: so viele gesprochene Sätze bleiben im
+# Vergleichs-Gedächtnis. Vorher wuchs `waechterGesagt` über den GANZEN Anruf;
+# in einem langen Gespräch (Live 11.09.2026, 109 Züge) war damit irgendwann
+# fast jede natürliche Pflichtfrage "schon gesagt" und wurde gestrichen —
+# der Wächter gegen Schleifen wurde selbst zur Schleifen-Ursache. Der Zweck
+# ("nie zweimal wortgleich HINTEREINANDER") braucht nur ein Fenster.
+GEDAECHTNIS_SAETZE = 24
 
 
 def _s(v: Any) -> str:
@@ -68,8 +75,15 @@ def gesagt_merken(sit: dict, text: str) -> None:
         sit["waechterGesagt"] = bag
     for satz in _saetze(text):
         n = _norm(satz)
-        if n and n not in bag:
-            bag.append(n)
+        if not n:
+            continue
+        if n in bag:
+            # Erneut gesagt: nach hinten holen, damit das Fenster die
+            # Aktualität abbildet (nicht das erste Vorkommen von vor 20 Zügen).
+            bag.remove(n)
+        bag.append(n)
+    if len(bag) > GEDAECHTNIS_SAETZE:
+        del bag[:-GEDAECHTNIS_SAETZE]
 
 
 def letzte_antworten(msgs: list[dict], n: int = FENSTER, *, ohne_letzte: bool = False) -> list[str]:

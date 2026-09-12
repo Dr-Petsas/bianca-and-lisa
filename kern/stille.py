@@ -7,6 +7,19 @@ Pflichtfrage sofort wiederholen. Denk-Cue unterdrückt Stups kurz.
 Nach MAX_STUPSE Stupsen ohne Antwort schweigt die Stimme, bis der
 Anrufer wieder spricht — kein Endlos-Genöle.
 
+W-STUPS-GESAMT 12.09.2026 (Live-Befund Session 9395e2ce, 109 Züge): der
+Zähler `stupse` wird bei JEDEM echten Anrufer-Satz auf 0 gesetzt. In einem
+langen Gespräch, in dem der Anrufer immer wieder am Thema vorbei redet,
+wechselten sich deshalb 15 Mal "Sind Sie noch dran?" und dieselbe offene
+Frage ab — MAX_STUPSE greift nur INNERHALB einer Stillephase. Seitdem läuft
+zusätzlich ein Zähler über den GANZEN Anruf (`gesamt`):
+
+- ab `PRESENCE_BIS` Stupsen im Anruf entfällt die Presence-Floskel und es
+  kommt sofort die konkrete offene Frage (Presence hat der Anrufer oft genug
+  gehört),
+- ab `GESAMT_MAX` Stupsen ist das Gespräch erkennbar tot: die Notleine
+  verabschiedet sich freundlich und legt auf (kern/abschied.notbremse_satz).
+
 Die 4 Sekunden misst das Browser-Dock (bianca_web/app.js, web/app.js) nach
 dem Ende der eigenen Wiedergabe; der Dienst liefert auf POST /api/stille nur
 den fertigen Stups-Zug. Hier liegt die stimmen-unabhängige Mechanik:
@@ -27,6 +40,10 @@ from kern import spur
 STUPS_NACH_S = 4.0
 # Mehr als zwei Stupse in Folge sind Genoele — danach wartet die Stimme.
 MAX_STUPSE = 2
+# W-STUPS-GESAMT: bis hierhin darf die Presence-Floskel im ANRUF kommen.
+PRESENCE_BIS = 3
+# So viele Stupse im ganzen Anruf: dann ist das Gespraech tot (Notleine).
+GESAMT_MAX = 6
 
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -41,11 +58,15 @@ def _stand(sit: dict) -> dict:
         st = {}
         sit["stille"] = st
     st.setdefault("stupse", 0)
+    st.setdefault("gesamt", 0)
     return st
 
 
 def reset(sit: dict) -> None:
-    """Der Anrufer hat wieder gesprochen — Stups-Zaehlung beginnt von vorn."""
+    """Der Anrufer hat wieder gesprochen — Stups-Zaehlung beginnt von vorn.
+
+    `gesamt` bleibt bewusst stehen: er misst, wie oft Bianca im GANZEN Anruf
+    ins Leere gesprochen hat (W-STUPS-GESAMT)."""
     st = _stand(sit)
     st["stupse"] = 0
 
@@ -54,8 +75,24 @@ def stups_zaehlen(sit: dict) -> int:
     """Naechste Stups-Nummer (1-basiert) — Cap prueft der Aufrufer."""
     st = _stand(sit)
     st["stupse"] = int(st.get("stupse") or 0) + 1
-    spur.merken(sit, "stille-stups", str(st["stupse"]))
+    st["gesamt"] = int(st.get("gesamt") or 0) + 1
+    spur.merken(sit, "stille-stups", f"{st['stupse']}/{st['gesamt']}")
     return st["stupse"]
+
+
+def gesamt(sit: dict) -> int:
+    """Stupse im ganzen Anruf — Grundlage der Notleine."""
+    return int(_stand(sit).get("gesamt") or 0)
+
+
+def gespraech_tot(sit: dict) -> bool:
+    """Zu viele Stupse im Anruf: weiter zu nöleln bringt nichts mehr."""
+    return gesamt(sit) >= GESAMT_MAX
+
+
+def presence_erlaubt(sit: dict) -> bool:
+    """Hat der Anrufer „Sind Sie noch dran?" schon oft genug gehört?"""
+    return gesamt(sit) <= PRESENCE_BIS
 
 
 def anrede(n: int) -> str:
