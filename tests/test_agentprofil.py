@@ -70,6 +70,15 @@ def test_fuer_did_ohne_cf_faellt_auf_lokale_datei(monkeypatch):
     assert t["clientId"] == "MEe4ZQHEzOPzLcexyhdT"
 
 
+def test_header_tenant_nutzt_denselben_db_agent_wie_die_did(monkeypatch):
+    lokal = {"_id": "kunde", "dids": ["+4930123456"], "praxisName": "Lokal"}
+    db = {"_id": "kunde", "_quelle": "cf+datei", "praxisName": "Aus der DB"}
+    monkeypatch.setattr(agentprofil.tenants, "laden", lambda _id: dict(lokal))
+    monkeypatch.setattr(agentprofil, "fuer_did",
+                        lambda did, caller="": dict(db) if did == "+4930123456" else None)
+    assert agentprofil.fuer_tenant("kunde")["praxisName"] == "Aus der DB"
+
+
 def test_fuer_did_db_gewinnt_vor_lokaler_datei(monkeypatch):
     """Chef 30.08.2026: die Konfig und somit die Begruessung MUSS aus der DB
     kommen — auch fuer DIDs, die eine lokale tenants/*.json traegt."""
@@ -111,8 +120,16 @@ def test_cf_mapping_fremder_mandant():
     assert t["calendars"] == [{"id": "cal-1", "name": "Doktor Beispiel"}]
     assert t["defaultCalendarId"] == "cal-1"
     # Motiv ohne internen Namen faellt auf nameForPatient zurueck.
-    assert {"id": "vm-1", "name": "Kontrolle", "duration": 30} in t["visitMotives"]
-    assert {"id": "vm-2", "name": "Beratung", "duration": 15} in t["visitMotives"]
+    assert any(
+        v.get("id") == "vm-1" and v.get("name") == "Kontrolle"
+        and v.get("duration") == 30
+        for v in t["visitMotives"]
+    )
+    assert any(
+        v.get("id") == "vm-2" and v.get("name") == "Beratung"
+        and v.get("duration") == 15
+        for v in t["visitMotives"]
+    )
     assert t["behandler"] == "Doktor Beispiel"
     assert t["telefon"] == "+4930111222"
     assert t["sttHotwords"] == ["Beispiel", "Narval", "Aligner"]
@@ -229,7 +246,7 @@ def test_fuer_did_cf_weg_mit_cache(monkeypatch):
     agentprofil.cache_leeren()
 
 
-def test_fuer_did_cf_fehler_faellt_auf_none(monkeypatch):
+def test_fuer_did_cf_fehler_faellt_auf_neutralen_fallback(monkeypatch):
     agentprofil.cache_leeren()
 
     def _kaputt(did, caller="", lookup_only=False):
@@ -237,7 +254,11 @@ def test_fuer_did_cf_fehler_faellt_auf_none(monkeypatch):
 
     monkeypatch.setattr(agentprofil, "_cf_pre", _kaputt)
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
-    assert agentprofil.fuer_did("+4930111299") is None
+    t = agentprofil.fuer_did("+4930111299")
+    assert t is not None
+    assert t["_id"] == "fallback-allgemein"
+    assert t["_fallbackOnly"] is True
+    assert not t.get("clientId")
     agentprofil.cache_leeren()
 
 

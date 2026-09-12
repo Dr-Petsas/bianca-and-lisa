@@ -56,8 +56,25 @@ function spielen(rel) {
   })();
 }
 
+function tenantQ() {
+  let t = "";
+  try { t = localStorage.getItem("pickadoc.praxis") || ""; } catch { /* */ }
+  return t ? ("?tenant=" + encodeURIComponent(t)) : "";
+}
+
+function tenantSetzen(id) {
+  const wert = String(id || "").trim();
+  if (!wert) return;
+  try { localStorage.setItem("pickadoc.praxis", wert); } catch { /* */ }
+  aktuellerLauf = "";
+  location.hash = "";
+  $("stories").innerHTML = "";
+  $("block-dialog").style.display = "none";
+  laeufeLaden();
+}
+
 async function laeufeLaden() {
-  const d = await (await fetch("api/laeufe")).json();
+  const d = await (await fetch("api/laeufe" + tenantQ())).json();
   const box = $("laeufe");
   box.innerHTML = "";
   (d.laeufe || []).forEach((l) => {
@@ -178,6 +195,14 @@ async function storyOeffnen(laufId, storyId) {
 
 $("knopf-alles").addEventListener("click", allesAbspielen);
 $("knopf-stopp").addEventListener("click", stoppen);
+window.addEventListener("message", (ev) => {
+  if (ev.origin !== location.origin) return;
+  const d = ev.data || {};
+  if (d.type === "pickadoc:tenant" && d.tenant) tenantSetzen(d.tenant);
+});
+window.addEventListener("storage", (ev) => {
+  if (ev.key === "pickadoc.praxis" && ev.newValue) tenantSetzen(ev.newValue);
+});
 
 laeufeLaden().then(() => {
   const h = location.hash.replace("#", "");

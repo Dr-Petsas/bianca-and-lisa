@@ -37,17 +37,37 @@ MAX_SLOT_ZUEGE = 3  # Verhandlungs-Deckel: spaetestens das dritte Angebot wird g
 
 # ------------------------------------------------------------------ Story-Bau
 
-def automatik(nr: int, *, tag: str = "Mittwoch", seed: int | None = None) -> dict[str, Any]:
+def einzelwoerter_liste(behandler: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    """Hot-30: feste Stichworte plus Behandler der gewaehlten Praxis."""
+    out = list(saetze.EINZELWOERTER)
+    for name in behandler or []:
+        n = " ".join(str(name or "").split())
+        if not n:
+            continue
+        last = n.split()[-1]
+        for w in (last, n):
+            if w and w not in out:
+                out.append(w)
+    return out
+
+
+def automatik(nr: int, *, tag: str = "Mittwoch", seed: int | None = None,
+              tenant: str = "", behandler: list[str] | tuple[str, ...] | None = None,
+              gruende: list[str] | None = None) -> dict[str, Any]:
     """Eine zufaellige, aber reproduzierbare Buchungs-Story (Neupatient).
 
     seed=None nimmt die Story-Nummer — derselbe Aufruf baut immer dieselbe
     Story (Korrekturschleife: ein roter Fall laesst sich exakt wiederholen).
+    Extra-Felder (tenant/Praxis-Gruende) nur wenn gesetzt — sonst bleibt
+    der Dict byte-gleich zu den Runner-Regressionen.
     """
     rnd = random.Random(nr * 7919 if seed is None else seed)
     stimme = rnd.choice(saetze.STIMMEN_M + saetze.STIMMEN_W)
-    grund = rnd.choice(list(saetze.GRUENDE))
+    grund_pool = list(gruende) if gruende else list(saetze.GRUENDE)
+    grund = rnd.choice(grund_pool)
     themen = rnd.sample(list(saetze.ABSCHWEIFER), k=rnd.choice([0, 1, 1, 2]))
     anker = rnd.sample(ABSCHWEIF_ANKER, k=len(themen))
+    aerzte = tuple(behandler) if behandler is not None else BEHANDLER
     story: dict[str, Any] = {
         "nr": nr,
         "id": f"s{nr:02d}-{stimme}-{grund}",
@@ -58,7 +78,7 @@ def automatik(nr: int, *, tag: str = "Mittwoch", seed: int | None = None) -> dic
         "grund": grund,
         "tag": tag,
         "schonmal": False,  # Neupatient: braucht keine bestehende Akte
-        "behandler": rnd.choice(BEHANDLER + ("",)),  # "" = egal
+        "behandler": rnd.choice(tuple(aerzte) + ("",)),  # "" = egal
         "versicherung": rnd.choice(["privat", "gesetzlich"]),
         "slotAnnahme": rnd.choice([1, 2, 2, 3]),
         "slotRichtung": rnd.choice(["frueher", "spaeter"]),
@@ -70,6 +90,8 @@ def automatik(nr: int, *, tag: str = "Mittwoch", seed: int | None = None) -> dic
         "wannWeissNicht": False,
         "seed": nr * 7919 if seed is None else seed,
     }
+    if tenant:
+        story["tenant"] = tenant
     return story
 
 
@@ -178,13 +200,65 @@ def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
     return None
 
 
+_EINZELWORT_SPERRE = frozenset({
+    "telefon", "telefon_check", "buchstabieren", "name", "vorname", "nachname",
+})
+
+
+def einzelwort_anzahl(story: dict) -> int:
+    """Wie oft einstreuen. Explizite Zahl gewinnt, sonst einmal je Wort."""
+    roh = story.get("einzelwortAnzahl")
+    if roh is None or roh == "":
+        return len([str(w).strip() for w in (story.get("einzelwoerter") or []) if str(w).strip()])
+    try:
+        n = int(roh)
+    except (TypeError, ValueError):
+        n = 0
+    return max(0, min(12, n))
+
+
+def _einzelwort(story: dict, lage: dict) -> dict[str, Any] | None:
+    """Ein isoliertes Stichwort — Themenwechsel, danach weiter die offene Frage.
+
+    Unabhaengig vom Anker der Abschweifer: nach der ersten echten Antwort,
+    nie zwei Worte hintereinander, nie mitten im Namens- oder Nummern-Diktat.
+    Die Anzahl kommt aus einzelwortAnzahl, der Wortvorrat aus einzelwoerter.
+    """
+    woerter = [str(w).strip() for w in (story.get("einzelwoerter") or []) if str(w).strip()]
+    budget = einzelwort_anzahl(story)
+    if not woerter or budget <= 0:
+        return None
+    if lage.get("frage") in _EINZELWORT_SPERRE:
+        return None
+    if str(lage.get("letzterBaustein") or "").startswith("einzelwort"):
+        return None
+    if lage["zaehler"].get("antworten", 0) < 1:
+        return None
+    gemacht = lage.setdefault("einzelwortGemacht", [])
+    if len(gemacht) >= budget:
+        return None
+    rest = [w for w in woerter if w not in gemacht]
+    if not rest:
+        rest = list(woerter)
+        letzter = gemacht[-1] if gemacht else ""
+        ohne = [w for w in rest if w != letzter]
+        if ohne:
+            rest = ohne
+    rnd = random.Random((story.get("seed") or 0) + 101 * len(gemacht)
+                        + lage["zaehler"].get("antworten", 0))
+    wort = rest[rnd.randrange(len(rest))]
+    gemacht.append(wort)
+    lage["letzterBaustein"] = f"einzelwort:{wort}"
+    return {"text": wort, "baustein": f"einzelwort:{wort}"}
+
+
 def _grund_text(story: dict, lage: dict) -> str:
     frei = str(story.get("grundText") or "").strip()
     if frei:
         return frei
     key = story.get("grund") or "kontrolle"
     if key not in saetze.GRUENDE:
-        return str(key)
+        return f"Ich hätte gerne einen Termin wegen {key}."
     varianten, _erwartet = saetze.GRUENDE[key]
     return _wahl(story, lage, "grund", varianten)
 
@@ -206,6 +280,12 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     # Verabschiedet? Nach dem Abschied ist Schluss (Runner legt auf).
     if "abschied" in lage["gemacht"]:
         return {"text": "", "baustein": "", "auflegen": True}
+
+    wort = _einzelwort(story, lage)
+    if wort:
+        return wort
+    lage["letzterBaustein"] = ""
+    lage["zaehler"]["antworten"] = lage["zaehler"].get("antworten", 0) + 1
 
     # Geplante Stoerungen: Abschweifer und Preis-Zwischenfrage verdraengen
     # die Antwort GENAU EINMAL — die Maschine muss die Frage erneut stellen.
@@ -366,6 +446,8 @@ def saetze_fuer_audio(story: dict) -> list[str]:
     for feld in ("eroeffnungText", "grundText", "wunschText",
                  "versicherungText", "slotText", "abschweiferText"):
         add(story.get(feld))
+    for w in story.get("einzelwoerter") or []:
+        add(w)
 
     lg = lage_neu()
     add(_eroeffnung(story, lg).get("text"))

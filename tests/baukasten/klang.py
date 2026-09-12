@@ -31,7 +31,26 @@ PCM_RATE = 24000
 
 
 TEL_RATE = 8000  # Schmalband-Telefon (G.711)
-TEL_BITS = 8     # Telefon-Bitrate: 8 kHz × 8 bit = 64 kbit/s
+TEL_BITS = 8     # 8 kHz × 8 bit μ-law = 64 kbit/s wie Zaluma
+# Cache-Bruch, wenn sich die Leitungssimulation aendert.
+TEL_DATEI_SUFFIX = ".tel-g711.wav"
+# Heisse Leitung: Zaluma kam live mit Clipping an.
+TEL_GAIN = 1.18
+TEL_RAUSCHEN = 90  # PCM16-Amplituden, Leitungszischen
+HZ_STUFEN = (8000, 16000, 24000)
+DEMO_STIMME = "markus"
+DEMO_SATZ = (
+    "Hallo, ich bin Markus Müller, ich hätte gerne einen Termin heute als Notfall."
+)
+# Studio-Default: echte Telefonleitung, Regler von dort aus feiner.
+LEITUNG_DEFAULT = {
+    "hz": 8000,
+    "rauschen": 28,
+    "artefakte": 12,
+    "dropouts": 6,
+    "pegel": 75,
+    "g711": True,
+}
 
 
 def wav_schliessen(blob: bytes) -> bytes:
@@ -125,9 +144,102 @@ def _wav_pcm16_header(data_len: int, rate: int) -> bytes:
     )
 
 
-def telefon_wav(blob: bytes, *, src_rate: int = PCM_RATE) -> bytes:
-    """24 kHz/16 bit Studio-WAV -> Telefonqualitaet: 8 kHz, 8-bit-Quantisierung
-    (64 kbit/s), wieder als PCM16-WAV damit STT/Browser das File fressen."""
+def _ulaw_encode(s: int) -> int:
+    """PCM16 -> μ-law-Byte (ITU-T G.711), wie Zaluma auf der Leitung."""
+    bias, clip = 0x84, 32635
+    sign = 0
+    if s < 0:
+        sign = 0x80
+        s = -s
+    if s > clip:
+        s = clip
+    s += bias
+    exp, mask = 7, 0x4000
+    while exp > 0 and not (s & mask):
+        exp -= 1
+        mask >>= 1
+    mant = (s >> (exp + 3)) & 0x0F
+    return ~(sign | (exp << 4) | mant) & 0xFF
+
+
+def _ulaw_decode(u: int) -> int:
+    u = ~u & 0xFF
+    sign = u & 0x80
+    exp = (u >> 4) & 0x07
+    mant = u & 0x0F
+    s = ((mant << 3) + 0x84) << exp
+    s -= 0x84
+    return -s if sign else s
+
+
+def _clip16(v: float) -> int:
+    if v > 32767:
+        return 32767
+    if v < -32768:
+        return -32768
+    return int(v)
+
+
+def _clamp_pct(v: object) -> int:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        n = 0
+    return max(0, min(100, n))
+
+
+def leitung_norm(d: dict | None = None) -> dict:
+    """Regler der Audioqualitäts-Box — immer dieselben sechs Felder."""
+    src = dict(LEITUNG_DEFAULT)
+    if isinstance(d, dict):
+        src.update(d)
+    hz = int(src.get("hz") or TEL_RATE)
+    hz = min(HZ_STUFEN, key=lambda x: abs(x - hz))
+    g711 = src.get("g711")
+    if isinstance(g711, str):
+        g711 = g711.strip().lower() not in {"0", "false", "aus", "off", ""}
+    return {
+        "hz": hz,
+        "rauschen": _clamp_pct(src.get("rauschen")),
+        "artefakte": _clamp_pct(src.get("artefakte")),
+        "dropouts": _clamp_pct(src.get("dropouts")),
+        "pegel": _clamp_pct(src.get("pegel")),
+        "g711": bool(g711),
+    }
+
+
+def leitung_suffix(leitung: dict | None) -> str:
+    L = leitung_norm(leitung)
+    g = "g711" if L["g711"] else "pcm"
+    return (
+        f".tel-h{L['hz']}-r{L['rauschen']}-a{L['artefakte']}"
+        f"-d{L['dropouts']}-p{L['pegel']}-{g}.wav"
+    )
+
+
+def _rng(n: int) -> int:
+    return ((n * 1103515245 + 12345) >> 16) & 0xFF
+
+
+def _resample(samples: array.array, src: int, dst: int) -> array.array:
+    if src == dst or not samples:
+        return samples
+    ratio = src / dst
+    n = max(1, int(len(samples) / ratio))
+    out = array.array("h")
+    last = len(samples) - 1
+    for i in range(n):
+        pos = i * ratio
+        j = int(pos)
+        frac = pos - j
+        a = samples[min(j, last)]
+        b = samples[min(j + 1, last)]
+        out.append(_clip16(a + (b - a) * frac))
+    return out
+
+
+def _telefon_wav_klassisch(blob: bytes, src_rate: int) -> bytes:
+    """Fester 8-kHz-G.711-Pfad — bleibt der Default ohne Regler."""
     if not blob or blob[:4] != b"RIFF" or len(blob) < 44:
         return blob
     rate = struct.unpack_from("<I", blob, 24)[0] or src_rate
@@ -137,22 +249,96 @@ def telefon_wav(blob: bytes, *, src_rate: int = PCM_RATE) -> bytes:
     if not samples:
         return blob
     step = max(1, int(round(rate / TEL_RATE)))
+    prev_x = 0
+    prev_y = 0.0
     out = array.array("h")
+    n = 0
     for i in range(0, len(samples) - step + 1, step):
         acc = sum(samples[i:i + step]) // step
-        # 8-bit linear (Telefon-Bitrate), als PCM16 gespeichert
-        q = max(-128, min(127, acc // 256))
-        out.append(q * 256)
+        y = acc - prev_x + 0.86 * prev_y
+        prev_x = acc
+        prev_y = y
+        rausch = (_rng(n) - 128) * TEL_RAUSCHEN // 128
+        heiss = _clip16(y * TEL_GAIN + rausch)
+        out.append(_ulaw_decode(_ulaw_encode(heiss)))
+        n += 1
     data = out.tobytes()
     return _wav_pcm16_header(len(data), TEL_RATE) + data
 
 
-def telefon_datei(pfad: Path) -> Path:
-    """Downsample-Cache neben der Studio-WAV (*.tel.wav)."""
-    ziel = pfad.with_name(pfad.stem + ".tel.wav")
+def _telefon_wav_leitung(blob: bytes, src_rate: int, L: dict) -> bytes:
+    if not blob or blob[:4] != b"RIFF" or len(blob) < 44:
+        return blob
+    rate = struct.unpack_from("<I", blob, 24)[0] or src_rate
+    pcm = blob[44:]
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not samples:
+        return blob
+    ziel = int(L["hz"])
+    out = _resample(samples, rate, ziel)
+    if ziel <= 8000:
+        prev_x = 0
+        prev_y = 0.0
+        gefiltert = array.array("h")
+        for acc in out:
+            y = acc - prev_x + 0.86 * prev_y
+            prev_x = acc
+            prev_y = y
+            gefiltert.append(_clip16(y))
+        out = gefiltert
+    gain = 0.85 + (int(L["pegel"]) / 100.0) * 0.55
+    rausch_amp = int(L["rauschen"]) * 320 // 100
+    click_p = int(L["artefakte"]) / 100.0 * 0.18
+    drop_p = int(L["dropouts"]) / 100.0 * 0.35
+    frame = max(1, ziel // 50)
+    drop_bis = -1
+    n = 0
+    fertig = array.array("h")
+    for i, s in enumerate(out):
+        if i <= drop_bis:
+            fertig.append(0)
+            n += 1
+            continue
+        if drop_p and i % frame == 0 and (_rng(n + 9000) / 255.0) < drop_p:
+            drop_bis = i + frame - 1
+            fertig.append(0)
+            n += 1
+            continue
+        y = s * gain
+        if rausch_amp:
+            y += (_rng(n) - 128) * rausch_amp / 128.0
+        if click_p and (_rng(n + 4000) / 255.0) < (click_p / 40.0):
+            y += 16000 if _rng(n + 7) >= 128 else -16000
+        heiss = _clip16(y)
+        if L["g711"]:
+            heiss = _ulaw_decode(_ulaw_encode(heiss))
+        fertig.append(heiss)
+        n += 1
+    data = fertig.tobytes()
+    return _wav_pcm16_header(len(data), ziel) + data
+
+
+def telefon_wav(blob: bytes, *, src_rate: int = PCM_RATE,
+                leitung: dict | None = None) -> bytes:
+    """Studio-WAV -> Telefonleitung, dann wieder PCM16-WAV.
+
+    Ohne ``leitung`` bleibt der klassische 8-kHz-G.711-Pfad (Tests).
+    Mit Regler: Samplefrequenz, Rauschen, Artefakte, Dropouts, Pegel,
+    echte G.711 μ-law hin und zurück (8 bit, 64 kbit/s).
+    """
+    if leitung is None:
+        return _telefon_wav_klassisch(blob, src_rate)
+    return _telefon_wav_leitung(blob, src_rate, leitung_norm(leitung))
+
+
+def telefon_datei(pfad: Path, *, leitung: dict | None = None) -> Path:
+    """Downsample-Cache neben der Studio-WAV (Suffix wechselt mit Algorithmus)."""
+    suffix = TEL_DATEI_SUFFIX if leitung is None else leitung_suffix(leitung)
+    ziel = pfad.with_name(pfad.stem + suffix)
     if ziel.is_file() and ziel.stat().st_size > 44:
         return ziel
-    blob = telefon_wav(pfad.read_bytes())
+    blob = telefon_wav(pfad.read_bytes(), leitung=leitung)
     tmp = ziel.with_suffix(".tmp")
     tmp.write_bytes(blob)
     tmp.replace(ziel)

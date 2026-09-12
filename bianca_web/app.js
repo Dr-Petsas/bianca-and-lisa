@@ -866,10 +866,56 @@ async function boot() {
     }
     notfall = urls;
   } catch { /* */ }
-  const t = await (await fetch("api/tenants")).json();
-  $("tenant").innerHTML = (t.tenants || []).map((x) =>
-    `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`
-  ).join("");
+  const onPraxis = () => {};
+  try {
+    if (typeof praxisSeiteStart === "function") {
+      await praxisSeiteStart({ onchange: onPraxis });
+    } else {
+      await praxisFallbackStart(onPraxis);
+    }
+  } catch (e) {
+    console.warn("praxis-start", e);
+    try { await praxisFallbackStart(onPraxis); } catch { /* */ }
+  }
+}
+
+function praxisAktuell() {
+  if (typeof praxisLesen === "function") {
+    try { return praxisLesen() || ""; } catch { /* */ }
+  }
+  try {
+    const q = new URLSearchParams(location.search).get("tenant");
+    if (q) return q;
+    return localStorage.getItem("pickadoc.praxis") || "";
+  } catch {
+    return "";
+  }
+}
+
+async function praxisFallbackStart(onchange) {
+  const sel = $("tenant");
+  if (!sel) return "";
+  let data = { tenants: [], default: "" };
+  try {
+    data = await (await fetch("api/tenants", { cache: "no-store" })).json();
+  } catch { /* */ }
+  const liste = (data.tenants || []).filter((t) => t.id !== "demo");
+  const aktuell = praxisAktuell();
+  const ids = new Set(liste.map((t) => t.id));
+  const wahl = ids.has(aktuell)
+    ? aktuell
+    : (ids.has(data.default) ? data.default : ((liste[0] && liste[0].id) || ""));
+  sel.innerHTML = liste.map((t) =>
+    `<option value="${t.id}">${t.praxisName || t.id}</option>`).join("");
+  if (wahl) sel.value = wahl;
+  try {
+    if (wahl) localStorage.setItem("pickadoc.praxis", wahl);
+  } catch { /* */ }
+  sel.onchange = () => {
+    try { localStorage.setItem("pickadoc.praxis", sel.value); } catch { /* */ }
+    if (typeof onchange === "function") onchange(sel.value);
+  };
+  return sel.value;
 }
 
 function starteAnruf() {
@@ -910,7 +956,7 @@ async function weiterNachMic(micBitte) {
     const r = await fetch("api/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant: $("tenant").value }),
+      body: JSON.stringify({ tenant: $("tenant").value, test: true, testName: "Dock" }),
     });
     if (!r.ok) {
       let msg = "start fehlgeschlagen";
@@ -1039,10 +1085,10 @@ const KOENNEN = [
 
 const TECHNIK = [
   { t: "Ohr — STT-Pipeline (hören)", p: [
-    "<b>Engine:</b> Parakeet Primeline lokal ist der direkte Hauptweg. Qwen- und Whisper-STT sind für die laufenden Produktionstests ausgeklammert.",
-    "<b>Kein stiller Rückfall:</b> fällt Parakeet aus, wird der Fehler sichtbar; Bianca weicht weder auf Whisper/Qwen noch auf ElevenLabs aus.",
+    "<b>Engine:</b> Parakeet Primeline auf der 5090 ist der sofortige Hauptweg; Qwen3-ASR auf der separaten GPU prüft parallel. Plausible Texte warten nie, nur auffällige Ergebnisse höchstens 250 ms.",
+    "<b>Qwen-only über LAN:</b> Bianca fragt auf der GPU-Box ausschließlich Qwen ab — kein doppeltes Parakeet und kein Cloudflare-Umweg. Fällt Qwen aus, spricht das lokale Parakeet ohne Verzögerung weiter; Whisper und ElevenLabs bleiben draußen.",
     "<b>Stille-Trim (W-STT-TRIM):</b> Vor-/Nachlauf-Stille wird vor der Inferenz energie-basiert abgeschnitten — „Ja“/„Nein“ gehen nicht mehr unter, reine Stille wird verworfen statt halluziniert.",
-    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Praxis- und Behandler-Namen als Tenant-Hotwords („Betsas“ → „Petsas“, „Ttola“ → „Thaler“).",
+    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare sowie mandantenscharfe Praxis-, Behandler- und Fach-Hotwords („Betsas“ → „Petsas“, „Ttola“ → „Thaler“, Thaler-Hörformen → „Röntgenbild“/„Sprechstundenhilfe“).",
     "<b>Ohr-Pausenverdichtung (W-STT-OHR-KOMPAKT):</b> genau eine sehr lange interne Leerstelle in einem dünnen Ohr-Zug wird vor Parakeet verkürzt; alle Sprachsamples sowie normale und mehrteilige Züge bleiben unverändert.",
     "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle je Fragetyp: 350 ms nach Ja/Nein-Fragen, 1500 ms Diktat-Geduld bei Nummern (W-STT-SCHWANZ), sonst 500 ms.",
     "<b>Echo-Wache:</b> das Lautsprecher-Echo der eigenen Stimme wird erkannt und verworfen — kurze echte Antworten („ja“, „nein“, „stopp“) nie.",
@@ -1119,7 +1165,7 @@ const PATCHES = [
   ["W-SIP-PEGEL (Telefon-Lautheit)", "30.08.", "Telefon", "Biancas Studio-Pegel (−14 dBFS, Peaks am Deckel) klang auf der G.711-Strecke übersteuert — die Brücke dämpft jetzt nur Richtung Asterisk um 6 dB (BRIDGE_GAIN, 1.0 = aus); Docks unverändert."],
   ["W-SIP-ECHO-RAUS (Echo-Sperre aus)", "30.08.", "Telefon", "Die Halbduplex-Echo-Sperre verschluckte echte Antworten (Sprache leiser als die Echo-Referenz) — jetzt default aus; Echo-Transkripte fängt die Text-Wache im Dienst. Rückweg: BRIDGE_ECHO=1."],
   ["W-STT-WHISPER (GPU-Ohr mit Rückfall)", "30.08.", "Ohr", "Whisper large-v3 auf der Dev-GPU hört zuerst (WebSocket-Stream über Tailscale, gleiche Fuzzy-Nachkorrektur); ist der Dev-Rechner weg, übernimmt Parakeet automatisch — nie ElevenLabs. Leer = Parakeet wie bisher."],
-  ["W-STT-QWEN (3060-Ohr ohne Whisper)", "09.09.", "Ohr", "Qwen3-ASR-1.7B auf der RTX 3060 liefert das finale deutsche Transkript an Bianca. Im Qwen-Modus werden weder Whisper noch ElevenLabs aufgerufen; bei einem Ausfall übernimmt ausschließlich der vorhandene Parakeet-Rückfall sichtbar."],
+  ["W-STT-QWEN-PARALLEL", "11.09.", "Ohr", "5090-Parakeet bleibt der latenzfreie Hauptweg; Qwen3-ASR prüft gleichzeitig über den direkten LAN-Qwen-only-Endpunkt. Plausible Züge warten 0 ms, auffällige maximal 250 ms; späte Qwen-Läufe stauen nie den nächsten Zug."],
   ["W-STT-SCHWANZ (nichts mehr verschluckt)", "30.08.", "Ohr", "Leise Satz-Enden (letzte Ziffern) gingen verloren: Diktat-Geduld 650 → 1500 ms, Hysterese in der Brücken-VAD (leiser Auslauf hält das Zugende offen), Trim-Grenzen im STT-Container über eine zartere Schwelle, Brücken-Vorlauf 300 → 500 ms."],
   ["W-SIP-SLIN (Codec-Verzerrer behoben)", "30.08.", "Telefon", "µ-law-Anrufer (je nach Zubringer) wurden mit der A-law-Kennlinie dekodiert — übel verzerrt, STT-Verhörer inklusive. Der Asterisk-Dialplan nutzt jetzt die AudioSocket()-Applikation statt Dial: der Kanal wird auf slin gezwungen, Asterisk transkodiert selbst, die Brücke bekommt IMMER sauberes PCM."],
   ["W-MANDANT (Mandant per angerufener Nummer)", "30.08.", "Kern", "Die SIP-Brücke erkennt an der Dialplan-UUID, WELCHE Nummer angerufen wurde, und Bianca lädt dazu den Agent aus der Pickadoc-DB (onPickadocPhoneCall wie beim alten phone_agent) — die DB ist die Wahrheit: Begrüßung, Kalender, Motive, Keywords und der Praxis-Prompt kommen von dort, der DB-Prompt wird als PRAXIS-PROFIL in Biancas festen Verhaltens-Prompt gemerged (der ist praxis-neutral). Lokale tenants/*.json sind nur noch Rückfall. Auch das MAS-Gedächtnis läuft unter der clientId des Sitzungs-Mandanten."],
@@ -1176,7 +1222,8 @@ const PATCHES = [
   ["W-STT-LEER (kurzes Ja gegenhören)", "09.09.", "Ohr", "Ein leeres Whisper-Final gilt bei hörbarem Audio nicht mehr als Stille: Parakeet hört denselben Zug sofort gegen. So verschwinden kurze Ja-Antworten nicht mehr und der Dialog stockt nicht bis zum Stups."],
   ["W-OHR-FENSTER (lange Antworten bleiben vollständig)", "09.09.", "Telefon", "Kurze Echo- oder Rauschspitzen werden beim stillen Ohr nicht mehr über eine ganze lange Ansage aufsummiert. Nur mindestens 400 ms echter Sprachanteil innerhalb von 600 ms lösen Barge-in aus; verteilte Störungen kappen Biancas Audio nicht mehr."],
   ["W-STT-OHR-KOMPAKT", "10.09.", "Ohr", "Sekundenlange interne Leere in einem dünnen Ohr-Zug wird vor Parakeet konservativ gekürzt. Reales A/B: 8,76 → 3,90 s und „Mm-hmm. Mitte mir jetzt.“ → „Aha, mit dem März.“; kurze Antworten und mehrteilige Abschiede bleiben unverändert. Notaus: STT_OHR_KOMPAKT=0."],
-  ["W-EINWORT (Stichwörter ohne Raten)", "10.09.", "Gespräch", "Eindeutige Einzelwörter wie „Mitarbeiter“, „Absage“, „Schmerzen“ oder „Zahnreinigung“ bleiben direkte sichere Wege. Das mehrdeutige „Termin“ führt ohne LLM zu einer konkreten Auswahl; unbekannte STT-Fragmente erhalten höchstens einmal je Gespräch die freundliche Ganzsatz-Bitte."],
+  ["W-EINWORT (Stichwörter ohne Raten)", "10.09.", "Gespräch", "Eindeutige Einzelwörter wie „Mitarbeiter“, „Absage“, „Schmerzen“ oder „Zahnreinigung“ bleiben direkte sichere Wege. Das mehrdeutige „Termin“ führt ohne LLM zu einer konkreten Auswahl; unbekannte STT-Fragmente werden wörtlich zurückgespiegelt, statt eine Bedeutung zu erfinden."],
+  ["W-THALER-HOTWORDS", "11.09.", "Ohr/Flow", "Belegte Thaler-Hörfehler wie „Rückenbild“, „Rentenbild“, „Rhöngbild“ und „Spress von der Hilfe“ werden nur mit passenden Fach-Hotwords zu „Röntgenbild“ beziehungsweise „Sprechstundenhilfe“ korrigiert. Plausible Namen wie „Brent Campbellt“ werden nicht gefährlich umgedeutet, sondern wörtlich rückgefragt; Thaler bietet nie proaktiv unerreichbare Mitarbeiter an."],
   ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
   ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
   ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Ich brauche eine Füllung“ öffnet auch vor dem Katalog-Laden sofort den sicheren Flow. „Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im Formular, unbelegte Aktenanlagen werden blockiert und eine leere Slotsuche läuft nicht mehr in Schleife."],
@@ -1231,17 +1278,6 @@ async function kLive() {
 
 $("koennenBtn").onclick = () => { $("koennen").hidden = false; kRender(); };
 $("koennenZu").onclick = () => { $("koennen").hidden = true; };
-function studioAuf(titel, pfad) {
-  $("studioTitel").textContent = titel;
-  $("studioRahmen").src = pfad;
-  $("studio").hidden = false;
-}
-$("studioBtn").onclick = () => studioAuf("Test-Studio", "studio/");
-$("ergebnisseBtn").onclick = () => studioAuf("Ergebnisse", "studio/ergebnisse/");
-$("studioZu").onclick = () => {
-  $("studio").hidden = true;
-  $("studioRahmen").src = "about:blank";
-};
 for (const b of document.querySelectorAll(".k-tab")) {
   b.onclick = () => { kTab = b.dataset.tab; kRender(); };
 }

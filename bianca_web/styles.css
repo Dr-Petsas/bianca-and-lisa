@@ -18,7 +18,10 @@ html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
-.header-status { text-align: right; min-width: 0; }
+.header-status { text-align: right; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.tenant-wahl { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: min(320px, 100%); }
+.tenant-wahl span { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.tenant-wahl select { width: 100%; min-width: 220px; }
 /* Links zum Test-Studio (8097) — Button-Optik, aber klein und dezent im Kopf. */
 .studio-links { display: flex; gap: 8px; justify-content: flex-end; }
 .studio-link {
@@ -181,7 +184,8 @@ body.incall .wrap, body.incall .dock { display: none; }
 @media (max-width: 860px) {
   .grid { grid-template-columns: 1fr; }
   header { flex-direction: column; }
-  .header-status { text-align: left; }
+  .header-status { text-align: left; align-items: flex-start; }
+  .tenant-wahl { align-items: flex-start; }
   .wrap { padding: 12px 12px 20px; }
   .live { min-height: 140px; max-height: 36vh; }
   .dock .btn { min-height: 52px; font-size: 17px; }

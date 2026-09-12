@@ -57,16 +57,29 @@ def liste() -> list[dict[str, str]]:
         out.append({
             "id": p.stem,
             "clientId": _sauber(d.get("clientId")) or p.stem,
+            "locationId": _sauber(d.get("locationId")),
+            "aliases": [
+                _sauber(x) for x in (d.get("tenantAliases") or [])
+                if _sauber(x)
+            ],
             "praxisName": _sauber(d.get("praxisName")) or p.stem,
         })
     return out
 
 
 def laden(tenant_id: str = "") -> dict[str, Any]:
-    name = _sauber(tenant_id) or DEFAULT_TENANT
+    angefragt = _sauber(tenant_id)
+    name = angefragt or DEFAULT_TENANT
     pfad = TENANTS_DIR / f"{name}.json"
     if not pfad.is_file():
+        # Ein unbekannter Mandant darf niemals still auf den Kunden aus
+        # DEFAULT_TENANT (produktiv: MedDent) umgebogen werden. Nur ein leerer
+        # Dock-Start wählt den ausdrücklich konfigurierten Dev-Default.
+        if angefragt:
+            return fach_fallback("allgemein")
         pfad = TENANTS_DIR / f"{DEFAULT_TENANT}.json"
+        if not pfad.is_file():
+            return fach_fallback("allgemein")
     raw = json.loads(pfad.read_text(encoding="utf-8"))
     raw["_id"] = pfad.stem
     return raw
@@ -104,6 +117,20 @@ def von_did(did: Any) -> dict[str, Any] | None:
             d["_id"] = p.stem
             return d
     return None
+
+
+def fach_fallback(fachgebiet: str = "allgemein", *, did: str = "") -> dict[str, Any]:
+    """Fail-closed statt Kundenwechsel: neutrales, nicht buchendes Profil."""
+    from kern import fachprofil
+    return fachprofil.fallback_tenant(fachgebiet, did=did)
+
+
+def fallback_fuer_did(did: Any) -> dict[str, Any]:
+    """Bekannte DID aus ihrer Datei, unbekannte DID aus neutralem Template."""
+    lokal = von_did(did)
+    if lokal is not None:
+        return lokal
+    return fach_fallback("allgemein", did=str(did or ""))
 
 
 def von_client_id(client_id: Any) -> dict[str, Any] | None:

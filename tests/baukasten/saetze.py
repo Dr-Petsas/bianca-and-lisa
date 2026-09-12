@@ -456,6 +456,40 @@ ABSCHIED = [
     "Herzlichen Dank, auf Wiederhören.",
 ]
 
+# Einzelwoerter: Themenwechsel mitten im Formular — versteht Bianca das
+# Wort, und findet sie danach zur offenen Frage zurueck?
+# Die drei Behandler-Namen der gewaehlten Praxis haengt das Studio an
+# (Hot-30: 27 feste + bis zu 3 Aerzte).
+EINZELWOERTER = (
+    "Mitarbeiter",
+    "Anmeldung",
+    "Rezeption",
+    "Empfang",
+    "Rückruf",
+    "Rezept",
+    "Überweisung",
+    "Röntgenbild",
+    "Krankmeldung",
+    "Attest",
+    "Rechnung",
+    "Buchhaltung",
+    "Absagen",
+    "Verschieben",
+    "Kontrolle",
+    "Notfall",
+    "Schmerzen",
+    "Zahnreinigung",
+    "Implantat",
+    "Öffnungszeiten",
+    "Parkplatz",
+    "Kosten",
+    "Befund",
+    "Labor",
+    "Chef",
+    "Durchstellen",
+    "Personal",
+)
+
 # -------------------------------------------------------- Abschweifer (Themen)
 
 ABSCHWEIFER = {

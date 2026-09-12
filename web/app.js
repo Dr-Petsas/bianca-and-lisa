@@ -863,11 +863,32 @@ async function boot() {
     }
     notfall = urls;
   } catch { /* */ }
-  const t = await (await fetch("/api/tenants")).json();
-  $("tenant").innerHTML = (t.tenants || []).map((x) =>
-    `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`
-  ).join("");
+  // Die Praxiswahl lebt im globalen Kopf. shell.js fuellt sie einmal fuer
+  // Lisa, Bianca, Studio, Ergebnisse und Anruflisten.
+  if (window.pickadocShellReady) {
+    try { await window.pickadocShellReady; } catch { /* Fallback unten */ }
+  }
+  if (!$("tenant").options.length) {
+    const t = await (await fetch("/api/tenants")).json();
+    $("tenant").innerHTML = (t.tenants || []).map((x) =>
+      `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`
+    ).join("");
+  }
 }
+
+function lisaPraxisGewechselt() {
+  // Patienten-/Akten-Daten duerfen nie in die naechste Praxis mitwandern.
+  patient = null;
+  vorbereitung = null;
+  trotzdemAnrufen = false;
+  $("who").value = "";
+  $("hits").innerHTML = "";
+  $("person").hidden = true;
+  $("akteKarte").hidden = true;
+  meld("");
+}
+
+window.addEventListener("pickadoc:tenant", lisaPraxisGewechselt);
 
 $("suchen").onclick = async () => {
   $("hits").innerHTML = "suche…";

@@ -5,19 +5,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Bianca &amp; Lisa — Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call36" />
+  <link rel="stylesheet" href="/styles.css?v=call39" />
 </head>
 <body>
-  <nav class="tabs" id="tabs">
+  <nav class="tabs global-kopf" id="tabs">
+    <div class="global-marke">Bianca &amp; Lisa</div>
     <button class="tab active" data-tab="bianca" type="button">
       Bianca <span class="tabsub">nimmt Anrufe an</span>
     </button>
     <button class="tab" data-tab="lisa" type="button">
       Lisa <span class="tabsub">ruft Patienten an</span>
     </button>
-    <a class="tab tab-link" href="/kampagne" data-tab="kampagne">
-      Kampagne <span class="tabsub">bewirbt sich als Telefonistin</span>
-    </a>
+    <button class="tab" data-tab="studio" type="button">
+      Teststudio
+    </button>
+    <label class="global-praxis" for="tenant">
+      <span>Praxis</span>
+      <select id="tenant" aria-label="Aktuelle Praxis"></select>
+    </label>
+    <button class="tab last-global" id="lasttestGlobal" type="button">
+      Belastungstest
+    </button>
+  </nav>
+
+  <nav class="studio-unternavi" id="studioUnternavi" hidden>
+    <button type="button" data-studio="konfigurator" class="active">Konfigurator</button>
+    <button type="button" data-studio="ergebnisse">Ergebnisse</button>
+    <button type="button" data-studio="bianca-anrufe">Bianca-Anrufe</button>
+    <button type="button" data-studio="lisa-anrufe">Lisa-Anrufe</button>
   </nav>
 
   <div id="tab-lisa" hidden>
@@ -35,8 +50,6 @@
       <div class="grid">
         <section class="card">
           <h2>Auftrag</h2>
-          <label for="tenant">Mandant</label>
-          <select id="tenant"></select>
           <label for="prompt">Was Lisa ausrichten soll</label>
           <textarea id="prompt" placeholder="z. B. Wir möchten Ihren Kontrolltermin vorverlegen — nächste Woche ist ein Platz frei."></textarea>
           <div class="row" style="margin-top:10px">
@@ -109,60 +122,32 @@
     </div>
   </div>
 
-  <script>
-    (function () {
-      var frame = document.getElementById("biancaFrame");
-      var hinweis = document.getElementById("biancaHinweis");
-      var geladen = false;
+  <div id="tab-studio" hidden>
+    <iframe id="studioFrame" class="tab-frame" title="Teststudio"
+            allow="autoplay; fullscreen"></iframe>
+  </div>
 
-      function zeige(tab) {
-        document.getElementById("tab-lisa").hidden = tab !== "lisa";
-        document.getElementById("tab-bianca").hidden = tab !== "bianca";
-        document.body.classList.toggle("bianca-aktiv", tab === "bianca");
-        var knoepfe = document.querySelectorAll("#tabs .tab");
-        for (var i = 0; i < knoepfe.length; i++) {
-          knoepfe[i].classList.toggle("active", knoepfe[i].dataset.tab === tab);
-        }
-        if (tab === "bianca" && !geladen) {
-          geladen = true;
-          // Bianca laeuft hinter Lisas Durchreiche (/bianca/ -> Port 8096) —
-          // so funktioniert sie auch durch den Cloudflare-Tunnel, wo :8096
-          // von aussen nicht erreichbar ist.
-          fetch("/bianca/health")
-            .then(function (r) {
-              if (!r.ok) throw new Error("bianca down");
-              frame.src = "/bianca/";
-            })
-            .catch(function () { hinweis.hidden = false; });
-        }
-        try { localStorage.setItem("tab2", tab); } catch (e) {}
-        if (location.hash !== "#" + tab) {
-          history.replaceState(null, "", "#" + tab);
-        }
-      }
+  <div class="global-modal" id="lasttestModal" hidden>
+    <div class="global-modal-karte">
+      <div class="global-modal-kopf">
+        <div>
+          <strong>Belastungstest</strong>
+          <div class="sub">Mandantenübergreifend, ohne Kalenderbuchungen</div>
+        </div>
+        <button class="modal-zu" id="lasttestZu" type="button">Schließen</button>
+      </div>
+      <label class="last-n-label" for="lasttestN">
+        Maximale gleichzeitige Telefonate
+        <input type="range" id="lasttestN" min="1" max="18" value="6">
+        <strong id="lasttestNWert">6</strong>
+      </label>
+      <div class="last-verteilung" id="lasttestVerteilung"></div>
+      <button class="btn" id="lasttestStart" type="button">Belastungstest starten</button>
+      <div class="last-status" id="lasttestStatus"></div>
+    </div>
+  </div>
 
-      document.getElementById("tabs").addEventListener("click", function (ev) {
-        var b = ev.target.closest(".tab");
-        if (!b || b.tagName === "A") return;
-        zeige(b.dataset.tab);
-      });
-
-      // Direktsprung per Adresse (#bianca / #lisa) auch OHNE Neuladen.
-      window.addEventListener("hashchange", function () {
-        if (location.hash === "#bianca") zeige("bianca");
-        if (location.hash === "#lisa") zeige("lisa");
-      });
-
-      // Startseite ist BIANCA (Chef 27.08.2026) — #lisa oder eine zuvor
-      // bewusst gewaehlte Lisa-Ansicht (neuer Speicher-Schluessel) gewinnt.
-      var start = "bianca";
-      if (location.hash === "#lisa") start = "lisa";
-      else if (!location.hash) {
-        try { if (localStorage.getItem("tab2") === "lisa") start = "lisa"; } catch (e) {}
-      }
-      zeige(start);
-    })();
-  </script>
-  <script src="/app.js?v=call38"></script>
+  <script src="/shell.js?v=global1"></script>
+  <script src="/app.js?v=call39"></script>
 </body>
 </html>

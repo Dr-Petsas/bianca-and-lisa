@@ -103,7 +103,9 @@ class Anruf:
         """Anrufer-WAV aus dem Klang-Cache holen und im Bericht ablegen."""
         text = " ".join((text or "").split())
         pfad = klang.audio_holen(self.story["stimme"], text)
-        if self.story.get("telefonQualitaet"):
+        if self.story.get("leitung"):
+            pfad = klang.telefon_datei(pfad, leitung=self.story.get("leitung"))
+        elif self.story.get("telefonQualitaet"):
             pfad = klang.telefon_datei(pfad)
         self._audio_nr += 1
         name = f"a{self._audio_nr:02d}.wav"
@@ -129,7 +131,14 @@ class Anruf:
     # ---- HTTP ---------------------------------------------------------------
 
     def _start(self) -> dict[str, Any]:
-        r = self.client.post(f"{self.basis}/api/start", json={"tenant": self.tenant})
+        name = " ".join(
+            x for x in (self.story.get("vorname"), self.story.get("nachname")) if x
+        )
+        r = self.client.post(f"{self.basis}/api/start", json={
+            "tenant": self.tenant,
+            "test": True,
+            "testName": name,
+        })
         r.raise_for_status()
         antwort = r.json()
         self.session_id = str(antwort.get("sessionId") or "")
@@ -352,7 +361,9 @@ def bewerten(story: dict, zuege: list[dict], last_call: dict, ziel_iso: str,
             am_ziel = slot_iso[:10] == ziel_iso
             check("Zieltag", am_ziel or voll, ziel_iso,
                   slot_iso[:10] + ("" if am_ziel else " (Wunschtag ausgebucht)" if voll else ""))
-        erwartet = saetze.GRUENDE.get(story.get("grund") or "", (None, ""))[1] or ""
+        erwartet = (str(story.get("grundErwartet") or "").strip()
+                    or saetze.GRUENDE.get(story.get("grund") or "", (None, ""))[1]
+                    or str(story.get("grund") or ""))
         # Das ERWARTETE ist das gebuchte Tenant-Motiv (motivName) — der
         # Sammler-grund traegt nur den Konzeptnamen ("Invisalign-Beratung"),
         # der aufs Motiv ("KFO Besprechung") gemappt wird.
@@ -437,7 +448,7 @@ def main() -> None:
     p.add_argument("--schnell", action="store_true", help="ohne Echtzeit-Taktung")
     p.add_argument("--mithoeren", action="store_true", help="Audio lokal abspielen")
     p.add_argument("--telefon", action="store_true",
-                   help="Anrufer-Audio auf 8 kHz / 8 bit (Telefonqualitaet)")
+                   help="Anrufer-Audio als dreckige G.711-Leitung (8 kHz μ-law)")
     a = p.parse_args()
     stories = [geschichten.automatik(nr, tag=a.tag) for nr in range(a.ab, a.ab + a.anzahl)]
     if a.telefon:

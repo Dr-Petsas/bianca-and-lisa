@@ -2,37 +2,65 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from kern import gedaechtnis, halbsatz, mitschnitt, sprech, unterbrechung
+from kern import agentprofil, gedaechtnis, halbsatz, mitschnitt, sprech, unterbrechung, webpfad
 from kern.dienst import Dienst, ndjson
-from lisa import agent, anliegen, calendar, filler, llm, patients, remote, session, stt, tenants, tts
+from lisa import agent, anliegen, bewerbung, calendar, filler, kampagnen_store, llm, patients, remote, session, stt, tenants, tts, vorbereitung
 from lisa import outbound
-from lisa.config import DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
+from lisa.config import BIANCA_WEB_DIR, DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
 app = FastAPI(title="Lisa Telefon-KI", version="0.1")
 remote.token()
+
+
+def _ist_bewerbung(sit: dict) -> bool:
+    return (sit or {}).get("lisaArt") == bewerbung.ART
+
+
+def _start_fn(sit: dict):
+    return bewerbung.start_reply(sit) if _ist_bewerbung(sit) else agent.start_reply(sit)
+
+
+def _turn_fn(sit: dict, spoken: str, **kw):
+    return bewerbung.user_turn(sit, spoken, **kw) if _ist_bewerbung(sit) else agent.user_turn(sit, spoken, **kw)
+
+
+def _stille_fn(sit: dict):
+    return bewerbung.stille_zug(sit) if _ist_bewerbung(sit) else agent.stille_zug(sit)
+
+
+def _hangup_fn(sit: dict):
+    return bewerbung.hangup(sit) if _ist_bewerbung(sit) else agent.hangup(sit)
+
 
 # Die komplette Latenz-Maschinerie (Audio-Ablage, Füller, NDJSON-Strom) liegt
 # in kern.dienst und wird mit Bianca geteilt. Lisas Eigenheiten stecken nur in
 # den vier Funktionszeigern.
 DIENST = Dienst(
     name="lisa",
-    start_fn=agent.start_reply,
-    turn_fn=agent.user_turn,
+    start_fn=_start_fn,
+    turn_fn=_turn_fn,
     # Solange die Identitätsprüfung läuft, antwortet die Zustandsmaschine
-    # sofort — Vorab-Füller wären dort falsch.
-    schnell_fn=lambda sit: sit.get("idCheck") not in (None, "", "fertig"),
+    # sofort — Vorab-Füller wären dort falsch. Bewerbung hat keinen Kalender.
+    schnell_fn=lambda sit: _ist_bewerbung(sit) or sit.get("idCheck") not in (None, "", "fertig"),
     merke_zug=session.merke_zug,
 )
+
+
+def bianca_ziel() -> str:
+    """Tunnel-Lisa läuft im Container: 127.0.0.1:8096 ist dort leer.
+    Compose setzt LISA_BIANCA_URL=http://bianca:8096."""
+    return (os.environ.get("LISA_BIANCA_URL") or "http://127.0.0.1:8096").rstrip("/")
 
 
 class SucheIn(BaseModel):
@@ -88,8 +116,45 @@ class AuftragIn(BaseModel):
     auftrag: str = ""
 
 
+class VertiefenIn(BaseModel):
+    tenant: str = ""
+    auftrag: str = ""
+    patient: dict | None = None
+
+
 class HangupIn(BaseModel):
     sessionId: str = ""
+
+
+class KampagneNeu(BaseModel):
+    name: str = ""
+    auftrag: str = ""
+    tenant: str = ""
+    liste: str = ""
+
+
+class KampagnePatch(BaseModel):
+    name: str | None = None
+    auftrag: str | None = None
+    tenant: str | None = None
+
+
+class KampagneEmpfaenger(BaseModel):
+    liste: str = ""
+    empfaenger: list | None = None
+
+
+class KampagneMark(BaseModel):
+    empfaengerId: str = ""
+    status: str = ""
+    sessionId: str = ""
+
+
+class KampagneStart(BaseModel):
+    tenant: str = ""
+    auftrag: str = ""
+    probe: bool = True
+    kampagne: dict | None = None
 
 
 class RemoteMsg(BaseModel):
@@ -207,7 +272,7 @@ def api_tenants():
 
 @app.post("/api/patients")
 def api_patients(body: SucheIn):
-    t = tenants.laden(body.tenant or DEFAULT_TENANT)
+    t = agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT)
     found = patients.search_patients(t, body.q)
     karten = []
     for p in found.get("patients") or []:
@@ -291,9 +356,9 @@ def api_start(body: StartIn):
         from lisa.patients import format_de_phone
         pat["devPhone"] = format_de_phone(DEV_PHONE)
         pat["devPhoneRaw"] = DEV_PHONE
-    t = tenants.laden(body.tenant or DEFAULT_TENANT)
+    t = agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT)
     sit = session.neu(
-        tenant_id=body.tenant or DEFAULT_TENANT,
+        tenant=t,
         auftrag=auftrag,
         patient=pat,
         past=[],
@@ -359,7 +424,7 @@ def api_stille(body: HangupIn):
         print(f"lisa-stille halbsatz-flush: {rest!r}", flush=True)
         return DIENST.json_antwort(sit, art="turn", text_in=rest,
                                    extra={"sessionId": sit.get("id") or ""})
-    reply = agent.stille_zug(sit)
+    reply = _stille_fn(sit)
     text = sprech.sanitize(reply.get("text") or "")
     if not text:
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
@@ -443,6 +508,19 @@ async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
     return {"ok": True, "text": gesagt}
 
 
+@app.post("/api/auftrag/vertiefen")
+@app.post("/api/auftrag/vorbereiten")
+def api_auftrag_vertiefen(body: VertiefenIn):
+    auftrag = (body.auftrag or "").strip()
+    if not auftrag:
+        raise HTTPException(400, "auftrag fehlt")
+    return vorbereitung.sammeln(
+        auftrag,
+        tenant_id=body.tenant or DEFAULT_TENANT,
+        patient=body.patient or {},
+    )
+
+
 @app.post("/api/auftrag")
 def api_auftrag(body: AuftragIn):
     sit = session.holen(body.sessionId)
@@ -475,7 +553,7 @@ def api_hangup(body: HangupIn):
     # wartet darauf nicht mehr.
     def _nacharbeit() -> None:
         try:
-            note = agent.hangup(sit)
+            note = _hangup_fn(sit)
             session.merke_zug(sit, art="hangup", note=(note or {}).get("note") or "", dryRun=bool((note or {}).get("dryRun")))
         except Exception as e:
             print(f"lisa-hangup-nacharbeit fail {e}", flush=True)
@@ -557,8 +635,9 @@ def api_audio_stream(name: str):
 # --- Bianca-Durchreiche -----------------------------------------------------
 # Der Cloudflare-Tunnel zeigt nur auf DIESEN Dienst (8095). Biancas Dienst
 # (8096) ist von aussen nicht erreichbar — darum reicht Lisa alles unter
-# /bianca/... an ihn durch. Lokal funktioniert weiterhin auch Port 8096 direkt.
-_BIANCA_ZIEL = "http://127.0.0.1:8096"
+# /bianca/... an ihn durch. Im Container darf das NICHT 127.0.0.1 sein
+# (Connection refused -> Tab "Bianca antwortet nicht"). Lokal bleibt der Default.
+_BIANCA_ZIEL = bianca_ziel()
 # read=None: die NDJSON-Stroeme (Fueller waehrend Werkzeug-Laeufen) duerfen
 # beliebig lange offen bleiben.
 _BIANCA_KANAL = httpx.AsyncClient(base_url=_BIANCA_ZIEL, timeout=httpx.Timeout(10.0, read=None))
@@ -571,9 +650,9 @@ def bianca_umleiten():
     return RedirectResponse("/bianca/")
 
 
-@app.api_route("/bianca/{pfad:path}", methods=["GET", "POST"])
+@app.api_route("/bianca/{pfad:path}", methods=["GET", "HEAD", "POST"])
 async def bianca_durchreichen(pfad: str, request: Request):
-    kopf = {}
+    kopf = {"x-forwarded-prefix": "/bianca"}
     ct = request.headers.get("content-type")
     if ct:
         kopf["content-type"] = ct
@@ -582,12 +661,31 @@ async def bianca_durchreichen(pfad: str, request: Request):
             request.method,
             httpx.URL(path="/" + pfad, query=request.url.query.encode()),
             headers=kopf,
-            content=request.stream() if request.method != "GET" else None,
+            content=request.stream() if request.method not in {"GET", "HEAD"} else None,
         )
         antwort = await _BIANCA_KANAL.send(weiter, stream=True)
     except httpx.HTTPError:
         raise HTTPException(502, "Bianca-Dienst (Port 8096) antwortet nicht")
-    raus = {k: v for k, v in antwort.headers.items() if k.lower() in {"content-type", "cache-control"}}
+    raus = {k: v for k, v in antwort.headers.items() if k.lower() in {
+        "content-type", "cache-control", "content-disposition",
+        "content-length", "accept-ranges", "content-range", "location",
+    }}
+    # Absolute Redirects (/studio/) sonst raus aus /bianca/ → platte Tabs.
+    loc = raus.get("location") or raus.get("Location")
+    if loc:
+        raus["location"] = webpfad.location_hinter_prefix(loc, "/bianca")
+    # Cloudflare darf alte 404 auf neu hinzugekommenen Viewer-Dateien
+    # nicht festhalten (Vorfall 09.09.2026: anrufe.js).
+    raus.setdefault("cache-control", "no-store")
+    mime = (raus.get("content-type") or raus.get("Content-Type") or "").lower()
+    if "text/html" in mime:
+        roh = await antwort.aread()
+        await antwort.aclose()
+        html = webpfad.html_studio_pfade(roh.decode("utf-8", errors="replace"), "/bianca")
+        raus.pop("content-length", None)
+        raus.pop("Content-Length", None)
+        return Response(html, status_code=antwort.status_code, headers=raus,
+                        media_type="text/html; charset=utf-8")
     return StreamingResponse(
         antwort.aiter_raw(),
         status_code=antwort.status_code,
@@ -596,8 +694,176 @@ async def bianca_durchreichen(pfad: str, request: Request):
     )
 
 
+@app.get("/api/kampagnen")
+def api_kampagnen_liste():
+    return {"ok": True, "kampagnen": kampagnen_store.liste()}
+
+
+@app.post("/api/kampagnen")
+def api_kampagnen_neu(body: KampagneNeu):
+    return kampagnen_store.anlegen(
+        name=body.name,
+        auftrag=body.auftrag,
+        tenant=body.tenant or DEFAULT_TENANT,
+        empfaenger_roh=body.liste,
+    )
+
+
+@app.get("/api/kampagnen/{kid}")
+def api_kampagnen_eine(kid: str):
+    doc = kampagnen_store.holen(kid)
+    if not doc:
+        raise HTTPException(404, "kampagne unbekannt")
+    return doc
+
+
+@app.patch("/api/kampagnen/{kid}")
+def api_kampagnen_patch(kid: str, body: KampagnePatch):
+    doc = kampagnen_store.speichern(
+        kid, name=body.name, auftrag=body.auftrag, tenant=body.tenant,
+    )
+    if not doc:
+        raise HTTPException(404, "kampagne unbekannt")
+    return doc
+
+
+@app.post("/api/kampagnen/{kid}/empfaenger")
+def api_kampagnen_dazu(kid: str, body: KampagneEmpfaenger):
+    doc = kampagnen_store.empfaenger_dazu(
+        kid, roh=body.liste, zeilen=body.empfaenger,
+    )
+    if not doc:
+        raise HTTPException(404, "kampagne unbekannt")
+    return doc
+
+
+@app.delete("/api/kampagnen/{kid}/empfaenger/{eid}")
+def api_kampagnen_weg(kid: str, eid: str):
+    doc = kampagnen_store.empfaenger_weg(kid, eid)
+    if not doc:
+        raise HTTPException(404, "kampagne unbekannt")
+    return doc
+
+
+@app.post("/api/kampagnen/{kid}/markieren")
+def api_kampagnen_mark(kid: str, body: KampagneMark):
+    doc = kampagnen_store.markieren(
+        kid, body.empfaengerId, status=body.status, session_id=body.sessionId,
+    )
+    if not doc:
+        raise HTTPException(404, "kampagne oder status unbekannt")
+    return doc
+
+
+@app.post("/api/kampagne/start")
+def api_kampagne_start(body: KampagneStart):
+    """Bewerbungs-Anruf: Lisa schweigt bis zur Meldung, kein Patient nötig."""
+    auftrag = (body.auftrag or "").strip() or bewerbung.DEFAULT_AUFTRAG
+    km = body.kampagne if isinstance(body.kampagne, dict) else {}
+    t = agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT)
+    sit = session.neu(
+        tenant=t,
+        auftrag=auftrag,
+        patient={},
+        past=[],
+        upcoming=[],
+    )
+    sit["lisaArt"] = bewerbung.ART
+    sit["kampagne"] = km
+    sit["probe"] = bool(body.probe)
+    bewerbung.start_reply(sit)
+    session.sichern(sit)
+    return _json_antwort(
+        sit, art="start",
+        extra={"sessionId": sit["id"], "praxis": t.get("praxisName"),
+               "bewerbung": True},
+    )
+
+
 if WEB_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+
+
+_MITSCHNITT_LISA = "lisa"
+
+
+@app.get("/api/anrufe")
+def api_lisa_anrufe():
+    return {"ok": True, "anrufe": mitschnitt.liste(_MITSCHNITT_LISA)}
+
+
+@app.get("/api/anrufe/{sid}")
+def api_lisa_anruf(sid: str):
+    m = mitschnitt.laden(_MITSCHNITT_LISA, sid)
+    if not m:
+        raise HTTPException(404, "anruf unbekannt")
+    return {"ok": True, "anruf": m}
+
+
+@app.get("/api/anrufe/{sid}/audio/{datei}")
+def api_lisa_anruf_audio(sid: str, datei: str):
+    p = mitschnitt.audio_pfad(_MITSCHNITT_LISA, sid, datei)
+    if p is None:
+        raise HTTPException(404)
+    mime = {"wav": "audio/wav", "mp3": "audio/mpeg", "m4a": "audio/mp4",
+            "ogg": "audio/ogg"}.get(p.suffix.lstrip("."), "audio/webm")
+    return FileResponse(p, media_type=mime)
+
+
+@app.get("/api/anrufe/{sid}/download")
+def api_lisa_anruf_download(sid: str):
+    m = mitschnitt.laden(_MITSCHNITT_LISA, sid)
+    if not m:
+        raise HTTPException(404, "anruf unbekannt")
+    blob = mitschnitt.anruf_wav(_MITSCHNITT_LISA, sid)
+    if not blob:
+        raise HTTPException(404, "kein Audio in diesem Mitschnitt")
+    stempel = str(m.get("startedAt") or "")[:16].replace(":", "-").replace("T", "_")
+    name = f"lisa-anruf-{stempel or sid[:8]}.wav"
+    return Response(blob, media_type="audio/wav",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/anrufe/{sid}/loeschen")
+def api_lisa_anruf_loeschen(sid: str):
+    return {"ok": mitschnitt.loeschen(_MITSCHNITT_LISA, sid)}
+
+
+@app.get("/anrufe")
+def anrufe_umleiten():
+    # Eingehende Live-Anrufe (Bianca) — das ist die Liste auf dieser Seite.
+    return RedirectResponse("/bianca/anrufe", status_code=307)
+
+
+@app.get("/lisa-anrufe")
+def lisa_anrufe_seite():
+    p = BIANCA_WEB_DIR / "anrufe.html"
+    if not p.is_file():
+        raise HTTPException(404, "anrufe.html fehlt")
+    html = p.read_text(encoding="utf-8")
+    html = html.replace("Bianca — Anrufe", "Lisa — Anrufe")
+    html = html.replace("Bianca — Unterhaltungen mit Audio, Transkript, Tools und Zeiten",
+                        "Lisa — ausgehende Anrufe mit Audio, Transkript und Zeiten")
+    html = html.replace('href="."', 'href="/#lisa"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/anrufe.js")
+def lisa_anrufe_js():
+    p = BIANCA_WEB_DIR / "anrufe.js"
+    if not p.is_file():
+        raise HTTPException(404)
+    return FileResponse(p, media_type="application/javascript; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/praxis.js")
+def lisa_praxis_js():
+    p = BIANCA_WEB_DIR / "praxis.js"
+    if not p.is_file():
+        raise HTTPException(404)
+    return FileResponse(p, media_type="application/javascript; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")
@@ -609,10 +875,20 @@ def index():
                         headers={"Cache-Control": "no-store"})
 
 
+@app.get("/kampagne")
+def kampagne_seite():
+    seite = WEB_DIR / "kampagne.html"
+    if not seite.is_file():
+        raise HTTPException(404, "web/kampagne.html fehlt")
+    return FileResponse(seite, media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.api_route("/{name}", methods=["GET", "HEAD"])
 def web_file(name: str):
     # HEAD muss gehen — sonst wirkt /replay.html „gelöscht“ (405 auf Probe).
-    erlaubt = {"app.js", "styles.css", "fernsteuerung.html", "replay.html"}
+    erlaubt = {"app.js", "shell.js", "styles.css", "fernsteuerung.html", "replay.html",
+               "kampagne.html", "kampagne.js"}
     if name in erlaubt:
         p = WEB_DIR / name
         if p.is_file():

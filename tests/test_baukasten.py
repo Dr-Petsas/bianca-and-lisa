@@ -147,8 +147,8 @@ def test_wav_schliessen_macht_stream_header_abspielbar():
     assert klang.wav_schliessen(fest) == fest
 
 
-def test_telefon_wav_downsample_8khz_8bit():
-    """Studio 24 kHz/16 bit -> Telefon 8 kHz, 8-bit-Quantisierung in PCM16."""
+def test_telefon_wav_ist_g711_schmalband_nicht_studio():
+    """Studio 24 kHz/16 bit -> 8 kHz, μ-law-Dreck, nicht lineare 8-bit-Stufen."""
     import struct
 
     from tests.baukasten import klang
@@ -163,8 +163,9 @@ def test_telefon_wav_downsample_8khz_8bit():
     assert struct.unpack_from("<H", tel, 34)[0] == 16
     samples = (len(tel) - 44) // 2
     assert 7900 <= samples <= 8100
-    first = struct.unpack_from("<h", tel, 44)[0]
-    assert first % 256 == 0
+    werte = [struct.unpack_from("<h", tel, 44 + 2 * i)[0] for i in range(80)]
+    assert any(v % 256 for v in werte), "μ-law darf keine reinen 256er-Stufen sein"
+    assert max(abs(v) for v in werte) > 0
 
 
 def test_testtermine_werden_erst_nach_2_stunden_reif():
@@ -263,6 +264,87 @@ def test_neu_angelegte_testakte_wird_nach_2_stunden_reif():
         assert "pat-neu" in geloescht
         assert "pat-echt" not in geloescht
         assert erg["abgesagt"] >= 2  # Termin + Akte des neuen, Termin des Bestands
+
+
+def test_einzelwort_achtet_auf_anzahl():
+    from tests.baukasten import geschichten
+
+    story = {
+        "einzelwoerter": ["Anmeldung", "Rezept", "Mitarbeiter", "Rückruf"],
+        "einzelwortAnzahl": 2,
+        "seed": 7,
+    }
+    lage = geschichten.lage_neu()
+    lage["frage"] = "schonmal"
+    lage["zaehler"]["antworten"] = 1
+    treffer = []
+    for _ in range(8):
+        lage["letzterBaustein"] = "schonmal"
+        w = geschichten._einzelwort(story, lage)
+        if w:
+            treffer.append(w["text"])
+    assert len(treffer) == 2
+    assert geschichten.einzelwort_anzahl({"einzelwoerter": ["A", "B"]}) == 2
+    assert geschichten.einzelwort_anzahl({"einzelwoerter": ["A"], "einzelwortAnzahl": 0}) == 0
+    assert geschichten.einzelwort_anzahl({"einzelwoerter": ["A"], "einzelwortAnzahl": 5}) == 5
+
+
+def test_lasttest_kappe_auf_acht():
+    from tests.baukasten import lasttest
+
+    assert lasttest._kappe(0, 8) == 1
+    assert lasttest._kappe(99, lasttest.MAX_PARALLEL) == lasttest.MAX_PARALLEL
+    assert lasttest._kappe("4", 8) == 4
+    assert lasttest.MAX_PARALLEL == 18
+
+
+def test_lasttest_verteilt_auf_drei_praxen():
+    from tests.baukasten import lasttest
+
+    p = lasttest.verteile(5)
+    assert sum(p["counts"].values()) == 5
+    assert all(p["counts"][x] >= 1 for x in ("meddent", "thaler", "blessing"))
+    assert {s["tenant"] for s in p["sitze"]} == {
+        "meddent", "thaler", "blessing",
+    }
+    sechs = lasttest.verteile(6)
+    assert sum(sechs["counts"].values()) == 6
+    assert all(sechs["counts"][x] >= 1 for x in ("meddent", "thaler", "blessing"))
+
+
+def test_lasttest_offset_und_dropout_blase():
+    from tests.baukasten import lasttest
+
+    off = lasttest.latenz_offset(1.6, 0.8)
+    assert off["offsetS"] == 0.8
+    assert off["offsetPct"] == 100.0
+    drops = lasttest.dropouts_von_zug(
+        tS=2.0, ersterTonS=2.0, antwortS=4.5, leer=False,
+        nr=3, tenant="thaler")
+    arten = {d["art"] for d in drops}
+    assert "ersterTon" in arten
+    assert "luecke" in arten
+    assert all(d["kurz"] == "Thaler" for d in drops)
+    assert max(d["dauerS"] for d in drops) >= 1.2
+
+
+def test_lasttest_zusammenfassung_zaehlt():
+    from tests.baukasten import lasttest
+
+    laeufe = [
+        {"nr": 1, "ok": True, "startS": 0.4, "ersterTonS": 0.8, "antwortS": 1.2},
+        {"nr": 2, "ok": True, "startS": 0.6, "ersterTonS": 1.5, "antwortS": 2.0},
+        {"nr": 3, "ok": False, "startS": 0, "ersterTonS": 0, "antwortS": 0, "fehler": "timeout"},
+    ]
+    s = lasttest.zusammenfassung(laeufe, n=3, sekunden=5.1)
+    assert s["gehalten"] == 2
+    assert s["fehler"] == 1
+    assert s["dauerS"] == 5.1
+    assert s["ersterTonP50"] in (0.8, 1.5)
+    assert s["ersterTonP95"] == 1.5
+    assert any("kein Buchen" in h.lower() or "Kein Buchen" in h for h in s["hinweise"])
+    assert "blasen" in s
+    assert s["plan"]["n"] == 3
 
 
 def test_dauer_s_liest_8khz_header():

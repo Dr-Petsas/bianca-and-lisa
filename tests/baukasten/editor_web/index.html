@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Teststudio</title>
-<link rel="stylesheet" href="web/stil.css?v=7">
+<link rel="stylesheet" href="web/stil.css?v=13">
 </head>
 <body class="studio">
 <header class="kopf">
@@ -12,10 +12,7 @@
     <h1>Teststudio</h1>
     <span class="status" id="status">bereit</span>
   </div>
-  <div class="rechts">
-    <label class="schalter"><input type="checkbox" id="mithoeren" checked> Mith&ouml;ren</label>
-    <a href="ergebnisse">Ergebnisse</a>
-  </div>
+  <select id="tenant" hidden></select>
 </header>
 <main class="raster">
   <section class="block">
@@ -60,13 +57,33 @@
     <textarea class="eigen" id="eigen-abschweifer" rows="2" placeholder="eigener Abschweifer — einmal, an der ersten Ankerfrage"></textarea>
     <div class="chips" id="chips-extras"></div>
   </section>
+  <section class="block block-breit einzelwort">
+    <h2>Einzelwörter einstreuen</h2>
+    <p class="klein">Zufällig, unabhängig vom Verlauf: nur das Wort, komplettes Thema gewechselt. Danach muss Bianca zur offenen Frage zurückfinden. Behandler kommen aus der gewählten Praxis.</p>
+    <label>Anzahl der Einstreuungen <input type="range" id="ew-n" min="0" max="8" value="0"> <span id="ew-n-w">0</span></label>
+    <div class="chips" id="chips-einzelwort"></div>
+    <textarea class="eigen" id="eigen-einzelwort" rows="2" placeholder="eigene Wörter, kommagetrennt — zusätzlich zu den Chips"></textarea>
+  </section>
+  <section class="block block-breit leitung">
+    <h2>Audioqualität — Telefonleitung</h2>
+    <p class="klein">Echte G.711 μ-law hin und zurück (8 bit, 64 kbit/s). Demosatz: <em id="demo-satz"></em></p>
+    <label>Samplefrequenz <input type="range" id="lt-hz" min="8000" max="24000" step="8000" value="8000"> <span id="lt-hz-w">8000 Hz</span></label>
+    <label>Rauschen <input type="range" id="lt-rauschen" min="0" max="100" value="28"> <span id="lt-rauschen-w">28 %</span></label>
+    <label>Artefakte <input type="range" id="lt-artefakte" min="0" max="100" value="12"> <span id="lt-artefakte-w">12 %</span></label>
+    <label>Dropouts <input type="range" id="lt-dropouts" min="0" max="100" value="6"> <span id="lt-dropouts-w">6 %</span></label>
+    <label>Pegel / Übersteuerung <input type="range" id="lt-pegel" min="0" max="100" value="75"> <span id="lt-pegel-w">75 %</span></label>
+    <div class="leitung-zeile">
+      <label class="schalter"><input type="checkbox" id="lt-g711" checked> G.711 μ-law</label>
+      <button class="gross" id="knopf-demo" type="button">Demosatz vorspielen</button>
+    </div>
+  </section>
 </main>
 
 <div class="leiste">
   <button class="gross" id="knopf-automatik">W&uuml;rfeln</button>
-  <button class="gross tel" id="knopf-telefon" type="button" aria-pressed="false">Telefonqualit&auml;t aus</button>
   <button class="gross primaer" id="knopf-start">Anruf starten</button>
   <button class="gross batch" id="knopf-batch">10 Tests</button>
+  <label class="schalter leiste-mithoeren"><input type="checkbox" id="mithoeren" checked> Mith&ouml;ren</label>
   <span class="klein" id="lauf-hinweis"></span>
 </div>
 
@@ -88,6 +105,57 @@
     <div class="dialog" id="live-dialog"></div>
   </div>
 </div>
-<script src="web/app.js?v=7"></script>
+
+<div id="last-setup" class="anruf-popup last-setup" hidden>
+  <div class="anruf-karte last-karte">
+    <div class="anruf-kopf">
+      <div class="anruf-kopf-text">
+        <div class="anruf-titel">Belastungstest</div>
+        <div class="klein">Gleichzeitige Gespräche gegen die Test-Bianca. Kein Buchen. Audio läuft in der Pipeline, der Monitor bleibt stumm.</div>
+      </div>
+      <button class="gross" id="last-setup-zu" type="button">Schließen</button>
+    </div>
+    <div class="last-setup-body">
+      <label class="last-n-label">Wie viele Gespräche gleichzeitig?
+        <input type="range" id="last-n" min="1" max="18" value="6">
+        <strong id="last-n-w">6</strong>
+      </label>
+      <div class="last-split" id="last-split"></div>
+      <button class="gross primaer" id="last-go" type="button">Start</button>
+    </div>
+  </div>
+</div>
+
+<div id="mon-popup" class="anruf-popup mon-popup" hidden>
+  <div class="anruf-karte mon-karte">
+    <div class="anruf-kopf mon-kopf">
+      <div class="anruf-kopf-text">
+        <div class="anruf-titel">Belastungsmonitor</div>
+        <div class="klein" id="mon-status">bereit</div>
+      </div>
+      <div class="anruf-kopf-aktion">
+        <button class="gross" id="mon-zu" type="button">Schließen</button>
+      </div>
+    </div>
+    <div class="mon-kpis" id="mon-kpis"></div>
+    <div class="mon-tabs">
+      <button class="mon-nav" id="mon-prev" type="button" aria-label="Vorheriger Kunde">←</button>
+      <div class="mon-tab-reihe" id="mon-tabs"></div>
+      <button class="mon-nav" id="mon-next" type="button" aria-label="Nächster Kunde">→</button>
+    </div>
+    <div class="mon-charts">
+      <div class="mon-chart">
+        <div class="mon-chart-titel">Latenz-Offset gegen Norm</div>
+        <canvas id="mon-latenz" width="640" height="180"></canvas>
+      </div>
+      <div class="mon-chart">
+        <div class="mon-chart-titel">Dropouts — Gesprächszeit × Dauer</div>
+        <canvas id="mon-drop" width="640" height="180"></canvas>
+      </div>
+    </div>
+    <div class="mon-trans" id="mon-trans"></div>
+  </div>
+</div>
+<script src="web/app.js?v=15"></script>
 </body>
 </html>

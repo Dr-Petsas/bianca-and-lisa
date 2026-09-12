@@ -1,0 +1,93 @@
+{
+  "clientId": "7tTnJZfJkb801r2rmYed",
+  "locationId": "loc_m219jgfb",
+  "tenantAliases": ["cf-mJtO1h35dPdz0NZBwh4G"],
+  "praxisName": "Thaler Zahnmedizin",
+  "praxisNameMelde": "Thaler Zahnmedizin",
+  "praxisNameVon": "der Praxis Thaler Zahnmedizin",
+  "behandler": "Eva Thaler",
+  "dids": ["+4921154244105"],
+  "telefon": "",
+  "sprache": "de",
+  "fachgebiet": "zahnmedizin",
+  "zusatzangebote": {
+    "pzrMitbuchung": false,
+    "pzrAuskunft": false,
+    "bleachingZurPzr": false
+  },
+  "sttHotwords": [
+    "Thaler",
+    "Röntgenbild",
+    "Röntgenbilder",
+    "Sprechstundenhilfe"
+  ],
+  "mitarbeiterAnbieten": false,
+  "defaultCalendarId": "QfAXRMiLpJVESMCFBLF6",
+  "calendars": [
+    {
+      "id": "QfAXRMiLpJVESMCFBLF6",
+      "name": "Eva Thaler"
+    },
+    {
+      "id": "xTz59BMpyKF6xCvURrGT",
+      "name": "Franziska Schmidt"
+    }
+  ],
+  "rooms": [
+    {
+      "id": "4pFcvPicbKuWqOrfq1nP",
+      "name": "Zi2 PZR"
+    },
+    {
+      "id": "NxzG7Qzj01PitgOzkByf",
+      "name": "Zi1 Notfall"
+    },
+    {
+      "id": "QaYApHVNA6DqoBHQD0ph",
+      "name": "Zi3 PZR"
+    },
+    {
+      "id": "hWtbyNNqq6c9eUx88W6N",
+      "name": "Zi4 Thaler"
+    }
+  ],
+  "zimmerMap": {
+    "pzr": [3, 2],
+    "akut": [1],
+    "behandlung": [4]
+  },
+  "begruessungText": "Thaler Zahnmedizin. Sie sprechen mit Bianca, der Telefonassistentin der Praxis. Wie kann ich Ihnen helfen?",
+  "weiterleitungen": [],
+  "visitMotives": [
+    {
+      "id": "kch-erstuntersuchung-neupatient-30min",
+      "name": "KCH Erstuntersuchung / Neupatient",
+      "duration": 30
+    },
+    {
+      "id": "kch-kontrolluntersuchung-15min",
+      "name": "KCH Kontrolluntersuchung",
+      "duration": 30
+    },
+    {
+      "id": "kch-akute-beschwerden-notfall-30min",
+      "name": "KCH Akute Beschwerden / Notfall",
+      "duration": 30
+    },
+    {
+      "id": "imp-besprechung-30min",
+      "name": "IMP Besprechung",
+      "duration": 30
+    },
+    {
+      "id": "ze-besprechung-25min",
+      "name": "ZE Besprechung",
+      "duration": 25
+    },
+    {
+      "id": "pro-professionelle-zahnreinigung-recall-6m",
+      "name": "PRO Professionelle Zahnreinigung",
+      "duration": 60
+    }
+  ]
+}

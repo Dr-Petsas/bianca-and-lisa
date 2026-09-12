@@ -26,6 +26,7 @@ from kern import (
     tenants,
     tts,
     unterbrechung,
+    webpfad,
 )
 from kern.config import (
     BIANCA_PORT,
@@ -94,6 +95,9 @@ class StartIn(BaseModel):
     # W-MANDANT: die ANGERUFENE Nummer (DID) — gesetzt von der SIP-Bruecke.
     did: str = ""
     caller: str = ""
+    # Teststudio: Anrufliste zeigt "Testanruf", nie "Unbekannter Anrufer".
+    test: bool = False
+    testName: str = ""
 
 
 class TurnIn(BaseModel):
@@ -171,8 +175,14 @@ def api_start(body: StartIn):
         if t is None:
             print(f"bianca-start did={body.did!r} unbekannt -> Default-Mandant", flush=True)
     if t is None:
-        t = tenants.laden(body.tenant or DEFAULT_TENANT)
+        t = agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT)
     sit = session.neu(tenant=t)
+    if body.test:
+        sit["testAnruf"] = True
+        sit["clientKind"] = "studio"
+        name = " ".join(str(body.testName or "").split())
+        if name:
+            sit["testName"] = name
     if body.did:
         # W-CALLSTATUS: phoneCallId dieses Anrufs in die Sitzung.
         agentprofil.call_erfassen(sit, did=body.did, caller=body.caller)
@@ -315,8 +325,18 @@ _MITSCHNITT_STIMME = "bianca"
 
 
 @app.get("/api/anrufe")
-def api_anrufe():
-    return {"ok": True, "anrufe": mitschnitt.liste(_MITSCHNITT_STIMME)}
+def api_anrufe(tenant: str = ""):
+    items = mitschnitt.liste(_MITSCHNITT_STIMME)
+    if tenant:
+        info = next((x for x in tenants.liste() if x.get("id") == tenant), {})
+        erlaubt = {
+            tenant,
+            str(info.get("clientId") or ""),
+            str(info.get("locationId") or ""),
+            *(str(x) for x in (info.get("aliases") or [])),
+        }
+        items = [x for x in items if str(x.get("tenantId") or "") in erlaubt]
+    return {"ok": True, "anrufe": items}
 
 
 @app.get("/api/anrufe/{sid}")
@@ -460,23 +480,23 @@ if BIANCA_WEB_DIR.is_dir():
 # Fenster, kein zweiter Port). API und Berichte gehen intern an den Editor
 # auf 8097 (Compose: STUDIO_BASE=http://studio:8097).
 #
-# Pfad-Falle (06.09.2026): relative Links "web/stil.css" von URL /studio
-# (ohne Slash) landen auf /web/… → 404, Seite wirkt tot. Darum <base href=
-# "/studio/"> in jedes HTML und Redirect /studio → /studio/.
+# Pfad-Falle: relative Links "web/stil.css" von /studio (ohne Slash) landen
+# auf /web/… → 404. <base> und Redirects MUESSEN den oeffentlichen Prefix
+# kennen (direkt: /studio/, Tunnel: /bianca/studio/). Hartes /studio/ macht
+# die Tabs hinter dem Tunnel jedes Mal wieder platt.
 _STUDIO_WEB = Path(__file__).resolve().parent.parent / "tests" / "baukasten" / "editor_web"
 _STUDIO_BASIS = os.environ.get("STUDIO_BASE", "").strip().rstrip("/") or "http://127.0.0.1:8097"
 
 
-def _studio_seite(name: str) -> Response:
+def _studio_seite(name: str, request: Request | None = None) -> Response:
     p = _STUDIO_WEB / name
     if not p.is_file():
         raise HTTPException(404, "Test-Studio-Datei fehlt")
     if name.endswith(".html"):
-        html = p.read_text(encoding="utf-8")
-        if "<base " not in html.lower():
-            html = html.replace("<head>", '<head>\n<base href="/studio/">', 1)
-            if "<base " not in html.lower():
-                html = html.replace("<head ", '<head>\n<base href="/studio/">\n<head ', 1)
+        html = webpfad.html_base_setzen(
+            p.read_text(encoding="utf-8"),
+            webpfad.studio_basis(request.headers if request else None),
+        )
         return Response(
             html,
             media_type="text/html; charset=utf-8",
@@ -486,25 +506,25 @@ def _studio_seite(name: str) -> Response:
 
 
 @app.get("/studio")
-def studio_index_redirect():
-    return RedirectResponse(url="/studio/", status_code=307)
+def studio_index_redirect(request: Request):
+    return RedirectResponse(url=webpfad.studio_basis(request.headers), status_code=307)
 
 
 @app.get("/studio/")
-def studio_index():
-    return _studio_seite("index.html")
+def studio_index(request: Request):
+    return _studio_seite("index.html", request)
 
 
 @app.get("/studio/ergebnisse")
 @app.get("/studio/ergebnisse/")
-def studio_ergebnisse():
-    return _studio_seite("ergebnisse.html")
+def studio_ergebnisse(request: Request):
+    return _studio_seite("ergebnisse.html", request)
 
 
 @app.get("/studio/uebergabe")
 @app.get("/studio/uebergabe/")
-def studio_uebergabe():
-    return _studio_seite("uebergabe.html")
+def studio_uebergabe(request: Request):
+    return _studio_seite("uebergabe.html", request)
 
 
 @app.get("/studio/web/{name}")
@@ -565,7 +585,10 @@ def index():
 @app.api_route("/{name}", methods=["GET", "HEAD"])
 def web_file(name: str):
     # HEAD muss gehen — sonst wirkt /replay.html „gelöscht“ (405 auf Probe).
-    erlaubt = {"app.js", "styles.css", "replay.html"}
+    # /anrufe lädt sein eigenes Skript relativ als /anrufe.js. Ohne diesen
+    # Eintrag blieb die Seite live wortlos auf "lade …", obwohl API und
+    # Mitschnitte vollständig vorhanden waren (Kiriakos 09.09.2026).
+    erlaubt = {"app.js", "anrufe.js", "styles.css", "replay.html", "praxis.js"}
     if name in erlaubt:
         p = BIANCA_WEB_DIR / name
         if p.is_file():

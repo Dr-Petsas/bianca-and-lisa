@@ -28,7 +28,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from tests.baukasten import aufraeumen, geschichten, klang, runner, saetze  # noqa: E402
+from kern.config import DEFAULT_TENANT  # noqa: E402
+from kern.patients import arzt_sprechname  # noqa: E402
+from kern import tenants, zimmer_map  # noqa: E402
+from tests.baukasten import aufraeumen, geschichten, klang, lasttest, runner, saetze  # noqa: E402
+
+WEB_PRAXIS_JS = Path(__file__).resolve().parent.parent.parent / "bianca_web" / "praxis.js"
 
 WEB_DIR = Path(__file__).resolve().parent / "editor_web"
 BERICHTE_DIR = runner.BERICHTE_DIR
@@ -50,7 +55,29 @@ _zustand: dict[str, Any] = {
     "fertig": [],        # Kurz-Ergebnisse der abgeschlossenen Stories
     "fehler": "",
     "warm": None,        # {story, i, n, text} waehrend TTS-Vorwaermen
+    "lasttest": None,    # {phase, n, fertig, ergebnis} parallele Kurzgespraeche
 }
+
+_LAST_FARBEN = ("#4da3ff", "#37c978", "#d862c8", "#e5a84b",
+                "#8d76ef", "#35b9c8", "#ef6b72", "#8bb34a")
+
+
+def _lasttest_kunden() -> list[dict[str, str]]:
+    """Alle echten Mandanten fuer den globalen, mandantenfreien Lasttest."""
+    out: list[dict[str, str]] = []
+    for i, t in enumerate(tenants.liste()):
+        tid = str((t or {}).get("id") or "").strip()
+        if not tid or tid == "demo":
+            continue
+        name = str((t or {}).get("praxisName") or tid).strip()
+        kurz = {
+            "meddent": "Medical Center",
+            "thaler": "Thaler",
+            "blessing": "Blessing",
+        }.get(tid, name[:28])
+        out.append({"id": tid, "kurz": kurz,
+                    "farbe": _LAST_FARBEN[i % len(_LAST_FARBEN)]})
+    return out
 
 
 def _wochentage_naechste_woche() -> list[dict[str, str]]:
@@ -77,8 +104,8 @@ def _audio_vorwaermen(story: dict) -> None:
             }
         try:
             pfad = klang.audio_holen(stimme, t)
-            if story.get("telefonQualitaet"):
-                klang.telefon_datei(pfad)
+            if story.get("leitung") or story.get("telefonQualitaet"):
+                klang.telefon_datei(pfad, leitung=story.get("leitung"))
         except Exception as e:
             print(f"baukasten-warm: {type(e).__name__}: {e}", flush=True)
     with _lock:
@@ -92,7 +119,7 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
     with _lock:
         _zustand.update({"laeuft": True, "laufId": lauf_id, "storyIdx": 0,
                          "storiesGesamt": len(stories), "fertig": [], "fehler": "",
-                         "warm": None})
+                         "warm": None, "lasttest": None})
     try:
         import json as _json
         import time as _time
@@ -103,7 +130,8 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
                 _zustand["aktiv"] = None
             _audio_vorwaermen(story)
             anruf = runner.Anruf(story, basis=BIANCA_BASIS, lauf_dir=lauf_dir,
-                                 echtzeit=True, mithoeren=False)
+                                 echtzeit=True, mithoeren=False,
+                                 tenant=str(story.get("tenant") or ""))
             with _lock:
                 _zustand["aktiv"] = anruf
                 _zustand["warm"] = None
@@ -118,6 +146,7 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
                 _zustand["aktiv"] = None
             (lauf_dir / "lauf.json").write_text(
                 _json.dumps({"laufId": lauf_id,
+                             "tenant": stories[0].get("tenant") or "",
                              "gestartet": datetime.now().isoformat(timespec="seconds"),
                              "stories": berichte}, ensure_ascii=False, indent=1),
                 encoding="utf-8")
@@ -132,23 +161,147 @@ def _lauf_thread(stories: list[dict], mithoeren: bool) -> None:
             _zustand["warm"] = None
 
 
+def _lasttest_thread(n: int, zuege: int, leitung: dict | None,
+                     plan: dict[str, Any]) -> None:
+    lauf_id = "last-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+    with _lock:
+        _zustand.update({
+            "laeuft": True, "laufId": lauf_id, "storyIdx": 0,
+            "storiesGesamt": n, "fertig": [], "fehler": "",
+            "warm": None, "aktiv": None,
+            "lasttest": {"phase": "start", "n": n, "fertig": 0,
+                         "plan": plan, "ergebnis": None,
+                         "blasen": [], "transkript": [], "latenz": [],
+                         "kpis": {}, "norm": dict(lasttest.NORM)},
+        })
+
+    def fortschritt(d: dict[str, Any]) -> None:
+        with _lock:
+            alt = dict(_zustand.get("lasttest") or {})
+            alt.update(d)
+            _zustand["lasttest"] = alt
+            _zustand["storyIdx"] = int(d.get("fertig") or 0)
+            _zustand["storiesGesamt"] = int(d.get("n") or n)
+
+    try:
+        erg = lasttest.welle(
+            n=n, zuege=zuege, basis=BIANCA_BASIS, plan=plan,
+            leitung=leitung, fortschritt=fortschritt)
+        kurz = [{"id": f"last-{x.get('nr')}", "ok": bool(x.get("ok")),
+                 "fehler": x.get("fehler") or "",
+                 "ersterTonS": x.get("ersterTonS"),
+                 "antwortS": x.get("antwortS"),
+                 "tenant": x.get("tenant")}
+                for x in (erg.get("laeufe") or [])]
+        lauf_dir = BERICHTE_DIR / lauf_id
+        lauf_dir.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        (lauf_dir / "lasttest.json").write_text(
+            _json.dumps({"laufId": lauf_id, **erg},
+                        ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        with _lock:
+            _zustand["lasttest"] = {
+                "phase": "fertig", "n": n, "fertig": n, "ergebnis": erg,
+                "plan": plan, "blasen": erg.get("blasen") or [],
+                "transkript": erg.get("transkript") or [],
+                "latenz": erg.get("latenz") or [],
+                "kpis": erg.get("kpis") or {},
+                "norm": erg.get("norm") or dict(lasttest.NORM),
+            }
+            _zustand["fertig"] = kurz
+    except Exception as e:
+        with _lock:
+            _zustand["fehler"] = f"{type(e).__name__}: {e}"
+            alt = dict(_zustand.get("lasttest") or {})
+            alt["phase"] = "fehler"
+            _zustand["lasttest"] = alt
+    finally:
+        with _lock:
+            _zustand["laeuft"] = False
+            _zustand["aktiv"] = None
+
+
 # ------------------------------------------------------------------------- API
 
-@app.get("/api/katalog")
-def katalog() -> dict[str, Any]:
+def _katalog_fuer(tenant_id: str) -> dict[str, Any]:
+    tid = (tenant_id or "").strip() or DEFAULT_TENANT
+    t = tenants.laden(tid)
+    behandler = []
+    for c in tenants.behandler_kalender(t):
+        name = arzt_sprechname(str((c or {}).get("name") or ""), t)
+        if name and name not in behandler:
+            behandler.append(name)
+    if not behandler:
+        behandler = list(geschichten.BEHANDLER)
+    motive = list(t.get("visitMotives") or [])
+    if zimmer_map.aktiv(t):
+        motive = zimmer_map.buchbarer_katalog(t, motive)
+    gruende: dict[str, str] = {}
+    for vm in motive:
+        if not isinstance(vm, dict):
+            continue
+        name = str(vm.get("name") or "").strip()
+        if name:
+            gruende[name] = name
+    if not gruende:
+        gruende = {k: v[1] for k, v in saetze.GRUENDE.items()}
     return {
+        "tenant": t.get("_id") or tid,
+        "praxisName": t.get("praxisName") or tid,
         "stimmen": saetze.STIMMEN_M + saetze.STIMMEN_W,
         "vornamen": saetze.VORNAMEN,
         "nachnamen": saetze.NACHNAMEN,
         "anliegen": list(geschichten.ALLE_ANLIEGEN),
-        "gruende": {k: v[1] for k, v in saetze.GRUENDE.items()},
-        "behandler": list(geschichten.BEHANDLER),
+        "gruende": gruende,
+        "behandler": behandler,
         "abschweifer": sorted(saetze.ABSCHWEIFER),
         "anker": list(geschichten.ABSCHWEIF_ANKER),
         "tage": _wochentage_naechste_woche(),
         "testnummer": saetze.TESTNUMMER,
         "biancaBasis": BIANCA_BASIS,
+        "leitung": dict(klang.LEITUNG_DEFAULT),
+        "demoSatz": klang.DEMO_SATZ,
+        "einzelwoerter": geschichten.einzelwoerter_liste(behandler),
+        "lasttestMax": lasttest.MAX_PARALLEL,
     }
+
+
+@app.get("/api/tenants")
+def api_tenants() -> dict[str, Any]:
+    return {"ok": True, "tenants": tenants.liste(), "default": DEFAULT_TENANT}
+
+
+@app.get("/api/katalog")
+def katalog(tenant: str = "") -> dict[str, Any]:
+    return _katalog_fuer(tenant)
+
+
+@app.get("/praxis.js")
+def praxis_js() -> FileResponse:
+    return FileResponse(WEB_PRAXIS_JS, media_type="application/javascript")
+
+
+class LeitungWunsch(BaseModel):
+    hz: int = 8000
+    rauschen: int = 28
+    artefakte: int = 12
+    dropouts: int = 6
+    pegel: int = 75
+    g711: bool = True
+
+
+@app.post("/api/leitung-probe")
+def leitung_probe(w: LeitungWunsch) -> Response:
+    L = klang.leitung_norm(w.model_dump())
+    try:
+        pfad = klang.audio_holen(klang.DEMO_STIMME, klang.DEMO_SATZ)
+        tel = klang.telefon_datei(pfad, leitung=L)
+    except Exception as e:
+        return JSONResponse({"ok": False, "fehler": f"{type(e).__name__}: {e}"},
+                            status_code=503)
+    return FileResponse(tel, media_type="audio/wav",
+                        headers={"Cache-Control": "no-store"})
 
 
 class LaufWunsch(BaseModel):
@@ -156,7 +309,9 @@ class LaufWunsch(BaseModel):
     ab: int = 1
     tag: str = "Mittwoch"
     mithoeren: bool = False
-    telefonQualitaet: bool = False  # 8 kHz / 8 bit Anrufer-Audio
+    tenant: str = ""
+    leitung: dict[str, Any] = {}
+    telefonQualitaet: bool = False  # Alt-Feld, ignoriert wenn leitung da ist
     story: dict[str, Any] | None = None  # manuell gebaute Story (Chips)
 
 
@@ -165,8 +320,13 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
     with _lock:
         if _zustand["laeuft"]:
             return JSONResponse({"ok": False, "fehler": "es läuft schon ein Lauf"}, status_code=409)
+    tid = (w.tenant or "").strip()
+    kat = _katalog_fuer(tid)
+    L = klang.leitung_norm(w.leitung or klang.LEITUNG_DEFAULT)
     if w.story:
-        basis = geschichten.automatik(int(w.story.get("nr") or w.ab), tag=w.tag)
+        basis = geschichten.automatik(
+            int(w.story.get("nr") or w.ab), tag=w.tag, tenant=tid,
+            behandler=kat["behandler"], gruende=list(kat["gruende"]))
         basis.update({k: v for k, v in w.story.items() if v is not None})
         basis["tag"] = w.tag
         art = str(basis.get("anliegen") or geschichten.TERMIN)
@@ -174,14 +334,48 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
             basis["id"] = f"s{basis['nr']:02d}-{basis['stimme']}-{art}"
         stories = [basis]
     else:
-        stories = [geschichten.automatik(nr, tag=w.tag)
+        stories = [geschichten.automatik(
+            nr, tag=w.tag, tenant=tid,
+            behandler=kat["behandler"], gruende=list(kat["gruende"]))
                    for nr in range(w.ab, w.ab + max(1, w.anzahl))]
-    if w.telefonQualitaet:
-        for s in stories:
-            s["telefonQualitaet"] = True
+    for s in stories:
+        s["tenant"] = tid or s.get("tenant") or ""
+        s["leitung"] = L
+        s["telefonQualitaet"] = True
+        if s.get("grund") and not s.get("grundErwartet"):
+            s["grundErwartet"] = kat["gruende"].get(s["grund"]) or s["grund"]
     t = threading.Thread(target=_lauf_thread, args=(stories, w.mithoeren), daemon=True)
     t.start()
-    return JSONResponse({"ok": True, "stories": [s["id"] for s in stories]})
+    return JSONResponse({"ok": True, "stories": [s["id"] for s in stories],
+                         "tenant": tid})
+
+
+class LasttestWunsch(BaseModel):
+    n: int = 6
+    zuege: int = 2
+    leitung: dict[str, Any] | None = None
+
+
+@app.get("/api/lasttest/plan")
+def lasttest_plan(n: int = 6) -> dict[str, Any]:
+    return lasttest.verteile(n, _lasttest_kunden())
+
+
+@app.post("/api/lasttest")
+def lasttest_starten(w: LasttestWunsch) -> JSONResponse:
+    with _lock:
+        if _zustand["laeuft"]:
+            return JSONResponse({"ok": False, "fehler": "es läuft schon ein Lauf"},
+                                status_code=409)
+    n = lasttest._kappe(w.n, lasttest.MAX_PARALLEL)
+    zuege = lasttest._kappe(w.zuege, 3)
+    plan = lasttest.verteile(n, _lasttest_kunden())
+    L = klang.leitung_norm(w.leitung) if w.leitung else None
+    t = threading.Thread(target=_lasttest_thread, args=(n, zuege, L, plan),
+                         daemon=True)
+    t.start()
+    return JSONResponse({"ok": True, "n": n, "zuege": zuege, "plan": plan,
+                         "max": lasttest.MAX_PARALLEL})
 
 
 @app.get("/api/live")
@@ -198,6 +392,7 @@ def live() -> dict[str, Any]:
             "story": "",
             "zuege": [],
             "warm": _zustand.get("warm"),
+            "lasttest": _zustand.get("lasttest"),
         }
         if anruf is not None:
             out["story"] = str(anruf.story.get("id") or "")
@@ -233,16 +428,20 @@ def ton(lauf_id: str, story_id: str, name: str) -> Response:
 
 
 @app.get("/api/laeufe")
-def laeufe() -> dict[str, Any]:
+def laeufe(tenant: str = "") -> dict[str, Any]:
     import json as _json
+    tid = (tenant or "").strip()
     out = []
     for p in sorted(BERICHTE_DIR.glob("*/lauf.json"), reverse=True):
         try:
             d = _json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if tid and (d.get("tenant") or "") != tid:
+            continue
         stories = d.get("stories") or []
         out.append({"laufId": d.get("laufId") or p.parent.name,
+                    "tenant": d.get("tenant") or "",
                     "gestartet": d.get("gestartet") or "",
                     "gruen": sum(1 for s in stories if s.get("ok")),
                     "gesamt": len(stories)})
