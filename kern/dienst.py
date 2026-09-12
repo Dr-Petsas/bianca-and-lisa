@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import queue
-import re
 import secrets
 import struct
 import threading
@@ -771,7 +770,11 @@ class Dienst:
                         spur.merken(sit, "halbsatz-warte", voll)
                         print(f"{self.name}-halbsatz warte ({sit.get('halbsatzZahl')}): {voll!r}", flush=True)
                         tempo.merken(sit, voll, audio_ms=audio_ms, barge=barge, gehalten=True)
-                        q.put(("warte", voll))
+                        warte_payload: dict[str, Any] = {"text": voll}
+                        if stt_s is not None:
+                            warte_payload["stt"] = stt_info
+                            warte_payload["sttS"] = stt_s
+                        q.put(("warte", warte_payload))
                         return
                     gesagt = voll
                 tempo.merken(sit, gesagt, audio_ms=audio_ms, barge=barge, gehalten=False)
@@ -875,11 +878,18 @@ class Dienst:
                 # Das Dock hoert mit laengerer Ruhe-Schwelle weiter, der
                 # naechste Zug wird an das gemerkte Fragment angefuegt.
                 # W-TEMPO: langsamer/unbekannter Sprecher bekommt mehr Geduld.
-                yield zeile({
+                warte_text = (_s(wert.get("text"))
+                              if isinstance(wert, dict) else _s(wert))
+                warte_antwort: dict[str, Any] = {
                     "type": "warte",
-                    "textIn": wert,
+                    "textIn": warte_text,
                     "stilleMs": tempo.warte_ms(sit),
-                })
+                }
+                if isinstance(wert, dict) and isinstance(wert.get("stt"), dict):
+                    warte_antwort["stt"] = wert["stt"]
+                if isinstance(wert, dict) and wert.get("sttS") is not None:
+                    warte_antwort["timings"] = {"stt": float(wert["sttS"])}
+                yield zeile(warte_antwort)
                 return
             elif typ == "leer":
                 # W-BARGE: Barge ohne verwertbaren Einwand (nichts gehoert

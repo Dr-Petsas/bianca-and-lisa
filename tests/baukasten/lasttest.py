@@ -346,6 +346,11 @@ def _listen(client: httpx.Client, basis: str, sid: str, wav: Path,
                 if typ == "transcript":
                     gehoert = _text_von(ev) or gehoert
                     stt_info = dict(ev.get("stt") or {})
+                elif typ == "warte":
+                    # Halbsatz-/Diktat-Wartezüge tragen den echten Decode im
+                    # finalen textIn; Bianca spricht dabei bewusst nicht.
+                    gehoert = _text_von(ev) or gehoert
+                    stt_info = dict(ev.get("stt") or stt_info)
                 if typ == "filler":
                     if not erster:
                         erster = round(jetzt, 2)
@@ -741,11 +746,14 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
                 et = float(ev.get("_ersterTonS") or 0)
                 ant = float(ev.get("_latenzS") or 0)
                 leer = str(ev.get("type") or "") == "empty"
+                wartet = str(ev.get("type") or "") == "warte"
                 stt_daten = ev.get("_stt") if isinstance(ev.get("_stt"), dict) else {}
                 stt_winner = str(stt_daten.get("winner") or stt_daten.get("gewinner") or "")
-                toene.append(et)
+                if not wartet:
+                    toene.append(et)
                 antworten.append(ant)
-                punkt("ersterTon", et, t_zug + et)
+                if not wartet:
+                    punkt("ersterTon", et, t_zug + et)
                 punkt("antwort", ant, t_zug + ant)
                 timings = ev.get("timings") if isinstance(ev.get("timings"), dict) else {}
                 for metrik, key in (("stt", "stt"), ("llm", "llm"), ("tts", "tts")):
@@ -762,12 +770,12 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
                               wer="anrufer", text=gehoert, soll=text,
                               baustein=zug.get("baustein") or "",
                               stt=ev.get("_stt") or {})
-                mund = _text_von(ev)
+                mund = "" if wartet else _text_von(ev)
                 if mund:
                     sam.zeile(tS=round(t_zug + ant, 2), phase=phase, nr=nr, tenant=tenant,
                               kurz=k["kurz"], farbe=k["farbe"],
                               wer="bianca", text=mund)
-                drops = dropouts_von_zug(
+                drops = [] if wartet else dropouts_von_zug(
                     tS=t_zug, ersterTonS=et, antwortS=ant, leer=leer,
                     nr=nr, tenant=tenant, kurz=k["kurz"], farbe=k["farbe"])
                 for drop in drops:
@@ -798,7 +806,7 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
                 sam.blase(drops)
                 out["zuege"].append({
                     "ersterTonS": et, "antwortS": ant, "leer": leer,
-                    "text": mund, "gehoert": gehoert,
+                    "text": mund, "gehoert": gehoert, "warte": wartet,
                     "soll": text, "baustein": zug.get("baustein") or "",
                     "timings": timings, "audio": audio_m,
                     "stt": ev.get("_stt") or {},
@@ -807,7 +815,7 @@ def _eine(sitz: dict[str, Any], *, basis: str, story: dict[str, Any],
                     raise RuntimeError(str(ev.get("error") or "leerer Zug"))
                 if not gehoert:
                     raise RuntimeError("Audio ergab kein STT-Transkript")
-                if str(ev.get("type") or "") == "warte":
+                if wartet:
                     halbsatz_rest = str(zug.get("halbsatzRest") or "")
                     continue
                 geschichten.lage_update(lage, ev)

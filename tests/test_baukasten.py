@@ -385,6 +385,22 @@ def test_lasttest_antwortet_auf_offene_frage_und_bestaetigt_keinen_write():
     assert stopp["baustein"] == "lasttest_keine_buchung"
 
 
+def test_story_runner_versteht_natuerliche_frage_ohne_frage_feld():
+    from tests.baukasten import geschichten, lasttest
+
+    story = lasttest.story_fuer_sitz({
+        "nr": 1, "tenant": "blessing", "seed": 505, "anliegen": "termin",
+    })
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True, "frage": "",
+        "biancaText": "Um welchen Arzt oder welche Ärztin geht es Ihnen?",
+    })
+    antwort = geschichten.naechster_baustein(story, lage)
+    assert antwort["baustein"] in {"arzt", "arzt_egal"}
+    assert antwort["text"].lower() not in {"ja.", "ja, gerne."}
+
+
 def test_lasttest_statistik_vergleicht_einzel_und_last_nach_mandant():
     from tests.baukasten import lasttest
 

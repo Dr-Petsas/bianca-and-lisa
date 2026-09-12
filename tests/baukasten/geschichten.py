@@ -288,6 +288,52 @@ def _rueckkehr_text(story: dict) -> str:
 _FRAGE_LEER_MAX = 3  # Zuege ohne offene Frage, bevor der Anrufer sich verabschiedet
 
 
+def _frage_aus_text(text: str) -> str:
+    """Fallback für natürliche LLM-Fragen ohne maschinenlesbares ``frage``.
+
+    Der Last-/Story-Runner darf auf „Um welchen Arzt geht es?“ nicht mit
+    einem generischen „Ja“ antworten. Eng geordnete Marker halten den
+    simulierten Anrufer auf seinem ursprünglichen Formularfaden.
+    """
+    t = " ".join(str(text or "").lower().split())
+    if not t:
+        return ""
+    if "schon einmal" in t or "schon mal" in t or "erstmals" in t:
+        return "schonmal"
+    if any(x in t for x in ("welchen arzt", "welche ärztin", "welchem arzt",
+                            "welcher ärztin", "welchen behandler",
+                            "welchem behandler", "arzt oder welche")):
+        return "arzt"
+    if "nachname" in t:
+        return "nachname"
+    if "vorname" in t:
+        return "vorname"
+    if "name" in t and any(x in t for x in ("wie ", "lautet", "sagen sie", "nennen sie")):
+        return "name"
+    if any(x in t for x in ("telefonnummer", "rufnummer", "handynummer",
+                            "welche nummer", "erreichen kann")):
+        return "telefon"
+    if "versicher" in t:
+        return "versicherung"
+    if any(x in t for x in ("grund für ihren besuch", "grund ihres besuch",
+                            "worum geht es", "weshalb möchten", "behandlungsgrund",
+                            "wobei ich helfen", "was genau möchten")):
+        return "grund"
+    if any(x in t for x in ("welchen termin", "welcher termin", "ersten oder",
+                            "zweiten oder", "welche uhrzeit davon")):
+        return "slotwahl"
+    if any(x in t for x in ("so eintragen", "fest eintragen", "verbindlich buchen",
+                            "soll ich den termin", "darf ich den termin")):
+        return "bestaetigung"
+    if any(x in t for x in ("wunschtermin", "wann passt", "wann es ihnen",
+                            "welche woche", "tageszeit", "vormittag oder",
+                            "nachmittag oder")):
+        return "wunsch"
+    if "zahnreinigung" in t and "?" in t:
+        return "pzr"
+    return ""
+
+
 def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     """Der naechste Anrufer-Zug zur offenen Frage.
 
@@ -298,6 +344,10 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         return _eroeffnung(story, lage)
 
     fid = lage["frage"]
+    if not fid:
+        fid = _frage_aus_text(lage.get("biancaText") or "")
+        if fid:
+            lage["frage"] = fid
 
     # Verabschiedet? Nach dem Abschied ist Schluss (Runner legt auf).
     if "abschied" in lage["gemacht"]:
@@ -458,6 +508,15 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
 
     # Keine offene Maschinen-Frage: LLM-Zug oder Abschluss.
     text = (lage["biancaText"] or "").lower()
+    if any(x in text for x in (
+            "persönlich vorsprechen", "persoenlich vorsprechen",
+            "nicht telefonisch bestellen", "nur persönlich")):
+        lage["gemacht"].add("abschied")
+        return {
+            "text": "Verstanden, dann komme ich persönlich vorbei. Vielen Dank und auf Wiederhören.",
+            "baustein": "doku_abschied",
+            "auflegen": True,
+        }
     if "sonst noch" in text or "noch etwas" in text or lage["gebucht"]:
         if "nichts_mehr" not in lage["gemacht"] and ("sonst noch" in text or "noch etwas" in text):
             lage["gemacht"].add("nichts_mehr")

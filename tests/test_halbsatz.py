@@ -151,6 +151,27 @@ def test_dienst_haelt_und_fuegt_zusammen():
         "Hallo, ich habe nächste Woche Dienstag ein einen Termin")
 
 
+def test_audio_halbsatz_warte_traegt_stt_gewinner(monkeypatch):
+    """Auch ein still gehaltener Audiozug belegt, welches STT ihn gehört hat."""
+    d, gesehen = _dienst()
+    monkeypatch.setattr(
+        dienst_mod.stt_spur, "transcribe",
+        lambda *a, **k: (
+            "Hallo, ich brauche einen",
+            {"pipeline": "audio", "winner": "parakeet"},
+        ),
+    )
+    z = _zeilen(
+        d, {}, art="listen", stt_blob=b"x" * 4000,
+        stt_mime="audio/wav", stt_name="zug.wav",
+    )
+    assert [x["type"] for x in z] == ["warte"]
+    assert z[0]["textIn"] == "Hallo, ich brauche einen"
+    assert z[0]["stt"]["winner"] == "parakeet"
+    assert z[0]["timings"]["stt"] >= 0
+    assert gesehen == []
+
+
 def test_dienst_reicht_stilles_diktat_warten_ohne_reply_audio_durch():
     """Live 08.09.: gespeicherte Ziffern/Buchstaben dürfen keine Ansage starten."""
     d, _ = _dienst()
@@ -177,12 +198,12 @@ def test_dienst_flush_bei_leerem_nachzug():
     d, gesehen = _dienst()
     sit: dict = {}
     _zeilen(d, sit, art="turn", text_in="Ich wollte fragen, ob")
-    echt = dienst_mod.stt.transcribe
-    dienst_mod.stt.transcribe = lambda *a, **k: ""
+    echt = dienst_mod.stt_spur.transcribe
+    dienst_mod.stt_spur.transcribe = lambda *a, **k: ("", {})
     try:
         z = _zeilen(d, sit, art="listen", stt_blob=b"x" * 4000)
     finally:
-        dienst_mod.stt.transcribe = echt
+        dienst_mod.stt_spur.transcribe = echt
     assert [x["type"] for x in z][-1] == "reply"
     assert gesehen == ["Ich wollte fragen, ob"]
 
