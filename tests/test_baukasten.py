@@ -521,6 +521,26 @@ def test_story_runner_erkennt_natuerliche_behandlerfrage():
     ) == "arzt"
 
 
+def test_story_runner_erkennt_sicher_erledigtes_dokumentanliegen():
+    from tests.baukasten import geschichten
+
+    story = {"anliegen": "ueberweisung_schein", "seed": 7}
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "biancaText": (
+            "Eine Überweisung kann ich am Telefon nicht ausstellen. "
+            "Die Praxis prüft Ihren Wunsch. Kann ich sonst noch etwas für Sie tun?"
+        ),
+    })
+    nichts = geschichten.naechster_baustein(story, lage)
+    assert nichts["baustein"] == "nichts_mehr"
+    lage["biancaText"] = "Sehr gerne. Auf Wiederhören."
+    ende = geschichten.naechster_baustein(story, lage)
+    assert ende["baustein"] == "doku_abschied"
+    assert ende["auflegen"] is True
+
+
 def test_lasttest_write_evidenz_macht_lauf_rot():
     from tests.baukasten import lasttest
 

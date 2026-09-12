@@ -286,7 +286,9 @@ def _rueckkehr_text(story: dict) -> str:
         return "Danke. Ich möchte aber noch meinen bestehenden Termin verschieben."
     if art == AUSKUNFT:
         return "Danke. Ich möchte aber noch wissen, wann mein bestehender Termin ist."
-    return f"Danke. Ich möchte aber noch zu meinem eigentlichen Anliegen zurück: {art}."
+    muster = saetze.ANLIEGEN.get(art) or []
+    konkret = str(muster[0] if muster else art).strip()
+    return f"Danke. Mein eigentliches Anliegen ist noch offen: {konkret}"
 
 
 _FRAGE_LEER_MAX = 3  # Zuege ohne offene Frage, bevor der Anrufer sich verabschiedet
@@ -523,6 +525,21 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
 
     # Keine offene Maschinen-Frage: LLM-Zug oder Abschluss.
     text = (lage["biancaText"] or "").lower()
+    art = str(story.get("anliegen") or TERMIN)
+    if art in DOKU_ARTEN and any(x in text for x in (
+            "nicht ausstellen", "nicht telefonisch ausstellen",
+            "kann ich am telefon nicht", "kann ich selbst nicht",
+            "persönlich vorsprechen", "persoenlich vorsprechen",
+            "nicht telefonisch bestellen", "nur persönlich")):
+        lage["fachlichErledigt"] = "doku_auskunft"
+    if lage.get("fachlichErledigt") == "doku_auskunft" and (
+            "nichts_mehr" in lage["gemacht"]):
+        lage["gemacht"].add("abschied")
+        return {
+            "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
+            "baustein": "doku_abschied",
+            "auflegen": True,
+        }
     if any(x in text for x in (
             "116 117", "116117", "ärztlichen bereitschaftsdienst",
             "aerztlichen bereitschaftsdienst", "wählen sie sofort die 112",
