@@ -20,6 +20,7 @@ import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -282,6 +283,13 @@ def _katalog_fuer(tenant_id: str) -> dict[str, Any]:
     }
 
 
+def _story_id_teil(wert: Any) -> str:
+    """Lesbarer, aber auf Windows und Linux pfadsicherer Teil einer Story-ID."""
+    text = " ".join(str(wert or "story").split())
+    text = "".join("-" if c in '<>:"/\\|?*' else c for c in text)
+    return text.strip(" .-")[:100] or "story"
+
+
 @app.get("/api/tenants")
 def api_tenants() -> dict[str, Any]:
     sichtbar = [t for t in tenants.liste() if str((t or {}).get("id") or "") != "demo"]
@@ -383,8 +391,13 @@ def lauf_starten(w: LaufWunsch) -> JSONResponse:
         basis.update({k: v for k, v in w.story.items() if v is not None})
         basis["tag"] = w.tag
         art = str(basis.get("anliegen") or geschichten.TERMIN)
-        if art in geschichten.DOKU_ARTEN:
-            basis["id"] = f"s{basis['nr']:02d}-{basis['stimme']}-{art}"
+        kennung = art if art != geschichten.TERMIN else (basis.get("grund") or art)
+        # Die ID muss die TATSAECHLICHE Schnellauswahl zeigen, nicht den
+        # Zufallsgrund der Automatik-Basis vor dem Merge.
+        basis["id"] = (
+            f"s{basis['nr']:02d}-{_story_id_teil(basis['stimme'])}-"
+            f"{_story_id_teil(kennung)}"
+        )
         stories = [basis]
     else:
         stories = [geschichten.automatik(
@@ -457,19 +470,31 @@ def live() -> dict[str, Any]:
                 z2 = dict(z)
                 name = Path(str(z2.get("audio") or "")).name
                 if name:
-                    z2["audioUrl"] = f"api/ton/{_zustand['laufId']}/{out['story']}/{name}"
+                    lauf = quote(str(_zustand["laufId"]), safe="")
+                    datei = quote(name, safe="")
+                    story = quote(str(out["story"]), safe="")
+                    # Story-IDs enthalten echte Katalognamen und damit teils
+                    # "/" (z. B. "Beschwerden/Notfall"). Im Query bleibt das
+                    # ein Wert; als Pfadsegment zerbrach es die Proxy-Route.
+                    z2["audioUrl"] = f"api/ton/{lauf}/{datei}?story={story}"
                 zuege.append(z2)
             out["zuege"] = zuege
     return out
 
 
-@app.get("/api/ton/{lauf_id}/{story_id}/{name}")
-def ton(lauf_id: str, story_id: str, name: str) -> Response:
+def _ton_antwort(lauf_id: str, story_id: str, name: str) -> Response:
     """Abspielbares Audio einer Bubble: Stream-WAV-Header wird geschlossen,
     damit der Browser wirklich Toene macht (nicht nur den Play-Knopf zeigt)."""
-    if "/" in name or "\\" in name or name in {".", ".."}:
+    if (not lauf_id or "/" in lauf_id or "\\" in lauf_id or lauf_id in {".", ".."}
+            or not story_id or "\\" in story_id
+            or not name or "/" in name or "\\" in name or name in {".", ".."}):
         return Response(status_code=404)
-    p = BERICHTE_DIR / lauf_id / story_id / "audio" / name
+    wurzel = BERICHTE_DIR.resolve()
+    p = (BERICHTE_DIR / lauf_id / story_id / "audio" / name).resolve()
+    try:
+        p.relative_to(wurzel)
+    except ValueError:
+        return Response(status_code=404)
     if not p.is_file():
         return Response(status_code=404)
     blob = p.read_bytes()
@@ -479,6 +504,17 @@ def ton(lauf_id: str, story_id: str, name: str) -> Response:
                         headers={"Cache-Control": "no-store", "Accept-Ranges": "bytes"})
     return Response(blob, media_type="audio/mpeg",
                     headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/ton/{lauf_id}/{name}")
+def ton(lauf_id: str, name: str, story: str = "") -> Response:
+    return _ton_antwort(lauf_id, story, name)
+
+
+# Alte gespeicherte Studio-Seiten ohne Schraegstrich bleiben abspielbar.
+@app.get("/api/ton/{lauf_id}/{story_id}/{name}")
+def ton_alt(lauf_id: str, story_id: str, name: str) -> Response:
+    return _ton_antwort(lauf_id, story_id, name)
 
 
 @app.get("/api/laeufe")

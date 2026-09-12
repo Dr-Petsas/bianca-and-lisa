@@ -246,6 +246,28 @@ def verfremden(text: str, einstellung: dict | None, *,
             for k in welche:
                 if k not in kats_genutzt:
                     kats_genutzt.append(k)
+
+    # Eine ausdrücklich gewählte Eigenschaft muss im Satz hörbar vorkommen,
+    # sofern irgendein Wort dafür geeignet ist. Die erste Runde verteilt die
+    # Fehler weiterhin natürlich; diese zweite Runde schließt nur den alten
+    # Zufallsfall "gewählt, aber gar nichts passiert".
+    for kat in n["kategorien"]:
+        if kat in kats_genutzt:
+            continue
+        fn = _FN.get(kat)
+        if not fn:
+            continue
+        for i, aktuell in enumerate(out):
+            if (not aktuell or not aktuell[0].isalpha()
+                    or _DIGIT.search(aktuell) or len(aktuell) < 3):
+                continue
+            neu = fn(aktuell, rnd)
+            if not neu or neu == aktuell:
+                continue
+            out[i] = _gross_wie(aktuell, neu)
+            hits.append({"von": aktuell, "nach": out[i], "kategorien": kat})
+            kats_genutzt.append(kat)
+            break
     gesprochen = "".join(out)
     if gesprochen == klar:
         return {"klar": klar, "text": klar, "hits": [], "kategorien": []}

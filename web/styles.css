@@ -14,6 +14,14 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+button:not(:disabled), a.tab {
+  transition: transform 70ms ease, filter 70ms ease, box-shadow 70ms ease;
+}
+button:not(:disabled):active, a.tab:active {
+  transform: translateY(2px) scale(0.97);
+  filter: brightness(1.3);
+  box-shadow: inset 0 2px 7px #0009;
+}
 /* Bianca aktiv: Seite wird zur Spalte (Tab-Leiste + Rest), das Iframe
    bekommt EXAKT den restlichen Platz — egal wie hoch die Tab-Leiste bei
    Zoom/schmalem Fenster wird. Vorher war die Hoehe hart gerechnet

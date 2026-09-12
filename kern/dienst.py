@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt, tempo, tenants, tts, unterbrechung
+from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt_spur, tempo, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 
@@ -708,6 +708,7 @@ class Dienst:
             try:
                 gesagt = text_in
                 stt_s = None
+                stt_info: dict[str, Any] = {}
                 audio_ms = _audio_ms_schaetzen(stt_blob)
                 barge = bool(_s(barge_url))
                 # Echo nur bei Barge oder stillem Ohr-Zug — sonst wuerden
@@ -725,8 +726,9 @@ class Dienst:
                         # Behandler-Namen des Mandanten als Hotwords fuer die
                         # Parakeet-Nachkorrektur ("Betsas" -> "Petsas").
                         kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
-                        gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name,
-                                                keywords=kw)
+                        gesagt, stt_info = stt_spur.transcribe(
+                            stt_blob, mime=stt_mime, name=stt_name, keywords=kw,
+                        )
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
                         q.put(("leer", str(e)))
@@ -774,7 +776,7 @@ class Dienst:
                     gesagt = voll
                 tempo.merken(sit, gesagt, audio_ms=audio_ms, barge=barge, gehalten=False)
                 if stt_blob is not None:
-                    q.put(("gehoert", gesagt))
+                    q.put(("gehoert", {"text": gesagt, "stt": stt_info}))
                 if stt_s is not None:
                     sit["_sttS"] = stt_s
                 out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
@@ -825,11 +827,14 @@ class Dienst:
                 vorab_gruppe = "allgemein"
                 continue
             if typ == "gehoert":
+                stt_info = wert.get("stt") if isinstance(wert, dict) else {}
+                gehoert = _s(wert.get("text")) if isinstance(wert, dict) else _s(wert)
                 # Nur solange noch nichts gespielt wurde neu raten — nach
                 # einem Füller gilt die laufende Nachschub-Frist weiter.
                 if not inhalt and filler_zahl == 0:
-                    frist, vorab_gruppe = frist_setzen(wert)
-                yield zeile({"type": "transcript", "textIn": wert})
+                    frist, vorab_gruppe = frist_setzen(gehoert)
+                yield zeile({"type": "transcript", "textIn": gehoert,
+                             "stt": stt_info or {}})
             elif typ == "vorab":
                 # Erster Antwortsatz — läuft über den Füller-Kanal des Clients
                 # (sofort abspielen), der Rest folgt im reply-Audio. ``inhalt``

@@ -206,7 +206,8 @@ class Anruf:
         return dauer
 
     def _merke_anrufer(self, text: str, baustein: str, rel: str, dauer: float,
-                       gehoert: str = "", sprecher: dict | None = None) -> None:
+                       gehoert: str = "", sprecher: dict | None = None,
+                       stt_info: dict | None = None) -> None:
         eintrag = {
             "wer": "anrufer",
             "text": text,
@@ -214,6 +215,10 @@ class Anruf:
             "baustein": baustein,
             "audio": rel,
             "dauerS": round(dauer, 2),
+            # Beweis im Bericht: dieser Zug ging als WAV an /api/listen,
+            # nie als vorgegebenes Transkript an /api/turn.
+            "audioPipeline": True,
+            "stt": dict(stt_info or {}),
         }
         gesprochen = str((sprecher or {}).get("text") or "")
         if gesprochen and gesprochen != text:
@@ -250,11 +255,13 @@ class Anruf:
                 final = self._listen(wav)
                 typ = str(final.get("type") or "")
                 gehoert = ""
+                stt_info: dict[str, Any] = {}
                 for ev in final.get("_ereignisse") or []:
                     if ev.get("type") == "transcript":
                         gehoert = str(ev.get("textIn") or "")
+                        stt_info = dict(ev.get("stt") or {})
                 self._merke_anrufer(
-                    text, baustein, rel, dauer_a, gehoert, sprecher,
+                    text, baustein, rel, dauer_a, gehoert, sprecher, stt_info,
                 )
 
                 if typ == "warte":

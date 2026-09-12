@@ -415,6 +415,55 @@ def test_sprechereigenschaften_verfremden_deterministisch():
     assert deutlichkeit._auslaut("Behandlung", __import__("random").Random(1)).endswith("unk")
 
 
+def test_jede_gewaehlte_sprechereigenschaft_greift_wenn_anwendbar():
+    from tests.baukasten import deutlichkeit
+
+    beispiele = {
+        "chsch": "Ich möchte sprechen.",
+        "hart": "Die Behandlung beginnt.",
+        "anlaut": "Der Termin beginnt.",
+        "auslaut": "Die Behandlung.",
+        "einfuegen": "Das Röntgenbild.",
+        "vertauschen": "Die Behandlung.",
+        "vokal": "Das ist freundlich.",
+        "verschlucken": "Die Behandlung.",
+    }
+    for kat, text in beispiele.items():
+        erg = deutlichkeit.verfremden(
+            text, {"staerke": 1, "kategorien": [kat]}, seed=71,
+        )
+        assert erg["text"] != text, kat
+        assert kat in erg["kategorien"], (kat, erg)
+
+
+def test_studio_bubble_audio_mit_schraegstrich_im_besuchsgrund(
+        monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from tests.baukasten import editor
+
+    lauf = "20260912-123456"
+    story = "s01-julia-Beschwerden/Notfall"
+    audio = tmp_path / lauf / story / "audio" / "b01.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"RIFF" + b"\x00" * 80)
+    aktiv = SimpleNamespace(
+        story={"id": story},
+        zuege=[{"wer": "bianca", "audio": "audio/b01.wav"}],
+    )
+    monkeypatch.setattr(editor, "BERICHTE_DIR", tmp_path)
+    monkeypatch.setitem(editor._zustand, "laufId", lauf)
+    monkeypatch.setitem(editor._zustand, "aktiv", aktiv)
+
+    live = editor.live()
+    url = live["zuege"][0]["audioUrl"]
+    assert url.startswith(f"api/ton/{lauf}/b01.wav?story=")
+    assert "%2F" in url
+    antwort = editor.ton(lauf, "b01.wav", story=story)
+    assert antwort.status_code == 200
+    assert antwort.media_type == "audio/wav"
+
+
 def test_statistik_zaehlt_zeitverlauf_und_mandant():
     import json
     import tempfile

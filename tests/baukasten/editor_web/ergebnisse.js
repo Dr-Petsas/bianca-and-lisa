@@ -27,10 +27,16 @@ function spielen(rel) {
   if (!url) return Promise.resolve();
   return (async () => {
     let blob = null;
-    try {
-      const r = await fetch(url, { cache: "no-store" });
-      if (r.ok) blob = await r.blob();
-    } catch { /* */ }
+    for (let i = 0; i < 5; i++) {
+      try {
+        const r = await fetch(url, { cache: "no-store" });
+        if (r.ok) {
+          blob = await r.blob();
+          if (blob && blob.size > 44) break;
+        }
+      } catch { /* */ }
+      await new Promise((w) => setTimeout(w, 180));
+    }
     if (!blob || blob.size < 44) {
       console.warn("studio-ton fehlt", url);
       return;
@@ -44,10 +50,14 @@ function spielen(rel) {
         const ende = () => {
           lautsprecher.removeEventListener("ended", ende);
           lautsprecher.removeEventListener("error", ende);
+          lautsprecher.removeEventListener("pause", ende);
+          lautsprecher.removeEventListener("emptied", ende);
           fertig();
         };
         lautsprecher.addEventListener("ended", ende);
         lautsprecher.addEventListener("error", ende);
+        lautsprecher.addEventListener("pause", ende);
+        lautsprecher.addEventListener("emptied", ende);
       });
     } catch (e) {
       console.warn("studio-ton play", url, e);
@@ -294,6 +304,29 @@ function bubbleBauen(z, basis) {
   });
   if (z.frage) meta.insertAdjacentHTML("beforeend", `<span class="tag">frage=${z.frage}</span>`);
   if (z.baustein) meta.insertAdjacentHTML("beforeend", `<span class="tag">${z.baustein}</span>`);
+  if (z.audioPipeline) {
+    const audioTag = document.createElement("span");
+    audioTag.className = "tag audio-pipeline";
+    audioTag.textContent = "🎙 WAV → Bianca-STT";
+    meta.appendChild(audioTag);
+  }
+  if (z.stt && z.stt.winner) {
+    const win = String(z.stt.winner);
+    const sttTag = document.createElement("span");
+    sttTag.className = "tag stt-gewinner " + (win === "qwen" ? "qwen" : "parakeet");
+    sttTag.textContent = `STT-Gewinner: ${win === "qwen" ? "Qwen" : win === "parakeet" ? "Parakeet" : win}`;
+    const p = (z.stt.parakeet && z.stt.parakeet.text) || "";
+    const q = (z.stt.qwen && z.stt.qwen.text) || "";
+    sttTag.title = `Parakeet: ${p || "—"}\nQwen: ${q || (z.stt.qwen && z.stt.qwen.status) || "—"}`;
+    meta.appendChild(sttTag);
+    if (z.stt.qwen && z.stt.qwen.status) {
+      const qwenTag = document.createElement("span");
+      qwenTag.className = "tag stt-status";
+      qwenTag.textContent = `Qwen: ${String(z.stt.qwen.status).replaceAll("_", " ")}`;
+      if (q) qwenTag.title = q;
+      meta.appendChild(qwenTag);
+    }
+  }
   if (z.gesprochen && z.gesprochen !== z.text) {
     meta.insertAdjacentHTML("beforeend", `<span class="tag gesprochen">gesprochen: ${z.gesprochen}</span>`);
   }

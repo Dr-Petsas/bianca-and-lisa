@@ -190,11 +190,15 @@ def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
     frei = str(story.get("abschweiferText") or "").strip()
     if frei and fid in ABSCHWEIF_ANKER and "abschweif:frei" not in lage["gemacht"]:
         lage["gemacht"].add("abschweif:frei")
+        lage["rueckkehrFrage"] = fid
+        lage["rueckkehrModus"] = str(lage.get("modus") or "")
         return {"text": frei, "baustein": "abschweifer_frei"}
     for anker, thema in story.get("abschweifer") or []:
         schluessel = f"abschweif:{thema}"
         if anker == fid and schluessel not in lage["gemacht"]:
             lage["gemacht"].add(schluessel)
+            lage["rueckkehrFrage"] = fid
+            lage["rueckkehrModus"] = str(lage.get("modus") or "")
             return {"text": _wahl(story, lage, schluessel, saetze.ABSCHWEIFER[thema]),
                     "baustein": f"abschweifer_{thema}"}
     return None
@@ -249,6 +253,8 @@ def _einzelwort(story: dict, lage: dict) -> dict[str, Any] | None:
     wort = rest[rnd.randrange(len(rest))]
     gemacht.append(wort)
     lage["letzterBaustein"] = f"einzelwort:{wort}"
+    lage["rueckkehrFrage"] = str(lage.get("frage") or "")
+    lage["rueckkehrModus"] = str(lage.get("modus") or "")
     return {"text": wort, "baustein": f"einzelwort:{wort}"}
 
 
@@ -261,6 +267,22 @@ def _grund_text(story: dict, lage: dict) -> str:
         return f"Ich hätte gerne einen Termin wegen {key}."
     varianten, _erwartet = saetze.GRUENDE[key]
     return _wahl(story, lage, "grund", varianten)
+
+
+def _rueckkehr_text(story: dict) -> str:
+    """Der Testanrufer verliert sein Hauptanliegen nach einer Stoerung nie."""
+    art = str(story.get("anliegen") or TERMIN)
+    if art == TERMIN:
+        grund = str(story.get("grundErwartet") or story.get("grund") or "").strip()
+        wegen = f" wegen {grund}" if grund and grund != "frei" else ""
+        return f"Danke. Ich möchte aber noch meinen Termin{wegen} vereinbaren."
+    if art == ABSAGEN:
+        return "Danke. Ich möchte aber noch meinen bestehenden Termin absagen."
+    if art == VERSCHIEBEN:
+        return "Danke. Ich möchte aber noch meinen bestehenden Termin verschieben."
+    if art == AUSKUNFT:
+        return "Danke. Ich möchte aber noch wissen, wann mein bestehender Termin ist."
+    return f"Danke. Ich möchte aber noch zu meinem eigentlichen Anliegen zurück: {art}."
 
 
 _FRAGE_LEER_MAX = 3  # Zuege ohne offene Frage, bevor der Anrufer sich verabschiedet
@@ -281,7 +303,27 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if "abschied" in lage["gemacht"]:
         return {"text": "", "baustein": "", "auflegen": True}
 
-    wort = _einzelwort(story, lage)
+    # Nach einem Abschweifer/Stichwort hat das Hauptgespraech Vorrang. Hat
+    # Bianca die vorher offene Frage wieder aufgenommen, beantwortet der
+    # Anrufer sie sofort. Ist Bianca auf eine Nebenaufgabe abgebogen, holt
+    # der Anrufer das urspruengliche Anliegen explizit zurueck.
+    rueckkehr_frage = lage.get("rueckkehrFrage")
+    direkt_antworten = False
+    if rueckkehr_frage is not None:
+        lage.pop("rueckkehrFrage", None)
+        rueckkehr_modus = str(lage.pop("rueckkehrModus", "") or "")
+        gleicher_faden = bool(fid) and (
+            fid == rueckkehr_frage
+            or not rueckkehr_modus
+            or str(lage.get("modus") or "") == rueckkehr_modus
+        )
+        if not gleicher_faden:
+            lage["letzterBaustein"] = "rueckkehr_hauptanliegen"
+            return {"text": _rueckkehr_text(story),
+                    "baustein": "rueckkehr_hauptanliegen"}
+        direkt_antworten = True
+
+    wort = None if direkt_antworten else _einzelwort(story, lage)
     if wort:
         return wort
     lage["letzterBaustein"] = ""
@@ -289,7 +331,7 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
 
     # Geplante Stoerungen: Abschweifer und Preis-Zwischenfrage verdraengen
     # die Antwort GENAU EINMAL — die Maschine muss die Frage erneut stellen.
-    stoer = _abschweifer(story, lage)
+    stoer = None if direkt_antworten else _abschweifer(story, lage)
     if stoer:
         return stoer
     if (story.get("zwischenfragePreis") and fid == "telefon"
@@ -431,6 +473,48 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
                 "baustein": "ja_generisch"}
     lage["gemacht"].add("abschied")
     return {"text": _wahl(story, lage, "abschied", saetze.ABSCHIED), "baustein": "abschied", "auflegen": True}
+
+
+def frei_saetze(story: dict) -> list[str]:
+    """Nur manuell eingegebene Werte fuer gezieltes Audio-Vorwaermen.
+
+    Freitext wird dabei einmal so normalisiert, wie er spaeter gesprochen
+    wird. Eigene Namen und Behandler zaehlen ebenfalls als Freitext; die
+    eingebauten Schnellwahlen nicht.
+    """
+    out: list[str] = []
+
+    def add(text: Any) -> None:
+        norm = " ".join(str(text or "").split())
+        if norm and norm not in out:
+            out.append(norm)
+
+    for feld in (
+        "eroeffnungText", "grundText", "wunschText", "versicherungText",
+        "slotText", "abschweiferText", "arztNotizText",
+    ):
+        norm = " ".join(str(story.get(feld) or "").split())
+        if norm:
+            story[feld] = norm
+            add(norm)
+
+    stimme = str(story.get("stimme") or "")
+    vorname = " ".join(str(story.get("vorname") or "").split())
+    nachname = " ".join(str(story.get("nachname") or "").split())
+    eigener_name = (
+        (vorname and vorname != saetze.VORNAMEN.get(stimme, ""))
+        or (nachname and nachname not in saetze.NACHNAMEN)
+    )
+    if eigener_name and vorname and nachname:
+        add(saetze.name_satz(vorname, nachname, int(story.get("seed") or 0)))
+        add(nachname)
+
+    behandler = " ".join(str(story.get("behandler") or "").split())
+    bekannte = {str(x).casefold() for x in BEHANDLER}
+    if behandler and behandler.casefold() not in bekannte:
+        add(saetze.arzt_satz(behandler, int(story.get("seed") or 0)))
+        add(behandler)
+    return out
 
 
 def saetze_fuer_audio(story: dict) -> list[str]:

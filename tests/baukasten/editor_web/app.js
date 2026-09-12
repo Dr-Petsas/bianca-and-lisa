@@ -12,6 +12,7 @@ const wahl = {
 let storyNr = 1;
 let poller = null;
 const gespielt = new Set();  // Audio-URLs, die das Mithoeren schon abgespielt hat
+const spielGeplant = new Set();
 let spielKette = Promise.resolve();
 const lautsprecher = new Audio();
 lautsprecher.preload = "auto";
@@ -67,7 +68,7 @@ function spielen(rel) {
     }
     if (!blob || blob.size < 44) {
       tonHinweis("Audio fehlt — Play nochmal tippen.");
-      return;
+      return false;
     }
     const obj = URL.createObjectURL(blob);
     try {
@@ -79,15 +80,23 @@ function spielen(rel) {
         const ende = () => {
           lautsprecher.removeEventListener("ended", ende);
           lautsprecher.removeEventListener("error", ende);
+          lautsprecher.removeEventListener("pause", ende);
+          lautsprecher.removeEventListener("emptied", ende);
           fertig();
         };
         lautsprecher.addEventListener("ended", ende);
         lautsprecher.addEventListener("error", ende);
+        // Ein Klick auf eine andere Bubble darf die Mithoer-Kette nicht
+        // dauerhaft blockieren, wenn er den laufenden Ton ersetzt.
+        lautsprecher.addEventListener("pause", ende);
+        lautsprecher.addEventListener("emptied", ende);
       });
+      return true;
     } catch (e) {
       ohrOffen = false;
       tonHinweis("Mithören startet nach einem Klick ins Fenster.");
       console.warn("studio-ton", url, e);
+      return false;
     } finally {
       try { URL.revokeObjectURL(obj); } catch { /* */ }
     }
@@ -244,7 +253,15 @@ function chipsBauen() {
   mehrfachwahl("chips-sprecher", KATALOG.sprecherKategorien || [], wahl.sprecher);
   const sp = $("chips-sprecher");
   if (sp) {
-    [...sp.children].forEach((c) => c.addEventListener("click", sprecherVorschauPlanen));
+    [...sp.children].forEach((c) => c.addEventListener("click", () => {
+      const staerke = $("sp-staerke");
+      // Eine Eigenschaft anzutippen muss sofort hörbar wirken. Stärke null
+      // ließ den gewählten Chip bisher optisch aktiv, technisch aber wirkungslos.
+      if (wahl.sprecher.size && staerke && Number(staerke.value) === 0) {
+        staerke.value = "65";
+      }
+      sprecherVorschauPlanen();
+    }));
   }
 }
 
@@ -681,16 +698,13 @@ function automatik() {
   wahl.versicherung = zuf(["privat", "gesetzlich"]);
   wahl.slotAnnahme = zuf([1, 2, 2, 3]);
   wahl.slotRichtung = zuf(["frueher", "spaeter"]);
-  wahl.abschweifer = new Set(Math.random() < 0.6 ? [zuf(KATALOG.abschweifer)] : []);
+  // Automatik baut ein schlüssiges Grundgespräch. Störungen bleiben als
+  // bewusste Schnellauswahl testbar und werden nicht heimlich eingestreut.
+  wahl.abschweifer = new Set();
   wahl.extras = new Set(Math.random() < 0.2 ? ["halbsatz"] : []);
   if (Math.random() < 0.5) wahl.extras.add("pzr");
-  const pool = KATALOG.einzelwoerter || [];
   wahl.einzelwoerter = new Set();
-  const n = 2 + Math.floor(Math.random() * 2);
-  if (pool.length) {
-    for (let i = 0; i < n; i++) wahl.einzelwoerter.add(zuf(pool));
-  }
-  einzelwortAnzahlSetzen(n);
+  einzelwortAnzahlSetzen(0);
   chipsBauen();
 }
 
@@ -717,6 +731,7 @@ async function laufStarten(anzahl) {
   if (!d.ok) { $("fehler").textContent = d.fehler || "Start fehlgeschlagen"; return; }
   storyNr += anzahl;
   gespielt.clear();
+  spielGeplant.clear();
   spielKette = Promise.resolve();
   pollerStarten();
 }
@@ -742,6 +757,29 @@ function bubbleBauen(z) {
   });
   if (z.frage) meta.insertAdjacentHTML("beforeend", `<span class="tag">frage=${z.frage}</span>`);
   if (z.baustein) meta.insertAdjacentHTML("beforeend", `<span class="tag">${z.baustein}</span>`);
+  if (z.audioPipeline) {
+    const audioTag = document.createElement("span");
+    audioTag.className = "tag audio-pipeline";
+    audioTag.textContent = "🎙 WAV → Bianca-STT";
+    meta.appendChild(audioTag);
+  }
+  if (z.stt && z.stt.winner) {
+    const win = String(z.stt.winner);
+    const sttTag = document.createElement("span");
+    sttTag.className = "tag stt-gewinner " + (win === "qwen" ? "qwen" : "parakeet");
+    sttTag.textContent = `STT-Gewinner: ${win === "qwen" ? "Qwen" : win === "parakeet" ? "Parakeet" : win}`;
+    const p = (z.stt.parakeet && z.stt.parakeet.text) || "";
+    const q = (z.stt.qwen && z.stt.qwen.text) || "";
+    sttTag.title = `Parakeet: ${p || "—"}\nQwen: ${q || (z.stt.qwen && z.stt.qwen.status) || "—"}`;
+    meta.appendChild(sttTag);
+    if (z.stt.qwen && z.stt.qwen.status) {
+      const qwenTag = document.createElement("span");
+      qwenTag.className = "tag stt-status";
+      qwenTag.textContent = `Qwen: ${String(z.stt.qwen.status).replaceAll("_", " ")}`;
+      if (q) qwenTag.title = q;
+      meta.appendChild(qwenTag);
+    }
+  }
   if (z.gesprochen && z.gesprochen !== z.text) {
     meta.insertAdjacentHTML("beforeend", `<span class="tag gesprochen">gesprochen: ${z.gesprochen}</span>`);
   }
@@ -752,9 +790,12 @@ function bubbleBauen(z) {
   if (z.audioUrl || z.audio) {
     const knopf = document.createElement("button");
     knopf.textContent = "▶";
-    knopf.addEventListener("click", () => {
-      ohrOeffnen();
-      spielen(z.audioUrl || z.audio);
+    knopf.title = "Diesen Gesprächszug abspielen";
+    knopf.addEventListener("click", async () => {
+      // Entsperrton und Nutzton strikt nacheinander. Parallel konnte der
+      // Entsperrton den gerade gestarteten Bubble-Ton sofort pausieren.
+      await ohrOeffnen();
+      await spielen(z.audioUrl || z.audio);
     });
     meta.appendChild(knopf);
   }
@@ -764,9 +805,15 @@ function bubbleBauen(z) {
 
 function mithoerenSpielen(z) {
   const rel = z.audioUrl || z.audio;
-  if (!mithoerenAn() || !rel || gespielt.has(rel)) return;
-  gespielt.add(rel);
-  spielKette = spielKette.then(() => spielen(rel));
+  if (!mithoerenAn() || !rel || gespielt.has(rel) || spielGeplant.has(rel)) return;
+  spielGeplant.add(rel);
+  spielKette = spielKette
+    .catch(() => false)
+    .then(() => spielen(rel))
+    .then((ok) => {
+      if (ok) gespielt.add(rel);
+    })
+    .finally(() => spielGeplant.delete(rel));
 }
 
 async function pollen() {
@@ -803,8 +850,10 @@ async function pollen() {
     while (dialog.children.length > d.zuege.length) dialog.removeChild(dialog.lastChild);
     for (let i = dialog.children.length; i < d.zuege.length; i++) {
       dialog.appendChild(bubbleBauen(d.zuege[i]));
-      mithoerenSpielen(d.zuege[i]);
     }
+    // Auch nach einem kurzen 404/noch nicht fertigen WAV erneut versuchen.
+    // Frueher wurde eine fehlgeschlagene URL fuer immer als gespielt markiert.
+    d.zuege.forEach(mithoerenSpielen);
     dialog.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "end" });
   } else if (!d.laeuft) {
     // Lauf fertig: Poller schlafen legen.
