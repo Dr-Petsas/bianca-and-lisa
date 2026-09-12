@@ -624,6 +624,9 @@ async function stilleStups(nr) {
     if (d.text) bubble("ki", d.text);
     phase("ki", "Bianca spricht …");
     await playUrl(d.audioUrl);
+    // W-STUPS-GESAMT: die Notleine verabschiedet sich — dann ist Schluss,
+    // sonst kam derselbe Abschluss-Satz beim nächsten Stups erneut.
+    if (d.hangup) { auflegen(); return true; }
     return true;
   } catch { return false; }
 }
@@ -1227,6 +1230,9 @@ const PATCHES = [
   ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
   ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
   ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Ich brauche eine Füllung“ öffnet auch vor dem Katalog-Laden sofort den sicheren Flow. „Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im Formular, unbelegte Aktenanlagen werden blockiert und eine leere Slotsuche läuft nicht mehr in Schleife."],
+  ["W-ABSCHIED (auflegen)", "12.09.", "Gespräch", "Eindeutige Schlusssätze („auf Wiederhören“, „tschüss“, „bis denn“, auch als „Auf Wiederhoeren“ geschrieben) beenden den Anruf wirklich — vorher sprach Bianca den Abschied und die Leitung blieb offen. Während Nummern- oder Namensdiktat zählt nur der unmissverständliche Kern. Notaus: ABSCHIED_AUFLEGEN=0."],
+  ["W-HALLO-ANTWORT", "12.09.", "Gespräch", "Die Wohlsein-Frage entfällt, sobald ein Anliegen auf dem Tisch liegt oder der Anrufer Schmerzen/Beschwerden nennt — dann nur noch eine Feststellung. Stellt Bianca sie doch, geht die Antwort des Anrufers nicht mehr verloren: sie wird mit dem geparkten Wunsch zusammengeführt."],
+  ["W-STUPS-GESAMT + W-FOKUS", "12.09.", "Gespräch", "Stupse werden über den GANZEN Anruf gezählt: ab dem vierten entfällt „Sind Sie noch dran?“, ab dem sechsten verabschiedet sich die Notleine mit Rückruf-Notiz und legt auf (auch auf dem Stille-Pfad — das hangup reicht bis Brücke und Dock durch). Kein stummer Zug mehr, Wächter-Gedächtnis und LLM-Verlauf sind gedeckelt, und nach vier freien Zügen holt die Drift-Bremse zur Pflichtfrage zurück."],
 ];
 
 let kTab = "faehig";

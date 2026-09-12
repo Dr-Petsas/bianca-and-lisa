@@ -50,6 +50,12 @@ def test_klare_schlusssaetze():
     for satz in (
         "Auf Wiederhören.",
         "Auf wiederhören!",
+        # Live 12.09.2026: das Dock/STT liefert Umlaute teils als oe/ue —
+        # „Auf Wiederhoeren!" rutschte durch und das Modell improvisierte
+        # „Nein, bitte nicht auflegen!".
+        "Auf Wiederhoeren!",
+        "Ach wissen Sie was, ich melde mich spaeter nochmal. Auf Wiederhoeren!",
+        "Okay, danke, tschuess.",
         "Auf Wiedersehen.",
         "Ja, dann auf Wiederhören.",
         "Okay, danke, tschüss.",
@@ -166,6 +172,43 @@ def test_notleine_beendet_endlose_stups_schleife():
     presence = [t["text"] for t in texte if "noch dran" in t["text"].casefold()]
     assert len(presence) <= 2, (
         "Presence darf nicht bei jeder Stille-Phase neu kommen")
+
+
+def test_notleine_sagt_ihren_schlusssatz_nur_einmal():
+    """Live-Probe 12.09.2026: der Schlusssatz kam zweimal, weil der
+    Stups-Pfad das hangup verschluckte. Selbst wenn der Klient das Auflegen
+    verpasst, wird derselbe Satz nie wiederholt."""
+    sit = _sit()
+    gehirn.sammler(sit).update({"modus": "", "phase": "fertig"})
+    for _ in range(3):
+        for _ in range(2):
+            letzte = bianca_agent.stille_zug(sit)
+        stille.reset(sit)
+    assert letzte.get("hangup") is True
+    nochmal = bianca_agent.stille_zug(sit)
+    assert not nochmal["text"], "nach dem Abschied wird geschwiegen"
+
+
+def test_stille_route_reicht_hangup_durch(monkeypatch):
+    """Die Notleine nuetzt nichts, wenn /api/stille das Feld nicht meldet:
+    Bruecke und Dock legen dann nicht auf (live 12.09.2026)."""
+    from bianca import server as bianca_server
+
+    sit = _sit()
+    sit["id"] = "probe"
+    gehirn.sammler(sit).update({"modus": "", "phase": "fertig"})
+    monkeypatch.setattr(bianca_server.session, "holen", lambda sid: sit)
+    monkeypatch.setattr(bianca_server.DIENST, "stimme", lambda text: ("api/audio/x.wav", 0.1))
+    monkeypatch.setattr(bianca_server.halbsatz, "abholen", lambda s: "")
+    body = bianca_server.HangupIn(sessionId="probe")
+
+    gesehen = []
+    for _ in range(3):
+        for _ in range(2):
+            gesehen.append(bianca_server.api_stille(body))
+        stille.reset(sit)
+    assert gesehen[-1].get("hangup") is True
+    assert not any(d.get("hangup") for d in gesehen[:-1])
 
 
 def test_presence_deckel_laesst_die_frage_durch():

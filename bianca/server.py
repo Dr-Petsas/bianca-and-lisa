@@ -266,8 +266,14 @@ def api_stille(body: HangupIn):
     timings: dict = {"tts": tts_s}
     session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)
     mitschnitt.zug(sit, DIENST, art="stille", text=text, timings=timings, audio_url=url)
-    print(f"bianca-stille session={body.sessionId} text={text!r}", flush=True)
-    return {"ok": True, "empty": False, "text": text, "audioUrl": url, "writeLive": WRITE_LIVE}
+    # W-STUPS-GESAMT: die Notleine verabschiedet sich auf dem Stups-Pfad —
+    # ohne dieses Feld spricht Bianca den Abschied und die Leitung bleibt
+    # offen (live 12.09.2026 sagte sie ihn beim naechsten Stups erneut).
+    auflegen = bool(reply.get("hangup"))
+    print(f"bianca-stille session={body.sessionId} text={text!r}"
+          f"{' [hangup]' if auflegen else ''}", flush=True)
+    return {"ok": True, "empty": False, "text": text, "audioUrl": url,
+            "hangup": auflegen, "writeLive": WRITE_LIVE}
 
 
 @app.post("/api/listen")

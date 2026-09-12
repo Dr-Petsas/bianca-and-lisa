@@ -42,24 +42,31 @@ MAX_KERN_WOERTER = 5
 
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
+# Umlaute kommen je nach Quelle als ö/oe/o an (STT, Dock-Tastatur, alte
+# ASCII-Transkripte). Live 12.09.2026 rutschte „Auf Wiederhoeren!" deshalb
+# durch und das Modell bettelte „bitte nicht auflegen".
+_OE = r"(?:ö|oe|o)"
+_UE = r"(?:ü|ue|u)"
+_AE = r"(?:ä|ae|a)"
+
 # Unmissverständlich: diese Formen sagt niemand mitten im Anliegen.
 _KLAR_RE = re.compile(
-    r"auf\s*wieder\s*h[oö]r|auf\s*wieder\s*seh|auf\s*wiederschau|"
-    r"\bwiederh[oö]ren\b|\bwiedersehen\b|"
-    r"\btsch[uü]s{1,2}(?:i|chen)?\b|\badieu\b|\bad(?:i|ie)os\b",
+    rf"auf\s*wieder\s*h{_OE}r|auf\s*wieder\s*seh|auf\s*wieder\s*schau|"
+    rf"\bwiederh{_OE}ren\b|\bwiedersehen\b|"
+    rf"\btsch{_UE}s{{1,2}}(?:i|chen)?\b|\badieu\b|\bad(?:i|ie)os\b",
     re.I,
 )
 
 # Kurzformen — nur wenn sonst nichts mehr im Satz steht.
 _KURZ_RE = re.compile(
-    r"^(?:(?:dann|denn|na|tja|ach)\s+)?(?:"
-    r"bis\s+(?:denn|dann|bald|sp[aä]ter|demn[aä]chst|nachher)|"
-    r"ciao|tschau|servus|"
-    r"mach(?:en\s+sie)?(?:\s+es)?\s+gut|"
-    r"sch[oö]nen\s+(?:tag|abend|feierabend|sonntag)(?:\s+noch)?|"
-    r"sch[oö]nes\s+wochenende|"
-    r"alles\s+gute"
-    r")$",
+    rf"^(?:(?:dann|denn|na|tja|ach)\s+)?(?:"
+    rf"bis\s+(?:denn|dann|bald|sp{_AE}ter|demn{_AE}chst|nachher)|"
+    rf"ciao|tschau|servus|"
+    rf"mach(?:en\s+sie)?(?:\s+es)?\s+gut|"
+    rf"sch{_OE}nen\s+(?:tag|abend|feierabend|sonntag)(?:\s+noch)?|"
+    rf"sch{_OE}nes\s+wochenende|"
+    rf"alles\s+gute"
+    rf")$",
     re.I,
 )
 

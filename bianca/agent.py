@@ -413,6 +413,12 @@ def stille_zug(sit: dict) -> dict[str, Any]:
     if time.time() < float(sit.get("denkPauseBis") or 0):
         return {"text": "", "book": None}
 
+    if sit.get("notleineGesagt"):
+        # Der Abschied ist gesprochen. Sollte das Auflegen am Klienten
+        # haengen, wird jetzt geschwiegen — nie denselben Schlusssatz
+        # noch einmal (live 12.09.2026 kam er zweimal).
+        return {"text": "", "book": None}
+
     n = stille.stups_zaehlen(sit)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
@@ -510,6 +516,7 @@ def _notleine(sit: dict) -> dict[str, Any]:
     text = abschied.notbremse_satz(notiz=notiz)
     stille.anhaengen(sit, text)
     wiederholung.gesagt_merken(sit, text)
+    sit["notleineGesagt"] = True
     spur.merken(sit, "stille-notleine", f"gesamt={stille.gesamt(sit)}")
     if not abschied.an():
         return {"text": text, "book": None}

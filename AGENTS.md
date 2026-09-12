@@ -413,29 +413,33 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
   nie Scribe, WAV-Direktspur, Nachkorrektur); Live-Probe:
   `tests/stt_whisper_probe.py` (echter Container + echter Rückfall).
 
-## Qwen3-ASR-Ohr auf der 3060 (W-STT-QWEN 09.09.2026 — nicht rückbauen)
+## Parakeet + Qwen parallel (W-STT-QWEN-PARALLEL 11.09.2026 — nicht rückbauen)
 
-Chef nach dem Rollback auf den Morgenstand: Zielpipeline ist ausdrücklich
-**Qwen3-ASR-1.7B auf der RTX 3060 -> Bianca-Worker -> Qwen-LLM + Qwen-TTS
-auf der 5090**, ohne Whisper im Sprachpfad.
+Live-Messung über den 3060-Hybrid-Gateway ergab 0,47–2,48 s STT statt
+0,17–0,47 s mit lokalem Parakeet. Deshalb ist die Reihenfolge verbindlich:
+**5090-Parakeet ist das sofortige Haupt-Ohr; Qwen3-ASR auf der separaten GPU
+läuft parallel und ist nur der Qualitätsprüfer.**
 
-- `STT_QWEN_BASE=wss://paraqwenstt.pickadoc-tunnel.com` aktiviert den
-  Qwen-Modus, `STT_QWEN_KEY` trägt den Bearer-Token. Der Gateway bleibt
-  lokal auf `127.0.0.1:8222`; der bestehende Cloudflare-Tunnel transportiert
-  HTTP und WebSocket. Der kompatible Stream-Vertrag ist
-  `begin` -> PCM16 mono 16 kHz -> `end` -> genau ein `final`; Partials
-  dürfen Bianca nie steuern.
-- Solange `STT_QWEN_BASE` gesetzt ist, ruft `kern/stt.py` auch bei einem
-  alten/stale `STT_WHISPER_BASE` **nie Whisper** auf. Bei Ausfall übernimmt
-  ausschließlich `STT_BASE` (Parakeet) nach 30 s Qwen-Pause; ohne STT_BASE
-  wird der Fehler hörbar geworfen, nie ElevenLabs.
-- Der 3060-Gateway darf intern ebenfalls keinen Whisper-Vergleich starten
-  (`WHISPER_URL` leer). Sein Parakeet-Vergleich ist nur ein lokales,
-  explizit in `source`/`degraded` gemeldetes Sicherheitsnetz für Qwen.
-- Der öffentliche Tunnel ist niemals ohne Bearer-Token zu betreiben. Health
-  zeigt `Qwen3-ASR 1.7B (3060) + Parakeet-Rueckfall`.
-- Tests: `tests/test_stt_qwen.py`; verpflichtend vor Rollout zusätzlich
-  echte WAV-Probe gegen den 3060-Endpunkt und `tools/prod_smoke.py`.
+- `STT_BASE` startet im aktuellen Thread; Qwen startet gleichzeitig in genau
+  EINEM Hintergrundslot. Plausible Parakeet-Texte warten **0 ms**. Nur
+  lexikalisch auffällige Ergebnisse warten maximal `STT_QWEN_GRACE_S`
+  (Default 0,25 s). Ein noch laufender alter Qwen-Zug wird nie aufgestaut.
+- `STT_QWEN_FINAL_BASE=http://192.168.0.167:8223` ist der schnelle direkte
+  LAN-Weg zum gereinigten Qwen-only-Container. Dort läuft für Bianca KEIN
+  zweites Parakeet. Der alte geschützte Hybrid-Gateway unter
+  `STT_QWEN_BASE` bleibt nur kompatibler Test-/Rückweg; Cloudflare gehört
+  nicht in Live-Biancas STT-Pfad.
+- Qwen darf nur ein deutsches, nicht leeres, nicht aus dem Vokabular-Kontext
+  nachgesprochenes Final übernehmen. Abweichende Ziffernfolgen bleiben aus
+  Sicherheitsgründen bei Parakeet. Partials steuern Bianca nie.
+- Qwen-Ausfall pausiert den Prüfpfad 30 s, beeinträchtigt Parakeets Antwort
+  aber nicht. Bei gesetztem Qwen ruft `kern/stt.py` auch bei einem stale
+  `STT_WHISPER_BASE` nie Whisper oder ElevenLabs auf.
+- Der LAN-Qwen-Endpunkt ist nur an die 3060-LAN-IP gebunden und verlangt
+  `STT_QWEN_KEY` als internen Token. Health zeigt
+  `Parakeet (lokal) + Qwen3-ASR parallel (3060)`.
+- Tests: `tests/test_stt_qwen.py`; vor Rollout zusätzlich direkte
+  Qwen-WAV-Probe und `tools/prod_smoke.py`.
 
 ## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
 
@@ -2185,6 +2189,67 @@ und schließen bei passender Länge/Ähnlichkeit auch ohne „fertig“ ab. Ein
 Vorname am Stück bleibt der sofortige Schnellweg.
 Tests:
 `tests/test_datenerfassung_pausen.py`.
+
+## Auflegen, Icebreaker, Fokus (12.09.2026 — nicht rückbauen)
+
+Chef 12.09.2026 nach mehreren Testanrufen (wörtlich): „sie fragt manchmal
+immer noch wie geht es Ihnen, was unklug ist, da fragen vom job ablenken …
+diese antwort ignoriert bianca komplett … bei mehreren turns wenn die
+gespräche sehr lang sind verliert sich bianca in stille oder schleifen …
+und Bianca soll lernen aufzulegen bei eindeutigen sätzen die ein gespräch
+beenden wie tschüss auf wiederhören wiedersehen bis denn etc."
+
+**W-ABSCHIED** — `kern/abschied.py` ist die EINE Stelle, die einen
+Schlusssatz erkennt. Zwei Stufen, damit ein Hörfehler keinen laufenden
+Vorgang abwürgt: unmissverständliche Kerne („auf Wiederhören", „tschüss")
+gelten allein, Kurzformen („bis denn", „ciao", „schönen Tag noch") nur wenn
+der Satz nach Abzug der Floskeln nichts anderes mehr trägt (höchstens
+`MAX_KERN_WOERTER`). Umlaute kommen je nach Quelle als ö/oe/o an — die
+Muster decken beides ab (live 12.09. rutschte „Auf Wiederhoeren!" durch und
+das Modell bettelte „bitte nicht auflegen"). Eingehängt in
+`bianca/agent.user_turn` VOR Intent/Fluss (`streng=True`, solange der
+Anrufer Ziffern oder Buchstaben diktiert) und an den drei Abschieds-Returns
+in `bianca/flow.py`, die den Satz vorher sprachen OHNE `hangup` zu setzen.
+Notaus: `ABSCHIED_AUFLEGEN=0`.
+
+**W-HALLO-ANTWORT** — `gehirn.hallo_frage_unpassend` unterdrückt die
+Wohlsein-Frage, sobald ein Anliegen läuft (`hirn.aktiv`, `sammler["modus"]`)
+oder der Satz nach `anliegen_art` Notfall/Beschwerde ist; `_hallo_form`
+liefert dann eine Feststellung statt einer Frage. Stellt Bianca sie doch
+(W-HALLO-PAUSE parkt den Wunsch in `anruferHalloOffenerText`), wird die
+Antwort nicht mehr verworfen: trägt sie Inhalt (`ist_nur_wohlsein` ist
+False), geht sie MIT dem geparkten Original in den Folgezug
+(Spur `hallo-antwort-aufgenommen`).
+
+**W-STUPS-GESAMT** — `stupse` wird bei jedem Anrufer-Satz genullt, `MAX_STUPSE`
+greift also nur INNERHALB einer Stillephase. Live 11.09. (Session 9395e2ce,
+109 Züge / 23 Minuten) wechselten sich deshalb 15-mal „Sind Sie noch dran?"
+und dieselbe Frage ab. `kern/stille.py` zählt zusätzlich über den GANZEN
+Anruf (`gesamt`): ab `PRESENCE_BIS` entfällt die Presence-Floskel, ab
+`GESAMT_MAX` verabschiedet `agent._notleine` freundlich und legt auf — ein
+offenes Anliegen wird vorher als echte Rückruf-Notiz gesichert. Presence
+kommt nur beim ERSTEN Stups des Anrufs (dreimal „Sind Sie noch dran?" war
+selbst die Schleife), das Talk-Thema nur ohne offene Pflichtfrage und nie
+aus einer Beschimpfung (`anstand.unfein`). Der Schlusssatz fällt genau
+einmal (`notleineGesagt`).
+**Die Durchreiche gehört dazu:** `POST /api/stille` MUSS `hangup` melden,
+`sip_bridge._stups` es beantworten (`_ausklingen_und_auflegen`) und
+`bianca_web/app.js` den Anruf beenden — ohne diese drei Stellen sprach die
+Notleine ihren Abschied und die Leitung blieb offen (live-Probe 12.09.:
+derselbe Satz kam beim nächsten Stups erneut).
+
+**W-FOKUS** — kein stummer Zug mehr: liefert das Modell nichts, antwortet
+`agent._nie_stumm` mit der offenen Pflichtfrage; streichen alle Wächter den
+Stups, gewinnt die Frage (Spur `stups-nie-stumm`); sind alle Frage-Varianten
+verbrannt, kommt die Frage mit Präfix statt Presence. Nach `_FOKUS_MAX`
+freien Zügen holt die Drift-Bremse zur Pflichtfrage zurück und räumt den
+Talk-Stapel. Gegen den Ballast langer Gespräche: `wiederholung`-Gedächtnis
+ist ein Fenster (`GEDAECHTNIS_SAETZE`), der LLM-Verlauf gedeckelt
+(`llm.VERLAUF_MAX`, System-Kopf bleibt).
+
+Tests: `tests/test_abschied.py`, `tests/test_fokus.py`, `tests/test_stille.py`,
+Stups-Block in `tests/test_sip_vad.py`. Live-Proben (read-only, im Container):
+`tools/_probe_abschied_live.py`, `tools/_probe_langgespraech.py`.
 
 ## Server-Deploy (pickadoc1) — die .env-Falle
 
