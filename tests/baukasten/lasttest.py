@@ -739,9 +739,12 @@ def _warte_fortsetzung(zug: dict[str, Any]) -> str:
     if rest:
         return rest
     baustein = str(zug.get("baustein") or "")
-    if baustein in {"buchstabieren", "telefon", "name", "vorname", "nachname"}:
+    if baustein in {
+        "buchstabieren", "telefon", "name", "vorname", "nachname",
+        "nachname_klar",
+    }:
         return "Fertig."
-    return ""
+    return "Ja."
 
 
 def _test_audit_fehler(ev: dict[str, Any]) -> str:
@@ -761,13 +764,13 @@ def _test_audit_fehler(ev: dict[str, Any]) -> str:
 def _fachlich_abgeschlossen(story: dict[str, Any], lage: dict[str, Any],
                             letzter_zug: dict[str, Any]) -> bool:
     baustein = str(letzter_zug.get("baustein") or "")
-    if baustein == "lasttest_keine_buchung":
+    if baustein in {"lasttest_keine_buchung", "doku_abschied", "notfall_abschied"}:
         return True
     art = str(story.get("anliegen") or geschichten.TERMIN)
     if art in geschichten.DOKU_ARTEN:
-        return baustein == "doku_abschied"
+        return str(lage.get("fachlichErledigt") or "") == "doku_auskunft"
     return str(lage.get("fachlichErledigt") or "") in {
-        "kein_slot", "notfall_auskunft",
+        "kein_slot", "notfall_auskunft", "doku_auskunft",
     }
 
 

@@ -76,6 +76,11 @@ def wav_schliessen(blob: bytes) -> bytes:
 # Satz-Fugen gestueckelt, einzeln gerendert und mit kurzer Pause gefuegt.
 _HAPPEN_ZEICHEN = 80
 _PAUSE_S = 0.22
+# Qwen kann bei Ziffernketten in eine Endlosschleife laufen (live 12.09.:
+# 87-Zeichen-Handynummer -> 147 s Audio). Ein Happen darf nie laenger
+# als ein kurzer Telefonsatz klingen, sonst steht der Lasttest.
+_MAX_HAPPEN_S = 8.0
+_MAX_SATZ_S = 16.0
 
 
 def _happen(text: str) -> list[str]:
@@ -116,13 +121,25 @@ def audio_holen(stimme: str, text: str, *, timeout: float = 180.0) -> Path:
     t0 = time.perf_counter()
     pcm = b""
     pause = b"\x00\x00" * int(PCM_RATE * _PAUSE_S)
+    max_happen = int(PCM_RATE * _MAX_HAPPEN_S) * 2
+    max_satz = int(PCM_RATE * _MAX_SATZ_S) * 2
     for i, teil in enumerate(_happen(text)):
         r = httpx.post(f"{TTS_BASE}/speak", json={"text": teil, "voice": stimme},
                        timeout=timeout)
         r.raise_for_status()
         if i:
             pcm += pause
-        pcm += r.content
+        stueck = r.content
+        if len(stueck) > max_happen:
+            print(f"baukasten-klang: Happen gekappt {len(stueck)/(PCM_RATE*2):.1f}s"
+                  f" -> {_MAX_HAPPEN_S:.0f}s ({stimme})", flush=True)
+            stueck = stueck[:max_happen]
+        pcm += stueck
+        if len(pcm) >= max_satz:
+            print(f"baukasten-klang: Satz gekappt {len(pcm)/(PCM_RATE*2):.1f}s"
+                  f" -> {_MAX_SATZ_S:.0f}s ({stimme})", flush=True)
+            pcm = pcm[:max_satz]
+            break
     wav = pcm16_wav(pcm)
     if len(wav) <= 44:
         raise RuntimeError(f"leerer Render fuer {stimme}: {text!r}")

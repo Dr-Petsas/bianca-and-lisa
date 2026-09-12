@@ -144,6 +144,44 @@ def test_thaler_alias_ist_nur_mit_tenant_hotword_aktiv():
     _mit_lokal(fake2, ohne_marker)
 
 
+def test_thaler_fachhotwords_kommen_aus_dem_mandanten():
+    tenant = tenants.laden("thaler")
+    kw = tenants.stt_keywords(tenant)
+    assert "Thaler" in kw
+    assert "Röntgenbild" in kw
+    assert "Röntgenbilder" in kw
+    assert "Sprechstundenhilfe" in kw
+
+
+def test_thaler_live_hoerfehler_werden_konservativ_korrigiert():
+    from stt_serve.postcorrect import correct_transcript
+
+    kw = ["Thaler", "Röntgenbild", "Röntgenbilder", "Sprechstundenhilfe"]
+    faelle = {
+        "Ich bräuchte mein Rückenbild bitte.": "Ich bräuchte mein Röntgenbild bitte.",
+        "Ich brauche mein Rentenbild für den Zahnarzt.": "Ich brauche mein Röntgenbild für den Zahnarzt.",
+        "Ein Rhöngbild.": "Ein Röntgenbild.",
+        "Bitte den Räumenbild Herr Fox.": "Bitte den Röntgenbild Herr Fox.",
+        "Röntgenbulder faxen zum Zahnarzt Doktor Esser.": "Röntgenbilder faxen zum Zahnarzt Doktor Esser.",
+        "Ja, ich brauche eine Spress von der Hilfe.": "Ja, ich brauche eine Sprechstundenhilfe.",
+        "Wild einer Sprechstunde Hilfesprecher.": "Wild einer Sprechstundenhilfe.",
+    }
+    for gehoert, erwartet in faelle.items():
+        text, ersetzt = correct_transcript(gehoert, kw)
+        assert text == erwartet, (gehoert, text)
+        assert ersetzt, gehoert
+
+    # Die starken Aliase gelten ausschließlich mit ihrem Fach-Hotword.
+    for gehoert in ("Rückenbild.", "Spress von der Hilfe."):
+        text, _ = correct_transcript(gehoert, ["Thaler"])
+        assert text == gehoert, (gehoert, text)
+
+    # Plausible Personennamen niemals blind zu einem Dokument umschreiben.
+    text, ersetzt = correct_transcript("Brent Campbellt.", kw)
+    assert text == "Brent Campbellt."
+    assert not ersetzt
+
+
 def test_postcorrect_kopie_fixt_behandler_hoerfehler():
     # Die Kopie von Claras stt_postcorrect im Container-Ordner: Anlaut-
     # Verwechslung P/B ("Betsas") und Vokal-Garble ("Patrikus") muessen auf
@@ -215,6 +253,8 @@ if __name__ == "__main__":
     test_tenant_keywords_sind_behandler_nachnamen()
     test_praxisname_ist_tenant_hotword_ohne_generische_woerter()
     test_thaler_alias_ist_nur_mit_tenant_hotword_aktiv()
+    test_thaler_fachhotwords_kommen_aus_dem_mandanten()
+    test_thaler_live_hoerfehler_werden_konservativ_korrigiert()
     test_postcorrect_kopie_fixt_behandler_hoerfehler()
     test_lokal_fehler_wirft_statt_zurueckzufallen()
     test_kyrillische_halluzination_wird_verworfen()

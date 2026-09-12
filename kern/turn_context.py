@@ -159,7 +159,16 @@ def _patient(sit: dict[str, Any]) -> dict[str, Any]:
     patient_id = _s(s.get("patientId") or pat.get("id") or anrufer.get("patientId"))
     out.update({
         "name": name,
+        "vorname": _s(s.get("vorname") or pat.get("firstName") or anrufer.get("vorname")),
+        "nachname": _s(s.get("nachname") or pat.get("lastName") or anrufer.get("nachname")),
         "patientId": patient_id,
+        "telefon": _s(
+            s.get("telefon") or s.get("aktePhone")
+            or pat.get("phone") or anrufer.get("telefon")
+        ),
+        "geschlecht": _s(s.get("geschlecht") or pat.get("gender") or anrufer.get("geschlecht")),
+        "geburtsdatum": _s(pat.get("birthDate") or anrufer.get("geburtsdatum")),
+        "versicherung": _s(s.get("versicherung") or s.get("versicherungAkte")),
         "quelle": (
             "sammler_bestaetigt" if _s(s.get("nachname"))
             else "patientenkartei" if pat
@@ -167,6 +176,15 @@ def _patient(sit: dict[str, Any]) -> dict[str, Any]:
         ),
         "letzterBesuch": _s(s.get("letzterBesuch")),
         "letzterGrund": _s(s.get("letzterGrund")),
+        "letzterArzt": _s(
+            (s.get("arzt") or {}).get("calendarName")
+            if isinstance(s.get("arzt"), dict)
+            else ""
+        ) or _s(
+            (sit.get("anruferKartei") or {}).get("doctorName")
+            if isinstance(sit.get("anruferKartei"), dict)
+            else ""
+        ),
         "kommendeTermine": _termine(sit.get("upcoming")),
         "vergangeneTermine": _termine(sit.get("past"), limit=3),
     })

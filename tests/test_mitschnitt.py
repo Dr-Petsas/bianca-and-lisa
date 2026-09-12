@@ -157,6 +157,21 @@ def test_liste_laden_loeschen(monkeypatch, tmp_path):
     assert mit.loeschen("bianca", a["id"]) is False
 
 
+def test_studio_anruf_traegt_testmarke_statt_unbekannt(monkeypatch, tmp_path):
+    _umleiten(monkeypatch, tmp_path)
+    d = _dienst()
+    sit = _sit("cccc3333cccc3333")
+    sit["testAnruf"] = True
+    sit["testName"] = "Markus Grunewald"
+    mit.zug(sit, d, art="start", text="Guten Tag!", timings={})
+    ein = mit.liste("bianca")
+    assert ein[0]["testAnruf"] is True
+    assert ein[0]["testName"] == "Markus Grunewald"
+    assert ein[0]["patientName"] == "Markus Grunewald"
+    m = mit.laden("bianca", sit["id"])
+    assert m["testAnruf"] is True
+
+
 def test_anruf_uid_ist_uuid_hex_und_im_manifest(monkeypatch, tmp_path):
     """Neue Sitzungen tragen eine 32-Hex-UUID; Mitschnitt speichert sie als id
     und reicht phoneCallId (Portal) mit — Detailansicht zeigt beides."""

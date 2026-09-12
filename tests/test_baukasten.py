@@ -521,6 +521,60 @@ def test_story_runner_erkennt_natuerliche_behandlerfrage():
     ) == "arzt"
 
 
+def test_story_runner_bricht_nicht_an_taskrouter_und_namensloop_ab():
+    from tests.baukasten import geschichten
+
+    assert geschichten._frage_aus_text(
+        "Geht es um einen Termin, eine Auskunft oder möchten Sie mit einem Mitarbeiter sprechen?"
+    ) == "anliegen"
+    assert geschichten._frage_aus_text(
+        "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, sagen Sie am Ende einfach fertig."
+    ) == "buchstabieren"
+    assert geschichten._frage_aus_text(
+        "Welche Krankenkasse haben Sie denn?"
+    ) == "versicherung"
+
+    story = {
+        "anliegen": geschichten.TERMIN,
+        "grund": "ZE Besprechung",
+        "nachname": "Feldkamp",
+        "seed": 1,
+    }
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "biancaText": (
+            "Geht es um einen Termin, eine Auskunft oder möchten Sie "
+            "mit einem Mitarbeiter sprechen?"
+        ),
+    })
+    zug = geschichten.naechster_baustein(story, lage)
+    assert zug["baustein"] == "anliegen"
+    assert "termin" in zug["text"].lower()
+    assert "ze besprechung" in zug["text"].lower()
+    assert zug["text"].lower().strip() not in {"ja, gerne.", "ja, das passt.", "gerne, ja."}
+
+    lage["frage"] = "buchstabieren"
+    lage["biancaText"] = "Bitte sprechen Sie ihn einmal langsam aus."
+    erst = geschichten.naechster_baustein(story, lage)
+    assert erst["baustein"] == "buchstabieren"
+    assert "fertig" in erst["text"].lower()
+    lage["frage"] = "buchstabieren"
+    lage["biancaText"] = "Bitte sprechen Sie ihn einmal langsam aus."
+    nochmal = geschichten.naechster_baustein(story, lage)
+    assert nochmal["baustein"] == "nachname_klar"
+    assert "feldkamp" in nochmal["text"].lower()
+
+    lage["frage"] = ""
+    lage["biancaText"] = (
+        "Vielen Dank, Herr Hachbach. Ich habe Ihre Daten notiert. "
+        "Ich suche jetzt nach einem passenden Termin für Sie bei Doktor Petsas."
+    )
+    warte = geschichten.naechster_baustein(story, lage)
+    assert warte["baustein"] == "warte_suche"
+    assert not warte.get("auflegen")
+
+
 def test_story_runner_erkennt_sicher_erledigtes_dokumentanliegen():
     from tests.baukasten import geschichten
 
@@ -534,7 +588,8 @@ def test_story_runner_erkennt_sicher_erledigtes_dokumentanliegen():
         ),
     })
     nichts = geschichten.naechster_baustein(story, lage)
-    assert nichts["baustein"] == "nichts_mehr"
+    assert nichts["baustein"] == "doku_abschied"
+    assert nichts["auflegen"] is True
     lage["biancaText"] = "Sehr gerne. Auf Wiederhören."
     ende = geschichten.naechster_baustein(story, lage)
     assert ende["baustein"] == "doku_abschied"
@@ -699,7 +754,7 @@ def test_lasttest_setzt_diktat_wartezug_mit_fertig_fort():
     }) == "Fertig."
     assert lasttest._warte_fortsetzung({
         "baustein": "abschweifer",
-    }) == ""
+    }) == "Ja."
 
 
 def test_lasttest_no_write_blockiert_alle_schreibklassen(monkeypatch, tmp_path):

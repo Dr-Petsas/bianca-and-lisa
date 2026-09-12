@@ -103,6 +103,21 @@ _DENTAL_KERNE = {
     "Zahnspange/KFO",
     "Zahnersatz-Beratung",
 }
+_DENTAL_WUNSCH_RE = re.compile(
+    r"\bzahn\w*|\bkiefer\w*|\bimplantat\w*|\bkrone\w*|\bbrücke\w*|"
+    r"\bbruecke\w*|\bprothese\w*|\binvisali\w*|\baligner\w*|"
+    r"\bschiene\w*|\bpzr\b|\bprophylaxe\b|\bbleach\w*|"
+    r"\baufhellung\b|\bwurzel(?:behandlung|kanal)?\b",
+    re.I,
+)
+_DENTAL_VERNEINT_RE = re.compile(
+    r"\b(?:nicht|kein\w*|ohne)\s+(?:(?:zum|zur|beim)\s+)?"
+    r"(?:(?:professionelle|neue)\s+)?"
+    r"(?:zahn\w*|kiefer\w*|implantat\w*|krone\w*|brücke\w*|bruecke\w*|"
+    r"prothese\w*|invisali\w*|aligner\w*|schiene\w*|pzr|prophylaxe|"
+    r"bleach\w*|aufhellung|wurzel(?:behandlung|kanal)?)\b",
+    re.I,
+)
 
 # Chef 27.08.2026: "im Zweifelsfall Besprechungs- oder Kontrolltermine".
 # "KCH Kontroll…" zuerst (Allgemein-Zahnheilkunde) — sonst gewann im grossen
@@ -179,7 +194,16 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
     kat = katalog
     if kat is None:
         kat = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
+    from kern import zimmer_map
+    if zimmer_map.klar_nicht_buchbar(tenant, text):
+        return "", None
     zahn = motive.ist_zahn(kat)
+    # Praxis-Kataloge dürfen sich nicht gegenseitig überlagern. Exakter
+    # Katalogname gewinnt vor Zahnarzt-Konzepten und vor generischen Wörtern
+    # wie "Sprechstunde" oder "Kontrolle".
+    vm = katalog_exakt(text, katalog=kat, calendar_id=calendar_id)
+    if vm is not None:
+        return sprechname(vm), vm
     for cre, kern, muster in KONZEPTE:
         if not cre.search(text):
             continue
@@ -195,6 +219,20 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
     if vm is not None:
         return sprechname(vm), vm
     return "", None
+
+
+def fachfremder_zahngrund(tenant: dict, text: str,
+                          *, katalog: list[dict] | None = None) -> bool:
+    """Zahnwunsch in einem nachweislich nicht-zahnärztlichen Katalog."""
+    kat = katalog
+    if kat is None:
+        kat = tenant.get("visitMotives") if isinstance(
+            tenant.get("visitMotives"), list) else []
+    bereinigt = _DENTAL_VERNEINT_RE.sub(" ", _ohne_verneintes(text))
+    return bool(
+        kat and not motive.ist_zahn(kat)
+        and _DENTAL_WUNSCH_RE.search(bereinigt)
+    )
 
 
 def fallback_motiv(tenant: dict, *, katalog: list[dict] | None = None,
@@ -257,6 +295,50 @@ def _match_norm(text: str) -> str:
 def _match_tokens(text: str) -> set[str]:
     return {w for w in _match_norm(text).split()
             if len(w) >= 3 and w not in _MATCH_STOP and not w.isdigit()}
+
+
+_GENERIC_MOTIV_TOKENS = {
+    "beratung", "behandlung", "beschwerden", "kontrolle",
+    "kontrolluntersuchung", "sprechstunde", "termin", "untersuchung",
+}
+
+
+def katalog_exakt(text: str, *, katalog: list[dict],
+                  calendar_id: str = "") -> dict | None:
+    """Exakter Motivname vor Fuzzy-Mapping; spezifisch schlägt generisch."""
+    roh = _match_norm(_ohne_verneintes(text))
+    kompakt = roh.replace(" ", "")
+    if not roh:
+        return None
+    treffer: list[tuple[int, int, dict]] = []
+    for vm in motive.fuer_kalender(katalog or [], calendar_id):
+        for wert in (vm.get("nameForPatient"), vm.get("name")):
+            name = _match_norm(_s(wert))
+            if not name:
+                continue
+            toks = [w for w in name.split() if len(w) >= 3]
+            nur_generisch = bool(toks) and all(
+                w in _GENERIC_MOTIV_TOKENS for w in toks)
+            rang = 0
+            if roh == name or kompakt == name.replace(" ", ""):
+                rang = 4
+            elif not nur_generisch and re.search(
+                    rf"(?<!\w){re.escape(name)}(?!\w)", roh):
+                rang = 3
+            elif (
+                not nur_generisch
+                and set(roh.split()).issubset(set(name.split()))
+                and not any(w in _GENERIC_MOTIV_TOKENS for w in roh.split())
+            ):
+                rang = 2
+            if rang:
+                treffer.append((rang, len(name), vm))
+    if not treffer:
+        return None
+    top = max(x[0] for x in treffer)
+    kandidaten = [(laenge, vm) for rang, laenge, vm in treffer if rang == top]
+    buchbar = [x for x in kandidaten if x[1].get("allowOnlineBooking") is not False]
+    return min(buchbar or kandidaten, key=lambda x: x[0])[1]
 
 
 def _stamm(w: str) -> str:
@@ -322,8 +404,10 @@ def katalog_treffer(text: str, *, katalog: list[dict],
         ) - name_toks
         score = 0
         for w in worte:
-            if any(_token_passt(w, n) for n in name_toks):
-                score += 3
+            if w in name_toks:
+                score += 2 if w in _GENERIC_MOTIV_TOKENS else 5
+            elif any(_token_passt(w, n) for n in name_toks):
+                score += 1 if w in _GENERIC_MOTIV_TOKENS else 3
             elif any(_token_passt(w, x) for x in text_toks):
                 score += 1
         if score > top:

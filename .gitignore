@@ -17,3 +17,11 @@ uebergabe/aktuell.json
 uebergabe/vorschlag.md
 uebergabe/archiv/
 uebergabe/liste.md
+
+# Build-/Diagnose-Reste und der Produktionsstand-Schnappschuss (Tokens,
+# Service-Account-Key, Patientendaten in Mitschnitten) - nie auf GitHub.
+app-deploy.zip
+enhance-deploy.zip
+_last_call_dump.json
+_last_call_lese.txt
+_snapshot-produktionsstand-v2/

@@ -1,23 +1,25 @@
 """Spracheingabe.
 
-STT_QWEN_BASE gesetzt = Qwen3-ASR-1.7B auf der RTX 3060 ist die primaere
-Final-Erkennung (PCM16 16 kHz, begin/end-WebSocket-Vertrag, Bearer-Auth).
-Dieser Modus ist hart von Whisper getrennt: bei einem Ausfall darf nur
-STT_BASE (Parakeet) als sichtbares Sicherheitsnetz uebernehmen, niemals
-Whisper oder ElevenLabs.
+STT_BASE-Parakeet auf der 5090 ist das schnelle lokale Haupt-Ohr. Ist Qwen
+konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel: plausible
+Parakeet-Texte warten exakt null Sekunden; nur auffaellige Texte duerfen
+kurz auf ein rechtzeitig fertiges Qwen-Final warten. Partials steuern Bianca
+nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der schnellere direkte
+Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide unterstuetzt.
 
 Ohne Qwen-Konfiguration bleibt der fruehere STT_WHISPER_BASE-Pfad
-abwaertskompatibel. STT_BASE ist der lokale Parakeet-Container auf der 5090.
-``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen aus dem Tenant) werden
-als reiner Vokabular-Kontext an Qwen beziehungsweise Whisper uebergeben."""
+abwaertskompatibel. ``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen)
+werden als reiner Vokabular-Kontext an Qwen beziehungsweise Whisper gegeben."""
 
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
+from difflib import SequenceMatcher
 import io
 import json
 import re
 import subprocess
+import threading
 import time
 import wave
 
@@ -27,6 +29,8 @@ from kern.config import (
     ELEVENLABS_API_KEY,
     STT_BASE,
     STT_QWEN_BASE,
+    STT_QWEN_FINAL_BASE,
+    STT_QWEN_GRACE_S,
     STT_QWEN_KEY,
     STT_WHISPER_BASE,
     STT_WHISPER_BUDGET_S,
@@ -46,6 +50,9 @@ _whisper_pause_bis = 0.0
 # Rueckfall bereits fertig und kostet nicht noch einmal ~0,2-0,3 s seriell.
 WHISPER_FALLBACK_LEAD_S = 0.30
 _FALLBACK_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="stt-fallback")
+_QWEN_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-qwen-parallel")
+_QWEN_LOCK = threading.Lock()
+_qwen_future: Future | None = None
 QWEN_PAUSE_S = 30.0
 _qwen_pause_bis = 0.0
 
@@ -76,6 +83,78 @@ def _sauber(text) -> str:
     if kurz in {"hello"}:
         return "Hallo."
     return text
+
+
+_DEUTSCHE_STRUKTUR = {
+    "aber", "also", "bitte", "brauche", "danke", "das", "dem", "den",
+    "der", "die", "doch", "du", "ein", "eine", "einen", "für", "gerne",
+    "habe", "haben", "hat", "heute", "ich", "ist", "ja", "kann", "kein",
+    "keine", "mein", "meine", "möchte", "morgen", "nein", "nicht", "noch",
+    "oder", "sie", "sind", "termin", "uhr", "um", "und", "uns", "was",
+    "wir", "zu", "zum", "zur",
+}
+_ZAHLWORT = {
+    "null": "0", "eins": "1", "ein": "1", "eine": "1", "einen": "1",
+    "zwei": "2", "zwo": "2", "drei": "3", "vier": "4", "fünf": "5",
+    "fuenf": "5", "sechs": "6", "sieben": "7", "acht": "8", "neun": "9",
+}
+
+
+def _woerter(text: str) -> list[str]:
+    return re.findall(r"[^\W\d_]+", str(text or "").casefold(), re.UNICODE)
+
+
+def _qwen_konfiguriert() -> bool:
+    return bool(STT_QWEN_FINAL_BASE or STT_QWEN_BASE)
+
+
+def _parakeet_braucht_qwen(text: str, keywords: str) -> bool:
+    """Konservativ: nur lexikalisch auffaellige Parakeet-Texte warten kurz."""
+    words = _woerter(text)
+    if not words:
+        return True
+    haystack = f" {' '.join(words)} "
+    for keyword in (k.strip() for k in keywords.split(",")):
+        needle = " ".join(_woerter(keyword))
+        if needle and f" {needle} " in haystack:
+            return False
+    evidence = sum(word in _DEUTSCHE_STRUKTUR for word in words)
+    return evidence / len(words) < 0.5
+
+
+def _zahlenfolgen(text: str) -> list[str]:
+    folgen: list[str] = []
+    aktuell = ""
+    for token in re.findall(r"\d+|[^\W\d_]+", str(text or "").casefold(), re.UNICODE):
+        ziffer = token if token.isdigit() else _ZAHLWORT.get(token, "")
+        if ziffer:
+            aktuell += ziffer
+        elif aktuell:
+            if len(aktuell) >= 2:
+                folgen.append(aktuell)
+            aktuell = ""
+    if len(aktuell) >= 2:
+        folgen.append(aktuell)
+    return folgen
+
+
+def _vergleich(text: str) -> str:
+    return " ".join(re.findall(r"\d+|[^\W\d_]+", str(text or "").casefold()))
+
+
+def _qwen_darf_uebernehmen(lokal: str, kandidat: dict, auffaellig: bool) -> bool:
+    qwen = _sauber(kandidat.get("text"))
+    if not qwen or not kandidat.get("authoritative"):
+        return False
+    if not lokal:
+        return True
+    if len(qwen.split()) < 2 and len(lokal.split()) >= 5:
+        return False
+    lokal_zahlen, qwen_zahlen = _zahlenfolgen(lokal), _zahlenfolgen(qwen)
+    if (lokal_zahlen or qwen_zahlen) and lokal_zahlen != qwen_zahlen:
+        return False
+    similarity = SequenceMatcher(None, _vergleich(lokal), _vergleich(qwen)).ratio()
+    return auffaellig or similarity >= 0.72
 
 
 # ---------------------------------------------------------------- Parakeet
@@ -220,28 +299,20 @@ def _whisper_ws(pcm: bytes, keywords: str = "") -> str:
     return str(msg.get("text") or "")
 
 
-def _qwen_ws(pcm: bytes, keywords: str = "") -> str:
-    """Qwen-Final vom 3060-Gateway; Partials steuern Bianca nie."""
-    msg = _stream_final(
+def _qwen_gateway_message(pcm: bytes, keywords: str = "") -> dict:
+    """Final vom alten Hybrid-Gateway; Partials steuern Bianca nie."""
+    return _stream_final(
         pcm,
         base=STT_QWEN_BASE,
         key=STT_QWEN_KEY,
         keywords=keywords,
         engine="qwen",
     )
-    source = str(msg.get("source") or "qwen")
-    degraded = bool(msg.get("degraded"))
-    if degraded or source not in {"qwen", "consensus"}:
-        reason = str(msg.get("fallbackReason") or "qwen_result_rejected")
-        disagreements = ",".join(
-            str(x) for x in (msg.get("disagreements") or [])
-        )
-        print(
-            f"stt-qwen: source={source} degraded=1 reason={reason} "
-            f"disagreements={disagreements or '-'}",
-            flush=True,
-        )
-    return str(msg.get("text") or "")
+
+
+def _qwen_ws(pcm: bytes, keywords: str = "") -> str:
+    """Abwaertskompatibler Test-Helfer fuer den Gateway-Vertrag."""
+    return str(_qwen_gateway_message(pcm, keywords).get("text") or "")
 
 
 def _nachkorrigieren(text: str, keywords: str) -> str:
@@ -260,6 +331,72 @@ def _nachkorrigieren(text: str, keywords: str) -> str:
         return korrigiert
     except Exception:
         return text
+
+
+def _qwen_context(keywords: str) -> str:
+    vocabulary = ", ".join(
+        k.strip() for k in keywords.split(",") if k.strip()
+    )
+    return f"Vokabular: {vocabulary}."[:800] if vocabulary else ""
+
+
+def _qwen_context_echo(text: str, context: str) -> bool:
+    heard = _vergleich(text).strip()
+    prompt = _vergleich(context).strip()
+    if len(heard) < 16 or len(prompt) < 16:
+        return False
+    return (
+        heard in prompt
+        or prompt in heard
+        or SequenceMatcher(None, heard, prompt).ratio() >= 0.85
+    )
+
+
+def _qwen_final_message(pcm: bytes, keywords: str = "") -> dict:
+    """Direkter Qwen-only-Container: kein zweites Parakeet auf der GPU-Box."""
+    response = _client().post(
+        f"{STT_QWEN_FINAL_BASE}/final",
+        files={"file": ("audio.pcm", pcm, "application/octet-stream")},
+        data={"context": _qwen_context(keywords)},
+        headers={"X-Internal-Token": STT_QWEN_KEY},
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"stt_qwen_final_http_{response.status_code}")
+    payload = dict(response.json())
+    payload.setdefault("source", "qwen")
+    payload.setdefault("degraded", False)
+    return payload
+
+
+def _qwen_candidate(pcm: bytes, keywords: str = "") -> dict:
+    message = (
+        _qwen_final_message(pcm, keywords)
+        if STT_QWEN_FINAL_BASE
+        else _qwen_gateway_message(pcm, keywords)
+    )
+    text = _sauber(_nachkorrigieren(str(message.get("text") or ""), keywords))
+    language = str(message.get("language") or "German").casefold()
+    source = str(message.get("source") or "qwen")
+    degraded = bool(message.get("degraded"))
+    context = _qwen_context(keywords)
+    echo = _qwen_context_echo(text, context)
+    authoritative = (
+        bool(text)
+        and language in {"de", "deutsch", "german"}
+        and source in {"qwen", "consensus"}
+        and not degraded
+        and not echo
+    )
+    return {
+        "text": "" if echo else text,
+        "source": source,
+        "authoritative": authoritative,
+        "reason": (
+            "qwen_context_echo"
+            if echo
+            else str(message.get("fallbackReason") or "")
+        ),
+    }
 
 
 def _whisper_aktiv() -> bool:
@@ -335,7 +472,7 @@ def _whisper_mit_vorgezogenem_fallback(
 
 
 def _qwen_aktiv() -> bool:
-    return bool(STT_QWEN_BASE) and time.time() >= _qwen_pause_bis
+    return _qwen_konfiguriert() and time.time() >= _qwen_pause_bis
 
 
 def _qwen_sperren(grund: Exception) -> None:
@@ -352,7 +489,88 @@ def _qwen(audio: bytes, *, mime: str, keywords: str = "") -> str:
     pcm = _pcm16k(audio, mime)
     if len(pcm) < 1600:
         return ""
-    return _sauber(_qwen_ws(pcm, keywords))
+    return str(_qwen_candidate(pcm, keywords).get("text") or "")
+
+
+def _qwen_parallel_task(audio: bytes, mime: str, keywords: str) -> dict:
+    try:
+        pcm = _pcm16k(audio, mime)
+        if len(pcm) < 1600:
+            return {"text": "", "authoritative": False, "reason": "too_short"}
+        return _qwen_candidate(pcm, keywords)
+    except Exception as exc:
+        _qwen_sperren(exc)
+        return {
+            "text": "",
+            "authoritative": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | None:
+    """Genau ein Qwen-Lauf gleichzeitig; alte Zuege werden nie aufgestaut."""
+    global _qwen_future
+    if not _qwen_aktiv():
+        return None
+    with _QWEN_LOCK:
+        if _qwen_future is not None and not _qwen_future.done():
+            return None
+        _qwen_future = _QWEN_POOL.submit(
+            _qwen_parallel_task,
+            audio,
+            mime,
+            keywords,
+        )
+        return _qwen_future
+
+
+def _parallel_transcribe(
+    audio: bytes,
+    *,
+    mime: str,
+    name: str,
+    keywords: str,
+) -> str:
+    """Parakeet sofort; nur auffaellige Texte warten gedeckelt auf Qwen."""
+    qwen = _qwen_parallel_start(audio, mime, keywords)
+    try:
+        lokal = _lokal(audio, mime=mime, name=name, keywords=keywords)
+    except Exception:
+        # Nur bei echtem Ausfall des Haupt-Ohrs darf Qwen laenger retten.
+        if qwen is not None:
+            try:
+                kandidat = qwen.result(timeout=15.0)
+                if kandidat.get("authoritative") and kandidat.get("text"):
+                    return str(kandidat["text"])
+            except FutureTimeout:
+                pass
+        raise
+
+    if qwen is None:
+        return lokal
+
+    auffaellig = _parakeet_braucht_qwen(lokal, keywords)
+    kandidat: dict | None = None
+    if qwen.done():
+        kandidat = qwen.result()
+    elif auffaellig and STT_QWEN_GRACE_S > 0:
+        try:
+            kandidat = qwen.result(timeout=max(0.0, STT_QWEN_GRACE_S))
+        except FutureTimeout:
+            print(
+                f"stt-qwen-parallel: spaet, parakeet nach "
+                f"{STT_QWEN_GRACE_S:.2f}s Zusatzdeckel",
+                flush=True,
+            )
+
+    if kandidat and _qwen_darf_uebernehmen(lokal, kandidat, auffaellig):
+        print(
+            f"stt-qwen-parallel: qwen uebernommen source="
+            f"{kandidat.get('source') or 'qwen'}",
+            flush=True,
+        )
+        return str(kandidat["text"])
+    return lokal
 
 
 # ------------------------------------------------------------------ Einstieg
@@ -361,15 +579,20 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
                keywords: str = "") -> str:
     if not audio or len(audio) < 800:
         return ""
-    if STT_QWEN_BASE:
+    if _qwen_konfiguriert():
+        if STT_BASE:
+            return _parallel_transcribe(
+                audio,
+                mime=mime,
+                name=name,
+                keywords=keywords,
+            )
         if _qwen_aktiv():
             try:
                 return _qwen(audio, mime=mime, keywords=keywords)
             except Exception as e:
                 _qwen_sperren(e)
-        if STT_BASE:
-            return _lokal(audio, mime=mime, name=name, keywords=keywords)
-        # Qwen-Modus ist absichtlich hart von Whisper/ElevenLabs getrennt.
+        # Qwen-only ohne lokales Parakeet: nie Whisper/ElevenLabs kaschieren.
         raise RuntimeError("stt_qwen_pause_ohne_fallback")
     if _whisper_aktiv():
         text, fallback, fehler = _whisper_mit_vorgezogenem_fallback(
@@ -415,7 +638,8 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
 
 def bereit() -> bool:
     return bool(
-        STT_QWEN_BASE
+        STT_QWEN_FINAL_BASE
+        or STT_QWEN_BASE
         or STT_WHISPER_BASE
         or STT_BASE
         or ELEVENLABS_API_KEY
@@ -424,12 +648,12 @@ def bereit() -> bool:
 
 def engine_anzeige() -> str:
     """Fuer die Dock-/Health-Anzeige: wer hoert gerade zu?"""
-    if STT_QWEN_BASE:
+    if _qwen_konfiguriert():
         if not _qwen_aktiv() and STT_BASE:
             return "Parakeet (lokal, Qwen pausiert)"
-        return "Qwen3-ASR 1.7B (3060)" + (
-            " + Parakeet-Rueckfall" if STT_BASE else ""
-        )
+        if STT_BASE:
+            return "Parakeet (lokal) + Qwen3-ASR parallel (3060)"
+        return "Qwen3-ASR 1.7B (3060)"
     if STT_WHISPER_BASE:
         if not _whisper_aktiv() and STT_BASE:
             return "Parakeet (lokal, Whisper pausiert)"

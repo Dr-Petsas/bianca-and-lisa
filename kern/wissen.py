@@ -189,8 +189,8 @@ def wissen_block(wissen: dict | None, sit: dict | None = None) -> str:
         )
     else:
         zeilen.append(
-            "Keine Diagnosen, keine individuellen Heilaussagen. Fachfremde Leistungen "
-            "(Zahnreinigung, Bleaching, Implantate) bietest du NICHT an und nennst dafür keine Preise."
+            "Keine Diagnosen, keine individuellen Heilaussagen. Fachfremde "
+            "Leistungen bietest du NICHT an und nennst dafür keine Preise."
         )
     if preise:
         zeilen.append("PREISE (ungefähr, circa — NUR diese nennen):")

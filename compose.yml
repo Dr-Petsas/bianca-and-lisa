@@ -40,6 +40,8 @@ services:
     command: python -m uvicorn lisa.server:app --host 0.0.0.0 --port 8095
     environment:
       <<: *app-env
+      # Bianca-Tab hinter dem Tunnel: Geschwister-Container, nicht localhost.
+      LISA_BIANCA_URL: ${LISA_BIANCA_URL:-http://bianca:8096}
       # Outbound-Dial (CF -> Lisa -> Asterisk Call-File)
       LISA_OUTBOUND_API_TOKEN: ${LISA_OUTBOUND_API_TOKEN:-}
       ASTERISK_SSH: ${ASTERISK_SSH:-root@87.106.34.137}
@@ -200,6 +202,23 @@ services:
   tunnel:
     image: alpine:3.20
     restart: unless-stopped
+    # W-SIP-RTO (12.09.2026 — nicht rueckbauen): RTO-Boden HOCH statt Standard.
+    # Gemessen auf dem Pfad nach 87.106.34.137: rtt median 17,7 ms, Spitzen
+    # 103,7 ms. Mit dem Kernel-Boden von 200 ms feuerte der Timer auf einer
+    # frischen Verbindung 15x falsch — retrans 15 = dsack_dups 15, also NIE
+    # echter Verlust, immer nur eine zu spaete Bestaetigung. Jeder Fehlalarm
+    # wirft cwnd auf 1 und staut die Sende-Warteschlange bis 12.376 B
+    # (~680 ms Audio); weil Hin- und Rueckrichtung dieselbe SSH-Verbindung
+    # teilen, friert das Gespraech in BEIDEN Richtungen ein — genau der
+    # hoerbare Aussetzer (groesste Eingangsluecke 709 ms). 600 ms liegt weit
+    # ueber den Laufzeitspitzen; ECHTE Verluste holen TLP/SACK unveraendert
+    # in einer bis zwei Laufzeiten, der Boden ist nur die letzte Reserve.
+    # Muss ein SYSCTL sein (kein `ip route rto_min`): der Container bekommt
+    # bei jedem Neuaufbau eine frische Netzwerk-Umgebung, und die SSH-
+    # Verbindung merkt sich ihren Routen-Eintrag beim Aufbau — ein spaeter
+    # gesetzter Wert erreicht sie nie mehr. Rueckweg: TUNNEL_RTO_MIN_US=200000.
+    sysctls:
+      net.ipv4.tcp_rto_min_us: ${TUNNEL_RTO_MIN_US:-600000}
     depends_on:
       - sipbridge
       - sipbridge-lisa

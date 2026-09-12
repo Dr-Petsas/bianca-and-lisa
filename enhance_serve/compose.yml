@@ -1,0 +1,32 @@
+# KI-Sprachbereinigung (Resemble Enhance) neben Qwen-TTS auf der 5090.
+#   cd enhance_serve && docker compose up -d --build
+# Host-Port 8214. MAS: /voice-enhance -> 192.168.0.246:8214
+services:
+  enhance:
+    build: .
+    image: telefonki-enhance:v1
+    ports:
+      - "8214:8214"
+    volumes:
+      - enhance-hf:/root/.cache
+    environment:
+      ENHANCE_PORT: "8214"
+      ENHANCE_NFE: "32"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8214/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 8
+      start_period: 600s
+
+volumes:
+  enhance-hf:

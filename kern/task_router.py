@@ -26,7 +26,7 @@ OPERATIONEN = {
 PROMPT = """TASK-AUSWAHL
 Erkennst du ein neues Termin-, Weiterleitungs- oder Rückrufanliegen, rufe
 select_task auf. Das ist nur eine Übergabe an den sicheren FlowManager, niemals
-eine Erledigung. „Ich möchte zur Kontrolle/Zahnreinigung“ bedeutet buchen, auch
+eine Erledigung. „Ich möchte zur Kontrolle“ bedeutet buchen, auch
 ohne das Wort Termin. Bestehende Termine darfst du nur bei einer ausdrücklichen
 Auskunfts-, Absage- oder Verschiebeanfrage erwähnen. Antworten auf die laufende
 Pflichtfrage sind KEIN neuer Task. Praxiswissen, Rückfragen und Smalltalk
@@ -59,8 +59,8 @@ TOOLS = [{
         "description": (
             "Übergibt ein erkanntes Anliegen an den sicheren FlowManager. "
             "Nutze buchen auch für natürliche Formulierungen ohne das Wort Termin, "
-            "zum Beispiel 'ich möchte zur Kontrolle', 'ich muss zur Zahnreinigung' "
-            "oder 'ich brauche etwas wegen Schmerzen'. terminauskunft gilt nur, "
+            "zum Beispiel 'ich möchte zur Kontrolle' oder "
+            "'ich brauche etwas wegen Beschwerden'. terminauskunft gilt nur, "
             "wenn nach einem bereits bestehenden Termin gefragt wird. Praxisfragen "
             "und Smalltalk beantwortest du direkt ohne Tool."
         ),

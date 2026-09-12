@@ -273,6 +273,23 @@ def _grund_text(story: dict, lage: dict) -> str:
     return _wahl(story, lage, "grund", varianten)
 
 
+def _anliegen_satz(story: dict, lage: dict) -> str:
+    """Antwort auf Biancas Task-Router ('Termin, Auskunft oder Mitarbeiter?')."""
+    art = str(story.get("anliegen") or TERMIN)
+    if art == TERMIN:
+        return _grund_text(story, lage)
+    if art == ABSAGEN:
+        return "Ich möchte meinen bestehenden Termin absagen."
+    if art == VERSCHIEBEN:
+        return "Ich möchte meinen bestehenden Termin verschieben."
+    if art == AUSKUNFT:
+        return "Ich möchte wissen, wann mein bestehender Termin ist."
+    muster = saetze.ANLIEGEN.get(art) or []
+    if muster:
+        return str(muster[0])
+    return _rueckkehr_text(story)
+
+
 def _rueckkehr_text(story: dict) -> str:
     """Der Testanrufer verliert sein Hauptanliegen nach einer Stoerung nie."""
     art = str(story.get("anliegen") or TERMIN)
@@ -293,6 +310,59 @@ def _rueckkehr_text(story: dict) -> str:
 
 _FRAGE_LEER_MAX = 3  # Zuege ohne offene Frage, bevor der Anrufer sich verabschiedet
 
+# Bianca arbeitet am Anliegen — kein Themenwechsel und kein Abschied.
+_ARBEITET_MARKEN = (
+    "suche jetzt", "ich suche", "schaue nach", "ich schaue",
+    "passenden termin", "freien terminen", "wiederhole die nummer",
+    "ich habe ihre daten", "ich habe den nachname",
+    "im kalender", "am apparat bleiben",
+)
+
+_DOKU_ERLEDIGT = (
+    "nicht ausstellen", "nicht telefonisch ausstellen",
+    "kann ich am telefon nicht", "kann ich selbst nicht",
+    "persönlich vorsprechen", "persoenlich vorsprechen",
+    "persönlicher vorsprach", "persoenlicher vorsprach",
+    "persönlich abholen", "persoenlich abholen",
+    "persönlich in der praxis", "persoenlich in der praxis",
+    "in der praxis abholen", "nicht telefonisch bestellen",
+    "nicht am telefon", "nicht per telefon", "nicht direkt per telefon",
+    "nicht direkt am telefon", "nicht per e-mail", "nicht per email",
+    "datenschutzrichtlini", "direkt an die praxis",
+    "praxis selbst erledigen", "keine dokumente",
+    "keine rechnungen", "rechnung",
+)
+
+_VERABSCHIEDET = (
+    "auf wiederhören", "auf wiederhoeren", "auf wiedersehen",
+    "schönen tag", "schoenen tag", "schönen rest",
+)
+
+
+def _doku_text_erledigt(text: str) -> bool:
+    t = " ".join(str(text or "").lower().split())
+    if not t:
+        return False
+    if any(x in t for x in (
+            "nicht ausstellen", "nicht telefonisch", "nicht am telefon",
+            "nicht per telefon", "nicht direkt per telefon",
+            "nicht direkt am telefon", "nicht per e-mail", "nicht per email",
+            "persönlich vorsprechen", "persoenlich vorsprechen",
+            "persönlich abholen", "persoenlich abholen",
+            "persönlich in der praxis", "persoenlich in der praxis",
+            "in der praxis abholen", "datenschutzrichtlini",
+            "direkt an die praxis", "praxis selbst",
+            "keine dokumente")):
+        return True
+    return ("rechnung" in t and any(
+        x in t for x in ("kann ich", "kann keine", "nicht", "leider")
+    ))
+
+
+def _bianca_verabschiedet(text: str) -> bool:
+    t = " ".join(str(text or "").lower().split())
+    return any(x in t for x in _VERABSCHIEDET)
+
 
 def _frage_aus_text(text: str) -> str:
     """Fallback für natürliche LLM-Fragen ohne maschinenlesbares ``frage``.
@@ -312,8 +382,16 @@ def _frage_aus_text(text: str) -> str:
                             "bestimmten arzt", "arzt im blick", "ärzte suchen",
                             "arzt suchen", "arzt frei lassen")):
         return "arzt"
+    if any(x in t for x in (
+            "termin, eine auskunft", "termin eine auskunft",
+            "auskunft oder möchten", "auskunft oder wollen",
+            "mit einem mitarbeiter", "mitarbeiter sprechen")):
+        return "anliegen"
     if "nachname" in t:
         return "nachname"
+    if any(x in t for x in ("langsam aus", "buchstabieren sie",
+                            "wenn sie buchstabieren", "ende einfach fertig")):
+        return "buchstabieren"
     if "vorname" in t:
         return "vorname"
     if "name" in t and any(x in t for x in ("wie ", "lautet", "sagen sie", "nennen sie")):
@@ -321,6 +399,8 @@ def _frage_aus_text(text: str) -> str:
     if any(x in t for x in ("telefonnummer", "rufnummer", "handynummer",
                             "welche nummer", "erreichen kann")):
         return "telefon"
+    if "krankenkasse" in t:
+        return "versicherung"
     if "versicher" in t:
         return "versicherung"
     if any(x in t for x in ("grund für ihren besuch", "grund ihres besuch",
@@ -353,9 +433,39 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         return _eroeffnung(story, lage)
 
     antwort_text = " ".join(str(lage.get("biancaText") or "").lower().split())
+    art = str(story.get("anliegen") or TERMIN)
+    if art in DOKU_ARTEN and _doku_text_erledigt(antwort_text):
+        lage["fachlichErledigt"] = "doku_auskunft"
+        lage["gemacht"].add("abschied")
+        return {
+            "text": "Verstanden, dann komme ich persönlich vorbei. Vielen Dank und auf Wiederhören.",
+            "baustein": "doku_abschied",
+            "auflegen": True,
+        }
+    if _bianca_verabschiedet(antwort_text):
+        lage["gemacht"].add("abschied")
+        if art in DOKU_ARTEN:
+            lage["fachlichErledigt"] = lage.get("fachlichErledigt") or "doku_auskunft"
+            return {
+                "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
+                "baustein": "doku_abschied",
+                "auflegen": True,
+            }
+        if lage.get("fachlichErledigt"):
+            return {
+                "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
+                "baustein": "abschied",
+                "auflegen": True,
+            }
+        return {
+            "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
+            "baustein": "abschied",
+            "auflegen": True,
+        }
     if any(x in antwort_text for x in (
             "keinen freien termin", "keine freien termine",
-            "leider keinen termin", "leider keine termine")):
+            "leider keinen termin", "leider keine termine",
+            "rückrufbitte", "rueckrufbitte", "praxis meldet sich")):
         lage["fachlichErledigt"] = "kein_slot"
         if "nichts_mehr" not in lage["gemacht"]:
             lage["gemacht"].add("nichts_mehr")
@@ -371,6 +481,11 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         }
 
     fid = lage["frage"]
+    if fid == "telefon_check" and not any(x in antwort_text for x in (
+            "stimmt das", "wiederhole", "null eins", "ist das korrekt",
+            "habe die nummer", "habe Ihre nummer", "habe ihre nummer")):
+        fid = ""
+        lage["frage"] = ""
     if not fid:
         fid = _frage_aus_text(lage.get("biancaText") or "")
         if fid:
@@ -443,8 +558,14 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         return {"text": _wahl(story, lage, "vorname", saetze.VORNAME_NUR).format(vorname=story["vorname"]),
                 "baustein": "vorname"}
     if fid == "nachname":
+        if "name_gesagt" in lage["gemacht"]:
+            return {"text": f"Mein Nachname ist {story['nachname']}.",
+                    "baustein": "nachname_klar"}
+        lage["gemacht"].add("name_gesagt")
         return {"text": _wahl(story, lage, "nachname", saetze.NACHNAME_NUR).format(nachname=story["nachname"]),
                 "baustein": "nachname"}
+    if fid == "anliegen":
+        return {"text": _anliegen_satz(story, lage), "baustein": "anliegen"}
     if fid == "grund":
         return {"text": _grund_text(story, lage), "baustein": f"grund_{story.get('grund')}"}
     if fid == "wunsch":
@@ -455,6 +576,10 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         lage["zaehler"]["wunsch_m"] = nr + 1
         return {"text": saetze.wunsch_satz(story["tag"], (story.get("seed") or 0) + nr), "baustein": "wunsch"}
     if fid == "buchstabieren":
+        if "name_gesagt" in lage["gemacht"]:
+            return {"text": f"Mein Nachname ist {story['nachname']}. Fertig.",
+                    "baustein": "nachname_klar"}
+        lage["gemacht"].add("name_gesagt")
         return {"text": saetze.buchstabier_satz(story["nachname"], story.get("seed") or 0),
                 "baustein": "buchstabieren"}
     if fid == "telefon":
@@ -601,11 +726,19 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
                 "baustein": "name"}
     if ("nummer" in text or "erreichen" in text) and "?" in text:
         return {"text": _wahl(story, lage, "telefon", saetze.TELEFON), "baustein": "telefon"}
+    if any(x in text for x in _ARBEITET_MARKEN):
+        suche = lage["zaehler"].get("suche", 0) + 1
+        lage["zaehler"]["suche"] = suche
+        if suche <= 2:
+            return {"text": "Ja, gerne, ich warte.", "baustein": "warte_suche"}
+        return {
+            "text": _rueckkehr_text(story),
+            "baustein": "rueckkehr_hauptanliegen",
+        }
     leer = lage["zaehler"].get("frage_leer", 0) + 1
     lage["zaehler"]["frage_leer"] = leer
     if "?" in text and leer <= _FRAGE_LEER_MAX:
-        return {"text": _wahl(story, lage, "ja_generisch", ["Ja, gerne.", "Ja, das passt.", "Gerne, ja."]),
-                "baustein": "ja_generisch"}
+        return {"text": _anliegen_satz(story, lage), "baustein": "anliegen"}
     if leer <= _FRAGE_LEER_MAX:
         return {
             "text": _rueckkehr_text(story),

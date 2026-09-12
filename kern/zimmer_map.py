@@ -15,9 +15,8 @@ Fuellung wird nach Chef-Vorgabe als Zahnersatz-Besprechung aufgenommen.
 
 Raeumlich gilt:
 
-- Prophylaxe / PZR     -> Kalender Prophylaxe, Zimmer 3, wenn voll Zimmer 2
-- Notfall / Schmerzen  -> bei Thaler, Zimmer 1
-- restliche Behandlung -> bei Thaler selbst in Zimmer 4
+- Prophylaxe / PZR -> Kalender Prophylaxe, Zimmer 3, wenn voll Zimmer 2
+- alle Haupttermine -> bei Thaler selbst in Zimmer 4
 
 Live stehen Zimmer in der rooms-Sammlung, nicht als Kalender. Gibt es
 Kalender namens Zimmer 1-4 (Tests), suchen wir dort. Sonst: PZR auf
@@ -38,7 +37,7 @@ THALER_CLIENT = "7tTnJZfJkb801r2rmYed"
 # Reihenfolge = Suchreihenfolge (erster Treffer mit Slots gewinnt).
 DEFAULT_MAP = {
     "pzr": [3, 2],
-    "akut": [1],
+    "akut": [4],
     "behandlung": [4],
 }
 
@@ -112,6 +111,14 @@ def aktiv(tenant: dict[str, Any] | None) -> bool:
     if isinstance(tenant.get("zimmerMap"), dict) and tenant["zimmerMap"]:
         return True
     return _s(tenant.get("clientId")) == THALER_CLIENT
+
+
+def ist_thaler(tenant: dict[str, Any] | None) -> bool:
+    t = tenant if isinstance(tenant, dict) else {}
+    return (
+        _s(t.get("clientId")) == THALER_CLIENT
+        or "thaler" in _s(t.get("praxisName")).casefold()
+    )
 
 
 def motiv_buchbar(vm: dict[str, Any] | None) -> bool:
@@ -206,6 +213,11 @@ def karte(tenant: dict[str, Any] | None) -> dict[str, list[int]]:
                     sauber.append(i)
             if sauber:
                 out[key] = sauber
+    if ist_thaler(tenant):
+        # Alte DB-Konfigurationen enthielten noch Notfall -> Zimmer 1.
+        # Die aktuelle Praxisregel gewinnt: jeder Haupttermin in Zimmer 4.
+        out["akut"] = [4]
+        out["behandlung"] = [4]
     return out
 
 

@@ -124,9 +124,17 @@ UNKLAR_ANTWORT = (
     "Ich möchte Sie richtig verstehen. Sagen Sie mir bitte kurz in einem "
     "ganzen Satz, wobei ich helfen darf."
 )
+GANZSATZ_ANTWORT = (
+    "Ich will Ihnen helfen, aber einzelne Wörter helfen mir leider nicht "
+    "weiter. Ich funktioniere über Satzverständnis. Wenn Sie mir bitte "
+    "einen ganzen Satz formulieren, komme ich deutlich besser zurecht."
+)
 UNKLAR_AUSWAHL_ANTWORT = (
     "Geht es um einen Termin, eine Auskunft oder möchten Sie mit einem "
     "Mitarbeiter sprechen?"
+)
+UNKLAR_AUSWAHL_OHNE_MITARBEITER = (
+    "Geht es um einen Termin oder um eine Auskunft zur Praxis?"
 )
 
 _STOP = frozenset((
@@ -156,6 +164,29 @@ _STOP = frozenset((
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
+
+
+def unklar_antwort(text: str) -> str:
+    """Unverständliches Gehörtes wörtlich spiegeln statt Bedeutung erfinden."""
+    gehoert = _s(text).strip(" \t\r\n.!?…")
+    if not gehoert:
+        return UNKLAR_ANTWORT
+    # Kein langer STT-Absatz im Mund; die Unklar-Wache liefert regulär nur
+    # kurze Schnipsel. Der Deckel ist das Sicherheitsnetz für Alt-Sitzungen.
+    if len(gehoert) > 70:
+        gehoert = gehoert[:67].rstrip() + "…"
+    gehoert = gehoert.replace("„", "").replace("“", "").replace('"', "")
+    return (
+        f"Ich habe „{gehoert}“ verstanden. Was meinen Sie damit? "
+        "Meinen Sie vielleicht etwas anderes?"
+    )
+
+
+def unklar_auswahl_antwort(tenant: dict | None = None) -> str:
+    """Zweite Hilfestellung mandantenscharf, ohne unerreichbares Personal."""
+    if isinstance(tenant, dict) and tenant.get("mitarbeiterAnbieten") is False:
+        return UNKLAR_AUSWAHL_OHNE_MITARBEITER
+    return UNKLAR_AUSWAHL_ANTWORT
 
 
 def _inhaltsworte(low: str) -> set[str]:

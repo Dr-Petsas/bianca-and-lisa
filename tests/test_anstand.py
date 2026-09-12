@@ -1,9 +1,4 @@
-"""W-ANSTAND (Chef 03.09.2026): Beschimpfung/Fluchen — charmanter Konter.
-
-"wenn dich jemand beschimpft oder flucht sagst du nur.... boah... das war
-nicht nett... ich gebe mir echt muehe oder 4-5 Alternativen in dieser Art.
-eine lustige nehmen wir auf wenn jemand sagt ach fick dich oder aehnliches..
-sagst du..... aehhhm selber!! sonst noch was?"
+"""W-ANSTAND: Beschimpfung/Fluchen — freundlich deeskalieren, nie kontern.
 
 Laeuft ohne Netz. Der Konter ist deterministisch (bianca/anstand.py) und
 greift NUR, wenn kein Fluss den Satz bedient hat — ein Anliegen im selben
@@ -18,7 +13,7 @@ def _sit() -> dict:
     return {"tenant": laden("meddent"), "messages": [{"role": "system", "content": "x"}]}
 
 
-# --- Die lustige: "fick dich oder aehnliches" -> "Aehm — selber!" -------------
+# --- Auch derbe Beleidigungen bleiben freundlich -----------------------------
 
 def test_fick_dich_bekommt_selber():
     for satz in [
@@ -31,6 +26,7 @@ def test_fick_dich_bekommt_selber():
     ]:
         z = anstand.zug(_sit(), satz)
         assert z and z["text"] == anstand.ANTWORT_SELBER, satz
+        assert "selber" not in z["text"].lower()
 
 
 # --- Beschimpfungen -> 4-5 Alternativen, rotierend ----------------------------
@@ -88,7 +84,8 @@ def test_anliegen_mit_schimpfwort_gewinnt_fachweg():
     (agent fragt anstand erst, wenn flow.zug None geliefert hat)."""
     sit = _sit()
     z = flow.zug(sit, "Verbinden Sie mich mit Doktor Petsas, Sie blöde Kuh!")
-    assert z is not None and weiterleiten.ANSAGE_PLATZHALTER in z["text"]
+    assert z is not None
+    assert z.get("transfer") or weiterleiten.ANSAGE_PLATZHALTER in z["text"]
 
 
 def test_agent_kontert_pure_beschimpfung_ohne_llm():
@@ -106,7 +103,8 @@ def test_agent_kontert_pure_beschimpfung_ohne_llm():
     try:
         sit = _sit()
         aus = agent.user_turn(sit, "Ach, fick dich!")
-        assert anstand.ANTWORT_SELBER.rstrip("?!. ") .split("—")[0].strip() in aus["text"] or "selber" in aus["text"].lower()
+        assert aus["text"] in anstand.ANTWORTEN
+        assert "selber" not in aus["text"].lower()
     finally:
         llm.chat = echt_chat
         llm.chat_stream = echt_stream

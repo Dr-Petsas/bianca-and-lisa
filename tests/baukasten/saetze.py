@@ -845,9 +845,9 @@ def buchstabier_satz(nachname: str, stil: int = 0) -> str:
     kette = ", ".join(teile)
     einzeln = "-".join(c.upper() for c in nachname if c.isalpha())
     formen = [
-        f"Ich buchstabiere: {kette}.",
-        f"Gerne: {kette}.",
-        f"{nachname}, also {einzeln}.",
+        f"Ich buchstabiere: {kette}. Fertig.",
+        f"Gerne: {kette}. Fertig.",
+        f"{nachname}, also {einzeln}. Fertig.",
     ]
     return formen[stil % len(formen)]
 

@@ -2251,6 +2251,37 @@ Tests: `tests/test_abschied.py`, `tests/test_fokus.py`, `tests/test_stille.py`,
 Stups-Block in `tests/test_sip_vad.py`. Live-Proben (read-only, im Container):
 `tools/_probe_abschied_live.py`, `tools/_probe_langgespraech.py`.
 
+## Keine erfundene Anrede (W-ANREDE 13.09.2026 — nicht rückbauen)
+
+Live-Probe 12.09.2026 mit UNBEKANNTEM Anrufer (keine übermittelte Nummer):
+Bianca antwortete im ersten Zug „Einen Moment. Gerne, **Herr Meier**. Ich
+buche Ihnen einen Termin zur Kontrolle." — den Namen hat niemand gesagt, das
+Modell hat ihn erfunden. Bei erkannter Rufnummer fällt das nicht auf (dann
+steht der echte Name in der Akte), einem fremden Anrufer wird so der Name
+eines anderen Menschen vorgelesen.
+
+`kern/anrede_wache.py` behandelt die Anrede deshalb wie jede andere Tatsache
+(W-FAKTEN-WACHE): raus darf sie nur, wenn der Name BELEGT ist. Belegt sind
+Sammler-Namen (nachname/vorname/name, `kontaktName` bei Dritt-Terminen),
+der per Cloud-Function erkannte Anrufer, Kartei-/Patientenfelder sowie
+Behandler- und Praxisnamen des Mandanten (`tenants.stt_keywords`,
+`tenant["calendars"]`) — die kommen aus der DB, nie aus dem Modell. Titel
+ohne Namen („Herr Doktor") und ein blosses „Herr oder Frau?" bleiben
+unberührt. Alles andere wird samt trennendem Komma gestrichen, der Satz
+bleibt stehen („Gerne. Ich buche Ihnen einen Termin").
+
+- Eingehängt NUR im LLM-Pfad (`bianca/agent._anrede_wache_anwenden`): nach
+  `_nachbessern`/Fakten-Wache **und** am P5-Streaming-Ausgang
+  (`sicherer_vorab`). Beide Stellen säubern identisch — sonst fände
+  `llm.rest_nach_vorab` den Rest nicht mehr und der Satz käme zweimal.
+- Die deterministische Maschine ist nicht betroffen: `gehirn.anrede()` baut
+  die Anrede aus dem Sammler, ist also immer belegt.
+- Stufen/Notaus `ANREDE_WACHE=off|shadow|enforce`, Default **enforce**
+  (ein erfundener Name ist nie besser als kein Name). Spur:
+  `anrede-wache` bzw. `anrede-wache-shadow`.
+- Tests: `tests/test_anrede_wache.py` — die Gegenprobe (belegte Anrede bleibt
+  unangetastet) ist der teurere Fehler und deshalb breiter abgedeckt.
+
 ## Server-Deploy (pickadoc1) — die .env-Falle
 
 - **`.env` ist im Git GETRACKT.** Jedes `git archive` enthält sie — ein

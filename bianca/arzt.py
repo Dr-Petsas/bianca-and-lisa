@@ -194,6 +194,8 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
         "doctorName": _s(termin.get("doctorName")),
         "lastIso": _s(termin.get("startIso")),
         "war": bool(data.get("lastAppointment")),
+        "lastAppointment": data.get("lastAppointment") or {},
+        "nextAppointment": data.get("nextAppointment") or {},
         # Besuchsgrund des VERGANGENEN Termins (Rueckblick-Ansprache, Chef
         # 30.08.2026) — bewusst nie vom Zukunfts-Termin.
         "grund": _s(vergangen.get("visitMotiveName")),

@@ -1,6 +1,6 @@
-"""Thaler Grund→Zimmer (Chef 08.09.2026).
+"""Thaler Grund→Zimmer.
 
-PZR: Zimmer 3, sonst 2. Notfall: Zimmer 1. Rest: Zimmer 4 bei Thaler.
+PZR: Zimmer 3, sonst 2. Alle Haupttermine: Zimmer 4 bei Thaler.
 MedDent ohne Karte bleibt unverändert.
 """
 
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from bianca import gehirn
+from bianca import flow, gehirn
 from kern import calendar as kal
 from kern import gespraech
 from kern import tenants as kern_tenants
@@ -45,7 +45,7 @@ def test_raeume_pzr_erst_drei_dann_zwei():
     t = _thaler()
     ids = [c["id"] for c in zimmer_map.raeume(t, "pzr")]
     assert ids == [Z3, Z2], ids
-    assert [c["id"] for c in zimmer_map.raeume(t, "akut")] == [Z1]
+    assert [c["id"] for c in zimmer_map.raeume(t, "akut")] == [Z4]
     assert [c["id"] for c in zimmer_map.raeume(t, "behandlung")] == [Z4]
 
 
@@ -83,7 +83,7 @@ def test_pzr_sucht_zimmer3_dann_zimmer2():
         kal.find_slots = echt
 
 
-def test_notfall_landet_zimmer1():
+def test_notfall_landet_wie_jeder_haupttermin_in_zimmer4():
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({
@@ -94,8 +94,8 @@ def test_notfall_landet_zimmer1():
         "arzt": {"typ": "default", "calendarId": EVA, "calendarName": "Dr. Eva Thaler"},
     })
     gehirn.kalender_zu_grund(sit)
-    assert s["arzt"]["calendarId"] == Z1
-    assert s["arzt"]["raeume"] == [Z1]
+    assert s["arzt"]["calendarId"] == Z4
+    assert s["arzt"]["raeume"] == [Z4]
     assert s["arzt"]["calendarName"] == "Dr. Eva Thaler"
 
 
@@ -140,6 +140,53 @@ def test_live_ohne_zimmer_kalender_pzr_auf_prophylaxe():
     assert ids == ["cal-prophy"], ids
     assert [c["id"] for c in zimmer_map.raeume(t, "akut")] == [EVA]
     assert [c["id"] for c in zimmer_map.raeume(t, "behandlung")] == [EVA]
+
+
+def test_thaler_fragt_niemals_nach_einem_arzt():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "grund"
+    assert "Arzt" not in frage and "Behandler" not in frage
+
+
+def test_thaler_pzr_ohne_sms_vertrag_wird_sicher_als_offen_notiert(monkeypatch):
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "warSchonMal": False,
+        "arzt": {"typ": "zimmer", "calendarId": Z4, "calendarName": "Zimmer 4"},
+        "grund": "Kontrolle",
+        "motivId": "recall",
+        "motivName": "Kontrolle",
+        "vorname": "Nina",
+        "nachname": "Test",
+        "patientId": "pat-1",
+        "telefon": "01776004600",
+        "telefonOk": True,
+        "slotIso": "2026-10-12T10:00:00+02:00",
+        "pzr": "ja",
+    })
+    notizen: list[str] = []
+    monkeypatch.setattr(flow.kal, "book_slot", lambda *_a, **_k: {
+        "ok": True,
+        "booked": True,
+        "slotIso": s["slotIso"],
+        "spoken": "Der Haupttermin ist eingetragen.",
+    })
+    monkeypatch.setattr(
+        flow.kal,
+        "note_appointment",
+        lambda *_a, note="", **_k: notizen.append(note) or {"ok": True},
+    )
+    res = flow._buchen(sit)
+    assert len(notizen) == 1
+    assert "PZR-Termin erwünscht, aber noch nicht gebucht; bitte nachholen" in notizen[0]
+    assert not notizen[0].endswith("..")
+    assert "nicht sicher zusammenlegen" in res["text"]
+    assert "Link" in res["text"] and "Unterlagen" in res["text"]
 
 
 def test_live_prophylaxe_satz_bindet_prophylaxe_kalender():

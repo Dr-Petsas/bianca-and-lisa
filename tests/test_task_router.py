@@ -264,22 +264,26 @@ def test_mitarbeiter_darf_offene_termin_klaerung_ueberstimmen():
     assert "einwortTerminOffen" not in sit
 
 
-def test_ganzsatz_bitte_nur_einmal_danach_konkrete_auswahl():
+def test_unklares_wort_wird_gespiegelt_danach_konkrete_auswahl():
     sit = _sit()
     env_alt = os.environ.get("INTENT_NACHZUG")
     try:
         os.environ["INTENT_NACHZUG"] = "0"
         erste = agent.user_turn(sit, "Füsebte")
         zweite = agent.user_turn(sit, "Dornenze")
+        dritte = agent.user_turn(sit, "Brommel")
     finally:
         if env_alt is None:
             os.environ.pop("INTENT_NACHZUG", None)
         else:
             os.environ["INTENT_NACHZUG"] = env_alt
 
-    assert "ganzen Satz" in erste["text"]
-    assert zweite["text"] == gespraech.UNKLAR_AUSWAHL_ANTWORT
-    assert "ganzen Satz" not in zweite["text"]
+    assert "Füsebte" in erste["text"]
+    assert "Was meinen Sie damit?" in erste["text"]
+    assert "Meinen Sie vielleicht etwas anderes?" in erste["text"]
+    assert "Dornenze" in zweite["text"]
+    assert dritte["text"] == gespraech.GANZSATZ_ANTWORT
+    assert "Füsebte" not in zweite["text"]
     assert sit["ganzsatzHinweisGegeben"] is True
 
 
@@ -315,7 +319,8 @@ def test_zweite_unklare_namensantwort_zieht_aus_zustandsluecke_zurueck():
             os.environ.pop("INTENT_NACHZUG", None)
         else:
             os.environ["INTENT_NACHZUG"] = env_alt
-    assert z1["text"] == agent.gespraech.UNKLAR_ANTWORT
+    assert "Hrisovalanis Charalampopoulos" in z1["text"]
+    assert "Was meinen Sie damit?" in z1["text"]
     assert "schon einmal" in z2["text"]
     assert "Ihr Sohn" in z2["text"]
     assert s["modus"] == "buchen"

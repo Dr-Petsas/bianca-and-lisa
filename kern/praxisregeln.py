@@ -14,6 +14,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from kern import fachprofil
+
 
 NOTFALL_MARKER = "NOTFALL-SOFORTREGEL"
 DOKUMENT_MARKER = "DOKUMENT-VORSPRACHEREGEL"
@@ -45,6 +47,17 @@ _VERNEINT_RE = re.compile(
     r"\b(?:kein|keine|nicht)\s+(?:akut\w*|notfall|dringend)\b", re.I)
 _UHRFRAGE_RE = re.compile(
     r"\bwann\b|welche\s+uhrzeit|um\s+wie\s+viel\s+uhr|feste?\s+uhrzeit",
+    re.I,
+)
+_REZEPT_UEBERWEISUNG_RE = re.compile(
+    r"\b(?:(?:folge|dauer|privat|kassen)[-\s]?)?rezept(?:e|es|en)?\b|"
+    r"\brezept(?:wunsch|bestell\w*|abhol\w*|verlänger\w*|verlaenger\w*)\b|"
+    r"\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
+    re.I,
+)
+_DENTAL_UNTERLAGEN_RE = re.compile(
+    r"\bröntgen\w*|\broentgen\w*|\bbefund(?:unterlagen?|berichte?|bilder?)?\w*|"
+    r"\bbehandlungsunterlagen?\w*",
     re.I,
 )
 _WOCHENTAGE = {
@@ -154,8 +167,28 @@ def notfall_antwort(
 
 def dokument_antwort() -> str:
     return (
-        "Rezepte und Überweisungen gibt es bei uns nur nach persönlicher "
-        "Vorsprache in der Praxis. Je nach Anliegen schaut die Ärztin Sie "
-        "vorher noch kurz an. Kommen Sie dafür bitte während der "
-        "Sprechzeiten vorbei."
+        "Rezepte und Überweisungen werden nur nach einer Kontrolle oder kurzen "
+        "Besprechung mit dem Arzt bereitgestellt. Dafür müssen Sie persönlich "
+        "in die Praxis kommen und die Unterlagen persönlich abholen. Eine "
+        "dritte Person kann sie grundsätzlich nicht abholen. Bei "
+        "schwerwiegenden Umständen, zum Beispiel fehlender Mobilität, muss "
+        "die Praxis den Einzelfall vorher prüfen."
     )
+
+
+def unterlagen_antwort(tenant: dict | None, text: str) -> str:
+    """Fachsichere Dokumentauskunft; Zahnregeln nie in Derma ausgeben."""
+    t = _s(text)
+    if _REZEPT_UEBERWEISUNG_RE.search(t):
+        return dokument_antwort()
+    if (
+        fachprofil.fach_id(tenant) == "zahnmedizin"
+        and _DENTAL_UNTERLAGEN_RE.search(t)
+    ):
+        return (
+            "Röntgenbilder und Befundunterlagen werden normalerweise über "
+            "einen gesicherten Dienstweg direkt an den anfordernden Zahnarzt "
+            "versandt. Der nachbehandelnde oder konsiliarisch tätige Zahnarzt "
+            "muss sie ausdrücklich anfordern."
+        )
+    return ""

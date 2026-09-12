@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, antwort_wache, fachprofil, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, anrede_wache, antwort_wache, fachprofil, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import spur
 from kern import wissen as kern_wissen
 # #region agent log
@@ -779,6 +779,26 @@ def start_reply(sit: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+def _anrede_wache_anwenden(sit: dict, text: str) -> str:
+    """W-ANREDE (13.09.2026): eine Anrede mit Namen darf nur raus, wenn der
+    Name belegt ist (Anrufer, Kartei oder Mandant).
+
+    Live-Probe 12.09.2026 mit unbekanntem Anrufer: „Gerne, Herr Meier." —
+    der Name war frei erfunden. off: nichts. shadow: nur Wächterspur.
+    enforce: Anrede streichen, Satz bleibt stehen."""
+    m = anrede_wache.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, gestrichen = anrede_wache.saeubern(sit, text)
+    if not gestrichen:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "anrede-wache-shadow", "; ".join(gestrichen)[:60])
+        return text
+    spur.merken(sit, "anrede-wache", "; ".join(gestrichen)[:60])
+    return neu or text
+
+
 def _fakten_wache_anwenden(
     sit: dict, text: str, *, nutzertext: str | None = None
 ) -> str:
@@ -1318,6 +1338,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 vorab_blockiert = True
                 spur.merken(sit, "fakten-wache-vorab", unbelegt)
                 return
+            # W-ANREDE: die erfundene Anrede muss HIER fallen — dieser Satz
+            # wird sofort gesprochen. Gesprochenes und Endtext werden gleich
+            # gesaeubert, damit llm.rest_nach_vorab den Rest weiter findet
+            # (sonst kaeme der Satz ein zweites Mal).
+            satz = _anrede_wache_anwenden(sit, satz)
+            if not _s(satz):
+                return
             vorab(satz)
 
         out = llm.chat_stream(
@@ -1350,6 +1377,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief, floor=route["floor"])
     bewacht = _fakten_wache_anwenden(
         sit, bewacht, nutzertext=text_in)
+    bewacht = _anrede_wache_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht

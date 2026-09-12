@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auftrag: Asterisk-Umzug auf den 8-Kern-Server</title>
+</head>
+<body style="margin:0; padding:0; background-color:#eef0f3;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" align="center" style="background-color:#eef0f3;">
+<tr>
+<td align="center" style="padding:24px 12px;">
+
+<table width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px; max-width:600px; background-color:#ffffff; border-radius:6px; overflow:hidden;">
+
+  <!-- Kopf -->
+  <tr>
+    <td align="center" style="background-color:#24374e; padding:22px 24px;">
+      <img src="https://pickadoc.de/images/logo-text-ai-email.png" width="180" height="40" alt="Pickadoc" style="display:block; border:0;">
+    </td>
+  </tr>
+
+  <tr>
+    <td style="padding:28px 28px 8px 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h1 style="margin:0 0 6px 0; font-size:21px; line-height:1.3; color:#24374e;">
+        Auftrag: Asterisk-Umzug auf den 8-Kern-Server
+      </h1>
+      <p style="margin:0 0 20px 0; font-size:13px; color:#8a94a0;">
+        Ursache der Audio-Aussetzer bei Bianca ist bewiesen &middot; 12.09.2026
+      </p>
+
+      <p style="margin:0 0 16px 0; font-size:15px; line-height:1.6; color:#333333;">
+        Hi Kiriakos,
+      </p>
+
+      <p style="margin:0 0 16px 0; font-size:15px; line-height:1.6; color:#333333;">
+        die Audio-Aussetzer in Biancas Telefonaten sind vollst&auml;ndig diagnostiziert. Die Ursache
+        liegt <strong>nicht</strong> in unserem Code, nicht im Netz und nicht in der SSH-Br&uuml;cke,
+        sondern in der Asterisk-Maschine selbst: Der Strato-VPS mit 2&nbsp;Kernen bleibt w&auml;hrend
+        eines Telefonats regelm&auml;&szlig;ig f&uuml;r 320 bis 950&nbsp;Millisekunden komplett stehen.
+        Unten findest du das Messmaterial, den Zielserver samt Vergleichsmessung und den konkreten
+        Arbeitsauftrag.
+      </p>
+
+      <p style="margin:0 0 24px 0; font-size:15px; line-height:1.6; color:#333333;">
+        <strong>Dein Auftrag:</strong> Auf dem gr&ouml;&szlig;eren Strato-Server
+        (212.132.104.205, 8&nbsp;Kerne) einen schlanken Asterisk aufbauen, der ausschlie&szlig;lich
+        Biancas vier Rufnummern annimmt, und die Nummern einzeln dorthin umziehen &mdash;
+        beginnend mit einer einzigen als Probel&auml;ufer.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Befund -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:0 0 12px 0; font-size:17px; color:#24374e;">1. Der Befund in einer Zahl</h2>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 18px 0;">
+        <tr><td style="padding:14px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          &Uuml;ber zwei gemessene Telefonate: <strong>13,9 Sekunden Sprachausfall in 91 Sekunden
+          Gespr&auml;ch &mdash; 15,3&nbsp;% der Gespr&auml;chszeit</strong>, verteilt auf 36 Unterbrechungen.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; font-family:Arial,Helvetica,sans-serif; font-size:13px; margin:0 0 22px 0;">
+        <tr style="background-color:#24374e; color:#ffffff;">
+          <th align="left"   style="padding:8px 10px;">Anruf</th>
+          <th align="right" style="padding:8px 10px;">Dauer</th>
+          <th align="right" style="padding:8px 10px;">L&uuml;cken</th>
+          <th align="right" style="padding:8px 10px;">Ausfall</th>
+          <th align="right" style="padding:8px 10px;">Anteil</th>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">f9e4cac7</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">65 s</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">28</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">11,6 s</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">17,9 %</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">9600d024</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">26 s</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">8</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">2,3 s</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">8,8 %</td>
+        </tr>
+        <tr style="background-color:#f7f8fa; font-weight:bold; color:#24374e;">
+          <td style="padding:8px 10px;">Gesamt</td>
+          <td align="right" style="padding:8px 10px;">91 s</td>
+          <td align="right" style="padding:8px 10px;">36</td>
+          <td align="right" style="padding:8px 10px;">13,9 s</td>
+          <td align="right" style="padding:8px 10px;">15,3 %</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- Beweise -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:0 0 12px 0; font-size:17px; color:#24374e;">2. Wie es bewiesen wurde</h2>
+
+      <p style="margin:0 0 14px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Von pickadoc1 aus liefen w&auml;hrend der Anrufe vier unabh&auml;ngige Sonden parallel, um die
+        Strecke Abschnitt f&uuml;r Abschnitt zu trennen:
+      </p>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:1.6; color:#333333; margin:0 0 16px 0;">
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>1.1.1.1</strong> &mdash; unsere eigene Leitung als Nullreferenz</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>212.227.120.189</strong> &mdash; letzter antwortender Strato-Knoten vor der Maschine</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>TCP-Handschlag zu 87.106.34.137:22</strong> &mdash; der Kernel der Maschine selbst</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>TCP-Handschlag zu 87.106.34.137:5060</strong> &mdash; zweiter, unabh&auml;ngiger Dienst derselben Maschine</td></tr>
+      </table>
+
+      <p style="margin:0 0 14px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Der Handschlag statt ICMP, weil die Maschine Ping-Echos filtert. Ein SYN-ACK wird im
+        Kernel erzeugt &mdash; wenn er ausbleibt, l&auml;uft die Maschine nicht.
+      </p>
+
+      <h3 style="margin:18px 0 8px 0; font-size:15px; color:#24374e;">Beweis 1 &mdash; nur die Maschine steht, das Netz ist glatt</h3>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; font-family:Arial,Helvetica,sans-serif; font-size:13px; margin:0 0 14px 0;">
+        <tr style="background-color:#24374e; color:#ffffff;">
+          <th align="left"  style="padding:8px 10px;">Sonde</th>
+          <th align="right" style="padding:8px 10px;">Median</th>
+          <th align="right" style="padding:8px 10px;">Maximum</th>
+          <th align="right" style="padding:8px 10px;">&uuml;ber 60 ms</th>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">unsere Leitung</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">8,2 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">174 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">3 von 2235</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Strato-Knoten davor</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">15,7 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">195 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">4 von 2236</td>
+        </tr>
+        <tr style="background-color:#fdf2fb;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;"><strong>Asterisk :22</strong></td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">20,2 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;"><strong>913,6 ms</strong></td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">16 von 897</td>
+        </tr>
+        <tr style="background-color:#fdf2fb;">
+          <td style="padding:7px 10px;"><strong>Asterisk :5060</strong></td>
+          <td align="right" style="padding:7px 10px;">20,4 ms</td>
+          <td align="right" style="padding:7px 10px;"><strong>838,5 ms</strong></td>
+          <td align="right" style="padding:7px 10px;">18 von 897</td>
+        </tr>
+      </table>
+
+      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Die Stillst&auml;nde der Maschine fallen zeitlich genau auf die h&ouml;rbaren Aussetzer.
+        Als Gegenprobe, die das Verfahren best&auml;tigt: bei Unix-Zeit 1789223143 gab es eine
+        <em>echte</em> Netzst&ouml;rung &mdash; da sprangen alle vier Sonden gleichzeitig
+        (174 / 195 / 98,6 / 88,7&nbsp;ms). W&auml;hrend der Aussetzer bewegt sich nur die Maschine.
+      </p>
+
+      <h3 style="margin:18px 0 8px 0; font-size:15px; color:#24374e;">Beweis 2 &mdash; zwei fremde Dienste fallen zur selben Millisekunde aus</h3>
+
+      <p style="margin:0 0 10px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Der Einwand &bdquo;eure eigene Messung st&ouml;rt die Maschine&ldquo; ist damit ausger&auml;umt:
+        SSH und SIP haben nichts miteinander zu tun, stehen aber gemeinsam still.
+      </p>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; font-family:Arial,Helvetica,sans-serif; font-size:13px; margin:0 0 14px 0;">
+        <tr style="background-color:#24374e; color:#ffffff;">
+          <th align="left"  style="padding:8px 10px;">Unix-Zeit</th>
+          <th align="right" style="padding:8px 10px;">Port 22</th>
+          <th align="right" style="padding:8px 10px;">Port 5060</th>
+        </tr>
+        <tr style="background-color:#f7f8fa;"><td style="padding:6px 10px;">1789223019,97</td><td align="right" style="padding:6px 10px;">458,1 ms</td><td align="right" style="padding:6px 10px;">461,1 ms</td></tr>
+        <tr><td style="padding:6px 10px;">1789223024,97</td><td align="right" style="padding:6px 10px;">458,8 ms</td><td align="right" style="padding:6px 10px;">458,7 ms</td></tr>
+        <tr style="background-color:#f7f8fa;"><td style="padding:6px 10px;">1789223027,97</td><td align="right" style="padding:6px 10px;">502,9 ms</td><td align="right" style="padding:6px 10px;">501,1 ms</td></tr>
+        <tr><td style="padding:6px 10px;">1789223030,97</td><td align="right" style="padding:6px 10px;">453,5 ms</td><td align="right" style="padding:6px 10px;">454,4 ms</td></tr>
+        <tr style="background-color:#f7f8fa;"><td style="padding:6px 10px;">1789223033,97</td><td align="right" style="padding:6px 10px;">497,2 ms</td><td align="right" style="padding:6px 10px;">499,5 ms</td></tr>
+        <tr><td style="padding:6px 10px;">1789223411,10</td><td align="right" style="padding:6px 10px;">327,4 ms</td><td align="right" style="padding:6px 10px;">322,6 ms</td></tr>
+        <tr style="background-color:#f7f8fa;"><td style="padding:6px 10px;">1789223426,11</td><td align="right" style="padding:6px 10px;">322,8 ms</td><td align="right" style="padding:6px 10px;">327,4 ms</td></tr>
+      </table>
+
+      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Dazu ein Argument aus den Kernel-Zeitgebern: Linux wiederholt ein verlorenes SYN erst nach
+        1, dann 3, dann 7&nbsp;Sekunden. Ein Verbindungsaufbau, der <em>500&nbsp;Millisekunden</em>
+        braucht, kann also kein verworfenes Paket und keine Drosselung sein &mdash; nur eine
+        Maschine, die in dieser Zeit keine Rechenzeit bekommt.
+      </p>
+
+      <h3 style="margin:18px 0 8px 0; font-size:15px; color:#24374e;">Beweis 3 &mdash; im Leerlauf ist alles sauber</h3>
+      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.6; color:#333333;">
+        790 Sonden &uuml;ber 6,5 Minuten ohne Telefonat: <strong>null Stillst&auml;nde</strong>.
+        W&auml;hrend eines Telefonats: 12 bis 19 Stillst&auml;nde pro Minute. Das Problem ist
+        lastabh&auml;ngig und tritt genau dann auf, wenn Asterisk Medien verarbeiten muss.
+      </p>
+
+      <h3 style="margin:18px 0 8px 0; font-size:15px; color:#24374e;">Beweis 4 &mdash; unsere Seite ist p&uuml;nktlich</h3>
+      <p style="margin:0 0 10px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Die Br&uuml;cke schreibt seit der Diagnose je Ansage eine Takt-Bilanz. In allen gemessenen
+        Anrufen: <strong>kein einziger versp&auml;teter Rahmen</strong>, maximale Abweichung
+        1,4 bis 2,3&nbsp;ms bei einem 20-ms-Takt, Sendepuffer-Stau dauerhaft 0&nbsp;Byte.
+        Zus&auml;tzlich ist die L&uuml;ckenrate identisch, egal ob der Anrufer spricht oder schweigt
+        (43 von 3580 gegen 21 von 1653 Rahmen) &mdash; unsere Verarbeitung ist als Ursache damit
+        auch quantitativ ausgeschlossen.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Warum jetzt -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">3. Warum es erst seit Ende August auftritt</h2>
+      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Zur ElevenLabs- und LiveKit-Zeit hat Asterisk die Gespr&auml;che nur vermittelt und die
+        Medien kaum angefasst. Seit Bianca die Anrufe selbst h&auml;lt, muss dieselbe schwache
+        Maschine alle 20&nbsp;Millisekunden das RTP von Zaluma terminieren, zwischen alaw und slin
+        umrechnen, ein zus&auml;tzliches Local-Kanal-Paar bedienen und TCP-Ein- und Ausgabe machen.
+        Wir haben den kompletten Medienpfad auf das schw&auml;chste Glied der Kette gelegt.
+        Das erkl&auml;rt, warum Leerlauf sauber ist und Gespr&auml;che nicht.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Zielserver -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">4. Der Zielserver, gemessen</h2>
+
+      <p style="margin:0 0 14px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Auf 212.132.104.205 habe ich denselben 20-ms-Takt gemessen, den Asterisk braucht &mdash;
+        im Leerlauf und unter Vollast auf allen acht Kernen:
+      </p>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; font-family:Arial,Helvetica,sans-serif; font-size:13px; margin:0 0 14px 0;">
+        <tr style="background-color:#24374e; color:#ffffff;">
+          <th align="left"  style="padding:8px 10px;">20-ms-Takt, 500 Rahmen</th>
+          <th align="right" style="padding:8px 10px;">Median</th>
+          <th align="right" style="padding:8px 10px;">p95</th>
+          <th align="right" style="padding:8px 10px;">Maximum</th>
+          <th align="right" style="padding:8px 10px;">&uuml;ber 20 ms</th>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Leerlauf</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">0,13 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">0,16 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">0,72 ms</td>
+          <td align="right" style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">0</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;">Vollast, 8 Kerne</td>
+          <td align="right" style="padding:7px 10px;">0,09 ms</td>
+          <td align="right" style="padding:7px 10px;">7,45 ms</td>
+          <td align="right" style="padding:7px 10px;">10,98 ms</td>
+          <td align="right" style="padding:7px 10px;">0</td>
+        </tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 18px 0;">
+        <tr><td style="padding:14px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>Vom Wirt entzogene Rechenzeit: 0,000&nbsp;%</strong>, sogar w&auml;hrend alle acht
+          Kerne unter Vollast liefen. CPU-Druck <code>full total=0</code>.
+          Die Maschine verschiebt ihren Takt selbst unter Vollast nie &uuml;ber 11&nbsp;ms &mdash;
+          die alte bleibt bei einem einzigen Telefonat 320 bis 950&nbsp;ms stehen.
+        </td></tr>
+      </table>
+
+      <p style="margin:0 0 8px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Weiterer Bestand dort: Ubuntu 24.04, 4,8 von 464&nbsp;GB belegt, kein Docker, kein Asterisk,
+        <strong>Port 5060 und der RTP-Bereich frei</strong>. Es laufen Caddy und
+        <code>onboarder.service</code> (Node, <code>/opt/onboarder</code>, Ports 8790 und 33369) &mdash;
+        <strong>die bleiben unber&uuml;hrt</strong>, Asterisk kommt daneben. L&ouml;schen ist nicht
+        n&ouml;tig.
+      </p>
+      <p style="margin:0 0 16px 0; font-size:13px; line-height:1.6; color:#8a94a0;">
+        Zum Vergleich der alte Asterisk: Ubuntu 22.04, 2 Kerne, 4&nbsp;GB.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Nummern -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">5. Die vier betroffenen Rufnummern</h2>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; font-family:Arial,Helvetica,sans-serif; font-size:13px; margin:0 0 14px 0;">
+        <tr style="background-color:#24374e; color:#ffffff;">
+          <th align="left" style="padding:8px 10px;">Nummer</th>
+          <th align="left" style="padding:8px 10px;">Praxis</th>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">+49 211 54244101</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Zahn&auml;rzte im Medical Center D&uuml;sseldorf</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">+49 211 54244110</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Zahn&auml;rzte im Medical Center D&uuml;sseldorf (zweite Leitung)</td>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">+49 211 54244120</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Hautarztpraxis Doktor Blessing</td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px;">+49 211 54244105</td>
+          <td style="padding:7px 10px;">Thaler Zahnmedizin (Eva Thaler)</td>
+        </tr>
+      </table>
+
+      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.6; color:#333333;">
+        Quelle: <code>sip_bridge/extensions_bianca.conf</code> und die <code>dids</code>-Felder in
+        <code>tenants/*.json</code>; die Live-<code>.env</code> setzt kein
+        <code>BRIDGE_DID_MAP</code>, es gilt der Default aus <code>sip_bridge/server.py</code>.
+        Alles andere auf der alten Maschine l&auml;uft &uuml;ber die Number-API an andere Backends und
+        ber&uuml;hrt die Br&uuml;cke nie &mdash; das bleibt dort.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Arbeitsauftrag -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">6. Arbeitsauftrag</h2>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>1. Asterisk installieren</strong><br>
+          Asterisk 20 aus den Ubuntu-Paketen auf 212.132.104.205, <em>neben</em> Caddy und dem
+          Onboarder. Nichts entfernen, nichts formatieren.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>2. Zaluma-Trunk einrichten</strong><br>
+          PJSIP-Endpunkt <code>zaluma-trunk</code> nach <code>vc.zaluma.tel</code>, Kontext
+          <code>[from-zaluma]</code> &mdash; als Spiegel der alten Konfiguration. Die alte Maschine
+          dabei nur lesen, nicht &auml;ndern.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>3. Dialplan &uuml;bernehmen</strong><br>
+          Referenzkopie im Repo: <code>sip_bridge/extensions_bianca.conf</code>. Drei Fallen, die
+          dort schon gel&ouml;st sind und nicht zur&uuml;ckgebaut werden d&uuml;rfen:
+          <br>&bull;&nbsp; die <code>AudioSocket()</code>-<em>Applikation</em> statt
+          <code>Dial(AudioSocket/&hellip;)</code> &mdash; sie zwingt den Kanal auf slin; mit Dial
+          kam G.711 roh durch und µ-law wurde als A-law dekodiert (&bdquo;&uuml;bel verzerrt&ldquo;),
+          <br>&bull;&nbsp; der Kontext <code>[bianca-audiosocket]</code> muss am <em>Dateiende</em>
+          stehen, sonst liegt alles darunter nicht mehr in <code>[from-zaluma]</code>,
+          <br>&bull;&nbsp; das Local-Leg mit <code>/n</code> und vererbtem <code>__BUUID</code> ist
+          n&ouml;tig, weil Asterisk nach dem AudioSocket-Ende den Kanal beendet &mdash; ohne das
+          Leg l&auml;uft die <code>CURL</code>-Abfrage f&uuml;r die Weiterleitung nie.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>4. R&uuml;cktunnel umh&auml;ngen</strong><br>
+          Der &ouml;ffentliche Schl&uuml;ssel von pickadoc1
+          (<code>~/.ssh/id_ed25519_asterisk_tunnel.pub</code>) in die
+          <code>authorized_keys</code> des neuen Servers, beschnitten auf
+          <code>permitlisten="40101"</code>, <code>permitlisten="40102"</code>,
+          <code>no-pty</code> und <code>command=</code> &mdash; kein Shell-Zugang.
+          <strong>Wichtig:</strong> <code>restrict</code> zusammen mit <code>permitlisten</code>
+          verweigert den Forward (auf OpenSSH 8.9 erlebt), deshalb die Einzeloptionen verwenden.
+          Danach im <code>compose.yml</code> den Dienst <code>tunnel</code> auf den neuen Host
+          zeigen lassen; den Block <code>net.ipv4.tcp_rto_min_us</code> dort behalten.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>5. Firewall &ouml;ffnen</strong><br>
+          5060 (UDP und TCP) sowie der RTP-Bereich 10000&ndash;20000/UDP f&uuml;r Zaluma &mdash;
+          sowohl in der Strato-Firewall als auch lokal.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>6. Ohne Zaluma vorab testen</strong><br>
+          Auf dem neuen Asterisk einen Anruf selbst erzeugen:
+          <code>channel originate Local/21154244110@from-zaluma application Wait 10</code>.
+          Im Br&uuml;cken-Log muss die Dialplan-UUID mit der DID-Kennung am Ende erscheinen.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 10px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>7. Eine Nummer als Probel&auml;ufer umlegen</strong><br>
+          Zaluma muss die neue IP f&uuml;r den Trunk freigeben und <strong>zuerst nur
+          +49&nbsp;211&nbsp;54244110</strong> dorthin routen. Die drei anderen laufen unver&auml;ndert
+          weiter. R&uuml;ckweg pro Nummer: zur&uuml;ck auf 87.106.34.137 &mdash; kein Code&auml;nderung
+          n&ouml;tig.
+        </td></tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f7f8fa; border-left:4px solid #d862c8; margin:0 0 18px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>8. Abnahme messen, nicht h&ouml;ren</strong><br>
+          Die Br&uuml;cken-Instrumentierung l&auml;uft noch und schreibt L&uuml;cken und Takt-Bilanz je
+          Anruf. <strong>Abnahmekriterium: keine einzige Eingangsl&uuml;cke ab 200&nbsp;ms</strong>
+          in einem Telefonat von mindestens 60&nbsp;Sekunden. Danach folgen 4101, 4120 und 4105.
+        </td></tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- Zugaenge -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">7. Zug&auml;nge</h2>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; font-family:Arial,Helvetica,sans-serif; font-size:13px; margin:0 0 14px 0;">
+        <tr style="background-color:#24374e; color:#ffffff;">
+          <th align="left" style="padding:8px 10px;">Zielserver (neu)</th>
+          <th align="left" style="padding:8px 10px;">Wert</th>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">IPv4</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;"><code>212.132.104.205</code></td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">IPv6</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;"><code>2a01:239:4db:900::1</code></td>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Benutzer</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;"><code>root</code></td>
+        </tr>
+        <tr>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">System</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #e3e6ea;">Ubuntu 24.04.4 LTS, 8 Kerne, 32 GB, 480 GB</td>
+        </tr>
+        <tr style="background-color:#f7f8fa;">
+          <td style="padding:7px 10px;">Auftragsnummer Strato</td>
+          <td style="padding:7px 10px;">9906335 (&bdquo;LiveAvatar-Server&ldquo;)</td>
+        </tr>
+      </table>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#fff6fc; border-left:4px solid #d862c8; margin:0 0 14px 0;">
+        <tr><td style="padding:13px 16px; font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.6; color:#333333;">
+          <strong>Schl&uuml;ssel bitte nicht per Mail.</strong> Der Zugang l&auml;uft aktuell &uuml;ber
+          den Schl&uuml;ssel <code>strato-deploy</code> auf dem Entwicklungsrechner. Schick deinen
+          <em>&ouml;ffentlichen</em> Schl&uuml;ssel, dann wird er auf dem Server hinterlegt &mdash;
+          alternativ setzt du das root-Passwort im Strato-Kundenbereich selbst neu. Ein privater
+          Schl&uuml;ssel geht nicht per E-Mail raus.
+        </td></tr>
+      </table>
+
+      <p style="margin:0 0 8px 0; font-size:14px; line-height:1.6; color:#333333;">
+        <strong>Alte Asterisk-Maschine:</strong> <code>87.106.34.137</code> (Ubuntu 22.04, 2 Kerne,
+        4&nbsp;GB), Benutzer <code>root</code>. Port 22 l&auml;sst nur pickadoc1 durch, Zugriff also
+        &uuml;ber <code>ssh -J pickadoc1</code>. F&uuml;r diese Maschine liegt hier <em>kein</em>
+        Shell-Schl&uuml;ssel &mdash; der Schl&uuml;ssel von pickadoc1 ist auf Port-Weiterleitung
+        beschnitten. F&uuml;r das Auslesen der Trunk-Konfiguration brauchst du dort einen
+        root-Zugang.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Nicht anfassen -->
+  <tr>
+    <td style="padding:0 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">8. Was unber&uuml;hrt bleiben muss</h2>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.7; color:#333333; margin:0 0 18px 0;">
+        <tr><td style="padding:2px 0;">&bull;&nbsp; Clara auf 8091, 8093 und 8094, MAS-2, Lena-Voice, pickadoc-live-base und <code>pickadoc-vllm-1</code> &mdash; nicht anfassen, nicht neu starten.</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <code>WRITE_LIVE</code> bleibt <code>1</code> (echter Kalender).</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; Die Server-<code>.env</code> niemals pauschal &uuml;berschreiben. Beim Deploy immer <code>--exclude=tenants/ --exclude=.env</code>, danach pr&uuml;fen: <code>grep -c 'CLOUDFLARE_TELEFONKI_TOKEN\|INTENT_NACHZUG' .env</code> muss <code>2</code> ergeben.</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; Auf der alten Maschine bleiben Blessing-Altroute, MedDent-alt, der LiveKit-Test und die Number-API unver&auml;ndert. Vor jeder &Auml;nderung dort ein Backup der Dialplan-Datei.</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; Auf dem neuen Server bleiben Caddy und der Onboarder in Betrieb.</td></tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- Offen -->
+  <tr>
+    <td style="padding:0 28px 8px 28px; font-family:Arial,Helvetica,sans-serif;">
+      <h2 style="margin:22px 0 12px 0; font-size:17px; color:#24374e;">9. Offene Punkte</h2>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif; font-size:14px; line-height:1.7; color:#333333; margin:0 0 18px 0;">
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>Zaluma</strong> muss die neue IP freigeben und die Nummern umlegen &mdash; das ist der einzige Schritt, der von au&szlig;en kommt.</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>Trunk-Konfiguration der alten Maschine</strong> auslesen &mdash; daf&uuml;r fehlt bisher der root-Zugang dort.</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>Strato-Ticket zur alten Maschine</strong> ist unabh&auml;ngig davon sinnvoll: 15,3&nbsp;% Sprachausfall, Stillst&auml;nde von 320 bis 950&nbsp;ms, bei denen der Kernel kein SYN-ACK mehr beantwortet, w&auml;hrend das vorgelagerte Netz nachweislich glatt ist. Wenn deren Wirt &uuml;berbelegt ist, verschieben sie die Maschine vielleicht.</td></tr>
+        <tr><td style="padding:2px 0;">&bull;&nbsp; <strong>Sp&auml;ter optional:</strong> das Local-Kanal-Paar im Dialplan einsparen und den Medienpfad von TCP-&uuml;ber-SSH l&ouml;sen. Beides senkt die Last je Anruf weiter, ist aber erst nach dem Umzug sinnvoll.</td></tr>
+      </table>
+
+      <p style="margin:0 0 6px 0; font-size:15px; line-height:1.6; color:#333333;">
+        Die Messsonden und die Instrumentierung in der Br&uuml;cke laufen weiter, damit wir nach dem
+        Umzug sofort einen Vorher-Nachher-Vergleich haben.
+      </p>
+    </td>
+  </tr>
+
+  <!-- Fuss -->
+  <tr>
+    <td style="background-color:#f7f8fa; padding:18px 28px; font-family:Arial,Helvetica,sans-serif; font-size:12px; line-height:1.6; color:#8a94a0; border-top:1px solid #e3e6ea;">
+      Messdaten: Br&uuml;cken-Instrumentierung in <code>telefonki-sipbridge-1</code> sowie vier
+      parallele Netzsonden von pickadoc1, 12.09.2026.
+    </td>
+  </tr>
+
+</table>
+
+</td>
+</tr>
+</table>
+</body>
+</html>

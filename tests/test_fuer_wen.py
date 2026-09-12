@@ -178,10 +178,82 @@ def test_buchen_check_fragt_fuer_sie_selbst():
         z1 = flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
         assert z1 and "richtig erkannt" in z1["text"], z1
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
-        z2 = flow.zug(sit, "Ja.")
-        assert z2 and "Der Termin ist für Sie selbst, richtig?" in z2["text"], z2
-        assert gehirn.sammler(sit)["frage"] == "fuer_wen_check"
+        s = gehirn.sammler(sit)
+        assert not s["patientId"]
+        assert not s["telefonOk"] and not s["telefon"]
+
+        z2 = flow.zug(sit, "Ja, genau.")
+        assert z2 and "Der Termin ist für Sie selbst, richtig?" in z2["text"]
+        assert s["frage"] == "fuer_wen_check"
+        assert s["patientId"] == "pat-77"
+        assert not s["telefonOk"] and not s["telefon"]
+        assert s["telefonBekannt"] == "015253904756"
     _ohne_hintergrund(lauf)
+
+
+def test_erkanntes_patientendossier_bleibt_im_session_hirn():
+    sit = _sit_mit_anrufer()
+    hirn.init(sit)
+    sit["anruferKartei"] = {
+        "letzterBesuch": "2026-02-01T09:00:00+01:00",
+        "letzterGrund": "Kontrolle",
+        "calendarId": "cal-p",
+        "calendarName": "Doktor Petsas",
+        "doctorName": "Doktor Petsas",
+    }
+    sit["upcoming"] = [{
+        "id": "ap-1",
+        "iso": "2026-10-01T10:00:00+02:00",
+        "calendarId": "cal-p",
+        "doctorName": "Doktor Petsas",
+        "visitMotiveName": "Kontrolle",
+    }]
+    assert gehirn.anrufer_daten_uebernehmen(sit)
+    patient = sit["hirn"]["patient"]
+    assert patient["patientId"] == "pat-77"
+    assert patient["telefon"] == "015253904756"
+    assert patient["letzterArzt"] == "Doktor Petsas"
+    assert patient["letzterGrund"] == "Kontrolle"
+    assert patient["kommendeTermine"][0]["id"] == "ap-1"
+    filler = sit["karteiFillerText"]
+    assert "Doktor Petsas" in filler and "Kontrolle" in filler
+    assert "schaue direkt, wann etwas frei ist" in filler
+    assert "?" not in filler
+
+
+def test_erkanntes_patientendossier_uebernimmt_behandler_ohne_rueckfrage():
+    sit = _sit_mit_anrufer()
+    sit["anruferKartei"] = {
+        "letzterBesuch": "2026-02-01T09:00:00+01:00",
+        "letzterGrund": "Kontrolle",
+        "calendarId": "cal-p",
+        "calendarName": "Doktor Petsas",
+        "doctorName": "Doktor Petsas",
+    }
+    s = gehirn.sammler(sit)
+    gehirn.anrufer_daten_uebernehmen(sit)
+    s.update({
+        "modus": "buchen",
+        "fuerWenCheck": "ja",
+        "grund": "Kontrolle",
+        "letzterBesuch": "2025-01-01",
+        "letzterGrund": "Kontrolle",
+    })
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "wunsch"
+    assert (s.get("arzt") or {}).get("calendarId") == "cal-p"
+    assert "vormittags oder nachmittags" in frage
+    assert "Behandler" not in frage and "Handynummer" not in frage
+    assert not gehirn.rueckblick_faellig(s)
+
+
+def test_neupatient_bekommt_eindeutige_behandlerwahl():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False})
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "arzt"
+    assert "Behandler" in frage
 
 
 def test_verwalten_check_bleibt_stimmt_das_so():
@@ -272,7 +344,8 @@ def test_dritttermin_meine_nummer_bezieht_sich_auf_anrufer_und_wird_bestaetigt()
 def test_nein_ohne_rolle_fragt_fuer_wen():
     def lauf():
         sit = _sit_mit_anrufer()
-        flow.zug(sit, "Ich möchte einen Termin buchen.")
+        z1 = flow.zug(sit, "Ich möchte einen Termin buchen.")
+        assert z1 and "richtig erkannt" in z1["text"]
         z2 = flow.zug(sit, "Ja.")
         assert z2 and "für Sie selbst" in z2["text"]
         z3 = flow.zug(sit, "Nein.")
@@ -370,9 +443,57 @@ def test_versicherungsfrage_fragt_nach_dem_dritten():
               "arzt": {"typ": "egal", "calendarId": "c1"},
               "grund": "Kontrolle", "wunsch": {},
               "vorname": "Niko", "nachname": "Tzannis", "buchstabiert": True,
-              "telefon": "015253904756", "telefonOk": True})
+              "telefon": "015253904756", "telefonOk": True,
+              "smsEmpfaenger": "anrufer"})
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "versicherung" and "Ihr Sohn" in frage, frage
+
+
+def test_dritttermin_fragt_sms_ziel_vor_einer_fremden_nummer():
+    sit = _sit_mit_anrufer()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "fuerWen": "sohn",
+        "warSchonMal": False,
+        "arzt": {"typ": "egal", "calendarId": "c1"},
+        "grund": "Kontrolle",
+        "wunsch": {},
+        "vorname": "Niko",
+        "nachname": "Tzannis",
+        "buchstabiert": True,
+        "kontaktTelefon": "015253904756",
+    })
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "sms_empfaenger"
+    assert "Niko Tzannis oder an Sie" in frage
+
+    s["frage"] = fid
+    gehirn.einsammeln(sit, "An mich bitte.")
+    assert s["smsEmpfaenger"] == "anrufer"
+    assert s["telefonOk"] and s["telefon"] == "015253904756"
+
+
+def test_dritttermin_nimmt_nummer_nur_fuer_drittperson_auf():
+    sit = _sit_mit_anrufer()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "fuerWen": "tochter",
+        "warSchonMal": False,
+        "arzt": {"typ": "egal", "calendarId": "c1"},
+        "grund": "Kontrolle",
+        "wunsch": {},
+        "vorname": "Nina",
+        "nachname": "Tzannis",
+        "buchstabiert": True,
+        "kontaktTelefon": "015253904756",
+        "frage": "sms_empfaenger",
+    })
+    gehirn.einsammeln(sit, "An Frau Tzannis.")
+    assert s["smsEmpfaenger"] == "patient"
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "telefon" and "Handynummer" in frage
 
 
 def test_doch_fuer_mich_loest_missverstaendnis():

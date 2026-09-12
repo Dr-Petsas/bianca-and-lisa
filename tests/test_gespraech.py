@@ -50,6 +50,23 @@ def test_stt_muell_wird_unklar_nicht_talk():
         assert gespraech.wirkt_unklar(satz), satz
 
 
+def test_unklares_wort_wird_woertlich_rueckgefragt():
+    for gehoert in ("Spress.", "Brent Campbellt."):
+        assert gespraech.wirkt_unklar(gehoert)
+        text = gespraech.unklar_antwort(gehoert)
+        assert gehoert.rstrip(".") in text
+        assert "Was meinen Sie damit?" in text
+        assert "Meinen Sie vielleicht etwas anderes?" in text
+
+
+def test_unklare_auswahl_respektiert_mitarbeitersperre():
+    thaler = {"mitarbeiterAnbieten": False}
+    text = gespraech.unklar_auswahl_antwort(thaler)
+    assert "Termin" in text and "Auskunft" in text
+    assert "Mitarbeiter" not in text
+    assert gespraech.unklar_auswahl_antwort({}) == gespraech.UNKLAR_AUSWAHL_ANTWORT
+
+
 def test_kurze_ok_woerter_sind_kein_unklar():
     for satz in ["Ja.", "Nein!", "Danke", "Hallo", "Bis bald", "Okay",
                  "Auf Wiederhören", "Auf Wiederhören, Bianca", "Sehr gerne",

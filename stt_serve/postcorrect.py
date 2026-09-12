@@ -82,11 +82,10 @@ _KONS_PHRASE_FIXES: list[tuple[re.Pattern, str]] = [
 ]
 _KONS_PHRASE_MARKERS = {"kons"}
 
-# Praxisname aus dem produktiven Thaler-Anruf (10.09.2026): Parakeet hoerte
-# den Eigennamen wiederholt als "Ttola". Diese weiter entfernte phonetische
-# Form erreicht die konservative Namens-Fuzzy-Schwelle bewusst nicht.
-# Darum marker-gated: die Ersetzung existiert NUR, wenn "Thaler" als
-# Praxis-/Tenant-Hotword mitgesendet wurde; andere Mandanten bleiben gleich.
+# Marker-gated Aliase aus produktiven Telefonclips. Weiter entfernte
+# phonetische Formen erreichen die konservative Namens-Fuzzy-Schwelle bewusst
+# nicht. Eine Ersetzung wird deshalb NUR aktiviert, wenn der Mandant das
+# jeweilige Zielwort ausdrücklich als Hotword mitsendet.
 _TENANT_PHRASE_FIXES: dict[str, list[tuple[re.Pattern, str]]] = {
     "thaler": [
         # Reale Telefonclips 10.09.: "Otala", "Hotala" und "Oh, Tala".
@@ -97,6 +96,31 @@ _TENANT_PHRASE_FIXES: dict[str, list[tuple[re.Pattern, str]]] = {
             re.IGNORECASE,
         ),
          "Thaler"),
+    ],
+    "röntgenbild": [
+        # Thaler 11.09.: derselbe Dokumentwunsch kam als Rückenbild,
+        # Rentenbild, Rhöngbild, Räumenbild und Röntgenbulder an.
+        (re.compile(
+            r"\b(?:rückenbild|rueckenbild|rentenbild|rhöngbild|rhoengbild|"
+            r"rhönbild|rhoenbild|röngbild|roengbild|räumenbild|raeumenbild)\b",
+            re.IGNORECASE,
+        ),
+         "Röntgenbild"),
+        (re.compile(r"\bröntgenbulder\b", re.IGNORECASE), "Röntgenbilder"),
+    ],
+    "sprechstundenhilfe": [
+        # Thaler 11.09.: "Sprechstundenhilfe" wurde in mehrere semantisch
+        # wertlose Wörter zerlegt. Nur die belegten Wortfolgen korrigieren.
+        (re.compile(
+            r"\bspress\s+von\s+der\s+hilfe\b",
+            re.IGNORECASE,
+        ),
+         "Sprechstundenhilfe"),
+        (re.compile(
+            r"\bsprechstund(?:e|en)\s+hilfe(?:sprecher)?\b",
+            re.IGNORECASE,
+        ),
+         "Sprechstundenhilfe"),
     ],
 }
 
