@@ -1,9 +1,30 @@
-# Produktionsstand V2.0 — 13.09.2026
+# Produktionsstand V2.1 — 13.09.2026
 
-Dieser Stand ist der **Rückrollpunkt**: Bianca und Lisa laufen damit live auf
-pickadoc1, Health grün, `tools/prod_smoke.py` = ALLE WACHEN GRUEN.
+Dieser Stand ist der **aktuelle Rückrollpunkt**: Bianca und Lisa laufen damit
+live auf pickadoc1, Health grün, `tools/prod_smoke.py` = ALLE WACHEN GRUEN.
 
-Nachfolger von `telefonki-produktionsstand-v1.0-2026-09-10`.
+Nachfolger von `telefonki-produktionsstand-v2.0-2026-09-13` (gleicher Tag,
+wenige Stunden früher) und `telefonki-produktionsstand-v1.0-2026-09-10`.
+
+## Warum es V2.1 gibt — zwei Fehler in V2.0
+
+**V2.0 nicht mehr als Ziel benutzen.** Der Stand trägt zwei Fehler, die erst
+bei der Test-Nachlese auffielen:
+
+1. **Behandlerwahl fehlte vor dem Zahnreinigungs-Angebot.** Die eine Zeile,
+   die W-PZR-REIHENFOLGE trägt (`"arzt"` in der Einschub-Sperre von
+   `flow.zug`), war am 12.09. mit einem fremden Arbeitsstand aus dem Commit
+   `df93e31` herausgefallen. Bianca bot dem Neupatienten die Zahnreinigung an,
+   bevor klar war, zu welchem Behandler er überhaupt will — zwei Tage live.
+2. **`bianca_web/index.html` war doppelt kodiert und trug ein BOM** (Titel
+   „Bianca â€" Patiententelefon", alle Umlaute kaputt) — so ausgeliefert. Der
+   V2.0-Commit selbst hatte die Datei falsch zurückgeschrieben.
+
+V2.1 = V2.0 plus deren Behebung, plus zwei Ergänzungen aus derselben Nachlese:
+`flow._ctx_bauen` legt ein fehlendes Geschlecht aus dem Vornamen nach (sonst
+fehlte es in einer neu angelegten Akte, wenn ein anderer Weg den Vornamen
+gesetzt hatte), und `flow.status_zeile` trägt die **belegte** Anrede als
+`Anrede=Herr Berger` mit, damit das Modell sie nicht raten muss.
 
 ## Was V2 gegenüber V1 mitbringt
 
@@ -22,22 +43,27 @@ Icebreaker, Fokus" und „Keine erfundene Anrede").
 
 ### 1. Quellcode — Git
 
-- Tag: **`telefonki-produktionsstand-v2.0-2026-09-13`** (annotiert)
+- Tag: **`telefonki-produktionsstand-v2.1-2026-09-13`** (annotiert, Commit `83daab3`)
 - Remote: `origin` = `github.com/Dr-Petsas/bianca-and-lisa`
-- Zurückrollen: `git checkout telefonki-produktionsstand-v2.0-2026-09-13`
+- Zurückrollen: `git checkout telefonki-produktionsstand-v2.1-2026-09-13`
 
 ### 2. Laufende Container — Docker-Image-Tags auf pickadoc1
 
 Die Images, aus denen der Live-Stand läuft, sind zusätzlich unter
-`produktionsstand-v2.0-20260913` getaggt — Rollback also **ohne Neubau**:
+`produktionsstand-v2.1-20260913` getaggt — Rollback also **ohne Neubau**:
 
 | Dienst | Live-Tag | Sicherungs-Tag |
 | --- | --- | --- |
-| bianca / lisa / bianca-test / studio / **sipbridge** / sipbridge-lisa | `telefonki:v1` (`8701a7003632`) | `telefonki:produktionsstand-v2.0-20260913` |
-| TTS (Qwen3, 8213) | `tts-qwen3:v1` (`388900ee2436`) | `tts-qwen3:produktionsstand-v2.0-20260913` |
-| STT (Parakeet, 8212) | `stt-parakeet-de:v1` (`8ff19deb7d74`) | `stt-parakeet-de:produktionsstand-v2.0-20260913` |
-| Cloudflare-Tunnel | `cloudflare/cloudflared:latest` | `cloudflare/cloudflared:produktionsstand-v2.0-20260913` |
-| SSH-Tunnel zum Asterisk | `alpine:3.20` | `alpine:produktionsstand-v2.0-20260913` |
+| bianca / lisa / bianca-test / studio / **sipbridge** / sipbridge-lisa | `telefonki:v1` (`958c909e6e9f`) | `telefonki:produktionsstand-v2.1-20260913` |
+| TTS (Qwen3, 8213) | `tts-qwen3:v1` (`388900ee2436`) | `tts-qwen3:produktionsstand-v2.1-20260913` |
+| STT (Parakeet, 8212) | `stt-parakeet-de:v1` (`8ff19deb7d74`) | `stt-parakeet-de:produktionsstand-v2.1-20260913` |
+| Cloudflare-Tunnel | `cloudflare/cloudflared:latest` | `cloudflare/cloudflared:produktionsstand-v2.1-20260913` |
+| SSH-Tunnel zum Asterisk | `alpine:3.20` | `alpine:produktionsstand-v2.1-20260913` |
+
+Das App-Image von V2.0 (`8701a7003632`) liegt unter
+`telefonki:produktionsstand-v2.0-20260913` weiter daneben — nur als Historie,
+nicht als Ziel (siehe die zwei Fehler oben). TTS/STT sind byte-identisch mit
+V2.0, dort wurde nichts gebaut.
 
 Hinweis: die beiden SIP-Brücken-Container laufen historisch aus unbenannten
 (inzwischen aufgeräumten) Layern. Ihr Code ist identisch mit
@@ -47,7 +73,7 @@ auf die alten Layer ist nicht möglich und auch nicht nötig.
 
 ### 3. Einstellungen, Geheimnisse und Daten — Schnappschuss auf pickadoc1
 
-`/home/cursor/telefonki-backups/produktionsstand-v2.0-20260913/` (1,1 GB, `chmod 700`):
+`/home/cursor/telefonki-backups/produktionsstand-v2.1-20260913/` (1,3 GB, `chmod 700`):
 
 | Datei | Inhalt |
 | --- | --- |
@@ -57,35 +83,40 @@ auf die alten Layer ist nicht möglich und auch nicht nötig.
 | `compose.yml`, `compose-tts_serve.yml`, `compose-stt_serve.yml`, `env-tts_serve`, `env-stt_serve` | Stack-Definitionen der drei Compose-Projekte |
 | `compose-aufgeloest.yml` | `docker compose config` — alle Variablen eingesetzt, so lief es wirklich |
 | `extensions_bianca.conf` | Asterisk-Dialplan (Referenzkopie des Live-Stands) |
-| `volume-telefonki_telefonki-data.tgz` | Sitzungen, Anruf-Mitschnitte, Praxis-Notizen (`.data`) — 1,0 GB |
+| `volume-telefonki_telefonki-data.tgz` | Sitzungen, Anruf-Mitschnitte, Praxis-Notizen (`.data`) — 1,1 GB |
 | `volume-telefonki_telefonki-berichte.tgz` | Studio-Berichte + Testtermin-Autolösch-Schlange |
 | `volume-telefonki_telefonki-klang.tgz` | TTS-Platten-Cache (gewärmte Sätze) |
 | `images.txt`, `inventar.txt` | welches Image je Container lief, Health-Antworten, `.env`-Schlüsselnamen, Plattenbelegung |
 
 **Diese Dateien kommen bewusst NICHT nach GitHub** (Tokens, Service-Account-Key,
 Patientendaten in den Mitschnitten). Sie liegen doppelt: auf pickadoc1 im
-Ordner oben und lokal in `_snapshot-produktionsstand-v2/` (gitignoriert).
+Ordner oben und lokal in `_snapshot-produktionsstand-v2.1/` (gitignoriert).
 
-### 4. Lokale Kopie — `_snapshot-produktionsstand-v2/`
+Neu geschrieben wird der Schnappschuss mit
+`tools/_produktionsstand_v2_server.sh` (`VERSION=v2.1` als Umgebungsvariable,
+Aufruf über `Get-Content … -Raw | ssh pickadoc1 "VERSION=v2.1 bash -s"`).
+Kein Container wird dabei gestoppt.
 
-Auf dem Dev-Rechner unter `F:\Bianca&Lisa TelefonKI\_snapshot-produktionsstand-v2\`:
-Git-Bundle der **vollen Historie** (`bianca-lisa-produktionsstand-v2.bundle`,
-läuft auch ohne GitHub), die Server-`.env`, `secrets.tgz`, `tenants.tgz`,
-`inventar.txt`, `images.txt` und diese Anleitung.
+### 4. Lokale Kopie — `_snapshot-produktionsstand-v2.1/`
+
+Auf dem Dev-Rechner unter `F:\Bianca&Lisa TelefonKI\_snapshot-produktionsstand-v2.1\`:
+Git-Bundle der **vollen Historie** (`bianca-lisa-produktionsstand-v2.1.bundle`,
+läuft auch ohne GitHub), die Server-`.env`, `secrets.tgz`, `tenants.tgz`, die
+drei Volume-Archive, `inventar.txt`, `images.txt`.
 
 Repo aus dem Bundle wiederherstellen:
 
 ```powershell
-git clone bianca-lisa-produktionsstand-v2.bundle wiederhergestellt
+git clone bianca-lisa-produktionsstand-v2.1.bundle wiederhergestellt
 cd wiederhergestellt
-git checkout telefonki-produktionsstand-v2.0-2026-09-13
+git checkout telefonki-produktionsstand-v2.1-2026-09-13
 ```
 
 ## Rückrollen in fünf Schritten
 
 ```bash
 ssh pickadoc1
-S=/home/cursor/telefonki-backups/produktionsstand-v2.0-20260913
+S=/home/cursor/telefonki-backups/produktionsstand-v2.1-20260913
 cd /home/cursor/telefonki
 
 # 1) Einstellungen und Geheimnisse zurück
@@ -95,11 +126,11 @@ tar xzf $S/secrets.tgz                # secrets/
 cp $S/compose.yml compose.yml
 
 # 2) Quellcode zurück (vom Dev-Rechner, .env und tenants NIE mit-rsyncen)
-#    lokal: git checkout telefonki-produktionsstand-v2.0-2026-09-13
+#    lokal: git checkout telefonki-produktionsstand-v2.1-2026-09-13
 #    dann zippen/scp wie in .cursor/rules/deploy-server.mdc beschrieben
 
 # 3) Container aus den Sicherungs-Images starten (kein Neubau nötig)
-docker tag telefonki:produktionsstand-v2.0-20260913 telefonki:v1
+docker tag telefonki:produktionsstand-v2.1-20260913 telefonki:v1
 docker compose up -d lisa bianca bianca-test studio sipbridge sipbridge-lisa tunnel
 
 # 4) Nur wenn Daten zurück sollen — ACHTUNG, überschreibt neuere Anrufe:
@@ -119,10 +150,10 @@ TTS/STT nur anfassen, wenn der Fehler dort liegt:
 
 ```bash
 cd /home/cursor/telefonki/tts_serve
-docker tag tts-qwen3:produktionsstand-v2.0-20260913 tts-qwen3:v1
+docker tag tts-qwen3:produktionsstand-v2.1-20260913 tts-qwen3:v1
 docker compose --profile qwen3 up -d
 cd ../stt_serve
-docker tag stt-parakeet-de:produktionsstand-v2.0-20260913 stt-parakeet-de:v1
+docker tag stt-parakeet-de:produktionsstand-v2.1-20260913 stt-parakeet-de:v1
 docker compose up -d
 ```
 
@@ -131,11 +162,23 @@ docker compose up -d
 - Bianca 8096 `ok`, Lisa 8095 `ok`, `writeLive: true`, Mandant `meddent`
 - `tools/prod_smoke.py`: ALLE WACHEN GRUEN
 - Brücke: „bruecke bereit auf :40101", DID +4921154244110 → meddent
-- Test-Suite: 1319 bestanden, 17 rot — dieselben 17 wie vor diesem Stand
-  (fremde Arbeitskopien aus Parallel-Sitzungen: `test_funktionskalender`,
-  `test_hirn`, `test_schleife`, `test_versicherung_geschlecht` u. a.).
-  Kein Rückschritt durch V2, aber offen.
+- Test-Suite: **1324 bestanden, 12 rot** (V2.0: 1319/17). Behoben wurden die
+  fünf echten Rückschritte (PZR-Reihenfolge, Geschlecht im Schnappschuss,
+  Anrede in der Statuszeile, Dock-Kodierung, kalenderabhängiger Slot-Test).
+  Die verbleibenden 12 sind bewusst offen und gehören nicht zu diesem Stand:
+  - `test_funktionskalender` (3): Thaler-Zimmer-Map — am 09.09. mit dem
+    Commit „Bianca auf den stabilen Morgenstand vor 07:30 zurücksetzen"
+    absichtlich zurückgebaut, die Tests blieben stehen. Läuft als eigene
+    Baustelle (Parallel-Sitzung) weiter.
+  - `test_hirn` (3) und `test_rueckruf` (1): der Rezept-/Rückruf-Wortlaut ist
+    inzwischen strenger formuliert als die Tests erwarten — Verhalten ist da,
+    Erwartung veraltet.
+  - `test_schleife` (3): alter Wortlaut.
+  - `test_bianca_bausteine` (1) und `test_baukasten_runner` (1): Test-Gerüst,
+    nicht das Produkt.
 - Live-Proben im Container: `tools/_probe_abschied_live.py` (Abschied →
   `hangup: True`), `tools/_probe_langgespraech.py` (13 Züge, keine wortgleiche
   Wiederholung, Notleine legt auf), `tools/_probe_anrede_live.py`
-  (erfundene Anrede fällt, belegte bleibt).
+  (erfundene Anrede fällt, belegte bleibt),
+  `tools/_probe_pzr_reihenfolge.py` (Behandlerfrage zuerst, Zahnreinigung
+  danach, `gender` und `Anrede=` gesetzt).

@@ -2296,7 +2296,8 @@ bleibt stehen („Gerne. Ich buche Ihnen einen Termin").
 
 | Stand | Tag | Anleitung |
 | --- | --- | --- |
-| V2.0, 13.09.2026 | `telefonki-produktionsstand-v2.0-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
+| **V2.1, 13.09.2026 (aktuell)** | `telefonki-produktionsstand-v2.1-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
+| V2.0, 13.09.2026 — NICHT benutzen | `telefonki-produktionsstand-v2.0-2026-09-13` | trägt die fehlende Behandlerwahl vor dem PZR-Angebot und die kaputte Dock-Kodierung (siehe Handbuch) |
 | V1.0, 10.09.2026 | `telefonki-produktionsstand-v1.0-2026-09-10` | nur Git-/Image-Tags |
 
 Ein Produktionsstand besteht aus VIER Teilen — Code allein reicht nicht:

@@ -34,10 +34,13 @@ echo "== 2/5 Aufgeloeste Compose-Konfiguration (so lief es wirklich)"
 docker compose config > "$ZIEL/compose-aufgeloest.yml" 2>/dev/null || true
 
 echo "== 3/5 Volumes sichern"
+EIGNER="$(id -u):$(id -g)"
 for v in telefonki_telefonki-data telefonki_telefonki-berichte telefonki_telefonki-klang; do
-  # Der Container schreibt als root — danach die Rechte wieder einsammeln.
+  # Der Container schreibt als root. chmod 600 allein reicht NICHT: die Datei
+  # bleibt root-eigen und ist dann per scp nicht holbar ("Permission denied",
+  # 13.09.2026 erlebt). Also im selben Lauf auch den Eigner umschreiben.
   docker run --rm -v "$v":/v -v "$ZIEL":/ziel alpine:3.20 \
-    sh -c "tar czf /ziel/volume-$v.tgz -C /v . && chmod 600 /ziel/volume-$v.tgz" \
+    sh -c "tar czf /ziel/volume-$v.tgz -C /v . && chown $EIGNER /ziel/volume-$v.tgz && chmod 600 /ziel/volume-$v.tgz" \
     || echo "  (uebersprungen: $v)"
   echo "  $v -> volume-$v.tgz"
 done
