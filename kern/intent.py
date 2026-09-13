@@ -161,7 +161,7 @@ _SLOTWAHL_RE = re.compile(
 _FORMULAR_FRAGEN = {
     "name", "vorname", "nachname", "telefon", "telefon_check", "telefon_alt",
     "buchstabieren", "schonmal", "versicherung", "anrufer_check",
-    "fuer_wen_check", "arzt_check",
+    "fuer_wen_check", "arzt_check", "vorname_check",
     "geburtstag",
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
     "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",

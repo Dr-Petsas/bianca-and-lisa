@@ -193,6 +193,13 @@ def kartei_anstossen(sit: dict) -> None:
                 s["aktePhone"] = _s(pat.get("phone"))
                 if not s["vorname"]:
                     s["vorname"] = _s(pat.get("firstName"))
+                    # W-HIRN-GATE (13.09.2026): Ein Vorname AUS DER KARTEI
+                    # wird nicht mehr still verwendet — Bianca bestaetigt ihn
+                    # einmal kurz ("Ihr Vorname ist Maximilian, richtig?").
+                    # So faellt auch ein falscher Kartei-Treffer auf.
+                    if s["vorname"]:
+                        s["vornameQuelle"] = "akte"
+                        s["vornameCheck"] = ""
                 # Kartei-Geschlecht schlaegt die Vornamen-Schaetzung (29.08.2026).
                 if _s(pat.get("gender")):
                     s["geschlecht"] = _s(pat.get("gender")).lower()

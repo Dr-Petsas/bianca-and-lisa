@@ -96,8 +96,27 @@ def _minuten_von(wort: str) -> int | None:
 _ABLEHNUNG_RE = re.compile(r"passt nicht|passt mir nicht|keiner davon|nichts davon|geht nicht|geht bei mir nicht|anderer termin|was anderes", re.I)
 # W-SCHLEIFE (04.09.2026): nach Nein auf die Readback-Frage sagt der
 # Anrufer, WAS falsch ist — nicht nochmal "Soll ich eintragen?".
+# "heißt" allein reichte nicht: live sagte der Anrufer "Ich HEISSE nicht Rateike
+# fertig, sondern Rateike" — der Namens-Zweig zuendete nicht, die Korrektur fiel
+# durch und Bianca fragte weiter mit dem falschen Namen (Anruf 1fbda5db).
 _AENDERUNG_NAME_RE = re.compile(
-    r"\b(?:vor-?\s*und\s*nach)?namen?\b|nachname|vorname|heißt|heisst", re.I)
+    r"\b(?:vor-?\s*und\s*nach)?namen?\b|nachname|vorname|heiß\w*|heiss\w*", re.I)
+# Welcher NAMENSTEIL ist beanstandet? "der Nachname ist falsch" ruehrt den
+# Vornamen nicht an (W-NAME-EINWAND-2 13.09.2026). "Vor- und Nachname" nennt
+# beide und faellt damit bewusst durch.
+_TEIL_NUR_NACH_RE = re.compile(r"\b(?:nach|familien|zu)namen?\b", re.I)
+_TEIL_NUR_VOR_RE = re.compile(r"\bvornamen?\b", re.I)
+
+
+def _aenderung_namensteil(t: str) -> str:
+    """"nachname" / "vorname" / "" (beide) — was neu eingesammelt wird."""
+    nach = bool(_TEIL_NUR_NACH_RE.search(t))
+    vor = bool(_TEIL_NUR_VOR_RE.search(t))
+    if nach and not vor:
+        return "nachname"
+    if vor and not nach:
+        return "vorname"
+    return ""
 _AENDERUNG_NUMMER_RE = re.compile(r"nummer|handy|telefon", re.I)
 _AENDERUNG_ZEIT_RE = re.compile(
     r"zeitpunkt|uhrzeit|\bzeit\b|datum|\btag\b|vormittag|nachmittag|"
@@ -1622,6 +1641,13 @@ def _eskalieren(sit: dict, fid: str) -> str:
         # fatal), klassisch nach Name und Nummer fragen (W-ANRUFER-CHECK).
         s["anruferCheck"] = "nein"
         return "Dann gehen wir auf Nummer sicher und nehmen Ihre Daten einfach frisch auf. "
+    if fid == "vorname_check":
+        # Zweimal keine klare Antwort auf den Kartei-Vornamen: der Wert steht
+        # in der Akte, er gilt. Ihn wegzuwerfen und neu zu erfragen waere
+        # schlechter (W-HIRN-GATE 13.09.2026) — die Bestaetigung ist eine
+        # Vergewisserung, keine Pflichterhebung.
+        s["vornameCheck"] = "ja"
+        return ""
     if fid == "fuer_wen_check":
         # Nicht raten, ob die erkannte Person selbst Patient ist.
         s["fuerWenCheck"] = "nein"
@@ -1768,6 +1794,8 @@ def _abgeben_kontakt(sit: dict) -> None:
             s["nachname"] = _s(a.get("nachname"))
             s["buchstabiert"] = True
             s["bekannt"] = True
+            s["vornameQuelle"] = "check"     # Abgeben fragt nichts nach
+            s["vornameCheck"] = "ja"
             if _s(a.get("patientId")):
                 s["patientId"] = _s(a.get("patientId"))
         if not s["telefon"]:
@@ -1926,16 +1954,26 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     s = gehirn.sammler(sit)
     feld = _aenderung_feld(t)
     if feld == "name":
-        gehirn.name_fuer_aenderung_leeren(sit)
-        s["frage"] = "name"
+        # W-NAME-EINWAND-2 (13.09.2026, Anruf 1fbda5db): Traegt der Einwand die
+        # Korrektur schon in sich ("Ich heisse nicht Rateike fertig, sondern
+        # Rateike"), wird NICHTS geleert. Live fing Bianca hier die ganze
+        # Datenaufnahme von vorne an und fragte den nie beanstandeten Vornamen
+        # erneut ab (Chef: "der wurde doch gar nicht beanstandet und steht
+        # schon fest!!!! das ist eine Katastrophe").
         s["phase"] = ""
-        neu = gehirn.einsammeln(sit, t)
-        sit["ernteZuletzt"] = sorted(neu)
-        # "Ändere den Namen auf Levi" — ein einzelnes Rest-Wort ist der
-        # Vorname (Live: Levi), nicht der Nachname.
-        if s["nachname"] and not s["vorname"] and len(_s(s["nachname"]).split()) == 1:
-            s["vorname"] = s["nachname"]
-            s["nachname"] = ""
+        if gehirn.name_korrektur_versuch(sit, t):
+            neu = {"name"}
+            sit["ernteZuletzt"] = ["name"]
+        else:
+            gehirn.name_fuer_aenderung_leeren(sit, _aenderung_namensteil(t))
+            s["frage"] = "name"
+            neu = gehirn.einsammeln(sit, t)
+            sit["ernteZuletzt"] = sorted(neu)
+            # "Ändere den Namen auf Levi" — ein einzelnes Rest-Wort ist der
+            # Vorname (Live: Levi), nicht der Nachname.
+            if s["nachname"] and not s["vorname"] and len(_s(s["nachname"]).split()) == 1:
+                s["vorname"] = s["nachname"]
+                s["nachname"] = ""
         hintergrund.anstossen(sit)
         fid, frage = gehirn.naechste_frage(sit)
         s["frage"] = fid
@@ -2546,7 +2584,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # heraus verlorengegangen; Wache: test_pzr_kassen,
     # test_neupatient_klaert_erst_behandler_dann_pzr.
     if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check", "arzt",
-                    "name", "nachname", "vorname", "buchstabieren", "telefon"}
+                    "name", "nachname", "vorname", "vorname_check",
+                    "buchstabieren", "telefon"}
             and not (fid == "arzt" and "arztCheck" in neu)
             and "wunsch" not in neu
             and (neu or not s["frage"])

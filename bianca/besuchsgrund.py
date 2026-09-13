@@ -182,6 +182,27 @@ def motiv_suchen(tenant: dict, muster: list[str], *, katalog: list[dict] | None 
     return _suche(vms)
 
 
+# Hoerfehler, die NUR in einer Zahnarztpraxis eindeutig sind (Chef 13.09.2026
+# zum Anruf 1fbda5db: "ich weiss nicht ob sie im kalender auf kieferorthopaedie
+# gemappt haette"). Live kam "Ich habe schiefe ZEHEN, ich moechte die gerade
+# haben" aus dem STT — kein Katalogwort passte und der Termin lief auf
+# Kontrolle statt "KFO Besprechung". Eine Zahnarztpraxis behandelt keine Zehen.
+# Nur fuer die MAPPING-Sicht: der gesprochene Wortlaut bleibt unveraendert im
+# Sammler und in der Termin-Notiz (die Praxis liest also weiter, was der
+# Anrufer wirklich gesagt hat).
+_ZAHN_HOERFEHLER = (
+    (re.compile(r"\bzehen\b", re.I), "Zähne"),
+    (re.compile(r"\bzehe\b", re.I), "Zahn"),
+    (re.compile(r"\bzeh\b", re.I), "Zahn"),
+)
+
+
+def _zahn_hoerfehler(text: str) -> str:
+    for cre, ersatz in _ZAHN_HOERFEHLER:
+        text = cre.sub(ersatz, text)
+    return text
+
+
 def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
           calendar_id: str = "") -> tuple[str, dict | None]:
     """(sprechbarer Kern, Motiv aus der Behandler-Liste) — ("", None) wenn nichts passt.
@@ -198,6 +219,8 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
     if zimmer_map.klar_nicht_buchbar(tenant, text):
         return "", None
     zahn = motive.ist_zahn(kat)
+    if zahn:
+        text = _zahn_hoerfehler(text)
     # Praxis-Kataloge dürfen sich nicht gegenseitig überlagern. Exakter
     # Katalogname gewinnt vor Zahnarzt-Konzepten und vor generischen Wörtern
     # wie "Sprechstunde" oder "Kontrolle".
@@ -384,6 +407,8 @@ def katalog_treffer(text: str, *, katalog: list[dict],
     online-buchbare vor internen, dann der kuerzeste Name.
     """
     roh = _ohne_verneintes(text)
+    if motive.ist_zahn(katalog or []):
+        roh = _zahn_hoerfehler(roh)
     worte = _match_tokens(roh)
     if not worte:
         return None

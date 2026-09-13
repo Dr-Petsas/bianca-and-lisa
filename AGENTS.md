@@ -2386,6 +2386,72 @@ Alle drei Stellen tragen jetzt `\brezept(?!ion)\w*`: `bianca/flow._DOKUMENT_RE`,
 `_FB_RUECKRUF_RE`). Gegenprobe mit im Test: das echte Rezept greift weiter
 (`test_rezeption_ist_kein_rezept` in `tests/test_weiterleiten.py`).
 
+## Vor jeder Frage ins Session-Hirn schauen (W-FRAGE-GATE / W-HIRN-GATE 13.09.2026 — nicht rückbauen)
+
+Chef zum Anruf 1fbda5db (wörtlich): „das session hirn braucht deutlich mehr
+sicherheit in dem aufnehmen und ausstreuen von daten […] es darf keine frage
+gestellt werden, zu der es bereits einen wert gibt […] die frage nach der
+zhanreinigung kommt doppelt!!!!! warum ???!!!" Und zur Form (später, wörtlich):
+„der datensatz muss hinterfragt werden mit data xy ist richtig, oder? z.b.
+Privat versichert habe ich hier stehen. ist das noch aktuell? oder: vorname
+Michael, ja? dann habe ich Sie gefunden."
+
+Ein belegter Wert wird also **nicht verschwiegen und nicht neu erfragt, sondern
+hinterfragt**. Drei Wachen, drei Ursachen:
+
+- **W-FRAGE-GATE** (`kern/frage_gate.py`, Default `enforce`, Notaus
+  `FRAGE_GATE=off`): Datenfragen gehören der MASCHINE. Live bot das MODELL in
+  Zug 8 die Zahnreinigung an — der Sammler wusste davon nichts, also fragte die
+  Maschine in Zug 13 erneut. Eine Job-Frage des Modells wird deshalb gestrichen
+  (`saeubern`), die Maschine stellt sie danach selbst. Zwei Ausnahmen, damit das
+  Gate nichts kaputt macht: die GERADE offene Maschinenfrage bleibt stehen (das
+  Modell spricht dann nur aus, worauf die Maschine wartet), und eine Rückfrage
+  gegen einen bekannten Wert („…, richtig?", `_RUECKFRAGE_RE`) ist genau die
+  gewünschte Form. Eingehängt am LLM-Ausgang (`agent._frage_gate_anwenden`)
+  UND im P5-Strom (`sicherer_vorab`) — sonst wäre die Frage gesprochen, bevor
+  die Wache am Zugende sie streichen kann.
+- **W-HIRN-GATE** (`bianca/gehirn.py`): `vornameQuelle` sagt, WOHER ein Wert
+  kommt — „gesagt", „akte" oder „check" (Identität war schon Thema). Ein
+  Vorname aus der KARTEI wird einmal bestätigt (`vorname_check`,
+  `vorname_check_frage`), statt still verwendet zu werden; so fällt auch ein
+  falscher Kartei-Treffer auf, bevor er in den Termin wandert. Die Markierung
+  „gesagt" setzt `einsammeln` an EINER Stelle (Vergleich gegen den Stand vor
+  der Ernte) — so kann kein neuer Schreibweg sie vergessen. Ein Nein räumt NUR
+  den Vornamen; Nachname, Nummer, Grund und Slot bleiben stehen. Nach zwei
+  unklaren Antworten gilt der Kartei-Wert (`flow._eskalieren`) — die
+  Bestätigung ist eine Vergewisserung, keine Pflichterhebung.
+- **W-JA-NACHGESTELLT** (`gehirn._ja_nachgestellt`): „Haben wir doch schon
+  gesagt, ja." fiel durch, weil `_JA_RE` am Satzanfang verankert ist — die
+  PZR-Zusage war verloren, im Hirn stand `pzr="gefragt"`. Bewusst eng: kein
+  Fragezeichen (eine Vergewisserung „…, ja?" ist keine Zusage, daran hängt
+  auch das Buchungs-Okay), kein Nein am Anfang, letztes Teilstück ein blankes
+  Ja-Wort.
+
+Dass die MASCHINE keine Frage zu einem belegten Feld stellt, ist Bauart:
+`gehirn.naechste_frage` ist eine if-Kette, in der jeder Zweig genau das Feld
+prüft, nach dem er fragt. `tests/test_frage_inventar.py` nagelt das Feld für
+Feld fest, damit eine künftige Frage ohne Wächter dort auffliegt und nicht
+erst im Feldtest. Weitere Regressionen: `tests/test_frage_gate.py`,
+`tests/test_anruf_rateike.py`.
+
+Dazu aus demselben Anruf, weil Zustands-Verfall dieselbe Doppelfrage erzeugt:
+
+- **W-DIKTAT-FERTIG** (`bianca/buchstaben.py`): das Schlusswort gehört nie zum
+  Namen („R-A-T-E-I-K-E, fertig" → Rateike), Füllwörter werden nicht in
+  Buchstaben zerlegt („es das" machte „Sdasrateike"), und ein vollständig
+  gesprochener Name am Ende der Buchstabenkette schlägt zwei Streu-Buchstaben
+  davor.
+- **W-NAME-EINWAND-2** (`gehirn.name_korrektur_versuch`,
+  `flow._aenderung_namensteil`): trägt der Einwand die Korrektur schon in sich
+  („Ich heiße nicht Rateike fertig, sondern Rateike"), wird NICHTS geleert;
+  sonst nur der bestrittene Teil (`name_fuer_aenderung_leeren(teil)`). Live
+  begann die Datenaufnahme von vorn und der nie beanstandete Vorname wurde
+  erneut abgefragt (Chef: „das ist eine Katastrophe").
+- **Hörfehler im Zahn-Kontext** (`besuchsgrund._zahn_hoerfehler`): „schiefe
+  Zehen" ist in einer Zahnarztpraxis „schiefe Zähne" → KFO-Besprechung statt
+  Kontrolle. NUR für die Motiv-Zuordnung; Sammler und Terminnotiz behalten den
+  echten Wortlaut, beim Hautarzt bleiben Zehen Zehen.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

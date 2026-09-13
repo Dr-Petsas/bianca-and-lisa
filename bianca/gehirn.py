@@ -98,6 +98,18 @@ _JA_RE = re.compile(
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
+# Nachgestelltes Ja/Nein am ENDE der Aeusserung (W-JA-NACHGESTELLT 13.09.2026):
+# nur ein blankes Zustimmungs-/Ablehnungswort als letztes Teilstueck, optional
+# mit einer Partikel ("ja gerne", "nein danke"). Alles Laengere ist Prosa und
+# bleibt bewusst draussen.
+_ENDE_JA_RE = re.compile(
+    r"[,;:—–-]\s*(?:ja|jaja|jawohl|jawoll|genau|richtig|korrekt|klar|gerne|"
+    r"sicher|doch)"
+    r"(?:\s+(?:ja|gerne|bitte|genau|klar|sicher|schon|doch|natürlich|"
+    r"natuerlich|logisch))?"
+    r"\s*[.!…]*\s*$", re.I)
+_ENDE_NEIN_RE = re.compile(
+    r"[,;:—–-]\s*(?:nein|nee|nö|noe)(?:\s+(?:danke|nicht))?\s*[.!…]*\s*$", re.I)
 # Kurz-Verneinungen als GANZE Aeusserung: "Noch nicht." auf "Waren Sie schon
 # mal bei uns?" ist ein Nein (live 27.08. 14:53: fiel durch, Frage kam doppelt).
 _NEIN_KURZ_RE = re.compile(
@@ -619,6 +631,15 @@ _NAME_FALSCH_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß'-]{2,})\s*[,.]?\s*(?:und\s+)?nicht\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
 _NAME_SONDERN_RE = re.compile(
     r"nicht\s+([A-Za-zÄÖÜäöüß'-]{2,})\s*[,.]?\s*sondern\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
+# Derselbe Einwand mit MEHRWORTIGEM Falschnamen: "Ich heisse nicht Rateike
+# fertig, sondern Rateike" (live 13.09.2026, Anruf 1fbda5db — der Nachname
+# trug das angeklebte Diktat-Schlusswort, der Einwand fiel durch und Bianca
+# fing die Datenaufnahme von vorne an). Bewusst NUR mit Anker: das Verneinte
+# muss dem gespeicherten Namen entsprechen (`_sondern_anker`), sonst wuerde
+# "nicht am Dienstag, sondern Mittwoch" einen Nachnamen "Mittwoch" setzen.
+_NAME_SONDERN_MEHR_RE = re.compile(
+    r"nicht\s+((?:[A-Za-zÄÖÜäöüß'-]{2,}\s+){1,2}[A-Za-zÄÖÜäöüß'-]{2,})"
+    r"\s*[,.]?\s*sondern\s+([A-Za-zÄÖÜäöüß'-]{2,})", re.I)
 _KORREKTUR_KONTEXT_RE = re.compile(
     r"falsch|vertan|verhört|verhoert|versprochen|verwechselt|korrigier|irrtum|stimmt\s+nicht|meinte", re.I)
 _TEL_FALSCH_RE = re.compile(
@@ -708,6 +729,17 @@ FELDER_START = {
     # die Buchstaben korrigieren ihn und liefern zugleich die Enderkennung.
     "vornameTeil": "",
     "vornameGehoert": "",
+    # W-HIRN-GATE (Chef 13.09.2026 zum Anruf 1fbda5db): "wenn der
+    # patientendatensatz existiert kurze bestaetigung […] oder vorname ist
+    # Maximilian, richtig?" Bisher uebernahm Bianca einen Vornamen aus der
+    # Kartei STILL — der Anrufer erfuhr nie, mit welchem Namen sie arbeitet
+    # (und ein falscher Kartei-Treffer fiel nie auf). ``vornameQuelle`` sagt,
+    # WOHER der Wert kommt: "gesagt" (im Gespraech genannt), "akte" (aus der
+    # Kartei, muss einmal bestaetigt werden) oder "check" (Identitaet war
+    # schon Thema, z. B. erkannter Anrufer). ``vornameCheck`` haelt die
+    # Antwort auf die Bestaetigung.
+    "vornameQuelle": "",
+    "vornameCheck": "",
     # W-NAME-EINWAND (Chef 13.09.2026 zum Anruf e5c25e25: "der Nachname wurde
     # nicht richtig erkannt und sie springt trotzdem vor der klärung zum
     # vornamen weiter..... der einwand des anrufers wird überhört"). Live kam
@@ -828,9 +860,32 @@ def _ohne_anlauf(text: str) -> str:
     return _ANLAUF_RE.sub("", _s(text))
 
 
+def _ja_nachgestellt(k: str) -> bool:
+    """Nachgestelltes blankes Ja: "… haben wir doch schon gesagt, ja."
+
+    W-JA-NACHGESTELLT (Chef 13.09.2026, Anruf 1fbda5db): So kam die Zusage zur
+    Zahnreinigung — `_JA_RE` ist auf den Satzanfang verankert, die Zusage fiel
+    durch, `pzr` blieb auf "gefragt" und der Termin wurde ohne Reinigung
+    vorgelesen. Bewusst eng, weil dieselbe Pruefung auch am Buchungs-Okay
+    haengt: kein Fragezeichen (eine Rueckfrage "…, ja?" ist keine Zusage),
+    kein Nein am Anfang, und das letzte Teilstueck muss ein BLANKES Ja-Wort
+    sein (hoechstens zwei Woerter, keine Verneinung darin).
+    """
+    if "?" in k or _NEIN_RE.search(k):
+        return False
+    return bool(_ENDE_JA_RE.search(k))
+
+
+def _nein_nachgestellt(k: str) -> bool:
+    """Nachgestelltes blankes Nein: "Das brauche ich nicht, nein." """
+    if "?" in k or _JA_RE.search(k):
+        return False
+    return bool(_ENDE_NEIN_RE.search(k))
+
+
 def ist_ja(text: str) -> bool:
     k = _ohne_anlauf(text)
-    return bool(_JA_RE.search(k) or _JA_KURZ_RE.match(k))
+    return bool(_JA_RE.search(k) or _JA_KURZ_RE.match(k) or _ja_nachgestellt(k))
 
 
 def ist_pzr_zusage(text: str) -> bool:
@@ -842,7 +897,7 @@ def ist_pzr_zusage(text: str) -> bool:
 
 def ist_nein(text: str) -> bool:
     k = _ohne_anlauf(text)
-    if _NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k):
+    if _NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k) or _nein_nachgestellt(k):
         return True
     # Kurze Äußerung mit klarem Nein-Wort irgendwo ("glaube nein", "hier nein"):
     # bei <= 3 Wörtern gibt es keinen Kontext, der das Nein umdrehen könnte.
@@ -1208,6 +1263,27 @@ def _korrektur_merken(s: dict, feld: str, alt: str) -> None:
         s["nachnameKlaeren"] = True
 
 
+def _sondern_anker(s: dict, alt: str) -> bool:
+    """Ist das Verneinte wirklich der gespeicherte Name (W-DIKTAT-FERTIG)?
+
+    Nur fuer den MEHRWORTIGEN Einwand ("nicht Rateike fertig, sondern
+    Rateike"). Verglichen wird ohne Leerzeichen, weil genau die Fuge der
+    Fehler war ("Rateikefertig" gespeichert, "Rateike fertig" gesprochen).
+    Ohne diesen Anker wuerde "nicht am Dienstag, sondern Mittwoch" einen
+    Nachnamen setzen.
+    """
+    flach = re.sub(r"[\s'-]+", "", _s(alt)).casefold()
+    if len(flach) < 4:
+        return False
+    for feld in ("nachname", "vorname"):
+        wert = re.sub(r"[\s'-]+", "", _s(s.get(feld))).casefold()
+        if not wert:
+            continue
+        if wert == flach or SequenceMatcher(None, wert, flach).ratio() >= 0.8:
+            return True
+    return False
+
+
 def _name_korrektur(s: dict, text: str) -> bool:
     """"Ich heiße Meier, nicht Müller" / "nicht Müller, sondern Meier":
     sofort übernehmen — auch wenn der Name längst gespeichert ist."""
@@ -1217,6 +1293,10 @@ def _name_korrektur(s: dict, text: str) -> bool:
         neu_wert, alt_wert = m.group(1), m.group(2)
     else:
         m = _NAME_SONDERN_RE.search(text)
+        if not m:
+            mehr = _NAME_SONDERN_MEHR_RE.search(text)
+            if mehr and _sondern_anker(s, mehr.group(1)):
+                m = mehr
         if m:
             alt_wert, neu_wert = m.group(1), m.group(2)
             # "nicht Patrikis, sondern Petsas" meint den ARZT: nur als
@@ -1376,6 +1456,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     neu: set[str] = set()
     if not t:
         return neu
+    vor_start = _s(s.get("vorname"))     # W-HIRN-GATE, s. Ende der Funktion
 
     # Anliegen-Modus: absagen/verschieben/auskunft VOR der Buchungs-Erkennung
     # prüfen — "Ich möchte meinen Termin absagen" enthält auch "Termin".
@@ -1518,6 +1599,23 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             if not s["fuerWen"]:
                 s["fuerWen"] = "andere"
             neu.update({"fuerWenCheck", "fuerWen"})
+
+    # W-HIRN-GATE: Antwort auf die Kartei-Bestaetigung des Vornamens. Ein Ja
+    # haelt den Wert fest (und wird nie wieder gefragt), ein Nein raeumt NUR
+    # den Vornamen — Nachname, Nummer, Grund und Slot bleiben stehen (die
+    # Live-Katastrophe vom 13.09.2026 war genau das gegenteilige Verhalten:
+    # ein Einwand warf die ganze Datenaufnahme weg).
+    if s["frage"] == "vorname_check" and not _s(s.get("vornameCheck")):
+        if ist_nein(t):
+            s["vornameCheck"] = "nein"
+            s["vorname"] = ""
+            s["vornameQuelle"] = ""
+            s["vornameTeil"] = ""
+            s["vornameGehoert"] = ""
+            neu.add("vornameCheck")
+        elif ist_ja(t):
+            s["vornameCheck"] = "ja"
+            neu.update({"vornameCheck", "vorname"})
 
     if s["frage"] == "sms_empfaenger" and s["fuerWen"]:
         if re.search(
@@ -2213,6 +2311,17 @@ def einsammeln(sit: dict, text: str) -> set[str]:
 
     kalender_zu_grund(sit)
     _motiv_an_kalender(sit)
+    # W-HIRN-GATE: Was der Anrufer SAGT, wird sofort als gesagt vermerkt.
+    # Chef 13.09.2026: "die parameter muessen sofort nach dem sie gesagt
+    # wurden in das session hirn geschrieben werden." Der Vergleich gegen den
+    # Stand VOR der Ernte ist die eine Stelle, die alle Namens-Schreibwege
+    # abdeckt (gesprochen, buchstabiert, korrigiert) — so kann kein neuer
+    # Pfad die Markierung vergessen und ein gesagter Vorname nie als
+    # Kartei-Wert durch die Bestaetigung laufen.
+    if (_s(s.get("vorname")) != vor_start
+            and _s(s.get("vornameQuelle")) != "check"):
+        s["vornameQuelle"] = "gesagt" if _s(s.get("vorname")) else ""
+        s["vornameCheck"] = ""
     return neu
 
 
@@ -2239,6 +2348,13 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "vorname": (
         "Wie ist Ihr Vorname?",
         "Welchen Vornamen darf ich notieren?",
+    ),
+    # Kartei-Bestaetigung (W-HIRN-GATE): beide Formen nennen den Vornamen und
+    # enden auf "richtig?" — sonst wuerde daraus wieder eine Frage nach einem
+    # Wert, der schon im Hirn steht.
+    "vorname_check": (
+        "Ich lese hier den Vornamen — richtig?",
+        "Habe ich den richtigen Vornamen vor mir?",
     ),
     "nachname": (
         "Wie lautet der Nachname?",
@@ -2725,6 +2841,11 @@ def anrufer_daten_uebernehmen(sit: dict) -> bool:
     s["nachname"] = _s(a.get("nachname")) or s["nachname"]
     s["buchstabiert"] = True
     s["bekannt"] = True
+    # W-HIRN-GATE: Die Identitaet war gerade Thema ("Habe ich Sie richtig
+    # erkannt?") — der Name ist damit bestaetigt und wird nicht ein zweites
+    # Mal rueckgefragt.
+    s["vornameQuelle"] = "check"
+    s["vornameCheck"] = "ja"
     s["patientId"] = _s(a.get("patientId")) or s["patientId"]
     bekannte_nr = telefon.normaliert(a.get("telefon") or "")
     s["telefon"] = ""
@@ -2979,6 +3100,8 @@ def rueckruf_starten(sit: dict) -> None:
         s["nachname"] = _s(a.get("nachname"))
         s["buchstabiert"] = True
         s["bekannt"] = True
+        s["vornameQuelle"] = "check"     # erkannter Anrufer, s. o.
+        s["vornameCheck"] = "ja"
         if _s(a.get("patientId")):
             s["patientId"] = _s(a.get("patientId"))
         s["telefon"] = telefon.normaliert(a.get("telefon") or "")
@@ -3158,8 +3281,25 @@ def patient_von_kontakt_loesen(sit: dict) -> None:
     sit["gefundenKey"] = ""
 
 
-def name_fuer_aenderung_leeren(sit: dict) -> None:
+def name_korrektur_versuch(sit: dict, text: str) -> bool:
+    """Traegt der Einwand die Korrektur schon in sich? (W-NAME-EINWAND-2)
+
+    Nebenwirkungsarm: greift NUR die Namensfelder an, kein Zeit-/Nummern-/
+    Grund-Einsammeln. `flow._aenderung_zug` fragt damit, BEVOR es die
+    Identitaet leert — live 13.09.2026 (Anruf 1fbda5db) warf der Einwand
+    "Ich heisse nicht Rateike fertig, sondern Rateike" den nie beanstandeten
+    Vornamen mit weg und Bianca fragte ihn erneut ab.
+    """
+    return _name_korrektur(sammler(sit), text)
+
+
+def name_fuer_aenderung_leeren(sit: dict, teil: str = "") -> None:
     """Patientennamen leeren, damit die Bestaetigung ihn neu erfragt (W-SCHLEIFE).
+
+    ``teil`` grenzt ein, WAS geleert wird: "vorname", "nachname" oder leer
+    (beides). Nennt der Anrufer ausdruecklich nur einen Teil ("der NACHname
+    ist falsch"), bleibt der andere stehen — er war nie beanstandet
+    (W-NAME-EINWAND-2 13.09.2026).
 
     Live 03.09.2026 ~22:44: nach „Nein" auf die Readback-Frage blieb
     ``frage=bestaetigung`` stehen, der (falsche) Name „Udrpetter" galt
@@ -3169,13 +3309,15 @@ def name_fuer_aenderung_leeren(sit: dict) -> None:
     ``kontaktName`` wird NICHT mit dem verworfenen Namen ueberschrieben
     (der Anrufer-Name steht dort schon vom Fuer-Wen-Pfad)."""
     s = sammler(sit)
-    s["vorname"] = ""
-    s["nachname"] = ""
-    s["buchstabiert"] = False
-    s["buchstabenTeil"] = ""
-    s["buchstabierHilfe"] = False
-    s["vornameTeil"] = ""
-    s["vornameGehoert"] = ""
+    if teil != "nachname":
+        s["vorname"] = ""
+        s["vornameTeil"] = ""
+        s["vornameGehoert"] = ""
+    if teil != "vorname":
+        s["nachname"] = ""
+        s["buchstabiert"] = False
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = False
     s["bekannt"] = False
     s["patientId"] = ""
     s["gesucht"] = ""
@@ -3387,7 +3529,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "telefon_alt", "telefon_check",
                 "sms_empfaenger",
                 "rueckblick", "folge_kontrolle", "anrufer_check",
-                "fuer_wen_check", "arzt_check",
+                "fuer_wen_check", "arzt_check", "vorname_check",
                 "frisch_absage_ok", "absage_ok",
                 "termin_anbieten", "arzt_notiz"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
@@ -3424,6 +3566,21 @@ def _buchstabier_frage(s: dict, standard: str) -> tuple[str, str]:
             "am Ende sagen Sie einfach fertig.",
         )
     return "buchstabieren", standard
+
+
+def vorname_check_frage(s: dict) -> str:
+    """Kartei-Vorname kurz bestaetigen (W-HIRN-GATE 13.09.2026).
+
+    Chef woertlich: "wenn der patientendatensatz existiert kurze bestaetigung
+    […] oder vorname ist Maximilian, richtig?" — eine Frage nach einem Wert,
+    der schon im Hirn steht, darf es nicht mehr geben; sie wird zur
+    Vergewisserung. Bewusst mit "richtig?" am Ende: so laesst der
+    Frage-Gate-Waechter sie stehen und 350 ms Ruhe genuegen als Zugende.
+    """
+    vor = _s((s or {}).get("vorname"))
+    if (s or {}).get("fuerWen"):
+        return f"In der Kartei steht der Vorname {vor} — richtig?"
+    return f"Ihr Vorname ist {vor}, richtig?"
 
 
 def naechste_frage(sit: dict) -> tuple[str, str]:
@@ -3516,6 +3673,13 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 f"Damit ich nichts Falsches in die Kartei schreibe: "
                 f"Buchstabieren Sie mir {s['nachname']} bitte einmal?",
             )
+        # W-HIRN-GATE (Chef 13.09.2026): Steht der Vorname in der KARTEI,
+        # wird er nicht gefragt und auch nicht still verwendet — eine kurze
+        # Bestaetigung ("Ihr Vorname ist Maximilian, richtig?"). Ein falscher
+        # Kartei-Treffer faellt damit auf, bevor er in den Termin wandert.
+        if (s["vorname"] and _s(s.get("vornameQuelle")) == "akte"
+                and not _s(s.get("vornameCheck"))):
+            return "vorname_check", vorname_check_frage(s)
         if not s["vorname"]:
             return "vorname", "Und der Vorname?"
         if s["fuerWen"] and not s["smsEmpfaenger"]:

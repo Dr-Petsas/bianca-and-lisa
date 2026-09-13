@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, abschweifen, anrede_wache, antwort_wache, fachprofil, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, anrede_wache, antwort_wache, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import spur
 from kern import wissen as kern_wissen
 # #region agent log
@@ -134,6 +134,7 @@ _FRAGE_KERN = {
     "telefon_check": r"nummer|stimmt",
     # Erkannte Identität und Terminempfänger sind getrennte Ja/Nein-Schritte.
     "anrufer_check": r"erkannt|richtige\s+person",
+    "vorname_check": r"vorname|richtig",
     "fuer_wen_check": r"selbst|persönlich|persoenlich",
     "arzt_check": r"zuletzt|behandler|arzt|zahnarzt|richtig",
     "telefon_alt": r"nummer|alte|akte|löschen",
@@ -279,6 +280,7 @@ _FEHLT_WORT = {
     "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
+    "vorname_check": "ob der Vorname aus der Kartei stimmt",
     "fuer_wen_check": "ob der Termin für Sie selbst ist",
     "rueckblick": "wie es nach dem letzten Besuch war",
     "folge_kontrolle": "ob eine Kontrolle gebucht werden soll",
@@ -777,6 +779,36 @@ def start_reply(sit: dict) -> dict[str, Any]:
         {"role": "assistant", "content": text},
     ]
     return {"text": text, "book": None}
+
+
+def _frage_gate_anwenden(sit: dict, text: str) -> str:
+    """W-FRAGE-GATE: Daten-Fragen des Modells streichen, Maschine fragt.
+
+    Chef 13.09.2026 zum Anruf 1fbda5db: "es darf keine frage gestellt werden,
+    zu der es bereits einen wert gibt […] jede frage muss erst im session hirn
+    überprüft werden bevor bianca sie stellt". Live bot das MODELL in Zug 8 die
+    Zahnreinigung an, die Maschine in Zug 13 noch einmal — der Sammler wusste
+    von der ersten Frage nichts, das "ja" des Anrufers lief ins Leere.
+
+    Steht danach keine Pflichtfrage offen, wird die naechste aus dem Hirn
+    gesetzt — der Frage-Anker bzw. `_nie_stumm` spricht sie aus. Der Zug bleibt
+    also nie ohne Frage.
+    """
+    neu, feld, belegt = frage_gate.saeubern(sit, text)
+    if not feld:
+        return text
+    scharf = frage_gate.modus() == "enforce"
+    spur.merken(
+        sit, "frage-gate" if scharf else "frage-gate-shadow",
+        f"{feld}{'=belegt' if belegt else ''}")
+    if not scharf or neu == text:
+        return text
+    s = sit.get("sammler") or {}
+    if not _s(s.get("frage")):
+        fid, _frage = gehirn.naechste_frage(sit)
+        if fid:
+            s["frage"] = fid
+    return neu
 
 
 def _anrede_wache_anwenden(sit: dict, text: str) -> str:
@@ -1364,6 +1396,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # gesaeubert, damit llm.rest_nach_vorab den Rest weiter findet
             # (sonst kaeme der Satz ein zweites Mal).
             satz = _anrede_wache_anwenden(sit, satz)
+            # W-FRAGE-GATE: eine Daten-Frage darf auch hier nicht raus — sie
+            # waere gesprochen, bevor die Wache am Zugende sie streichen kann,
+            # und die Maschine wuerde sie danach ein zweites Mal stellen.
+            satz = _frage_gate_anwenden(sit, satz)
             if not _s(satz):
                 return
             vorab(satz)
@@ -1399,6 +1435,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     bewacht = _fakten_wache_anwenden(
         sit, bewacht, nutzertext=text_in)
     bewacht = _anrede_wache_anwenden(sit, bewacht)
+    bewacht = _frage_gate_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht

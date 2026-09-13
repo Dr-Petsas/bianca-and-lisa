@@ -84,6 +84,26 @@ _VORLESE: dict[str, str] = {
 
 _EINZEL = set("abcdefghijklmnopqrstuvwxyzäöüß")
 
+# Diktat-Schlusswoerter. Sie BEENDEN die Buchstabierung und gehoeren NIE zum
+# Namen (W-DIKTAT-FERTIG 13.09.2026, Anruf 1fbda5db — Chef: "obwohl ich nach
+# dem buchstabieren fertig sage und bianca den namen rateike erkennt, nennt
+# sie mich spaeter rateike fertig.... was wird in das session brain
+# geschrieben?!"). Live wurde aus "Rateike, R-A-T-E-I-K-E, fertig." der
+# Nachname "Rateikefertig": ``teil`` kannte die Woerter, ``deute`` nicht — dort
+# lief "fertig" als Anschluss-Wort in die Suffix-Fuge. Der Schwanz wird
+# deshalb VOR dem Zerlegen abgeschnitten.
+_ENDE_RE = re.compile(
+    r"(?:[\s,.;:!?-]*\b(?:fertig|ende|gewesen|danke|das\s+war(?:'s|s|\s+es)?|"
+    r"mehr\s+nicht|war\s+es)\b)+[\s,.;:!?-]*$", re.I)
+
+
+def _ende_ab(text: str) -> str:
+    """Diktat-Schlusswort am Satzende abschneiden ("… E, fertig." -> "… E")."""
+    gekappt = _ENDE_RE.sub("", _s(text)).strip(" ,.;:!?-")
+    # Nur das Schlusswort allein ("Fertig.") darf nicht zu einem leeren Satz
+    # werden — dann bliebe die Kette ohne Bezug und `deute` liefe auf None.
+    return gekappt if gekappt else _s(text)
+
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
@@ -197,7 +217,7 @@ def deute(text: str) -> dict[str, Any] | None:
     keine Buchstabierung ist. "sicher" wird gesetzt, wenn ein zusammenhängend
     gesprochenes Wort im Satz exakt dem zusammengesetzten Namen entspricht.
     """
-    toks = _tokens(text)
+    toks = _tokens(_ende_ab(text))
     if not toks:
         return None
     letters: list[str] = []
@@ -253,8 +273,12 @@ def deute(text: str) -> dict[str, Any] | None:
         # Buchstaben: aufspalten. Vokalhaltige Kurz-Tokens ("Kam" statt
         # K-A-M, Batch s11 29.08.2026) nur, wenn die Buchstabierung danach
         # sichtbar WEITERGEHT — sonst wäre jedes Alltagswort ein Cluster.
+        # Fuellwoerter NIE zerlegen (W-DIKTAT-FERTIG 13.09.2026): live wurde
+        # aus "aufstabiert es das R-A-T-E-I-K-E" der Name "Sdasrateike" —
+        # "das" landete als d-a-s in der Kette, weil diese Cluster-Regel VOR
+        # dem Fuellwort-Zweig greift.
         if (kette and fuell_folge == 0 and 2 <= len(tok) <= 4 and tok.isalpha()
-                and tok not in _TAFEL):
+                and tok not in _TAFEL and tok not in _FUELL):
             nxt_tafel = nxt in _TAFEL and len(nxt) > 1
             # Verschliffenes "X wie" VOR einem Tafel-Wort ("Ew Emil",
             # "Uwi Ulrich", "SW Samuel" — Batch s09 29.08.2026): das
@@ -333,6 +357,16 @@ def deute(text: str) -> dict[str, Any] | None:
         for w in woerter:
             if len(w) > len(zusammen) and w.startswith(zusammen):
                 return {"name": w[0].upper() + w[1:], "sicher": True}
+    # Streu-Buchstaben VOR dem gesprochenen Namen (live 13.09.2026: in
+    # "Rateike, aufstabiert es das R-A-T-E-I-K-E" wurde das Woertchen "es" zum
+    # Buchstaben S, der Nachname hiess "Srateike"). Steht der gesprochene Name
+    # vollstaendig am ENDE der Kette und fehlen davor hoechstens zwei
+    # Buchstaben, ist der Vorlauf STT-Muell — das Wort wurde gesprochen UND
+    # buchstabiert, ist also sicher.
+    for w in woerter:
+        if (len(w) >= 4 and w != zusammen and zusammen.endswith(w)
+                and len(zusammen) - len(w) <= 2):
+            return {"name": w[0].upper() + w[1:], "sicher": True}
     # Suffix-Fuge: STT hat das ENDE der Buchstabierung zu einem Wort
     # zusammengezogen ("F-E-L-D-Kamp"). Genau ein Wort direkt hinter der
     # Kette ohne Füller dazwischen => anfügen — ausser das Wort ist die

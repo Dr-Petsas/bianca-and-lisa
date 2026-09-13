@@ -222,6 +222,8 @@ def _finden(sit: dict, melde: Melde) -> dict:
             # der Vorname aus der Akte (W-NAMESKORREKTUR).
             if _s(pat.get("firstName")) and (not s["vorname"] or res.get("vornameVerworfen")):
                 s["vorname"] = _s(pat.get("firstName"))
+                s["vornameQuelle"] = "akte"      # W-HIRN-GATE: einmal bestaetigen
+                s["vornameCheck"] = ""
         sit["gefunden"] = res.get("appointments") or []
         sit["gefundenKey"] = f"{s['vorname']}|{s['nachname']}".lower()
     return res
