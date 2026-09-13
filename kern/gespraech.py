@@ -97,7 +97,9 @@ _LOSLASS_RE = re.compile(
 # „nicht verstanden“ statt sich zu verabschieden.
 _KURZ_OK_RE = re.compile(
     r"^\s*(?:"
-    r"(?:ja|jaja|jap|jep|jo|joa|nein|nee|n[oö]e?|doch|klar|genau|richtig|stimmt|"
+    r"(?:ja|jaja|jap|jep|jo|joa|yes|yeah|yea|yep|"
+    r"bitte\s+(?:ja|jap|jep|yes|yeah|yea|yep)|"
+    r"nein|nee|n[oö]e?|nine|nope|doch|klar|genau|richtig|stimmt|"
     r"ok|okay|gut|passt|super|prima|perfekt|danke|bitte|hallo|hi|hey|"
     r"tsch[uü]s{0,2}|"
     r"(?:auf\s+)?wiederh[oö]ren(?:\s*[,.]?\s*\w+)?|"
@@ -116,7 +118,24 @@ _KURZ_OK_RE = re.compile(
 )
 
 # Kurzer STT-Muell / Einwort-Rauschen: kein neues Talk-Thema, kein Plaudern.
-UNKLAR_ANTWORT = "Das habe ich nicht verstanden. Bitte noch einmal."
+# Die Ganzsatz-Bitte wird vom Agenten hoechstens einmal je Sitzung gesprochen;
+# danach helfen konkrete Einzelwort-Auswahlen weiter.
+UNKLAR_ANTWORT = (
+    "Ich möchte Sie richtig verstehen. Sagen Sie mir bitte kurz in einem "
+    "ganzen Satz, wobei ich helfen darf."
+)
+GANZSATZ_ANTWORT = (
+    "Ich will Ihnen helfen, aber einzelne Wörter helfen mir leider nicht "
+    "weiter. Ich funktioniere über Satzverständnis. Wenn Sie mir bitte "
+    "einen ganzen Satz formulieren, komme ich deutlich besser zurecht."
+)
+UNKLAR_AUSWAHL_ANTWORT = (
+    "Geht es um einen Termin, eine Auskunft oder möchten Sie mit einem "
+    "Mitarbeiter sprechen?"
+)
+UNKLAR_AUSWAHL_OHNE_MITARBEITER = (
+    "Geht es um einen Termin oder um eine Auskunft zur Praxis?"
+)
 
 _STOP = frozenset((
     "nicht", "haben", "hatte", "hatten", "haette", "hätte", "haetten", "hätten",
@@ -145,6 +164,29 @@ _STOP = frozenset((
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
+
+
+def unklar_antwort(text: str) -> str:
+    """Unverständliches Gehörtes wörtlich spiegeln statt Bedeutung erfinden."""
+    gehoert = _s(text).strip(" \t\r\n.!?…")
+    if not gehoert:
+        return UNKLAR_ANTWORT
+    # Kein langer STT-Absatz im Mund; die Unklar-Wache liefert regulär nur
+    # kurze Schnipsel. Der Deckel ist das Sicherheitsnetz für Alt-Sitzungen.
+    if len(gehoert) > 70:
+        gehoert = gehoert[:67].rstrip() + "…"
+    gehoert = gehoert.replace("„", "").replace("“", "").replace('"', "")
+    return (
+        f"Ich habe „{gehoert}“ verstanden. Was meinen Sie damit? "
+        "Meinen Sie vielleicht etwas anderes?"
+    )
+
+
+def unklar_auswahl_antwort(tenant: dict | None = None) -> str:
+    """Zweite Hilfestellung mandantenscharf, ohne unerreichbares Personal."""
+    if isinstance(tenant, dict) and tenant.get("mitarbeiterAnbieten") is False:
+        return UNKLAR_AUSWAHL_OHNE_MITARBEITER
+    return UNKLAR_AUSWAHL_ANTWORT
 
 
 def _inhaltsworte(low: str) -> set[str]:

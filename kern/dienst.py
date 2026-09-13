@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import queue
-import re
 import secrets
 import struct
 import threading
@@ -19,7 +18,7 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt, tempo, tenants, tts, unterbrechung
+from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt_spur, tempo, tenants, tts, unterbrechung
 from kern.config import WRITE_LIVE
 
 
@@ -563,6 +562,25 @@ class Dienst:
         if sammler.get("frage") or sammler.get("modus"):
             antwort["frage"] = str(sammler.get("frage") or "")
             antwort["modus"] = str(sammler.get("modus") or "")
+        if sit.get("testNoWrite"):
+            schreibnamen = {
+                "book_slot", "cancel_appointment", "move_appointment",
+                "note_appointment", "praxis_notiz", "create_patient",
+                "update_phone", "update_insurance", "delete_patient",
+            }
+            antwort["testAudit"] = {
+                "marker": [
+                    key for key in (
+                        "lastBook", "lastCancel", "lastMove", "lastNote", "lastCreate",
+                    )
+                    if sit.get(key)
+                ],
+                "writeTools": [
+                    str(t.get("name") or "")
+                    for t in (sit.get("tools") or [])
+                    if isinstance(t, dict) and str(t.get("name") or "") in schreibnamen
+                ],
+            }
         antwort.update(self._stille_feld(sit))
         # W-MITSCHNITT: Zug samt Audio auf die Platte (.data/anrufe).
         # Live 06.09.2026: fehlte seit W-LIVE 13:43 → CallR ohne Audio/Transkript.
@@ -708,6 +726,7 @@ class Dienst:
             try:
                 gesagt = text_in
                 stt_s = None
+                stt_info: dict[str, Any] = {}
                 audio_ms = _audio_ms_schaetzen(stt_blob)
                 barge = bool(_s(barge_url))
                 # Echo nur bei Barge oder stillem Ohr-Zug — sonst wuerden
@@ -725,8 +744,9 @@ class Dienst:
                         # Behandler-Namen des Mandanten als Hotwords fuer die
                         # Parakeet-Nachkorrektur ("Betsas" -> "Petsas").
                         kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
-                        gesagt = stt.transcribe(stt_blob, mime=stt_mime, name=stt_name,
-                                                keywords=kw)
+                        gesagt, stt_info = stt_spur.transcribe(
+                            stt_blob, mime=stt_mime, name=stt_name, keywords=kw,
+                        )
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
                         q.put(("leer", str(e)))
@@ -769,12 +789,16 @@ class Dienst:
                         spur.merken(sit, "halbsatz-warte", voll)
                         print(f"{self.name}-halbsatz warte ({sit.get('halbsatzZahl')}): {voll!r}", flush=True)
                         tempo.merken(sit, voll, audio_ms=audio_ms, barge=barge, gehalten=True)
-                        q.put(("warte", voll))
+                        warte_payload: dict[str, Any] = {"text": voll}
+                        if stt_s is not None:
+                            warte_payload["stt"] = stt_info
+                            warte_payload["sttS"] = stt_s
+                        q.put(("warte", warte_payload))
                         return
                     gesagt = voll
                 tempo.merken(sit, gesagt, audio_ms=audio_ms, barge=barge, gehalten=False)
                 if stt_blob is not None:
-                    q.put(("gehoert", gesagt))
+                    q.put(("gehoert", {"text": gesagt, "stt": stt_info}))
                 if stt_s is not None:
                     sit["_sttS"] = stt_s
                 out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
@@ -825,11 +849,14 @@ class Dienst:
                 vorab_gruppe = "allgemein"
                 continue
             if typ == "gehoert":
+                stt_info = wert.get("stt") if isinstance(wert, dict) else {}
+                gehoert = _s(wert.get("text")) if isinstance(wert, dict) else _s(wert)
                 # Nur solange noch nichts gespielt wurde neu raten — nach
                 # einem Füller gilt die laufende Nachschub-Frist weiter.
                 if not inhalt and filler_zahl == 0:
-                    frist, vorab_gruppe = frist_setzen(wert)
-                yield zeile({"type": "transcript", "textIn": wert})
+                    frist, vorab_gruppe = frist_setzen(gehoert)
+                yield zeile({"type": "transcript", "textIn": gehoert,
+                             "stt": stt_info or {}})
             elif typ == "vorab":
                 # Erster Antwortsatz — läuft über den Füller-Kanal des Clients
                 # (sofort abspielen), der Rest folgt im reply-Audio. ``inhalt``
@@ -870,11 +897,18 @@ class Dienst:
                 # Das Dock hoert mit laengerer Ruhe-Schwelle weiter, der
                 # naechste Zug wird an das gemerkte Fragment angefuegt.
                 # W-TEMPO: langsamer/unbekannter Sprecher bekommt mehr Geduld.
-                yield zeile({
+                warte_text = (_s(wert.get("text"))
+                              if isinstance(wert, dict) else _s(wert))
+                warte_antwort: dict[str, Any] = {
                     "type": "warte",
-                    "textIn": wert,
+                    "textIn": warte_text,
                     "stilleMs": tempo.warte_ms(sit),
-                })
+                }
+                if isinstance(wert, dict) and isinstance(wert.get("stt"), dict):
+                    warte_antwort["stt"] = wert["stt"]
+                if isinstance(wert, dict) and wert.get("sttS") is not None:
+                    warte_antwort["timings"] = {"stt": float(wert["sttS"])}
+                yield zeile(warte_antwort)
                 return
             elif typ == "leer":
                 # W-BARGE: Barge ohne verwertbaren Einwand (nichts gehoert

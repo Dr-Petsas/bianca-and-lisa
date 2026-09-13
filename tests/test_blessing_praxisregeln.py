@@ -118,7 +118,23 @@ def test_rezept_und_ueberweisung_nur_persoenlich_ohne_datensammelei():
         sit["hirnAbgeben"] = {"offen": True, "was": wort}
         res = flow._abgeben_zug(sit, f"Ich brauche eine {wort}.")
         s = flow.gehirn.sammler(sit)
-        assert res and "persönlicher Vorsprache" in res["text"]
-        assert "Ärztin" in res["text"]
+        assert res and "persönlich in die Praxis" in res["text"]
+        assert "Kontrolle" in res["text"] and "Arzt" in res["text"]
         assert "Name" not in res["text"] and "Nummer" not in res["text"]
         assert s["phase"] == "fertig"
+
+
+def test_blessing_bekommt_keine_zahnaerztliche_roentgenregel():
+    assert praxisregeln.unterlagen_antwort(
+        _tenant(), "Schicken Sie mir bitte meine Röntgenbilder."
+    ) == ""
+
+
+def test_zahnarzt_unterlagen_nur_ueber_gesicherten_dienstweg():
+    tenant = {"fachtemplate": "zahnmedizin"}
+    text = praxisregeln.unterlagen_antwort(
+        tenant, "Können Sie mir die Röntgenbilder zuschicken?"
+    )
+    assert "gesicherten Dienstweg" in text
+    assert "anfordernden Zahnarzt" in text
+    assert "ausdrücklich anfordern" in text

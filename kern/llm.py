@@ -51,10 +51,36 @@ def _sauber(text: str) -> str:
     return " ".join(_THINK.sub("", text or "").split()).strip()
 
 
+# W-PROMPT-DECKEL 12.09.2026: `messages` wuchs über den ganzen Anruf weiter.
+# In einem langen Gespräch (Live 11.09.2026, Session 9395e2ce: 109 Züge,
+# 23 Minuten) sprengt das zusammen mit den vollen Werkzeug-Schemas das
+# Kontextfenster — das Modell antwortete mit LEEREM content und der Zug
+# blieb stumm (sechs stumme Züge in derselben Session). Der System-Prompt
+# bleibt IMMER vorn (er trägt Praxisfakten, Regeln und Gesprächslage);
+# gekappt wird nur der älteste Verlauf. Normale Anrufe liegen weit darunter
+# und sind damit byte-identisch.
+VERLAUF_MAX = 40
+
+
+def _verlauf_kappen(messages: list[dict]) -> list[dict]:
+    if not isinstance(messages, list):
+        return messages
+    kopf = messages[:1] if messages and (messages[0] or {}).get("role") == "system" else []
+    rest = messages[len(kopf):]
+    if len(rest) <= VERLAUF_MAX:
+        return messages
+    rest = rest[-VERLAUF_MAX:]
+    # Ein `tool`-Ergebnis ohne den zugehörigen Werkzeug-Aufruf davor ist für
+    # die OpenAI-API ungültig — solche Reste vorne abschneiden.
+    while rest and (rest[0] or {}).get("role") == "tool":
+        rest = rest[1:]
+    return kopf + rest
+
+
 def _body(messages: list[dict], tools: list[dict] | None, temperature: float, max_tokens: int) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": LLM_MODEL,
-        "messages": messages,
+        "messages": _verlauf_kappen(messages),
         "temperature": temperature,
         "max_tokens": max_tokens,
         "chat_template_kwargs": {"enable_thinking": False},

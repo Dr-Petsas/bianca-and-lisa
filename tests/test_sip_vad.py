@@ -203,6 +203,54 @@ def test_schnelle_antwort_nach_sprechende(anruf):
     assert anruf.zuege.qsize() == 1
 
 
+# --- W-STUPS-GESAMT (12.09.2026): Notleine legt auch auf dem Stups-Pfad auf --
+
+class _Antwort:
+    def __init__(self, daten: dict) -> None:
+        self.status_code = 200
+        self._daten = daten
+
+    def json(self) -> dict:
+        return self._daten
+
+
+class _Http:
+    def __init__(self, daten: dict) -> None:
+        self._daten = daten
+
+    async def post(self, pfad, json=None):      # noqa: A002 - httpx-Signatur
+        return _Antwort(self._daten)
+
+
+def _stups_laeuft(daten: dict) -> tuple[bool, list[str]]:
+    import asyncio
+
+    a = srv.Anruf(reader=None, writer=None)
+    a.session_id = "probe"
+    a.http = _Http(daten)
+    gespielt: list[str] = []
+    a._spielen = lambda url, **k: gespielt.append(url)
+    return asyncio.run(a._stups()), gespielt
+
+
+def test_stups_spielt_weiter_ohne_hangup():
+    weiter, gespielt = _stups_laeuft({"ok": True, "text": "Sind Sie noch dran?",
+                                      "audioUrl": "api/audio/a.wav"})
+    assert weiter is True
+    assert gespielt == ["api/audio/a.wav"]
+
+
+def test_stups_mit_hangup_beendet_den_anruf():
+    """Live 12.09.2026: die Notleine sprach ihren Abschied, die Bruecke
+    ignorierte das hangup — die Leitung blieb offen und beim naechsten
+    Stups kam derselbe Satz erneut."""
+    weiter, gespielt = _stups_laeuft({"ok": True, "text": "… Auf Wiederhören!",
+                                      "audioUrl": "api/audio/b.wav",
+                                      "hangup": True})
+    assert weiter is False, "nach dem Abschied wird aufgelegt"
+    assert gespielt == ["api/audio/b.wav"], "der Abschied wird noch gespielt"
+
+
 # --- W-VERBINDEN-ECHT (31.08.2026): Transfer-Store + HTTP-Peek ---------------
 
 _UUID_HEX = "ffffffffffffffffffff000000004101"          # wie rahmen[1].hex()

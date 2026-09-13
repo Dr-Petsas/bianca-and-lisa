@@ -9,6 +9,12 @@
   "dids": ["+4921154244101", "+4921154244110"],
   "telefon": "",
   "sprache": "de",
+  "fachgebiet": "zahnmedizin",
+  "zusatzangebote": {
+    "pzrMitbuchung": true,
+    "pzrAuskunft": true,
+    "bleachingZurPzr": true
+  },
   "sttHotwords": ["Grüger", "Lange", "Schlaflabor", "Narval", "Invisalign", "Aligner"],
   "defaultCalendarId": "zex5bmv5jfIHWVW6zHbg",
   "calendars": [

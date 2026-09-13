@@ -62,10 +62,14 @@ def test_meine_nummer_uebernimmt_anrufernummer():
     s = gehirn.sammler(sit)
     s["modus"] = "buchen"
     neu = gehirn.einsammeln(sit, "Nehmen Sie einfach meine Nummer.")
-    assert "telefon" in neu
-    assert s["telefonOk"] is True
+    assert "telefonBekannt" in neu
+    assert s["telefonOk"] is False
     # +491776004600 -> normalisiert die volle, korrekte Nummer.
-    assert s["telefon"].endswith("6004600")
+    assert s["telefonBekannt"].endswith("6004600")
+    assert s["telefonOffen"] == s["telefonBekannt"]
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "telefon_check"
+    assert "Bestätigungs-SMS" in frage
 
 
 def test_meine_nummer_ohne_bekannte_nummer_beharrt_nicht():
@@ -103,7 +107,8 @@ def test_fuer_wen_notiz_nennt_anrufer_und_beziehung():
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
         "ok": True, "booked": True, "slotIso": slot_iso,
         "spoken": "Der Termin ist eingetragen."}
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     echt_hg = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda _s: None
     try:

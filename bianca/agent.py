@@ -15,9 +15,12 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import antwort_wache, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, anrede_wache, antwort_wache, fachprofil, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import spur
 from kern import wissen as kern_wissen
+# #region agent log
+from kern import dbg_a62ee2
+# #endregion
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
 
@@ -72,6 +75,40 @@ _PRESENCE_ANTWORT_RE = re.compile(
     re.I,
 )
 _NUR_JA_RE = re.compile(r"^\s*ja[\s.,!?…]*$", re.I)
+_TERMIN_EINWORT_RE = re.compile(
+    r"^\s*(?:ein(?:en)?\s+)?termine?[\s.,!?…]*$",
+    re.I,
+)
+_TERMIN_EINWORT_AKTIONEN: tuple[tuple[re.Pattern, str], ...] = (
+    (
+        re.compile(r"\b(?:neu\w*|buch\w*|vereinbar\w*|ausmach\w*)\b", re.I),
+        "Ich möchte einen neuen Termin vereinbaren.",
+    ),
+    (
+        re.compile(r"\b(?:verschieb\w*|verleg\w*|änder\w*|aender\w*)\b", re.I),
+        "Ich möchte meinen Termin verschieben.",
+    ),
+    (
+        re.compile(r"\b(?:absag\w*|storn\w*|lösch\w*|loesch\w*|streich\w*)\b", re.I),
+        "Ich möchte meinen Termin absagen.",
+    ),
+    (
+        re.compile(r"\b(?:auskunft|nachseh\w*|prüf\w*|pruef\w*|wann)\b", re.I),
+        "Ich möchte wissen, wann mein Termin ist.",
+    ),
+)
+TERMIN_EINWORT_FRAGE = (
+    "Gerne. Möchten Sie einen neuen Termin vereinbaren, "
+    "einen Termin verschieben oder einen Termin absagen?"
+)
+TERMIN_EINWORT_NACHFRAGE = (
+    "Was möchten Sie mit dem Termin tun: neu vereinbaren, verschieben oder absagen?"
+)
+_TERMIN_EINWORT_UNKLAR_RE = re.compile(
+    r"^\s*(?:ja|nein|okay|ok|weiß\s+nicht|weiss\s+nicht|keine\s+ahnung|"
+    r"(?:ein(?:en)?\s+)?termine?)[\s.,!?…]*$",
+    re.I,
+)
 _ANGEBOT_ZEIT_RE = re.compile(
     r"\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b|"
     r"\b\d{1,2}\.\s?(?:\d{1,2}\.|januar|februar|märz|maerz|april|mai|juni|juli|"
@@ -95,9 +132,10 @@ _FRAGE_KERN = {
     "buchstabieren": r"buchstabier",
     "telefon": r"nummer|handy|telefon",
     "telefon_check": r"nummer|stimmt",
-    # W-ANRUFER-CHECK: das vorgelesene Name+Nummer-Paar zur Rufnummer.
-    "anrufer_check": r"rufnummer|erkannt|stimmt|selbst",
-    "arzt_check": r"zuletzt|behandler|richtig",
+    # Erkannte Identität und Terminempfänger sind getrennte Ja/Nein-Schritte.
+    "anrufer_check": r"erkannt|richtige\s+person",
+    "fuer_wen_check": r"selbst|persönlich|persoenlich",
+    "arzt_check": r"zuletzt|behandler|arzt|zahnarzt|richtig",
     "telefon_alt": r"nummer|alte|akte|löschen",
     "slotwahl": r"\buhr\b|termin.{0,30}passt|welcher",
     "bestaetigung": r"eintragen|so\s+buchen|festhalten",
@@ -201,9 +239,17 @@ def _wiederholungs_wache(sit: dict, text: str) -> str:
         if zimmer_map.aktiv(sit.get("tenant") or {}):
             varianten = {**varianten, "arzt": gehirn.THALER_SPUR_VARIANTEN}
         elif s.get("warSchonMal") is False:
-            # Neupatient: die Behandler-WAHL wiederholen, nicht "bei wem waren
+            # Neupatient: die Arzt-WAHL wiederholen, nicht "bei wem waren
             # Sie zuletzt?" — der Anrufer war ja noch nie da.
             varianten = {**varianten, "arzt": gehirn.ARZTWAHL_VARIANTEN}
+        else:
+            varianten = {
+                **varianten,
+                "arzt": (
+                    "Bei welchem Behandler waren Sie zuletzt?",
+                    "Wissen Sie den Namen Ihres Behandlers noch?",
+                ),
+            }
     return wiederholung.pruefen(
         sit, text,
         frueher=wiederholung.letzte_antworten(sit.get("messages") or []),
@@ -215,7 +261,7 @@ def _wiederholungs_wache(sit: dict, text: str) -> str:
 
 _FEHLT_WORT = {
     "schonmal": "ob Sie schon Patient bei uns sind",
-    "arzt": "der Behandler",
+    "arzt": "der Arzt",
     "name": "Ihr Name",
     "vorname": "Ihr Vorname",
     "nachname": "der Nachname",
@@ -233,6 +279,7 @@ _FEHLT_WORT = {
     "versicherung": "Ihr Versichertenstatus — privat oder gesetzlich",
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
+    "fuer_wen_check": "ob der Termin für Sie selbst ist",
     "rueckblick": "wie es nach dem letzten Besuch war",
     "folge_kontrolle": "ob eine Kontrolle gebucht werden soll",
 }
@@ -247,10 +294,68 @@ def _wiederholung_oder_presence(sit: dict, text: str) -> str:
     raus = _wiederholungs_wache(sit, text)
     if raus:
         return antwort_wache.saeubern(sit, raus)
-    # Alles war Wiederholung und keine Variante frei: Presence, nicht Original.
-    if _s(text):
-        return stille.anrede(1)
-    return ""
+    if not _s(text):
+        return ""
+    # Alles war Wiederholung und keine Variante frei. Presence ("Sind Sie
+    # noch dran?") gehoert dem STILLE-Waechter: hier hat der Anrufer GERADE
+    # gesprochen. Live 12.09.2026 wurden so vier gesprochene Saetze in Folge
+    # mit "Sind Sie noch dran?" beantwortet — eine Endlosschleife. Die offene
+    # Frage kommt stattdessen mit Praefix zurueck (nie wortgleich, W-REPEAT
+    # bleibt gewahrt); nur wenn ueberhaupt keine Frage offen ist, bleibt
+    # Presence als letzter Notnagel.
+    offen = stille.nur_fragesaetze(text) or _s(sit.get("flussFrage"))
+    # #region agent log
+    dbg_a62ee2.dbg("H", "bianca/agent.py:_wiederholung_oder_presence",
+                   "alles gestrichen — Rueckfall gewaehlt",
+                   {"rueckfall": "praefix" if offen else "presence",
+                    "text": dbg_a62ee2.kurz(text)})
+    # #endregion
+    if offen:
+        praefix = stille.frage_praefix(offen)
+        # Die Re-Greeting-Wache darf den Rueckfall nicht leeren — stumm zu
+        # bleiben waere schlimmer als die Schleife. `praefix` ist NICHT der
+        # wortgleiche Originalsatz, W-REPEAT bleibt also gewahrt.
+        return antwort_wache.saeubern(sit, praefix) or praefix
+    return stille.anrede(1)
+
+
+# Während der Anrufer Ziffern oder Buchstaben diktiert, zählt nur ein
+# unmissverständlicher Abschied — ein verhörtes „ciao" darf keine halb
+# erfasste Rufnummer wegwerfen.
+_DIKTAT_FRAGEN = {
+    "telefon", "telefon_check", "telefon_alt", "buchstabieren",
+    "nachname", "vorname", "geburtsdatum",
+}
+
+
+def _diktat_offen(sit: dict) -> bool:
+    return _s((sit.get("sammler") or {}).get("frage")) in _DIKTAT_FRAGEN
+
+
+# So viele freie (LLM-)Züge darf ein Nebenthema kosten, während eine
+# Pflichtfrage offen ist — danach holt die Maschine zurück (W-FOKUS).
+_FOKUS_MAX = 4
+
+
+def _nie_stumm(sit: dict) -> str:
+    """Letztes Netz: ein Zug darf nach echtem Anrufer-Satz NIE stumm bleiben.
+
+    Live 11.09.2026 (Session 9395e2ce) endeten sechs Züge ohne einen Ton —
+    das Modell lieferte leeren Inhalt (zu langer Prompt, W-PROMPT-DECKEL) und
+    danach gab es keinen Rückfall. Für den Anrufer ist das eine tote Leitung,
+    und weder Schleifen- noch Stille-Wächter holen ihn zurück: er hat ja
+    gerade gesprochen.
+
+    Bewusst NICHT durch den Wiederholungs-Wächter: stumm zu bleiben wäre
+    schlimmer als ein zweites Mal dieselbe offene Frage."""
+    s = sit.get("sammler") or {}
+    fid = _s(s.get("frage"))
+    frage = _kanonische_frage(sit, fid) if fid else ""
+    if not frage:
+        frage = _s(sit.get("flussFrage"))
+    if frage:
+        return frage
+    return "Entschuldigung, da war ich kurz still. Was kann ich für Sie tun?"
 
 
 def _stand_ansage(sit: dict) -> str:
@@ -274,7 +379,7 @@ def _stand_ansage(sit: dict) -> str:
             habe.append("Ihren Namen habe ich schon.")
         a = s.get("arzt") or {}
         if a.get("calendarId") or _s(a.get("typ")):
-            habe.append("Der Behandler ist notiert.")
+            habe.append(f"Der {fachprofil.arztwort(sit)} ist notiert.")
         fehlt = _FEHLT_WORT.get(fid, "")
         frage = _kanonische_frage(sit, fid) if fid else ""
         teile = [auftrag + "."] + habe
@@ -299,13 +404,26 @@ def stille_zug(sit: dict) -> dict[str, Any]:
     - Denk-Cue („Moment“, „überlegen“): kurze Pause ohne Stups.
     - Nach MAX_STUPSE Stupsen ohne Antwort: Schweigen, bis der Anrufer
       wieder spricht (user_turn setzt den Zähler zurück).
+    - W-STUPS-GESAMT (12.09.2026): ab stille.PRESENCE_BIS Stupsen im ANRUF
+      entfällt die Presence-Floskel, ab stille.GESAMT_MAX beendet die
+      Notleine das Gespräch. `stupse` allein reicht nicht — er wird bei
+      jedem Anrufer-Satz genullt, weshalb live 23 Minuten lang „Sind Sie
+      noch dran?" und dieselbe Frage abwechselten.
     """
     if time.time() < float(sit.get("denkPauseBis") or 0):
+        return {"text": "", "book": None}
+
+    if sit.get("notleineGesagt"):
+        # Der Abschied ist gesprochen. Sollte das Auflegen am Klienten
+        # haengen, wird jetzt geschwiegen — nie denselben Schlusssatz
+        # noch einmal (live 12.09.2026 kam er zweimal).
         return {"text": "", "book": None}
 
     n = stille.stups_zaehlen(sit)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
+    if stille.gespraech_tot(sit):
+        return _notleine(sit)
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
 
@@ -328,38 +446,81 @@ def stille_zug(sit: dict) -> dict[str, Any]:
 
     st = gespraech.stand(sit)
     stack = st.get("stack") or []
-    if (n == 1 and stack and gespraech.floor(sit) in (gespraech.TALK, gespraech.BLENDED)):
+    # Nebenthema nur anbieten, wenn KEINE Pflichtfrage offen ist. Live
+    # 11.09.2026 lud Bianca minutenlang zum „Thema arsch" bzw. „Thema barry"
+    # ein, während sie auf die Handynummer wartete — das hielt den Anrufer
+    # genau in dem Abseits, aus dem sie ihn holen sollte.
+    if (n == 1 and stack and not fid and stille.presence_erlaubt(sit)
+            and gespraech.floor(sit) in (gespraech.TALK, gespraech.BLENDED)):
         thema = _s((stack[-1] or {}).get("thema"))
-        if thema:
+        if thema and not anstand.unfein(thema):
             text = (f"{stille.anrede(n)} Wir waren gerade beim Thema {thema} — "
                     "erzählen Sie gern weiter.")
             stille.anhaengen(sit, text)
             return {"text": text, "book": None}
 
-    if n <= 1:
-        # Presence only — phone_agent hat auf Silence nie die Pflichtfrage
-        # wiederholt (W-STUPS-PRESENCE 01.09.2026).
+    if stille.gesamt(sit) <= 1:
+        # ERSTER Stups im Anruf: nur Presence — phone_agent hat auf Silence
+        # nie die Pflichtfrage wiederholt (W-STUPS-PRESENCE 01.09.2026).
+        # Ab dem zweiten bringt jeder Stups die offene Frage mit: dreimal
+        # „Sind Sie noch dran?" war live selbst die Schleife.
         text = stille.anrede(n)
         stille.anhaengen(sit, text)
         return {"text": text, "book": None}
 
-    # Zweiter Stups: kurze offene Frage (Variante), kein Stand-Sermon.
+    # Ab dem zweiten Stups: kurze offene Frage (Variante), kein Stand-Sermon.
+    vorsatz = stille.anrede(2) if stille.presence_erlaubt(sit) else ""
     frage = stille.nur_fragesaetze(_kanonische_frage(sit, fid)) if fid else ""
     if not frage and _s(sit.get("flussFrage")):
         frage = stille.nur_fragesaetze(sit["flussFrage"])
     if not frage:
         frage = "Kann ich sonst noch etwas für Sie tun?"
-    text = " ".join([stille.anrede(n), frage])
+    text = " ".join(x for x in (vorsatz, frage) if x)
     ent = _wiederholungs_wache(sit, text)
     if ent and "?" in ent:
-        text = antwort_wache.saeubern(sit, ent)
-    elif frage:
-        # Frage war schon wortgleich da — mit Präfix, nie Original-Restore.
-        text = f"{stille.anrede(n)} {stille.frage_praefix(frage)}"
+        text = antwort_wache.saeubern(sit, ent) or ent
     else:
-        text = stille.anrede(n)
+        # Frage war schon wortgleich da — mit Präfix, nie Original-Restore.
+        praefix = stille.frage_praefix(frage)
+        text = " ".join(x for x in (vorsatz, praefix) if x)
+    if not _s(text):
+        # Alle Wächter haben gestrichen. Ein stummer Stups ist für den
+        # Anrufer eine tote Leitung — die offene Frage gewinnt (Live
+        # 11.09.2026: „Sind Sie noch dran?" und dann gar nichts mehr).
+        text = frage
+        spur.merken(sit, "stups-nie-stumm", frage[:60])
     stille.anhaengen(sit, text)
     return {"text": text, "book": None}
+
+
+def _notleine(sit: dict) -> dict[str, Any]:
+    """W-STUPS-GESAMT: das Gespräch kommt nicht mehr voran — freundlich
+    beenden statt weiter zu nöleln (Live 11.09.2026: 23 Minuten Schleife).
+
+    Ein offenes Anliegen wird vorher als echte Rückruf-Notiz gesichert, damit
+    der Anrufer nicht mit leeren Händen aus der Leitung fällt."""
+    s = sit.get("sammler") or {}
+    offen = bool(_s(s.get("modus")) and _s(s.get("phase")) not in {"gebucht", "fertig"})
+    notiz = False
+    if offen:
+        try:
+            from bianca import verwalten
+            verwalten.abgeben_notiz(
+                sit,
+                was=_s(s.get("grundWortlaut")) or _s(s.get("grund"))
+                or "Anruf kam nicht zum Abschluss",
+            )
+            notiz = not sit.get("testNotizUnterdrueckt")
+        except Exception as e:  # Notiz darf den Abschied nie verhindern
+            print(f"notleine-notiz fail {e}", flush=True)
+    text = abschied.notbremse_satz(notiz=notiz)
+    stille.anhaengen(sit, text)
+    wiederholung.gesagt_merken(sit, text)
+    sit["notleineGesagt"] = True
+    spur.merken(sit, "stille-notleine", f"gesamt={stille.gesamt(sit)}")
+    if not abschied.an():
+        return {"text": text, "book": None}
+    return {"text": text, "book": None, "hangup": True}
 
 
 def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False,
@@ -497,11 +658,56 @@ def _job_aktiv(sit: dict) -> bool:
             and s.get("phase") not in {"gebucht", "fertig"})
 
 
+def _einwort_termin_vorbereiten(sit: dict, text: str) -> tuple[str, str]:
+    """Mehrdeutiges „Termin“ klaeren, ohne das LLM eine Absicht raten zu lassen.
+
+    Rueckgabe: (Text fuer Intent/Flow, direkte Rueckfrage). Eine Antwort auf
+    die Rueckfrage wird in einen eindeutigen Satz erweitert. Offene Formular-
+    schritte bleiben unangetastet: Dort kann ein einzelnes Wort die erwartete
+    Antwort sein und darf nie von dieser allgemeinen Klaerung ueberholt werden.
+    """
+    t = _s(text)
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    offen = bool(_s(s.get("frage")) or _job_aktiv(sit))
+
+    if sit.get("einwortTerminOffen"):
+        if offen:
+            sit.pop("einwortTerminOffen", None)
+            return t, ""
+        treffer = [satz for muster, satz in _TERMIN_EINWORT_AKTIONEN if muster.search(t)]
+        if len(treffer) == 1:
+            sit.pop("einwortTerminOffen", None)
+            spur.merken(sit, "einwort-termin", t[:40])
+            return treffer[0], ""
+        if _TERMIN_EINWORT_UNKLAR_RE.match(t):
+            return t, TERMIN_EINWORT_NACHFRAGE
+        # Ein anderes belastbares Einzelwort („Mitarbeiter“,
+        # „Zahnreinigung“ ...) ist ein Themenwechsel und geht normal durch
+        # Intent/Flow. Die alte Terminfrage darf es nicht festhalten.
+        sit.pop("einwortTerminOffen", None)
+        return t, ""
+
+    if not offen and _TERMIN_EINWORT_RE.match(t):
+        sit["einwortTerminOffen"] = True
+        spur.merken(sit, "einwort-termin-unklar", t[:40])
+        return t, TERMIN_EINWORT_FRAGE
+    return t, ""
+
+
 def _offene_frage(sit: dict) -> str:
-    """Die offene Pflichtfrage des Sammlers als Satz — '' wenn keine offen."""
+    """Die offene Pflichtfrage des Sammlers als Satz — '' wenn keine offen.
+
+    W-FOKUS 12.09.2026: `_kanonische_frage` liefert nur etwas, wenn
+    `gehirn.naechste_frage` GENAU diese Frage als nächste sieht. In langen
+    Gesprächen (Zwischenanliegen, geparkte Aufgaben) fallen die beiden
+    auseinander — dann galt die Pflichtfrage als „nicht offen" und niemand
+    holte den Anrufer zurück. Der zuletzt WIRKLICH gestellte Satz des
+    Flusses (`flussFrage`) ist in diesem Fall die ehrliche Auskunft."""
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
-    return _kanonische_frage(sit, fid) if fid else ""
+    if not fid:
+        return ""
+    return _kanonische_frage(sit, fid) or _s(sit.get("flussFrage"))
 
 
 def _behandler_alle(tenant: dict) -> str:
@@ -573,7 +779,29 @@ def start_reply(sit: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
-def _fakten_wache_anwenden(sit: dict, text: str) -> str:
+def _anrede_wache_anwenden(sit: dict, text: str) -> str:
+    """W-ANREDE (13.09.2026): eine Anrede mit Namen darf nur raus, wenn der
+    Name belegt ist (Anrufer, Kartei oder Mandant).
+
+    Live-Probe 12.09.2026 mit unbekanntem Anrufer: „Gerne, Herr Meier." —
+    der Name war frei erfunden. off: nichts. shadow: nur Wächterspur.
+    enforce: Anrede streichen, Satz bleibt stehen."""
+    m = anrede_wache.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, gestrichen = anrede_wache.saeubern(sit, text)
+    if not gestrichen:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "anrede-wache-shadow", "; ".join(gestrichen)[:60])
+        return text
+    spur.merken(sit, "anrede-wache", "; ".join(gestrichen)[:60])
+    return neu or text
+
+
+def _fakten_wache_anwenden(
+    sit: dict, text: str, *, nutzertext: str | None = None
+) -> str:
     """W-FAKTEN-WACHE (09.09.2026): evidenzbasierte Erledigt-Wache auf dem
     LLM-Pfad. off: nichts. shadow: nur Waechterspur. enforce: unbelegte
     Erledigt-Behauptung durch eine ehrliche Absicherung + offene Frage
@@ -581,7 +809,8 @@ def _fakten_wache_anwenden(sit: dict, text: str) -> str:
     m = fakten_wache.modus()
     if m == "off" or not _s(text):
         return text
-    unbelegt = fakten_wache.unbelegte_behauptung(sit, text)
+    unbelegt = fakten_wache.unbelegte_behauptung(
+        sit, text, nutzertext=nutzertext)
     if not unbelegt:
         return text
     if m == "shadow":
@@ -592,7 +821,16 @@ def _fakten_wache_anwenden(sit: dict, text: str) -> str:
     fid, frage = gehirn.naechste_frage(sit)
     if fid:
         s["frage"] = fid
-    hedge = "Da will ich nichts falsch machen — das ist noch nicht erledigt."
+    hedge = {
+        "slots": "Das kann ich ohne eine echte Kalendersuche nicht sicher sagen.",
+        "bestand": "Ob ein Termin besteht, sage ich erst nach einer echten Kalendersuche.",
+        "sms": "Eine Bestätigungs-SMS kann ich erst nach einer bestätigten Buchung zusagen.",
+        "rueckruf": "Einen Rückruf habe ich noch nicht angelegt.",
+        "transfer": "Eine Weiterleitung habe ich noch nicht gestartet.",
+    }.get(
+        unbelegt,
+        "Da will ich nichts falsch machen — das ist noch nicht erledigt.",
+    )
     return _wiederholung_oder_presence(sit, " ".join(x for x in [hedge, frage] if x).strip())
 
 
@@ -667,6 +905,31 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     return aus
 
 
+def _antwort_mit_vorspann(
+    sit: dict, antwort: dict[str, Any], vorspann: str,
+) -> dict[str, Any]:
+    """Bereits gestarteten sozialen Vorspann in Antwort und Verlauf spiegeln.
+
+    ``vorab(vorspann)`` kann den kurzen Satz parallel zur fachlichen Arbeit
+    vertonen. Der Dienst entfernt ihn anschließend aus dem Rest-Audio; im
+    Antworttext und Gesprächsverlauf muss er trotzdem vollständig stehen.
+    """
+    aus = dict(antwort or {})
+    body = _s(aus.get("text"))
+    voll = " ".join(x for x in (_s(vorspann), body) if x)
+    aus["text"] = voll
+    if not voll:
+        return aus
+    msgs = list(sit.get("messages") or [])
+    if msgs and msgs[-1].get("role") == "assistant" and _s(msgs[-1].get("content")) == body:
+        msgs[-1]["content"] = voll
+    elif not msgs or msgs[-1].get("role") != "assistant":
+        msgs.append({"role": "assistant", "content": voll})
+    sit["messages"] = msgs
+    wiederholung.gesagt_merken(sit, voll)
+    return aus
+
+
 def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
@@ -690,13 +953,91 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return start_reply(sit)
     msgs.append({"role": "user", "content": text_in})
 
+    # W-ABSCHIED (12.09.2026, Chef: „Bianca soll lernen aufzulegen bei
+    # eindeutigen sätzen die ein gespräch beenden wie tschüss auf
+    # wiederhören wiedersehen bis denn"): ein klarer Schlusssatz beendet den
+    # Anruf jetzt wirklich. Vorher sprach bianca/flow zwar „Auf Wiederhören",
+    # setzte aber nie `hangup` — die Leitung blieb offen, bis der Anrufer
+    # selbst auflegte (Live 11.09.2026: 23 Minuten).
+    if abschied.an() and abschied.ist_abschied(text_in, streng=_diktat_offen(sit)):
+        spur.merken(sit, "abschied-auflegen", text_in[:60])
+        return _maschinen_antwort(
+            sit,
+            {
+                "text": abschied.satz(gehirn.anrede(gehirn.sammler(sit))),
+                "book": None,
+                "hangup": True,
+                # Der Schlusssatz darf NIE dem Entdoppler zum Opfer fallen:
+                # stumm auflegen wäre für den Anrufer ein Abbruch.
+                "_wiederholungErlaubt": True,
+            },
+            msgs,
+        )
+
+    # Unbekannte DID/mandantenId: keine andere Praxis einsetzen und niemals
+    # mit einem leeren Profil ans LLM oder an Kalenderwerkzeuge gehen.
+    if fachprofil.ist_fallback(sit):
+        return _maschinen_antwort(
+            sit,
+            {"text": fachprofil.fallback_antwort(sit), "book": None},
+            msgs,
+        )
+
     # W-HALLO-PAUSE (10.09.2026): Hat Bianca wirklich „Wie geht es Ihnen?“
     # gefragt, war der vorherige Zug absichtlich NUR diese Frage. Jetzt erst
     # den dort geparkten Originalwunsch in die Maschine geben und nach der
     # Wohlseinsantwort mit der fachlichen Pflichtfrage fortfahren.
     if sit.pop("anruferHalloFrageOffen", False):
         original = _s(sit.pop("anruferHalloOffenerText", ""))
-        fl = tasks.zug(sit, original, melde) if original else None
+        einwort_frage = _s(sit.pop("anruferHalloEinwortFrage", ""))
+        identitaet_nein = gehirn.ist_anrufer_identitaet_nein(text_in)
+        quittung = "" if identitaet_nein else gehirn.anrufer_wohl_quittung(text_in)
+        if identitaet_nein:
+            fl = tasks.zug(sit, original, melde) if original else None
+        elif einwort_frage:
+            fl = {"text": einwort_frage, "book": None}
+        elif original:
+            # Live MedDent 11.09.: „Röntgenbild zugeschickt bekommen“ war
+            # korrekt geparkt, tasks.zug kannte das Dokumentanliegen aber
+            # noch nicht. Der alte Früh-Rückweg fragte deshalb nur erneut
+            # „Was kann ich für Sie tun?“; der Wiederholungswächter strich
+            # die Frage, hörbar blieb bloß „Das freut mich.“. Den Original-
+            # wunsch jetzt durch die VOLLSTÄNDIGE Pipeline schicken:
+            # Intent/Task-Router, sicherer Flow und nötigenfalls Talk-LLM.
+            sit["messages"] = msgs
+            if quittung and vorab:
+                vorab(quittung)
+            # W-HALLO-ANTWORT (12.09.2026, Chef: „diese antwort ignoriert
+            # bianca komplett. sie müsste bei der frage die antwort
+            # aufnehmen und dann weitermachen."): trägt die Antwort eigenen
+            # Inhalt („Gut, aber mein Zahn tut weh."), geht sie MIT dem
+            # geparkten Auftrag durch die Pipeline. Vorher lief nur der
+            # geparkte Satz — der Anrufer musste sich wiederholen.
+            arbeit = original
+            if not gehirn.ist_nur_wohlsein(text_in):
+                arbeit = f"{original} {text_in}"
+                spur.merken(sit, "hallo-antwort-aufgenommen", text_in[:60])
+            fortsetzung = user_turn(sit, arbeit, melde=melde, vorab=None)
+            spur.merken(sit, "anrufer-hallo-pause", text_in[:80])
+            return _antwort_mit_vorspann(sit, fortsetzung, quittung)
+        else:
+            # Kein geparkter Auftrag: eine bewusst andere Form als die
+            # Eingangsbegrüßung, damit die jetzt nötige Frage nicht als
+            # Wiederholung verschwindet.
+            fl = {
+                "text": "Wie kann ich Ihnen helfen?",
+                "book": None,
+                "_wiederholungErlaubt": True,
+            }
+        if (identitaet_nein
+                and _s((sit.get("sammler") or {}).get("frage")) == "anrufer_check"):
+            # Live 10.09.: Auf „Wie geht es Ihnen?“ kam die wichtigere
+            # Korrektur „Ich bin nicht Phoebe Rose Kellner.“. Nicht erst
+            # mit „Danke. Habe ich Sie richtig erkannt?“ nachfragen, sondern
+            # den falschen DB-Treffer sofort sicher verwerfen.
+            ablehnung = tasks.zug(sit, "Nein.", melde)
+            if ablehnung:
+                fl = ablehnung
         if not fl or not (
             _s(fl.get("text")) or fl.get("hangup")
             or fl.get("transfer") or fl.get("warte")
@@ -704,9 +1045,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             fl = {"text": "Was kann ich für Sie tun?", "book": None}
         else:
             fl = dict(fl)
-        quittung = gehirn.anrufer_wohl_quittung(text_in)
         fl["text"] = " ".join(x for x in (quittung, _s(fl.get("text"))) if x)
-        spur.merken(sit, "anrufer-hallo-pause", text_in[:80])
+        spur.merken(
+            sit,
+            "anrufer-hallo-identitaet-nein" if identitaet_nein
+            else "anrufer-hallo-pause",
+            text_in[:80],
+        )
         return _maschinen_antwort(sit, fl, msgs)
 
     # W-PRAXISAUSKUNFT (09.09.2026): Öffnungszeiten und Wegbeschreibung
@@ -747,6 +1092,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             arbeits_text = zusatz
             spur.merken(sit, "mischzug", f"{vorfrage}: {kurzantwort} + Zusatz")
 
+    arbeits_text, einwort_frage = _einwort_termin_vorbereiten(
+        sit, arbeits_text,
+    )
+
     if _letzte_war_presence(sit) and (
         _PRESENCE_ANTWORT_RE.search(text_in) or _NUR_JA_RE.match(text_in)
     ):
@@ -767,7 +1116,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     #    Maschine laeuft — synchron IMMER in 0 ms (Fast-Paths + Heuristik).
     #    Das LLM prueft mehrdeutige Saetze im Hintergrund nach; sein
     #    Nachzug vom VORIGEN Satz wird hier zuerst eingearbeitet.
-    if "hirn" in sit and intent.enabled():
+    if "hirn" in sit and intent.enabled() and not einwort_frage:
         hirn.sync_nach_zug(sit)  # Maschinen-Stand vom VORIGEN Zug abgleichen
         spaet = intent.nachzug(sit)
         if spaet is not None:
@@ -804,9 +1153,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         # nachgereicht. Jetzt darf akustisch nichts mehr folgen.
         sit["anruferHalloFrageOffen"] = True
         sit["anruferHalloOffenerText"] = arbeits_text
+        if einwort_frage:
+            sit["anruferHalloEinwortFrage"] = einwort_frage
         spur.merken(sit, "anrufer-hallo-fragt", hallo)
         return _maschinen_antwort(
             sit, {"text": hallo, "book": None}, msgs,
+        )
+
+    if einwort_frage:
+        sit.pop("unklarFolge", None)
+        return _maschinen_antwort(
+            sit, {"text": einwort_frage, "book": None}, msgs,
         )
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
@@ -853,6 +1210,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     )
     if job_sprach:
         sit.pop("unklarFolge", None)
+        sit.pop("ganzsatzHinweisGegeben", None)
+        sit.pop("talkDrift", None)
         return _maschinen_antwort(sit, fl, msgs)
 
     # W-MEDDENT (04.09.2026): kurzer STT-Muell → nachfragen, kein LLM-Plaudern.
@@ -888,18 +1247,49 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 ):
                     sit.pop("unklarFolge", None)
                     return _maschinen_antwort(sit, fl, msgs)
-            text = (
-                "Ich möchte Sie nicht in einer Schleife festhalten. "
-                "Sagen Sie bitte noch einmal in einem Satz, wobei ich helfen soll."
-            )
+        if unklar_folge >= 3 and not sit.get("ganzsatzHinweisGegeben"):
+            sit["ganzsatzHinweisGegeben"] = True
+            text = gespraech.GANZSATZ_ANTWORT
+            spur.merken(sit, "ganzsatz-waechter", f"{unklar_folge} Einzelwort-Züge")
+        elif sit.get("ganzsatzHinweisGegeben"):
+            text = gespraech.unklar_auswahl_antwort(sit.get("tenant") or {})
         else:
-            text = gespraech.UNKLAR_ANTWORT
+            text = gespraech.unklar_antwort(text_in)
         msgs.append({"role": "assistant", "content": text})
         sit["messages"] = msgs
         wiederholung.gesagt_merken(sit, text)
         gespraech.nach_antwort(sit)
         return {"text": text, "book": None}
     sit.pop("unklarFolge", None)
+    sit.pop("ganzsatzHinweisGegeben", None)
+
+    # W-FOKUS (12.09.2026, Chef: „auch bei live telefonaten verliert bianca
+    # den fokus"): ein Nebenthema darf Züge kosten, aber nicht beliebig
+    # viele, solange eine Pflichtfrage offen ist. Live 11.09.2026 lief der
+    # Anruf minutenlang frei weiter, während die Handynummer offen war — die
+    # Maschine kam nie wieder dran. Nach _FOKUS_MAX freien Zügen holt sie
+    # deterministisch zurück und räumt den Talk-Stack.
+    offene_pflicht = _offene_frage(sit)
+    if offene_pflicht:
+        drift = int(sit.get("talkDrift") or 0) + 1
+        sit["talkDrift"] = drift
+        if drift >= _FOKUS_MAX:
+            sit.pop("talkDrift", None)
+            talk = sit.get("talk")
+            if isinstance(talk, dict):
+                talk.update({
+                    "gravity": {}, "woerter": {}, "stack": [],
+                    "floor": gespraech.JOB, "bruecke": "", "frisch": [],
+                })
+            text = f"Damit ich das für Sie erledigen kann: {offene_pflicht}"
+            spur.merken(sit, "fokus-rueckholung", f"{drift} freie Züge")
+            msgs.append({"role": "assistant", "content": text})
+            sit["messages"] = msgs
+            wiederholung.gesagt_merken(sit, text)
+            gespraech.nach_antwort(sit)
+            return {"text": text, "book": None}
+    else:
+        sit.pop("talkDrift", None)
 
     # 2) Modell-Pfad: Stand der Buchung + Gespraechslage frisch in den Prompt.
     plan = gespraech.plan_block(route, offene_frage=_offene_frage(sit), stimme="bianca")
@@ -932,7 +1322,33 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             extra[k] = v
     llm_tools = task_router.werkzeuge_fuer(sit) if task_auswahl else TOOLS
     if darf_vorab:
-        out = llm.chat_stream(msgs, llm_tools, erster_satz=vorab, **extra)
+        # P5 spricht Sätze bereits während der Generierung. Die finale Wache
+        # unten käme für eine Halluzination zu spät; deshalb wird ein
+        # unbelegter Kalender-/Erledigt-Satz samt aller Folge-Sätze schon am
+        # Streaming-Ausgang zurückgehalten.
+        vorab_blockiert = False
+
+        def sicherer_vorab(satz: str) -> None:
+            nonlocal vorab_blockiert
+            if vorab_blockiert:
+                return
+            unbelegt = fakten_wache.unbelegte_behauptung(
+                sit, satz, nutzertext=text_in)
+            if fakten_wache.modus() == "enforce" and unbelegt:
+                vorab_blockiert = True
+                spur.merken(sit, "fakten-wache-vorab", unbelegt)
+                return
+            # W-ANREDE: die erfundene Anrede muss HIER fallen — dieser Satz
+            # wird sofort gesprochen. Gesprochenes und Endtext werden gleich
+            # gesaeubert, damit llm.rest_nach_vorab den Rest weiter findet
+            # (sonst kaeme der Satz ein zweites Mal).
+            satz = _anrede_wache_anwenden(sit, satz)
+            if not _s(satz):
+                return
+            vorab(satz)
+
+        out = llm.chat_stream(
+            msgs, llm_tools, erster_satz=sicherer_vorab, **extra)
     else:
         out = llm.chat(msgs, llm_tools, **extra)
     if not out.get("ok"):
@@ -959,12 +1375,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     werkzeug_lief = bool(gelaufen)
     _fluss_sync(sit, gelaufen, book)
     bewacht = _nachbessern(sit, text, melde, werkzeug_lief=werkzeug_lief, floor=route["floor"])
-    bewacht = _fakten_wache_anwenden(sit, bewacht)
+    bewacht = _fakten_wache_anwenden(
+        sit, bewacht, nutzertext=text_in)
+    bewacht = _anrede_wache_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht
         text = bewacht
     sit["messages"] = msgs
+    if not _s(text) and not book:
+        text = _nie_stumm(sit)
+        spur.merken(sit, "nie-stumm", text[:60])
     if _s(text):
         wiederholung.gesagt_merken(sit, text)
     gespraech.nach_antwort(sit)

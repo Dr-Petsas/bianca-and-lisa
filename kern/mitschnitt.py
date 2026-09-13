@@ -108,7 +108,7 @@ def _manifest(sit: dict, pfad: Path) -> dict[str, Any]:
     alt = _laden(pfad)
     if alt is not None:
         return alt
-    return {
+    out = {
         "id": sit.get("id") or "",
         "stimme": sit.get("stimme") or "",
         "tenantId": sit.get("tenantId") or "",
@@ -117,6 +117,11 @@ def _manifest(sit: dict, pfad: Path) -> dict[str, Any]:
         "dauerMs": None,
         "zuege": [],
     }
+    if sit.get("testAnruf"):
+        out["testAnruf"] = True
+        if sit.get("testName"):
+            out["testName"] = sit.get("testName")
+    return out
 
 
 def _zusammenfassung(manifest: dict, sit: dict) -> None:
@@ -125,6 +130,11 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
     pat = sit.get("patient") or {}
     s = sit.get("sammler") or {}
     name = pat.get("name") or " ".join(x for x in (s.get("vorname"), s.get("nachname")) if x).strip()
+    if sit.get("testAnruf"):
+        manifest["testAnruf"] = True
+        if sit.get("testName"):
+            manifest["testName"] = sit.get("testName")
+        name = sit.get("testName") or name or ""
     manifest["patientName"] = name or ""
     manifest["auftrag"] = sit.get("auftrag") or ""
     # id = Anruf-UID (session.neu: uuid4.hex). Portal-phoneCallId separat,
@@ -358,11 +368,12 @@ def ende(sit: dict, dienst, *, warte_s: float = 10.0) -> None:
 
 # ---- Lesen (API-Routen) -----------------------------------------------------
 
-def liste(stimme: str, limit: int = 200) -> list[dict[str, Any]]:
+def liste(stimme: str, limit: int = 200, tenant_id: str = "") -> list[dict[str, Any]]:
     """Kopfzeilen aller Mitschnitte, neueste zuerst — fürs Dock."""
     basis = _wurzel() / (stimme or "").strip().lower()
     if not basis.is_dir():
         return []
+    filter_id = (tenant_id or "").strip()
     aus: list[dict[str, Any]] = []
     for d in basis.iterdir():
         if not d.is_dir():
@@ -370,14 +381,20 @@ def liste(stimme: str, limit: int = 200) -> list[dict[str, Any]]:
         m = _laden(d)
         if not m:
             continue
+        tid = m.get("tenantId") or ""
+        if filter_id and tid != filter_id:
+            continue
         zuege = m.get("zuege") or []
         aus.append({
             "id": m.get("id") or d.name,
             "phoneCallId": m.get("phoneCallId") or "",
+            "tenantId": tid,
             "startedAt": m.get("startedAt") or "",
             "endedAt": m.get("endedAt"),
             "dauerMs": m.get("dauerMs"),
             "patientName": m.get("patientName") or "",
+            "testAnruf": bool(m.get("testAnruf")),
+            "testName": m.get("testName") or "",
             "zuege": len(zuege),
             "lastBook": m.get("lastBook"),
             "lastCancel": m.get("lastCancel"),

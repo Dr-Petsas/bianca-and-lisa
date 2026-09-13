@@ -4,7 +4,7 @@ import json
 import os
 
 from bianca import agent, flow, gehirn
-from kern import hirn, task_router
+from kern import gespraech, hirn, task_router
 from kern.tenants import laden
 
 
@@ -180,6 +180,123 @@ def test_live_prothesen_satz_braucht_keinen_llm_und_eroeffnet_flow():
     assert sit["taskRouter"][-1]["quelle"] == "sichere_ernte"
 
 
+def test_nacktes_terminwort_wird_ohne_llm_nach_aktion_gefragt():
+    """Ein „Termin“ ist akustisch klar, semantisch aber nicht eindeutig."""
+    sit = _sit()
+
+    def niemals_llm(*_a, **_k):
+        raise AssertionError("Einwort-Klaerung darf kein LLM brauchen")
+
+    chat_alt = agent.llm.chat
+    stream_alt = agent.llm.chat_stream
+    try:
+        agent.llm.chat = niemals_llm
+        agent.llm.chat_stream = niemals_llm
+        antwort = agent.user_turn(sit, "Termin")
+    finally:
+        agent.llm.chat = chat_alt
+        agent.llm.chat_stream = stream_alt
+
+    text = antwort["text"].lower()
+    assert "vereinbaren" in text and "verschieben" in text and "absagen" in text
+    assert sit["einwortTerminOffen"] is True
+    assert not sit["sammler"]["modus"]
+
+
+def test_einwort_terminauswahl_startet_den_sicheren_flow():
+    """Auch die Antwort auf die Auswahl darf wieder nur ein Wort sein."""
+    faelle = [
+        ("Neu", "buchen", "schon"),
+        ("Verschieben", "verschieben", "nachname"),
+        ("Absage", "absagen", "nachname"),
+    ]
+    hg_alt = agent.flow.hintergrund.anstossen
+    chat_alt = agent.llm.chat
+    stream_alt = agent.llm.chat_stream
+
+    def niemals_llm(*_a, **_k):
+        raise AssertionError("Einwort-Auswahl muss deterministisch bleiben")
+
+    try:
+        agent.flow.hintergrund.anstossen = lambda _sit: None
+        agent.llm.chat = niemals_llm
+        agent.llm.chat_stream = niemals_llm
+        for antwortwort, modus, antwortanker in faelle:
+            sit = _sit()
+            agent.user_turn(sit, "Termin")
+            antwort = agent.user_turn(sit, antwortwort)
+            assert sit["sammler"]["modus"] == modus, antwortwort
+            assert antwortanker in antwort["text"].lower(), antwortwort
+            assert "einwortTerminOffen" not in sit
+    finally:
+        agent.flow.hintergrund.anstossen = hg_alt
+        agent.llm.chat = chat_alt
+        agent.llm.chat_stream = stream_alt
+
+
+def test_mitarbeiter_einwort_bleibt_deterministisch():
+    sit = _sit()
+
+    def niemals_llm(*_a, **_k):
+        raise AssertionError("Mitarbeiter muss der sichere Weiterleitungsweg sein")
+
+    chat_alt = agent.llm.chat
+    stream_alt = agent.llm.chat_stream
+    try:
+        agent.llm.chat = niemals_llm
+        agent.llm.chat_stream = niemals_llm
+        antwort = agent.user_turn(sit, "Mitarbeiter")
+    finally:
+        agent.llm.chat = chat_alt
+        agent.llm.chat_stream = stream_alt
+
+    assert "Telefonassistentin" in antwort["text"]
+    assert "Worum geht es" in antwort["text"]
+    assert sit["weiterleiten"]["frage"] == "anliegen"
+
+
+def test_mitarbeiter_darf_offene_termin_klaerung_ueberstimmen():
+    sit = _sit()
+    agent.user_turn(sit, "Termin")
+    antwort = agent.user_turn(sit, "Mitarbeiter")
+    assert "Telefonassistentin" in antwort["text"]
+    assert sit["weiterleiten"]["frage"] == "anliegen"
+    assert "einwortTerminOffen" not in sit
+
+
+def test_unklares_wort_wird_gespiegelt_danach_konkrete_auswahl():
+    sit = _sit()
+    env_alt = os.environ.get("INTENT_NACHZUG")
+    try:
+        os.environ["INTENT_NACHZUG"] = "0"
+        erste = agent.user_turn(sit, "Füsebte")
+        zweite = agent.user_turn(sit, "Dornenze")
+        dritte = agent.user_turn(sit, "Brommel")
+    finally:
+        if env_alt is None:
+            os.environ.pop("INTENT_NACHZUG", None)
+        else:
+            os.environ["INTENT_NACHZUG"] = env_alt
+
+    assert "Füsebte" in erste["text"]
+    assert "Was meinen Sie damit?" in erste["text"]
+    assert "Meinen Sie vielleicht etwas anderes?" in erste["text"]
+    assert "Dornenze" in zweite["text"]
+    assert dritte["text"] == gespraech.GANZSATZ_ANTWORT
+    assert "Füsebte" not in zweite["text"]
+    assert sit["ganzsatzHinweisGegeben"] is True
+
+
+def test_einwort_klaerung_greift_nie_in_offene_formularfrage():
+    sit = _sit()
+    s = sit["sammler"]
+    s.update({"modus": "buchen", "phase": "", "frage": "nachname"})
+    arbeits_text, frage = agent._einwort_termin_vorbereiten(sit, "Termin")
+    assert arbeits_text == "Termin"
+    assert frage == ""
+    assert "einwortTerminOffen" not in sit
+
+
 def test_zweite_unklare_namensantwort_zieht_aus_zustandsluecke_zurueck():
     """Wortgleicher Live-Super-GAU: freie Namensfrage darf nie endlos loopen."""
     sit = _sit()
@@ -202,7 +319,8 @@ def test_zweite_unklare_namensantwort_zieht_aus_zustandsluecke_zurueck():
             os.environ.pop("INTENT_NACHZUG", None)
         else:
             os.environ["INTENT_NACHZUG"] = env_alt
-    assert z1["text"] == agent.gespraech.UNKLAR_ANTWORT
+    assert "Hrisovalanis Charalampopoulos" in z1["text"]
+    assert "Was meinen Sie damit?" in z1["text"]
     assert "schon einmal" in z2["text"]
     assert "Ihr Sohn" in z2["text"]
     assert s["modus"] == "buchen"

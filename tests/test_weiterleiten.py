@@ -336,6 +336,15 @@ def test_mensch_ohne_arzt_fragt_nach_dem_anliegen():
     assert "Ärzte" not in z["text"]
 
 
+def test_allgemeine_personal_stichworte_bekommen_ueberlastungs_erklaerung():
+    for text in ("Rezeption", "Mitarbeiter", "Anmeldung", "Mensch", "Person"):
+        z = flow.zug(_sit(), text)
+        assert z and "medizinische Versorgung" in z["text"], text
+        assert "KI-Assistenz" in z["text"]
+        assert "jedem Anruf" in z["text"]
+        assert not z.get("transfer")
+
+
 def test_erneutes_bestehen_ohne_rollenziel_bietet_rueckruf_an():
     sit = _sit()
     events: list[str] = []
@@ -368,7 +377,7 @@ def test_thaler_personalwunsch_nach_genanntem_anliegen_startet_nicht_von_vorn():
     assert sit["weiterleiten"]["frage"] == "rueckruf"
 
 
-def test_erneutes_bestehen_verbindet_nur_exaktes_rollenziel():
+def test_erneutes_bestehen_verbindet_auch_mit_rollenziel_nicht_direkt():
     sit = _sit()
     sit["tenant"] = dict(sit["tenant"])
     sit["tenant"]["weiterleitungen"] = [
@@ -378,8 +387,8 @@ def test_erneutes_bestehen_verbindet_nur_exaktes_rollenziel():
     events: list[str] = []
     flow.zug(sit, "Ich möchte jemanden vom Empfang sprechen.", events.append)
     z = flow.zug(sit, "Ich bestehe auf dem Empfang.", events.append)
-    assert z and z.get("transfer", {}).get("nummer") == "+49212222222"
-    assert z.get("hangup") and weiterleiten.JINGLE_EVENT in events
+    assert z and "Rückrufwunsch" in z["text"]
+    assert not z.get("transfer") and weiterleiten.JINGLE_EVENT not in events
 
 
 def test_rueckruf_ja_uebergibt_an_sicheren_notizfluss():

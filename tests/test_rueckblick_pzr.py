@@ -173,17 +173,18 @@ def test_pzr_faellig_grenzen():
     s["grund"] = "akute Beschwerden/Notfall"
     assert not gehirn.pzr_faellig(s)
     s["grund"] = "Kontrolluntersuchung"
-    # Chef 29.08.2026: Vortermin gefunden => anbieten — auch wenn der letzte
-    # Besuch erst kurz zurueckliegt (live: sechs Wochen, kein Angebot kam).
+    # Jeder vergebene Termin bekommt das Angebot — auch bei frischem
+    # Bestandstermin.
     s["letzterBesuch"] = _vor_tagen(60)
     assert gehirn.pzr_faellig(s)
-    # ... AUSSER die letzte Behandlung war selbst die Reinigung und ist frisch.
+    # Ausnahme: die letzte Behandlung war selbst eine frische Reinigung.
     s["letzterGrund"] = "PZR 60 Min."
     assert not gehirn.pzr_faellig(s)
     s["letzterBesuch"] = _vor_tagen(400)  # alte Reinigung: wieder anbieten
     assert gehirn.pzr_faellig(s)
-    # Chef 08.09.2026: jeder Termin — auch ohne Kartei-Treffer.
+    # Jeder Termin — auch ohne Kartei-Treffer.
     s["bekannt"] = False
+    s["letzterBesuch"] = ""
     s["letzterGrund"] = "IMP OP Implantation"
     assert gehirn.pzr_faellig(s)
     assert gehirn.pzr_noch_fragen(s)
@@ -281,7 +282,9 @@ def test_zug_erstes_mal_dann_besuch_2023_greift_vortermin():
             "bekommen und möchte nun die Implantatkronen anfertigen lassen."
         ))
         assert s["warSchonMal"] is True and s["besuchErzaehlt"]
-        assert r3 and ("letzter Besuch" in r3["text"] or "Zahnreinigung" in r3["text"]), r3
+        assert r3 and "Nachname" in r3["text"], r3
+        r4 = flow.zug(sit, "Peter Berger.")
+        assert r4 and ("letzter Besuch" in r4["text"] or "Zahnreinigung" in r4["text"]), r4
         assert s["frage"] in {"rueckblick", "pzr"}
     finally:
         flow.hintergrund.anstossen = echt_anstossen
@@ -291,12 +294,13 @@ def test_zug_rueckblick_dann_pzr_dann_zwischenfrage():
     sit = _sit()
     _bestand(sit, 900, "IMP OP Implantation")
     s = gehirn.sammler(sit)
+    s["arzt"] = {"typ": "letzter", "calendarId": "kal-a", "calendarName": "Dr. Petsas"}
     echt_anstossen = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
-        # Ernte-Zug (Wunsch) -> statt der naechsten Pflichtfrage kommt der
-        # Rueckblick auf den letzten Besuch.
-        r = flow.zug(sit, "Am liebsten Dienstag vormittag.")
+        # Sind die primären Daten bereits vorhanden, kommt der Rückblick vor
+        # dem nächsten offenen Schritt.
+        r = flow.zug(sit, "Ja, genau.")
         assert r and "letzter Besuch" in r["text"] and "verheilt" in r["text"]
         assert s["frage"] == "rueckblick" and s["rueckblick"] == "gefragt"
 
@@ -306,11 +310,15 @@ def test_zug_rueckblick_dann_pzr_dann_zwischenfrage():
         assert "Zahnreinigung" in r2["text"]
         assert s["frage"] == "pzr" and s["pzr"] == "gefragt" and s["rueckblick"] == "fertig"
 
-        # Zwischenfrage auf die PZR-Frage: LLM antwortet (None), Frage bleibt offen.
+        # Preisfrage: deterministische Praxisantwort, danach bleibt die
+        # PZR-Entscheidung über die Kassen-Nachfrage offen.
         r3 = flow.zug(sit, "Was kostet denn so eine Zahnreinigung?")
-        assert r3 is None and s["frage"] == "pzr"
+        assert r3 and "einhundertzwanzig Euro" in r3["text"]
+        assert s["frage"] == "pzr_kasse"
 
-        # Das Ja danach zaehlt — Quittung + naechste Pflichtfrage.
+        # Kasse beantworten, dann das Ja zur eigentlichen PZR.
+        flow.zug(sit, "Techniker Krankenkasse.")
+        s["frage"] = "pzr"
         r4 = flow.zug(sit, "Ja, machen Sie das gerne.")
         assert r4 and "nehme ich mit auf" in r4["text"]
         assert s["pzr"] == "ja"
@@ -322,10 +330,11 @@ def test_zug_rueckblick_erzaehlung_geht_ans_llm():
     sit = _sit()
     _bestand(sit, 900, "ZE Eingliederung")
     s = gehirn.sammler(sit)
+    s["arzt"] = {"typ": "letzter", "calendarId": "kal-a", "calendarName": "Dr. Petsas"}
     echt_anstossen = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
-        r = flow.zug(sit, "Am liebsten Dienstag vormittag.")
+        r = flow.zug(sit, "Ja, genau.")
         assert r and "zufrieden" in r["text"] and s["frage"] == "rueckblick"
         # Negative/erzaehlende Antwort: kein deterministischer Trost — das LLM
         # uebernimmt (Talk-Schicht), der Rueckblick gilt als besprochen.
@@ -369,7 +378,8 @@ def test_petsas_so_eintragen_bitte_schreibt_pzr_notiz():
         "ok": True, "booked": True, "slotIso": slot_iso,
         "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         assert gehirn.ist_pzr_zusage("So eintragen bitte")
         assert gehirn.ist_pzr_zusage("Nimm sie mit.")
@@ -396,7 +406,8 @@ def test_buchen_traegt_plus_pzr_notiz():
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
         "ok": True, "booked": True, "slotIso": slot_iso, "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         r = flow._buchen(sit)
     finally:
@@ -411,7 +422,7 @@ def test_kartei_fueller_satz_nur_mit_fakt_ohne_frage():
     satz = gehirn.kartei_fueller_satz(s)
     assert satz
     assert "?" not in satz
-    assert "Moment" in satz
+    assert "schaue direkt" in satz
     assert "Kontrolle" in satz
     s["grundWortlaut"] = "starke Schmerzen"
     assert gehirn.kartei_fueller_satz(s) == ""
@@ -449,7 +460,8 @@ def test_buchen_traegt_rueckblick_antwort_ins_popup():
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
         "ok": True, "booked": True, "slotIso": slot_iso, "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         flow._buchen(sit)
     finally:

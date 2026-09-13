@@ -30,7 +30,7 @@ Bianca-Inbound (40101 / `extensions_bianca.conf`) bleibt parallel unberührt.
 
 | URL | Was dahinter steckt |
 |-----|---------------------|
-| `https://lisa-live.pickadoc-tunnel.com` | **Neuer** Named Tunnel → pickadoc1 Lisa (`outbound:true`, LLM `100.82.122.62`) |
+| `https://bianca-and-lisa.pickadoc-tunnel.com` | Named Tunnel → pickadoc1 Bianca & Lisa (`outbound:true`, LLM `100.82.122.62`) |
 | `https://lisa.pickadoc-tunnel.com` | **Alter** Tunnel `pickadoc-mas` → andere Lisa (`100.77.30.98`) — **nicht umbiegen** |
 
 - Connector: Compose-Service `lisa-public` (`network_mode: host`), Token in Server-`.env`: `CLOUDFLARE_TELEFONKI_TOKEN`
@@ -45,7 +45,7 @@ Services: `startoutboundcall`, `callcampaignpatients`, `runcampaignrtest`
 ```powershell
 gcloud run services update startoutboundcall `
   --project=docgenda --region=europe-west3 `
-  --update-env-vars="OUTBOUND_PROVIDER=lisa,LISA_OUTBOUND_BASE_URL=https://lisa-live.pickadoc-tunnel.com,LISA_OUTBOUND_API_TOKEN=lisa-out-dev-token"
+  --update-env-vars="OUTBOUND_PROVIDER=lisa,LISA_OUTBOUND_BASE_URL=https://bianca-and-lisa.pickadoc-tunnel.com,LISA_OUTBOUND_API_TOKEN=lisa-out-dev-token"
 ```
 
 Dasselbe für `callcampaignpatients` und `runcampaignrtest`.
@@ -58,7 +58,7 @@ Dasselbe für `callcampaignpatients` und `runcampaignrtest`.
 
 ### Abnahme / Logs
 
-1. `curl.exe -sf https://lisa-live.pickadoc-tunnel.com/health` → `"outbound":true`, `llmBase` mit `100.82.122.62`
+1. `curl.exe -sf https://bianca-and-lisa.pickadoc-tunnel.com/health` → `"outbound":true`, `llmBase` mit `100.82.122.62`
 2. Portal: „KI Recall“
 3. pickadoc1: `docker logs -f telefonki-lisa-1` (`lisa-outbound dial`) und `telefonki-sipbridge-lisa-1` (`bruecke-start mode=outbound`)
 

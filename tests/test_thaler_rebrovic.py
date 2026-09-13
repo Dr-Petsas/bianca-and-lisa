@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
-from bianca import agent, flow, gehirn, weiterleiten
+from datetime import datetime, timedelta
+
+from bianca import agent, flow, gehirn, prompt, weiterleiten
 from kern import gespraech
 from kern.tenants import laden
 
@@ -20,6 +22,7 @@ def _sit_thaler() -> dict:
         "clientId": "thaler-test",
         "locationId": "loc",
         "praxisName": "Zahnarztpraxis Eva Thaler",
+        "mitarbeiterAnbieten": False,
         "defaultCalendarId": EVA,
         "calendars": [
             {"id": EVA, "name": "Dr. Eva Thaler"},
@@ -36,10 +39,15 @@ def _sit_thaler() -> dict:
 
 def _sit_gebucht_thaler() -> dict:
     sit = _sit_thaler()
+    slot_iso = (
+        datetime.now(gehirn.TZ).replace(
+            hour=15, minute=30, second=0, microsecond=0,
+        ) + timedelta(days=1)
+    ).isoformat(timespec="seconds")
     sit["lastBook"] = {
         "booked": True,
         "appointmentId": "z1lItlCGCkr3yk9M6QLe",
-        "slotIso": "2026-09-10T15:30:00+02:00",
+        "slotIso": slot_iso,
         "spoken": "Donnerstag um fünfzehn Uhr dreißig bei Frau Thaler",
     }
     sit["booking"] = {"appointmentId": "z1lItlCGCkr3yk9M6QLe"}
@@ -54,7 +62,7 @@ def _sit_gebucht_thaler() -> dict:
         "nachname": "Rebrovic",
         "arzt": {"typ": "genannt", "calendarId": EVA,
                  "calendarName": "Dr. Eva Thaler"},
-        "slotIso": "2026-09-10T15:30:00+02:00",
+        "slotIso": slot_iso,
     })
     return sit
 
@@ -136,6 +144,24 @@ def test_mitarbeiter_thaler_kein_personalfrei():
     assert "personalfrei" not in z["text"]
     assert "KI-geführt" not in z["text"]
     assert weiterleiten.WAHRHEIT in z["text"]
+
+
+def test_thaler_bietet_bei_unklarheit_keinen_mitarbeiter_an():
+    sit = _sit_thaler()
+    text = gespraech.unklar_auswahl_antwort(sit["tenant"])
+    assert text == gespraech.UNKLAR_AUSWAHL_OHNE_MITARBEITER
+    assert "Mitarbeiter" not in text
+
+
+def test_thaler_prompt_verbietet_proaktives_mitarbeiterangebot():
+    sit = _sit_thaler()
+    text = prompt.system_prompt(
+        praxis="Thaler Zahnmedizin",
+        behandler="Eva Thaler",
+        sit=sit,
+    )
+    assert "Biete niemals von dir aus an, mit einem Mitarbeiter" in text
+    assert "keine Erreichbarkeit und keine Warteschleife" in text
 
 
 def test_gebucht_perfekt_danke_kein_slot():

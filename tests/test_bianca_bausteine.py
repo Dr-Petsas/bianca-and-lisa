@@ -4,6 +4,7 @@ Läuft ohne Netz: Kartei-/Slot-Suche wird gestummt, der Mandant kommt aus
 tenants/meddent.json (lokale Datei).
 """
 
+from datetime import datetime, timedelta
 import re
 
 from bianca import buchstaben, flow, gehirn, telefon
@@ -503,6 +504,10 @@ def test_absage_stallone_fallback_trotz_fremder_anrufernummer():
     aufrufe: list[tuple[str, dict]] = []
     storniert: dict[str, str] = {}
 
+    heute_um_zwoelf = datetime.now(gehirn.TZ).replace(
+        hour=12, minute=0, second=0, microsecond=0,
+    ).isoformat(timespec="minutes")
+
     def _cf(route, body, timeout=None):
         aufrufe.append((route, dict(body)))
         dispatch = {"route": route, "request": dict(body), "httpStatus": 200}
@@ -527,7 +532,7 @@ def test_absage_stallone_fallback_trotz_fremder_anrufernummer():
                 "status": "success",
                 "nextAppointment": {
                     "appointmentId": "1t4ni9bi5A3faIAGxrAq",
-                    "startIso": "2026-09-10T12:00",
+                    "startIso": heute_um_zwoelf,
                     "calendarId": "zex5bmv5jfIHWVW6zHbg",
                     "calendarName": "Dr. Petsas",
                     "doctorName": "Dr. Michael Petsas",
@@ -738,13 +743,20 @@ def test_verschieben_fluss_komplett():
     """Verschieben: GLEICHE Prozedur (W-NACHNAME: Nachname -> suchen),
     dann Bestaetigung des Fundes und die Neu-Wunsch-Strecke."""
     echt_find = verwalten.kal.find_patient_appointments
-    echt_slots = verwalten.kal.find_slots
+    echt_slots = verwalten.kal.find_slots_behandler
     echt_move = verwalten.kal.move_appointment
     aufrufe = {}
+    morgen = datetime.now(gehirn.TZ).replace(
+        hour=10, minute=0, second=0, microsecond=0,
+    ) + timedelta(days=1)
     verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
-    verwalten.kal.find_slots = lambda t, c, **k: {
+    verwalten.kal.find_slots_behandler = lambda t, c, **k: {
         "ok": True,
-        "slots": ["2026-09-03T10:00", "2026-09-08T14:30", "2026-09-09T15:00"],
+        "slots": [
+            morgen.isoformat(timespec="minutes"),
+            (morgen + timedelta(days=1, hours=4, minutes=30)).isoformat(timespec="minutes"),
+            (morgen + timedelta(days=2, hours=5)).isoformat(timespec="minutes"),
+        ],
         "doctorName": "Dr. Petsas",
     }
     def _move(t, ctx, **k):
@@ -776,7 +788,7 @@ def test_verschieben_fluss_komplett():
         assert aufrufe["iso"] and aufrufe["iso"] != "2026-09-03T10:00"
     finally:
         verwalten.kal.find_patient_appointments = echt_find
-        verwalten.kal.find_slots = echt_slots
+        verwalten.kal.find_slots_behandler = echt_slots
         verwalten.kal.move_appointment = echt_move
 
 
@@ -784,11 +796,18 @@ def test_verschieben_alt_neu_trennung():
     """'Termin AM Donnerstag AUF Freitag verschieben': das am-Stueck ist der
     Bestandstermin (Hinweis), das auf-Stueck bleibt der Neu-Wunsch."""
     echt_find = verwalten.kal.find_patient_appointments
-    echt_slots = verwalten.kal.find_slots
+    echt_slots = verwalten.kal.find_slots_behandler
+    heute = datetime.now(gehirn.TZ).replace(hour=9, minute=30, second=0, microsecond=0)
+    tage_bis_freitag = (4 - heute.weekday()) % 7 or 7
+    freitag = heute + timedelta(days=tage_bis_freitag)
     verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
-    verwalten.kal.find_slots = lambda t, c, **k: {
+    verwalten.kal.find_slots_behandler = lambda t, c, **k: {
         "ok": True,
-        "slots": ["2026-09-08T14:30", "2026-09-11T09:30", "2026-09-11T15:00"],
+        "slots": [
+            (freitag - timedelta(days=1) + timedelta(hours=5)).isoformat(timespec="minutes"),
+            freitag.isoformat(timespec="minutes"),
+            (freitag + timedelta(hours=5, minutes=30)).isoformat(timespec="minutes"),
+        ],
         "doctorName": "Dr. Petsas",
     }
     try:
@@ -800,12 +819,12 @@ def test_verschieben_alt_neu_trennung():
         assert (s["wunsch"] or {}).get("weekday") == 5              # neu: Freitag
 
         z2 = flow.zug(sit, "Martin Berger.")
-        # Wunsch liegt vor -> direkt Angebot, gefiltert auf Freitag (11.09.).
+        # Wunsch liegt vor -> direkt Angebot, gefiltert auf den nächsten Freitag.
         assert z2 and sit.get("offered"), z2
-        assert all(o["iso"].startswith("2026-09-11") for o in sit["offered"])
+        assert all(o["iso"].startswith(freitag.date().isoformat()) for o in sit["offered"])
     finally:
         verwalten.kal.find_patient_appointments = echt_find
-        verwalten.kal.find_slots = echt_slots
+        verwalten.kal.find_slots_behandler = echt_slots
 
 
 def test_verwaltung_kein_termin_gefunden():
@@ -1650,7 +1669,35 @@ def test_telefon_alt_loeschen_ruft_update_und_traegt_neue_nummer_ein():
     assert rufe == [("Uz5O", "01776004600")]
     assert s["telefonAlt"] == "neu"
     assert s["aktePhone"] == "01776004600"
+    assert sit["telefonUpdateAlt"] == "0123456789"
     assert res and res["text"].startswith("Erledigt")
+
+
+def test_telefon_update_schreibt_geforderten_bianca_vermerk_an_termin():
+    sit = _konflikt_sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "telefonAlt": "neu", "aktePhone": "01776004600",
+        "phase": "bestaetigen", "frage": "bestaetigung",
+        "slotIso": "2026-09-11T09:15",
+    })
+    sit["telefonUpdateAlt"] = "0123456789"
+    echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
+    notizen: list[str] = []
+    flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
+        "ok": True, "booked": True, "slotIso": slot_iso,
+        "appointmentId": "e7ho", "spoken": "Der Termin ist fest eingetragen.",
+    }
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit=None, *, note="":
+        notizen.append(note) or {"ok": True}
+    )
+    try:
+        flow._buchen(sit)
+    finally:
+        flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
+    assert notizen
+    assert "Alte Nummer 0123456789 aktualisiert //Bianca" in notizen[-1]
 
 
 def test_telefon_alt_sms_an_die_alte_nummer_ohne_update():
@@ -2807,11 +2854,10 @@ def _sit_mit_anrufer() -> dict:
     return sit
 
 
-def test_anrufer_check_buchung_ja_uebernimmt_name_und_nummer():
-    """Chef 31.08.2026: 'den namen und die telefonnummer bei der buchung …
-    vorzulesen als kontrolle anstatt das nochmal zu erfragen.' Ein Ja
-    uebernimmt BEIDES — danach fragt der Fluss NIE wieder nach Name,
-    Buchstabierung oder Handynummer."""
+def test_anrufer_check_buchung_trennt_identitaet_terminempfaenger_und_sms():
+    """Chef 10.09.2026: Name nur initial bestätigen, danach Pronomen. Die
+    hinterlegte Nummer wird separat als SMS-Ziel vorgelesen und erst nach
+    einem klaren Ja verwendet."""
     from bianca import agent as bianca_agent
 
     echt_anstossen = flow.hintergrund.anstossen
@@ -2835,17 +2881,76 @@ def test_anrufer_check_buchung_ja_uebernimmt_name_und_nummer():
         assert s["warSchonMal"] is True  # steht in der Kartei => Bestand
         assert s["vorname"] == "Julia" and s["nachname"] == "Berger"
         assert s["patientId"] == "pat-7" and s["bekannt"] and s["buchstabiert"]
-        assert s["telefonOk"] and s["telefon"] == "015253904756"
+        assert not s["telefonOk"] and not s["telefon"]
+        assert s["telefonBekannt"] == "015253904756"
         assert s["geschlecht"] == "f" and s["geschlechtQuelle"] == "akte"
-        assert z2 and "Danke, Julia Berger" in z2["text"]
+        assert z2 and "Danke." in z2["text"]
+        assert "Julia Berger" not in z2["text"]
+        assert "Der Termin ist für Sie selbst, richtig?" in z2["text"]
+        assert s["frage"] == "fuer_wen_check"
+
+        z3 = flow.zug(sit, "Ja.")
+        assert z3 and "Julia Berger" not in z3["text"]
         assert s["frage"] == "arzt"  # weiter im Bestand-Fluss
-        # Name/Buchstabieren/Telefon kommen NIE wieder:
+
+        # Nach den Inhaltsfeldern kommt die hinterlegte Nummer als Kontrolle.
         s["arzt"] = {"typ": "genannt", "calendarId": "cal-1", "calendarName": "Dr. Petsas"}
         s["grund"] = "Kontrolle"
         s["wunsch"] = {}
+        fid, frage = gehirn.naechste_frage(sit)
+        assert fid == "telefon_check"
+        assert "Bestätigungs-SMS" in frage
+        assert telefon.sprechbar("015253904756") in frage
+        s["frage"] = fid
+        gehirn.einsammeln(sit, "Ja.")
+        assert s["telefonOk"] and s["telefon"] == "015253904756"
+
         fid, _ = gehirn.naechste_frage(sit)
         assert fid not in {"name", "nachname", "vorname", "buchstabieren",
                            "telefon", "telefon_check", "anrufer_check"}
+    finally:
+        flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_erkannt_michael_petsas_wird_nach_hallo_nur_noch_mit_sie_angesprochen():
+    """Live 10.09.2026: Nach „Ah, Herr Petsas“ den Namen nicht drei- bis
+    viermal wiederholen; auch gleicher Patienten-/Behandlername wird
+    pronomenbasiert formuliert."""
+    sit = _sit_mit_anrufer()
+    sit["anrufer"].update({
+        "vorname": "Michael", "nachname": "Petsas",
+        "geschlecht": "male", "telefon": "+491776004600",
+    })
+    sit["anruferHalloGesagt"] = True  # „Ah, Herr Petsas“ lief bereits.
+    sit["anruferKartei"] = {
+        "letzterBesuch": "2026-03-01T09:00:00", "letzterGrund": "Kontrolle",
+        "calendarId": "cal-petsas", "calendarName": "Dr. Michael Petsas",
+        "doctorName": "Dr. Michael Petsas",
+    }
+    echt_anstossen = flow.hintergrund.anstossen
+    flow.hintergrund.anstossen = lambda _sit: None
+    try:
+        z1 = flow.zug(sit, "Ich hätte gern einen Termin.")
+        assert z1 and "Petsas" not in z1["text"]
+        assert "richtig erkannt" in z1["text"]
+
+        z2 = flow.zug(sit, "Ja.")
+        assert z2 and "für Sie selbst" in z2["text"]
+        assert "Petsas" not in z2["text"]
+
+        z3 = flow.zug(sit, "Ja.")
+        s = gehirn.sammler(sit)
+        assert z3 and "selben Behandler" not in z3["text"]
+        assert (s.get("arzt") or {}).get("calendarId") == "cal-petsas"
+        s.update({
+            "arzt": {"calendarId": "cal-petsas",
+                     "calendarName": "Dr. Michael Petsas"},
+            "motivName": "KCH Kontrolluntersuchung",
+            "slotIso": "2026-09-11T11:00:00+02:00",
+        })
+        rb = flow._readback(sit)["text"]
+        assert "für Sie" in rb
+        assert "für Herrn Petsas" not in rb
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 
@@ -2888,12 +2993,13 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
         assert s["anruferCheck"] == ""
         assert not s["nachname"]
         assert s["frage"] == "anrufer_check"
-        assert z and "selbst" in z["text"]
+        assert z and "richtig erkannt" in z["text"]
         assert "Ich bin die Neue!" not in z["text"]
         assert "Bianca" not in z["text"]
         z2 = flow.zug(sit, "Ja, genau.")
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
-        assert z2 and "Danke, Julia Berger" in z2["text"]
+        assert z2 and "Der Termin ist für Sie selbst" in z2["text"]
+        assert "Julia Berger" not in z2["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 
@@ -2935,6 +3041,7 @@ def test_anrufer_hallo_wiederanrufer_ohne_kartei():
     sit = _sit()
     sit["callerPhone"] = "+4915253904756"
     sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+    sit["halloVariante"] = 1  # Feststellungsvariante mit Zeitbezug
     hallo = gehirn.anrufer_hallo(sit)
     assert "Ich bin die Neue!" not in hallo
     assert "gestern" in hallo
@@ -3022,14 +3129,18 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
 
         z2 = bianca_agent.user_turn(sit, "Ja, gut.", vorab=hits.append)
         assert z2["text"].startswith("Das freut mich.")
-        assert "Der Termin ist für Sie selbst, richtig?" in z2["text"]
+        assert "Habe ich Sie richtig erkannt?" in z2["text"]
         assert not sit.get("anruferHalloFrageOffen")
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
         assert gehirn.sammler(sit)["anruferCheck"] == ""
-        assert hits == ["Ah, Frau Berger, wie geht es Ihnen?"]
+        assert hits == [
+            "Ah, Frau Berger, wie geht es Ihnen?",
+            "Das freut mich.",
+        ]
         z2b = bianca_agent.user_turn(sit, "Ja, genau.", vorab=hits.append)
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
-        assert z2b and "Danke, Julia Berger" in z2b["text"]
+        assert z2b and "Der Termin ist für Sie selbst, richtig?" in z2b["text"]
+        assert "Julia Berger" not in z2b["text"]
 
         # Ohne Fragezeichen gibt es keinen Extrazug.
         sit2 = _sit_mit_anrufer()
@@ -3040,7 +3151,7 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
             sit2, "Ich hätte gern einen Termin.", vorab=hits2.append,
         )
         assert hits2 and "?" not in hits2[0]
-        assert "Der Termin ist für Sie selbst, richtig?" in z3["text"]
+        assert "Habe ich Sie richtig erkannt?" in z3["text"]
         assert not sit2.get("anruferHalloFrageOffen")
 
         # Ohne Vorab-Kanal darf die soziale Frage ebenfalls nie vor einer
@@ -3048,11 +3159,101 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
         sit3 = _sit_mit_anrufer()
         sit3["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
         sit3["halloVariante"] = 0
-        direkt = gehirn.anrufer_check_frage(sit3, selbst=True)
+        direkt = gehirn.anrufer_check_frage(sit3)
         assert "wie geht" not in direkt.lower()
         assert direkt.count("?") == 1
+
+        # Live 10.09.: Auf die soziale Frage kam keine Wohlseinsantwort,
+        # sondern „Ich bin nicht Phoebe Rose Kellner.“. Das ist bereits eine
+        # eindeutige Identitäts-Ablehnung und darf nicht noch einmal mit
+        # „Habe ich Sie richtig erkannt?“ beantwortet werden.
+        sit4 = _sit_mit_anrufer()
+        sit4["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+        sit4["halloVariante"] = 0
+        z4 = bianca_agent.user_turn(
+            sit4, "Ich hätte gern einen Termin.", vorab=lambda _text: None,
+        )
+        assert "wie geht es ihnen" in z4["text"].lower()
+        z5 = bianca_agent.user_turn(
+            sit4, "Ich bin nicht Julia Berger.", vorab=lambda _text: None,
+        )
+        assert gehirn.sammler(sit4)["anruferCheck"] == "nein"
+        assert "Daten frisch" in z5["text"]
+        assert "Waren Sie denn schon einmal" in z5["text"]
+        assert "richtig erkannt" not in z5["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
+
+
+def test_anrufer_hallo_setzt_geparkten_dokumentauftrag_nach_wohlsein_fort(
+    monkeypatch,
+):
+    """Live MedDent 11.09.: Röntgenbild-Wunsch darf nach „Danke gut“ nicht
+    hinter dem Icebreaker verschwinden — auch wenn flow.zug ihn nicht kennt."""
+    from bianca import agent as bianca_agent
+    from kern import hirn as session_hirn
+
+    sit = _sit_mit_anrufer()
+    session_hirn.init(sit)
+    gehirn.sammler(sit)
+    sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+    sit["anruferKartei"] = {
+        "letzterBesuch": "2026-09-08T09:00:00",
+        "calendarName": "Doktor Petsas", "doctorName": "Petsas",
+    }
+    sit["halloVariante"] = 0
+    gesehen: list[str] = []
+    vorab: list[str] = []
+
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(bianca_agent.tasks, "zug", lambda *_a, **_k: None)
+    monkeypatch.setattr(bianca_agent.intent, "enabled", lambda: False)
+    monkeypatch.setattr(
+        bianca_agent.task_router, "braucht_auswahl", lambda _sit: False,
+    )
+
+    def antwort(messages, _tools=None, **_kwargs):
+        gesehen.append(messages[-1]["content"])
+        return {
+            "ok": True,
+            "text": "Für das Röntgenbild kläre ich jetzt mit Ihnen den Versandweg.",
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(bianca_agent.llm, "chat", antwort)
+
+    z1 = bianca_agent.user_turn(
+        sit,
+        "Hallo, ich hätte gerne ein Röntgenbild zugeschickt bekommen.",
+        vorab=vorab.append,
+    )
+    assert z1["text"] == "Ah, Frau Berger, wie geht es Ihnen?"
+    assert sit.get("anruferHalloFrageOffen")
+
+    z2 = bianca_agent.user_turn(sit, "Danke gut.", vorab=vorab.append)
+    assert z2["text"].startswith("Das freut mich.")
+    assert "Röntgenbild" in z2["text"]
+    assert gesehen[-1:] == [
+        "Hallo, ich hätte gerne ein Röntgenbild zugeschickt bekommen.",
+    ]
+    assert vorab[-1] == "Das freut mich."
+    assert not sit.get("anruferHalloFrageOffen")
+
+
+def test_anrufer_hallo_ohne_geparkten_auftrag_fragt_nach_anliegen():
+    """Ohne verwertbaren Erstsatz nie nach der Wohlseinsantwort schweigen."""
+    from bianca import agent as bianca_agent
+
+    sit = _sit_mit_anrufer()
+    sit["messages"].append({
+        "role": "assistant",
+        "content": "Zahnärzte im Medical Center, guten Tag! Was kann ich für Sie tun?",
+    })
+    sit["anruferHalloFrageOffen"] = True
+    sit["anruferHalloOffenerText"] = ""
+
+    aus = bianca_agent.user_turn(sit, "Danke gut.")
+    assert aus["text"] == "Das freut mich. Wie kann ich Ihnen helfen?"
 
 
 def test_anrufer_check_nach_hallo_ohne_eigenen_namen():
@@ -3135,7 +3336,7 @@ def test_anrufer_hallo_nur_einmal_auch_ohne_checkfrage():
     assert not gehirn.anrufer_hallo_jetzt(sit, "Morgen früh.")
 
 
-def test_anrufer_kartei_kommt_nach_dem_hallo():
+def test_anrufer_kartei_setzt_behandler_nach_selbstbestaetigung():
     """Letzter Behandler fliesst erst NACH dem schnellen Hallo ein.
 
     Chef 08.09.2026: Fast-Erkennung = Name aus der Rufnummer. Letzter
@@ -3166,23 +3367,22 @@ def test_anrufer_kartei_kommt_nach_dem_hallo():
         flow.hintergrund.anstossen = lambda s: None
         try:
             flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
-            z = flow.zug(sit, "Ja, genau.")
+            z_ident = flow.zug(sit, "Ja, genau.")
+            assert z_ident and "für Sie selbst" in z_ident["text"]
+            z = flow.zug(sit, "Ja.")
             s = gehirn.sammler(sit)
             assert s["anruferCheck"] == "ja"
             assert s["letzterBesuch"].startswith("2026-03-01")
-            assert s["frage"] == "arzt_check"
-            assert z and "Petsas" in z["text"] and "richtig" in z["text"]
-            z2 = flow.zug(sit, "Ja.")
-            s = gehirn.sammler(sit)
             assert (s.get("arzt") or {}).get("calendarId") == "cal-petsas"
             assert s["frage"] != "arzt_check"
+            assert z and "selben Behandler" not in z["text"]
         finally:
             flow.hintergrund.anstossen = echt_anstossen
     finally:
         hintergrund.arztmod.letzter_behandler = echt
 
 
-def test_arzt_check_nein_fragt_offen():
+def test_kartei_behandler_kann_ausdruecklich_gewechselt_werden():
     sit = _sit_mit_anrufer()
     sit["anruferKartei"] = {
         "letzterBesuch": "2026-03-01T09:00:00", "letzterGrund": "Kontrolle",
@@ -3194,12 +3394,12 @@ def test_arzt_check_nein_fragt_offen():
     try:
         flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
         flow.zug(sit, "Ja, genau.")
-        z = flow.zug(sit, "Nein.")
+        flow.zug(sit, "Ja.")
+        z = flow.zug(sit, "Nein, lieber zu Doktor Patrikis.")
         s = gehirn.sammler(sit)
-        assert s["arztCheck"] == "nein"
-        assert not (s.get("arzt") or {}).get("calendarId")
-        assert s["frage"] == "arzt"
-        assert z and "Behandler" in z["text"]
+        assert "Patrikis" in (s.get("arzt") or {}).get("calendarName", "")
+        assert (s.get("arzt") or {}).get("calendarId") != "cal-petsas"
+        assert z and "selben Behandler" not in z["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 
@@ -3213,7 +3413,20 @@ def test_anrufer_check_nein_fragt_klassisch():
     try:
         sit = _sit_mit_anrufer()
         sit["patient"] = {"id": "pat-7", "lastName": "Berger", "firstName": "Julia"}
-        sit["booking"] = {"patientId": "pat-7", "lastName": "Berger", "firstName": "Julia"}
+        sit["booking"] = {
+            "patientId": "pat-7",
+            "patientIdBound": "pat-7",
+            "patientIdFirstName": "Julia",
+            "patientIdLastName": "Berger",
+            "appointmentId": "termin-alt",
+            "lastName": "Berger",
+            "firstName": "Julia",
+            "patientName": "Julia Berger",
+            "phone": "+4915253904756",
+            "gender": "f",
+            "privateInsurance": False,
+            "visitMotiveId": "kontrolle",
+        }
         sit["upcoming"] = [{"id": "x", "label": "alt"}]
         flow.zug(sit, "Ich möchte einen Termin vereinbaren.")
         z2 = flow.zug(sit, "Nein, das bin ich nicht.")
@@ -3222,7 +3435,8 @@ def test_anrufer_check_nein_fragt_klassisch():
         assert not s["nachname"] and not s["telefonOk"] and not s["patientId"]
         assert sit.get("patient") == {}
         assert not sit.get("anrufer")
-        assert not (sit.get("booking") or {}).get("patientId")
+        booking = sit.get("booking") or {}
+        assert booking == {"visitMotiveId": "kontrolle"}
         assert sit.get("upcoming") == []
         assert z2 and "frisch auf" in z2["text"]
         assert s["frage"] == "schonmal"
@@ -3247,7 +3461,7 @@ def test_auskunft_upgrade_nachname_zu_anrufer_check():
         }
         z2 = flow.zug(sit, "Äh, Moment.")
         assert z2 and "Frau Berger" in z2["text"]
-        assert "bestehenden Termine im Kalender nachsehen" in z2["text"]
+        assert "richtig erkannt" in z2["text"]
         assert "Bianca" not in z2["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
@@ -3302,7 +3516,8 @@ def test_absage_mit_erkanntem_anrufer_sucht_direkt():
 
         z2 = flow.zug(sit, "Ja.")
         assert z2 and "wirklich absagen" in z2["text"].lower(), z2
-        assert "Frau Berger" in z2["text"]  # Kartei-Geschlecht traegt die Anrede
+        assert "Frau Berger" not in z2["text"]  # danach nur noch Pronomen
+        assert "Julia Berger" not in z2["text"]
         assert gesucht[-1].get("lastName") == "Berger"
         assert gesucht[-1].get("patientId") == "pat-7"
         assert gesucht[-1].get("phone") == "015253904756"
@@ -3323,7 +3538,7 @@ def test_absage_nach_schnellem_hallo_stellt_keine_nackte_stimmt_das_frage():
         sit["anruferHalloGesagt"] = True
         z = flow.zug(sit, "Ich möchte einen Termin absagen.")
         assert z and z["text"] != "Stimmt das so?"
-        assert "Frau Berger" in z["text"]
+        assert "hinterlegten Daten" in z["text"]
         assert "absagen möchten" in z["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
@@ -3455,7 +3670,8 @@ def test_auskunft_leert_stale_upcoming():
         sit = _sit_mit_anrufer()
         sit["upcoming"] = [{"id": "alt", "label": "gestern um zehn", "iso": "2020-01-01T10:00"}]
         z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
-        assert z1 and "Julia Berger" in z1["text"]
+        assert z1 and "Frau Berger" in z1["text"]
+        assert "richtig erkannt" in z1["text"]
         assert sit.get("upcoming") == []
     finally:
         verwalten.kal.find_patient_appointments = echt_find
@@ -3498,20 +3714,29 @@ def _buch_sit(slot_iso: str) -> dict:
     })
     sit["offered"] = [{"iso": slot_iso, "spoken": "heute um elf Uhr dreißig"}]
     sit["angebotKalender"] = {"calendarId": "cal-thaler", "calendarName": "Thaler"}
+    basis = datetime.fromisoformat(slot_iso)
     sit["slotVorrat"] = [
         slot_iso,
-        "2026-09-03T11:00:00+02:00",
-        "2026-09-03T14:00:00+02:00",
-        "2026-09-04T09:00:00+02:00",
+        (basis + timedelta(hours=1)).isoformat(timespec="seconds"),
+        (basis + timedelta(hours=4)).isoformat(timespec="seconds"),
+        (basis + timedelta(days=1, hours=-1)).isoformat(timespec="seconds"),
     ]
+    vm = gehirn.motiv_fuer_kalender(sit, "cal-thaler")
+    if vm:
+        s["motivId"] = vm.get("id") or ""
+        s["motivName"] = vm.get("name") or s["motivName"]
+    sit["vorratFuer"] = flow.hintergrund.vorrat_schluessel(sit)
     return sit
 
 
 def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
     """Live 01.09. Rebrovic: nach Ja kam 'gerade weg' ×5. Max. 2 Fails, dann
     Notiz — gescheiterte ISO nie wieder anbieten."""
-    iso1 = "2026-09-03T10:00:00+02:00"
-    iso2 = "2026-09-03T11:00:00+02:00"
+    basis = datetime.now(gehirn.TZ).replace(
+        hour=10, minute=0, second=0, microsecond=0,
+    ) + timedelta(days=1)
+    iso1 = basis.isoformat(timespec="seconds")
+    iso2 = (basis + timedelta(hours=1)).isoformat(timespec="seconds")
     sit = _buch_sit(iso1)
     notizen: list = []
     angebote: list = []
@@ -3564,8 +3789,11 @@ def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
 
 def test_book_retry_nach_ja_fail_bucht_alternativ_ohne_zweites_confirm():
     """Nach erstem Ja+Fail: gewählte Alternative wird ohne 'Soll ich eintragen?' gebucht."""
-    iso1 = "2026-09-03T10:00:00+02:00"
-    iso2 = "2026-09-03T11:00:00+02:00"
+    basis = datetime.now(gehirn.TZ).replace(
+        hour=10, minute=0, second=0, microsecond=0,
+    ) + timedelta(days=1)
+    iso1 = basis.isoformat(timespec="seconds")
+    iso2 = (basis + timedelta(hours=1)).isoformat(timespec="seconds")
     sit = _buch_sit(iso1)
     sit["buchIntent"] = True
     sit["bookFails"] = 1

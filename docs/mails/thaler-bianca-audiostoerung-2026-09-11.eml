@@ -1,0 +1,89 @@
+X-Unsent: 1
+From: Pickadoc <info@pickadoc.de>
+To: Frau Eva Thaler <praxis@za-thaler.de>
+Cc: info@pickadoc.de
+Subject: =?UTF-8?Q?Technische_St=C3=B6rung:_Bianca_stottert_=E2=80=93_Diagnose_abgeschlossen?=
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Technische Störung: Bianca stottert – Diagnose abgeschlossen</title>
+</head>
+<body style="margin:0;padding:0;background:#eef1f5;font-family:Arial,Helvetica,sans-serif;color:#24374e;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#eef1f5;">
+    <tr>
+      <td align="center" style="padding:24px 10px 36px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 28px rgba(36,55,78,.12);">
+          <tr>
+            <td align="center" style="background:#24374e;padding:28px 28px 24px;">
+              <img src="https://pickadoc.de/images/logo-text-ai-email.png" width="190" height="51" alt="Pickadoc" style="display:block;border:0;width:190px;height:51px;margin:0 auto 16px;">
+              <div style="display:inline-block;background:#d862c8;color:#ffffff;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:bold;letter-spacing:.8px;">TECHNISCHE PRÜFUNG</div>
+              <h1 style="margin:16px 0 4px;color:#ffffff;font-size:26px;line-height:1.2;">Bianca: gemeldetes Stottern</h1>
+              <div style="color:#dbe4ef;font-size:15px;">Diagnose und abschließende Bewertung</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px 30px 12px;">
+              <p style="margin:0 0 14px;font-size:16px;line-height:1.6;">Sehr geehrte Frau Thaler,</p>
+              <p style="margin:0;font-size:16px;line-height:1.6;">
+                vielen Dank für Ihren Hinweis, dass Bianca während vorheriger Telefonate zeitweise stark gestottert hat. Wir haben die betreffenden Gespräche und die beteiligten technischen Komponenten unmittelbar geprüft.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">Diagnose</div>
+                    <div style="font-size:15px;line-height:1.65;">
+                      Die von Bianca erzeugten Sprachdateien waren vollständig und technisch sauber. Es fanden sich weder Aussetzer noch wiederholte Audioblöcke oder Übersteuerungen. Auch die Telefonbrücke verzeichnete keine Ladefehler oder Pufferabbrüche. Der Verbindungstunnel blieb stabil; die beteiligten Dienste wurden nicht neu gestartet und zeigten keine auffällige Systemauslastung.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">Wahrscheinliche Ursache</div>
+                    <div style="font-size:15px;line-height:1.65;">
+                      Da die erzeugte Sprachausgabe und unsere Übertragungsdienste fehlerfrei waren, spricht das Fehlerbild am ehesten für eine kurzfristige Störung im Telefontransport oder am beteiligten Endgerät. In den Gesprächen war zudem ein weiterer Sprachassistent auf der Anruferseite aktiv, wodurch sich Audioausgaben und Gesprächssteuerung gegenseitig beeinflusst haben können.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#24374e;border-radius:10px;">
+                <tr>
+                  <td align="center" style="padding:20px 18px;">
+                    <div style="color:#ffffff;font-size:18px;font-weight:bold;margin-bottom:8px;">Fazit: kein Handlungsbedarf</div>
+                    <div style="color:#dbe4ef;font-size:15px;line-height:1.6;">
+                      Bianca läuft aktuell stabil und ohne Auffälligkeiten. Es ist derzeit keine technische Änderung oder Unterbrechung des Betriebs erforderlich. Sollte das Verhalten erneut auftreten, genügt uns die ungefähre Uhrzeit des Telefonats für eine weitere punktgenaue Prüfung.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

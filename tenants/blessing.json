@@ -1,0 +1,125 @@
+{
+  "clientId": "UUJnPzoYPa4yYyzcaGlm",
+  "locationId": "dlxNwKLaA5VMEWQ5AjsL",
+  "tenantAliases": ["cf-8JoAXSHoBoHITzB20deb"],
+  "praxisName": "Hautarztpraxis Doktor Blessing",
+  "praxisNameMelde": "Hautarztpraxis Doktor Blessing",
+  "praxisNameVon": "der Hautarztpraxis Doktor Blessing",
+  "behandler": "Doktor Charlotte Blessing",
+  "dids": ["+4921154244120"],
+  "telefon": "",
+  "sprache": "de",
+  "fachgebiet": "dermatologie",
+  "sttHotwords": [
+    "Blessing",
+    "Hautkrebsscreening",
+    "Neurodermitis",
+    "Rosacea",
+    "Ekzeme",
+    "Venensprechstunde",
+    "Nagelpilz",
+    "Sklerotherapie"
+  ],
+  "defaultCalendarId": "8krcWh7AuXEfgWc1blzQ",
+  "calendars": [
+    {
+      "id": "8krcWh7AuXEfgWc1blzQ",
+      "name": "Doktor Charlotte Blessing"
+    }
+  ],
+  "begruessungText": "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit Bianca, der Telefonassistentin der Praxis. Wie kann ich Ihnen helfen?",
+  "dbPrompt": "NOTFALL-SOFORTREGEL: Akute dermatologische Notfälle werden nach den festen Praxisregeln behandelt. DOKUMENT-VORSPRACHEREGEL: Rezepte, Überweisungen und Krankmeldungen werden telefonisch nicht bestellt oder zur Abholung zugesagt; dafür ist eine persönliche Vorsprache erforderlich.",
+  "weiterleitungen": [],
+  "visitMotives": [
+    {
+      "id": "0OgCmirb1YYxRa7CJDj5",
+      "name": "Beratung Allergie",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "0XeGm00uRgvpcIgJtjaO",
+      "name": "Neurodermitis",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "2oJ9lYZK9KEABwxezFWZ",
+      "name": "Beratung Behandlung Botox / Filler",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "5PuSqKkTtTgYuaYhajm5",
+      "name": "Sprechstunde",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "FD7TqHIdBn733qTC5O2u",
+      "name": "Neupatienten Erstaufnahme",
+      "duration": 15,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "Hr7bt89rKrK3BDK4BnK4",
+      "name": "Akne / Rosacea / Ekzeme",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "UnfQ5DOaMx9FLiTC3L9b",
+      "name": "Kontrolle",
+      "duration": 15,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "YON77rLGke1FMj29PuNH",
+      "name": "Venensprechstunde",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "cluzt3EwHYgnTwt3i1z9",
+      "name": "NOTFALL/ akute Beschwerden",
+      "duration": 5,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "d8gQBR3fJiE0tAAR5c7t",
+      "name": "Hautkrebs-Screening",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "dB8AvAFbdDTXGpegI7de",
+      "name": "Nagelpilz",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "ePZup3RSfHdopPW4LFui",
+      "name": "Beratung Kosmetik (Akne- / Fruchtsäure- / Fußpflege)",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "qTREvPlAqxVQSQSQSsP5",
+      "name": "Termin über Telefon-KI Bianca",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "rRCFfJZZjV2mI5WWH6ZE",
+      "name": "Beratung Entfernung von störenden Hautveränderungen",
+      "duration": 10,
+      "allowOnlineBooking": true
+    },
+    {
+      "id": "uGqUWNmiF00zeL3Z8oeQ",
+      "name": "Kontrolluntersuchung",
+      "duration": 10,
+      "allowOnlineBooking": true
+    }
+  ]
+}

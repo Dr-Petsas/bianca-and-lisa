@@ -154,7 +154,9 @@ def test_telefon_check_erst_kurz_dann_nummer():
 
 
 def test_talk_thema_zuerst_dann_frage():
-    sit = _buchungs_sit()
+    """Ohne offene Pflichtfrage knuepft der erste Stups am Thema an."""
+    sit = _buchungs_sit(frage="")
+    sit["sammler"]["phase"] = "gebucht"
     st = gespraech.stand(sit)
     st["floor"] = gespraech.TALK
     st["stack"] = [{"thema": "hochzeit", "zuege": 1}]
@@ -162,8 +164,33 @@ def test_talk_thema_zuerst_dann_frage():
     t1 = bianca_agent.stille_zug(sit)["text"]
     assert "hochzeit" in t1.casefold(), "erster Stups knuepft am letzten Thema an"
     assert "Terminaufnahme" not in t1, "kein Job-Sermon mitten im Talk"
+
+
+def test_talk_thema_nicht_bei_offener_pflichtfrage():
+    """W-FOKUS 12.09.2026: Live lud Bianca minutenlang zum Nebenthema ein,
+    waehrend die Handynummer offen war — der Stups muss zurueckholen."""
+    sit = _buchungs_sit(frage="telefon")
+    st = gespraech.stand(sit)
+    st["floor"] = gespraech.TALK
+    st["stack"] = [{"thema": "hochzeit", "zuege": 1}]
+    st["gravity"] = {"hochzeit": 2.0}
+    t1 = bianca_agent.stille_zug(sit)["text"]
+    assert "hochzeit" not in t1.casefold(), "kein Themen-Geplauder bei offener Pflicht"
     t2 = bianca_agent.stille_zug(sit)["text"]
     assert "andynummer" in t2 or "ummer" in t2, "zweiter Stups: Job-Frage"
+
+
+def test_stups_thema_nie_aus_beschimpfung():
+    """Live 11.09.2026: „Wir waren gerade beim Thema arsch — erzaehlen Sie
+    gern weiter." Ein Thema aus einer Beschimpfung wird nie zurueckgeholt."""
+    sit = _buchungs_sit(frage="")
+    sit["sammler"]["phase"] = "gebucht"
+    st = gespraech.stand(sit)
+    st["floor"] = gespraech.TALK
+    st["stack"] = [{"thema": "arsch", "zuege": 1}]
+    st["gravity"] = {"arsch": 2.0}
+    t1 = bianca_agent.stille_zug(sit)["text"]
+    assert "arsch" not in t1.casefold()
 
 
 def test_verwalten_zweiter_stups_mit_flussfrage():

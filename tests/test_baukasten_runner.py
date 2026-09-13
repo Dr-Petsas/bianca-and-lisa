@@ -134,6 +134,43 @@ def test_abschweifer_verdraengt_die_antwort_genau_einmal():
     assert "Mittwoch" in zweiter["text"]
 
 
+def test_nach_abschweifer_kommt_zuerst_die_offene_aufgabe_zurueck():
+    story = geschichten.automatik(61)
+    story["abschweifer"] = [("schonmal", "rechnung_teuer")]
+    story["einzelwoerter"] = ["Attest"]
+    story["einzelwortAnzahl"] = 1
+    lage = _lage_mit("schonmal")
+
+    stoerung = geschichten.naechster_baustein(story, lage)
+    assert stoerung["baustein"] == "abschweifer_rechnung_teuer"
+
+    # Bianca hat die offene Schonmal-Frage nach der Nebenantwort erhalten.
+    # Der Testanrufer beantwortet jetzt diese Frage und wirft nicht sofort
+    # das nächste zusammenhanglose Einzelwort in den Dialog.
+    lage["frage"] = "schonmal"
+    zurueck = geschichten.naechster_baustein(story, lage)
+    assert zurueck["baustein"] == "schonmal"
+    assert zurueck["text"] in saetze.SCHONMAL_NEIN
+
+
+def test_testanrufer_holt_hauptanliegen_zurueck_wenn_bianca_abbiegt():
+    story = geschichten.automatik(62)
+    story["grund"] = "IMP Besprechung"
+    story["grundErwartet"] = "IMP Besprechung"
+    story["einzelwoerter"] = ["Attest"]
+    story["einzelwortAnzahl"] = 1
+    lage = _lage_mit("grund")
+    lage["modus"] = "buchen"
+    lage["zaehler"]["antworten"] = 1
+
+    assert geschichten.naechster_baustein(story, lage)["baustein"].startswith("einzelwort:")
+    lage["frage"] = ""  # Bianca ist auf das Nebenwort abgebogen.
+    lage["modus"] = "attest"
+    zurueck = geschichten.naechster_baustein(story, lage)
+    assert zurueck["baustein"] == "rueckkehr_hauptanliegen"
+    assert "Termin" in zurueck["text"] and "IMP Besprechung" in zurueck["text"]
+
+
 def test_zwischenfrage_preis_bei_telefonfrage():
     story = geschichten.automatik(8)
     story["zwischenfragePreis"] = True

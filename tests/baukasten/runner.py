@@ -30,7 +30,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tests.baukasten import aufraeumen, geschichten, klang, saetze  # noqa: E402
+from tests.baukasten import aufraeumen, deutlichkeit, geschichten, klang, saetze  # noqa: E402
 
 BASIS = "http://127.0.0.1:8096"
 BERICHTE_DIR = Path(__file__).resolve().parent / "berichte"
@@ -99,18 +99,26 @@ class Anruf:
         dauer = max(0.0, (len(blob) - 44) / (klang.PCM_RATE * 2)) if blob[:4] == b"RIFF" else len(blob) / 4000.0
         return f"audio/{name}", dauer
 
-    def _anrufer_audio(self, text: str) -> tuple[Path, str, float]:
-        """Anrufer-WAV aus dem Klang-Cache holen und im Bericht ablegen."""
+    def _anrufer_audio(self, text: str, baustein: str) -> tuple[Path, str, float, dict]:
+        """Anrufer-WAV mit den gewählten Sprechereigenschaften bauen."""
         text = " ".join((text or "").split())
-        pfad = klang.audio_holen(self.story["stimme"], text)
-        if self.story.get("telefonQualitaet"):
+        sprecher = deutlichkeit.verfremden(
+            text, self.story.get("sprecher"),
+            seed=int(self.story.get("seed") or self.story.get("nr") or 0),
+            baustein=baustein,
+        )
+        gesprochen = str(sprecher.get("text") or text)
+        pfad = klang.audio_holen(self.story["stimme"], gesprochen)
+        if self.story.get("leitung"):
+            pfad = klang.telefon_datei(pfad, leitung=self.story.get("leitung"))
+        elif self.story.get("telefonQualitaet"):
             pfad = klang.telefon_datei(pfad)
         self._audio_nr += 1
         name = f"a{self._audio_nr:02d}.wav"
         ziel = self.audio_dir / name
         if not ziel.is_file():
             shutil.copyfile(pfad, ziel)
-        return pfad, f"audio/{name}", klang.dauer_s(pfad)
+        return pfad, f"audio/{name}", klang.dauer_s(pfad), sprecher
 
     def _abspielen(self, relativ: str) -> None:
         if not self.mithoeren or not relativ:
@@ -129,7 +137,14 @@ class Anruf:
     # ---- HTTP ---------------------------------------------------------------
 
     def _start(self) -> dict[str, Any]:
-        r = self.client.post(f"{self.basis}/api/start", json={"tenant": self.tenant})
+        name = " ".join(
+            x for x in (self.story.get("vorname"), self.story.get("nachname")) if x
+        )
+        r = self.client.post(f"{self.basis}/api/start", json={
+            "tenant": self.tenant,
+            "test": True,
+            "testName": name,
+        })
         r.raise_for_status()
         antwort = r.json()
         self.session_id = str(antwort.get("sessionId") or "")
@@ -191,15 +206,25 @@ class Anruf:
         return dauer
 
     def _merke_anrufer(self, text: str, baustein: str, rel: str, dauer: float,
-                       gehoert: str = "") -> None:
-        self.zuege.append({
+                       gehoert: str = "", sprecher: dict | None = None,
+                       stt_info: dict | None = None) -> None:
+        eintrag = {
             "wer": "anrufer",
             "text": text,
             "gehoert": gehoert,
             "baustein": baustein,
             "audio": rel,
             "dauerS": round(dauer, 2),
-        })
+            # Beweis im Bericht: dieser Zug ging als WAV an /api/listen,
+            # nie als vorgegebenes Transkript an /api/turn.
+            "audioPipeline": True,
+            "stt": dict(stt_info or {}),
+        }
+        gesprochen = str((sprecher or {}).get("text") or "")
+        if gesprochen and gesprochen != text:
+            eintrag["gesprochen"] = gesprochen
+            eintrag["sprecherHits"] = list((sprecher or {}).get("hits") or [])
+        self.zuege.append(eintrag)
 
     # ---- Hauptlauf ----------------------------------------------------------
 
@@ -224,15 +249,20 @@ class Anruf:
                 text = " ".join(str(zug.get("text") or "").split())
                 if not text:
                     break
-                wav, rel, dauer_a = self._anrufer_audio(text)
+                baustein = str(zug.get("baustein") or "")
+                wav, rel, dauer_a, sprecher = self._anrufer_audio(text, baustein)
                 self._abspielen(rel)
                 final = self._listen(wav)
                 typ = str(final.get("type") or "")
                 gehoert = ""
+                stt_info: dict[str, Any] = {}
                 for ev in final.get("_ereignisse") or []:
                     if ev.get("type") == "transcript":
                         gehoert = str(ev.get("textIn") or "")
-                self._merke_anrufer(text, str(zug.get("baustein") or ""), rel, dauer_a, gehoert)
+                        stt_info = dict(ev.get("stt") or {})
+                self._merke_anrufer(
+                    text, baustein, rel, dauer_a, gehoert, sprecher, stt_info,
+                )
 
                 if typ == "warte":
                     # Halbsatz-Wache: kein Ton von Bianca, weiterhoeren.
@@ -352,7 +382,9 @@ def bewerten(story: dict, zuege: list[dict], last_call: dict, ziel_iso: str,
             am_ziel = slot_iso[:10] == ziel_iso
             check("Zieltag", am_ziel or voll, ziel_iso,
                   slot_iso[:10] + ("" if am_ziel else " (Wunschtag ausgebucht)" if voll else ""))
-        erwartet = saetze.GRUENDE.get(story.get("grund") or "", (None, ""))[1] or ""
+        erwartet = (str(story.get("grundErwartet") or "").strip()
+                    or saetze.GRUENDE.get(story.get("grund") or "", (None, ""))[1]
+                    or str(story.get("grund") or ""))
         # Das ERWARTETE ist das gebuchte Tenant-Motiv (motivName) — der
         # Sammler-grund traegt nur den Konzeptnamen ("Invisalign-Beratung"),
         # der aufs Motiv ("KFO Besprechung") gemappt wird.
@@ -437,7 +469,7 @@ def main() -> None:
     p.add_argument("--schnell", action="store_true", help="ohne Echtzeit-Taktung")
     p.add_argument("--mithoeren", action="store_true", help="Audio lokal abspielen")
     p.add_argument("--telefon", action="store_true",
-                   help="Anrufer-Audio auf 8 kHz / 8 bit (Telefonqualitaet)")
+                   help="Anrufer-Audio als dreckige G.711-Leitung (8 kHz μ-law)")
     a = p.parse_args()
     stories = [geschichten.automatik(nr, tag=a.tag) for nr in range(a.ab, a.ab + a.anzahl)]
     if a.telefon:

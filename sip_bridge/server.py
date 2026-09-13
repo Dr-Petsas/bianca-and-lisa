@@ -48,7 +48,57 @@ from collections import deque
 
 import httpx
 
-from sip_bridge.stimme import filtern as stimme_filtern
+from sip_bridge.stimme import filtern as stimme_filtern, ohr_kompakt
+
+# #region agent log
+_DBG_PFAD = os.environ.get("BRIDGE_DEBUG_LOG") or "/tmp/debug-a62ee2.log"
+_DBG_AN = (os.environ.get("BRIDGE_DEBUG") or "1").strip() != "0"
+_DBG_N = {"n": 0}
+
+
+def _dbg(hyp: str, ort: str, text: str, daten: dict) -> None:
+    if not _DBG_AN or _DBG_N["n"] >= 6000:
+        return
+    _DBG_N["n"] += 1
+    try:
+        with open(_DBG_PFAD, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "sessionId": "a62ee2", "runId": "run1", "hypothesisId": hyp,
+                "location": ort, "message": text, "data": daten,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _stau_lesen(writer) -> tuple[int, int]:
+    """Wieviel Audio haengt NACH unserem Takt noch fest? (Bytes)
+
+    Zwei Warteschlangen, die `drain()` nicht verraet:
+    1. asyncio-Transportpuffer — `drain()` kehrt sofort zurueck, solange er
+       unter der Hochwassermarke (64 KB = 4 s Audio!) liegt.
+    2. Kernel-Sendepuffer (TIOCOUTQ) — geschrieben, aber noch nicht bestaetigt.
+    Summe/320 = Rahmen, die der Anrufer noch NICHT gehoert hat. Wird sie
+    groesser als der Vorsprung, hoert er genau jetzt Stille.
+    """
+    puffer = kernel = -1
+    try:
+        puffer = writer.transport.get_write_buffer_size()
+    except Exception:
+        pass
+    try:
+        import fcntl
+        import termios
+        s = writer.get_extra_info("socket")
+        if s is not None:
+            roh = fcntl.ioctl(s.fileno(),
+                              getattr(termios, "TIOCOUTQ", 0x5411),
+                              struct.pack("I", 0))
+            kernel = struct.unpack("I", roh)[0]
+    except Exception:
+        pass
+    return puffer, kernel
+# #endregion
 
 # BIANCA_BASE / LISA_BASE: Ziel-Dienst. sipbridge-lisa setzt LISA_BASE
 # (oder BIANCA_BASE=http://lisa:8095) — gleiche Variable, anderer Host.
@@ -453,17 +503,34 @@ class Wiedergabe:
             if wartend and gespielt:
                 letzte = gespielt[-1]
                 url, ms = letzte["url"], letzte["sent"] / (RATE_IN * 2 / 1000.0)
+        # #region agent log
+        _rest = sum(max(0, len(p["buf"]) - p["sent"]) for p in self.posten)
+        _dbg("E", "sip_bridge/server.py:stoppen", "Wiedergabe abgebrochen",
+             {"url": url, "gespieltMs": round(ms, 1),
+              "restMs": round(_rest / 16.0, 1), "posten": len(self.posten)})
+        # #endregion
         self.posten.clear()
         return url, ms
 
     async def lauf(self) -> None:
         naechster = time.monotonic()
         sprach = False
+        # #region agent log
+        _start = time.monotonic()
+        _gesendet = 0
+        _m = {"frames": 0, "spaet": 0, "spaetMaxMs": 0.0,
+              "schreibLang": 0, "schreibMaxMs": 0.0, "vorsprungMinMs": 9999.0,
+              "leer": 0}
+        # #endregion
         while True:
             jetzt = time.monotonic()
             if jetzt < naechster:
                 await asyncio.sleep(naechster - jetzt)
-            naechster = max(naechster + FRAME_MS / 1000.0, time.monotonic() - 0.1)
+            # #region agent log
+            _spaet = time.monotonic() - naechster
+            # #endregion
+            naechster = max(naechster + FRAME_MS / 1000.0,
+                            time.monotonic() - 0.1)
             rahmen = b""
             async with self.lock:
                 while self.posten:
@@ -497,12 +564,48 @@ class Wiedergabe:
                     if p["underruns"] in (1, 25, 50):  # 0 / 0,5 / 1 s
                         print(f"bruecke-underrun n={p['underruns']} "
                               f"url={p.get('url', '')!r}", flush=True)
+                        # #region agent log
+                        _dbg("D", "sip_bridge/server.py:lauf", "Stream-Underrun",
+                             {"n": p["underruns"], "url": p.get("url", ""),
+                              "bufMs": round(len(p["buf"]) / 16.0, 1),
+                              "sentMs": round(p["sent"] / 16.0, 1)})
+                        # #endregion
                     break  # auf Nachschub warten
             if rahmen:
                 if BRIDGE_GAIN != 1.0:
                     rahmen = audioop.mul(rahmen, 2, BRIDGE_GAIN)
                 self._sende_rms.append(audioop.rms(rahmen, 2))
+                # #region agent log
+                _t0 = time.monotonic()
+                # #endregion
                 await self._schreib(rahmen)
+                # #region agent log
+                _dt = time.monotonic() - _t0
+                _m["frames"] += 1
+                _gesendet += 1
+                # Vorsprung = gesendetes Audio minus verstrichene Zeit. Faellt
+                # er auf 0, hoert der Anrufer JETZT Stille — das ist der
+                # Aussetzer, exakt gemessen statt ueber den Rueckkanal geraten.
+                _vor = _gesendet * FRAME_MS - (time.monotonic() - _start) * 1000.0
+                if _vor < _m["vorsprungMinMs"]:
+                    _m["vorsprungMinMs"] = round(_vor, 1)
+                if _vor < FRAME_MS:
+                    _m["leer"] += 1
+                _m["spaetMaxMs"] = max(_m["spaetMaxMs"], round(_spaet * 1000, 1))
+                _m["schreibMaxMs"] = max(_m["schreibMaxMs"], round(_dt * 1000, 1))
+                if _spaet > 0.040:
+                    _m["spaet"] += 1
+                    _dbg("A", "sip_bridge/server.py:lauf", "Sende-Takt zu spaet",
+                         {"spaetMs": round(_spaet * 1000, 1),
+                          "schreibMs": round(_dt * 1000, 1),
+                          "frameNr": _m["frames"]})
+                if _dt > 0.020:
+                    _m["schreibLang"] += 1
+                    _dbg("B", "sip_bridge/server.py:lauf", "Tunnel-Schreiben blockiert",
+                         {"schreibMs": round(_dt * 1000, 1),
+                          "spaetMs": round(_spaet * 1000, 1),
+                          "frameNr": _m["frames"]})
+                # #endregion
                 self.zuletzt_ton = time.monotonic()
                 sprach = True
             else:
@@ -512,10 +615,22 @@ class Wiedergabe:
                 if sprach:
                     self.fertig_seit = time.monotonic()
                     sprach = False
+                    # #region agent log
+                    _dbg("A", "sip_bridge/server.py:lauf",
+                         "Ansage fertig — Takt-Bilanz", dict(_m))
+                    _m.update({"frames": 0, "spaet": 0, "spaetMaxMs": 0.0,
+                               "schreibLang": 0, "schreibMaxMs": 0.0,
+                               "vorsprungMinMs": 9999.0, "leer": 0})
+                    # #endregion
                 # Dauer-Stille senden: der Medienstrom Richtung Asterisk/
                 # Zaluma darf NIE abreissen (RTP-Timeout beendet sonst den
                 # Anruf, sobald Bianca schweigt und zuhoert).
                 await self._schreib(b"\x00" * FRAME_B)
+                # #region agent log
+                # Stille-Rahmen zaehlen mit: der Vorsprung gilt fuer den
+                # GANZEN Strom, nicht nur fuer die Sprach-Abschnitte.
+                _gesendet += 1
+                # #endregion
 
 
 class Anruf:
@@ -571,6 +686,10 @@ class Anruf:
         self._ohr_barge_fenster: deque[int] = deque(maxlen=OHR_BARGE_WINDOW_FRAMES)
         self._ohr_zug = False      # naechster Zug kam aus dem Ohr-Puffer
         self._spielte = False
+        # #region agent log
+        self._stau = {"n": 0, "maxB": 0, "maxPufferB": 0, "maxKernelB": 0,
+                      "ueber": 0, "meld": 0}
+        # #endregion
 
     def _ohr_reset(self) -> None:
         self._ohr = []
@@ -613,6 +732,30 @@ class Anruf:
         async with self.schreib_lock:
             self.writer.write(struct.pack(">BH", K_AUDIO, len(pcm)) + pcm)
             await self.writer.drain()
+        # #region agent log
+        # Hypothese K: unser Takt ist nachweislich puenktlich (spaet=0) und
+        # das Audio selbst hat keine Loecher — also messen wir, ob die Rahmen
+        # NACH dem Schreiben haengen bleiben. Bleibt die Summe bei null,
+        # sitzt die Ursache jenseits unseres Kernels (Asterisk/Pfad).
+        _st = self._stau
+        _st["n"] += 1
+        if _st["n"] % 5 == 0:
+            _puf, _ker = _stau_lesen(self.writer)
+            _ges = max(_puf, 0) + max(_ker, 0)
+            _st["maxB"] = max(_st["maxB"], _ges)
+            _st["maxPufferB"] = max(_st["maxPufferB"], _puf)
+            _st["maxKernelB"] = max(_st["maxKernelB"], _ker)
+            if _ges >= 3200:  # >= 200 ms Audio haengt fest
+                _st["ueber"] += 1
+                if _st["meld"] < 12:
+                    _st["meld"] += 1
+                    _dbg("K", "sip_bridge/server.py:_audio_raus",
+                         "Audio haengt nach dem Schreiben fest",
+                         {"stauB": _ges, "stauMs": round(_ges / 320.0 * 20, 1),
+                          "pufferB": _puf, "kernelB": _ker,
+                          "rahmenNr": _st["n"],
+                          "spielt": self.wiedergabe.spielt()})
+        # #endregion
 
     async def _ende_raus(self) -> None:
         with contextlib.suppress(Exception):
@@ -956,6 +1099,11 @@ class Anruf:
         """Einen Anrufer-Zug an Bianca geben. False = auflegen."""
         pcm16, _ = audioop.ratecv(pcm8, 2, 1, RATE_IN, RATE_STT, None)
         pcm16 = await asyncio.to_thread(stimme_filtern, pcm16, RATE_STT)
+        if ohr:
+            # Parakeet bekommt keine sekundenlange interne Leere aus dem
+            # stillen Ohr. Normale Zuege und die Sprachsamples selbst bleiben
+            # unangetastet; Notaus sitzt in ohr_kompakt().
+            pcm16 = await asyncio.to_thread(ohr_kompakt, pcm16, RATE_STT)
         wav = _wav(pcm16, RATE_STT)
         if os.environ.get("BRIDGE_DUMP") == "1":
             pfad = f"/tmp/zug-{int(time.time())}.wav"
@@ -1021,16 +1169,20 @@ class Anruf:
             print(f"bruecke-zug fail {type(e).__name__}: {e}", flush=True)
         return not auflegen
 
-    async def _stups(self) -> None:
+    async def _stups(self) -> bool:
+        """Stups spielen. False = Bianca hat sich verabschiedet (auflegen)."""
         self.stups_zahl += 1
         try:
             r = await self.http.post("/api/stille", json={"sessionId": self.session_id})
             d = r.json() if r.status_code == 200 else {}
         except Exception:
             d = {}
+        auflegen = bool(d.get("hangup"))
         if d.get("audioUrl"):
-            print(f"bruecke-stups {d.get('text', '')[:60]!r}", flush=True)
+            print(f"bruecke-stups {d.get('text', '')[:60]!r}"
+                  f"{' [hangup]' if auflegen else ''}", flush=True)
             self._spielen(d["audioUrl"])
+        return not auflegen
 
     def _diktat_weiterhoeren(self, stille_ms: int) -> None:
         """Still gespeichertes Datenfragment: Pause anpassen, Stups sperren."""
@@ -1055,8 +1207,13 @@ class Anruf:
                 item = await asyncio.wait_for(self.zuege.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 if self._stups_bereit() and self.stups_zahl < 2:
-                    await self._stups()
+                    weiter = await self._stups()
                     self.wiedergabe.fertig_seit = time.monotonic()
+                    if not weiter:
+                        # Notleine (W-STUPS-GESAMT): Abschied ausspielen,
+                        # dann auflegen — sonst blieb die Leitung offen.
+                        await self._ausklingen_und_auflegen()
+                        return
                 continue
             if isinstance(item, tuple):
                 pcm, ohr = item[0], bool(item[1]) if len(item) > 1 else False
@@ -1064,14 +1221,18 @@ class Anruf:
                 pcm, ohr = item, False
             if not await self._zug(pcm, ohr=ohr):
                 # Abschied/Weiterleitung: fertig spielen, dann auflegen.
-                for _ in range(600):
-                    if not self.wiedergabe.aktiv:
-                        break
-                    await asyncio.sleep(0.1)
-                await asyncio.sleep(0.4)
-                await self._ende_raus()
-                self.lebt = False
+                await self._ausklingen_und_auflegen()
                 return
+
+    async def _ausklingen_und_auflegen(self) -> None:
+        """Letzte Ansage zu Ende spielen, dann den AudioSocket beenden."""
+        for _ in range(600):
+            if not self.wiedergabe.aktiv:
+                break
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.4)
+        await self._ende_raus()
+        self.lebt = False
 
     # ---- Lebenszyklus -------------------------------------------------------
 
@@ -1096,16 +1257,45 @@ class Anruf:
             return
         spieler = asyncio.create_task(self.wiedergabe.lauf())
         dialog = asyncio.create_task(self._dialog())
+        # #region agent log
+        _rx = {"letzte": 0.0, "n": 0, "lueck": 0, "maxMs": 0.0}
+        # #endregion
         try:
             while self.lebt:
                 r = await self._rahmen_lesen()
                 if r is None or r[0] == K_ENDE:
                     break
                 if r[0] == K_AUDIO:
+                    # #region agent log
+                    _nun = time.monotonic()
+                    if _rx["letzte"]:
+                        _ab = (_nun - _rx["letzte"]) * 1000.0
+                        _rx["n"] += 1
+                        _rx["maxMs"] = max(_rx["maxMs"], round(_ab, 1))
+                        if _ab > 60.0:
+                            _rx["lueck"] += 1
+                            _dbg("C", "sip_bridge/server.py:Anruf.lauf",
+                                 "Eingangs-Rahmen verspaetet",
+                                 {"abstandMs": round(_ab, 1),
+                                  "spielt": self.wiedergabe.spielt(),
+                                  "lueckenBisher": _rx["lueck"]})
+                    _rx["letzte"] = _nun
+                    # #endregion
                     self._vad(self._eingang(r[1]))
                 elif r[0] == K_FEHLER:
                     print(f"bruecke-asterisk-fehler {r[1].hex()}", flush=True)
         finally:
+            # #region agent log
+            _dbg("C", "sip_bridge/server.py:Anruf.lauf",
+                 "Anruf-Ende — Empfangs-Bilanz",
+                 {"rahmen": _rx["n"], "luecken": _rx["lueck"],
+                  "maxAbstandMs": _rx["maxMs"], "session": self.session_id,
+                  "stauMaxB": self._stau["maxB"],
+                  "stauMaxMs": round(self._stau["maxB"] / 320.0 * 20, 1),
+                  "stauMaxPufferB": self._stau["maxPufferB"],
+                  "stauMaxKernelB": self._stau["maxKernelB"],
+                  "stauUeber200ms": self._stau["ueber"]})
+            # #endregion
             self.lebt = False
             spieler.cancel()
             dialog.cancel()

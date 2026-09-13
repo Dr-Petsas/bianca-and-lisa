@@ -14,6 +14,14 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+button:not(:disabled), a.tab {
+  transition: transform 70ms ease, filter 70ms ease, box-shadow 70ms ease;
+}
+button:not(:disabled):active, a.tab:active {
+  transform: translateY(2px) scale(0.97);
+  filter: brightness(1.3);
+  box-shadow: inset 0 2px 7px #0009;
+}
 /* Bianca aktiv: Seite wird zur Spalte (Tab-Leiste + Rest), das Iframe
    bekommt EXAKT den restlichen Platz — egal wie hoch die Tab-Leiste bei
    Zoom/schmalem Fenster wird. Vorher war die Hoehe hart gerechnet
@@ -25,6 +33,12 @@ body.bianca-aktiv {
   height: 100vh;   /* Rueckfall fuer aeltere Browser ohne dvh */
   height: 100dvh;
 }
+body.frame-aktiv {
+  padding-bottom: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
 
 /* --- Tabs: Lisa (Outbound) | Bianca (Inbound) --- */
 .tabs {
@@ -32,6 +46,11 @@ body.bianca-aktiv {
   flex: 0 0 auto; flex-wrap: wrap;
   background: #0c110f; border-bottom: 1px solid var(--line);
   padding: 8px 10px calc(8px + 0px);
+}
+.global-kopf { align-items: center; }
+.global-marke {
+  color: var(--text); font-size: 16px; font-weight: 750; white-space: nowrap;
+  padding: 0 8px 0 2px;
 }
 .tab {
   appearance: none; border: 1px solid transparent; border-radius: 10px;
@@ -43,8 +62,36 @@ body.bianca-aktiv {
 .tab.active { background: var(--card); border-color: var(--line); color: var(--text); }
 .tab.active .tabsub { color: var(--accent); }
 .tab[data-tab="bianca"].active .tabsub { color: #e8a2b6; }
+.tab[data-tab="anrufe"].active .tabsub { color: #c87eb0; }
 .tab[data-tab="kampagne"].active .tabsub { color: #c4b07a; }
 a.tab-link { text-decoration: none; }
+.global-praxis {
+  display: flex; align-items: center; gap: 7px; margin: 0 4px 0 auto;
+  color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .045em; white-space: nowrap;
+}
+.global-praxis select {
+  width: auto; min-width: 210px; max-width: 330px; padding: 8px 32px 8px 10px;
+  border-radius: 9px; font-size: 14px; color: var(--text); text-transform: none;
+  letter-spacing: normal;
+}
+.last-global {
+  background: #272119; border-color: #57452d; color: #efd49b;
+}
+.studio-unternavi {
+  z-index: 55; flex: 0 0 auto; display: flex; gap: 7px; align-items: center;
+  padding: 7px 14px; background: #121816; border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.studio-unternavi[hidden] { display: none !important; }
+.studio-unternavi button {
+  appearance: none; border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--muted); padding: 6px 12px;
+  font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.studio-unternavi button.active {
+  color: var(--text); background: #25312d; border-color: #3b4a44;
+}
 body.kampagne-seite { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 .k-grid { display: grid; grid-template-columns: 240px 1fr; gap: 12px; }
 .k-liste { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow: auto; }
@@ -70,7 +117,12 @@ body.kampagne-seite { padding-bottom: calc(88px + env(safe-area-inset-bottom)); 
   height: calc(100vh - 49px);   /* Rueckfall ohne dvh */
   height: calc(100dvh - 49px);
 }
-body.bianca-aktiv #tab-bianca { height: auto; }
+body.bianca-aktiv #tab-bianca,
+body.frame-aktiv #tab-bianca,
+body.frame-aktiv #tab-studio {
+  flex: 1 1 auto; min-height: 0; height: auto;
+}
+#tab-studio { position: relative; min-height: 0; }
 .tab-frame {
   display: block; width: 100%; height: 100%; min-height: 420px;
   border: 0; background: #14100f;
@@ -80,6 +132,54 @@ body.bianca-aktiv #tab-bianca { height: auto; }
   color: var(--warn); font-size: 15px; padding: 0 20px;
 }
 .tab-frame-hinweis code { background: #24302c; border-radius: 6px; padding: 2px 8px; }
+.global-modal {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
+  padding: 18px; background: rgba(3, 7, 6, .76);
+}
+.global-modal[hidden] { display: none !important; }
+.global-modal-karte {
+  width: min(980px, 100%); max-height: 90dvh; overflow: auto;
+  background: #19211e; border: 1px solid #3b4943; border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0,0,0,.5); padding: 17px;
+}
+.global-modal-kopf {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 16px;
+}
+.modal-zu {
+  appearance: none; border: 1px solid var(--line); border-radius: 9px;
+  background: #252f2b; color: var(--text); padding: 8px 11px; cursor: pointer;
+}
+.last-n-label { display: grid; grid-template-columns: 1fr auto; gap: 9px; align-items: center; }
+.last-n-label input { grid-column: 1; width: 100%; accent-color: var(--accent); }
+.last-n-label strong { grid-column: 2; grid-row: 1 / span 2; font-size: 26px; color: var(--accent); }
+.last-verteilung {
+  display: grid; gap: 7px; margin: 14px 0;
+  padding: 11px; background: #101614; border-radius: 10px;
+}
+.last-verteilung > div { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; }
+.last-punkt { width: 10px; height: 10px; border-radius: 50%; }
+.last-status { min-height: 24px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+.last-auswertung { margin-top: 14px; display: grid; gap: 10px; }
+.last-auswertung h3 { margin: 5px 0 0; font-size: 13px; color: var(--text); }
+.last-karten { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.last-karten > div {
+  display: grid; gap: 3px; padding: 10px; border: 1px solid var(--line);
+  border-radius: 10px; background: #101614;
+}
+.last-karten span { font-size: 11px; color: var(--muted); }
+.last-karten strong { font-size: 20px; }
+.last-auswertung .ok { color: var(--lisa); }
+.last-auswertung .warn { color: var(--warn); }
+.last-auswertung .bad { color: var(--strike); }
+.last-tabelle { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.last-tabelle table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.last-tabelle th, .last-tabelle td {
+  padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap;
+}
+.last-tabelle th:first-child { text-align: left; }
+.last-tabelle thead th { color: var(--muted); font-weight: 600; background: #101614; }
+.last-tabelle tbody tr:last-child th, .last-tabelle tbody tr:last-child td { border-bottom: 0; }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 h1 { font-size: 22px; font-weight: 650; margin: 0; }
@@ -164,6 +264,16 @@ textarea { min-height: 120px; resize: vertical; }
 body.incall { overflow: hidden; }
 body.incall .wrap, body.incall .dock { display: none; }
 @media (max-width: 860px) {
+  .tabs { gap: 4px; padding: 6px 7px; }
+  .global-marke { width: 100%; padding: 1px 5px; }
+  .tab { padding: 7px 10px; font-size: 14px; }
+  .tab .tabsub { display: none; }
+  .global-praxis {
+    order: 8; width: 100%; margin: 2px 0 0; padding: 0 4px;
+  }
+  .global-praxis select { flex: 1; min-width: 0; max-width: none; }
+  .last-global { margin-left: auto; }
+  .last-karten { grid-template-columns: 1fr 1fr; }
   .grid, .appts { grid-template-columns: 1fr; }
   header { flex-direction: column; }
   .wrap { padding: 12px 12px 20px; }

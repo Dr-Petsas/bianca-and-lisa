@@ -28,16 +28,31 @@
     @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
     .card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+    .filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
+    .filter button {
+      appearance: none; cursor: pointer; font: inherit; font-size: 12px; font-weight: 650;
+      padding: 5px 10px; border-radius: 999px; background: #171114; color: var(--text);
+      border: 1px solid var(--line);
+    }
+    .filter button.an { border-color: var(--accent); background: #2a1c26; color: #f3d4e6; }
+    .filter button .n { color: var(--muted); font-weight: 600; }
     .liste { display: flex; flex-direction: column; gap: 6px; max-height: 78vh; overflow: auto; }
-    .eintrag { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; cursor: pointer; }
+    .eintrag { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; cursor: pointer; box-shadow: inset 4px 0 0 #7fbf8e; }
     .eintrag:hover { background: #2a2128; }
     .eintrag.aktiv { border-color: var(--accent); background: #2a1c26; }
+    .eintrag.test { background: #2a2210; border-color: #c4862a; box-shadow: inset 4px 0 0 #e0b15a; }
+    .eintrag.test:hover { background: #332910; }
+    .eintrag.test.aktiv { border-color: #e0b15a; background: #3a2c12; }
     .e-kopf { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 600; }
+    .e-marken { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .name-test { color: #e0b15a; }
     .e-meta { color: var(--muted); font-size: 12px; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
     .marke { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
     .marke.gruen { color: var(--gut); border-color: #3c5a46; }
     .marke.gelb { color: var(--warn); border-color: #6b5a34; }
     .marke.grau { color: var(--muted); }
+    .marke.test { color: #e0b15a; border-color: #c4862a; background: #3a2c12; }
+    .marke.live { color: #7fbf8e; border-color: #3c5a46; background: #15241c; }
     .detail-kopf { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
     .zeiten { color: var(--muted); font-size: 13px; line-height: 1.6; }
     .zeiten b { color: var(--text); font-weight: 600; }
@@ -117,6 +132,11 @@
     <div class="grid">
       <section class="card">
         <h2>Unterhaltungen</h2>
+        <div class="filter" id="art-filter" role="tablist" aria-label="Anrufart">
+          <button type="button" data-art="alle" class="an">Alle <span class="n" id="n-alle"></span></button>
+          <button type="button" data-art="test">Testanrufe <span class="n" id="n-test"></span></button>
+          <button type="button" data-art="live">Praxis-Live <span class="n" id="n-live"></span></button>
+        </div>
         <div class="liste" id="liste"><div class="leer">lade …</div></div>
       </section>
       <section class="card">
@@ -126,6 +146,7 @@
     </div>
   </div>
   <audio id="spieler" hidden></audio>
-  <script src="anrufe.js?v=a6"></script>
+  <script src="praxis.js?v=5"></script>
+  <script src="anrufe.js?v=a14"></script>
 </body>
 </html>

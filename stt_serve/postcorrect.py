@@ -82,6 +82,48 @@ _KONS_PHRASE_FIXES: list[tuple[re.Pattern, str]] = [
 ]
 _KONS_PHRASE_MARKERS = {"kons"}
 
+# Marker-gated Aliase aus produktiven Telefonclips. Weiter entfernte
+# phonetische Formen erreichen die konservative Namens-Fuzzy-Schwelle bewusst
+# nicht. Eine Ersetzung wird deshalb NUR aktiviert, wenn der Mandant das
+# jeweilige Zielwort ausdrücklich als Hotword mitsendet.
+_TENANT_PHRASE_FIXES: dict[str, list[tuple[re.Pattern, str]]] = {
+    "thaler": [
+        # Reale Telefonclips 10.09.: "Otala", "Hotala" und "Oh, Tala".
+        # Nur mit dem Tenant-Hotword "Thaler" aktiv; "Tala" bleibt bei
+        # allen anderen Praxen vollständig unangetastet.
+        (re.compile(
+            r"\b(?:tt?ola|tola|otala|hotala|tahler|taler|thala|tala)\b",
+            re.IGNORECASE,
+        ),
+         "Thaler"),
+    ],
+    "röntgenbild": [
+        # Thaler 11.09.: derselbe Dokumentwunsch kam als Rückenbild,
+        # Rentenbild, Rhöngbild, Räumenbild und Röntgenbulder an.
+        (re.compile(
+            r"\b(?:rückenbild|rueckenbild|rentenbild|rhöngbild|rhoengbild|"
+            r"rhönbild|rhoenbild|röngbild|roengbild|räumenbild|raeumenbild)\b",
+            re.IGNORECASE,
+        ),
+         "Röntgenbild"),
+        (re.compile(r"\bröntgenbulder\b", re.IGNORECASE), "Röntgenbilder"),
+    ],
+    "sprechstundenhilfe": [
+        # Thaler 11.09.: "Sprechstundenhilfe" wurde in mehrere semantisch
+        # wertlose Wörter zerlegt. Nur die belegten Wortfolgen korrigieren.
+        (re.compile(
+            r"\bspress\s+von\s+der\s+hilfe\b",
+            re.IGNORECASE,
+        ),
+         "Sprechstundenhilfe"),
+        (re.compile(
+            r"\bsprechstund(?:e|en)\s+hilfe(?:sprecher)?\b",
+            re.IGNORECASE,
+        ),
+         "Sprechstundenhilfe"),
+    ],
+}
+
 
 # Deutsche STT-Verwechslungen am WORTANFANG (Clara-Live-Befund: "Zannis"/
 # "Tzannis", "Betsas"/"Petsas", "Gaufmann"/"Kaufmann", "Kerber"/"Gerber").
@@ -245,6 +287,15 @@ def correct_transcript(text: str, keywords: list[str]) -> tuple[str, list[tuple[
                     replacements_pre.append((m.group(0), _repl))
                 return _repl
             text = pat.sub(_kons_sub, text)
+    for marker, fixes in _TENANT_PHRASE_FIXES.items():
+        if marker not in marker_norms:
+            continue
+        for pat, repl in fixes:
+            def _tenant_sub(m: "re.Match[str]", _repl=repl) -> str:
+                if _norm(m.group(0)) != _norm(_repl):
+                    replacements_pre.append((m.group(0), _repl))
+                return _repl
+            text = pat.sub(_tenant_sub, text)
     kw = [(k, _norm(k)) for k in keywords
           if k and " " not in k.strip() and len(_norm(k)) >= 4]
     if not kw:

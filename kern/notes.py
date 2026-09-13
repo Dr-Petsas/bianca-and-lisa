@@ -118,6 +118,22 @@ def zusammenfassung(sit: dict[str, Any]) -> str:
     return aktion
 
 
+def ein_satz(teile: list[str]) -> str:
+    """Mehrere Termin-Hinweise knapp, dedupliziert und als einen Satz schreiben."""
+    sauber: list[str] = []
+    gesehen: set[str] = set()
+    for roh in teile or []:
+        teil = _s(roh).strip(" .;")
+        if not teil:
+            continue
+        key = re.sub(r"\W+", " ", teil.casefold()).strip()
+        if key in gesehen:
+            continue
+        gesehen.add(key)
+        sauber.append(teil)
+    return ("; ".join(sauber) + ".") if sauber else ""
+
+
 def besondere_zeilen(sit: dict[str, Any]) -> list[str]:
     """Auffälliges in Patientenworten — je Fund eine kurze Zeile, maximal zwei."""
     zeilen: list[str] = []

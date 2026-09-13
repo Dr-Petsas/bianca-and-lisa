@@ -59,7 +59,36 @@ def kartei_von_anrufer(sit: dict) -> None:
                     "calendarId": _s(info.get("calendarId")),
                     "calendarName": _s(info.get("calendarName")),
                     "doctorName": _s(info.get("doctorName") or info.get("calendarName")),
+                    "nextAppointment": (
+                        info.get("nextAppointment")
+                        if isinstance(info.get("nextAppointment"), dict)
+                        else {}
+                    ),
                 }
+                naechster = info.get("nextAppointment")
+                if isinstance(naechster, dict) and naechster:
+                    row = {
+                        **naechster,
+                        "iso": _s(naechster.get("startIso")),
+                        "motiv": _s(naechster.get("visitMotiveName")),
+                        "behandler": _s(
+                            naechster.get("doctorName") or naechster.get("calendarName")
+                        ),
+                    }
+                    bestehend = [
+                        x for x in (sit.get("upcoming") or [])
+                        if isinstance(x, dict)
+                    ]
+                    aid = _s(row.get("id") or row.get("appointmentId"))
+                    if not any(
+                        (_s(x.get("id") or x.get("appointmentId")) == aid and aid)
+                        or (
+                            _s(x.get("iso") or x.get("startIso"))
+                            == _s(row.get("iso") or row.get("startIso"))
+                        )
+                        for x in bestehend
+                    ):
+                        sit["upcoming"] = [row, *bestehend]
                 name = arzt_sprechname(
                     _s(info.get("doctorName") or info.get("calendarName")),
                     sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
@@ -81,6 +110,7 @@ def kartei_von_anrufer(sit: dict) -> None:
             if s.get("anruferCheck") == "ja":
                 gehirn.anrufer_kartei_uebernehmen(sit)
             dossier.fuellen(sit)
+            gehirn.patientenkontext_aktualisieren(sit)
         except Exception as e:
             sit.setdefault("anruferKartei", {})
             print(f"bianca-anrufer-kartei fail {e}", flush=True)
@@ -230,6 +260,7 @@ def kartei_anstossen(sit: dict) -> None:
                         s["arzt"] = {"typ": "egal"}
                         print("bianca-kartei: keine Behandler-Historie, suche global", flush=True)
             vorrat_anstossen(sit)
+            gehirn.patientenkontext_aktualisieren(sit)
         except Exception as e:
             # Netz-Wackler: Suchmarke zurücknehmen, damit ein späterer Zug
             # denselben Namen noch einmal versuchen darf.

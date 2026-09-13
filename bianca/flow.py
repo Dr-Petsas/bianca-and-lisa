@@ -12,12 +12,16 @@ import re
 from typing import Any, Callable
 
 from bianca import besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
+from kern import abschied
 from kern import anliegen_art
 from kern import dossier
+from kern import fachprofil
 from kern import gedaechtnis
 from kern import motive
+from kern import patients
 from kern import praxisregeln
 from kern import spur
+from kern import vornamen
 from kern import notes as kern_notes
 from kern import calendar as kal
 from kern import gespraech
@@ -368,22 +372,51 @@ def _ctx_bauen(sit: dict) -> dict:
     if s["motivId"]:
         ctx["visitMotiveId"] = s["motivId"]
         ctx["visitMotiveName"] = s["motivName"]
-    elif s["grund"] and not _s(ctx.get("visitMotiveName")):
+    elif (s["grund"] and motive.ist_zahn(sit)
+          and not _s(ctx.get("visitMotiveName"))):
         ctx["visitMotiveName"] = "Kontrolluntersuchung"
+    elif s["grund"]:
+        ctx.pop("visitMotiveId", None)
+        ctx.pop("visitMotiveName", None)
     if s["patientId"]:
+        if _s(ctx.get("patientId")) != _s(s["patientId"]):
+            # Die ID kam frisch aus einer Namens-/Karteisuche. Ihre
+            # ursprüngliche Namensbindung wird separat festgehalten und bei
+            # späteren Namenskorrekturen nicht still überschrieben.
+            patients.patient_id_bindung_setzen(
+                ctx, s["patientId"], s["vorname"], s["nachname"])
         ctx["patientId"] = s["patientId"]
+    else:
+        ctx.pop("patientId", None)
+        patients.patient_id_bindung_setzen(ctx, "", "", "")
     if s["vorname"]:
         ctx["firstName"] = s["vorname"]
+    else:
+        ctx.pop("firstName", None)
     if s["nachname"]:
         ctx["lastName"] = s["nachname"]
+    else:
+        ctx.pop("lastName", None)
     name = f"{s['vorname']} {s['nachname']}".strip()
     if name:
         ctx["patientName"] = name
+    else:
+        ctx.pop("patientName", None)
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
     # Fuer eine NEUE Akte (book_slot -> akte_anlegen): Geschlecht aus dem
     # Vornamen-Waechter und der erfragte Versichertenstatus (29.08.2026).
+    if s["vorname"] and not s["geschlecht"] and s["geschlechtQuelle"] != "akte":
+        # Tiefe Sicherung: setzt ein anderer Weg den Vornamen direkt (ohne
+        # gehirn.einsammeln), fehlte dem Schnappschuss bisher das Geschlecht
+        # und die Anrede fiel weg. Gleiche Regel wie beim Einsammeln —
+        # unklarer Vorname wird weiblich plus Praxis-Notiz (Chef 29.08.2026).
+        g = vornamen.geschlecht(s["vorname"])
+        s["geschlecht"] = g or "f"
+        s["geschlechtUnklar"] = not g
+        s["geschlechtQuelle"] = "rate"
+        s["geschlechtVon"] = s["vorname"]
     if s["geschlecht"]:
         ctx["gender"] = s["geschlecht"]
     if s["versicherung"]:
@@ -409,6 +442,19 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if wer:
             return f"Alles klar — der Termin ist für {wer}. "
         return "Alles klar — der Termin ist für jemand anderen. "
+    if "anruferCheck" in neu:
+        if s.get("anruferCheck") == "nein":
+            # DB-Treffer verworfen: klassisch frisch aufnehmen.
+            return "Entschuldigen Sie bitte — dann nehme ich Ihre Daten frisch auf. "
+        # Name stand unmittelbar zuvor im Hallo/Identitätscheck; danach nur
+        # noch Pronomen statt „Danke, Michael Petsas“.
+        return "Danke. "
+    if "fuerWenCheck" in neu:
+        return "Alles klar. "
+    if "warSchonMal" in neu:
+        if s.get("warSchonMal") is False:
+            return "Ah, dann sind Sie zum ersten Mal bei uns. "
+        return "Alles klar, dann sind Sie bereits Patient bei uns. "
     if "nachname" in neu and s["buchstabiert"]:
         return f"Danke — {s['nachname']}, notiert. "
     if "name" in neu:
@@ -418,10 +464,6 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if s["vorname"] and s["nachname"]:
             return f"Danke, {s['vorname']} {s['nachname']}. "
         return "Danke. "
-    if "anruferCheck" in neu and s.get("anruferCheck") == "nein":
-        # DB-Treffer verworfen (W-ANRUFER-CHECK): kurz entschuldigen, dann
-        # kommt direkt die klassische Frage (schonmal/Name) hinterher.
-        return "Entschuldigen Sie bitte — dann nehme ich Ihre Daten frisch auf. "
     if "telefon" in neu:
         return "Prima, die Nummer habe ich. "
     if "telefonAkte" in neu:
@@ -494,7 +536,14 @@ def _readback(sit: dict) -> dict:
         beim = arzt_sprechname(kal_name, tenant)
     # Geschlechts-Anrede (Chef 29.08.2026): "für Frau Müller" / "für Herrn
     # Müller" — ohne Geschlecht bleibt der volle Name.
-    wer = gehirn.anrede(s, sit.get("patient"), beugen=True)
+    erkannt_selbst = (
+        s.get("anruferCheck") == "ja"
+        and not s.get("fuerWen")
+        and not s.get("kontaktName")
+    )
+    wer = "Sie" if erkannt_selbst else gehirn.anrede(
+        s, sit.get("patient"), beugen=True
+    )
     s["phase"] = "bestaetigen"
     s["frage"] = "bestaetigung"
     teile = [_grund_sprechbar(s), spoken_slot(s["slotIso"])]
@@ -553,8 +602,13 @@ def _abschied_nach_buchung(sit: dict) -> dict:
     sit["offered"] = []
     s = gehirn.sammler(sit)
     s["frage"] = ""
-    an = gehirn.anrede(s)
-    return {"text": f"Gern geschehen{', ' + an if an else ''}. Auf Wiederhören."}
+    an = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
+    return {
+        "text": f"Gern geschehen{', ' + an if an else ''}. Auf Wiederhören.",
+        # W-ABSCHIED 12.09.2026: gesprochener Abschied UND wirklich auflegen.
+        "hangup": abschied.an(),
+        "_wiederholungErlaubt": True,
+    }
 
 
 def _erinner_termin(sit: dict) -> dict:
@@ -579,6 +633,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             melde("offer_slots")
         hintergrund.kartei_abwarten(sit, max_s=3.0)
         a = s["arzt"] or {}
+    if (
+        s.get("anruferCheck") == "ja"
+        and not a.get("calendarId")
+        and (sit.get("hgLaeuft") or {}).get("anruferKartei")
+    ):
+        if melde:
+            melde("offer_slots")
+        hintergrund.anrufer_kartei_abwarten(sit, max_s=1.2)
+        gehirn.anrufer_kartei_uebernehmen(sit)
+        a = s["arzt"] or {}
 
     # Chef 03.09.2026: "wenn jemand nicht weiss zu welchem arzt er soll dann
     # immer bei dr. Petsas buchen" — steht bis hier KEIN Kalender fest (egal,
@@ -595,6 +659,17 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
 
     sit.pop("angebotKalender", None)  # neues Angebot => neue Bindung
     ctx = _ctx_bauen(sit)
+    if not _s(ctx.get("visitMotiveId")) and not motive.ist_zahn(sit):
+        # Tiefe Sicherung gegen alte/fortgesetzte Sitzungen: Auch wenn ein
+        # fachfremder Grund schon im Sammler stand, ohne exaktes Motiv keine
+        # Slotsuche und erst recht keine Kontrollbuchung.
+        s["grund"] = ""
+        s["grundWortlaut"] = ""
+        s["motivId"] = ""
+        s["motivName"] = ""
+        s["phase"] = ""
+        s["frage"] = "grund"
+        return {"text": fachprofil.nicht_buchbar_antwort(sit)}
     vorrat = list(sit.get("slotVorrat") or [])
     # Gescheiterte Buchungs-ISOs nie wieder anbieten (W-BOOK-RETRY 01.09.2026).
     gesperrt = sit.get("slotGesperrt") or []
@@ -785,7 +860,10 @@ def _telefon_alt_ausfuehren(sit: dict, melde: Melde = None) -> str:
     res = telefon_aktualisieren(sit["tenant"], s["patientId"], s["telefon"])
     merke_tool(sit, "update_phone", res)
     if res.get("ok"):
+        alte_nummer = telefon.normaliert(s["aktePhone"])
         s["aktePhone"] = s["telefon"]
+        if not res.get("dryRun") and alte_nummer:
+            sit["telefonUpdateAlt"] = alte_nummer
         if res.get("dryRun"):
             return "Die neue Nummer hätte ich jetzt eingetragen — der Test schreibt die Kartei noch nicht. "
         return "Erledigt — die alte Nummer ist gelöscht, Ihre neue steht jetzt in der Akte. "
@@ -924,6 +1002,17 @@ def _pzr_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     if gehirn.ist_pzr_zusage(t):
         s["pzr"] = "ja"
         dossier.markiere(sit, "pzr")
+        from kern import zimmer_map
+        if zimmer_map.aktiv(sit.get("tenant") or {}):
+            gedaechtnis.fakt_senden(
+                sit, "PZR-Termin zusätzlich gewünscht; Buchung noch offen.")
+            sit["thalerPzrZusatz"] = True
+            return _pzr_weiter(
+                sit,
+                "Sehr gerne. Ich berücksichtige den Wunsch nach einem "
+                "PZR-Termin direkt vor oder nach dem Haupttermin. ",
+                melde,
+            )
         gedaechtnis.fakt_senden(sit, "Zahnreinigung zum Termin dazugebucht.")
         return _pzr_weiter(sit, "Sehr gerne, die Zahnreinigung nehme ich mit auf. ", melde)
     if gehirn.ist_nein(t):
@@ -1035,26 +1124,63 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 else:
                     if melde:
                         melde("note_appointment")
-                    kal.note_appointment(
+                    nummer_notiz = kal.note_appointment(
                         sit["tenant"], ctx, sit,
                         note=(
                             f"Anrufer nennt neue Handynummer: {s['telefon']} — "
                             f"Akte trägt {s['aktePhone']}. Bitte Akte aktualisieren."
                         ),
                     )
-                    text += " Ihre neue Handynummer gebe ich der Praxis mit."
+                    if not isinstance(nummer_notiz, dict):
+                        nummer_notiz = {}
+                    if nummer_notiz:
+                        merke_tool(sit, "note_appointment", nummer_notiz)
+                    if nummer_notiz.get("ok"):
+                        text += " Ihre neue Handynummer habe ich der Praxis mitgegeben."
+                    else:
+                        verwalten.abgeben_notiz(
+                            sit,
+                            was=(
+                                f"Neue Handynummer {s['telefon']} statt "
+                                f"{s['aktePhone']} prüfen und aktualisieren"
+                            ),
+                        )
+                        text += (
+                            " Die neue Handynummer konnte ich nicht sicher am Termin "
+                            "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                        )
             elif s["telefon"] or s["aktePhone"]:
                 text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
             # Praxis-Notizen ans Terminpopup (29.08.2026): unklares Geschlecht
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
             hinweise = []
+            notiz_bestaetigungen = []
+            if _s(sit.get("telefonUpdateAlt")):
+                hinweise.append(
+                    f"Alte Nummer {telefon.normaliert(sit['telefonUpdateAlt'])} "
+                    "aktualisiert //Bianca"
+                )
             if s["pzr"] == "ja":
-                # Chef 30.08.2026, exakter Wortlaut fuers Notizfeld: die
-                # Zahnreinigung wird nicht als zweiter Slot gebucht, sondern
-                # der Praxis am Termin sichtbar gemacht.
-                hinweise.append("PLUS PZR heute")
-                text += " Die professionelle Zahnreinigung habe ich mit dazu vermerkt."
+                from kern import zimmer_map
+                if zimmer_map.aktiv(sit.get("tenant") or {}):
+                    # Der aktuelle masBookAppointment-Vertrag verschickt bei
+                    # jeder Buchung zwingend eine Bestätigungs-SMS. Solange
+                    # keine SMS-Unterdrückung belegt ist, nie einen zweiten
+                    # Termin mit doppelter SMS heimlich schreiben.
+                    hinweise.append(
+                        "PZR-Termin erwünscht, aber noch nicht gebucht; bitte nachholen"
+                    )
+                    notiz_bestaetigungen.append(
+                        "Die beiden Termine kann ich von hier aus leider nicht "
+                        "sicher zusammenlegen. Ob die PZR direkt vor oder nach "
+                        "Ihrem Haupttermin möglich ist, wird vor Ort entschieden; "
+                        "sonst bekommen Sie einen eigenen PZR-Termin."
+                    )
+                else:
+                    hinweise.append("PLUS PZR heute")
+                    notiz_bestaetigungen.append(
+                        "Die professionelle Zahnreinigung habe ich mit dazu vermerkt.")
             # W-BLEACHING (Chef 03.09.2026): die Aufhellung wird nicht als
             # zweiter Slot gebucht — die Praxis sieht sie am Termin und
             # verlaengert selbst (ca. +1 Std., 350 Euro zusaetzlich).
@@ -1063,7 +1189,8 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     "PLUS Zahnaufhellung/Bleaching zur Zahnreinigung "
                     "(ca. +1 Std., 350 Euro zusätzlich) — bitte Terminlänge anpassen."
                 )
-                text += " Die Zahnaufhellung habe ich mit dazu vermerkt."
+                notiz_bestaetigungen.append(
+                    "Die Zahnaufhellung habe ich mit dazu vermerkt.")
             elif s["bleaching"] == "beratung":
                 if s["bleachingInfo"] == "unverbindlich":
                     hinweise.append(
@@ -1116,8 +1243,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     kern = f"Termin telefonisch gebucht vom Anrufer {kontakt}."
                 else:
                     kern = "Termin telefonisch von einem Angehörigen gebucht."
-                if s.get("telefon"):
+                if s.get("telefon") and s.get("smsEmpfaenger") == "anrufer":
                     kern += f" Kontakt-Nummer {s['telefon']} gehört dem Anrufer."
+                elif s.get("telefon") and s.get("smsEmpfaenger") == "patient":
+                    kern += " Die Bestätigungs-SMS geht an die terminierte Person."
                 hinweise.append(kern)
             # W-MOTIV-KATALOG (Chef 03.09.2026): "entsprechende kurznotizen
             # bitte nicht vergessen" — deckt der gebuchte Besuchsgrund den
@@ -1138,13 +1267,48 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     f"Anrufer an den Behandler: „{_s(s['arztNotiz'])}“ — "
                     "bitte beim Termin eingehen."
                 )
-                text += " Die Notiz für den Doktor habe ich zum Termin geschrieben."
+                notiz_bestaetigungen.append(
+                    "Die Notiz für den Doktor habe ich zum Termin geschrieben.")
             if hinweise:
                 if melde:
                     melde("note_appointment")
-                kal.note_appointment(sit["tenant"], ctx, sit, note=" ".join(hinweise))
+                notiz_res = kal.note_appointment(
+                    sit["tenant"], ctx, sit, note=kern_notes.ein_satz(hinweise))
+                if not isinstance(notiz_res, dict):
+                    notiz_res = {}
+                if notiz_res:
+                    merke_tool(sit, "note_appointment", notiz_res)
+                if notiz_res.get("ok"):
+                    text += " " + " ".join(notiz_bestaetigungen)
+                else:
+                    verwalten.abgeben_notiz(
+                        sit, was="Zusatzhinweise zum gebuchten Termin prüfen")
+                    text += (
+                        " Die Zusatzhinweise konnte ich nicht sicher am Termin "
+                        "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                    )
             text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
+    if res.get("patientMismatch"):
+        # Alte Akten-ID und bestätigter Name widersprechen sich. Slot/Grund
+        # bleiben stehen, aber die Patientenidentität wird vollständig neu
+        # erfasst; ein zweiter Buchungsversuch kann erst danach entstehen.
+        gehirn.name_fuer_aenderung_leeren(sit)
+        s["anruferCheck"] = "nein"
+        s["phase"] = ""
+        s["frage"] = "nachname"
+        return {"text": res.get("spoken"), "book": book}
+    if res.get("verificationFailed"):
+        # Die Buchung KANN gelandet sein. Nie erneut buchen und weder Erfolg
+        # noch SMS behaupten; stattdessen einen echten Prüf-/Rückrufvorgang
+        # hinterlassen.
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["keinSlotFertig"] = True
+        sit["offered"] = []
+        verwalten.buchung_pruefen_notiz(
+            sit, slot_iso=_s(res.get("slotIso") or s.get("slotIso")))
+        return {"text": res.get("spoken"), "book": book}
     if res.get("slotTaken"):
         # W-BOOK-RETRY 01.09.2026: phone_agent-Deckel — max. 2 slotTaken,
         # gescheiterte ISOs sperren, Intent merken (kein zweites Confirm).
@@ -1288,6 +1452,17 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
     s = gehirn.sammler(sit)
     if sit.get("rueckrufBuchung"):
         return None
+    if (s.get("modus") == "buchen" and s.get("anruferCheck") == "ja"
+            and not s.get("fuerWenCheck") and not s.get("fuerWen")):
+        # Identität und „für Sie selbst?“ bleiben ein zusammenhängender
+        # Dialogfaden. Kein Rückblick/PZR-Angebot darf dazwischen springen.
+        return None
+    if (s.get("modus") == "buchen" and s.get("anruferCheck") == "ja"
+            and not s.get("arzt")):
+        # Erst den passenden Kalender/letzten Behandler klären; ein
+        # Kartei-Rückblick darf diese Pflichtfrage beim erkannten Anrufer
+        # nicht überholen. Andere Bestandspfade bleiben unverändert.
+        return None
     if gehirn.rueckblick_faellig(s):
         s["rueckblick"] = "gefragt"
         s["frage"] = "rueckblick"
@@ -1347,6 +1522,16 @@ def _eskalieren(sit: dict, fid: str) -> str:
             return f"Machen wir es einfach: Ich schaue bei {beim} nach freien Terminen. "
         return "Machen wir es einfach: Ich schaue, wo es am schnellsten geht. "
     if fid == "grund":
+        if not motive.ist_zahn(sit):
+            s["grund"] = ""
+            s["grundWortlaut"] = ""
+            s["motivId"] = ""
+            s["motivName"] = ""
+            s["frage"] = "grund"
+            return (
+                "Das konnte ich nicht sicher einer Leistung dieser Praxis "
+                "zuordnen. " + fachprofil.besuchsgrund_frage(sit)
+            )
         s["grund"] = "Kontrolluntersuchung"
         s["grundWortlaut"] = s.get("grundWortlaut") or "Kontrolle"
         vm = (besuchsgrund.fallback_motiv(sit.get("tenant") or {},
@@ -1394,12 +1579,29 @@ def _eskalieren(sit: dict, fid: str) -> str:
         return ("Ich habe mir eine Notiz gemacht — der Doktor schaut sich das "
                 "beim Termin in Ruhe an und berät Sie. ")
     if fid == "anrufer_check":
-        # Zweimal keine klare Antwort auf das vorgelesene Name+Nummer-Paar:
+        # Zweimal keine klare Antwort auf die erkannte Identität:
         # NICHTS uebernehmen (Sicherheit vor Tempo — falsche Identitaet waere
         # fatal), klassisch nach Name und Nummer fragen (W-ANRUFER-CHECK).
         s["anruferCheck"] = "nein"
         return "Dann gehen wir auf Nummer sicher und nehmen Ihre Daten einfach frisch auf. "
+    if fid == "fuer_wen_check":
+        # Nicht raten, ob die erkannte Person selbst Patient ist.
+        s["fuerWenCheck"] = "nein"
+        s["fuerWen"] = "andere"
+        gehirn.patient_von_kontakt_loesen(sit)
+        return "Damit ich niemanden verwechsle: Für wen ist der Termin? "
     if fid == "telefon_check" and s["telefonOffen"]:
+        if (s.get("telefonBekannt")
+                and telefon.normaliert(s["telefonOffen"])
+                == telefon.normaliert(s["telefonBekannt"])):
+            # Hinterlegte Nummer nur nach einem klaren Ja verwenden. Nach
+            # zwei unklaren Antworten lieber neu erfragen als eine SMS an
+            # die falsche Nummer zu schicken.
+            gehirn._telefon_sperren(s, s["telefonOffen"])
+            s["telefonBekannt"] = ""
+            s["telefonOffen"] = ""
+            s["telefonTeil"] = ""
+            return "Dann frage ich die Nummer lieber neu ab. "
         # Zweimal keine klare Antwort auf die Rückbestätigung, aber auch kein
         # Nein: die vorgelesene Nummer gilt — nicht zum dritten Mal fragen
         # (Chef 27.08.2026: Nummer wurde mehrfach abgefragt und bestätigt).
@@ -1844,6 +2046,13 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         kern_hirn.erledigt(sit)
         return {"text": akut_text}
 
+    dokument_text = praxisregeln.unterlagen_antwort(sit.get("tenant"), t)
+    if dokument_text:
+        # Fester Praxisablauf: keine LLM-Halluzination und kein unnötiges
+        # Sammeln von Name oder Rufnummer.
+        s["frage"] = ""
+        return {"text": dokument_text}
+
     # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
     # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris
     # Zaluma-/SIP-Weiterleitung (bianca/weiterleiten.py).
@@ -1885,7 +2094,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # Live MedDent 09.09.: nach erfolgreicher Absage führten zwei
         # verhörte Danke-Sätze erst in „nicht verstanden“, dann in die
         # Schleifenbremse. Der abgeschlossene Job verabschiedet sich sofort.
-        return {"text": "Sehr gerne. Auf Wiederhören."}
+        return {"text": "Sehr gerne. Auf Wiederhören.", "hangup": abschied.an(),
+                "_wiederholungErlaubt": True}
 
     # Kein Slot gefunden, echte Rückrufnotiz geschrieben: der Vorgang ist
     # abgeschlossen. Dank/Abschied beendet freundlich; andere Folgesätze
@@ -1905,7 +2115,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit["offered"] = []
             return {"text": "Gerne. Wann passt es Ihnen für den weiteren Termin?"}
         if _ABSCHIED_RE.search(t):
-            return {"text": "Sehr gerne. Auf Wiederhören."}
+            return {"text": "Sehr gerne. Auf Wiederhören.",
+                    "hangup": abschied.an(), "_wiederholungErlaubt": True}
         return {"text": (
             "Die Rückrufbitte ist bereits für die Praxis notiert. "
             "Kann ich sonst noch etwas für Sie tun?"
@@ -2058,13 +2269,16 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
     if "grundNichtBuchbar" in neu:
-        # Thaler: andere Behandlungen nie als Kontrolle/Besprechung tarnen
-        # und nie einen dafuer unzulaessigen Termin anbieten. Die sechs
-        # freigegebenen Gruppen klar nennen und bei der Grundfrage bleiben.
+        # Fachfremde/unbekannte Leistungen nie als Kontrolle tarnen.
+        # Thaler nennt seine sechs freigegebenen Gruppen; alle anderen
+        # Mandanten antworten aus ihrem Fachtemplate.
         from kern import zimmer_map
         s["phase"] = ""
         s["frage"] = "grund"
-        return {"text": zimmer_map.buchbare_ansage()}
+        art = str(sit.pop("grundNichtBuchbarArt", "") or "")
+        if zimmer_map.aktiv(sit.get("tenant") or {}) and art == "mandantengrenze":
+            return {"text": zimmer_map.buchbare_ansage()}
+        return {"text": fachprofil.nicht_buchbar_antwort(sit)}
 
     # Live 08.09.2026: bei langsamer Buchstabierung/Nummerndiktat beendete
     # die SIP-VAD jeden Pausenabschnitt als eigenen Zug. Die Fragmentlogik
@@ -2081,10 +2295,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
 
     if "anruferWohl" in neu:
         # "Gut." auf den Hallo-Satz — Identitaet bleibt offen, nur die
-        # echte Ja/Nein-Frage nochmal, ohne den Verspiel-Vorsatz.
+        # echte Ja/Nein-Frage nochmal, ohne den Verspiel-Vorsatz. Die
+        # Empfängerfrage kommt erst NACH einem klaren Identitäts-Ja.
         s["frage"] = "anrufer_check"
-        selbst = s["modus"] == "buchen"
-        return {"text": "Schön! " + gehirn.anrufer_check_schluss(selbst=selbst)}
+        return {"text": "Schön! " + gehirn.anrufer_check_schluss()}
 
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
     # eigenen deterministischen Fluss.
@@ -2285,6 +2499,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # nie mitten in einem unbeantworteten Pflichtfragen-Faden.
     # W-MEDDENT (04.09.2026): nie direkt nach frischer Wunschzeit — erst
     # Slot anbieten (Detschel-Live: PZR mitten in „Nachmittag 15.09.“).
+    # W-PZR-REIHENFOLGE (09.09.2026): auch die offene Behandlerwahl ("arzt")
+    # sperrt den Einschub — ein Zusatzangebot darf den primaeren Terminrahmen
+    # nie ueberholen. Die Sperre war am 12.09. aus einem fremden Arbeitsstand
+    # heraus verlorengegangen; Wache: test_pzr_kassen,
+    # test_neupatient_klaert_erst_behandler_dann_pzr.
     if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check", "arzt",
                     "name", "nachname", "vorname", "buchstabieren", "telefon"}
             and not (fid == "arzt" and "arztCheck" in neu)
@@ -2387,6 +2606,13 @@ def status_zeile(sit: dict) -> str:
     a = s.get("arzt") or {}
     teile = [
         f"Name={_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip(),
+    ]
+    # Die belegte Anrede gehoert in den Stand: das Modell soll "Frau Mueller"
+    # nicht selbst raten muessen (die Anrede-Wache streicht ungedeckte Namen).
+    an = gehirn.anrede(s)
+    if an and an != f"{_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip():
+        teile.append(f"Anrede={an}")
+    teile += [
         f"Grund={_s(s.get('grund')) or '?'}",
         f"Arzt={_s(a.get('calendarName')) or a.get('typ') or '?'}",
         f"Telefon={_s(s.get('telefon')) or '?'}",

@@ -6,10 +6,33 @@
 
 const $ = (id) => document.getElementById(id);
 const spieler = $("spieler");
+const ART_KEY = "pickadoc.anrufe.art";
 let anrufe = [];
 let aktivId = "";
 let laufKnopf = null;
 let kette = [];
+let artFilter = "alle";
+let tenantAliase = {};
+
+function artLesen() {
+  try {
+    const v = localStorage.getItem(ART_KEY);
+    if (v === "test" || v === "live" || v === "alle") return v;
+  } catch { /* */ }
+  return "alle";
+}
+
+function artSchreiben(v) {
+  artFilter = v;
+  try { localStorage.setItem(ART_KEY, v); } catch { /* */ }
+}
+
+function istTest(a) {
+  if (!a) return false;
+  if (a.testAnruf) return true;
+  if (a.phoneCallId) return false;
+  return true;
+}
 
 function zeit(iso) {
   try {
@@ -73,6 +96,12 @@ function kopierKnopf(text, label) {
     }
   };
   return b;
+}
+
+function anruferName(a) {
+  const name = String(a.patientName || a.testName || "").trim();
+  if (istTest(a)) return name ? `Test · ${name}` : "Testanruf";
+  return name || "Unbekannter Anrufer";
 }
 
 function ergebnis(a) {
@@ -317,8 +346,9 @@ function maleDetail(a) {
   const zeiten = document.createElement("div");
   zeiten.className = "zeiten";
   const dauer = a.dauerMs != null ? mmss(a.dauerMs) + " min" : "läuft / offen";
+  const art = istTest(a) ? "Testanruf" : "Praxis-Live";
   zeiten.innerHTML =
-    `<b>${a.patientName || "Unbekannter Anrufer"}</b> — ${a.zuege ? a.zuege.length : 0} Züge<br>` +
+    `<b>${anruferName(a)}</b> — ${art} · ${a.zuege ? a.zuege.length : 0} Züge<br>` +
     `Beginn: <b>${zeit(a.startedAt)}</b> · Ende: <b>${a.endedAt ? zeit(a.endedAt) : "—"}</b> · Dauer: <b>${dauer}</b>`;
   const uidZeile = document.createElement("div");
   uidZeile.className = "uid-zeile";
@@ -449,26 +479,62 @@ async function oeffne(sid) {
   }
 }
 
+function sichtbare() {
+  return anrufe.filter((a) => {
+    if (artFilter === "test") return istTest(a);
+    if (artFilter === "live") return !istTest(a);
+    return true;
+  });
+}
+
+function filterZeichnen() {
+  const nAlle = anrufe.length;
+  const nTest = anrufe.filter(istTest).length;
+  const nLive = nAlle - nTest;
+  if ($("n-alle")) $("n-alle").textContent = nAlle ? `(${nAlle})` : "";
+  if ($("n-test")) $("n-test").textContent = nTest ? `(${nTest})` : "";
+  if ($("n-live")) $("n-live").textContent = nLive ? `(${nLive})` : "";
+  document.querySelectorAll("#art-filter [data-art]").forEach((b) => {
+    b.classList.toggle("an", b.getAttribute("data-art") === artFilter);
+  });
+}
+
 function maleListe() {
+  filterZeichnen();
   const wurzel = $("liste");
   wurzel.innerHTML = "";
-  if (!anrufe.length) {
-    wurzel.innerHTML = '<div class="leer">noch keine Mitschnitte — einfach bei Bianca anrufen</div>';
+  const liste = sichtbare();
+  if (!liste.length) {
+    const leer = artFilter === "test"
+      ? "keine Testanrufe in dieser Praxis"
+      : artFilter === "live"
+        ? "keine Praxis-Live-Anrufe in dieser Praxis"
+        : "noch keine Mitschnitte — einfach bei Bianca anrufen";
+    wurzel.innerHTML = `<div class="leer">${leer}</div>`;
     return;
   }
-  for (const a of anrufe) {
+  for (const a of liste) {
+    const test = istTest(a);
     const e = document.createElement("div");
-    e.className = "eintrag" + (a.id === aktivId ? " aktiv" : "");
+    e.className = "eintrag" + (a.id === aktivId ? " aktiv" : "") + (test ? " test" : "");
     const [text, farbe] = ergebnis(a);
     const kopf = document.createElement("div");
     kopf.className = "e-kopf";
     const name = document.createElement("span");
-    name.textContent = a.patientName || "Unbekannter Anrufer";
+    name.className = test ? "name-test" : "";
+    name.textContent = anruferName(a);
+    const marken = document.createElement("span");
+    marken.className = "e-marken";
+    const artMarke = document.createElement("span");
+    artMarke.className = "marke " + (test ? "test" : "live");
+    artMarke.textContent = test ? "Test" : "Live";
+    marken.appendChild(artMarke);
     const marke = document.createElement("span");
     marke.className = `marke ${farbe}`;
     marke.textContent = text;
+    marken.appendChild(marke);
     kopf.appendChild(name);
-    kopf.appendChild(marke);
+    kopf.appendChild(marken);
     const meta = document.createElement("div");
     meta.className = "e-meta";
     meta.textContent = `${zeit(a.startedAt)} · ${a.dauerMs != null ? mmss(a.dauerMs) + " min" : "offen"} · ${a.zuege} Züge`;
@@ -481,14 +547,45 @@ function maleListe() {
 
 async function ladeListe() {
   try {
+    const t = (typeof praxisLesen === "function" && praxisLesen()) || "";
+    if (!Object.keys(tenantAliase).length) {
+      try {
+        const td = await (await fetch("api/tenants", { cache: "no-store" })).json();
+        (td.tenants || []).forEach((x) => {
+          tenantAliase[x.id] = [
+            x.id, x.clientId, x.locationId, ...(x.aliases || []),
+          ].filter(Boolean);
+        });
+      } catch { /* lokale ID bleibt nutzbar */ }
+    }
+    const erlaubt = new Set(tenantAliase[t] || [t]);
     const r = await fetch("api/anrufe");
     const d = await r.json();
-    anrufe = (d && d.anrufe) || [];
+    anrufe = ((d && d.anrufe) || []).filter((a) => {
+      if (!t) return true;
+      const tid = a.tenantId || "";
+      return erlaubt.has(tid);
+    });
   } catch {
     anrufe = [];
   }
   maleListe();
 }
 
+function filterBinden() {
+  document.querySelectorAll("#art-filter [data-art]").forEach((b) => {
+    b.addEventListener("click", () => {
+      artSchreiben(b.getAttribute("data-art") || "alle");
+      maleListe();
+    });
+  });
+}
+
 $("neuLaden").onclick = () => { ladeListe(); if (aktivId) oeffne(aktivId); };
-ladeListe();
+artFilter = artLesen();
+filterBinden();
+if (typeof praxisSeiteStart === "function") {
+  praxisSeiteStart({ onchange: () => ladeListe() }).then(ladeListe);
+} else {
+  ladeListe();
+}

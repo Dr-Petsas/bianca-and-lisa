@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Lisa — Kampagne</title>
+  <link rel="stylesheet" href="/styles.css?v=kampagne1" />
+</head>
+<body class="kampagne-seite">
+  <nav class="tabs">
+    <a class="tab tab-link" href="/#bianca">Bianca <span class="tabsub">nimmt Anrufe an</span></a>
+    <a class="tab tab-link" href="/#lisa">Lisa <span class="tabsub">ruft Patienten an</span></a>
+    <a class="tab tab-link" href="/bianca/anrufe">Anrufe <span class="tabsub">Mitschnitte und Transkripte</span></a>
+    <a class="tab tab-link active" href="/kampagne" data-tab="kampagne">
+      Kampagne <span class="tabsub">bewirbt sich als Telefonistin</span>
+    </a>
+  </nav>
+
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Kampagne</h1>
+        <div class="sub">Lisa ist die Anruferin: sie wartet auf die Meldung, dann fragt sie locker nach Rezeptions-Personal. Keine Termine.</div>
+      </div>
+    </header>
+
+    <div class="k-grid">
+      <section class="card">
+        <h2>Kampagnen</h2>
+        <div class="k-liste" id="kampListe"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn ghost" id="neu" type="button">Neue Kampagne</button>
+        </div>
+      </section>
+
+      <div>
+        <section class="card">
+          <h2>Auftrag</h2>
+          <label for="kName">Name</label>
+          <input id="kName" type="text" placeholder="z. B. Pickadoc Rezeption KW36" />
+          <label for="kAuftrag">Bewerbung — was Lisa am Telefon will</label>
+          <textarea id="kAuftrag" placeholder="Als Telefonistin bewerben, Entscheider erreichen …"></textarea>
+          <label for="kTenant">Mandant</label>
+          <select id="kTenant"></select>
+          <div class="row" style="margin-top:10px">
+            <button class="btn ghost" id="speichern" type="button">Speichern</button>
+          </div>
+        </section>
+
+        <section class="card" style="margin-top:12px">
+          <h2>Empfängerliste</h2>
+          <div class="sub">Eine Zeile: Name;Telefon;Notiz — oder CSV. Web-Anruf klingelt bei dir (Dev-Nummer), nicht beim Eintrag.</div>
+          <textarea id="kPaste" placeholder="Praxis Dr. Meier;0211 123456;Dr. Meier" style="min-height:88px"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn ghost" id="dazu" type="button">Zur Liste</button>
+          </div>
+          <div id="empfaenger" style="margin-top:10px"></div>
+        </section>
+
+        <section class="card" style="margin-top:12px">
+          <h2>Gespräche</h2>
+          <div id="calls" class="k-trans"></div>
+        </section>
+      </div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <div id="call" class="call">
+    <div class="call-top">
+      <div class="call-name" id="callName">Lisa</div>
+      <div class="call-phase" id="phase">verbindet…</div>
+    </div>
+    <div class="call-pulse" id="pulse"></div>
+    <div class="live call-live" id="live"></div>
+    <button class="btn hang" id="hang" type="button">Auflegen</button>
+  </div>
+
+  <div class="dock" id="dock">
+    <button class="btn" id="naechste" type="button">Gespräch starten</button>
+  </div>
+  <audio id="speaker" playsinline webkit-playsinline hidden></audio>
+  <script src="/kampagne.js?v=kampagne5"></script>
+</body>
+</html>

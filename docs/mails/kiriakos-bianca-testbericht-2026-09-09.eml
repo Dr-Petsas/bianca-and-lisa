@@ -1,0 +1,156 @@
+X-Unsent: 1
+From: Nadine <info@pickadoc.de>
+To: development@pickadoc.de
+Subject: Bianca-Testbericht: Audioaussetzer, Kurz-Ja und Teststudio behoben
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bianca-Testbericht: Audioaussetzer, Kurz-Ja und Teststudio behoben</title>
+</head>
+<body style="margin:0;padding:0;background:#eef1f5;font-family:Arial,Helvetica,sans-serif;color:#24374e;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#eef1f5;">
+    <tr>
+      <td align="center" style="padding:24px 10px 36px;">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 28px rgba(36,55,78,.12);">
+          <tr>
+            <td align="center" style="background:#24374e;padding:28px 28px 24px;">
+              <img src="https://pickadoc.de/images/logo-text-ai-email.png" width="190" height="51" alt="Pickadoc" style="display:block;border:0;width:190px;height:51px;margin:0 auto 16px;">
+              <div style="display:inline-block;background:#d862c8;color:#ffffff;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:bold;letter-spacing:.8px;">LIVE BEHOBEN</div>
+              <h1 style="margin:16px 0 4px;color:#ffffff;font-size:27px;line-height:1.2;">Bianca-Testbericht</h1>
+              <div style="color:#dbe4ef;font-size:15px;">Audioaussetzer, Kurz-Ja, Behandlerfrage, Transkripte und Teststudio</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px 30px 8px;">
+              <p style="margin:0 0 14px;font-size:16px;line-height:1.6;">Hi Kiriakos,</p>
+              <p style="margin:0 0 16px;font-size:16px;line-height:1.6;">
+                dein Test heute Morgen war sehr hilfreich. Wir konnten die gemeldeten Stellen anhand des echten Gesprächs, der Audioarchive und der Bridge-Logs nachvollziehen. Die Korrekturen sind bereits auf <strong>pickadoc1</strong> live.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">1. Audioaussetzer bei langen Antworten gefunden und behoben</div>
+                    <div style="font-size:15px;line-height:1.6;">
+                      Der Fehler lag nicht bei Whisper und nicht in den erzeugten Sprachdateien. Das „stille Ohr“ der Telefonbrücke summierte kurze Echo- und Rauschspitzen über die <strong>gesamte</strong> Antwort. Sobald über einen langen Satz verteilt insgesamt 400 Millisekunden zusammenkamen, wertete die Brücke das fälschlich als Zwischenruf und kappte Biancas laufendes Audio. Genau deshalb nahm der Effekt bei längeren Antworten zu. Jetzt gilt die Schwelle nur noch in einem rollenden 600-Millisekunden-Fenster: Echte längere Einwände unterbrechen Bianca weiterhin, verteilte Leitungsstörungen nicht mehr.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">2. Separates Dialogstocken nach kurzem „Ja“ behoben</div>
+                    <div style="font-size:15px;line-height:1.6;">
+                      Unabhängig davon gab es einen Eingabefehler: Hörbare kurze Antworten erreichten Whisper, konnten aber als formal gültiges leeres Ergebnis zurückkommen. Ein leeres Whisper-Final gilt bei vorhandenem Sprach-Audio deshalb nicht mehr als Stille. Parakeet hört denselben Zug sofort gegen; Whisper wird dabei nicht unnötig pausiert. Das beseitigt die Wartezeit bis zum Stups, ist aber ausdrücklich nicht die Ursache der Aussetzer in Biancas Sprachausgabe.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">3. Behandlerfrage verkürzt</div>
+                    <div style="font-size:15px;line-height:1.6;">
+                      Ist der Behandler aus einem letzten Besuch oder einem bereits bestehenden Folgetermin sicher bekannt, fragt Bianca jetzt nur noch: <strong>„Bei Doktor Petsas wieder, richtig?“</strong> Ohne gesicherten Kalenderfakt fragt sie neutral, bei welchem Behandler sie schauen soll – sie rät nicht.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">4. Bianca-Teststudio komplett wiederhergestellt</div>
+                    <div style="font-size:15px;line-height:1.6;">
+                      Hauptseite, Styles, Skripte, Katalog, Ergebnisse, Detailansichten, Zurück-Links und Audioabrufe funktionieren wieder direkt und hinter dem öffentlichen Bianca-Tunnel. Die Ursache waren absolute Studio-Pfade, verlorene Weiterleitungs-Header und eine fehlende Aufbereitung freier Testtexte. Ein neuer kompletter Rezept-Testlauf wurde öffentlich gestartet, beendet und anschließend mit Transkript und Audioknöpfen in der Ergebnisansicht geöffnet.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:8px 30px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f7f8fa;border-left:4px solid #d862c8;border-radius:8px;">
+                <tr>
+                  <td style="padding:17px 18px;">
+                    <div style="font-size:18px;font-weight:bold;margin-bottom:8px;">5. Transkriptseite vollständig repariert</div>
+                    <div style="font-size:15px;line-height:1.6;">
+                      Hier lagen drei getrennte Fehler übereinander: Der Lisa-Container zeigte beim Bianca-Proxy auf sein eigenes localhost, Biancas Server lieferte das benötigte <code>anrufe.js</code> nicht aus, und Cloudflare hielt den früheren 404 im Cache. Proxyziel, JavaScript-Route und Cache-Schutz sind korrigiert. Die Seite lädt jetzt 200 Gespräche; dein jüngster Test zeigt 17 Züge, das vollständige Transkript und 29 Audioelemente.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:18px 30px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#24374e;border-radius:10px;">
+                <tr>
+                  <td align="center" style="padding:20px 18px;">
+                    <div style="color:#ffffff;font-size:17px;font-weight:bold;margin-bottom:12px;">Geschützter Zugang zu Anrufen und Transkripten</div>
+                    <a href="https://bianca-and-lisa.pickadoc-tunnel.com/bianca/anrufe#t=Oke1b5MAoeIxeFsu7TDi4w97" style="display:inline-block;background:#d862c8;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:15px;font-weight:bold;">Transkriptseite öffnen</a>
+                    <div style="color:#dbe4ef;font-size:12px;line-height:1.5;margin-top:12px;">
+                      Der Zugangstoken wird einmalig gegen ein 12-Stunden-HttpOnly-Cookie nur für den Bianca-Viewer getauscht. Er erscheint nicht in Transkript-, API- oder Audio-URLs.
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:20px 30px 8px;">
+              <h2 style="margin:0 0 10px;font-size:20px;color:#24374e;">Produktionsprüfung</h2>
+              <ul style="margin:0;padding-left:20px;font-size:15px;line-height:1.7;">
+                <li>Lisa und Bianca gesund, <code>WRITE_LIVE=1</code> unverändert.</li>
+                <li>Produktions-Smoke vollständig grün: Weiterleitung, CallR/Mitschnitt, beide MedDent-DIDs und SIP-Prefill.</li>
+                <li>52 relevante Audio-, Barge-in-, Echo-, Studio- und Viewer-Regressionstests grün.</li>
+                <li>Der alte Audiofehler ist durch einen gezielten Test reproduzierbar; dieser Test ist nach dem Fix grün und auch im laufenden SIP-Container bestanden.</li>
+                <li>Realer Brücken-Diagnoselauf: rund 16 Sekunden Antwort ohne Paketlücke oder Underrun.</li>
+                <li>Keine neuen Tracebacks oder Startfehler in den Live-Containern; SIP-Brücke gesund.</li>
+              </ul>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:20px 30px 30px;">
+              <p style="margin:0;font-size:16px;line-height:1.6;">
+                Bitte jetzt noch einmal einen längeren Anruf testen, dabei ein paar Antworten bewusst nur kurz mit „Ja“ oder „Nein“ geben und anschließend den Anruf direkt im Viewer öffnen. Falls noch ein hörbarer Audioabriss auftritt, reichen Uhrzeit und ungefährer Satz – Ausgabeabbrüche, Eingabestockungen und normale Sprechpausen sind jetzt technisch sauber getrennt.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -624,6 +624,9 @@ async function stilleStups(nr) {
     if (d.text) bubble("ki", d.text);
     phase("ki", "Bianca spricht …");
     await playUrl(d.audioUrl);
+    // W-STUPS-GESAMT: die Notleine verabschiedet sich — dann ist Schluss,
+    // sonst kam derselbe Abschluss-Satz beim nächsten Stups erneut.
+    if (d.hangup) { auflegen(); return true; }
     return true;
   } catch { return false; }
 }
@@ -866,10 +869,56 @@ async function boot() {
     }
     notfall = urls;
   } catch { /* */ }
-  const t = await (await fetch("api/tenants")).json();
-  $("tenant").innerHTML = (t.tenants || []).map((x) =>
-    `<option value="${x.id}" ${x.id === t.default ? "selected" : ""}>${x.praxisName}</option>`
-  ).join("");
+  const onPraxis = () => {};
+  try {
+    if (typeof praxisSeiteStart === "function") {
+      await praxisSeiteStart({ onchange: onPraxis });
+    } else {
+      await praxisFallbackStart(onPraxis);
+    }
+  } catch (e) {
+    console.warn("praxis-start", e);
+    try { await praxisFallbackStart(onPraxis); } catch { /* */ }
+  }
+}
+
+function praxisAktuell() {
+  if (typeof praxisLesen === "function") {
+    try { return praxisLesen() || ""; } catch { /* */ }
+  }
+  try {
+    const q = new URLSearchParams(location.search).get("tenant");
+    if (q) return q;
+    return localStorage.getItem("pickadoc.praxis") || "";
+  } catch {
+    return "";
+  }
+}
+
+async function praxisFallbackStart(onchange) {
+  const sel = $("tenant");
+  if (!sel) return "";
+  let data = { tenants: [], default: "" };
+  try {
+    data = await (await fetch("api/tenants", { cache: "no-store" })).json();
+  } catch { /* */ }
+  const liste = (data.tenants || []).filter((t) => t.id !== "demo");
+  const aktuell = praxisAktuell();
+  const ids = new Set(liste.map((t) => t.id));
+  const wahl = ids.has(aktuell)
+    ? aktuell
+    : (ids.has(data.default) ? data.default : ((liste[0] && liste[0].id) || ""));
+  sel.innerHTML = liste.map((t) =>
+    `<option value="${t.id}">${t.praxisName || t.id}</option>`).join("");
+  if (wahl) sel.value = wahl;
+  try {
+    if (wahl) localStorage.setItem("pickadoc.praxis", wahl);
+  } catch { /* */ }
+  sel.onchange = () => {
+    try { localStorage.setItem("pickadoc.praxis", sel.value); } catch { /* */ }
+    if (typeof onchange === "function") onchange(sel.value);
+  };
+  return sel.value;
 }
 
 function starteAnruf() {
@@ -910,7 +959,7 @@ async function weiterNachMic(micBitte) {
     const r = await fetch("api/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant: $("tenant").value }),
+      body: JSON.stringify({ tenant: $("tenant").value, test: true, testName: "Dock" }),
     });
     if (!r.ok) {
       let msg = "start fehlgeschlagen";
@@ -1039,16 +1088,18 @@ const KOENNEN = [
 
 const TECHNIK = [
   { t: "Ohr — STT-Pipeline (hören)", p: [
-    "<b>Engine:</b> Qwen3-ASR-1.7B auf der RTX 3060, fest auf Deutsch — nur das finale geprüfte Transkript steuert Bianca. Der frühere Whisper-Pfad ist in dieser Pipeline abgeschaltet.",
-    "<b>Sicherheitsnetz:</b> fällt der Qwen-Dienst aus, übernimmt Parakeet auf der 5090 sichtbar nach einer kurzen Qwen-Pause. Ein stiller Rückfall auf Whisper oder ElevenLabs ist im Qwen-Modus ausgeschlossen.",
+    "<b>Engine:</b> Parakeet Primeline auf der 5090 ist der sofortige Hauptweg; Qwen3-ASR auf der separaten GPU prüft parallel. Plausible Texte warten nie, nur auffällige Ergebnisse höchstens 250 ms.",
+    "<b>Qwen-only über LAN:</b> Bianca fragt auf der GPU-Box ausschließlich Qwen ab — kein doppeltes Parakeet und kein Cloudflare-Umweg. Fällt Qwen aus, spricht das lokale Parakeet ohne Verzögerung weiter; Whisper und ElevenLabs bleiben draußen.",
     "<b>Stille-Trim (W-STT-TRIM):</b> Vor-/Nachlauf-Stille wird vor der Inferenz energie-basiert abgeschnitten — „Ja“/„Nein“ gehen nicht mehr unter, reine Stille wird verworfen statt halluziniert.",
-    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare, Behandler-Namen als Hotwords („Betsas“ → „Petsas“).",
+    "<b>Fuzzy-Nachkorrektur</b> (Claras bewährte Strecke): Anlaut-Gruppen P/B und T/D/Z, Token-Paare sowie mandantenscharfe Praxis-, Behandler- und Fach-Hotwords („Betsas“ → „Petsas“, „Ttola“ → „Thaler“, Thaler-Hörformen → „Röntgenbild“/„Sprechstundenhilfe“).",
+    "<b>Ohr-Pausenverdichtung (W-STT-OHR-KOMPAKT):</b> genau eine sehr lange interne Leerstelle in einem dünnen Ohr-Zug wird vor Parakeet verkürzt; alle Sprachsamples sowie normale und mehrteilige Züge bleiben unverändert.",
     "<b>Vorab-STT (W-TEMPO):</b> ab 200 ms Ruhe wird schon transkribiert — die Rest-Stille überlappt mit der Erkennung; adaptive Ruhe-Schwelle je Fragetyp: 350 ms nach Ja/Nein-Fragen, 1500 ms Diktat-Geduld bei Nummern (W-STT-SCHWANZ), sonst 500 ms.",
     "<b>Echo-Wache:</b> das Lautsprecher-Echo der eigenen Stimme wird erkannt und verworfen — kurze echte Antworten („ja“, „nein“, „stopp“) nie.",
   ]},
   { t: "Hirn — LLM-Pipeline (verstehen & entscheiden)", p: [
     "<b>Modell:</b> Qwen 3.6 35B-A3B auf vLLM (5090:8000, Prefix-Cache) — ein Container für alle Stimmen des Hauses.",
     "<b>Zwei Schichten:</b> die deterministische Job-Maschine hält Termine, Namen und Nummern; die Talk-Schicht redet frei bei Nebenthemen (Gravity + Rückweg-Brücke).",
+    "<b>Einwort-Lotse (W-EINWORT):</b> eindeutige Stichwörter laufen direkt in den sicheren Flow; das mehrdeutige „Termin“ fragt nach vereinbaren, verschieben oder absagen. Nur unbekannte Fragmente bekommen einmalig die freundliche Bitte um einen ganzen Satz.",
     "<b>Satz-Deckel (P2):</b> der Stream schließt hart nach zwei Sätzen plus Frage — nichts Abgehacktes.",
     "<b>Satzweises Streaming (P5):</b> jeder fertige Satz wird sofort vertont, während das Modell weiterschreibt.",
     "<b>Wachen um jeden Zug:</b> Fakten kommen aus Werkzeugen (Kalender, Kartei, Wissen), nie aus dem Bauch — Halbsatz-, Wiederholungs-, Buchungs- und Nachbesserungs-Wachen.",
@@ -1117,7 +1168,7 @@ const PATCHES = [
   ["W-SIP-PEGEL (Telefon-Lautheit)", "30.08.", "Telefon", "Biancas Studio-Pegel (−14 dBFS, Peaks am Deckel) klang auf der G.711-Strecke übersteuert — die Brücke dämpft jetzt nur Richtung Asterisk um 6 dB (BRIDGE_GAIN, 1.0 = aus); Docks unverändert."],
   ["W-SIP-ECHO-RAUS (Echo-Sperre aus)", "30.08.", "Telefon", "Die Halbduplex-Echo-Sperre verschluckte echte Antworten (Sprache leiser als die Echo-Referenz) — jetzt default aus; Echo-Transkripte fängt die Text-Wache im Dienst. Rückweg: BRIDGE_ECHO=1."],
   ["W-STT-WHISPER (GPU-Ohr mit Rückfall)", "30.08.", "Ohr", "Whisper large-v3 auf der Dev-GPU hört zuerst (WebSocket-Stream über Tailscale, gleiche Fuzzy-Nachkorrektur); ist der Dev-Rechner weg, übernimmt Parakeet automatisch — nie ElevenLabs. Leer = Parakeet wie bisher."],
-  ["W-STT-QWEN (3060-Ohr ohne Whisper)", "09.09.", "Ohr", "Qwen3-ASR-1.7B auf der RTX 3060 liefert das finale deutsche Transkript an Bianca. Im Qwen-Modus werden weder Whisper noch ElevenLabs aufgerufen; bei einem Ausfall übernimmt ausschließlich der vorhandene Parakeet-Rückfall sichtbar."],
+  ["W-STT-QWEN-PARALLEL", "11.09.", "Ohr", "5090-Parakeet bleibt der latenzfreie Hauptweg; Qwen3-ASR prüft gleichzeitig über den direkten LAN-Qwen-only-Endpunkt. Plausible Züge warten 0 ms, auffällige maximal 250 ms; späte Qwen-Läufe stauen nie den nächsten Zug."],
   ["W-STT-SCHWANZ (nichts mehr verschluckt)", "30.08.", "Ohr", "Leise Satz-Enden (letzte Ziffern) gingen verloren: Diktat-Geduld 650 → 1500 ms, Hysterese in der Brücken-VAD (leiser Auslauf hält das Zugende offen), Trim-Grenzen im STT-Container über eine zartere Schwelle, Brücken-Vorlauf 300 → 500 ms."],
   ["W-SIP-SLIN (Codec-Verzerrer behoben)", "30.08.", "Telefon", "µ-law-Anrufer (je nach Zubringer) wurden mit der A-law-Kennlinie dekodiert — übel verzerrt, STT-Verhörer inklusive. Der Asterisk-Dialplan nutzt jetzt die AudioSocket()-Applikation statt Dial: der Kanal wird auf slin gezwungen, Asterisk transkodiert selbst, die Brücke bekommt IMMER sauberes PCM."],
   ["W-MANDANT (Mandant per angerufener Nummer)", "30.08.", "Kern", "Die SIP-Brücke erkennt an der Dialplan-UUID, WELCHE Nummer angerufen wurde, und Bianca lädt dazu den Agent aus der Pickadoc-DB (onPickadocPhoneCall wie beim alten phone_agent) — die DB ist die Wahrheit: Begrüßung, Kalender, Motive, Keywords und der Praxis-Prompt kommen von dort, der DB-Prompt wird als PRAXIS-PROFIL in Biancas festen Verhaltens-Prompt gemerged (der ist praxis-neutral). Lokale tenants/*.json sind nur noch Rückfall. Auch das MAS-Gedächtnis läuft unter der clientId des Sitzungs-Mandanten."],
@@ -1130,11 +1181,15 @@ const PATCHES = [
   ["W-NACHNAME (Absage wie im alten Agent)", "31.08.", "Gespräch", "Absagen/Verschieben fragt NUR noch den Nachnamen und sucht sofort (die Cloud Function braucht nicht mehr); die Wann-/Behandler-Vorabfrage ist raus. Melden sich mehrere Patienten mit gleichem Nachnamen (CF 409/ambiguous), grenzt eine Vornamen-Frage ab. Freiwillige Angaben (Tag, Behandler) filtern die Treffer weiter."],
   ["W-NAMESKORREKTUR (nie zu schnell aufgeben)", "31.08.", "Gespräch", "Findet die Suche zum Nachnamen nichts, gibt Bianca dem Anrufer ERST eine Korrektur-Chance („Vielleicht habe ich den Nachnamen falsch verstanden — sagen oder buchstabieren Sie ihn noch einmal?“) statt sofort die Notiz zu schreiben. Explizite Korrekturen („Nein, mein Nachname ist Zannes.“) werden IMMER übernommen — auch auf die Neubuchungs-Frage, wo sie früher im Nein-Zweig versanken. Ein verhörter Vorname vergiftet die Suche nicht mehr: die Suche fasst notfalls nur mit dem Nachnamen nach, die Kartei liefert den echten Vornamen."],
   ["W-ABSAGE-STALLONE (False-404-Fallback)", "10.09.", "Termine", "„Stallone“ war korrekt buchstabiert, doch die schnelle Termin-CF meldete wegen der fremden Anrufernummer fälschlich „Patient nicht gefunden“. Bei diesem Widerspruch sucht Bianca jetzt die Akte exakt über masSearchPatients und lädt den nächsten Termin über die eindeutige Patienten-ID. Mehrere Namens-Treffer werden nie geraten; dann fragt sie weiter nach dem Vornamen. Der gefundene Termin wird anschließend punktgenau per appointmentId abgesagt."],
+  ["W-ABSAGE-SPURWECHSEL", "10.09.", "Termine", "Während eines neuen Slotangebots gewinnt eine ausdrücklich benannte Bestandsabsage („Termin von Stallone absagen“, „meinen gebuchten Termin löschen“). Ein nacktes „den absagen, der passt nicht“ lehnt weiterhin nur den angebotenen Slot ab."],
+  ["W-SIP-SITZUNG (vollständig speicherbar)", "10.09.", "Betrieb", "Nicht serialisierbare Laufzeitobjekte wie Anrufer-Events und offene TTS-Jobs bleiben aus der JSON-Sicherung; Patient, Anliegen und CF-Mandant werden vollständig gespeichert."],
+  ["W-SLOT-FAKTEN (Verfügbarkeit nur aus Werkzeug)", "10.09.", "Termine", "„Ist heute noch etwas frei?“ startet immer den sicheren Buchungsfaden — auch beim Parakeet-Verhörer „sind heute doch der Wide frei bei Doktor Petzers“. Ohne Besuchsgrund fragt Bianca zuerst danach; mit Grund muss getFreeTimeSlots laufen. Das freie LLM darf nie wieder „heute ist nichts frei“ behaupten."],
+  ["W-DATENSATZ-BEZUG (Sie + hinterlegte SMS-Nummer)", "10.09.", "Gespräch", "Nach der einmaligen Identitätsbestätigung spricht Bianca den erkannten Patienten nur noch mit „Sie“ an — kein drei- bis vierfaches Michael Petsas. Identität und „Termin für Sie selbst?“ sind getrennt. Die hinterlegte Nummer wird als SMS-Ziel vorgelesen; bei Nein wird eine neue Nummer erfasst, rückbestätigt, auf Wunsch per masUpdatePatientPhone ersetzt und am Termin als „Alte Nummer … aktualisiert //Bianca“ vermerkt. Bei Kinder-/Drittterminen bedeutet „meine Nummer“ sicher die Kontakt-Nummer des Anrufers, nicht die Kinderakte."],
   ["Buchstabieren bei der Absage", "31.08.", "Gespräch", "Die Nachnamen-Frage beim Absagen/Verschieben lädt direkt zum Buchstabieren ein („Buchstabieren Sie ihn am besten gleich einmal.“) — und die Frage bekommt Diktat-Geduld (1,5 s statt 0,5 s Ruhe-Schwelle), damit langsames „B … E … R“ nie mitten im Namen geschnitten wird."],
   ["W-VERBINDEN-ECHT (echte Weiterleitung)", "31.08.", "Telefon", "Hat der Client im Portal eine Weiterleitung eingerichtet (callForwardings), wird nach Ansage + Jingle WIRKLICH durchgestellt: die Brücke merkt sich die Zielnummer je Anruf, der Asterisk-Dialplan holt sie nach dem AudioSocket-Ende per CURL ab (gleicher Port, HTTP-Peek) und wählt über den Zaluma-Trunk raus — wie die alten REFER-Transfers des phone_agent. Behandler nicht erreichbar → der Anrufer landet wieder bei Bianca statt in Totenstille. Ohne Einrichtung bleibt der Platzhalter-Weg."],
   ["W-TTS-NAHT (nichts mehr abgehackt)", "31.08.", "Hirn/Mund", "Sätze und Wörter klangen manchmal mittendrin abgehackt: der Satz-Split schnitt hinter Ordnungszahlen und Abkürzungen („im 3. | Stock“, „Bahnhofstr. | Fünf“), der Satz-Deckel kappte Antworten an solchen falschen Satzenden. Jetzt gilt die Grenz-Wache des alten phone_agent (tts_chunks) in der ganzen Kette: nie hinter Ziffer/Abkürzung/Einzelbuchstabe splitten, und Vorab-Sätze unter 20 Zeichen warten auf den Folgesatz statt als Mini-Render zu klingen."],
   ["Verbinde-Imperativ erkannt", "31.08.", "Gespräch", "„Verbinde mich mit Dr. Petzos jetzt.“ fiel durch alle Erkennungs-Formen — das LLM fragte in jedem Anruf aufs Neue „Zu welchem unserer Ärzte darf ich Sie verbinden?“ statt durchzustellen. Jetzt zählt auch der nackte Imperativ („Verbinde mich/uns …“) als Weiterleitungs-Wunsch, und der Namens-Weg greift auch bei verhörten Namen (Petzos/Petzl → Petsas)."],
-  ["W-ANRUFER-CHECK (erkannten Anrufer vorlesen)", "31.08.", "Gespräch", "Findet die Cloud Function den Anrufer über seine übermittelte Rufnummer in der Kartei, liest Bianca bei Buchung, Absage, Verschieben und Auskunft Name + Nummer EINMAL zur Kontrolle vor („Ich habe Sie an Ihrer Rufnummer erkannt: Julia Berger, unter … Stimmt das so?“) statt beides zu erfragen. Ein Ja übernimmt Name (Kartei-Schreibweise, nichts zu buchstabieren), patientId, Geschlecht und die Nummer als rückbestätigt; ein Nein (oder zweimal Unklares) verwirft den Treffer komplett und fragt klassisch. Nie für Dritte („Termin für meine Tochter“), nie nach „ich war noch nie bei Ihnen“, Notaus ANRUFER_CHECK=0."],
+  ["W-ANRUFER-CHECK (erkannten Anrufer kontrollieren)", "31.08.", "Gespräch", "Findet die Cloud Function den Anrufer über seine Rufnummer in der Kartei, bestätigt Bianca den Namen einmal und übernimmt nach Ja die Kartei-Identität (Name, patientId, Geschlecht). Die Nummer gilt ausdrücklich noch nicht als bestätigt: Sie folgt separat als SMS-Kontrolle. Ein Identitäts-Nein verwirft den Treffer komplett und fragt klassisch. Nie für Dritte („Termin für meine Tochter“), nie nach „ich war noch nie bei Ihnen“, Notaus ANRUFER_CHECK=0."],
   ["W-TOOL-UI (Tool-Dispatch in der Unterhaltung)", "02.09.", "Betrieb", "Jeder Cloud-Function-Aufruf (getFreeTimeSlots, Buchen, Absage …) erscheint in Dock und Anrufe-Ansicht als aufklappbare Karte: URL, Request-Body, Response, Dauer und Dynamic-Variable-Updates — wie im Portal-Tool-Dispatch."],
   ["W-VORRAT-UI (getFreeTimeSlots auch aus Hintergrund)", "02.09.", "Betrieb", "Slots aus dem Hintergrund-Vorrat (bianca-vorrat) erscheinen beim Angebot trotzdem als getFreeTimeSlots-Tool-Karte — nicht nur, wenn der Angebots-Zug die CF nochmal anruft."],
   ["W-FRISCH-ABSAGE (Storno nach frischer Buchung)", "02.09.", "Gespräch", "Nach frischer Buchung: Absage-Wunsch und Ja auf eine LLM-Storno-Frage lösen wirklich cancel_appointment aus (kein erfundenes „Der Termin ist storniert“). Erledigt-Wache greift auch bei phase=gebucht."],
@@ -1145,8 +1200,8 @@ const PATCHES = [
   ["W-HALLO-EINMAL (kein Ah-Herr-Schleife)", "08.09.", "Gespräch", "„Ah, Herr Petsas…“ nur EINMAL. Vorab geht durch den Wiederholungs-Wächter (auch kurze Sätze). Der Wächter sah den Hallo vorher nicht — er landete nie in der Antwort."],
   ["W-TRANSKRIPT-MUND", "08.09.", "Gespräch", "Alles Gesprochene ins Protokoll: Füller („Einen Moment.“) + Vorab-Hallo + Antwort. Vorher loggte last-call nur den Job-/LLM-Satz."],
   ["W-LEITUNG-CHECK (Praxis-verbunden ≠ Transfer)", "08.09.", "Gespräch", "„Bin ich mit der Praxis Dr. Petsas verbunden?“ ist eine Leitungsfrage, kein Durchstellen. Kein Jingle, kein Transfer — kurze Bestätigung. Echte Wünsche („Könnte ich mit Doktor Petsas verbunden?“) bleiben Transfer."],
-  ["W-ANRUFER-HALLO (erster Ton parallel)", "08.09.", "Gespräch", "Vorab endet auf „Ich bin die Neue!“ — Pause — dann nur die Selbst-Frage. Nie „Bianca, der Termin ist für Sie selbst“. Kein Nummern-Sermon im ersten Zug. „Gut.“ bestätigt die Identität nicht."],
-  ["W-HALLO-PAUSE (echte Frage hört zu)", "10.09.", "Gespräch", "Wiedererkannte Anrufer bekommen wechselnde natürliche Einstiege: Eine Feststellung darf direkt in den Fachweg übergehen; fragt Bianca „Wie geht es Ihnen?“, endet der Zug dort wirklich. Erst nach der Antwort setzt sie Termin, Absage oder Auskunft ohne Datenverlust fort."],
+  ["W-ANRUFER-HALLO (erster Ton parallel)", "08.09.", "Gespräch", "Vorab endet auf „Ich bin die Neue!“ — Pause — dann die eindeutige Identitätsfrage. Erst ein klares Ja führt zur getrennten Frage „Der Termin ist für Sie selbst, richtig?“. Kein Nummern-Sermon im ersten Zug; „Gut.“ bestätigt die Identität nicht."],
+  ["W-HALLO-PAUSE (echte Frage hört zu)", "10.09.", "Gespräch", "Wiedererkannte Anrufer bekommen wechselnde natürliche Einstiege: Eine Feststellung darf direkt in den Fachweg übergehen; fragt Bianca „Wie geht es Ihnen?“, endet der Zug dort wirklich. Erst nach der Antwort setzt sie Termin, Absage oder Auskunft ohne Datenverlust fort. Antwortet jemand stattdessen eindeutig „Ich bin nicht …“, verwirft Bianca den falschen Treffer sofort und fragt nicht noch einmal nach der Identität."],
   ["W-FUELLER-NUR-HANG (kein Moment bei jedem Satz)", "08.09.", "Gespräch", "„Einen Moment bitte.“ nur noch bei echtem Slot-/Buchungs-Hänger oder Kalender-Treffer — nicht bei Ja, Arztfrage oder Begrüßung. Begrüßung wird nach Fehl-Barge nicht nochmal von vorn gespielt. Zahnaufhellung nur, wenn eine Zahnreinigung gebucht wird und die Wunschzeit schon da ist."],
   ["W-ANRUFER-FAST (Name sofort, Kartei danach)", "08.09.", "Gespräch", "Der erste Satz braucht nur den Namens-Treffer zur Rufnummer (schon beim Abheben da) — nicht letzten Termin oder Behandler. Die Kartei läuft parallel zur Begrüßung. Nach dem Ja: „Sie waren zuletzt bei Doktor X, richtig?“, dann PZR und der Rest."],
   ["W-DOSSIER (Lücken-Talk + Spurwechsel)", "08.09.", "Gespräch", "Kein zweites Gespräch: Job bleibt tonangebend. Im Hintergrund entsteht ein Dossier (letzter Besuch, MAS). In echten Lücken kommt ein Talk-Takt statt „Einen Moment.“ — nie bei Nummer, Slot oder Confirm. Sagt der Anrufer „brauch noch ein Implantat“, wechselt der Job von der Kontrolle auf die Implantat-Besprechung. Feste Fakten gehen sofort ins MAS."],
@@ -1169,9 +1224,16 @@ const PATCHES = [
   ["W-KURZANTWORT (Fragezeichen ist kein Themenwechsel)", "09.09.", "Audio/Flow", "Eine von Whisper zögernd als „Ähm, nein?“ punktuierte Kurzantwort bleibt in der schnellen Terminmaschine. Sie löst weder freies LLM-Gerede noch mehrere unnötige TTS-Streams aus; echte Zusatzfragen wie „Nein, aber was kostet das?“ bleiben erlaubt."],
   ["W-STT-LEER (kurzes Ja gegenhören)", "09.09.", "Ohr", "Ein leeres Whisper-Final gilt bei hörbarem Audio nicht mehr als Stille: Parakeet hört denselben Zug sofort gegen. So verschwinden kurze Ja-Antworten nicht mehr und der Dialog stockt nicht bis zum Stups."],
   ["W-OHR-FENSTER (lange Antworten bleiben vollständig)", "09.09.", "Telefon", "Kurze Echo- oder Rauschspitzen werden beim stillen Ohr nicht mehr über eine ganze lange Ansage aufsummiert. Nur mindestens 400 ms echter Sprachanteil innerhalb von 600 ms lösen Barge-in aus; verteilte Störungen kappen Biancas Audio nicht mehr."],
+  ["W-STT-OHR-KOMPAKT", "10.09.", "Ohr", "Sekundenlange interne Leere in einem dünnen Ohr-Zug wird vor Parakeet konservativ gekürzt. Reales A/B: 8,76 → 3,90 s und „Mm-hmm. Mitte mir jetzt.“ → „Aha, mit dem März.“; kurze Antworten und mehrteilige Abschiede bleiben unverändert. Notaus: STT_OHR_KOMPAKT=0."],
+  ["W-EINWORT (Stichwörter ohne Raten)", "10.09.", "Gespräch", "Eindeutige Einzelwörter wie „Mitarbeiter“, „Absage“, „Schmerzen“ oder „Zahnreinigung“ bleiben direkte sichere Wege. Das mehrdeutige „Termin“ führt ohne LLM zu einer konkreten Auswahl; unbekannte STT-Fragmente werden wörtlich zurückgespiegelt, statt eine Bedeutung zu erfinden."],
+  ["W-THALER-HOTWORDS", "11.09.", "Ohr/Flow", "Belegte Thaler-Hörfehler wie „Rückenbild“, „Rentenbild“, „Rhöngbild“ und „Spress von der Hilfe“ werden nur mit passenden Fach-Hotwords zu „Röntgenbild“ beziehungsweise „Sprechstundenhilfe“ korrigiert. Plausible Namen wie „Brent Campbellt“ werden nicht gefährlich umgedeutet, sondern wörtlich rückgefragt; Thaler bietet nie proaktiv unerreichbare Mitarbeiter an."],
   ["W-PRAXISAUSKUNFT (Öffnungszeiten und Weg)", "09.09.", "Gespräch", "Öffnungszeiten und Wegbeschreibung kommen deterministisch aus dem DB-Praxisprofil beziehungsweise dem lokalen Rückfall. Auch STT-Verhörer wie „Pflungszeiten“ und „wie ich die praktisch erreiche“ führen zu den echten Mandantenfakten statt zu freiem LLM-Gerede."],
   ["W-TERMIN-BESTÄTIGUNG (Thaler)", "09.09.", "Termine", "Termindaten wiederholen oder abgleichen bucht niemals ohne ausdrückliches Ja. Beim Verschieben erben taggenaue Wünsche den Monat des Bestandstermins; Alternativen bleiben im selben Kalender, beim echten Besuchsgrund und ab dem gewünschten Datum."],
   ["W-THALER-FORMULAR (New York)", "09.09.", "Termine", "„Ich brauche eine Füllung“ öffnet auch vor dem Katalog-Laden sofort den sicheren Flow. „Nicht neu“ bleibt Bestand, Buchstabier-Rückfragen und Nummern-Readbacks bleiben im Formular, unbelegte Aktenanlagen werden blockiert und eine leere Slotsuche läuft nicht mehr in Schleife."],
+  ["W-ABSCHIED (auflegen)", "12.09.", "Gespräch", "Eindeutige Schlusssätze („auf Wiederhören“, „tschüss“, „bis denn“, auch als „Auf Wiederhoeren“ geschrieben) beenden den Anruf wirklich — vorher sprach Bianca den Abschied und die Leitung blieb offen. Während Nummern- oder Namensdiktat zählt nur der unmissverständliche Kern. Notaus: ABSCHIED_AUFLEGEN=0."],
+  ["W-HALLO-ANTWORT", "12.09.", "Gespräch", "Die Wohlsein-Frage entfällt, sobald ein Anliegen auf dem Tisch liegt oder der Anrufer Schmerzen/Beschwerden nennt — dann nur noch eine Feststellung. Stellt Bianca sie doch, geht die Antwort des Anrufers nicht mehr verloren: sie wird mit dem geparkten Wunsch zusammengeführt."],
+  ["W-ANREDE (kein erfundener Name)", "13.09.", "Gespräch", "Eine Anrede mit Namen darf nur raus, wenn der Name belegt ist: vom Anrufer genannt, aus der Kartei, vom erkannten Anrufer oder ein Behandler/Praxisname des Mandanten. „Gerne, Herr Meier“ bei einem unbekannten Anrufer wird samt Komma gestrichen, der Satz bleibt („Gerne. Ich buche Ihnen einen Termin“). Titel ohne Namen („Herr Doktor“) bleiben. Notaus: ANREDE_WACHE=off."],
+  ["W-STUPS-GESAMT + W-FOKUS", "12.09.", "Gespräch", "Stupse werden über den GANZEN Anruf gezählt: ab dem vierten entfällt „Sind Sie noch dran?“, ab dem sechsten verabschiedet sich die Notleine mit Rückruf-Notiz und legt auf (auch auf dem Stille-Pfad — das hangup reicht bis Brücke und Dock durch). Kein stummer Zug mehr, Wächter-Gedächtnis und LLM-Verlauf sind gedeckelt, und nach vier freien Zügen holt die Drift-Bremse zur Pflichtfrage zurück."],
 ];
 
 let kTab = "faehig";
@@ -1223,17 +1285,6 @@ async function kLive() {
 
 $("koennenBtn").onclick = () => { $("koennen").hidden = false; kRender(); };
 $("koennenZu").onclick = () => { $("koennen").hidden = true; };
-function studioAuf(titel, pfad) {
-  $("studioTitel").textContent = titel;
-  $("studioRahmen").src = pfad;
-  $("studio").hidden = false;
-}
-$("studioBtn").onclick = () => studioAuf("Test-Studio", "studio/");
-$("ergebnisseBtn").onclick = () => studioAuf("Ergebnisse", "studio/ergebnisse/");
-$("studioZu").onclick = () => {
-  $("studio").hidden = true;
-  $("studioRahmen").src = "about:blank";
-};
 for (const b of document.querySelectorAll(".k-tab")) {
   b.onclick = () => { kTab = b.dataset.tab; kRender(); };
 }

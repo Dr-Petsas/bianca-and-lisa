@@ -95,6 +95,31 @@ _TEMPLATES: dict[str, dict[str, Any]] = {
     },
 }
 
+_BESUCHSGRUND_FRAGEN = {
+    "allgemein": "Worum geht es bei Ihrem Termin?",
+    "zahnmedizin": "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?",
+    "gynaekologie": (
+        "Worum geht es denn — um eine Vorsorge, Beschwerden, eine Schwangerschaft "
+        "oder etwas anderes?"
+    ),
+    "orthopaedie": (
+        "Worum geht es denn — um eine Kontrolle, akute Beschwerden, eine Verletzung "
+        "oder etwas anderes?"
+    ),
+    "dermatologie": (
+        "Worum geht es denn — um eine Hautkontrolle, akute Hautbeschwerden, "
+        "eine Beratung oder etwas anderes?"
+    ),
+}
+
+_FALLBACK_NAMEN = {
+    "allgemein": "Praxis",
+    "zahnmedizin": "Zahnarztpraxis",
+    "gynaekologie": "Frauenarztpraxis",
+    "orthopaedie": "Orthopädische Praxis",
+    "dermatologie": "Hautarztpraxis",
+}
+
 _ALIASE = {
     "allgemein": "allgemein",
     "arztpraxis": "allgemein",
@@ -224,6 +249,77 @@ def template(quelle: Any) -> dict[str, Any]:
         "empfehlungen": list(roh["empfehlungen"]),
         "schutz": list(_KERN_SCHUTZ) + list(roh["schutz"]),
     }
+
+
+def besuchsgrund_frage(quelle: Any) -> str:
+    """Fachsichere Grundfrage; ohne belastbares Fach bewusst allgemein."""
+    return _BESUCHSGRUND_FRAGEN.get(
+        fach_id(quelle), _BESUCHSGRUND_FRAGEN["allgemein"])
+
+
+def arztwort(quelle: Any, *, mehrzahl: bool = False) -> str:
+    """Patientensprache fuer die Fachperson, nie das interne Wort Behandler."""
+    zahn = fach_id(quelle) == "zahnmedizin"
+    if mehrzahl:
+        return "Zahnärzten" if zahn else "Ärzten"
+    return "Zahnarzt" if zahn else "Arzt"
+
+
+def nicht_buchbar_antwort(quelle: Any) -> str:
+    """Fachfremde Leistung ablehnen, ohne sie als Kontrolltermin zu tarnen."""
+    return (
+        "Diese Leistung wird in dieser Praxis nicht angeboten. "
+        + besuchsgrund_frage(quelle)
+    )
+
+
+def fallback_tenant(fach: Any = "allgemein", *, did: Any = "") -> dict[str, Any]:
+    """Nicht buchendes Fachprofil, wenn keine Mandantenkonfiguration vorliegt.
+
+    Ohne DB- oder lokale Praxisdaten dürfen wir weder einen anderen Kunden
+    einsetzen noch Kalenderdaten raten. Bekannte DIDs werden vorher über ihre
+    lokale Tenant-Datei aufgelöst; nur wirklich unbekannte Nummern landen hier.
+    """
+    fid = _alias(fach) or "allgemein"
+    praxis = _FALLBACK_NAMEN.get(fid, _FALLBACK_NAMEN["allgemein"])
+    nummer = "".join(c for c in str(did or "") if c.isdigit())
+    return {
+        "_id": f"fallback-{fid}",
+        "_quelle": "fachfallback",
+        "_fallbackOnly": True,
+        "fachgebiet": fid,
+        "praxisName": praxis,
+        "praxisNameMelde": praxis,
+        "behandler": "",
+        "sprache": "de",
+        "dids": [f"+{nummer}"] if nummer else [],
+        "calendars": [],
+        "visitMotives": [],
+        "wissen": {},
+        "dbPrompt": (
+            "FALLBACK-MODUS: Die konkrete Praxiskonfiguration ist gerade nicht "
+            "sicher verfügbar. Keine Termine, Behandler, Leistungen, Preise, "
+            "Öffnungszeiten oder Erledigungen behaupten."
+        ),
+        "begruessungText": (
+            "Guten Tag, Sie sprechen mit Bianca. Die Praxisdaten sind gerade "
+            "nicht sicher verfügbar. Ich kann deshalb momentan keine Termine "
+            "verbindlich bearbeiten. Bitte versuchen Sie es in Kürze noch einmal."
+        ),
+    }
+
+
+def ist_fallback(quelle: Any) -> bool:
+    return bool(_tenant(quelle).get("_fallbackOnly"))
+
+
+def fallback_antwort(quelle: Any) -> str:
+    """Deterministische Antwort im neutralen Notprofil; nie ans LLM."""
+    return (
+        "Die konkreten Praxisdaten sind weiterhin nicht sicher verfügbar. "
+        "Ich kann deshalb gerade keine Termine oder Patientendaten verbindlich "
+        "bearbeiten. Bitte versuchen Sie es in Kürze noch einmal."
+    )
 
 
 def praxis_layer(tenant: dict[str, Any] | None) -> dict[str, Any]:

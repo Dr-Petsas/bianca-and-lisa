@@ -413,9 +413,16 @@ def _cf_pre_mit_geschwistern(did: str, caller: str = "",
 
 def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
     """Mandant zur angerufenen Nummer — die DB ist die Wahrheit (Chef
-    30.08.2026), die lokale Datei nur Rueckfall (CF aus/down/kein Agent)."""
+    30.08.2026), die lokale Datei nur Rueckfall (CF aus/down/kein Agent).
+
+    Eine unbekannte DID liefert bewusst ein neutrales, nicht buchendes
+    Fachprofil. Sie darf niemals im DEFAULT_TENANT eines anderen Kunden
+    landen (produktiv waere das MedDent).
+    """
     norm = tenants.nummer_norm(did)
     if not norm:
+        if _s(did):
+            return tenants.fach_fallback("allgemein", did=_s(did))
         return None
 
     t: dict[str, Any] | None = None
@@ -452,7 +459,29 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
     if lokal:
         print(f"agentprofil did={norm} -> lokale Datei {lokal.get('_id')} (Rueckfall)", flush=True)
         return lokal
-    return None
+    sicher = tenants.fallback_fuer_did(norm)
+    print(
+        f"agentprofil did={norm} -> neutraler Fachfallback {sicher.get('_id')}",
+        flush=True,
+    )
+    return sicher
+
+
+def fuer_tenant(tenant_id: Any) -> dict[str, Any]:
+    """Header-Auswahl -> derselbe DB-first Agent wie bei einem echten DID-Anruf.
+
+    Die lokale Datei liefert nur die DID und die Basiswerte. Begruessung,
+    Kalender, Motive, Keywords und Praxis-Prompt kommen danach aus der DB.
+    """
+    lokal = tenants.laden(_s(tenant_id))
+    dids = lokal.get("dids") if isinstance(lokal.get("dids"), list) else [lokal.get("did")]
+    for did in dids:
+        if not tenants.nummer_norm(did):
+            continue
+        dynamisch = fuer_did(did)
+        if dynamisch:
+            return dynamisch
+    return lokal
 
 
 def cache_leeren() -> None:
@@ -503,6 +532,11 @@ def _anrufer_in_sitzung(sit: dict, pat: dict[str, str], caller_norm: str) -> Non
         return
     if pid and not _s(ctx.get("patientId")):
         ctx["patientId"] = pid
+        # Schreibschutz: patientId und der von der CF gelieferte Karteiname
+        # bleiben als unveränderliche Bindung zusammen. Ändert der Dialog
+        # später den Namen, darf diese ID nicht unter dem neuen Namen buchen.
+        from kern import patients
+        patients.patient_id_bindung_setzen(ctx, pid, vor, nach)
     if vor and not _s(ctx.get("firstName")):
         ctx["firstName"] = vor
     if nach and not _s(ctx.get("lastName")):

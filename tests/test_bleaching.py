@@ -238,7 +238,8 @@ def _buchen_mit(sit: dict) -> list[str]:
         "ok": True, "booked": True, "slotIso": slot_iso,
         "spoken": "Der Termin ist eingetragen.",
     }
-    flow.kal.note_appointment = lambda tenant, ctx, sit2, note="": notes.append(note)
+    flow.kal.note_appointment = (
+        lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
     try:
         flow._buchen(sit)
     finally:

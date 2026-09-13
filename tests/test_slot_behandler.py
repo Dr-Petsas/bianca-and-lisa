@@ -84,7 +84,10 @@ def test_start_datum_nimmt_fruehesten_wunschtag():
     d10 = _tag_im_monat(10).isoformat()
     d21 = _tag_im_monat(21).isoformat()
     s["wunsch"] = {"date": d10, "tage": [d10, d21], "weekday": None}
-    assert gehirn.start_datum(s) == d10
+    # Kalendertreu pruefen: nach dem 10. liegt der "10." schon im naechsten
+    # Monat, der "21." also FRUEHER. Fix auf d10 machte den Test vom Datum
+    # abhaengig (nach dem 10. jedes Monats rot).
+    assert gehirn.start_datum(s) == min(d10, d21)
 
 
 def test_pick_slots_filtert_auf_wunschtage():

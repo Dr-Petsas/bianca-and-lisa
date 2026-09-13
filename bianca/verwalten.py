@@ -37,6 +37,7 @@ from bianca import gehirn, hintergrund
 from kern import agentprofil
 from kern import calendar as kal
 from kern import gespraech, motive
+from kern import patients
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
@@ -120,13 +121,21 @@ def _ctx(sit: dict) -> dict:
         ctx.pop("firstName", None)
     if s["nachname"]:
         ctx["lastName"] = s["nachname"]
+    else:
+        ctx.pop("lastName", None)
     name = f"{s['vorname']} {s['nachname']}".strip()
     if name:
         ctx["patientName"] = name
+    else:
+        ctx.pop("patientName", None)
     if s["patientId"]:
+        if _s(ctx.get("patientId")) != _s(s["patientId"]):
+            patients.patient_id_bindung_setzen(
+                ctx, s["patientId"], s["vorname"], s["nachname"])
         ctx["patientId"] = s["patientId"]
     else:
         ctx.pop("patientId", None)
+        patients.patient_id_bindung_setzen(ctx, "", "", "")
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
@@ -445,6 +454,9 @@ def _kein_termin(sit: dict, modus: str) -> dict:
 def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
                      dock_text: str = "") -> None:
     """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock."""
+    if sit.get("testNoWrite"):
+        sit["testNotizUnterdrueckt"] = True
+        return
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     eintrag = {
@@ -492,6 +504,22 @@ def rueckruf_notiz(sit: dict) -> None:
     )
 
 
+def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> None:
+    """HTTP-200 ohne belastbaren Read-back wird zum echten Prüf-/Rückrufvorgang."""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    wann = spoken_slot(slot_iso) if len(_s(slot_iso)) >= 16 else _s(slot_iso)
+    _notiz_schreiben(
+        sit,
+        anliegen="buchung_pruefen",
+        status="Buchungsantwort nicht eindeutig rücklesbar — Termin und SMS prüfen, bitte zurückrufen",
+        dock_text=(
+            f"{name}: Buchung für {wann or 'den gewünschten Zeitpunkt'} war nach dem "
+            "Schreiben nicht eindeutig rücklesbar. Termin und SMS prüfen, bitte zurückrufen."
+        ),
+    )
+
+
 def abgeben_notiz(sit: dict, *, was: str = "") -> None:
     """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf-/Nachricht-Notiz OHNE
     Termin-Bezug — frueher gab es die Spur nur, wenn zufaellig keine Slots
@@ -536,7 +564,7 @@ def _absage_frage(sit: dict, termin: dict) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "absage_bestaetigen"
     s["frage"] = "absage_ok"
-    wer = gehirn.anrede(s)
+    wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
         f"Gefunden — {termin.get('spoken')}. "
@@ -545,6 +573,11 @@ def _absage_frage(sit: dict, termin: dict) -> dict:
 
 
 def _absagen(sit: dict, melde: Melde) -> dict:
+    if sit.get("testNoWrite"):
+        s = gehirn.sammler(sit)
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        return {"text": "Der Testlauf ist beendet; der Termin wurde nicht abgesagt."}
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
     if melde:
@@ -578,7 +611,7 @@ def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "verschieb_wunsch"
     s["frage"] = "wunsch"
-    wer = gehirn.anrede(s)
+    wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
         f"Gefunden — es geht um den Termin {termin.get('spoken')}{zusatz}. "
@@ -682,6 +715,11 @@ def _verschieb_readback(sit: dict, neu_iso: str) -> dict:
 
 
 def _verschieben(sit: dict, melde: Melde) -> dict:
+    if sit.get("testNoWrite"):
+        s = gehirn.sammler(sit)
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        return {"text": "Der Testlauf ist beendet; der Termin wurde nicht verschoben."}
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
     ctx = _ctx(sit)
@@ -937,7 +975,8 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         )}
 
     quittung = ""
-    if ("name" in neu or "nachname" in neu) and s["nachname"]:
+    if (("name" in neu or "nachname" in neu)
+            and "anruferCheck" not in neu and s["nachname"]):
         voll = f"{s['vorname']} {s['nachname']}".strip()
         quittung = f"Danke, {voll}. "
     aus = _dispatch(sit, melde)
@@ -1103,7 +1142,8 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         or (s["phase"] == "" and sit.get("gefundenKey") != f"{s['vorname']}|{s['nachname']}".lower())
     ):
         quittung = ""
-        if ("name" in neu or "nachname" in neu) and s["nachname"]:
+        if (("name" in neu or "nachname" in neu)
+                and "anruferCheck" not in neu and s["nachname"]):
             voll = f"{s['vorname']} {s['nachname']}".strip()
             quittung = f"Danke, {voll}. "
         aus = _dispatch(sit, melde)

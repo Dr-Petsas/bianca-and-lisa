@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Baukasten-Ergebnisse</title>
-<link rel="stylesheet" href="web/stil.css?v=7">
+<link rel="stylesheet" href="web/stil.css?v=15">
 </head>
 <body class="ergebnisse">
 <header class="kopf">
@@ -15,8 +15,40 @@
   <div class="rechts"><a href="./">&larr; Teststudio</a></div>
 </header>
 <main>
+  <div class="block">
+    <h2>Qualitätsentwicklung</h2>
+    <div class="stat-kpis" id="stat-kpis"></div>
+    <div class="trend" id="stat-trend"></div>
+    <div class="stat-charts">
+      <div class="stat-chart">
+        <strong>Erfolgsquote über die Zeit</strong>
+        <canvas id="chart-erfolg" width="760" height="230"></canvas>
+      </div>
+      <div class="stat-chart">
+        <strong>Gespräche und Gesprächszüge</strong>
+        <canvas id="chart-volumen" width="760" height="230"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="block">
+    <h2>Warnungen</h2>
+    <div class="warnungen" id="stat-warnungen"></div>
+  </div>
+  <div class="block">
+    <h2>Häufige Probleme</h2>
+    <div class="stat-tabelle-wrap">
+      <table class="stat-tabelle">
+        <thead><tr><th>Problem</th><th>Anzahl</th><th>Zuletzt</th><th>Empfehlung</th></tr></thead>
+        <tbody id="stat-probleme"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="block">
+    <h2>Gesprächsanalysen — Verbesserung nötig</h2>
+    <div class="analysen" id="stat-analysen"></div>
+  </div>
   <div class="block" id="block-laeufe">
-    <h2>L&auml;ufe</h2>
+    <h2>Einzelläufe</h2>
     <div id="laeufe"></div>
   </div>
   <div class="block" id="block-stories" style="display:none">
@@ -35,6 +67,6 @@
     <div class="dialog" id="dialog"></div>
   </div>
 </main>
-<script src="web/ergebnisse.js?v=7"></script>
+<script src="web/ergebnisse.js?v=12"></script>
 </body>
 </html>

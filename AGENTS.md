@@ -199,36 +199,48 @@ dann erst nach namen und nummer fragen."
  Termin-/Absage-/Auskunftswunsch bleibt in `anruferHalloOffenerText`
  geparkt und läuft nach der Wohlseinsantwort weiter. Nie wieder eine Frage
  stellen und im selben Atemzug selbst weiterreden. „Gut.“ oder „Ja, gut.“
- bestätigt dabei NIE die Identität; erst die danach gestellte Kontrolle
- („Der Termin ist für Sie selbst, richtig?“) nimmt ein Ja an.
+ bestätigt dabei NIE die Identität; erst „Habe ich Sie richtig erkannt?“
+ nimmt ein Ja an. Bei Buchungen folgt als EIGENER Schritt
+ `frage=fuer_wen_check`: „Der Termin ist für Sie selbst, richtig?“.
+ Identität und Terminempfänger dürfen nie wieder in eine doppeldeutige
+ Ja/Nein-Frage zusammengezogen werden. Antwortet der Anrufer auf die
+ Wohlseinsfrage stattdessen eindeutig „Ich bin nicht <Name>“, wird der
+ falsche DB-Treffer sofort verworfen — keine überflüssige zweite
+ Identitätsfrage.
  Fast-Pfad: der Hallo wartet NICHT auf
  letzten Besuch oder Behandler (`anrufer_hallo_jetzt` nur Name). Die
  Kartei startet schon zur Begrüßung (`hintergrund.kartei_von_anrufer`)
  und fliesst danach ein: „Sie waren zuletzt bei Doktor X, richtig?“
  (`arzt_check`), dann PZR.
  Ja (`einsammeln`): Name in Kartei-Schreibweise (buchstabiert=True,
- bekannt=True, patientId), Geschlecht als Quelle "akte", Telefon gilt als
- rückbestätigt (telefonOk), warSchonMal=True — schonmal-, Namens-,
- Buchstabier- und Telefon-Frage entfallen komplett; die Hintergrund-Kartei
- reichert wie gehabt an (aktePhone/letzterBesuch/Versicherung → Rückblick/
- PZR laufen normal). Nein: Treffer verworfen (anruferCheck="nein", kommt
- nie wieder), klassische Fragen wie vor dem Patch. NIE gefragt: bei
- `fuerWen` (Termin für Dritte) oder warSchonMal=False (Angehöriger am
- selben Anschluss); ein Kind, das den Hörer der Mutter nutzt, verneint.
+ bekannt=True, patientId), Geschlecht als Quelle "akte", warSchonMal=True.
+ Danach nur noch Pronomen („Sie“), nicht drei- bis viermal der volle Name.
+ Die Rufnummer wird NICHT still als bestätigt übernommen: am normalen
+ Nummernschritt fragt Bianca „Soll ich die Bestätigungs-SMS an die
+ <hinterlegte Nummer> schicken?“. Ja übernimmt sie; Nein fragt eine neue
+ Nummer ab. Nach deren Readback folgt `telefon_alt`: alte Nummer löschen
+ und neue per `masUpdatePatientPhone` eintragen oder SMS doch an die alte
+ Nummer. Ein erfolgreicher Wechsel wird am Termin als
+ `Alte Nummer <alt> aktualisiert //Bianca` vermerkt. Identitäts-Nein
+ verwirft den Treffer (anruferCheck="nein"), danach klassische Fragen.
 - **Absage/Verschieben/Auskunft** (`verwalten._sammeln` bzw. Auskunfts-Zweig
  in `verwalten.zug`): dieselbe Frage ersetzt die Nachnamen-Frage; ein Ja
  sucht SOFORT mit Kartei-Name, patientId und Anrufernummer
  (`agentFindPatientAppointments` bekommt phone=callerPhone mit). Wurde der
  Name schon im schnellen Hallo genannt, lautet die spätere Kontrolle
- aufgabenscharf („Soll ich unter diesem Namen den Termin suchen, den Sie
+ aufgabenscharf („Soll ich unter Ihren hinterlegten Daten den Termin suchen,
+ den Sie
  absagen möchten?“) — nie mehr das zusammenhanglose „Stimmt das so?“.
-- **Deterministisch wie telefon_check:** die Frage trägt Ziffern
- (Wiederholungs-Wächter fasst sie nie an, TTS-Ziffern-Wächter verifiziert
- den Render), Antwort-Leerlauf bleibt beim festen Text ("Habe ich Sie
- richtig erkannt? Ein kurzes Ja oder Nein genügt."), zwei unklare Antworten
- => `flow._eskalieren` verwirft den Treffer (Sicherheit vor Tempo — nie
- eine Identität raten). Kurze Ruhe-Schwelle 350 ms (`_STILLE_KURZ`),
- Frage-Kern in `agent._FRAGE_KERN["anrufer_check"]`.
+- **Dritttermine + relative Nummer:** beim Lösen der erkannten Anruferakte
+ vom Patienten bleiben `kontaktName` und `kontaktTelefon` erhalten. „Nehmen
+ Sie meine Nummer“ bezieht sich dadurch sicher auf die Rufnummer des
+ Anrufers/Elternteils, nie auf die frisch erfasste Kinderakte; Bianca liest
+ sie als SMS-Ziel vor und verwendet sie erst nach Ja.
+- **Deterministisch wie telefon_check:** Identität, Terminempfänger und
+ SMS-Ziel bleiben feste Ja/Nein-Schritte. Zwei unklare Antworten verwerfen
+ lieber den Identitätstreffer bzw. fragen die Nummer neu, statt etwas zu
+ raten. Kurze Ruhe-Schwelle 350 ms (`_STILLE_KURZ`), Frage-Kerne in
+ `agent._FRAGE_KERN["anrufer_check"|"fuer_wen_check"]`.
 - **Notaus:** `ANRUFER_CHECK=0` (gehirn.anrufer_bekannt liefert {}) =>
  Verhalten wie vor dem Patch. Tests: W-ANRUFER-CHECK-Blöcke in
  `tests/test_bianca_bausteine.py` (Buchung ja/nein, Neupatient/Dritte,
@@ -401,29 +413,33 @@ soll Bianca/Lisa auf pickadoc1 zuhören — auf die 5090 passt er nicht
   nie Scribe, WAV-Direktspur, Nachkorrektur); Live-Probe:
   `tests/stt_whisper_probe.py` (echter Container + echter Rückfall).
 
-## Qwen3-ASR-Ohr auf der 3060 (W-STT-QWEN 09.09.2026 — nicht rückbauen)
+## Parakeet + Qwen parallel (W-STT-QWEN-PARALLEL 11.09.2026 — nicht rückbauen)
 
-Chef nach dem Rollback auf den Morgenstand: Zielpipeline ist ausdrücklich
-**Qwen3-ASR-1.7B auf der RTX 3060 -> Bianca-Worker -> Qwen-LLM + Qwen-TTS
-auf der 5090**, ohne Whisper im Sprachpfad.
+Live-Messung über den 3060-Hybrid-Gateway ergab 0,47–2,48 s STT statt
+0,17–0,47 s mit lokalem Parakeet. Deshalb ist die Reihenfolge verbindlich:
+**5090-Parakeet ist das sofortige Haupt-Ohr; Qwen3-ASR auf der separaten GPU
+läuft parallel und ist nur der Qualitätsprüfer.**
 
-- `STT_QWEN_BASE=wss://paraqwenstt.pickadoc-tunnel.com` aktiviert den
-  Qwen-Modus, `STT_QWEN_KEY` trägt den Bearer-Token. Der Gateway bleibt
-  lokal auf `127.0.0.1:8222`; der bestehende Cloudflare-Tunnel transportiert
-  HTTP und WebSocket. Der kompatible Stream-Vertrag ist
-  `begin` -> PCM16 mono 16 kHz -> `end` -> genau ein `final`; Partials
-  dürfen Bianca nie steuern.
-- Solange `STT_QWEN_BASE` gesetzt ist, ruft `kern/stt.py` auch bei einem
-  alten/stale `STT_WHISPER_BASE` **nie Whisper** auf. Bei Ausfall übernimmt
-  ausschließlich `STT_BASE` (Parakeet) nach 30 s Qwen-Pause; ohne STT_BASE
-  wird der Fehler hörbar geworfen, nie ElevenLabs.
-- Der 3060-Gateway darf intern ebenfalls keinen Whisper-Vergleich starten
-  (`WHISPER_URL` leer). Sein Parakeet-Vergleich ist nur ein lokales,
-  explizit in `source`/`degraded` gemeldetes Sicherheitsnetz für Qwen.
-- Der öffentliche Tunnel ist niemals ohne Bearer-Token zu betreiben. Health
-  zeigt `Qwen3-ASR 1.7B (3060) + Parakeet-Rueckfall`.
-- Tests: `tests/test_stt_qwen.py`; verpflichtend vor Rollout zusätzlich
-  echte WAV-Probe gegen den 3060-Endpunkt und `tools/prod_smoke.py`.
+- `STT_BASE` startet im aktuellen Thread; Qwen startet gleichzeitig in genau
+  EINEM Hintergrundslot. Plausible Parakeet-Texte warten **0 ms**. Nur
+  lexikalisch auffällige Ergebnisse warten maximal `STT_QWEN_GRACE_S`
+  (Default 0,25 s). Ein noch laufender alter Qwen-Zug wird nie aufgestaut.
+- `STT_QWEN_FINAL_BASE=http://192.168.0.167:8223` ist der schnelle direkte
+  LAN-Weg zum gereinigten Qwen-only-Container. Dort läuft für Bianca KEIN
+  zweites Parakeet. Der alte geschützte Hybrid-Gateway unter
+  `STT_QWEN_BASE` bleibt nur kompatibler Test-/Rückweg; Cloudflare gehört
+  nicht in Live-Biancas STT-Pfad.
+- Qwen darf nur ein deutsches, nicht leeres, nicht aus dem Vokabular-Kontext
+  nachgesprochenes Final übernehmen. Abweichende Ziffernfolgen bleiben aus
+  Sicherheitsgründen bei Parakeet. Partials steuern Bianca nie.
+- Qwen-Ausfall pausiert den Prüfpfad 30 s, beeinträchtigt Parakeets Antwort
+  aber nicht. Bei gesetztem Qwen ruft `kern/stt.py` auch bei einem stale
+  `STT_WHISPER_BASE` nie Whisper oder ElevenLabs auf.
+- Der LAN-Qwen-Endpunkt ist nur an die 3060-LAN-IP gebunden und verlangt
+  `STT_QWEN_KEY` als internen Token. Health zeigt
+  `Parakeet (lokal) + Qwen3-ASR parallel (3060)`.
+- Tests: `tests/test_stt_qwen.py`; vor Rollout zusätzlich direkte
+  Qwen-WAV-Probe und `tools/prod_smoke.py`.
 
 ## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
 
@@ -490,9 +506,19 @@ taub (Barge-Schwelle 1100 / 280 ms). Vier Bausteine:
    Sprachanteil). Echte längere Einwände stoppen unverändert schnell,
    verteilte Leitungsstörungen nie. Repro/Wache:
    `test_ohr_stoerimpulse_summieren_sich_nicht_ueber_lange_ansage`.
+6. **Interne Ohr-Pause vor Parakeet kürzen (W-STT-OHR-KOMPAKT
+   10.09.2026):** Im Thaler-Livezug lagen zwischen zwei Sprachinseln
+   5,18 Sekunden Leere (8,76 s Segment, nur 19 % Sprache). Parakeet machte
+   daraus „Mm-hmm. Mitte mir jetzt.“; nach reinem Entfernen der inneren
+   Leere wurde derselbe Ton zu „Aha, mit dem März.“. `sip_bridge.stimme.
+   ohr_kompakt` greift deshalb NUR bei Ohr-Zügen ab 4 s, höchstens 25 %
+   Sprache, GENAU einer internen Pause ab 1,2 s. Es entfernt nur
+   Pausensamples; Sprache, normale Züge, kurze Antworten und mehrteilige
+   Abschiede bleiben byte-identisch. Notaus: `STT_OHR_KOMPAKT=0`.
 
 Tests: `tests/test_tempo.py`, Ohr-Block in `test_sip_vad.py`,
-`test_ist_echo_ohr_gegen_satzkarte`, Halbsatz-Punkt-Fälle.
+`test_ist_echo_ohr_gegen_satzkarte`, `tests/test_sip_stimme.py`,
+Halbsatz-Punkt-Fälle.
 
 ## Ziel-Pipeline Lisa/Bianca (Stand 28.08.2026 spät)
 
@@ -635,6 +661,12 @@ später im `_einschub` (dann ohne Vorsatz); die Antwort steht als
 Terminaufnahme nicht überholen. Bei Neupatienten kommt nach „noch nie da“
 zuerst die Behandlerwahl; erst wenn der Behandler feststeht, fragt Bianca
 nach der Zahnreinigung. Das Angebot bleibt Pflicht vor dem Eintragen.
+Technisch ist das EIN Eintrag: `"arzt"` in der Einschub-Sperre von
+`flow.zug`. Der ist am 12.09.2026 aus einem fremden Arbeitsstand heraus
+verlorengegangen und lief zwei Tage falsch live (13.09. zurückgeholt) —
+wer diese Zeile anfasst, prüft `tests/test_pzr_kassen.py::
+test_neupatient_klaert_erst_behandler_dann_pzr` UND
+`tests/test_datenerfassung_pausen.py` (voller Neupatientenfluss).
 
 ## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
 
@@ -1044,6 +1076,17 @@ Notiz-Weg. `bianca/verwalten.py -> _sammeln` (BEIDE Anliegen):
  punktgenau über `agentCancelAppointmentById` abgesagt bzw. verschoben.
  Kein Fallback bei echtem `no_upcoming`. Regression:
  `test_absage_stallone_fallback_trotz_fremder_anrufernummer`.
+ **Nachlauf W-ABSAGE-SPURWECHSEL:** Nennt der Anrufer während eines neuen
+ Slotangebots ausdrücklich einen BESTANDstermin („Termin von Sylvester
+ Stallone absagen“, „meinen bereits gebuchten Termin löschen“), gewinnt die
+ Absage und parkt den neuen Buchungsfaden. Nur ein nacktes „den absagen, der
+ passt nicht“ lehnt weiter den angebotenen Slot ab. Regression:
+ `test_bestandsabsage_ueberstimmt_laufendes_slotangebot`.
+ **SIP-Sitzungssicherung:** Laufzeitobjekte mit `_`-Präfix
+ (`_anruferReady`/`threading.Event`, offene TTS-Jobs) werden bewusst nicht
+ nach JSON geschrieben. Fachzustand, erkannter Anrufer und CF-Tenant bleiben
+ vollständig erhalten; ein Event darf nie wieder die gesamte Sicherung still
+ verhindern. Regression: `test_session_persistenz.py`.
 3. **Treffer bestätigen mit Anrede** (Chef: "Herr/Frau xy, ja?"):
  "Gefunden — {Termin}. Soll ich den Termin wirklich absagen, Herr Berger?"
  (gehirn.anrede; Vornamen-Wächter/Kartei). Bei Ja löscht
@@ -1521,8 +1564,10 @@ NIE der LLM-Text.
 
 - **Erkennung** (`kern/fakten_wache.py`, bianca-frei): `unbelegte_behauptung`
   prüft je Satz gegen `AKTIONEN` (buchen/absagen/verschieben/transfer/notiz/anlegen) und
-  das jeweilige Evidenz-Prädikat. Fragen/Angebote („soll ich eintragen?",
-  „passt Ihnen?") zählen NIE als Behauptung. Kurze Gesprächsbestätigungen
+  das jeweilige Evidenz-Prädikat. Reine Fragen („soll ich eintragen?")
+  zählen nicht als Behauptung; ein konkretes Slotangebot oder eine
+  vorausgehende Tatsachenbehauptung wird durch ein angehängtes „passt Ihnen?"
+  aber nicht mehr entschärft. Kurze Gesprächsbestätigungen
   („notiert", „Ihre Angaben aufgenommen") zählen ohne ausdrücklichen
   Notiz-/Aktenbezug ebenfalls nicht — sonst würde `enforce` legitime
   Datenerfassung unterbrechen.
@@ -1541,6 +1586,34 @@ NIE der LLM-Text.
   echte Zielnummer ersetzt, statt den Anrufer in einer Phantom-Weiterleitung
   warten zu lassen. Eine erfolgreiche `praxis_notiz` zählt wie
   `note_appointment` als Notiz-Evidenz; fehlgeschlagene Notizwerkzeuge nie.
+
+### P0-Schreib- und Kalenderbeweis (10.09.2026 — nicht rückbauen)
+
+- **Name und `patientId` sind eine untrennbare Bindung:** `kern/patients.py`
+  merkt am Buchungskontext `patientIdBound` plus Karteinamen. Jede
+  Namenskorrektur räumt sofort Akte, Termine und alte Schreibziele.
+  `calendar.book_slot` und `note_appointment` brechen vor jedem Write ab,
+  wenn gesprochener Name und gebundene ID auseinanderlaufen. Repro:
+  Session `2ec59b80` („Killnir“ durfte nie auf die Kellner-Akte buchen).
+- **HTTP 200 reicht nicht:** `calendar.book_slot` liest jede
+  `masBookAppointment`-Antwort unabhängig über die Patienten-Terminliste
+  zurück. Patient, Startminute, Kalender und echte Termin-ID müssen gemeinsam
+  passen. Bei Abweichung: kein Buchungs-/SMS-Erfolg, kein Notiz-Write auf die
+  Antwort-ID, kein zweiter Buchungsversuch; stattdessen echter
+  Prüf-/Rückrufvorgang (`verwalten.buchung_pruefen_notiz`). Repro:
+  Tom Schumann, Antwort-ID zeigte später auf einen anderen Slot.
+- **Kalenderfakten sind ebenfalls evidenzpflichtig:** freie/volle Slots,
+  bestehende/nicht bestehende Termine, SMS, Rückruf und Transfer sind in
+  `kern/fakten_wache.py` abgedeckt. Slot- und Termin-Aussagen brauchen den
+  passenden erfolgreichen Lese-Tool-Eintrag; Transfer zusätzlich einen
+  ausdrücklichen Wunsch im aktuellen Nutzersatz. Die P5-Vorab-Ausgabe wird
+  schon satzweise geprüft, damit die Halluzination nicht vor der finalen
+  Antwortwache hörbar wird.
+- Deterministische Zusatznotizen werden erst als geschrieben angesagt, wenn
+  `masAppointmentNote` erfolgreich war und im Tool-Ledger steht. Bei Fehler
+  entsteht ein echter Rückrufvermerk statt einer leeren Zusage.
+- Regressionen: `tests/test_patients.py`, `tests/test_notiz.py`,
+  `tests/test_fakten_wache.py`.
 
 ## Task-Grenze vor dem Flow-Monolithen (W-TASK-GRENZE 09.09.2026 — nicht rückbauen)
 
@@ -2122,6 +2195,118 @@ und schließen bei passender Länge/Ähnlichkeit auch ohne „fertig“ ab. Ein
 Vorname am Stück bleibt der sofortige Schnellweg.
 Tests:
 `tests/test_datenerfassung_pausen.py`.
+
+## Auflegen, Icebreaker, Fokus (12.09.2026 — nicht rückbauen)
+
+Chef 12.09.2026 nach mehreren Testanrufen (wörtlich): „sie fragt manchmal
+immer noch wie geht es Ihnen, was unklug ist, da fragen vom job ablenken …
+diese antwort ignoriert bianca komplett … bei mehreren turns wenn die
+gespräche sehr lang sind verliert sich bianca in stille oder schleifen …
+und Bianca soll lernen aufzulegen bei eindeutigen sätzen die ein gespräch
+beenden wie tschüss auf wiederhören wiedersehen bis denn etc."
+
+**W-ABSCHIED** — `kern/abschied.py` ist die EINE Stelle, die einen
+Schlusssatz erkennt. Zwei Stufen, damit ein Hörfehler keinen laufenden
+Vorgang abwürgt: unmissverständliche Kerne („auf Wiederhören", „tschüss")
+gelten allein, Kurzformen („bis denn", „ciao", „schönen Tag noch") nur wenn
+der Satz nach Abzug der Floskeln nichts anderes mehr trägt (höchstens
+`MAX_KERN_WOERTER`). Umlaute kommen je nach Quelle als ö/oe/o an — die
+Muster decken beides ab (live 12.09. rutschte „Auf Wiederhoeren!" durch und
+das Modell bettelte „bitte nicht auflegen"). Eingehängt in
+`bianca/agent.user_turn` VOR Intent/Fluss (`streng=True`, solange der
+Anrufer Ziffern oder Buchstaben diktiert) und an den drei Abschieds-Returns
+in `bianca/flow.py`, die den Satz vorher sprachen OHNE `hangup` zu setzen.
+Notaus: `ABSCHIED_AUFLEGEN=0`.
+
+**W-HALLO-ANTWORT** — `gehirn.hallo_frage_unpassend` unterdrückt die
+Wohlsein-Frage, sobald ein Anliegen läuft (`hirn.aktiv`, `sammler["modus"]`)
+oder der Satz nach `anliegen_art` Notfall/Beschwerde ist; `_hallo_form`
+liefert dann eine Feststellung statt einer Frage. Stellt Bianca sie doch
+(W-HALLO-PAUSE parkt den Wunsch in `anruferHalloOffenerText`), wird die
+Antwort nicht mehr verworfen: trägt sie Inhalt (`ist_nur_wohlsein` ist
+False), geht sie MIT dem geparkten Original in den Folgezug
+(Spur `hallo-antwort-aufgenommen`).
+
+**W-STUPS-GESAMT** — `stupse` wird bei jedem Anrufer-Satz genullt, `MAX_STUPSE`
+greift also nur INNERHALB einer Stillephase. Live 11.09. (Session 9395e2ce,
+109 Züge / 23 Minuten) wechselten sich deshalb 15-mal „Sind Sie noch dran?"
+und dieselbe Frage ab. `kern/stille.py` zählt zusätzlich über den GANZEN
+Anruf (`gesamt`): ab `PRESENCE_BIS` entfällt die Presence-Floskel, ab
+`GESAMT_MAX` verabschiedet `agent._notleine` freundlich und legt auf — ein
+offenes Anliegen wird vorher als echte Rückruf-Notiz gesichert. Presence
+kommt nur beim ERSTEN Stups des Anrufs (dreimal „Sind Sie noch dran?" war
+selbst die Schleife), das Talk-Thema nur ohne offene Pflichtfrage und nie
+aus einer Beschimpfung (`anstand.unfein`). Der Schlusssatz fällt genau
+einmal (`notleineGesagt`).
+**Die Durchreiche gehört dazu:** `POST /api/stille` MUSS `hangup` melden,
+`sip_bridge._stups` es beantworten (`_ausklingen_und_auflegen`) und
+`bianca_web/app.js` den Anruf beenden — ohne diese drei Stellen sprach die
+Notleine ihren Abschied und die Leitung blieb offen (live-Probe 12.09.:
+derselbe Satz kam beim nächsten Stups erneut).
+
+**W-FOKUS** — kein stummer Zug mehr: liefert das Modell nichts, antwortet
+`agent._nie_stumm` mit der offenen Pflichtfrage; streichen alle Wächter den
+Stups, gewinnt die Frage (Spur `stups-nie-stumm`); sind alle Frage-Varianten
+verbrannt, kommt die Frage mit Präfix statt Presence. Nach `_FOKUS_MAX`
+freien Zügen holt die Drift-Bremse zur Pflichtfrage zurück und räumt den
+Talk-Stapel. Gegen den Ballast langer Gespräche: `wiederholung`-Gedächtnis
+ist ein Fenster (`GEDAECHTNIS_SAETZE`), der LLM-Verlauf gedeckelt
+(`llm.VERLAUF_MAX`, System-Kopf bleibt).
+
+Tests: `tests/test_abschied.py`, `tests/test_fokus.py`, `tests/test_stille.py`,
+Stups-Block in `tests/test_sip_vad.py`. Live-Proben (read-only, im Container):
+`tools/_probe_abschied_live.py`, `tools/_probe_langgespraech.py`.
+
+## Keine erfundene Anrede (W-ANREDE 13.09.2026 — nicht rückbauen)
+
+Live-Probe 12.09.2026 mit UNBEKANNTEM Anrufer (keine übermittelte Nummer):
+Bianca antwortete im ersten Zug „Einen Moment. Gerne, **Herr Meier**. Ich
+buche Ihnen einen Termin zur Kontrolle." — den Namen hat niemand gesagt, das
+Modell hat ihn erfunden. Bei erkannter Rufnummer fällt das nicht auf (dann
+steht der echte Name in der Akte), einem fremden Anrufer wird so der Name
+eines anderen Menschen vorgelesen.
+
+`kern/anrede_wache.py` behandelt die Anrede deshalb wie jede andere Tatsache
+(W-FAKTEN-WACHE): raus darf sie nur, wenn der Name BELEGT ist. Belegt sind
+Sammler-Namen (nachname/vorname/name, `kontaktName` bei Dritt-Terminen),
+der per Cloud-Function erkannte Anrufer, Kartei-/Patientenfelder sowie
+Behandler- und Praxisnamen des Mandanten (`tenants.stt_keywords`,
+`tenant["calendars"]`) — die kommen aus der DB, nie aus dem Modell. Titel
+ohne Namen („Herr Doktor") und ein blosses „Herr oder Frau?" bleiben
+unberührt. Alles andere wird samt trennendem Komma gestrichen, der Satz
+bleibt stehen („Gerne. Ich buche Ihnen einen Termin").
+
+- Eingehängt NUR im LLM-Pfad (`bianca/agent._anrede_wache_anwenden`): nach
+  `_nachbessern`/Fakten-Wache **und** am P5-Streaming-Ausgang
+  (`sicherer_vorab`). Beide Stellen säubern identisch — sonst fände
+  `llm.rest_nach_vorab` den Rest nicht mehr und der Satz käme zweimal.
+- Die deterministische Maschine ist nicht betroffen: `gehirn.anrede()` baut
+  die Anrede aus dem Sammler, ist also immer belegt. Damit das Modell sie
+  nicht selbst zusammenreimen muss, trägt `flow.status_zeile` die belegte
+  Form als `Anrede=…` mit, und `flow._ctx_bauen` legt ein fehlendes
+  Geschlecht aus dem Vornamen nach (gleiche Regel wie beim Einsammeln —
+  greift, wenn ein anderer Weg den Vornamen direkt gesetzt hat).
+- Stufen/Notaus `ANREDE_WACHE=off|shadow|enforce`, Default **enforce**
+  (ein erfundener Name ist nie besser als kein Name). Spur:
+  `anrede-wache` bzw. `anrede-wache-shadow`.
+- Tests: `tests/test_anrede_wache.py` — die Gegenprobe (belegte Anrede bleibt
+  unangetastet) ist der teurere Fehler und deshalb breiter abgedeckt.
+
+## Rückrollpunkte (Produktionsstände)
+
+| Stand | Tag | Anleitung |
+| --- | --- | --- |
+| V2.0, 13.09.2026 | `telefonki-produktionsstand-v2.0-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
+| V1.0, 10.09.2026 | `telefonki-produktionsstand-v1.0-2026-09-10` | nur Git-/Image-Tags |
+
+Ein Produktionsstand besteht aus VIER Teilen — Code allein reicht nicht:
+annotierter Git-Tag, Docker-Image-Tags `produktionsstand-vX-JJJJMMTT` der
+laufenden Container auf pickadoc1, ein Schnappschuss von Live-`.env`,
+`secrets/`, `tenants/`, Compose-Konfiguration, Asterisk-Dialplan und den
+Docker-Volumes unter `/home/cursor/telefonki-backups/produktionsstand-…`
+sowie eine lokale Kopie samt Git-Bundle in `_snapshot-produktionsstand-…`
+(gitignoriert). Tokens, Service-Account-Key und Patientendaten aus den
+Mitschnitten gehen NIE nach GitHub. Skripte: `tools/_produktionsstand_v2_server.sh`.
 
 ## Server-Deploy (pickadoc1) — die .env-Falle
 

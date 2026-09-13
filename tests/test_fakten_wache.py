@@ -131,10 +131,84 @@ def test_frage_ist_keine_behauptung():
     assert fakten_wache.unbelegte_behauptung(sit, "Soll ich den Termin so eintragen?") == ""
 
 
-def test_angebot_ist_keine_behauptung():
+def test_erfundenes_slotangebot_ohne_kalendersuche_ist_unbelegt():
     sit = _sit()
     assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich hätte am Montag um neun etwas frei. Passt Ihnen das?") == "slots"
+
+
+def test_slotangebot_mit_aktueller_kalenderevidenz_ist_ok():
+    sit = _sit()
+    sit["offered"] = [{"iso": "2026-09-14T09:00", "spoken": "Montag um neun"}]
+    merke_tool(sit, "getFreeTimeSlots", {
+        "ok": True,
+        "slots": sit["offered"],
+    })
+    assert fakten_wache.unbelegte_behauptung(
         sit, "Ich hätte am Montag um neun etwas frei. Passt Ihnen das?") == ""
+
+
+def test_keine_freien_slots_braucht_echte_leersuche():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Leider ist diese Woche kein freier Termin verfügbar.") == "slots"
+    merke_tool(sit, "getFreeTimeSlots", {"ok": True, "slots": []})
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Leider ist diese Woche kein freier Termin verfügbar.") == ""
+
+
+def test_bestandstermin_darf_ohne_suche_nicht_verneint_werden():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Sie haben aktuell keinen kommenden Termin.") == "bestand"
+    merke_tool(sit, "agentFindPatientAppointments", {
+        "ok": True,
+        "appointments": [],
+        "patient": {"id": "p1"},
+    })
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Sie haben aktuell keinen kommenden Termin.") == ""
+
+
+def test_sms_und_rueckruf_brauchen_evidenz():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Die Bestätigungs-SMS kommt gleich.") == "sms"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Die Praxis ruft Sie zurück.") == "rueckruf"
+
+    sit["lastBook"] = {"ok": True, "booked": True, "verified": True}
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Die Bestätigungs-SMS kommt gleich.") == ""
+    merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True})
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Die Praxis ruft Sie zurück.") == ""
+
+
+def test_transfer_braucht_auch_einen_aktuellen_nutzerwunsch():
+    sit = _sit()
+    sit["weiterleitungZiel"] = {"name": "Frau Thaler", "nummer": "+4987512345"}
+    assert fakten_wache.unbelegte_behauptung(
+        sit,
+        "Ich stelle Sie jetzt zu Frau Thaler durch.",
+        nutzertext="Wie sind Ihre Öffnungszeiten?",
+    ) == "transfer"
+    assert fakten_wache.unbelegte_behauptung(
+        sit,
+        "Ich stelle Sie jetzt zu Frau Thaler durch.",
+        nutzertext="Ich möchte nur kurz über meine Behandlung sprechen.",
+    ) == "transfer"
+    assert fakten_wache.unbelegte_behauptung(
+        sit,
+        "Ich stelle Sie jetzt zu Frau Thaler durch.",
+        nutzertext="Verbinden Sie mich bitte mit Frau Thaler.",
+    ) == ""
+
+
+def test_angehaengte_frage_entschaerft_keine_erledigt_luege():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich habe den Termin reserviert, passt das?") == "buchen"
 
 
 # --- Agent-Umgang: off / shadow / enforce -----------------------------------
@@ -172,3 +246,17 @@ def test_enforce_laesst_belegte_behauptung_stehen(monkeypatch):
     sit["lastBook"] = {"ok": True, "booked": True}
     aus = agent._fakten_wache_anwenden(sit, "Ihr Termin ist gebucht.")
     assert aus == "Ihr Termin ist gebucht."
+
+
+def test_enforce_entfernt_den_ganzen_erfundenen_slot_satz(monkeypatch):
+    monkeypatch.setenv("FAKTEN_WACHE", "enforce")
+    sit = _sit()
+    sit["sammler"]["modus"] = ""
+    aus = agent._fakten_wache_anwenden(
+        sit,
+        "Am Montag um neun ist noch etwas frei. Die SMS kommt danach sofort.",
+        nutzertext="Ist heute noch ein Termin frei?",
+    )
+    assert "montag" not in aus.lower()
+    assert "sms kommt" not in aus.lower()
+    assert "kalendersuche" in aus.lower()
