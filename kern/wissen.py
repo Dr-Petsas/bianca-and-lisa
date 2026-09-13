@@ -137,26 +137,36 @@ def _sprechbare_zeiten(raw: str) -> str:
 def praxis_antwort(tenant: dict | None, text: str) -> tuple[str, set[str]]:
     """Öffnungszeiten/Weg ausschließlich aus Mandanten-Fakten beantworten.
 
-    DB-Prompt gewinnt; ``wissen`` ist der lokale Rückfall. Fehlt ein Fakt,
-    übernimmt weiterhin der normale Gesprächspfad, statt etwas zu erfinden.
+    Rangfolge Öffnungszeiten: ausdrückliche Einzeiler-Angabe im DB-Prompt
+    („Öffnungszeiten: …", MedDent) > Standorteinstellungen aus dem Portal
+    (``tenant["standort"]``, W-STANDORT 13.09.2026 — Thaler/Blessing) >
+    lokales ``wissen``. Fehlt ein Fakt, übernimmt weiterhin der normale
+    Gesprächspfad, statt etwas zu erfinden.
     """
     themen = auskunft_themen(text)
     if not themen:
         return "", set()
     t = tenant if isinstance(tenant, dict) else {}
     w = t.get("wissen") if isinstance(t.get("wissen"), dict) else {}
+    st = t.get("standort") if isinstance(t.get("standort"), dict) else {}
     prompt = str(t.get("dbPrompt") or "")
     teile: list[str] = []
     bedient: set[str] = set()
     if "oeffnungszeiten" in themen:
-        zeiten = (
-            _prompt_oeffnungszeiten(prompt)
-            or _s(w.get("oeffnungszeiten"))
-            or _s(t.get("oeffnungszeiten"))
-        )
+        zeiten = _prompt_oeffnungszeiten(prompt)
         if zeiten:
             teile.append(f"Unsere Öffnungszeiten sind {_sprechbare_zeiten(zeiten)}.")
             bedient.add("oeffnungszeiten")
+        elif _s(st.get("text")):
+            # Standort-Sprechform ist schon gruppiert und traegt „Uhr" je Zeit
+            # — sanitize spricht daraus „sieben Uhr dreißig".
+            teile.append(f"Unsere Öffnungszeiten: {_s(st.get('text'))}.")
+            bedient.add("oeffnungszeiten")
+        else:
+            zeiten = _s(w.get("oeffnungszeiten")) or _s(t.get("oeffnungszeiten"))
+            if zeiten:
+                teile.append(f"Unsere Öffnungszeiten sind {_sprechbare_zeiten(zeiten)}.")
+                bedient.add("oeffnungszeiten")
     if "anfahrt" in themen:
         anfahrt = _prompt_anfahrt(prompt) or _s(w.get("anfahrt")) or _s(t.get("anfahrt"))
         if anfahrt:

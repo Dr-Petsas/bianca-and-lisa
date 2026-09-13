@@ -171,10 +171,24 @@ def akut(text: str) -> bool:
 
 
 def praxis_offen(tenant: dict | None, jetzt: datetime | None = None) -> bool | None:
-    """Sprechzeiten aus dem DB-Prompt lesen; None, wenn dort keine stehen."""
+    """Ist die Praxis gerade geoeffnet? None, wenn keine Zeiten bekannt sind.
+
+    W-STANDORT (13.09.2026): liegen strukturierte Zeiten aus den
+    Standorteinstellungen vor (``tenant["standort"]["zeiten"]``), gelten
+    die — sonst wie bisher die Sprechzeiten-Zeilen des DB-Prompts.
+    """
     now = jetzt or datetime.now(TZ)
     if now.tzinfo is None:
         now = now.replace(tzinfo=TZ)
+    st = (tenant or {}).get("standort") if isinstance(tenant, dict) else None
+    if isinstance(st, dict) and st.get("zeiten"):
+        from kern import standort as standortmod
+        # Gleiche Rangfolge wie kern.wissen: eine ausdrueckliche Einzeiler-
+        # Angabe im Agent-Prompt (MedDent) bleibt die Wahrheit des Kunden.
+        if not standortmod.hat_explizite_zeiten(_prompt(tenant)):
+            offen = standortmod.offen(st.get("zeiten"), now)
+            if offen is not None:
+                return offen
     tag = _WOCHENTAGE[now.weekday()]
     prompt = _prompt(tenant)
     zeile = next(

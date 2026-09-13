@@ -22,6 +22,7 @@ from kern import (
     llm,
     mitschnitt,
     sprech,
+    standort,
     stt,
     tenants,
     tts,
@@ -160,6 +161,7 @@ def health():
         "gedaechtnis": gedaechtnis.anzeige(),
         "mandant": agentprofil.anzeige(),
         "anrufAudio": anrufaudio.anzeige(),
+        "standort": standort.anzeige(),
         "lastCall": session.last_call(),
     }
 
@@ -480,6 +482,17 @@ def _warm_start():
         for satz in gehirn.feste_saetze(t):
             tts.warm(sprech.sanitize(satz))
         print("bianca-warm: feste Fragen im Cache", flush=True)
+        # W-STANDORT (13.09.2026): Oeffnungszeiten aller lokalen Mandanten
+        # aus den Standorteinstellungen vorab lesen — der erste Anrufer je
+        # Praxis wartet so nie auf Firestore (danach stale-while-revalidate).
+        for info in tenants.liste():
+            try:
+                lt = tenants.laden(info["id"])
+                st = standort.laden(lt.get("clientId"), lt.get("locationId"))
+                print(f"bianca-warm: standort {info['id']} -> "
+                      f"{'Zeiten da' if st and st.get('zeiten') else 'keine Zeiten'}", flush=True)
+            except Exception as e:
+                print(f"bianca-warm: standort {info['id']} fail {e}", flush=True)
         # W-MANDANT-4: die uebrigen Mandanten NACH dem Default anwärmen —
         # deren erste Anrufer sollen ebenso wenig auf die Synthese warten.
         # Gleiche Saetze dedupliziert der Cache; ein kaputtes Tenant-JSON

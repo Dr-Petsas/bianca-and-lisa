@@ -44,7 +44,10 @@ _UPLOAD_BASE = "https://storage.googleapis.com/upload/storage/v1/b"
 _DOWNLOAD_BASE = "https://firebasestorage.googleapis.com/v0/b"
 
 _LOCK = threading.Lock()
-_TOKEN: dict[str, Any] = {"wert": "", "bis": 0.0}
+# Token je Scope (W-STANDORT 13.09.2026: kern/standort.py liest mit demselben
+# Service-Account die Standorteinstellungen aus Firestore — anderer Scope,
+# eigener Cache-Eintrag; der Storage-Weg bleibt unveraendert).
+_TOKENS: dict[str, dict[str, Any]] = {}
 
 
 def _s(v: Any) -> str:
@@ -68,11 +71,13 @@ def _b64url(blob: bytes) -> str:
     return base64.urlsafe_b64encode(blob).decode("ascii").rstrip("=")
 
 
-def _access_token() -> str:
-    """OAuth2-Token aus dem Service-Account — gecacht bis kurz vor Ablauf."""
+def _access_token(scope: str = _SCOPE) -> str:
+    """OAuth2-Token aus dem Service-Account — gecacht bis kurz vor Ablauf
+    (je Scope ein Eintrag; ohne Argument der Storage-Scope wie bisher)."""
     with _LOCK:
-        if _TOKEN["wert"] and _TOKEN["bis"] - time.time() > 120:
-            return _TOKEN["wert"]
+        tok = _TOKENS.get(scope) or {}
+        if tok.get("wert") and float(tok.get("bis") or 0.0) - time.time() > 120:
+            return tok["wert"]
 
     sa = json.loads(Path(FIREBASE_CREDENTIALS).read_text(encoding="utf-8"))
     token_uri = _s(sa.get("token_uri")) or _TOKEN_URI_DEFAULT
@@ -86,7 +91,7 @@ def _access_token() -> str:
     kopf = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode("utf-8"))
     claims = _b64url(json.dumps({
         "iss": sa["client_email"],
-        "scope": _SCOPE,
+        "scope": scope,
         "aud": token_uri,
         "iat": now,
         "exp": now + 3600,
@@ -102,9 +107,11 @@ def _access_token() -> str:
     r.raise_for_status()
     d = r.json()
     with _LOCK:
-        _TOKEN["wert"] = _s(d.get("access_token"))
-        _TOKEN["bis"] = time.time() + float(d.get("expires_in") or 3600)
-        return _TOKEN["wert"]
+        _TOKENS[scope] = {
+            "wert": _s(d.get("access_token")),
+            "bis": time.time() + float(d.get("expires_in") or 3600),
+        }
+        return _TOKENS[scope]["wert"]
 
 
 def _mp3(wav: bytes) -> bytes | None:

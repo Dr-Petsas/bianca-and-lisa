@@ -474,14 +474,14 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
     # (tenants/<id>.json "telefonGesperrteBehandler") fliegen an DIESER einen
     # Stelle aus den Kalendern — CF-Pfad, Cache-Treffer und Datei-Rueckfall
     # gleich. Ohne Eintrag byte-identisch.
-    from kern import behandler_sperre
+    from kern import behandler_sperre, standort
     if t:
-        return behandler_sperre.anwenden(t)
+        return standort.anreichern(behandler_sperre.anwenden(t))
 
     lokal = tenants.von_did(norm)
     if lokal:
         print(f"agentprofil did={norm} -> lokale Datei {lokal.get('_id')} (Rueckfall)", flush=True)
-        return behandler_sperre.anwenden(lokal)
+        return standort.anreichern(behandler_sperre.anwenden(lokal))
     sicher = tenants.fallback_fuer_did(norm)
     print(
         f"agentprofil did={norm} -> neutraler Fachfallback {sicher.get('_id')}",
@@ -504,8 +504,8 @@ def fuer_tenant(tenant_id: Any) -> dict[str, Any]:
         dynamisch = fuer_did(did)
         if dynamisch:
             return dynamisch
-    from kern import behandler_sperre
-    return behandler_sperre.anwenden(lokal)
+    from kern import behandler_sperre, standort
+    return standort.anreichern(behandler_sperre.anwenden(lokal))
 
 
 def cache_leeren() -> None:
