@@ -54,6 +54,19 @@ for c in telefonki-bianca-1 telefonki-lisa-1 telefonki-bianca-test-1 telefonki-s
   [ -z "$id" ] && continue
   name=$(docker inspect -f '{{.Config.Image}}' "$c" 2>/dev/null)
   neu="$(echo "$name" | cut -d: -f1):$MARKE"
+  # Ein Repo-Tag zeigt auf GENAU ein Image. Laufen Container desselben Repos
+  # aus verschiedenen Images (V2.3, 13.09.2026: bianca/lisa neu gebaut,
+  # sipbridge nicht — sip_bridge/ war unveraendert), darf der spaetere
+  # Container den Tag des ersten NICHT ueberschreiben — sonst zeigt der
+  # App-Sicherungstag auf das alte Image und ein "Rollback auf V2.3" holt
+  # den Vor-Fix-Stand zurueck. Der erste Container der Liste (bianca) ist
+  # der massgebliche; Abweichler bekommen einen eigenen Tag mit Suffix.
+  vorhanden=$(docker inspect -f '{{.Id}}' "$neu" 2>/dev/null || true)
+  if [ -n "$vorhanden" ] && [ "$vorhanden" != "$id" ]; then
+    kurz=$(echo "$c" | sed 's/^telefonki-//; s/-1$//')
+    neu="$neu-$kurz"
+    echo "  ACHTUNG: $c laeuft aus einem ANDEREN Image als der erste Container dieses Repos -> eigener Tag $neu"
+  fi
   # Die SIP-Bruecken laufen historisch aus aufgeraeumten Layern: docker tag
   # und docker commit scheitern dort ("content digest not found"). Ihr Code
   # ist identisch mit telefonki:v1 (compose nutzt denselben *app-Block) —

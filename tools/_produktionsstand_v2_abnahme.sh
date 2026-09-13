@@ -14,6 +14,23 @@ echo
 echo "== Sicherungs-Images vorhanden"
 docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep "$MARKE"
 echo
+# V2.3-Lektion (13.09.2026): der App-Tag zeigte auf das V2.2-Image, weil die
+# sipbridge (nicht neu gebaut) als letzter Container den Tag ueberschrieb.
+# Ein Rollback "auf V2.3" haette den Vor-Fix-Stand gebracht. Deshalb hier
+# der harte Vergleich: Sicherungstag == Image der laufenden Bianca.
+echo "== App-Tag zeigt auf die laufende Bianca"
+live=$(docker inspect -f '{{.Image}}' telefonki-bianca-1)
+tag=$(docker inspect -f '{{.Id}}' "telefonki:$MARKE" 2>/dev/null || echo fehlt)
+if [ "$live" = "$tag" ]; then
+  echo "OK  telefonki:$MARKE = ${live:7:12} (bianca live)"
+else
+  echo "FEHLER  telefonki:$MARKE = ${tag:7:12}, bianca laeuft aber aus ${live:7:12} -> docker tag ${live:7:12} telefonki:$MARKE"
+fi
+for c in telefonki-lisa-1 telefonki-sipbridge-1 telefonki-studio-1 telefonki-bianca-test-1; do
+  i=$(docker inspect -f '{{.Image}}' "$c" 2>/dev/null) || continue
+  [ "$i" = "$live" ] || echo "HINWEIS $c laeuft aus ${i:7:12} (anders als bianca) - Code-Unterschied pruefen"
+done
+echo
 echo "== Archive lesbar (Stichprobe)"
 for f in tenants secrets; do
   n=$(tar tzf "$S/$f.tgz" | wc -l)
