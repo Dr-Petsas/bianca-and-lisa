@@ -355,8 +355,17 @@ def test_rezeption_ist_kein_rezept():
         z = flow.zug(_sit(), text)
         assert z and "Rezept" not in z["text"], text
         assert "Anmeldung" in z["text"], text
-    z = flow.zug(_sit(), "Ich brauche ein Rezept.")
-    assert z and "Rezepte" in z["text"]
+    # Gegenprobe auf dem ECHTEN Weg (Fix 1, 13.09.2026): MedDent traegt
+    # keinen Vorsprache-Marker, das Rezept laeuft ueber Intent -> ABGEBEN
+    # -> _abgeben_zug (Notiz-Weg, „nicht ausstellen"). Der feste
+    # Blessing-Text („Rezepte ... nur persoenlich") darf hier NICHT kommen.
+    sit = _sit()
+    assert flow.zug(sit, "Ich brauche ein Rezept.") is None  # Hook still, Hirn entscheidet
+    sit["hirnAbgeben"] = {"offen": True, "was": "Rezept"}
+    z = flow.zug(sit, "Ich brauche ein Rezept.")
+    assert z and "Rezept" in z["text"] and "nicht ausstellen" in z["text"]
+    assert "persönlich in die Praxis" not in z["text"]
+    assert "Rezeption" not in z["text"]
 
 
 def test_erneutes_bestehen_ohne_rollenziel_bietet_rueckruf_an():

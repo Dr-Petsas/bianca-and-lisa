@@ -55,9 +55,52 @@ _REZEPT_UEBERWEISUNG_RE = re.compile(
     r"\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
     re.I,
 )
+# Zahnaerztliche Unterlagen, die HERAUSGEGEBEN werden koennten (Dienstweg):
+# Roentgenbilder/-aufnahmen, Befundberichte, Behandlungsunterlagen. Bewusst
+# NICHT „Befundbesprechung"/„Roentgentermin" — das sind Termine (Fix 1,
+# 13.09.2026: die alte Form `befund\w*` fing jede Befundbesprechung ab).
 _DENTAL_UNTERLAGEN_RE = re.compile(
-    r"\bröntgen\w*|\broentgen\w*|\bbefund(?:unterlagen?|berichte?|bilder?)?\w*|"
-    r"\bbehandlungsunterlagen?\w*",
+    r"\b(?:r(?:ö|oe)ntgen(?:bild\w*|aufnahme\w*|unterlagen|befund\w*)?"
+    r"|befund(?:e|s|es|bericht\w*|unterlagen|bilder?|kopie\w*)?"
+    r"|behandlungsunterlagen|unterlagen|patientenakte|krankenakte)\b",
+    re.I,
+)
+
+# Der Anrufer WILL ein Dokument bekommen/ausgestellt/geschickt haben. Ohne
+# ein solches Anforderungs-Verb ist die blosse Nennung („Rezept", „Roentgen")
+# kein Dokumentwunsch — z. B. „Termin zum Roentgen", „Befundbesprechung".
+_ANFORDERUNG_RE = re.compile(
+    r"\b(?:brauch\w*|br(?:ä|ae)uchte\w*|ben(?:ö|oe)tig\w*"
+    r"|h(?:ä|ae)tte?n?\s+(?:\w+\s+){0,3}?gern\w*"
+    r"|m(?:ö|oe)chte\w*|will|wollte\w*|wollen|bitte\s+um|bestell\w*"
+    r"|abhol\w*|verl(?:ä|ae)nger\w*|ausstell\w*|ausgestellt|verschreib\w*|aufschreib\w*"
+    r"|(?:zu|r(?:ü|ue)ber|zur(?:ü|ue)ck|nach)?schick\w*|(?:zu)?send\w*|(?:zu)?mail\w*"
+    r"|fax\w*|bekomm\w*|krieg\w*|erhalt\w*|mitgeb\w*|mitnehm\w*|hinterleg\w*"
+    r"|fertig\s*mach\w*|bereitleg\w*|kopie\w*|anforder\w*|beantrag\w*"
+    r"|abgelaufen|aufgebraucht|alle\b|leer\b"
+    r"|neue[sn]?\s+(?:rezept|(?:ü|ue)berweisung|verordnung|attest)"
+    r"|noch\s+(?:ein\w*|mal)\s+(?:ein\w*\s+)?(?:rezept|(?:ü|ue)berweisung|verordnung))",
+    re.I,
+)
+
+# Der Anrufer HAT eine Ueberweisung (vom Hausarzt/Kollegen) — das ist ein
+# Buchungsgrund, kein Dokumentwunsch. Gewinnt gegen die Anforderung.
+_HAT_UEBERWEISUNG_RE = re.compile(
+    r"(?:ü|ue)berwiesen"
+    r"|(?:ü|ue)berweisung\w*\s+(?:von|vom|durch|des|der|meine[rs]|aus|liegt|dabei|mitgebracht)\b"
+    r"|\b(?:hab(?:e|en)?|hatte|hat|liegt|bring\w*)\s+(?:\w+\s+){0,3}?"
+    r"(?:eine|die|ne|meine|schon\s+eine|bereits\s+eine|so\s+eine)\s+(?:ü|ue)berweisung"
+    r"|\bmit\s+(?:einer\s+|der\s+|meiner\s+)?(?:ü|ue)berweisung"
+    r"|(?:ü|ue)berweisung\w*\s+(?:\w+\s+){0,2}?(?:dabei|mitgebracht|in\s+der\s+hand|vorliegen)",
+    re.I,
+)
+
+# Terminbezug im Satz — beim Zahnarzt sind „Roentgen"/„Befund" dann Termine
+# (Roentgentermin, Befundbesprechung, Aufnahmen machen lassen).
+_TERMIN_KONTEXT_RE = re.compile(
+    r"\btermin\w*|besprech\w*|kontroll\w*|untersuch\w*|aufnahmen?\s+machen"
+    r"|r(?:ö|oe)ntgen\s+(?:lassen|machen)|zum\s+r(?:ö|oe)ntgen|ger(?:ö|oe)ntgt"
+    r"|r(?:ö|oe)ntgentermin|vorbeikommen",
     re.I,
 )
 _WOCHENTAGE = {
@@ -176,14 +219,51 @@ def dokument_antwort() -> str:
     )
 
 
-def unterlagen_antwort(tenant: dict | None, text: str) -> str:
-    """Fachsichere Dokumentauskunft; Zahnregeln nie in Derma ausgeben."""
+def dokument_anforderung(text: str) -> bool:
+    """Will der Anrufer ein Rezept/eine Ueberweisung BEKOMMEN (nicht: er hat
+    eine und will deshalb einen Termin)? Fix 1, 13.09.2026."""
     t = _s(text)
+    if not _REZEPT_UEBERWEISUNG_RE.search(t):
+        return False
+    if _HAT_UEBERWEISUNG_RE.search(t):
+        return False
+    return bool(_ANFORDERUNG_RE.search(t))
+
+
+def unterlagen_antwort(tenant: dict | None, text: str) -> str:
+    """Fachsichere Dokumentauskunft; Zahnregeln nie in Derma ausgeben.
+
+    Fix 1 (13.09.2026, Feldtest-Analyse): Vor dem Fix feuerte diese Antwort
+    fuer JEDEN Mandanten und bei jeder Nennung von „Rezept"/„Ueberweisung"/
+    „Befund" — MedDent/Thaler sprachen Blessings festen Vorsprache-Text
+    („Rezepte ... nur persoenlich in der Praxis"), obwohl dort der
+    Rueckruf-/Notiz-Weg gilt, und „Ich bin vom Hausarzt ueberwiesen" oder
+    „Termin zur Befundbesprechung" wurden mitten in der Buchung als
+    Dokumentwunsch abgefangen. Jetzt gilt:
+
+    - Rezept/Ueberweisung-Vorsprache NUR fuer Mandanten mit DB-Marker
+      (`dokument_vorsprache_aktiv`, Blessing) und NUR bei echter
+      ANFORDERUNG (bekommen/ausstellen/schicken ...); „ich habe eine
+      Ueberweisung" ist ein Buchungsgrund und faellt durch.
+    - Zahnaerztlicher Dienstweg (Roentgenbilder/Befunde) NUR bei Anforderung
+      und OHNE Terminbezug im Satz (Befundbesprechung/Roentgentermin sind
+      Termine).
+    - Alles andere -> "" -> der normale Weg (Intent/Hirn/ABGEBEN-Notiz).
+    """
+    t = _s(text)
+    if not t:
+        return ""
     if _REZEPT_UEBERWEISUNG_RE.search(t):
-        return dokument_antwort()
+        if dokument_vorsprache_aktiv(tenant) and dokument_anforderung(t):
+            return dokument_antwort()
+        # Ueberweisung/Rezept ohne Marker-Mandant oder ohne Anforderung:
+        # kein fester Text — Hirn/Flow entscheiden (Notiz, Buchung).
+        return ""
     if (
         fachprofil.fach_id(tenant) == "zahnmedizin"
         and _DENTAL_UNTERLAGEN_RE.search(t)
+        and _ANFORDERUNG_RE.search(t)
+        and not _TERMIN_KONTEXT_RE.search(t)
     ):
         return (
             "Röntgenbilder und Befundunterlagen werden normalerweise über "

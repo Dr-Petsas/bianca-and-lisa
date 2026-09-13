@@ -2295,7 +2295,23 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     dokument_text = praxisregeln.unterlagen_antwort(sit.get("tenant"), t)
     if dokument_text:
         # Fester Praxisablauf: keine LLM-Halluzination und kein unnötiges
-        # Sammeln von Name oder Rufnummer.
+        # Sammeln von Name oder Rufnummer. `unterlagen_antwort` liefert seit
+        # Fix 1 (13.09.2026) nur noch fuer Marker-Mandanten (Blessing) bzw.
+        # echte zahnaerztliche Unterlagen-ANFORDERUNGEN etwas — MedDent/
+        # Thaler-Rezeptwuensche laufen ueber Intent/Hirn in den Notiz-Weg.
+        offene = _s(s.get("frage"))
+        if s["modus"] and offene and s["phase"] != "fertig":
+            # Mitten in einer Aufgabe: die Kette NICHT abreissen. Auskunft
+            # geben und die offene Frage im selben Zug erneut stellen
+            # (die zuletzt wirklich gesprochene Fassung, sonst die kanonische).
+            frage = _s(sit.get("flussFrage"))
+            if not frage:
+                fid, frage = gehirn.naechste_frage(sit)
+                if fid and frage:
+                    s["frage"] = fid
+            if frage:
+                return {"text": f"{dokument_text} {frage}".strip()}
+            return {"text": dokument_text}
         s["frage"] = ""
         return {"text": dokument_text}
 
