@@ -16,6 +16,7 @@ from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import qwen_korrektor
 from kern import spur
 from kern import wissen as kern_wissen
 # #region agent log
@@ -1435,6 +1436,12 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if task_auswahl:
         task_plan = task_router.prompt(sit)
         plan = f"{plan}\n\n{task_plan}" if plan else task_plan
+    # W-QWEN-KORREKTOR (13.09.2026): hat das Zweit-Ohr den VORIGEN Anrufer-
+    # Satz berichtigt (Verlauf ist schon umgeschrieben), sagt ein einmaliger
+    # Hinweis dem Modell, welche Fassung gilt — nur in DIESEM Zug.
+    qwen_hinweis = qwen_korrektor.prompt_hinweis(sit)
+    if qwen_hinweis:
+        plan = f"{plan}\n\n{qwen_hinweis}" if plan else qwen_hinweis
     if msgs and msgs[0].get("role") == "system":
         msgs[0]["content"] = system_prompt_aktuell(sit, plan=plan)
     # Kein Stream-Vorab, solange Buchung ODER Verwaltung offen ist: die Wachen

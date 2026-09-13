@@ -81,6 +81,11 @@ STT_QWEN_KEY = _s("STT_QWEN_KEY")
 # Plausible Texte warten exakt null Sekunden. 0.25 s ist auch auf der 3060
 # gedeckelt; eine spaetere 5070 Ti wird meist innerhalb des Fensters fertig.
 STT_QWEN_GRACE_S = float(_s("STT_QWEN_GRACE_S", "0.25") or "0.25")
+# W-QWEN-KORREKTOR (13.09.2026): so viele Qwen-Zuege duerfen gleichzeitig
+# in Arbeit sein. Mit 1 wurde jeder Zug verworfen, solange der vorige noch
+# rechnete (Kaltstart 2-5 s) — der asynchrone Korrektor braucht aber JEDEN
+# Zug. 2 = ein laufender + ein nachrueckender; aeltere werden nie aufgestaut.
+STT_QWEN_PARALLEL = max(1, int(_s("STT_QWEN_PARALLEL", "2") or "2"))
 # Whisper-GPU-STT auf dem Dev-Rechner (W-STT-WHISPER 30.08.2026): GESETZT =
 # Transkription laeuft ZUERST ueber den Whisper-Stream-Container (WebSocket,
 # pickadoc-stt, large-v3 auf der Dev-GPU, via Tailscale). Ist er nicht

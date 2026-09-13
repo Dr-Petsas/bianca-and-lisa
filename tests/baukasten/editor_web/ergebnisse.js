@@ -365,6 +365,19 @@ function bubbleBauen(z, basis) {
       if (q) qwenTag.title = q;
       meta.appendChild(qwenTag);
     }
+    // W-QWEN-KORREKTOR: das Zweit-Ohr hat diesen Zug vor dem Hirn berichtigt.
+    const k = z.stt.korrektur;
+    if (k && typeof k === "object") {
+      const kTag = document.createElement("span");
+      kTag.className = "tag stt-gewinner qwen";
+      kTag.textContent = k.vorzug ? `Qwen-Korrektur (${k.grund || "vorzug"})` : "Qwen-Wörterbuch";
+      const teile = [];
+      if (k.textVorher && k.text) teile.push(`${k.textVorher} → ${k.text}`);
+      if (k.woerterbuch && k.woerterbuch.length) teile.push(k.woerterbuch.join(", "));
+      if (k.vorzug && k.qwenVorher) teile.push(`voriger Zug richtig: ${k.qwenVorher} (gehört: ${k.parakeetVorher || ""})`);
+      kTag.title = teile.join("\n");
+      meta.appendChild(kTag);
+    }
   }
   if (z.gesprochen && z.gesprochen !== z.text) {
     meta.insertAdjacentHTML("beforeend", `<span class="tag gesprochen">gesprochen: ${z.gesprochen}</span>`);

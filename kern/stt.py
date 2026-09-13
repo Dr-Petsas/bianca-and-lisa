@@ -22,6 +22,7 @@ import subprocess
 import threading
 import time
 import wave
+from typing import Callable
 
 import httpx
 
@@ -32,6 +33,7 @@ from kern.config import (
     STT_QWEN_FINAL_BASE,
     STT_QWEN_GRACE_S,
     STT_QWEN_KEY,
+    STT_QWEN_PARALLEL,
     STT_WHISPER_BASE,
     STT_WHISPER_BUDGET_S,
     STT_WHISPER_KEY,
@@ -50,9 +52,13 @@ _whisper_pause_bis = 0.0
 # Rueckfall bereits fertig und kostet nicht noch einmal ~0,2-0,3 s seriell.
 WHISPER_FALLBACK_LEAD_S = 0.30
 _FALLBACK_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="stt-fallback")
-_QWEN_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-qwen-parallel")
+_QWEN_POOL = ThreadPoolExecutor(max_workers=STT_QWEN_PARALLEL, thread_name_prefix="stt-qwen-parallel")
 _QWEN_LOCK = threading.Lock()
+# Juengster Qwen-Lauf (stt_spur erkennt daran, ob ein neuer Lauf startete)
+# plus alle noch offenen Laeufe (W-QWEN-KORREKTOR: bis STT_QWEN_PARALLEL
+# gleichzeitig — jeder Zug soll Qwen erreichen, nichts wird aufgestaut).
 _qwen_future: Future | None = None
+_qwen_offen: list[Future] = []
 QWEN_PAUSE_S = 30.0
 _qwen_pause_bis = 0.0
 
@@ -352,20 +358,54 @@ def _qwen_context_echo(text: str, context: str) -> bool:
     )
 
 
+def _qwen_final_bases() -> list[str]:
+    """`STT_QWEN_FINAL_BASE` darf mehrere Basen tragen (Komma-Liste).
+
+    W-QWEN-KORREKTOR (13.09.2026): der Qwen-Container laeuft auf dem
+    Dev-Rechner mit DHCP-Adresse — die IP wanderte am 13.09. von .167 auf
+    .173 und Qwen war einen Tag lang still unerreichbar. Mit einer Liste
+    ("http://192.168.0.173:8223,http://192.168.0.167:8223") wandert der
+    Klient bei Verbindungsfehlern zur naechsten Basis und bleibt dort.
+    """
+    return [b.strip().rstrip("/") for b in str(STT_QWEN_FINAL_BASE or "").split(",") if b.strip()]
+
+
+_qwen_final_idx = 0
+
+
 def _qwen_final_message(pcm: bytes, keywords: str = "") -> dict:
     """Direkter Qwen-only-Container: kein zweites Parakeet auf der GPU-Box."""
-    response = _client().post(
-        f"{STT_QWEN_FINAL_BASE}/final",
-        files={"file": ("audio.pcm", pcm, "application/octet-stream")},
-        data={"context": _qwen_context(keywords)},
-        headers={"X-Internal-Token": STT_QWEN_KEY},
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"stt_qwen_final_http_{response.status_code}")
-    payload = dict(response.json())
-    payload.setdefault("source", "qwen")
-    payload.setdefault("degraded", False)
-    return payload
+    global _qwen_final_idx
+    bases = _qwen_final_bases()
+    if not bases:
+        raise RuntimeError("stt_qwen_final_base_leer")
+    start = _qwen_final_idx % len(bases)
+    letzter: Exception | None = None
+    for schritt in range(len(bases)):
+        i = (start + schritt) % len(bases)
+        base = bases[i]
+        try:
+            response = _client().post(
+                f"{base}/final",
+                files={"file": ("audio.pcm", pcm, "application/octet-stream")},
+                data={"context": _qwen_context(keywords)},
+                headers={"X-Internal-Token": STT_QWEN_KEY},
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            letzter = exc
+            print(f"stt-qwen-final: {base} nicht erreichbar "
+                  f"({type(exc).__name__}) — naechste Basis", flush=True)
+            continue
+        if response.status_code != 200:
+            raise RuntimeError(f"stt_qwen_final_http_{response.status_code}")
+        if i != _qwen_final_idx:
+            _qwen_final_idx = i
+            print(f"stt-qwen-final: aktive Basis {base}", flush=True)
+        payload = dict(response.json())
+        payload.setdefault("source", "qwen")
+        payload.setdefault("degraded", False)
+        return payload
+    raise letzter or RuntimeError("stt_qwen_final_unerreichbar")
 
 
 def _qwen_candidate(pcm: bytes, keywords: str = "") -> dict:
@@ -508,12 +548,17 @@ def _qwen_parallel_task(audio: bytes, mime: str, keywords: str) -> dict:
 
 
 def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | None:
-    """Genau ein Qwen-Lauf gleichzeitig; alte Zuege werden nie aufgestaut."""
+    """Hoechstens STT_QWEN_PARALLEL Qwen-Laeufe gleichzeitig; ist alles
+    belegt, faellt der Zug aus (nie aufstauen — ein Stau wuerde den
+    Korrektor mit veralteten Zuegen fuettern)."""
     global _qwen_future
     if not _qwen_aktiv():
         return None
     with _QWEN_LOCK:
-        if _qwen_future is not None and not _qwen_future.done():
+        _qwen_offen[:] = [f for f in _qwen_offen if not f.done()]
+        if len(_qwen_offen) >= STT_QWEN_PARALLEL:
+            print(f"stt-qwen-parallel: {len(_qwen_offen)} Laeufe offen — Zug ohne Qwen",
+                  flush=True)
             return None
         _qwen_future = _QWEN_POOL.submit(
             _qwen_parallel_task,
@@ -521,7 +566,48 @@ def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | Non
             mime,
             keywords,
         )
+        _qwen_offen.append(_qwen_future)
         return _qwen_future
+
+
+Nachtrag = Callable[[dict], None]
+
+
+def _nachtrag_anmelden(qwen: Future, lokal: str, kandidat: dict | None,
+                       nachtrag: Nachtrag, t0: float) -> None:
+    """W-QWEN-KORREKTOR (13.09.2026): ein Qwen-Ergebnis, das den Live-Zug
+    nicht mehr erreicht hat (zu spaet) oder ihn nicht uebernehmen durfte,
+    wird NICHT mehr weggeworfen, sondern dem Aufrufer nachgereicht — der
+    asynchrone Korrektor wertet es einen Zug spaeter aus. Parakeet bleibt
+    das Live-Ohr; hier wartet niemand."""
+
+    def _melden(k: dict, spaet: bool) -> None:
+        try:
+            nachtrag({
+                "text": _sauber((k or {}).get("text")),
+                "authoritative": bool((k or {}).get("authoritative")),
+                "reason": str((k or {}).get("reason") or ""),
+                "source": str((k or {}).get("source") or "qwen"),
+                "parakeet": lokal,
+                "spaet": spaet,
+                "s": round(time.perf_counter() - t0, 2),
+            })
+        except Exception as exc:  # der Korrektor darf das Ohr nie stoeren
+            print(f"stt-qwen-nachtrag fail {type(exc).__name__}: {exc}", flush=True)
+
+    if kandidat is not None:
+        _melden(kandidat, False)
+        return
+
+    def _fertig(f: Future) -> None:
+        try:
+            k = f.result()
+        except Exception as exc:
+            k = {"text": "", "authoritative": False,
+                 "reason": f"{type(exc).__name__}: {exc}"}
+        _melden(k, True)
+
+    qwen.add_done_callback(_fertig)
 
 
 def _parallel_transcribe(
@@ -530,8 +616,10 @@ def _parallel_transcribe(
     mime: str,
     name: str,
     keywords: str,
+    nachtrag: Nachtrag | None = None,
 ) -> str:
     """Parakeet sofort; nur auffaellige Texte warten gedeckelt auf Qwen."""
+    t0 = time.perf_counter()
     qwen = _qwen_parallel_start(audio, mime, keywords)
     try:
         lokal = _lokal(audio, mime=mime, name=name, keywords=keywords)
@@ -570,13 +658,18 @@ def _parallel_transcribe(
             flush=True,
         )
         return str(kandidat["text"])
+    if nachtrag is not None:
+        _nachtrag_anmelden(qwen, lokal, kandidat, nachtrag, t0)
     return lokal
 
 
 # ------------------------------------------------------------------ Einstieg
 
 def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
-               keywords: str = "") -> str:
+               keywords: str = "", nachtrag: Nachtrag | None = None) -> str:
+    """`nachtrag` (optional): bekommt ein Qwen-Ergebnis nachgereicht, das
+    NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). Ohne den
+    Parameter verhaelt sich alles byte-identisch wie zuvor."""
     if not audio or len(audio) < 800:
         return ""
     if _qwen_konfiguriert():
@@ -586,6 +679,7 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
                 mime=mime,
                 name=name,
                 keywords=keywords,
+                nachtrag=nachtrag,
             )
         if _qwen_aktiv():
             try:

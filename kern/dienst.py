@@ -18,7 +18,10 @@ from typing import Any, Callable
 
 from fastapi.responses import StreamingResponse
 
-from kern import filler, halbsatz, llm, mitschnitt, sprech, spur, stt_spur, tempo, tenants, tts, unterbrechung
+from kern import (
+    filler, halbsatz, llm, mitschnitt, qwen_korrektor, sprech, spur, stt_spur,
+    tempo, tenants, tts, unterbrechung,
+)
 from kern.config import WRITE_LIVE
 
 
@@ -515,6 +518,9 @@ class Dienst:
         # STT-Zeit (Cloud-Transkription) gehört mit ins Protokoll — sie ist
         # ein voller Latenz-Posten des Zugs (Messlücke bis 28.08.2026).
         stt_s = sit.pop("_sttS", None)
+        # W-QWEN-KORREKTOR: Ohr-Diagnose dieses Zugs (Gewinner Parakeet/Qwen,
+        # beide Texte, angewandte Korrektur) — fuer Anrufliste und Studio.
+        stt_info = sit.pop("_sttInfo", None)
         timings = {"llm": llm_s, "tts": tts_s, "total": round(llm_s + tts_s, 2)}
         if stt_s is not None:
             timings = {"stt": stt_s, **timings}
@@ -542,6 +548,8 @@ class Dienst:
             "timings": timings,
             "waechter": waechter,
         }
+        if isinstance(stt_info, dict) and stt_info:
+            antwort["stt"] = stt_info
         if reply.get("hangup"):
             antwort["hangup"] = True
         if wartet:
@@ -589,7 +597,8 @@ class Dienst:
         mitschnitt.zug(sit, self, art=art, text_in=text_in, text=mund,
                        timings=timings, waechter=waechter, audio_url=url,
                        vorab_urls=vorab_urls, book=reply.get("book"),
-                       frage=str(antwort.get("frage") or ""))
+                       frage=str(antwort.get("frage") or ""),
+                       stt=stt_info if isinstance(stt_info, dict) else None)
         return antwort
 
     # ---- Barge-Fortsetzung (W-BARGE) ---------------------------------------
@@ -727,6 +736,9 @@ class Dienst:
                 gesagt = text_in
                 stt_s = None
                 stt_info: dict[str, Any] = {}
+                # W-QWEN-KORREKTOR: laufende Zug-Nummer der Sitzung — Schluessel,
+                # unter dem ein spaetes Qwen-Ergebnis diesem Zug zugeordnet wird.
+                zug_n = qwen_korrektor.naechster_zug(sit)
                 audio_ms = _audio_ms_schaetzen(stt_blob)
                 barge = bool(_s(barge_url))
                 # Echo nur bei Barge oder stillem Ohr-Zug — sonst wuerden
@@ -742,11 +754,27 @@ class Dienst:
                     t0 = time.perf_counter()
                     try:
                         # Behandler-Namen des Mandanten als Hotwords fuer die
-                        # Parakeet-Nachkorrektur ("Betsas" -> "Petsas").
-                        kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+                        # Parakeet-Nachkorrektur ("Betsas" -> "Petsas") — plus
+                        # die Woerter, die Qwen in frueheren Zuegen dieses Anrufs
+                        # richtig hatte (W-QWEN-KORREKTOR: "Röntgenbild").
+                        kw_liste = list(tenants.stt_keywords(sit.get("tenant") or {}))
+                        kw_liste += [w for w in qwen_korrektor.hotwords(sit) if w not in kw_liste]
+                        kw = ",".join(kw_liste)
+
+                        def _qwen_nachtrag(info: dict, _n: int = zug_n) -> None:
+                            qwen_korrektor.nachtrag(sit, _n, info)
+
                         gesagt, stt_info = stt_spur.transcribe(
                             stt_blob, mime=stt_mime, name=stt_name, keywords=kw,
+                            nachtrag=_qwen_nachtrag,
                         )
+                        stt_info["zug"] = zug_n
+                        teile = sit.pop("_sttZugTeile", None)
+                        if teile:
+                            # W-HALBSATZ: gehaltene Fragmente hatten eigene
+                            # STT-Zuege — deren spaete Qwen-Ergebnisse gehoeren
+                            # zu diesem (zusammengefuegten) Zug.
+                            stt_info["zuege"] = list(teile)
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
                         q.put(("leer", str(e)))
@@ -789,6 +817,8 @@ class Dienst:
                         spur.merken(sit, "halbsatz-warte", voll)
                         print(f"{self.name}-halbsatz warte ({sit.get('halbsatzZahl')}): {voll!r}", flush=True)
                         tempo.merken(sit, voll, audio_ms=audio_ms, barge=barge, gehalten=True)
+                        if stt_s is not None:
+                            sit.setdefault("_sttZugTeile", []).append(zug_n)
                         warte_payload: dict[str, Any] = {"text": voll}
                         if stt_s is not None:
                             warte_payload["stt"] = stt_info
@@ -796,11 +826,25 @@ class Dienst:
                         q.put(("warte", warte_payload))
                         return
                     gesagt = voll
+                # W-QWEN-KORREKTOR (13.09.2026): gelernte Verhoerer ersetzen und
+                # — bei Wiederholung/Widerspruch — Qwens Fassung des VORIGEN
+                # Zugs vorziehen (LLM-Verlauf umschreiben, Prompt-Hinweis).
+                # Laeuft vor Fluss und LLM; kostet keine Wartezeit (Qwen wurde
+                # nie abgewartet, sein Ergebnis liegt schon in der Sitzung).
+                gesagt_vorher = gesagt
+                gesagt, korr = qwen_korrektor.anwenden(sit, gesagt)
+                if korr:
+                    stt_info["korrektur"] = korr
+                    if gesagt != gesagt_vorher:
+                        print(f"{self.name}-listen korrigiert: {gesagt_vorher!r} -> {gesagt!r}",
+                              flush=True)
                 tempo.merken(sit, gesagt, audio_ms=audio_ms, barge=barge, gehalten=False)
                 if stt_blob is not None:
                     q.put(("gehoert", {"text": gesagt, "stt": stt_info}))
                 if stt_s is not None:
                     sit["_sttS"] = stt_s
+                if stt_info:
+                    sit["_sttInfo"] = stt_info
                 out = self.json_antwort(sit, art=art, text_in=gesagt, extra=extra, melde=melde, vorab=vorab)
                 q.put(("fertig", out))
             except Exception as e:

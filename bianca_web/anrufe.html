@@ -76,6 +76,19 @@
     .bubble.sys { color: var(--muted); font-size: 12px; align-self: center; background: none; padding: 2px 0; }
     .b-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 11px; color: var(--muted); }
     .chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+    /* W-QWEN-KORREKTOR: welches Ohr hat den Zug gehoert? */
+    .chip.ohr-parakeet { border-color: #4b7bd1; color: #8fb3f0; }
+    .chip.ohr-qwen { border-color: #2fa36b; color: #6fd39c; }
+    .chip.ohr-sonst { border-color: #8a7f86; color: #b8adb3; }
+    .chip.ohr-spaet { border-color: #2fa36b; color: #6fd39c; border-style: dashed; cursor: help; }
+    .chip.ohr-korrektur { border-color: var(--accent); color: var(--accent); cursor: help; }
+    .chip.ohr-warn { border-color: #d19b3b; color: #f0c46d; cursor: help; }
+    .ohr-detail {
+      align-self: flex-end; max-width: 92%; font-size: 12px; color: var(--muted);
+      background: #1a1a12; border: 1px dashed #2fa36b55; border-radius: 10px; padding: 6px 10px;
+    }
+    .ohr-detail b { color: #6fd39c; font-weight: 600; }
+    .ohr-detail .alt { color: #b8adb3; text-decoration: line-through; }
     .play {
       appearance: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
       background: #171114; color: var(--text); font: inherit; font-size: 11px; padding: 1px 9px;
@@ -147,6 +160,6 @@
   </div>
   <audio id="spieler" hidden></audio>
   <script src="praxis.js?v=5"></script>
-  <script src="anrufe.js?v=a16"></script>
+  <script src="anrufe.js?v=a17"></script>
 </body>
 </html>

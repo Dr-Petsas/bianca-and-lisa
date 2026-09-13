@@ -235,10 +235,84 @@ def eingang(sit: dict, blob: bytes, mime: str = "") -> None:
         print(f"mitschnitt-eingang fail {e}", flush=True)
 
 
+def _stt_kompakt(stt: dict | None) -> dict[str, Any] | None:
+    """W-QWEN-KORREKTOR (13.09.2026): welches Ohr hat diesen Zug gehoert?
+
+    Aus der stt_spur-Diagnose bleibt im Manifest, was die Anrufliste zeigen
+    muss: Gewinner (parakeet/qwen), beide Texte, Qwen-Status, die STT-Zug-
+    Nummer (Schluessel fuer den spaeten Qwen-Nachtrag) und eine angewandte
+    Korrektur. Ohne stt_spur (Text-Zug) bleibt das Feld weg."""
+    if not isinstance(stt, dict) or not stt:
+        return None
+    aus: dict[str, Any] = {}
+    if stt.get("winner"):
+        aus["winner"] = str(stt["winner"])
+    if stt.get("zug") is not None:
+        aus["zug"] = int(stt["zug"])
+    p = stt.get("parakeet") if isinstance(stt.get("parakeet"), dict) else {}
+    q = stt.get("qwen") if isinstance(stt.get("qwen"), dict) else {}
+    if p:
+        aus["parakeet"] = {k: p[k] for k in ("text", "suspicious", "error") if p.get(k)}
+    if q:
+        aus["qwen"] = {k: q[k] for k in ("text", "status", "authoritative", "reason", "spaet") if q.get(k)}
+    if isinstance(stt.get("korrektur"), dict) and stt["korrektur"]:
+        aus["korrektur"] = stt["korrektur"]
+    for k in ("zuege", "teile"):
+        if stt.get(k):
+            aus[k] = stt[k]
+    return aus or None
+
+
+def _qwen_spaet_einhaengen(sit: dict, eintrag: dict[str, Any]) -> None:
+    """Ein Qwen-Ergebnis, das VOR dem Schreiben des Zugs eintraf (stt_nachtragen
+    fand noch keinen Eintrag), jetzt an den frischen Eintrag haengen."""
+    offen = sit.get("_qwenSpaetOffen")
+    st = eintrag.get("stt")
+    if not isinstance(offen, dict) or not offen or not isinstance(st, dict):
+        return
+    schluessel = [st.get("zug")] + list(st.get("zuege") or [])
+    for z in schluessel:
+        info = offen.pop(z, None) if z is not None else None
+        if isinstance(info, dict):
+            st.setdefault("qwen", {})["spaet"] = info
+
+
+def stt_nachtragen(sit: dict, zug_nr: int, info: dict) -> bool:
+    """W-QWEN-KORREKTOR: spaetes Qwen-Ergebnis an den Zug mit stt.zug == zug_nr
+    haengen (Feld stt.qwen.spaet). Ist der Zug noch nicht geschrieben (Qwen war
+    schneller als die Antwort), wartet das Ergebnis in der Sitzung, bis zug()
+    den Eintrag anlegt. Nie werfend."""
+    if not an() or not isinstance(sit, dict):
+        return False
+    try:
+        kompakt = {k: info[k] for k in ("qwen", "auth", "s", "reason", "gelernt") if k in info}
+        pfad = ordner(sit)
+        if pfad is not None and (pfad / "anruf.json").is_file():
+            with _LOCK:
+                manifest = _manifest(sit, pfad)
+                for z in reversed(manifest.get("zuege") or []):
+                    st = z.get("stt") if isinstance(z, dict) else None
+                    if not isinstance(st, dict):
+                        continue
+                    if st.get("zug") == zug_nr or zug_nr in (st.get("zuege") or []):
+                        st.setdefault("qwen", {})["spaet"] = kompakt
+                        _schreiben(pfad, manifest)
+                        return True
+        offen = sit.setdefault("_qwenSpaetOffen", {})
+        offen[int(zug_nr)] = kompakt
+        for alt in sorted(offen)[:-8]:
+            offen.pop(alt, None)
+        return False
+    except Exception as e:
+        print(f"mitschnitt-stt-nachtrag fail {e}", flush=True)
+        return False
+
+
 def zug(sit: dict, dienst, *, art: str, text_in: str = "", text: str = "",
         timings: dict | None = None, waechter: list | None = None,
         audio_url: str = "", vorab_urls: list[str] | None = None,
-        book: Any = None, frage: str = "", tools: list | None = None) -> None:
+        book: Any = None, frage: str = "", tools: list | None = None,
+        stt: dict | None = None) -> None:
     """Einen gesprochenen Zug ins Manifest schreiben — sofort, nicht erst
     beim Auflegen. Audio kommt aus der Dienst-Ablage (RAM) auf die Platte;
     noch laufende Streams bleiben als "offen" markiert."""
@@ -269,6 +343,10 @@ def zug(sit: dict, dienst, *, art: str, text_in: str = "", text: str = "",
                 "text": text,
                 "timings": timings or {},
             }
+            stt_k = _stt_kompakt(stt)
+            if stt_k:
+                eintrag["stt"] = stt_k
+                _qwen_spaet_einhaengen(sit, eintrag)
             if waechter:
                 eintrag["waechter"] = waechter
             if ein:

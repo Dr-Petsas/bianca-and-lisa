@@ -82,11 +82,19 @@ def transcribe(
     mime: str = "audio/webm",
     name: str = "turn.webm",
     keywords: str = "",
+    nachtrag=None,
 ) -> tuple[str, dict[str, Any]]:
-    """Ein echter Decode plus dessen beobachtete Engine-Entscheidung."""
+    """Ein echter Decode plus dessen beobachtete Engine-Entscheidung.
+
+    `nachtrag` wird unveraendert an `stt.transcribe` durchgereicht
+    (W-QWEN-KORREKTOR: spaetes Qwen-Ergebnis fuer den asynchronen Korrektor)."""
     _reset()
     vorher = _qwen_futur()
-    text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords)
+    if nachtrag is not None:
+        text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords,
+                              nachtrag=nachtrag)
+    else:
+        text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords)
     nachher = _qwen_futur()
 
     qwen_an = _qwen_konfiguriert()

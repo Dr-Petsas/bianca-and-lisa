@@ -79,6 +79,7 @@ def _umgebung(
     stt._CLIENT = fake_lokal
     stt._qwen_pause_bis = 0.0
     stt._qwen_future = None
+    stt._qwen_offen.clear()
     stt._qwen_candidate = qwen_candidate
     stt._pcm16k = lambda audio, mime: b"p" * 4000
 
@@ -90,6 +91,9 @@ def _umgebung(
         fn(fake_lokal)
         if stt._qwen_future is not None:
             stt._qwen_future.result(timeout=1)
+        for f in list(stt._qwen_offen):
+            f.result(timeout=1)
+        stt._qwen_offen.clear()
     finally:
         (
             stt.STT_QWEN_BASE,
@@ -174,6 +178,8 @@ def test_qwen_ausfall_laesst_parakeet_sofort_stehen_und_pausiert():
 
 
 def test_laufendes_qwen_staut_keinen_naechsten_zug():
+    """Deckel STT_QWEN_PARALLEL=1: solange ein Qwen-Lauf offen ist, geht der
+    naechste Zug ohne Qwen — nie aufstauen."""
     release = threading.Event()
     started = threading.Event()
     calls = []
@@ -185,13 +191,125 @@ def test_laufendes_qwen_staut_keinen_naechsten_zug():
         return _kandidat("Qwen.")
 
     def lauf(_fake_lokal):
-        assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
-        assert started.wait(timeout=0.2)
-        assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
-        release.set()
-        assert len(calls) == 1
+        alt = stt.STT_QWEN_PARALLEL
+        stt.STT_QWEN_PARALLEL = 1
+        try:
+            assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
+            assert started.wait(timeout=0.2)
+            assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
+            release.set()
+            assert len(calls) == 1
+        finally:
+            stt.STT_QWEN_PARALLEL = alt
 
     _umgebung(lauf, qwen_candidate=slow_qwen)
+
+
+def test_zwei_qwen_laeufe_parallel_dritter_faellt_aus():
+    """W-QWEN-KORREKTOR (13.09.2026): der Korrektor braucht JEDEN Zug — mit
+    STT_QWEN_PARALLEL=2 startet der zweite Zug seinen eigenen Qwen-Lauf,
+    waehrend der erste (Kaltstart) noch rechnet; erst der dritte faellt aus."""
+    release = threading.Event()
+    gestartet: list[threading.Event] = [threading.Event(), threading.Event()]
+    calls = []
+
+    def slow_qwen(_pcm, _keywords=""):
+        n = len(calls)
+        calls.append(1)
+        if n < 2:
+            gestartet[n].set()
+        release.wait(timeout=0.5)
+        return _kandidat("Qwen.")
+
+    def lauf(_fake_lokal):
+        alt = stt.STT_QWEN_PARALLEL
+        stt.STT_QWEN_PARALLEL = 2
+        try:
+            assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
+            assert gestartet[0].wait(timeout=0.2)
+            assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
+            assert gestartet[1].wait(timeout=0.2)
+            assert stt.transcribe(BLOB) == "Ich möchte zu Doktor Petsas."
+            release.set()
+            for f in list(stt._qwen_offen):
+                f.result(timeout=1)
+            assert len(calls) == 2
+        finally:
+            stt.STT_QWEN_PARALLEL = alt
+
+    _umgebung(lauf, qwen_candidate=slow_qwen)
+
+
+def test_spaetes_qwen_wird_nachgetragen_statt_verworfen():
+    """W-QWEN-KORREKTOR: kommt Qwen nach dem Live-Deckel, landet sein Text
+    ueber `nachtrag` beim Korrektor — mit Parakeets Fassung und dem Marker
+    spaet=True. Der Live-Zug selbst wartet nicht."""
+    release = threading.Event()
+    angekommen = threading.Event()
+    nachtraege: list[dict] = []
+
+    def slow_qwen(_pcm, _keywords=""):
+        release.wait(timeout=0.5)
+        return _kandidat("Ein Röntgenbild.")
+
+    def nachtrag(info: dict) -> None:
+        nachtraege.append(info)
+        angekommen.set()
+
+    def lauf(_fake_lokal):
+        started = time.perf_counter()
+        text = stt.transcribe(BLOB, keywords="Röntgenbild", nachtrag=nachtrag)
+        assert time.perf_counter() - started < 0.1
+        assert text == "Bröntgempelt."
+        release.set()
+        assert angekommen.wait(timeout=1.0)
+        n = nachtraege[0]
+        assert n["text"] == "Ein Röntgenbild."
+        assert n["parakeet"] == "Bröntgempelt."
+        assert n["authoritative"] is True
+        assert n["spaet"] is True
+
+    _umgebung(lauf, lokal_text="Bröntgempelt.", qwen_candidate=slow_qwen, grace=0.02)
+
+
+def test_abgelehntes_qwen_wird_ebenfalls_nachgetragen():
+    """Qwen war rechtzeitig, durfte aber nicht uebernehmen (abweichende
+    Ziffernfolge — Sicherheitsregel des Live-Ohrs): der Korrektor bekommt es
+    trotzdem (spaet=False) — als Zweitmeinung fuer den Fall, dass der Anrufer
+    widerspricht. (Der Korrektor selbst lernt aus Ziffern-Abweichungen nie.)"""
+    nachtraege: list[dict] = []
+    angekommen = threading.Event()
+    qwen_fertig = threading.Event()
+    parakeet_text = "Meine Nummer ist null eins sieben sieben."
+    qwen_text = "Meine Nummer ist null eins sieben acht."
+
+    def qwen(_pcm, _keywords=""):
+        qwen_fertig.set()
+        return _kandidat(qwen_text)
+
+    def nachtrag(info: dict) -> None:
+        nachtraege.append(info)
+        angekommen.set()
+
+    def lauf(fake_lokal):
+        # Parakeet wartet, bis Qwen fertig ist — so ist der Kandidat beim
+        # Entscheid sicher da (rechtzeitig, aber abgelehnt).
+        echt = fake_lokal.post
+
+        def langsam(url, files=None, data=None, **kwargs):
+            qwen_fertig.wait(timeout=0.5)
+            time.sleep(0.02)
+            return echt(url, files=files, data=data, **kwargs)
+
+        fake_lokal.post = langsam
+        text = stt.transcribe(BLOB, keywords="Petsas", nachtrag=nachtrag)
+        assert text == parakeet_text
+        assert angekommen.wait(timeout=1.0)
+        assert nachtraege[0]["spaet"] is False
+        assert nachtraege[0]["text"] == qwen_text
+        assert nachtraege[0]["parakeet"] == parakeet_text
+
+    _umgebung(lauf, lokal_text=parakeet_text, qwen_candidate=qwen)
 
 
 def test_qwen_only_ohne_parakeet_bleibt_moeglich():

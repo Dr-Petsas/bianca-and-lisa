@@ -2585,6 +2585,89 @@ grün. Voll-Suite 14 → 11 Altfehler (9 bekannte + 2 `audioop`), kein neuer.
    Dienst spricht satzweise aus dem Cache, ein ungewärmter Vorsatz kostete
    sonst eine eigene Synthese vor der gewärmten Frage.
 
+## Chef-Vorgaben für den Feldtest (13.09.2026 spät — nicht rückbauen)
+
+Neun Punkte des Chefs vor dem Volllast-Start in drei Praxen; die
+Code-Punkte in Kürze, jeder mit eigenem Modul, Notaus und Tests:
+
+1. **Behandler-Sperre** (`kern/behandler_sperre.py`, Chef: „Dr. Nikolaou
+   soll vorerst raus aus der telefonischen Buchung"): `telefonGesperrteBehandler`
+   im Mandanten (meddent: `["Nikolaou"]`) nimmt den Kalender aus Wahl, Suche
+   und Buchung (`anwenden` in `agentprofil.fuer_did/fuer_tenant`, gesperrte
+   Kalender liegen unter `_gesperrteKalender`). Nennt der Anrufer den Namen
+   (`arzt.deute` → `typ=gesperrt`) oder war er zuletzt dort
+   (`arzt.letzter_behandler` → `gesperrt=True`, `anruferKartei`), sagt
+   Bianca es EHRLICH (`behandler_sperre.hinweis`, vorgewärmt) und bietet
+   die übrigen Behandler an — vorher buchte sie still bei Petsas oder in
+   Nikolaous Kalender. Der Name bleibt STT-Hotword (sonst Verhörer).
+   Tests: `tests/test_behandler_sperre.py`.
+2. **Verbinden-Whitelist** (`bianca/weiterleiten.verbinden_erlaubt`,
+   Punkte 2 + 9): weitergeleitet wird NUR an Ziele aus `verbindenErlaubt`
+   (meddent: Petsas, Patrikis; Env-Ergänzung `VERBINDEN_ERLAUBT`). Thaler
+   und Blessing haben kein Ziel — kein Durchstellen. Kein Transfer an
+   Rezeption/Mitarbeiter/Buchhaltung bei irgendeinem Mandanten (die
+   Rollen-Weiterleitung ist gelöscht). Die alte Regel „ein einziger
+   `weiterleitungen`-Eintrag gilt für alle Ärzte" ist gestrichen — sie
+   hätte Nikolaou-Wünsche auf die Praxisnummer gelegt. Gesperrter
+   Behandler am Telefon verlangt → `_gesperrt_antwort` (ehrlich, Termin
+   oder Notiz), kein Jingle.
+3. **Rückkehr nach fehlgeschlagenem Verbinden** (`bianca/rueckkehr.py`,
+   Brücke `_RUECKKEHR`-Store; Chef: „darf nicht auf 0 zurückgefallen
+   werden"): der Dialplan landet nach Besetzt/keine Antwort per
+   `Goto(bianca)` in `/api/start` — die Brücke gibt `resumeSessionId`,
+   `resumeSchnell` (< `BRIDGE_RUECKKEHR_SCHNELL_S` 55 s = Verbindung kam
+   nicht zustande), `resumeSeitS`, `resumeZiel` mit; `rueckkehr.aufnehmen`
+   prüft DID/Anrufer (`passt`) und Alter (`TRANSFER_RUECKKEHR_MAX_S` 1800),
+   `vorbereiten` räumt Barge-/Halbsatz-Reste, `hirn.nach_transfer_ruecken`
+   erledigt das ERREICHEN-Anliegen und holt das geparkte zurück;
+   `agent._rueckkehr_reply` spricht „Da bin ich wieder — die Verbindung zu
+   Doktor X ist leider nicht zustande gekommen" + offene Frage. Kein
+   zweites `call_erfassen` (ein PhoneCall), Report mit Phasen-Suffix
+   (`gedaechtnis._event_id` `:rN`) statt Dedupe-Verlust. Notaus:
+   `TRANSFER_RUECKKEHR=0` bzw. `BRIDGE_RUECKKEHR=0`. Tests:
+   `tests/test_transfer_rueckkehr.py`, Rückkehr-Block in `test_sip_vad.py`.
+4. **Öffnungszeiten aus den Standorteinstellungen** (`kern/standort.py`,
+   Punkt 3): Bianca liest `clients/{clientId}/locations/{locationId}`
+   per Firestore-REST (Service-Account-JWT, Scope-Cache in
+   `anrufaudio._access_token`), parst `openingHours`, hängt
+   `tenant["standort"]` an und schreibt den Block „ÖFFNUNGSZEITEN
+   (Standorteinstellungen)" in den `dbPrompt` — NUR wenn der Agent-Prompt
+   keine eigene Zeile trägt (MedDent behält seine; die Standort-Zeiten
+   dort stimmen nicht mit dem Prompt überein — Chef informiert).
+   `wissen.praxis_antwort` und `praxisregeln.praxis_offen` lesen dieselbe
+   Quelle. Stale-while-revalidate (`STANDORT_TTL_S` 600, `STANDORT_WARTE_S`
+   2,5, Vorwärmen im `_warm_start`) — kein Firestore-Warten im Anruf.
+   Notaus: `STANDORT_ZEITEN=0`. Tests: `tests/test_standort.py`.
+5. **W-QWEN-KORREKTOR** (`kern/qwen_korrektor.py`, Punkt 5 — Chef: „qwen
+   muss erreichbar sein und asynchron korrigieren dürfen"): Parakeet
+   bleibt das Live-Ohr; Qwens Ergebnis, das den Zug verpasst oder
+   abgelehnt wurde, wird nicht mehr weggeworfen (`stt._nachtrag_anmelden`
+   → Callback `nachtrag`), sondern je Zug gemerkt (`qwenSpaet`), als
+   Wörterbuch Verhörer→Qwen-Wort gelernt (`qwenWoerter`, Quell-Zug in
+   `qwenWoerterZug`) und als Hotwords an Parakeet gegeben
+   (`qwenHotwords`). `anwenden` läuft VOR Fluss/LLM des nächsten Zugs
+   (0 ms, kein Netz): Wörterbuch ersetzt („Rentenbild" → „Röntgenbild");
+   bei Wiederholung oder Widerspruch („Nein, Röntgenbild!") gilt Qwens
+   Fassung des VORIGEN Zugs — der Anrufer-Satz im LLM-Verlauf wird
+   umgeschrieben und ein einmaliger Prompt-Hinweis (`prompt_hinweis`,
+   zug-gebunden) nennt die Korrektur. NIE: Ziffernfolgen, Mandanten-
+   Vokabular (Behandlernamen), Strukturwörter, ohne Signal in den Verlauf,
+   den EIGENEN Zug (kommt Qwen vor dem Korrektor an, bleibt die
+   Live-Entscheidung stehen). Qwen-Pool jetzt `STT_QWEN_PARALLEL` (2)
+   statt 1; `STT_QWEN_FINAL_BASE` nimmt eine Komma-Liste (Rotation bei
+   Verbindungsfehler — die Dev-Box wechselte die LAN-IP .167 → .173, Qwen
+   war deshalb seit Tagen stumm). Anzeige: Manifest `zuege[].stt`
+   (Gewinner, beide Texte, spätes Qwen, Korrektur) → `/anrufe` zeigt je
+   Zug „Parakeet STT"/„Qwen STT", „Qwen (spät) anders", „Qwen-Korrektur"
+   samt Vergleichszeile; Studio (`ergebnisse.js`/`app.js`) dieselben Tags.
+   Notaus: `QWEN_KORREKTOR=0`. Tests: `tests/test_qwen_korrektor.py`,
+   `tests/test_stt_qwen.py` (Nachtrag-Fälle), `tests/test_mitschnitt.py`.
+
+Reine Betriebs-Punkte ohne Code: Clara/Lena bleiben bis zum Hardware-
+Upgrade aus (4); kein Verweis auf 116117 in Zahnpraxen (6 — nur Blessing
+trägt die Regel per DB-Marker); Telefon-Notizen laufen ins MAS-Gedächtnis,
+das Praxisteam sichtet CallR (7); Blessing ohne zahnmedizinische Inhalte (8).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

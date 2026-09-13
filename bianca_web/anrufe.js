@@ -171,6 +171,104 @@ function sttChips(t) {
   return [];
 }
 
+/** W-QWEN-KORREKTOR (13.09.2026): Chef — „in den anrufen muss ich sehen
+    welches ... parakeet oder qwen transkribiert hat". Je Anrufer-Zug steht
+    im Manifest `stt` (Gewinner, beide Texte, spaetes Qwen, Korrektur). */
+const OHR_NAME = {
+  parakeet: "Parakeet STT",
+  qwen: "Qwen STT",
+  whisper_oder_parakeet: "Whisper/Parakeet STT",
+  elevenlabs: "ElevenLabs STT",
+};
+
+function ohrChips(st) {
+  if (!st || typeof st !== "object") return [];
+  const aus = [];
+  const winner = String(st.winner || "");
+  if (winner) {
+    const cls = winner === "parakeet" ? "ohr-parakeet" : winner === "qwen" ? "ohr-qwen" : "ohr-sonst";
+    const c = chip(OHR_NAME[winner] || `${winner} STT`);
+    c.className = `chip ${cls}`;
+    const q = st.qwen || {};
+    const tipp = [];
+    if (q.status) tipp.push(`Qwen: ${q.status}`);
+    if (q.reason) tipp.push(q.reason);
+    if (st.parakeet && st.parakeet.suspicious) tipp.push("Parakeet-Text auffällig");
+    if (tipp.length) c.title = tipp.join(" · ");
+    aus.push(c);
+  }
+  const spaet = st.qwen && st.qwen.spaet;
+  if (spaet && spaet.qwen) {
+    const gleich = normText(spaet.qwen) === normText((st.parakeet || {}).text || "");
+    const c = chip(gleich ? "Qwen (spät) gleich" : "Qwen (spät) anders");
+    c.className = `chip ohr-spaet`;
+    c.title = `Qwen nach ${spaet.s != null ? Math.round(Number(spaet.s) * 1000) + " ms" : "?"}: „${spaet.qwen}“`
+      + (spaet.auth ? "" : " (nicht autoritativ)")
+      + (spaet.gelernt && spaet.gelernt.length ? ` · gelernt: ${spaet.gelernt.join(", ")}` : "");
+    aus.push(c);
+  } else if (winner === "parakeet" && st.qwen && st.qwen.status
+             && st.qwen.status !== "aus" && st.qwen.status !== "abgelehnt"
+             && st.qwen.status !== "parallel_zu_spaet" && !st.qwen.text) {
+    // Qwen war konfiguriert, hat aber nichts geliefert (belegt/pausiert).
+    const c = chip("Qwen fehlt");
+    c.className = "chip ohr-warn";
+    c.title = `Qwen-Status: ${st.qwen.status}`;
+    aus.push(c);
+  }
+  const k = st.korrektur;
+  if (k && typeof k === "object") {
+    const c = chip(k.vorzug ? `Qwen-Korrektur (${k.grund || "vorzug"})` : "Qwen-Wörterbuch");
+    c.className = "chip ohr-korrektur";
+    const teile = [];
+    if (k.textVorher && k.text) teile.push(`„${k.textVorher}“ → „${k.text}“`);
+    if (k.woerterbuch && k.woerterbuch.length) teile.push(k.woerterbuch.join(", "));
+    if (k.vorzug && k.qwenVorher) teile.push(`voriger Zug richtig: „${k.qwenVorher}“ (gehört: „${k.parakeetVorher || ""}“)`);
+    if (k.verlauf) teile.push("LLM-Verlauf umgeschrieben");
+    c.title = teile.join(" · ");
+    aus.push(c);
+  }
+  return aus;
+}
+
+function normText(s) {
+  return String(s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/** Zweitzeile unter dem Anrufer-Satz, wenn Qwen etwas ANDERES gehoert hat
+    oder eine Korrektur angewandt wurde — der Vergleich muss lesbar sein,
+    nicht nur als Tooltip. */
+function ohrDetail(st) {
+  if (!st || typeof st !== "object") return null;
+  const p = (st.parakeet || {}).text || "";
+  const qLive = (st.qwen || {}).text || "";
+  const spaet = st.qwen && st.qwen.spaet;
+  const qSpaet = spaet && spaet.qwen ? spaet.qwen : "";
+  const k = st.korrektur;
+  const zeilen = [];
+  if (st.winner === "qwen" && p && normText(p) !== normText(qLive)) {
+    zeilen.push(`Parakeet hörte: <span class="alt">${escapeHtml(p)}</span> · <b>Qwen gewann</b>`);
+  }
+  if (qSpaet && p && normText(qSpaet) !== normText(p)) {
+    zeilen.push(`Parakeet (live): <span class="alt">${escapeHtml(p)}</span><br>Qwen (spät${spaet.auth ? "" : ", nicht autoritativ"}): <b>${escapeHtml(qSpaet)}</b>`);
+  }
+  if (k && k.textVorher && k.text && normText(k.textVorher) !== normText(k.text)) {
+    zeilen.push(`Korrigiert vor dem Hirn: <span class="alt">${escapeHtml(k.textVorher)}</span> → <b>${escapeHtml(k.text)}</b>`);
+  } else if (k && k.vorzug && k.qwenVorher) {
+    zeilen.push(`Vorzug für den vorigen Zug: <span class="alt">${escapeHtml(k.parakeetVorher || "")}</span> → <b>${escapeHtml(k.qwenVorher)}</b>${k.verlauf ? " (Verlauf umgeschrieben)" : ""}`);
+  }
+  if (!zeilen.length) return null;
+  const d = document.createElement("div");
+  d.className = "ohr-detail";
+  d.innerHTML = zeilen.join("<br>");
+  return d;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
 function kiTimingChips(t) {
   if (!t) return [];
   const aus = [];
@@ -431,8 +529,11 @@ function maleDetail(a) {
       m.appendChild(chip(`${mmss(z.offsetMs)}`));
       if (rein.length) m.appendChild(playKnopf(rein, "Anrufer"));
       for (const c of sttChips(z.timings)) m.appendChild(c);
+      for (const c of ohrChips(z.stt)) m.appendChild(c);
       b.appendChild(m);
       fluss.appendChild(b);
+      const det = ohrDetail(z.stt);
+      if (det) fluss.appendChild(det);
     }
     if (z.text) {
       const b = bubble("ki", z.text);
