@@ -50,6 +50,64 @@ def test_anwenden_entfernt_gesperrten_kalender_und_merkt_ihn():
     assert t == vorher
 
 
+def _db_tenant_ohne_nikolaou_kalender() -> dict:
+    """So sieht der MedDent-Mandant aus der DB aus (Live 14.09.2026): nur die
+    Kalender Petsas und Patrikis, Nikolaou steht allein im Prompt."""
+    return {
+        "calendars": [
+            {"id": "pat", "name": "Doktor Theodosios Patrikis, M.Sc."},
+            {"id": PETSAS, "name": "Doktor Michael Petsas"},
+        ],
+        "defaultCalendarId": PETSAS,
+        "telefonGesperrteBehandler": ["Nikolaou"],
+    }
+
+
+def test_sperrname_ohne_db_kalender_wird_trotzdem_erkannt():
+    """Live-Probe 14.09.2026 00:50: die DB fuehrt keinen Nikolaou-Kalender —
+    anwenden() hatte nichts zu entfernen, gesperrte_kalender() war leer,
+    arzt.deute kannte den Namen nicht: "Termin bei Doktor Nikolaou" lief OHNE
+    Sperr-Ansage in die Behandlerwahl, "mit Doktor Nikolaou sprechen" in die
+    Schleife "zu welchem unserer Ärzte?". Die Sperr-Liste ist die Wahrheit."""
+    t = behandler_sperre.anwenden(_db_tenant_ohne_nikolaou_kalender())
+    assert _namen(t) == ["Doktor Theodosios Patrikis, M.Sc.", "Doktor Michael Petsas"]
+    assert behandler_sperre.gesperrte_kalender(t) == [{"id": "", "name": "Doktor Nikolaou"}]
+    for satz in (
+        "Ich möchte einen Termin zur Kontrolle bei Doktor Nikolaou.",
+        "Können Sie mich mit Doktor Nikolaou verbinden?",
+        "Nikolaou",
+    ):
+        d = arztmod.deute(satz, t)
+        assert d and d["typ"] == "gesperrt" and d["calendarId"] == "", (satz, d)
+        assert d["name"] == "Doktor Nikolaou"
+    assert behandler_sperre.treffer(t, "zu Doktor Nikolaou") == "Doktor Nikolaou"
+    # Idempotent, und kein Platzhalter landet im Mandanten selbst.
+    vorher = copy.deepcopy(t)
+    behandler_sperre.anwenden(t)
+    assert t == vorher
+    assert "_gesperrteKalender" not in t
+
+
+def test_platzhalter_verdoppelt_keinen_echten_kalender():
+    """Gibt es den Kalender doch (Datei-Mandant), bleibt es bei EINEM Eintrag."""
+    t = behandler_sperre.anwenden(laden("meddent"))
+    assert [g["name"] for g in behandler_sperre.gesperrte_kalender(t)] == ["Dr. Nikolaou"]
+
+
+def test_grad_hinter_dem_komma_ist_kein_nachname():
+    """Live 14.09.2026: "Doktor Theodosios Patrikis, M.Sc." — der alte Splitter
+    hielt "sc" fuer den Nachnamen, "zu Doktor Patrikis" traf NIE (fiel still
+    auf den Default-Kalender)."""
+    t = behandler_sperre.anwenden(_db_tenant_ohne_nikolaou_kalender())
+    assert arztmod._nachname("Doktor Theodosios Patrikis, M.Sc.") == "patrikis"
+    assert arztmod._vornamen("Doktor Theodosios Patrikis, M.Sc.") == ["theodosios"]
+    for satz in ("Ich war bei Doktor Patrikis.", "Zu Patrikis bitte.", "Bei Doktor Patrikis."):
+        d = arztmod.deute(satz, t)
+        assert d and d["typ"] == "genannt" and d["calendarId"] == "pat", (satz, d)
+    d = arztmod.deute("Zu Doktor Petsas.", t)
+    assert d and d["calendarId"] == PETSAS
+
+
 def test_anwenden_ohne_sperrliste_ist_byte_identisch():
     roh = laden("meddent")
     roh.pop("telefonGesperrteBehandler", None)

@@ -1231,6 +1231,21 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit.pop("unklarFolge", None)
         return _maschinen_antwort(sit, {"text": praxis_text, "book": None}, msgs)
 
+    # W-FACH-WACHE am EINGANG (Regel 8, Live-Probe 14.09.2026): "Ich habe
+    # furchtbare Zahnschmerzen" beim HAUTARZT startete die Buchung ("Waren
+    # Sie schon einmal bei uns?"). Ein eindeutig zahnmedizinisches Anliegen
+    # wird in einer Nicht-Zahn-Praxis ehrlich weiterverwiesen — kein Fluss,
+    # kein Termin, kein Zahn-Gespraech. Eine laufende Aufgabe bleibt stehen
+    # (offene Frage haengt an); bei Zahnpraxen und ohne bekanntes Fach ist
+    # die Wache nie aktiv (fach_wache.aktiv).
+    fremd = fach_wache.fremdes_anliegen(sit, text_in)
+    if fremd:
+        offene = _offene_frage(sit)
+        fremd_text = f"{fremd} {offene}" if offene else fremd
+        spur.merken(sit, "fach-wache-eingang", ",".join(fach_wache.zahn_anliegen(text_in)))
+        sit.pop("unklarFolge", None)
+        return _maschinen_antwort(sit, {"text": fremd_text, "book": None}, msgs)
+
     # Gemischter Zug: „Ja, aber …“ enthält ZWEI Handlungen. Bei wenigen
     # ausdrücklich sicheren Fragen erntet der bisherige Flow zuerst das
     # Ja/Nein; nur der Zusatz geht danach durch Intent und Task-Router.

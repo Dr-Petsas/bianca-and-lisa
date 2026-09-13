@@ -577,6 +577,11 @@ _NAME_STOP = {
     # live (27.08.2026) als "Nee Paul" geerntet.
     "nee", "nein", "nö", "noe", "ne", "doch", "falsch", "moment", "sekunde",
     "vorname", "nachname", "familienname", "lautet",
+    # Zustimmung und Slot-Wahl sind NIE Namen: Live-Probe 14.09.2026 landete
+    # "Ja, der erste passt." auf der Vornamen-Frage als Vorname "Ja".
+    "ja", "jawohl", "jap", "jo", "okay", "ok", "stimmt", "passt", "richtig",
+    "korrekt", "gerne", "erste", "erster", "erstes", "zweite", "zweiter",
+    "dritte", "dritter", "letzte", "letzter",
     # Verwaltungswörter aus einem Einstiegswunsch sind ebenfalls keine
     # Person. Ein echter mitgesprochener Name bleibt als übriges Token stehen
     # („Termin löschen, Müller“); ohne Name darf „entfernen“ nicht als

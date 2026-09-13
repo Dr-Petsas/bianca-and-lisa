@@ -64,6 +64,44 @@ _FACH_SATZ = {
 }
 _FACH_SATZ_ALLGEMEIN = "Das gehört nicht zu unserer Praxis."
 
+# EINGANGS-Seite (Live-Probe 14.09.2026 00:50, Regel 8): "Ich habe furchtbare
+# Zahnschmerzen" beim HAUTARZT lief in die Buchung ("Waren Sie schon einmal
+# bei uns?"). Ein klar ZAHNMEDIZINISCHES ANLIEGEN gehoert in keiner Nicht-
+# Zahn-Praxis in den Buchungsfluss — es wird ehrlich weiterverwiesen.
+# Bewusst ENGER als _ZAHN_RE: hier wird ein ANRUFER abgewiesen, ein
+# Fehltreffer schickt einen echten Patienten weg. Deshalb nur Beschwerden/
+# Leistungen, die eindeutig zum Zahnarzt gehoeren — NICHT das blosse Wort
+# "Zahnarzt" ("mein Zahnarzt hat mich zu Ihnen ueberwiesen") und NICHT
+# "Zahnpasta" (Kontaktallergie ist Hautarzt-Alltag).
+_ZAHN_ANLIEGEN_RE = re.compile(
+    r"(?:"
+    r"\bzahnschmerz\w*|\bzahnweh\b|\bzahnreinigung\w*|\bzahnersatz\w*"
+    r"|\bzahnfleisch\w*|\bzahnkrone\w*|\bzahnimplantat\w*|\bzahnspange\w*"
+    r"|\bzahnstein\w*|\bzahnf(?:ü|ue)llung\w*|\bzahnaufhellung\w*"
+    r"|\bweisheitsz(?:a|ä|ae)hn\w*|\bbackenzahn\w*|\bschneidezahn\w*|\bmilchzahn\w*"
+    r"|\bzahn\s+(?:abgebrochen|ausgeschlagen|gezogen|ziehen|tut|schmerzt|wackelt|pocht)"
+    r"|\bz(?:ä|ae)hne\s+(?:tun|schmerzen|putzen|ziehen|reinigen|bleichen|richten)"
+    r"|\bkaries\b|\bwurzelbehandlung\w*|\bwurzelkanal\w*|\bparodont\w*|\bpzr\b"
+    r"|\bbleaching\b|\bkieferorthop\w*|\bkfo\b|\bgebiss\w*"
+    r"|\b(?:zum|einen|beim|bei\s+einem|termin\s+beim)\s+zahnarzt\b|\bzahnarzttermin\w*"
+    r")",
+    re.I,
+)
+
+# Der Verweis selbst traegt KEIN Zahn-Wort (Regel 8 gilt auch fuer Biancas
+# eigenen Mund; test_llm_zug_beim_hautarzt_ohne_zahn prueft genau das) —
+# "Hautarztpraxis" sagt dem Anrufer mit Zahnschmerzen alles.
+_FREMD_SATZ = {
+    "dermatologie": ("Damit sind Sie bei uns leider nicht richtig — wir sind eine "
+                     "Hautarztpraxis. Bitte wenden Sie sich dafür an die passende Fachpraxis."),
+    "gynaekologie": ("Damit sind Sie bei uns leider nicht richtig — wir sind eine "
+                     "Frauenarztpraxis. Bitte wenden Sie sich dafür an die passende Fachpraxis."),
+    "orthopaedie": ("Damit sind Sie bei uns leider nicht richtig — wir sind eine "
+                    "orthopädische Praxis. Bitte wenden Sie sich dafür an die passende Fachpraxis."),
+}
+_FREMD_SATZ_ALLGEMEIN = ("Damit sind Sie bei uns leider nicht richtig. "
+                         "Bitte wenden Sie sich dafür an die passende Fachpraxis.")
+
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
@@ -106,6 +144,25 @@ def zahn_treffer(text: str) -> list[str]:
 
 def fach_satz(sit: dict | None) -> str:
     return _FACH_SATZ.get(fach(sit), _FACH_SATZ_ALLGEMEIN)
+
+
+def zahn_anliegen(text: str) -> list[str]:
+    """Eindeutig zahnmedizinische Anliegen im ANRUFER-Satz (fuer Spur/Tests)."""
+    return [m.group(0) for m in _ZAHN_ANLIEGEN_RE.finditer(_s(text))]
+
+
+def fremdes_anliegen(sit: dict | None, text: str) -> str:
+    """Ehrlicher Verweis-Satz, wenn ein Anrufer in einer Nicht-Zahn-Praxis ein
+    zahnmedizinisches Anliegen vortraegt — sonst "".
+
+    Nur im Modus ``enforce`` und nur bei AKTIVER Wache (bekanntes Nicht-Zahn-
+    Fach). Der Aufrufer (bianca/agent.user_turn) spricht den Satz statt den
+    Buchungsfluss zu starten; eine laufende Aufgabe bleibt stehen."""
+    if modus() != "enforce" or not aktiv(sit):
+        return ""
+    if not zahn_anliegen(text):
+        return ""
+    return _FREMD_SATZ.get(fach(sit), _FREMD_SATZ_ALLGEMEIN)
 
 
 def saeubern(sit: dict | None, text: str) -> tuple[str, list[str]]:

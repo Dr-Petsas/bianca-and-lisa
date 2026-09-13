@@ -207,6 +207,79 @@ def test_llm_zug_beim_hautarzt_ohne_zahn(monkeypatch):
     assert not fach_wache.zahn_treffer(letzte), letzte
 
 
+# --- EINGANGS-Seite (Live-Probe 14.09.2026) -----------------------------------
+
+def test_zahnanliegen_beim_hautarzt_startet_keine_buchung():
+    """Live-Probe 14.09.2026 00:50 (Blessing): "Ich habe furchtbare
+    Zahnschmerzen und brauche schnell einen Termin" -> Bianca fragte "Waren
+    Sie schon einmal bei uns?" — der ZAHN-Buchungsfluss lief beim HAUTARZT an.
+    Jetzt: ehrlicher Verweis, kein Fluss, kein Zahn-Wort, kein Modell."""
+    sit = _blessing_sit()
+    aus = bianca_agent.user_turn(
+        sit, "Ich habe furchtbare Zahnschmerzen und brauche schnell einen Termin.")
+    text = aus["text"]
+    assert "Hautarztpraxis" in text, text
+    assert not fach_wache.zahn_treffer(text), text
+    assert not aus.get("book")
+    s = gehirn.sammler(sit)
+    assert s.get("modus") in ("", None), s.get("modus")
+    assert not s.get("frage"), s.get("frage")
+    assert any(e.get("w") == "fach-wache-eingang" for e in sit.get("_spur") or []), sit.get("_spur")
+
+
+@pytest.mark.parametrize("satz", [
+    "Ich brauche eine professionelle Zahnreinigung.",
+    "Ich möchte einen Termin beim Zahnarzt.",
+    "Ich habe Karies und brauche eine Wurzelbehandlung.",
+    "Mein Weisheitszahn tut weh.",
+])
+def test_fremdes_anliegen_erkannt(satz):
+    assert fach_wache.fremdes_anliegen(_blessing_sit(), satz)
+
+
+@pytest.mark.parametrize("satz", [
+    # Kontaktallergie ist Hautarzt-Alltag — "Zahnpasta" ist kein Zahn-Anliegen.
+    "Ich habe eine Allergie gegen meine Zahnpasta bekommen.",
+    # Ueberweisung VOM Zahnarzt: der Anrufer gehoert hierher.
+    "Mein Zahnarzt hat mich wegen einem Ausschlag zu Ihnen überwiesen.",
+    "Ich habe einen akuten Ausschlag am Arm.",
+    "Ich möchte einen Termin zur Hautkrebsvorsorge.",
+    "Ich brauche ein Rezept für meine Salbe.",
+])
+def test_fremdes_anliegen_gegenproben(satz):
+    """Der teurere Fehler: ein echter Hautarzt-Patient wird weggeschickt."""
+    assert fach_wache.fremdes_anliegen(_blessing_sit(), satz) == ""
+
+
+def test_fremdes_anliegen_nie_bei_zahnpraxis_und_ohne_fach():
+    assert fach_wache.fremdes_anliegen(_meddent_sit(), "Ich habe Zahnschmerzen.") == ""
+    sit = _blessing_sit()
+    sit["tenant"].pop("fachgebiet", None)
+    sit["tenant"]["visitMotives"] = []
+    sit["motivKatalog"] = []
+    assert fach_wache.fremdes_anliegen(sit, "Ich habe Zahnschmerzen.") == ""
+
+
+def test_fremdes_anliegen_laesst_laufende_aufgabe_stehen():
+    """Mitten in einer echten Haut-Buchung faellt ein Zahn-Satz: Verweis PLUS
+    die offene Pflichtfrage — der Faden reisst nicht."""
+    sit = _blessing_sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "frage": "grund"})
+    sit["flussFrage"] = "Worum geht es denn bei dem Termin?"
+    aus = bianca_agent.user_turn(sit, "Ach, und Zahnschmerzen habe ich auch noch.")
+    assert "Hautarztpraxis" in aus["text"], aus["text"]
+    assert "Worum geht es" in aus["text"], aus["text"]
+    assert gehirn.sammler(sit)["modus"] == "buchen"
+
+
+def test_fremdes_anliegen_shadow_und_off(monkeypatch):
+    monkeypatch.setenv("FACH_WACHE", "shadow")
+    assert fach_wache.fremdes_anliegen(_blessing_sit(), "Ich habe Zahnschmerzen.") == ""
+    monkeypatch.setenv("FACH_WACHE", "off")
+    assert fach_wache.fremdes_anliegen(_blessing_sit(), "Ich habe Zahnschmerzen.") == ""
+
+
 def test_llm_zug_bei_meddent_behaelt_zahn(monkeypatch):
     """Gegenprobe: in der Zahnpraxis ist Zahn-Vokabular der Job."""
     monkeypatch.setattr(

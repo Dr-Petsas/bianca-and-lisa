@@ -43,16 +43,30 @@ def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
 
+# Titel/Grade sind kein Namensteil. Live-Befund 14.09.2026 01:00: der
+# MedDent-DB-Kalender heisst "Doktor Theodosios Patrikis, M.Sc." — der alte
+# Splitter nahm das LETZTE Token ("sc") als Nachnamen, "zu Doktor Patrikis"
+# traf also NIE (deute -> None, Wunsch fiel still auf den Default-Kalender).
+# Grade hinter dem Komma fallen komplett weg (wie in patients.arzt_sprechname).
+_GRAD_TOKS = {
+    "dr", "med", "dent", "prof", "doktor", "professor", "univ", "habil",
+    "m", "sc", "msc", "ma", "mba", "phd", "dds", "dmd", "bsc", "ba", "mag", "dipl",
+    "frau", "herr", "herrn",
+}
+
+
+def _namens_tokens(cal_name: str) -> list[str]:
+    kern = _s(cal_name).split(",")[0]
+    return [t for t in kern.lower().replace(".", " ").split() if t not in _GRAD_TOKS]
+
+
 def _nachname(cal_name: str) -> str:
-    toks = [t for t in _s(cal_name).lower().replace(".", " ").split() if t not in {"dr", "med", "prof"}]
+    toks = _namens_tokens(cal_name)
     return toks[-1] if toks else ""
 
 
 def _vornamen(cal_name: str) -> list[str]:
-    toks = [
-        t for t in _s(cal_name).lower().replace(".", " ").split()
-        if t not in {"dr", "med", "prof", "frau", "herr", "herrn"}
-    ]
+    toks = _namens_tokens(cal_name)
     return toks[:-1] if len(toks) >= 2 else []
 
 

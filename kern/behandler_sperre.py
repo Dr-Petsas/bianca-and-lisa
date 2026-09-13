@@ -66,13 +66,37 @@ def ist_gesperrt(tenant: dict | None, kalender_name: str) -> bool:
     return False
 
 
-def gesperrte_kalender(tenant: dict | None) -> list[dict[str, str]]:
-    """Die beim Anwenden entfernten Kalender (id/name) — fuer arzt.deute und
-    letzter_behandler. Leer ohne Sperre."""
+_TITEL_RE = re.compile(r"^(?:dr\.?|doktor|prof\.?|professor|frau|herr)\b", re.I)
+
+
+def _entfernte_kalender(tenant: dict | None) -> list[dict[str, str]]:
+    """Nur die von ``anwenden`` tatsaechlich entfernten DB-Kalender (id/name)."""
     roh = (tenant or {}).get("_gesperrteKalender")
     if not isinstance(roh, list):
         return []
     return [dict(c) for c in roh if isinstance(c, dict) and _s(c.get("name"))]
+
+
+def gesperrte_kalender(tenant: dict | None) -> list[dict[str, str]]:
+    """Die beim Anwenden entfernten Kalender (id/name) — fuer arzt.deute und
+    letzter_behandler. Leer ohne Sperre.
+
+    Ein gesperrter Behandler OHNE eigenen Kalender in der DB bekommt einen
+    kalenderlosen Eintrag (id ""). Live-Probe 14.09.2026 00:50: die MedDent-DB
+    fuehrt nur die Kalender Petsas und Patrikis, Doktor Nikolaou steht allein
+    im Praxis-Prompt — ``anwenden`` hatte also nichts zu entfernen,
+    ``_gesperrteKalender`` blieb leer, arzt.deute kannte den Namen nicht und
+    "Termin bei Doktor Nikolaou" lief OHNE Sperr-Ansage in die Behandlerwahl,
+    "mit Doktor Nikolaou sprechen" in die Schleife "zu welchem unserer Ärzte?".
+    Die Sperr-Liste ist die Wahrheit, nicht die Kalenderliste."""
+    out = _entfernte_kalender(tenant)
+    for n in gesperrte_namen(tenant):
+        einzel = {"telefonGesperrteBehandler": [n]}
+        if any(ist_gesperrt(einzel, _s(c.get("name"))) for c in out):
+            continue
+        name = n if _TITEL_RE.search(n) else f"Doktor {n}"
+        out.append({"id": "", "name": name})
+    return out
 
 
 def anwenden(tenant: dict | None) -> dict | None:
@@ -87,7 +111,9 @@ def anwenden(tenant: dict | None) -> dict | None:
         return tenant
     cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
     frei: list[dict] = []
-    weg: list[dict[str, str]] = list(gesperrte_kalender(tenant))
+    # Nur ECHTE Kalender merken — die kalenderlosen Platzhalter fuer Sperr-
+    # Namen ohne DB-Kalender synthetisiert gesperrte_kalender() beim Lesen.
+    weg: list[dict[str, str]] = _entfernte_kalender(tenant)
     for c in cals:
         if not isinstance(c, dict):
             continue

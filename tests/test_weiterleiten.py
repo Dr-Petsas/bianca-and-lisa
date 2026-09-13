@@ -598,6 +598,26 @@ def test_gesperrter_behandler_wird_nicht_verbunden_sondern_ehrlich_abgesagt():
     assert z2 is not None and "Nikolaou" in z2["text"] and "transfer" not in z2
 
 
+def test_gesperrter_behandler_ohne_db_kalender_wird_ehrlich_abgesagt():
+    """Live-Probe 14.09.2026 00:50 (MedDent, DB-Mandant): die DB fuehrt KEINEN
+    Nikolaou-Kalender — "mit Doktor Nikolaou sprechen" lief in die Schleife
+    "Zu welchem unserer Ärzte darf ich Sie verbinden?", weil arzt.deute den
+    Namen nicht kannte. Die Sperr-Liste allein muss reichen."""
+    from kern import behandler_sperre
+    sit = _sit_mit_weiterleitung()
+    t = sit["tenant"]
+    t["calendars"] = [c for c in t["calendars"] if "nikolaou" not in _s(c.get("name")).lower()]
+    t["telefonGesperrteBehandler"] = ["Nikolaou"]
+    behandler_sperre.anwenden(t)
+    events: list[str] = []
+    z = flow.zug(sit, "Ich möchte mit Doktor Nikolaou sprechen.", events.append)
+    assert z is not None, "fiel ans LLM"
+    assert "transfer" not in z and not z.get("hangup")
+    assert "Nikolaou" in z["text"] and "nicht möglich" in z["text"], z["text"]
+    assert "welchem unserer" not in z["text"].lower(), z["text"]
+    assert weiterleiten.JINGLE_EVENT not in events
+
+
 def test_weiterleitungs_ziel_ohne_konfig_leer():
     assert weiterleiten.weiterleitungs_ziel({}, {"calendarName": "Dr. Petsas"}) == {}
     assert weiterleiten.weiterleitungs_ziel({"weiterleitungen": []}, {}) == {}

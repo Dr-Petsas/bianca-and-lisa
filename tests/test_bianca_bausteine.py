@@ -1282,6 +1282,23 @@ def test_auch_paul_wird_paul():
     assert s["vorname"] == "Paul"
 
 
+def test_zustimmung_ist_kein_vorname():
+    """Live-Probe 14.09.2026 (MedDent): "Ja, der erste passt." auf die offene
+    Vornamen-Frage wurde als Vorname "Ja" geerntet ("Danke, Ja Meier")."""
+    for satz in ("Ja, der erste passt.", "Okay.", "Ja, genau.", "Stimmt, richtig."):
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": True, "nachname": "Meier", "frage": "vorname"})
+        gehirn.einsammeln(sit, satz)
+        assert not s["vorname"], (satz, s["vorname"])
+    # Gegenprobe: der echte Vorname hinter der Zustimmung bleibt.
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": True, "nachname": "Meier", "frage": "vorname"})
+    gehirn.einsammeln(sit, "Ja, Thomas.")
+    assert s["vorname"] == "Thomas"
+
+
 def test_englische_ziffern():
     """Web-Speech rutschte ins Englische: 'six hundred' = 600 (live)."""
     assert telefon.ziffern("Null eins sieben sieben six hundred vier six hundred") == "01776004600"
