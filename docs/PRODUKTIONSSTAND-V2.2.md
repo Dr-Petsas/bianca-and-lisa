@@ -33,7 +33,7 @@ korrigiert (W-EINWAND)" und „Jeder Zug geht auf das Gesagte ein (W-EINGEHEN)".
 
 | Teil | Wo |
 | --- | --- |
-| Git | Tag **`telefonki-produktionsstand-v2.2-2026-09-13`** (annotiert, Commit `f08a47e`) |
+| Git | Tag **`telefonki-produktionsstand-v2.2-2026-09-13`** (annotiert; Code-Stand ist Commit `f08a47e`, der Tag sitzt auf dem Handbuch-Commit darüber — der Tagname ist die Wahrheit, nicht der Hash) |
 | App-Image | `telefonki:produktionsstand-v2.2-20260913` (`7f127afed684`, 912 MB) — bianca, lisa, bianca-test, studio, sipbridge |
 | TTS / STT | `tts-qwen3:produktionsstand-v2.2-20260913` (`388900ee2436`), `stt-parakeet-de:produktionsstand-v2.2-20260913` (`8ff19deb7d74`) — byte-identisch mit V2.1/V2.0, dort wurde nichts gebaut |
 | Tunnel | `cloudflare/cloudflared:produktionsstand-v2.2-20260913`, `alpine:produktionsstand-v2.2-20260913` |
