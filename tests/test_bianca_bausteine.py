@@ -1299,6 +1299,74 @@ def test_zustimmung_ist_kein_vorname():
     assert s["vorname"] == "Thomas"
 
 
+def test_versicherungswort_ist_kein_vorname_sondern_versicherung():
+    """Live-Probe 14.09.2026: "Gesetzlich." auf die Vornamen-Frage wurde zu
+    "Gesetzlich Meier" — und die Kette fragte den Status danach trotzdem
+    noch einmal. Ein nacktes Versicherungswort ist die Versicherung."""
+    for satz, wert in (("Gesetzlich.", "gesetzlich"), ("Privat.", "privat"),
+                       ("Ich bin privat.", "privat")):
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": False, "nachname": "Meier", "frage": "vorname"})
+        neu = gehirn.einsammeln(sit, satz)
+        assert not s["vorname"], (satz, s["vorname"])
+        assert s["versicherung"] == wert and s["versicherungOk"], (satz, s["versicherung"])
+        assert "versicherung" in neu
+    # Weitere Antworten auf ANDERE Fragen sind ebenfalls nie ein Vorname.
+    for satz in ("Vormittags.", "Donnerstag.", "Kontrolle.", "Egal."):
+        sit = _sit()
+        s = gehirn.sammler(sit)
+        s.update({"modus": "buchen", "warSchonMal": False, "nachname": "Meier", "frage": "vorname"})
+        gehirn.einsammeln(sit, satz)
+        assert not s["vorname"], (satz, s["vorname"])
+    # Gegenprobe: "privat" MIT Kontext im langen Satz bleibt wie bisher
+    # Versicherung; "Privat" als Teil eines Namenssatzes bleibt draussen.
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "frage": "wunsch"})
+    gehirn.einsammeln(sit, "Am Donnerstag privat, am Freitag arbeite ich.")
+    assert not s["versicherungOk"]
+
+
+def test_einzelner_vorname_auf_fremder_frage_wird_geerntet():
+    """Live-Probe 14.09.2026: Nachname "Meier" stand, die Kette fragte die
+    Wunschzeit, der Anrufer sagte "Thomas." — Bianca: "Was meinen Sie damit?",
+    einen Zug spaeter behauptete das Modell "Thomas Meier", waehrend die
+    Maschine den Vornamen noch einmal erfragte. Ein einzelner gaengiger
+    Vorname bei stehendem Nachnamen IST der Vorname."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "nachname": "Meier",
+              "buchstabiert": True, "frage": "wunsch"})
+    neu = gehirn.einsammeln(sit, "Thomas.")
+    assert s["vorname"] == "Thomas" and "name" in neu
+    assert s["nachname"] == "Meier"
+    assert s.get("vornameQuelle") == "gesagt"
+    # Gegenproben: kein Nachname -> keine Ernte (Vor- oder Nachname? nie raten);
+    # unbekanntes Wort -> keine Ernte; Behandler-Frage -> keine Ernte.
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "frage": "wunsch"})
+    gehirn.einsammeln(sit, "Thomas.")
+    assert not s["vorname"] and not s["nachname"]
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "nachname": "Meier", "frage": "wunsch"})
+    gehirn.einsammeln(sit, "Blubbernd.")
+    assert not s["vorname"]
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "nachname": "Meier", "frage": "arzt"})
+    gehirn.einsammeln(sit, "Thomas.")
+    assert not s["vorname"]
+    # Steht der Vorname schon, ueberschreibt ein loses Wort ihn nicht.
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "buchen", "warSchonMal": False, "nachname": "Meier", "vorname": "Anna", "frage": "wunsch"})
+    gehirn.einsammeln(sit, "Thomas.")
+    assert s["vorname"] == "Anna"
+
+
 def test_englische_ziffern():
     """Web-Speech rutschte ins Englische: 'six hundred' = 600 (live)."""
     assert telefon.ziffern("Null eins sieben sieben six hundred vier six hundred") == "01776004600"

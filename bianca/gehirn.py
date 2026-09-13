@@ -589,6 +589,16 @@ _NAME_STOP = {
     "sie", "bitte", "termin", "termine", "kalender", "nehmen",
     "löschen", "loeschen", "streichen", "stornieren", "canceln",
     "entfernen", "absagen", "verschieben",
+    # Antworten auf ANDERE Fragen der Kette sind nie ein Name — Live-Probe
+    # 14.09.2026: "Gesetzlich." auf die Vornamen-Frage wurde zu "Gesetzlich
+    # Meier". Versicherung, Tageszeit, Wochentag, Besuchsgrund.
+    "gesetzlich", "privat", "kasse", "krankenkasse", "versichert",
+    "versicherung", "beihilfe", "kassenpatient", "privatpatient",
+    "vormittags", "nachmittags", "vormittag", "nachmittag", "morgens",
+    "mittags", "abends", "heute", "übermorgen", "uebermorgen", "montag",
+    "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag",
+    "woche", "wochenende", "kontrolle", "zahnreinigung", "schmerzen",
+    "beratung", "besprechung", "egal",
 }
 # Gängige Vornamen (nur zur Zuordnung "ein einzelnes Wort = eher Vorname?").
 # Live 27.08.2026: die Antwort "Paul?" auf die Namensfrage wurde als NACHNAME
@@ -1397,6 +1407,20 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
 
     m = _NAME_LEADIN_RE.search(text)
     kandidat = m.group(1) if m else (text if erzwungen else "")
+    if not m and not erzwungen and s["nachname"] and not s["vorname"]:
+        # Nachname steht, Vorname fehlt, und der Anrufer sagt EIN Wort, das
+        # ein gaengiger Vorname ist ("Thomas.") — auch wenn die Kette gerade
+        # etwas anderes gefragt hat. Live-Probe 14.09.2026: das Wort lief als
+        # "unklar" ("Was meinen Sie damit?"), und einen Zug spaeter behauptete
+        # das Modell "Thomas Meier", waehrend die Maschine den Vornamen noch
+        # einmal erfragte. NUR kuratierte Vornamen, nie die -a-Heuristik.
+        lone = _name_tokens(text)
+        if (len(lone) == 1 and lone[0].lower() not in _NAME_STOP
+                and (lone[0].lower() in _VORNAMEN or vornamen.aus_liste(lone[0]))):
+            neu_vor = lone[0].capitalize()
+            _kartei_vor_namensaenderung(s, first=neu_vor)
+            s["vorname"] = neu_vor
+            return True
     toks = _name_tokens(kandidat)
     if s.get("fuerWen") and len(toks) >= 2 and toks[0].lower() in _ROLLE_WOERTER:
         # Fuer-Wen-Buchung: "Der Nachbar heisst Schmattke" / "Nachbar Schmattke"
@@ -2054,7 +2078,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     elif s["frage"] in {"name", "vorname", "nachname"}:
         if _name_aufnehmen(s, t, erzwungen=True):
             neu.add("name")
-    elif not s["nachname"] and _name_aufnehmen(s, t, erzwungen=False):
+    elif (not s["nachname"] or not s["vorname"]) and _name_aufnehmen(s, t, erzwungen=False):
+        # Auch mit stehendem Nachnamen: ein fehlender Vorname darf aus einem
+        # einzelnen gaengigen Vornamen geerntet werden (s. _name_aufnehmen).
         neu.add("name")
     elif (_TEIL_NACH_RE.search(t) or _TEIL_NACH_UMGEKEHRT_RE.search(t)
           or _TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
@@ -2202,7 +2228,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         gesetzlich = bool(_VERS_GESETZLICH_RE.search(t_vers))
         if privat and gesetzlich:
             privat = gesetzlich = False  # beides im Satz: unklar, nicht raten
-        if (privat or gesetzlich) and (in_frage or _VERS_KONTEXT_RE.search(t)):
+        # Ein NACKTES "Gesetzlich." / "Privat." (hoechstens zwei Woerter) ist
+        # auch ohne Frage und Kontext eindeutig — Live-Probe 14.09.2026: die
+        # Antwort kam einen Zug frueher als die Frage und wurde als Vorname
+        # gefuehrt; die Kette fragte den Status danach trotzdem noch einmal.
+        nackt = len(t_vers.split()) <= 3 and bool(
+            re.fullmatch(r"\s*(?:ich\s+bin\s+|bin\s+)?(?:privat|gesetzlich)\w*[.!]?\s*", t_vers, re.I))
+        if (privat or gesetzlich) and (in_frage or nackt or _VERS_KONTEXT_RE.search(t)):
             wert = "privat" if privat else "gesetzlich"
             s["versicherung"] = wert
             s["versicherungOk"] = True
