@@ -2492,6 +2492,10 @@ stellte einfach ihre offene Frage weiter.
   bleiben bei W-NAMESKORREKTUR.
 - Notaus `EINWAND=off|shadow|enforce` (Default **enforce**). Tests:
   `tests/test_einwand.py` — hinter jedem Positiv-Fall steht ein Negativ-Fall.
+  Live-Probe im Container (kein Kalender-Write):
+  `docker exec -w /app telefonki-bianca-1 python tools/_probe_einwand_live.py`
+  — Teil A zeigt Nummer/Behandler/Versicherung samt weiterlaufender Kette,
+  Teil B den Bezug in echten Dock-Zügen (13.09.2026 grün).
 
 ## Jeder Zug geht auf das Gesagte ein (W-EINGEHEN 13.09.2026 — nicht rückbauen)
 
@@ -2524,7 +2528,10 @@ und die Antwort ist eine nackte Frage („Und der Vorname?").
   das sind die Quittungen der Maschine und würden im Gedächtnis des
   Wiederholungs-Wächters eine echte Quittung als „schon gesagt" streichen.
 - Notaus `EINGEHEN=off|shadow|enforce` (Default **enforce**). Tests:
-  `tests/test_eingehen.py`.
+  `tests/test_eingehen.py`; Live-Probe Teil B in
+  `tools/_probe_einwand_live.py` (13.09.2026: „Alles klar. Waren Sie denn
+  schon einmal bei uns?" — und KEIN Vorsatz, wo die Antwort schon einen
+  eigenen Bezug trägt).
 
 **Auto-Resume ist seit heute scharf.** Chef: „manchmal strandet sie obwohl wir
 wächter haben". `hirn.auto_resume_modus()` liefert jetzt `enforce` als Default
