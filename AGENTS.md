@@ -2662,11 +2662,37 @@ Code-Punkte in Kürze, jeder mit eigenem Modul, Notaus und Tests:
    samt Vergleichszeile; Studio (`ergebnisse.js`/`app.js`) dieselben Tags.
    Notaus: `QWEN_KORREKTOR=0`. Tests: `tests/test_qwen_korrektor.py`,
    `tests/test_stt_qwen.py` (Nachtrag-Fälle), `tests/test_mitschnitt.py`.
+6. **W-FACH-WACHE** (`kern/fach_wache.py`, Punkt 8 — Chef: „bei blessing
+   darf auf gar keinen Fall ein zahnmedizinischer Einfluss oder
+   gesprächsverlauf entstehen"): Die MASCHINE war schon dicht — PZR,
+   Bleaching, Zahn-Regeln im Prompt, Zahnarzt-Verweis hängen alle am
+   Katalog (`motive.ist_zahn`/`fuehrt_pzr`, `tests/test_zahn_katalog.py`,
+   Audit 13.09. ohne Befund). Offen war der LLM-Ausgang: sagt ein
+   Anrufer beim Hautarzt „Zahnschmerzen", darf das Modell keinen
+   Zahnarzt-Rat und kein Zahn-Angebot sprechen. Die Wache streicht am
+   Endtext UND im P5-Streaming-Satz (`agent._fach_wache_anwenden`, gleiche
+   Doppel-Einhängung wie Anrede-Wache) jeden Satz mit Zahn-Vokabular
+   (`\w*zähn\w*`, PZR, Bleaching, Karies, Implantat, Krone, Prothese,
+   Wurzelbehandlung, KFO, dental …); bleibt nichts, kommt „Das gehört
+   nicht zu unserer Praxis — wir sind eine Hautarztpraxis." Scharf NUR
+   bei bekanntem Nicht-Zahn-Fach (`fachprofil.fach_id` ≠ allgemein/
+   zahnmedizin — Blessing trägt `fachgebiet=dermatologie` in der lokalen
+   Datei, also ab dem ERSTEN Zug); „allgemein" (leerer Katalog) = AUS,
+   damit MedDent vor dem Katalog-Lauf nie verstummt. Bewusst NICHT im
+   Vokabular: Prophylaxe (Hautkrebs-Prophylaxe), Brücke, Mund, Kiefer,
+   Füllung (= Filler beim Hautarzt) — ein gestrichener legitimer Satz
+   wäre der teurere Fehler. Stufen `FACH_WACHE=off|shadow|enforce`
+   (Default enforce). Tests: `tests/test_fach_wache.py`.
 
 Reine Betriebs-Punkte ohne Code: Clara/Lena bleiben bis zum Hardware-
 Upgrade aus (4); kein Verweis auf 116117 in Zahnpraxen (6 — nur Blessing
 trägt die Regel per DB-Marker); Telefon-Notizen laufen ins MAS-Gedächtnis,
-das Praxisteam sichtet CallR (7); Blessing ohne zahnmedizinische Inhalte (8).
+das Praxisteam sichtet CallR (7).
+
+Dabei entfernt: die Debug-Instrumentierung der Sitzung a62ee2 vom
+12.09. (`kern/dbg_a62ee2.py`, `#region agent log`-Blöcke in Brücke,
+`agent.py`, `weiterleiten.py` — NDJSON nach `/tmp/debug-a62ee2.log`); sie
+war zur Fehlersuche gedacht und hatte in V2.3 nichts mehr zu tun.
 
 ## Rückrollpunkte (Produktionsstände)
 

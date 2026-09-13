@@ -37,9 +37,6 @@ from bianca import besuchsgrund, gehirn
 from kern import fachprofil, hirn as session_hirn, wiederholung
 from kern.leitung import ist_leitung_check
 from kern.patients import arzt_sprechname
-# #region agent log
-from kern import dbg_a62ee2
-# #endregion
 
 # Kurze Quittung auf „Bin ich mit der Praxis … verbunden?“ — kein Jingle.
 LEITUNG_OK = "Ja, Sie sind richtig verbunden. Was kann ich für Sie tun?"
@@ -531,12 +528,6 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # Mensch meldet sich. Der ABGEBEN-Fluss erfragt Name und Nummer, dort
         # kann er immer noch abbrechen.
         unklar = int(w.get("unklar") or 0) + 1
-        # #region agent log
-        dbg_a62ee2.dbg("G", "bianca/weiterleiten.py:rueckruf",
-                       "weder Ja noch Nein auf die Rueckruf-Frage",
-                       {"unklar": unklar, "gehoert": dbg_a62ee2.kurz(t),
-                        "weg": "abgeben" if unklar >= 2 else "nachfrage"})
-        # #endregion
         if unklar >= 2:
             sit["weiterleiten"] = {}
             session_hirn.anwenden(sit, dict(_RUECKRUF_ABGEBEN))

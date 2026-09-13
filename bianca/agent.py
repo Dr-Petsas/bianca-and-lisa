@@ -16,12 +16,10 @@ from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import fach_wache
 from kern import qwen_korrektor
 from kern import spur
 from kern import wissen as kern_wissen
-# #region agent log
-from kern import dbg_a62ee2
-# #endregion
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
 
@@ -307,12 +305,6 @@ def _wiederholung_oder_presence(sit: dict, text: str) -> str:
     # bleibt gewahrt); nur wenn ueberhaupt keine Frage offen ist, bleibt
     # Presence als letzter Notnagel.
     offen = stille.nur_fragesaetze(text) or _s(sit.get("flussFrage"))
-    # #region agent log
-    dbg_a62ee2.dbg("H", "bianca/agent.py:_wiederholung_oder_presence",
-                   "alles gestrichen — Rueckfall gewaehlt",
-                   {"rueckfall": "praefix" if offen else "presence",
-                    "text": dbg_a62ee2.kurz(text)})
-    # #endregion
     if offen:
         praefix = stille.frage_praefix(offen)
         # Die Re-Greeting-Wache darf den Rueckfall nicht leeren — stumm zu
@@ -889,6 +881,28 @@ def _anrede_wache_anwenden(sit: dict, text: str) -> str:
         spur.merken(sit, "anrede-wache-shadow", "; ".join(gestrichen)[:60])
         return text
     spur.merken(sit, "anrede-wache", "; ".join(gestrichen)[:60])
+    return neu or text
+
+
+def _fach_wache_anwenden(sit: dict, text: str) -> str:
+    """W-FACH-WACHE (13.09.2026): in einer Nicht-Zahn-Praxis (Blessing) darf
+    das Modell keinen Satz mit Zahn-Vokabular sprechen — Chef: "auf gar
+    keinen Fall ein zahnmedizinischer Einfluss oder gesprächsverlauf".
+
+    Nur bei BEKANNTEM Nicht-Zahn-Fach scharf (fachprofil.fach_id); ohne
+    Fach oder bei Zahnpraxen unveraendert. off: nichts. shadow: nur Spur.
+    enforce: Zahn-Saetze streichen, Rest bleibt; bleibt nichts, kommt der
+    ehrliche Fach-Satz."""
+    m = fach_wache.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, treffer = fach_wache.saeubern(sit, text)
+    if not treffer:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "fach-wache-shadow", "; ".join(treffer)[:60])
+        return text
+    spur.merken(sit, "fach-wache", "; ".join(treffer)[:60])
     return neu or text
 
 
@@ -1487,6 +1501,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # gesaeubert, damit llm.rest_nach_vorab den Rest weiter findet
             # (sonst kaeme der Satz ein zweites Mal).
             satz = _anrede_wache_anwenden(sit, satz)
+            # W-FACH-WACHE: ein Zahn-Satz beim Hautarzt faellt ebenfalls HIER
+            # — gesprochen waere er nicht mehr einzufangen.
+            satz = _fach_wache_anwenden(sit, satz)
             # W-FRAGE-GATE: eine Daten-Frage darf auch hier nicht raus — sie
             # waere gesprochen, bevor die Wache am Zugende sie streichen kann,
             # und die Maschine wuerde sie danach ein zweites Mal stellen.
@@ -1527,6 +1544,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     bewacht = _fakten_wache_anwenden(
         sit, bewacht, nutzertext=text_in)
     bewacht = _anrede_wache_anwenden(sit, bewacht)
+    bewacht = _fach_wache_anwenden(sit, bewacht)
     bewacht = _frage_gate_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
