@@ -81,6 +81,11 @@ _BEZUG_NEUTRAL = ("Verstehe.", "Alles klar.", "Mhm, verstehe.", "In Ordnung.")
 _BEZUG_WUNSCH = ("Gerne.", "Sehr gerne.", "Das mache ich gerne.")
 _BEZUG_LEID = ("Das tut mir leid.", "Oh, das tut mir leid.",
                "Verstehe, das ist unangenehm.")
+# Fix 5 (13.09.2026): alle Bezuege fuer den TTS-Platten-Cache
+# (bianca/gehirn.feste_saetze) — als Vorsatz vor einer gewaermten Frage
+# kostet der Bezug sonst eine eigene Synthese (~0,5-1 s) und schiebt die
+# Antwort hinter die 2-s-Grenze. Inhaltsfrei, nie Patientendaten.
+ALLE_BEZUEGE: tuple[str, ...] = _BEZUG_NEUTRAL + _BEZUG_WUNSCH + _BEZUG_LEID
 
 
 def modus() -> str:

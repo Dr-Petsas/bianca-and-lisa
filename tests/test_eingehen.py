@@ -140,3 +140,19 @@ def test_maschinen_zug_mit_quittung_bleibt_unveraendert(monkeypatch):
         sit, {"text": "Danke, Stefan Rateike. Welche Handynummer darf ich eintragen?"},
         msgs)
     assert aus["text"].startswith("Danke, Stefan Rateike.")
+
+
+# --- Fix 5 (13.09.2026): Bezuege liegen im TTS-Platten-Cache -----------------
+
+def test_alle_bezuege_werden_vorgewaermt():
+    """Ein Bezug vor einer gewaermten Frage darf keine eigene Synthese kosten
+    (sonst rutscht die Antwort hinter die 2-s-Grenze). Der Dienst spricht
+    satzweise aus dem Cache — also muss jeder Bezug einzeln drin liegen."""
+    from bianca import flow, gehirn
+    fest = set(gehirn.feste_saetze())
+    for bezug in eingehen.ALLE_BEZUEGE:
+        assert bezug in fest, bezug
+    for vorsatz in flow._EINWAND_VORSATZ.values():
+        assert vorsatz.strip() in fest, vorsatz
+    assert "Entschuldigung — dann korrigiere ich das." in fest
+    assert "Prima, dann habe ich Sie gefunden." in fest

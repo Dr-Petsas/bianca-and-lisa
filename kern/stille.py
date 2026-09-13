@@ -43,7 +43,12 @@ MAX_STUPSE = 2
 # W-STUPS-GESAMT: bis hierhin darf die Presence-Floskel im ANRUF kommen.
 PRESENCE_BIS = 3
 # So viele Stupse im ganzen Anruf: dann ist das Gespraech tot (Notleine).
-GESAMT_MAX = 6
+# Fix 5 (13.09.2026, vor den Feldtests): 6 -> 8. Mit MAX_STUPSE=2 sind das
+# VIER Stille-Phasen von je ~8 s Funkstille (statt drei) — ein Anrufer, der
+# am Tresen nachschaut oder einen Zettel sucht, wird nicht schon beim
+# dritten Nachdenken verabschiedet. Die 15er-Schleife aus Session 9395e2ce
+# faengt die Notleine damit weiterhin.
+GESAMT_MAX = 8
 
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 

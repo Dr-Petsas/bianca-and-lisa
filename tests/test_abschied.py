@@ -161,11 +161,15 @@ def test_notleine_beendet_endlose_stups_schleife():
               "nachname": "Meier", "testNoWrite": True})
     sit["testNoWrite"] = True
     texte = []
-    for _ in range(3):          # drei Stille-Phasen mit je zwei Stupsen
-        for _ in range(2):
+    # So viele Stille-Phasen mit je MAX_STUPSE Stupsen, bis GESAMT_MAX
+    # erreicht ist (Fix 5, 13.09.2026: aus den Konstanten abgeleitet statt
+    # fest „3 x 2“ — die Notleine bleibt, nur die Schwelle wanderte auf 8).
+    phasen = stille.GESAMT_MAX // stille.MAX_STUPSE
+    for _ in range(phasen):
+        for _ in range(stille.MAX_STUPSE):
             texte.append(bianca_agent.stille_zug(sit))
         stille.reset(sit)       # der Anrufer hat dazwischen gesprochen
-    assert stille.gesamt(sit) == 6
+    assert stille.gesamt(sit) == stille.GESAMT_MAX
     letzte = texte[-1]
     assert letzte.get("hangup") is True, "irgendwann ist Auflegen freundlicher"
     assert "Wiederhören" in letzte["text"]
@@ -180,8 +184,8 @@ def test_notleine_sagt_ihren_schlusssatz_nur_einmal():
     verpasst, wird derselbe Satz nie wiederholt."""
     sit = _sit()
     gehirn.sammler(sit).update({"modus": "", "phase": "fertig"})
-    for _ in range(3):
-        for _ in range(2):
+    for _ in range(stille.GESAMT_MAX // stille.MAX_STUPSE):
+        for _ in range(stille.MAX_STUPSE):
             letzte = bianca_agent.stille_zug(sit)
         stille.reset(sit)
     assert letzte.get("hangup") is True
@@ -203,8 +207,8 @@ def test_stille_route_reicht_hangup_durch(monkeypatch):
     body = bianca_server.HangupIn(sessionId="probe")
 
     gesehen = []
-    for _ in range(3):
-        for _ in range(2):
+    for _ in range(stille.GESAMT_MAX // stille.MAX_STUPSE):
+        for _ in range(stille.MAX_STUPSE):
             gesehen.append(bianca_server.api_stille(body))
         stille.reset(sit)
     assert gesehen[-1].get("hangup") is True

@@ -3434,6 +3434,19 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
     # Import in der Funktion, weil weiterleiten selbst gehirn importiert.
     from bianca import weiterleiten as _wl
     out.append(_wl.ANSAGE_PLATZHALTER)
+    # Fix 5 (13.09.2026): W-EINGEHEN-Bezuege ("Verstehe.", "Gerne.", …) und die
+    # W-EINWAND-/W-HIRN-GATE-Vorsaetze mitwaermen. Der Dienst spricht
+    # mehrsaetzige Antworten satzweise aus dem Cache — ein ungewaermter
+    # Vorsatz vor einer gewaermten Frage kostete sonst eine eigene Synthese
+    # und schob die Antwort hinter die 2-s-Grenze. Alle inhaltsfrei.
+    from kern import eingehen as _eg
+    out.extend(_eg.ALLE_BEZUEGE)
+    from bianca import flow as _fl
+    out.extend(v.strip() for v in _fl._EINWAND_VORSATZ.values())
+    out.extend([
+        "Entschuldigung — dann korrigiere ich das.",
+        "Prima, dann habe ich Sie gefunden.",
+    ])
     # Behandler-Wahl fuer Neupatienten: die Erstform traegt die Namen aus
     # dem Tenant (nur mit Tenant baubar), die Varianten sind statisch.
     if tenant:
