@@ -348,11 +348,14 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
         )
         z1 = flow.zug(sit, "Ich möchte zur Kontrolle.")
         assert z1 and "schon einmal" in z1["text"]
+        # W-PZR-REIHENFOLGE (09.09.2026): erst der Behandler, dann das
+        # Zusatzangebot — nie umgekehrt.
         z2 = flow.zug(sit, "Nein.")
-        assert z2 and "Zahnreinigung" in z2["text"]
-        z3 = flow.zug(sit, "Nein, danke.")
-        assert z3 and "Behandler" in z3["text"]
-        z4 = flow.zug(sit, "Bei Doktor Petsas.")
+        assert z2 and "Behandler" in z2["text"]
+        assert "Zahnreinigung" not in z2["text"]
+        z3 = flow.zug(sit, "Bei Doktor Petsas.")
+        assert z3 and "Zahnreinigung" in z3["text"]
+        z4 = flow.zug(sit, "Nein, danke.")
         assert z4 and "Wann passt" in z4["text"]
         z5 = flow.zug(sit, "Vormittags bitte.")
         assert z5 and "Nachname" in z5["text"]

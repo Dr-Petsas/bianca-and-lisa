@@ -221,18 +221,26 @@ def _bestand(sit: dict, *, tage_her: int, akte: str = "gesetzlich") -> dict:
 
 def test_bestand_rueckfrage_nur_nach_sechs_monaten():
     sit = _sit()
-    _bestand(sit, tage_her=250)
+    s = _bestand(sit, tage_her=250)
+    # Zuerst laeuft der Nummernschritt (SMS an die hinterlegte Nummer,
+    # W-ANRUFER-CHECK); die Versicherungs-Rueckfrage ist danach die LETZTE
+    # Pflichtfrage — nicht die erste.
+    assert gehirn.naechste_frage(sit)[0] == "telefon_check"
+    s["telefon"] = s["aktePhone"]
+    s["telefonOk"] = True
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "versicherung_check"
     assert "gesetzlich" in frage
 
     sit2 = _sit()
-    _bestand(sit2, tage_her=60)
+    s2 = _bestand(sit2, tage_her=60)
+    s2["telefon"], s2["telefonOk"] = s2["aktePhone"], True
     fid2, _ = gehirn.naechste_frage(sit2)
     assert fid2 == ""  # frischer Besuch: keine Rückfrage
 
     sit3 = _sit()
     s3 = _bestand(sit3, tage_her=250)
+    s3["telefon"], s3["telefonOk"] = s3["aktePhone"], True
     s3["letzterBesuch"] = ""  # kein Datum bekannt: nicht raten, nicht fragen
     fid3, _ = gehirn.naechste_frage(sit3)
     assert fid3 == ""

@@ -661,6 +661,12 @@ später im `_einschub` (dann ohne Vorsatz); die Antwort steht als
 Terminaufnahme nicht überholen. Bei Neupatienten kommt nach „noch nie da“
 zuerst die Behandlerwahl; erst wenn der Behandler feststeht, fragt Bianca
 nach der Zahnreinigung. Das Angebot bleibt Pflicht vor dem Eintragen.
+Technisch ist das EIN Eintrag: `"arzt"` in der Einschub-Sperre von
+`flow.zug`. Der ist am 12.09.2026 aus einem fremden Arbeitsstand heraus
+verlorengegangen und lief zwei Tage falsch live (13.09. zurückgeholt) —
+wer diese Zeile anfasst, prüft `tests/test_pzr_kassen.py::
+test_neupatient_klaert_erst_behandler_dann_pzr` UND
+`tests/test_datenerfassung_pausen.py` (voller Neupatientenfluss).
 
 ## Behandler-Wahl zu Gesprächsbeginn (29.08.2026 — nicht rückbauen)
 
@@ -2275,7 +2281,11 @@ bleibt stehen („Gerne. Ich buche Ihnen einen Termin").
   (`sicherer_vorab`). Beide Stellen säubern identisch — sonst fände
   `llm.rest_nach_vorab` den Rest nicht mehr und der Satz käme zweimal.
 - Die deterministische Maschine ist nicht betroffen: `gehirn.anrede()` baut
-  die Anrede aus dem Sammler, ist also immer belegt.
+  die Anrede aus dem Sammler, ist also immer belegt. Damit das Modell sie
+  nicht selbst zusammenreimen muss, trägt `flow.status_zeile` die belegte
+  Form als `Anrede=…` mit, und `flow._ctx_bauen` legt ein fehlendes
+  Geschlecht aus dem Vornamen nach (gleiche Regel wie beim Einsammeln —
+  greift, wenn ein anderer Weg den Vornamen direkt gesetzt hat).
 - Stufen/Notaus `ANREDE_WACHE=off|shadow|enforce`, Default **enforce**
   (ein erfundener Name ist nie besser als kein Name). Spur:
   `anrede-wache` bzw. `anrede-wache-shadow`.

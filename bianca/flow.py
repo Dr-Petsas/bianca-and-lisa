@@ -21,6 +21,7 @@ from kern import motive
 from kern import patients
 from kern import praxisregeln
 from kern import spur
+from kern import vornamen
 from kern import notes as kern_notes
 from kern import calendar as kal
 from kern import gespraech
@@ -406,6 +407,16 @@ def _ctx_bauen(sit: dict) -> dict:
         ctx["phone"] = tel
     # Fuer eine NEUE Akte (book_slot -> akte_anlegen): Geschlecht aus dem
     # Vornamen-Waechter und der erfragte Versichertenstatus (29.08.2026).
+    if s["vorname"] and not s["geschlecht"] and s["geschlechtQuelle"] != "akte":
+        # Tiefe Sicherung: setzt ein anderer Weg den Vornamen direkt (ohne
+        # gehirn.einsammeln), fehlte dem Schnappschuss bisher das Geschlecht
+        # und die Anrede fiel weg. Gleiche Regel wie beim Einsammeln —
+        # unklarer Vorname wird weiblich plus Praxis-Notiz (Chef 29.08.2026).
+        g = vornamen.geschlecht(s["vorname"])
+        s["geschlecht"] = g or "f"
+        s["geschlechtUnklar"] = not g
+        s["geschlechtQuelle"] = "rate"
+        s["geschlechtVon"] = s["vorname"]
     if s["geschlecht"]:
         ctx["gender"] = s["geschlecht"]
     if s["versicherung"]:
@@ -2488,7 +2499,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # nie mitten in einem unbeantworteten Pflichtfragen-Faden.
     # W-MEDDENT (04.09.2026): nie direkt nach frischer Wunschzeit — erst
     # Slot anbieten (Detschel-Live: PZR mitten in „Nachmittag 15.09.“).
-    if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check",
+    # W-PZR-REIHENFOLGE (09.09.2026): auch die offene Behandlerwahl ("arzt")
+    # sperrt den Einschub — ein Zusatzangebot darf den primaeren Terminrahmen
+    # nie ueberholen. Die Sperre war am 12.09. aus einem fremden Arbeitsstand
+    # heraus verlorengegangen; Wache: test_pzr_kassen,
+    # test_neupatient_klaert_erst_behandler_dann_pzr.
+    if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check", "arzt",
                     "name", "nachname", "vorname", "buchstabieren", "telefon"}
             and not (fid == "arzt" and "arztCheck" in neu)
             and "wunsch" not in neu
@@ -2590,6 +2606,13 @@ def status_zeile(sit: dict) -> str:
     a = s.get("arzt") or {}
     teile = [
         f"Name={_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip(),
+    ]
+    # Die belegte Anrede gehoert in den Stand: das Modell soll "Frau Mueller"
+    # nicht selbst raten muessen (die Anrede-Wache streicht ungedeckte Namen).
+    an = gehirn.anrede(s)
+    if an and an != f"{_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip():
+        teile.append(f"Anrede={an}")
+    teile += [
         f"Grund={_s(s.get('grund')) or '?'}",
         f"Arzt={_s(a.get('calendarName')) or a.get('typ') or '?'}",
         f"Telefon={_s(s.get('telefon')) or '?'}",
