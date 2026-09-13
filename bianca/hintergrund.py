@@ -52,13 +52,19 @@ def kartei_von_anrufer(sit: dict) -> None:
     def arbeit() -> None:
         try:
             info = arztmod.letzter_behandler(sit.get("tenant") or {}, pid)
-            if info.get("ok") and info.get("war") and _s(info.get("calendarId")):
+            # W-BEHANDLER-SPERRE: letzter Besuch bei einem telefonisch
+            # gesperrten Behandler kommt OHNE calendarId (nie binden, nie
+            # buchen) — Besuch/Grund bleiben fuer Rueckblick und die
+            # ehrliche Behandler-Frage (gehirn._arzt_gesperrt_frage).
+            if info.get("ok") and info.get("war") and (
+                    _s(info.get("calendarId")) or info.get("gesperrt")):
                 sit["anruferKartei"] = {
                     "letzterBesuch": _s(info.get("lastIso")),
                     "letzterGrund": _s(info.get("grund")),
                     "calendarId": _s(info.get("calendarId")),
                     "calendarName": _s(info.get("calendarName")),
                     "doctorName": _s(info.get("doctorName") or info.get("calendarName")),
+                    "gesperrt": bool(info.get("gesperrt")),
                     "nextAppointment": (
                         info.get("nextAppointment")
                         if isinstance(info.get("nextAppointment"), dict)
@@ -96,7 +102,8 @@ def kartei_von_anrufer(sit: dict) -> None:
                 print(f"bianca-anrufer-kartei: zuletzt {name!r} "
                       f"{_s(info.get('lastIso'))[:10]}", flush=True)
                 from kern import zimmer_map
-                frage = "" if zimmer_map.aktiv(sit.get("tenant") or {}) else gehirn.arzt_check_frage(sit)
+                frage = "" if zimmer_map.aktiv(sit.get("tenant") or {}) else (
+                    gehirn.arzt_check_frage(sit) or gehirn._arzt_gesperrt_frage(sit))
                 if frage:
                     try:
                         from kern import tts as _tts
@@ -262,6 +269,26 @@ def kartei_anstossen(sit: dict) -> None:
                                 "ich schaue direkt in dem Kalender."
                             )
                         print(f"bianca-kartei: letzter Behandler {name!r}", flush=True)
+                    elif info.get("ok") and info.get("gesperrt"):
+                        # W-BEHANDLER-SPERRE: zuletzt beim telefonisch
+                        # gesperrten Behandler — ehrlich sagen und (Chef
+                        # 03.09.: "weiss nicht" = Standard-Behandler) bei
+                        # Doktor Petsas schauen, nie still in seinen Kalender.
+                        from kern import behandler_sperre
+                        s["arzt"] = gehirn.arzt_default(tenant) or {"typ": "egal"}
+                        name = arzt_sprechname(
+                            info.get("doctorName") or info.get("calendarName") or "",
+                            tenant,
+                        )
+                        ersatz = arzt_sprechname(_s((s["arzt"] or {}).get("calendarName")), tenant)
+                        if name:
+                            sit["arztHinweis"] = (
+                                f"Ich sehe hier: Sie waren zuletzt bei {name} — "
+                                f"{behandler_sperre.hinweis(name)}"
+                                + (f" Ich schaue bei {ersatz}." if ersatz else "")
+                            )
+                        print(f"bianca-kartei: letzter Behandler {name!r} GESPERRT -> "
+                              f"{ersatz or 'global'}", flush=True)
                     else:
                         # Keine Historie gefunden: global suchen statt raten.
                         s["arzt"] = {"typ": "egal"}

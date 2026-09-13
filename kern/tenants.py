@@ -193,6 +193,13 @@ def stt_keywords(tenant: dict[str, Any]) -> list[str]:
     ]
     cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
     quellen += [c.get("name") for c in cals if isinstance(c, dict)]
+    # W-BEHANDLER-SPERRE: telefonisch gesperrte Behandler (Nikolaou) muss das
+    # Ohr weiter sauber hoeren — nur so kann Bianca den Wunsch ehrlich
+    # ablehnen statt ihn als Verhoerer irgendwo hin zu biegen.
+    gesperrt = tenant.get("_gesperrteKalender") if isinstance(tenant.get("_gesperrteKalender"), list) else []
+    quellen += [c.get("name") for c in gesperrt if isinstance(c, dict)]
+    sperr_namen = tenant.get("telefonGesperrteBehandler") if isinstance(tenant.get("telefonGesperrteBehandler"), list) else []
+    quellen += [n for n in sperr_namen if _sauber(n)]
     # Mandanten-Hotwords (z. B. Ueberweiser "Grüger"/"Lange", "Narval"):
     # gleiche Fuzzy-Nachkorrektur wie die Behandler-Namen, rein additiv.
     extra = tenant.get("sttHotwords") if isinstance(tenant.get("sttHotwords"), list) else []

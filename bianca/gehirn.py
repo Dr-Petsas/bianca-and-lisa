@@ -842,6 +842,10 @@ FELDER_START = {
     # Letzter Behandler aus der Hintergrund-Kartei: "" | "ja" | "nein".
     # Wird erst nach dem schnellen Hallo bestaetigt, nie davor.
     "arztCheck": "",
+    # W-BEHANDLER-SPERRE (Chef 13.09.2026): Sprechform des vom Anrufer
+    # genannten, telefonisch gesperrten Behandlers ("Doktor Nikolaou") —
+    # flow._quittung sagt es ehrlich, naechste_frage bietet die freien an.
+    "arztGesperrtName": "",
 }
 
 
@@ -1679,7 +1683,16 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     gedeutet = arztmod.deute(t, tenant)
     if gedeutet:
         im_kontext = s["frage"] == "arzt" or _ARZT_KONTEXT_RE.search(t)
-        if gedeutet["typ"] == "genannt":
+        if gedeutet["typ"] == "gesperrt":
+            # W-BEHANDLER-SPERRE (Chef 13.09.2026: "Dr. Nikolaou soll vorerst
+            # raus aus der telefonischen Buchung"): der Name wird erkannt,
+            # aber KEIN Kalender gesetzt und nie still auf den Default
+            # umgebogen. flow._quittung spricht den Hinweis, naechste_frage
+            # bietet die freien Behandler zur Wahl an.
+            s["arztGesperrtName"] = arzt_sprechname(
+                _s(gedeutet.get("name")), tenant) or _s(gedeutet.get("name"))
+            neu.add("arztGesperrt")
+        elif gedeutet["typ"] == "genannt":
             s["arzt"] = gedeutet
             s["warSchonMal"] = True if s["warSchonMal"] is None and _SCHONMAL_JA_RE.search(t) else s["warSchonMal"]
             neu.add("arzt")
@@ -3196,6 +3209,29 @@ def anrufer_behandler_uebernehmen(sit: dict) -> bool:
     return True
 
 
+def _arzt_gesperrt_frage(sit: dict) -> str:
+    """W-BEHANDLER-SPERRE: Behandler-Frage, wenn der Gewuenschte gesperrt ist.
+
+    Zwei Quellen: der Anrufer hat den Gesperrten GENANNT (arztGesperrtName —
+    den Hinweis hat flow._quittung dann schon gesprochen, hier folgt nur die
+    Wahl) oder die Kartei sagt, er war zuletzt bei ihm (anruferKartei.gesperrt
+    — dann Hinweis UND Wahl in einem Satzpaar, weil sonst niemand es sagt).
+    Kern-Wort "Behandler" steckt in arztwahl_frage (Wiederholungs-Waechter)."""
+    s = sammler(sit)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if _s(s.get("arztGesperrtName")):
+        return arztwahl_frage(tenant)
+    k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+    if k.get("gesperrt") and not _s(k.get("calendarId")):
+        from kern import behandler_sperre
+        name = arzt_sprechname(_s(k.get("doctorName") or k.get("calendarName")), tenant)
+        if not name:
+            return arztwahl_frage(tenant)
+        return (f"Sie waren zuletzt bei {name} — "
+                f"{behandler_sperre.hinweis(name)} {arztwahl_frage(tenant)}")
+    return ""
+
+
 def arzt_check_frage(sit: dict) -> str:
     """Sinnvolle Terminpräferenz, falls die automatische Übernahme ausbleibt."""
     k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
@@ -3455,6 +3491,13 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         if zimmer_map.aktiv(tenant):
             out.append(thaler_spur_frage(tenant))
             out.extend(THALER_SPUR_VARIANTEN)
+        # W-BEHANDLER-SPERRE: die ehrliche Absage fuer gesperrte Behandler
+        # (kein Patientenbezug) — sonst kostet sie live eine eigene Synthese.
+        from kern import behandler_sperre as _bs
+        for g in _bs.gesperrte_kalender(tenant):
+            name = arzt_sprechname(_s(g.get("name")), tenant)
+            if name:
+                out.append(_bs.hinweis(name))
     out.extend(ARZTWAHL_VARIANTEN)
     dental_fragen = {
         "pzr", "pzr_kasse", "termin_anbieten", "bleaching", "bleaching_check",
@@ -3656,6 +3699,13 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                     rq = arzt_check_frage(sit)
                     if rq:
                         return "arzt_check", rq
+                # W-BEHANDLER-SPERRE: der genannte oder der letzte Behandler
+                # (Kartei) ist telefonisch gesperrt — nicht "bei wem waren
+                # Sie zuletzt?" fragen (die Antwort waere wieder der
+                # Gesperrte), sondern ehrlich sagen und die freien anbieten.
+                gesperrt_frage = _arzt_gesperrt_frage(sit)
+                if gesperrt_frage:
+                    return "arzt", gesperrt_frage
                 wer = fuer_wen_phrase(s)
                 if wer:
                     return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"

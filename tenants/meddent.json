@@ -22,6 +22,8 @@
     { "id": "RHYdoQFD7oAhqIepLzC2", "name": "Dr. Patrikis" },
     { "id": "zex5bmv5jfIHWVW6zHbg", "name": "Dr. Petsas" }
   ],
+  "telefonGesperrteBehandler": ["Nikolaou"],
+  "verbindenErlaubt": ["Petsas", "Patrikis"],
   "weiterleitungen": [
     { "name": "Dr. Patrikis", "nummer": "+4921130293034", "hinweis": "Patrikis" },
     { "name": "Dr. Petsas", "nummer": "+4921130293035", "hinweis": "Petsas" }

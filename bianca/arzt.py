@@ -98,13 +98,23 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
     t = raw.lower()
     doktor_kontext = bool(_DOKTOR_RE.search(t))
 
+    # W-BEHANDLER-SPERRE (Chef 13.09.2026): telefonisch gesperrte Behandler
+    # (Nikolaou) stehen nicht mehr in calendars — aber ihr Name muss weiter
+    # ERKANNT werden, sonst faellt "zu Doktor Nikolaou" still auf den
+    # Default-Kalender (Live-Probe 13.09.: Ansage Nikolaou, Buchung Petsas).
+    # Sie laufen als Kandidaten mit und liefern typ="gesperrt".
+    from kern import behandler_sperre
+    pool: list[tuple[dict, bool]] = [
+        (c, False) for c in tenant.get("calendars") or [] if isinstance(c, dict)
+    ] + [(c, True) for c in behandler_sperre.gesperrte_kalender(tenant)]
+
     # Korrektur-Sätze ("nein, nicht Doktor Patrikis — ich wollte zu Doktor
     # Petsas", Chef 27.08.2026): der VERNEINTE Name fliegt vor dem Abgleich
     # raus, sonst gewinnt er den Gleichstand und Bianca wechselt nicht.
     nachnamen = [
         n for n in (
             _nachname(c.get("name"))
-            for c in tenant.get("calendars") or []
+            for c, _g in pool
             if not ist_funktionskalender(c)
         ) if n
     ]
@@ -117,8 +127,8 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
 
     # Ein konkreter Name schlägt "egal"-Floskeln im selben Satz.
     tokens = [w for w in re.sub(r"[^\wäöüß]+", " ", t).split() if w not in _STOP and len(w) >= 3]
-    kandidaten: list[tuple[dict, float, float, int]] = []  # (cal, roh, score, position)
-    for cal in tenant.get("calendars") or []:
+    kandidaten: list[tuple[dict, float, float, int, bool, bool]] = []  # (cal, roh, score, position, mit_vorname, gesperrt)
+    for cal, gesperrt in pool:
         if ist_funktionskalender(cal):
             continue
         ziel = _nachname(cal.get("name"))
@@ -141,7 +151,7 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
         if score_b > 0:
             # Vorname + ähnlicher Nachname zählt wie Doktor-Kontext
             # („Eva Kahler“ ohne Frau/Doktor).
-            kandidaten.append((cal, roh_b, score_b, pos_b, mit_vorname))
+            kandidaten.append((cal, roh_b, score_b, pos_b, mit_vorname, gesperrt))
     # Sicherer Treffer: roh eindeutig. Toleranter Treffer (Klang/Anfang) nur,
     # wenn der Satz erkennbar von einem Arzt spricht — sonst würde ein
     # Patienten-Vorname wie "Peter" auf "Petsas" springen.
@@ -154,9 +164,15 @@ def deute(text: str, tenant: dict) -> dict[str, Any] | None:
         if korrektur and len(tragfaehig) > 1:
             # Korrektur-Satz mit zwei Namen: das Gemeinte steht HINTEN
             # ("nicht Petzers, lieber Patrikis" — Chef 27.08.2026).
-            best = max(tragfaehig, key=lambda k: (k[3], k[2]))[0]
+            sieger = max(tragfaehig, key=lambda k: (k[3], k[2]))
         else:
-            best = max(tragfaehig, key=lambda k: k[2])[0]
+            sieger = max(tragfaehig, key=lambda k: k[2])
+        best = sieger[0]
+        if sieger[5]:
+            # Gesperrter Behandler genannt: KEIN Kalender — der Aufrufer
+            # (gehirn.einsammeln) sagt es ehrlich und bietet die freien an.
+            return {"typ": "gesperrt", "calendarId": "",
+                    "calendarName": _s(best.get("name")), "name": _s(best.get("name"))}
         return {"typ": "genannt", "calendarId": _s(best.get("id")), "calendarName": _s(best.get("name"))}
     if _UNBEKANNT_RE.search(t):
         return {"typ": "unbekannt"}
@@ -185,8 +201,35 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
     termin = data.get("lastAppointment") or data.get("nextAppointment") or {}
     if not termin:
         return {"ok": False, "leer": True}
-    cal = kalender_von(tenant, _s(termin.get("calendarName")) or _s(termin.get("doctorName")))
     vergangen = data.get("lastAppointment") or {}
+    # W-BEHANDLER-SPERRE: lag der letzte Termin bei einem telefonisch
+    # gesperrten Behandler, darf weder sein Kalender (die CF liefert dessen
+    # calendarId mit!) noch per kalender_von der DEFAULT-Kalender herauskommen
+    # — Bianca sagte sonst "Sie waren zuletzt bei Doktor Petsas" und buchte
+    # still in den internen Nikolaou-Kalender. Historie (Besuch/Grund) bleibt.
+    from kern import behandler_sperre
+    name_roh = _s(termin.get("calendarName")) or _s(termin.get("doctorName"))
+    termin_cid = _s(termin.get("calendarId"))
+    gesperrt_kal = next(
+        (g for g in behandler_sperre.gesperrte_kalender(tenant)
+         if (termin_cid and termin_cid == _s(g.get("id")))
+         or (name_roh and behandler_sperre.ist_gesperrt(tenant, name_roh))),
+        None,
+    )
+    if gesperrt_kal:
+        return {
+            "ok": True,
+            "gesperrt": True,
+            "calendarId": "",
+            "calendarName": _s(gesperrt_kal.get("name")) or name_roh,
+            "doctorName": _s(termin.get("doctorName")) or _s(gesperrt_kal.get("name")),
+            "lastIso": _s(termin.get("startIso")),
+            "war": bool(data.get("lastAppointment")),
+            "lastAppointment": data.get("lastAppointment") or {},
+            "nextAppointment": data.get("nextAppointment") or {},
+            "grund": _s(vergangen.get("visitMotiveName")),
+        }
+    cal = kalender_von(tenant, name_roh)
     return {
         "ok": True,
         "calendarId": _s(termin.get("calendarId")) or _s((cal or {}).get("id")),

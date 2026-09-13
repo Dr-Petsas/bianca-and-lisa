@@ -28,6 +28,7 @@ ZALUMA_TRANSFER_PLATZHALTER).
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Callable
 
@@ -122,19 +123,6 @@ _ZURUECK_RE = re.compile(
     r"\bzurück\s+(?:zum|zur)\s+termin\b|\bzurueck\s+(?:zum|zur)\s+termin\b",
     re.I,
 )
-
-_ROLLEN_GRUPPEN = {
-    "anmeldung": re.compile(
-        r"\banmeldung\b|\bempfang\b|\brezeption\b|\bpatientenannahme\b|"
-        r"\bannahme\b|\bsekretariat\b|\bsprechstundenhilfe\b",
-        re.I,
-    ),
-    "buchhaltung": re.compile(r"\bbuchhaltung\b|\babrechnung\b", re.I),
-    "verwaltung": re.compile(r"\bverwaltung\b", re.I),
-    "leitung": re.compile(
-        r"\bchef\w*\b|\binhaber\w*\b|\bpraxisleitung\b|\bboss\b", re.I,
-    ),
-}
 
 # Ausdruecklicher Verbinde-/Durchstell-Wunsch. Die "verbunden"-Formen ohne
 # mich/uns stammen aus dem Live-Gespraech 29.08.2026 08:44: "Könnte ich bitte
@@ -316,49 +304,21 @@ def _angebot_text(ziel: dict, tenant: dict | None = None) -> str:
     return f"Soll ich Sie zu {wer} weiterleiten?"
 
 
-def _rollen_weiterleitung(tenant: dict, text: str) -> dict:
-    """Nur ein EXAKT zur verlangten Abteilung passendes DB-Ziel liefern.
-
-    Die Ein-Ziel-Rückfallregel von ``weiterleitungs_ziel`` ist für Ärzte
-    sinnvoll, für „Anmeldung“ aber gefährlich: Ein einzelnes Arztziel darf
-    niemals still zur Anmeldung umgedeutet werden.
-    """
-    verlangt = {
-        gruppe for gruppe, muster in _ROLLEN_GRUPPEN.items()
-        if muster.search(_s(text))
-    }
-    if not verlangt:
-        return {}
-    for eintrag in tenant.get("weiterleitungen") or []:
-        if not isinstance(eintrag, dict) or not _s(eintrag.get("nummer")):
-            continue
-        beschreibung = f"{_s(eintrag.get('name'))} {_s(eintrag.get('hinweis'))}"
-        vorhanden = {
-            gruppe for gruppe, muster in _ROLLEN_GRUPPEN.items()
-            if muster.search(beschreibung)
-        }
-        if verlangt & vorhanden:
-            return {
-                "name": _s(eintrag.get("name")) or sorted(verlangt)[0],
-                "nummer": _s(eintrag.get("nummer")),
-            }
-    return {}
-
-
-def _rolle_verbinden(sit: dict, ziel: dict, melde: Melde = None) -> dict:
-    """Bereits rollenvalidiertes Ziel wirklich verbinden."""
+def _gesperrt_antwort(sit: dict, d: dict) -> dict:
+    """W-BEHANDLER-SPERRE: der Anrufer will zu einem telefonisch gesperrten
+    Behandler verbunden werden (arzt.deute: typ "gesperrt"). Ehrlich absagen
+    MIT Namen — statt "zu welchem unserer Ärzte?" zu fragen, obwohl der Name
+    gerade gefallen ist. Kein Jingle, kein Auflegen, Gespraech bleibt offen."""
     sit["weiterleiten"] = {}
-    name = _s(ziel.get("name")) or "Anmeldung"
-    if melde:
-        melde("sag:Ok, einen Moment bitte — ich stelle die Verbindung zur gewünschten Stelle her.")
-        melde(JINGLE_EVENT)
-    sit["weiterleitungZiel"] = dict(ziel)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None
+    wer = arzt_sprechname(_s(d.get("calendarName")) or _s(d.get("name")), tenant)
+    zu = f" zu {wer}" if wer else ""
+    print(f"bianca-weiterleitung gesperrter-behandler ziel={wer!r} "
+          f"sit={sit.get('id')!r}", flush=True)
     return {
-        "text": "",
-        "jingle": JINGLE_EVENT,
-        "ziel": {"calendarId": "", "calendarName": name},
-        "transfer": {"nummer": _s(ziel.get("nummer")), "name": name},
-        "hangup": True,
+        "text": f"Die direkte Verbindung{zu} ist im Moment leider nicht möglich. "
+                "Kann ich sonst etwas für Sie tun?",
+        "ziel": {"calendarId": "", "calendarName": _s(d.get("calendarName"))},
     }
 
 
@@ -371,15 +331,42 @@ _TITEL_WORTE = {
 }
 
 
+def verbinden_erlaubt(tenant: dict | None) -> set[str]:
+    """W-VERBINDEN-WHITELIST (Chef 13.09.2026): Namens-Woerter der Behandler,
+    zu denen dieser Mandant ueberhaupt verbinden darf — aus der Tenant-Datei
+    ``verbindenErlaubt`` (meddent: Petsas, Patrikis). Leer = KEIN Durchstellen
+    (Thaler, Blessing, jeder Mandant ohne Eintrag). Notaus fuer den Betrieb:
+    Umgebungsvariable ``VERBINDEN_ERLAUBT=Petsas,Patrikis`` ergaenzt die
+    Liste fuer ALLE Mandanten (nur fuer den Notfall gedacht)."""
+    roh = (tenant or {}).get("verbindenErlaubt")
+    namen: list[str] = [n for n in roh if _s(n)] if isinstance(roh, list) else []
+    env = os.environ.get("VERBINDEN_ERLAUBT", "")
+    namen += [n for n in env.split(",") if _s(n)]
+    out: set[str] = set()
+    for n in namen:
+        for w in re.split(r"[^\wäöüß]+", _s(n).lower()):
+            if len(w) >= 3 and w not in _TITEL_WORTE:
+                out.add(w)
+    return out
+
+
 def weiterleitungs_ziel(tenant: dict, ziel: dict) -> dict:
     """Eingerichtete Weiterleitung des Clients zum Ziel-Behandler.
 
     tenant["weiterleitungen"] kommt aus der DB (kern/agentprofil.py:
     callForwardings, nur mit callForwardingToolEnabled) oder aus einer
     lokalen tenants/*.json. Abgleich: ein Namens-Wort des Kalenders
-    ("Petsas") muss im Eintrag (name/hinweis) vorkommen; ohne Treffer
-    gilt ein EINZELNER Eintrag als Praxis-Ziel fuer alle Behandler.
-    {} = nichts eingerichtet -> Platzhalter-Weg."""
+    ("Petsas") muss im Eintrag (name/hinweis) vorkommen.
+
+    W-VERBINDEN-WHITELIST (Chef 13.09.2026, woertlich: "die einzigen
+    zugelassenen verbindungen momentan sind bis auf weiteres dr. petsas und
+    dr. patrikis bei med dent" — kein Durchstellen bei Thaler/Blessing, nie
+    zu Rezeption/Mitarbeitern): verbunden wird NUR, wenn der Ziel-Behandler
+    in ``verbindenErlaubt`` des Mandanten steht UND ein Eintrag namentlich
+    zu ihm passt. Die alte Ein-Ziel-Rueckfallregel (ein einzelner Eintrag
+    gilt fuer alle) ist damit aus — sie haette einen nicht erlaubten
+    Behandler stillschweigend zur Praxisnummer durchgestellt.
+    {} = nicht erlaubt/nicht eingerichtet -> Platzhalter-Weg."""
     eintraege = [
         e for e in (tenant.get("weiterleitungen") or [])
         if isinstance(e, dict) and _s(e.get("nummer"))
@@ -390,13 +377,16 @@ def weiterleitungs_ziel(tenant: dict, ziel: dict) -> dict:
         w for w in re.split(r"[^\wäöüß]+", _s(ziel.get("calendarName")).lower())
         if len(w) >= 3 and w not in _TITEL_WORTE
     ]
+    erlaubt = verbinden_erlaubt(tenant)
+    frei = [tok for tok in tokens if tok in erlaubt]
+    if not frei:
+        print(f"bianca-weiterleitung gesperrt ziel={_s(ziel.get('calendarName'))!r} "
+              f"erlaubt={sorted(erlaubt)}", flush=True)
+        return {}
     for e in eintraege:
         text = f"{_s(e.get('name'))} {_s(e.get('hinweis'))}".lower()
-        if tokens and any(tok in text for tok in tokens):
+        if any(tok in text for tok in frei):
             return {"name": _s(e.get("name")), "nummer": _s(e.get("nummer"))}
-    if len(eintraege) == 1:
-        e = eintraege[0]
-        return {"name": _s(e.get("name")), "nummer": _s(e.get("nummer"))}
     return {}
 
 
@@ -488,6 +478,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # Weiterleitung. Namentlich genannte Ärzte bleiben separat erreichbar.
     if w.get("frage") == "anliegen":
         d = arztmod.deute(t, sit.get("tenant") or {})
+        if d and d.get("typ") == "gesperrt":
+            return _gesperrt_antwort(sit, d)
         if d and d.get("typ") == "genannt":
             sit["weiterleiten"] = {}
             ziel = {
@@ -562,8 +554,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # Auskunftsfrage statt Zielangabe — LLM antwortet, Angebot bleibt.
             return None
         d = arztmod.deute(t, sit.get("tenant") or {})
+        if d and d.get("typ") == "gesperrt":
+            return _gesperrt_antwort(sit, d)
         if d and d.get("typ") == "genannt":
-            # "Nein, lieber zu Doktor Nikolaou" — namentlich genannt heisst
+            # "Nein, lieber zu Doktor Patrikis" — namentlich genannt heisst
             # direkt verbinden (Chef 27.08.), nicht noch einmal anbieten.
             ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
             _arzt_merken(s, ziel)
@@ -581,6 +575,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # Zielangabe — nicht verbinden, das LLM beantwortet sie.
             return None
         d = arztmod.deute(t, sit.get("tenant") or {})
+        if d and d.get("typ") == "gesperrt":
+            return _gesperrt_antwort(sit, d)
         if d and d.get("typ") == "genannt":
             # Arzt genannt -> direkt verbinden, keine weitere Rueckfrage.
             ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
@@ -614,6 +610,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if "termin" in t.lower():
             return None
         d0 = arztmod.deute(t, sit.get("tenant") or {})
+        if d0 and d0.get("typ") == "gesperrt" and _SPRECH_VERB_RE.search(t):
+            # "Kann ich Herrn Nikolaou sprechen?" — gesperrter Behandler mit
+            # Sprech-Verb: ehrlich absagen statt ans LLM (das erfindet sonst
+            # eine Verbindung oder eine Ablehnung).
+            return _gesperrt_antwort(sit, d0)
         genannt = d0 if (d0 and d0.get("typ") == "genannt") else None
         if genannt:
             ziel0 = {"calendarId": _s(genannt.get("calendarId")), "calendarName": _s(genannt.get("calendarName"))}
@@ -635,10 +636,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # Fall 1: Arzt NAMENTLICH im Satz ("Kann ich mit Doktor Patrikis
     # sprechen?") -> direkt verbinden. KEINE Personalfrei-Ansage, keine Frage.
     d = arztmod.deute(t, sit.get("tenant") or {})
-    if (not d or d.get("typ") != "genannt") and isinstance(hirn_wunsch, dict) \
-            and _s(hirn_wunsch.get("person")):
+    if (not d or d.get("typ") not in {"genannt", "gesperrt"}) \
+            and isinstance(hirn_wunsch, dict) and _s(hirn_wunsch.get("person")):
         # Der Name stand in einem frueheren Satz — das Hirn traegt ihn nach.
         d = arztmod.deute(_s(hirn_wunsch["person"]), sit.get("tenant") or {})
+    if d and d.get("typ") == "gesperrt":
+        return _gesperrt_antwort(sit, d)
     if d and d.get("typ") == "genannt":
         ziel = {"calendarId": _s(d.get("calendarId")), "calendarName": _s(d.get("calendarName"))}
         _arzt_merken(s, ziel)

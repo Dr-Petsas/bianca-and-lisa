@@ -321,6 +321,24 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     # auch das AUS (Schalter aus/keine Ziele ueberschreibt eine Datei-Basis,
     # sonst wuerde ein abgeschalteter Client weiter verbunden).
     t["weiterleitungen"] = _weiterleitungen(agent)
+    # W-VERBINDEN-WHITELIST (Chef 13.09.2026): DB-Eintraege ohne Namen
+    # (Portal pflegt oft nur die Nummer) bekommen ihr Etikett aus der
+    # lokalen Datei — NUR bei identischer Nummer. Ohne Etikett kann die
+    # Whitelist (bianca/weiterleiten.weiterleitungs_ziel) das Ziel nicht dem
+    # erlaubten Behandler zuordnen und verbindet zu Recht NICHT.
+    if basis and isinstance(basis.get("weiterleitungen"), list):
+        etikett = {
+            tenants.nummer_norm(e.get("nummer")): e
+            for e in basis["weiterleitungen"]
+            if isinstance(e, dict) and tenants.nummer_norm(e.get("nummer"))
+        }
+        for e in t["weiterleitungen"]:
+            if _s(e.get("name")) or _s(e.get("hinweis")):
+                continue
+            quelle = etikett.get(tenants.nummer_norm(e.get("nummer")))
+            if quelle:
+                e["name"] = _s(quelle.get("name"))
+                e["hinweis"] = _s(quelle.get("hinweis"))
 
     # W-CALLSTATUS: die pre-Phase hat einen PhoneCall-Datensatz angelegt —
     # seine Id gehoert zur SITZUNG (call_erfassen), nie in den Cache.
@@ -452,13 +470,18 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
                       f"clientId={t.get('clientId')}", flush=True)
             else:
                 print(f"agentprofil did={norm} -> kein Agent in der DB", flush=True)
+    # W-BEHANDLER-SPERRE (Chef 13.09.2026): telefonisch gesperrte Behandler
+    # (tenants/<id>.json "telefonGesperrteBehandler") fliegen an DIESER einen
+    # Stelle aus den Kalendern — CF-Pfad, Cache-Treffer und Datei-Rueckfall
+    # gleich. Ohne Eintrag byte-identisch.
+    from kern import behandler_sperre
     if t:
-        return t
+        return behandler_sperre.anwenden(t)
 
     lokal = tenants.von_did(norm)
     if lokal:
         print(f"agentprofil did={norm} -> lokale Datei {lokal.get('_id')} (Rueckfall)", flush=True)
-        return lokal
+        return behandler_sperre.anwenden(lokal)
     sicher = tenants.fallback_fuer_did(norm)
     print(
         f"agentprofil did={norm} -> neutraler Fachfallback {sicher.get('_id')}",
@@ -481,7 +504,8 @@ def fuer_tenant(tenant_id: Any) -> dict[str, Any]:
         dynamisch = fuer_did(did)
         if dynamisch:
             return dynamisch
-    return lokal
+    from kern import behandler_sperre
+    return behandler_sperre.anwenden(lokal)
 
 
 def cache_leeren() -> None:

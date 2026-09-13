@@ -492,6 +492,12 @@ def _quittung(s: dict, neu: set[str]) -> str:
         if jetzt and jetzt.casefold() != alt.casefold():
             return (f"Entschuldigung — ich hatte {alt} gehört. "
                     f"Dann korrigiere ich auf {jetzt}. ")
+    if "arztGesperrt" in neu and _s(s.get("arztGesperrtName")):
+        # W-BEHANDLER-SPERRE (Chef 13.09.2026): der gewuenschte Behandler ist
+        # telefonisch gesperrt — ehrlich sagen, statt still im Default-
+        # Kalender zu buchen. Die Wahl der freien stellt naechste_frage.
+        from kern import behandler_sperre
+        return behandler_sperre.hinweis(s["arztGesperrtName"]) + " "
     if "fuerWen" in neu and s.get("fuerWen"):
         # W-FUER-WEN (Chef 03.09.2026): der Termin ist fuer jemand anderen —
         # das SOFORT quittieren, bevor irgendein "Danke, <Anrufername>"

@@ -8,6 +8,10 @@ from bianca import flow, gehirn, weiterleiten
 from kern.tenants import laden
 
 
+def _s(v) -> str:
+    return " ".join(str(v or "").split()).strip()
+
+
 def _sit() -> dict:
     return {"tenant": laden("meddent"), "messages": [{"role": "system", "content": "x"}]}
 
@@ -516,22 +520,82 @@ def _sit_mit_weiterleitung() -> dict:
 
 
 def test_weiterleitungs_ziel_matcht_behandler_ueber_name_und_hinweis():
-    t = {"weiterleitungen": [dict(e) for e in _WL_KONFIG]}
+    t = {"weiterleitungen": [dict(e) for e in _WL_KONFIG],
+         "verbindenErlaubt": ["Petsas", "Nikolaou"]}
     z1 = weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Petsas"})
     assert z1 == {"name": "Dr. Petsas", "nummer": "+49211111111"}
     # Nikolaou steht nur im HINWEIS des Praxishandys — zaehlt trotzdem.
     z2 = weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Nikolaou"})
     assert z2 == {"name": "Praxishandy", "nummer": "+49222222222"}
     # Kein Treffer bei MEHREREN Eintraegen: nichts raten.
+    t["verbindenErlaubt"].append("Patrikis")
     assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Patrikis"}) == {}
 
 
-def test_weiterleitungs_ziel_einzelner_eintrag_gilt_fuer_alle():
-    t = {"weiterleitungen": [{"name": "Praxis", "nummer": "+49333", "hinweis": ""}]}
-    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Patrikis"}) == {
-        "name": "Praxis", "nummer": "+49333"}
-    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": ""}) == {
-        "name": "Praxis", "nummer": "+49333"}
+def test_weiterleitungs_ziel_whitelist_sperrt_alles_andere(monkeypatch):
+    """W-VERBINDEN-WHITELIST (Chef 13.09.2026): "die einzigen zugelassenen
+    verbindungen momentan sind bis auf weiteres dr. petsas und dr. patrikis
+    bei med dent" — ohne ``verbindenErlaubt`` wird NIE verbunden, auch wenn
+    die DB Weiterleitungen fuehrt (Thaler/Blessing); ein nicht gelisteter
+    Behandler wird auch dann nicht durchgestellt, wenn ein Eintrag zu ihm
+    passt. Die alte Ein-Ziel-Rueckfallregel ist aus."""
+    monkeypatch.delenv("VERBINDEN_ERLAUBT", raising=False)
+    # Kein verbindenErlaubt => kein Durchstellen, egal wie gut der Eintrag passt.
+    t = {"weiterleitungen": [dict(e) for e in _WL_KONFIG]}
+    assert weiterleiten.weiterleitungs_ziel(t, {"calendarName": "Dr. Petsas"}) == {}
+    # Ein einzelner Eintrag gilt NICHT mehr fuer alle (frueher: "Praxis" fuer jeden).
+    t1 = {"weiterleitungen": [{"name": "Praxis", "nummer": "+49333", "hinweis": ""}],
+          "verbindenErlaubt": ["Petsas"]}
+    assert weiterleiten.weiterleitungs_ziel(t1, {"calendarName": "Dr. Petsas"}) == {}
+    assert weiterleiten.weiterleitungs_ziel(t1, {"calendarName": "Dr. Patrikis"}) == {}
+    assert weiterleiten.weiterleitungs_ziel(t1, {"calendarName": ""}) == {}
+    # Gelisteter Behandler mit passendem Eintrag: verbinden.
+    t2 = {"weiterleitungen": [dict(e) for e in _WL_KONFIG],
+          "verbindenErlaubt": ["Petsas"]}
+    assert weiterleiten.weiterleitungs_ziel(t2, {"calendarName": "Doktor Michael Petsas"}) == {
+        "name": "Dr. Petsas", "nummer": "+49211111111"}
+    # Nikolaou steht NICHT auf der Liste -> auch der passende Praxishandy-Eintrag zieht nicht.
+    assert weiterleiten.weiterleitungs_ziel(t2, {"calendarName": "Dr. Nikolaou"}) == {}
+    # Notaus-Umgebungsvariable ergaenzt die Liste.
+    monkeypatch.setenv("VERBINDEN_ERLAUBT", "Nikolaou")
+    assert weiterleiten.weiterleitungs_ziel(t2, {"calendarName": "Dr. Nikolaou"}) == {
+        "name": "Praxishandy", "nummer": "+49222222222"}
+
+
+def test_meddent_tenant_traegt_whitelist_petsas_patrikis():
+    """Die Live-Datei muss die Chef-Vorgabe tragen — sonst verbindet MedDent
+    gar nicht mehr (oder zu viel)."""
+    t = laden("meddent")
+    assert weiterleiten.verbinden_erlaubt(t) >= {"petsas", "patrikis"}
+    assert "nikolaou" not in weiterleiten.verbinden_erlaubt(t)
+    for mandant in ("thaler", "blessing"):
+        try:
+            tt = laden(mandant)
+        except Exception:
+            continue
+        assert weiterleiten.verbinden_erlaubt(tt) == set(), mandant
+
+
+def test_gesperrter_behandler_wird_nicht_verbunden_sondern_ehrlich_abgesagt():
+    """W-BEHANDLER-SPERRE: Nikolaou ist telefonisch gesperrt (meddent.json).
+    "Kann ich mit Doktor Nikolaou sprechen?" darf weder verbinden noch
+    "zu welchem unserer Ärzte?" fragen — der Name ist ja gefallen."""
+    from kern import behandler_sperre
+    sit = _sit_mit_weiterleitung()
+    behandler_sperre.anwenden(sit["tenant"])  # wie agentprofil.fuer_did/fuer_tenant live
+    assert all("nikolaou" not in _s(c.get("name")).lower() for c in sit["tenant"]["calendars"])
+    events: list[str] = []
+    z = flow.zug(sit, "Kann ich bitte mit Doktor Nikolaou sprechen?", events.append)
+    assert z is not None
+    assert "transfer" not in z and not z.get("hangup")
+    assert "Nikolaou" in z["text"] and "nicht möglich" in z["text"]
+    assert weiterleiten.JINGLE_EVENT not in events
+    assert sit.get("weiterleiten") in (None, {})
+    # Ohne Doktor-Titel, mit Sprech-Verb: derselbe ehrliche Weg.
+    sit2 = _sit_mit_weiterleitung()
+    behandler_sperre.anwenden(sit2["tenant"])
+    z2 = flow.zug(sit2, "Kann ich Herrn Nikolaou sprechen?", None)
+    assert z2 is not None and "Nikolaou" in z2["text"] and "transfer" not in z2
 
 
 def test_weiterleitungs_ziel_ohne_konfig_leer():
