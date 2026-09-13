@@ -112,6 +112,42 @@ def test_flow_bietet_bei_notfall_keinen_normalen_termin():
     assert s["phase"] == "fertig" and s["modus"] == ""
 
 
+def test_dringlichkeit_ohne_beschwerde_ist_kein_notfall():
+    """Fix 3 (13.09.2026): „dringend"/„sofort" allein machte aus Buchung,
+    Absage oder Durchstellen einen Akutfall („Kommen Sie jetzt direkt")."""
+    for satz in ("Ich brauche dringend einen Termin.",
+                 "Ich muss meinen Termin sofort absagen.",
+                 "Stellen Sie mich bitte sofort zu Doktor Blessing durch.",
+                 "Ich brauche heute unbedingt noch einen Termin beim Hautarzt.",
+                 "Können Sie mich möglichst schnell zurückrufen? Es ist eilig."):
+        assert not praxisregeln.akut(satz), satz
+        assert praxisregeln.notfall_antwort(
+            _tenant(), satz, jetzt=datetime(2026, 9, 7, 9, 0, tzinfo=TZ)) == "", satz
+
+
+def test_dringlichkeit_mit_beschwerde_bleibt_notfall():
+    """Gegenprobe: Dringlichkeit PLUS Beschwerde ist weiter der Akutweg."""
+    for satz in ("Ich brauche dringend einen Termin, mein Ausschlag brennt total.",
+                 "Ich muss sofort kommen, meine Haut ist überall geschwollen.",
+                 "Ich brauche heute unbedingt einen Termin, der Fleck hat sich verändert.",
+                 "Das juckt so stark, ich muss dringend zu Ihnen."):
+        assert praxisregeln.akut(satz), satz
+        text = praxisregeln.notfall_antwort(
+            _tenant(), satz, jetzt=datetime(2026, 9, 7, 9, 0, tzinfo=TZ))
+        assert "jetzt direkt" in text, satz
+
+
+def test_dringender_terminwunsch_bleibt_in_der_buchung():
+    sit = _sit()
+    s = flow.gehirn.sammler(sit)
+    s.update({"modus": "buchen", "frage": "grund"})
+    res = flow.zug(sit, "Ich brauche dringend einen Termin zur Kontrolle.")
+    text = (res or {}).get("text", "")
+    assert "jetzt direkt" not in text
+    assert s["modus"] == "buchen"
+    assert not sit.get("akutSofort")
+
+
 def test_rezept_und_ueberweisung_nur_persoenlich_ohne_datensammelei():
     for wort in ("Rezept", "Überweisung"):
         sit = _sit()

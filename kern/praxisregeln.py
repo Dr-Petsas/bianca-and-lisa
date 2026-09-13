@@ -30,8 +30,34 @@ _LEBENSGEFAHR_RE = re.compile(
     r"schwere?\s+(?:arzneimittel|medikamenten)(?:reaktion|allergie)",
     re.I,
 )
+# Fix 3 (13.09.2026, Feldtest-Analyse): „dringend"/„sofort"/„heute
+# unbedingt" standen hier als eigenstaendige Notfall-Marker. Damit wurde
+# „Ich brauche dringend einen Termin", „Ich muss den Termin sofort absagen"
+# oder „Stellen Sie mich sofort durch" zum Akutfall: Buchung/Absage
+# abgebrochen, „Kommen Sie jetzt direkt in die Praxis". Dringlichkeit
+# zaehlt jetzt NUR zusammen mit einem Beschwerde-Wort im selben Satz
+# (_DRINGLICHKEIT_RE + _BESCHWERDE_RE in akut()). Die Symptom-Muster unten
+# und notfall/akut bleiben unveraendert eigenstaendig.
+_DRINGLICHKEIT_RE = re.compile(
+    r"\bdringend\w*|\bsofort\b|heute\s+unbedingt|schnellstm(?:ö|oe)glich|"
+    r"so\s+schnell\s+wie\s+m(?:ö|oe)glich|\beilig\b|ganz\s+schnell|umgehend",
+    re.I,
+)
+_BESCHWERDE_RE = re.compile(
+    r"\bhaut(?!arzt|(?:ä|ae)rzt)\w*|ausschlag|ekzem|\bfleck\w*|pustel\w*|pickel|"
+    r"quaddel\w*|\bblasen?\b|juck\w*|brenn\w*|schmerz\w*|\bweh\b|wehtut|"
+    r"tut\s+(?:\w+\s+)?weh|schwell\w*|geschwollen|entz(?:ü|ue)nd\w*|eiter\w*|"
+    r"\bblut(?:et|en|ung\w*|ig\w*)\b|wunde\w*|n(?:ä|ae)ssend\w*|offene?\s+stelle|"
+    r"fieber|allergi\w*|reaktion|muttermal\w*|leberfleck\w*|"
+    r"(?:fleck|muttermal|stelle|haut)\w*[^.!?]{0,30}(?:ver(?:ä|ae)nder|w(?:ä|ae)chst|gr(?:ö|oe)(?:ß|ss)er)|"
+    r"g(?:ü|ue)rtelrose|herpes|zecke\w*|sonnenbrand|verbrenn\w*|verbr(?:ü|ue)h\w*|"
+    r"\b(?:insekten|m(?:ü|ue)cken|wespen|bienen)?stich(?:e|es|en)?\b|gestochen|"
+    r"gebissen|\bbiss\b|infekt\w*|beschwerden|symptom\w*|"
+    r"breitet\s+sich\s+aus|ausgebreitet",
+    re.I,
+)
 _AKUT_RE = re.compile(
-    r"\bnotfall\b|\bakut\w*|\bdringend\b|\bsofort\b|heute\s+unbedingt|"
+    r"\bnotfall\b|\bakut\w*|"
     r"pl(?:ö|oe)tzlich[^.!?]{0,50}(?:haut|ausschlag|fleck|ver(?:ä|ae)nder)|"
     r"schnell[^.!?]{0,30}(?:schlimmer|ausbreit)|"
     r"starke?\s+(?:schmerz|brennen|juckreiz)|nicht\s+aus(?:zu)?halten|"
@@ -138,7 +164,10 @@ def akut(text: str) -> bool:
     t = _s(text)
     if not t or _VERNEINT_RE.search(t):
         return False
-    return lebensgefahr(t) or bool(_AKUT_RE.search(t))
+    if lebensgefahr(t) or _AKUT_RE.search(t):
+        return True
+    # Fix 3: Dringlichkeit allein ist kein Notfall — nur mit Beschwerde-Wort.
+    return bool(_DRINGLICHKEIT_RE.search(t) and _BESCHWERDE_RE.search(t))
 
 
 def praxis_offen(tenant: dict | None, jetzt: datetime | None = None) -> bool | None:
