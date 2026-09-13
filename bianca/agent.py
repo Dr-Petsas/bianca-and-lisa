@@ -1056,13 +1056,20 @@ def _antwort_mit_vorspann(
     Antworttext und Gesprächsverlauf muss er trotzdem vollständig stehen.
     """
     aus = dict(antwort or {})
-    body = _s(aus.get("text"))
+    roh_body = _s(aus.get("text"))
+    body = roh_body
+    if _s(vorspann):
+        # Der Vorspann IST der Bezug — ein von W-EINGEHEN im inneren Zug
+        # vorangestellter zweiter ("Das freut mich. Gerne. Habe ich …?")
+        # klingt schlimmer als keiner.
+        body = eingehen.ohne_bezug(roh_body)
     voll = " ".join(x for x in (_s(vorspann), body) if x)
     aus["text"] = voll
     if not voll:
         return aus
     msgs = list(sit.get("messages") or [])
-    if msgs and msgs[-1].get("role") == "assistant" and _s(msgs[-1].get("content")) == body:
+    if (msgs and msgs[-1].get("role") == "assistant"
+            and _s(msgs[-1].get("content")) in {roh_body, body}):
         msgs[-1]["content"] = voll
     elif not msgs or msgs[-1].get("role") != "assistant":
         msgs.append({"role": "assistant", "content": voll})
@@ -1072,6 +1079,12 @@ def _antwort_mit_vorspann(
 
 
 def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
+    # Dieser Agent IST Bianca. kern/hirn schaltet den Sammler-Modus (die
+    # Freigabe der deterministischen Fluesse) nur fuer sit["stimme"]=="bianca"
+    # — fehlt das Feld (Alt-Sitzung, Probe, Dock ohne session.neu), erkennt
+    # das Hirn das Anliegen, der Sammler bleibt aber stumm und JEDER Zug
+    # faellt ans LLM. Deshalb hier absichern, nie ueberschreiben.
+    sit.setdefault("stimme", "Bianca")
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
@@ -1134,7 +1147,22 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         identitaet_nein = gehirn.ist_anrufer_identitaet_nein(text_in)
         quittung = "" if identitaet_nein else gehirn.anrufer_wohl_quittung(text_in)
         if identitaet_nein:
-            fl = tasks.zug(sit, original, melde) if original else None
+            # Live 10.09.: Auf „Wie geht es Ihnen?“ kam die wichtigere
+            # Korrektur „Ich bin nicht Phoebe Rose Kellner.“. Den falschen
+            # DB-Treffer SOFORT und deterministisch verwerfen — genau das,
+            # was ein Nein auf „Habe ich Sie richtig erkannt?“ tut — statt
+            # diese Frage noch zu stellen. Der geparkte Wunsch laeuft danach
+            # durch die VOLLE Pipeline: seit W-HIRN oeffnet erst Intent/Hirn
+            # den Sammler-Modus; ein nacktes tasks.zug blieb hier stumm und
+            # der Zug fiel ans LLM („Was kann ich fuer Sie tun?“).
+            gehirn.anrufer_daten_verwerfen(sit)
+            quittung = "Entschuldigen Sie bitte — dann nehme ich Ihre Daten frisch auf."
+            if original:
+                sit["messages"] = msgs
+                fortsetzung = user_turn(sit, original, melde=melde, vorab=None)
+                spur.merken(sit, "anrufer-hallo-identitaet-nein", text_in[:80])
+                return _antwort_mit_vorspann(sit, fortsetzung, quittung)
+            fl = None
         elif einwort_frage:
             fl = {"text": einwort_frage, "book": None}
         elif original:
@@ -1170,15 +1198,6 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 "book": None,
                 "_wiederholungErlaubt": True,
             }
-        if (identitaet_nein
-                and _s((sit.get("sammler") or {}).get("frage")) == "anrufer_check"):
-            # Live 10.09.: Auf „Wie geht es Ihnen?“ kam die wichtigere
-            # Korrektur „Ich bin nicht Phoebe Rose Kellner.“. Nicht erst
-            # mit „Danke. Habe ich Sie richtig erkannt?“ nachfragen, sondern
-            # den falschen DB-Treffer sofort sicher verwerfen.
-            ablehnung = tasks.zug(sit, "Nein.", melde)
-            if ablehnung:
-                fl = ablehnung
         if not fl or not (
             _s(fl.get("text")) or fl.get("hangup")
             or fl.get("transfer") or fl.get("warte")

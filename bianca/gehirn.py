@@ -3115,6 +3115,13 @@ def rueckruf_starten(sit: dict) -> None:
         s["bekannt"] = True
         s["vornameQuelle"] = "check"     # erkannter Anrufer, s. o.
         s["vornameCheck"] = "ja"
+        # W-FRAGE-GATE: Die Praxis hat DIESEN Patienten wegen SEINER Sache
+        # angerufen (Schiene abholbereit, Befund) — der Termin ist fuer ihn
+        # selbst. "Der Termin ist fuer Sie selbst, richtig?" waere eine
+        # Frage zu einem Wert, der schon feststeht. Nennt der Anrufer doch
+        # einen Dritten, greift fuer_wen_signal in einsammeln wie ueberall.
+        if not s.get("fuerWen") and not _s(s.get("fuerWenCheck")):
+            s["fuerWenCheck"] = "ja"
         if _s(a.get("patientId")):
             s["patientId"] = _s(a.get("patientId"))
         s["telefon"] = telefon.normaliert(a.get("telefon") or "")

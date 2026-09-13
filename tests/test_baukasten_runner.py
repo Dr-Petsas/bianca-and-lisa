@@ -184,16 +184,35 @@ def test_zwischenfrage_preis_bei_telefonfrage():
     assert "null" in zweiter["text"].lower()
 
 
+_READBACK_TEXT = "Ich wiederhole die Nummer. Null eins sieben sieben, drei vier fünf, sechs sieben acht neun. Stimmt das so?"
+
+
 def test_readback_fehler_einmal_dann_ja():
+    # Der Testanrufer glaubt frage=telefon_check nur, wenn Bianca auch
+    # wirklich ein Readback gesprochen hat (Wache in naechster_baustein) —
+    # deshalb traegt die Lage den echten Dreisatz-Readback-Text.
+    story = geschichten.automatik(9)
+    story["readbackFehler"] = True
+    story["abschweifer"] = []
+    lage = _lage_mit("telefon_check", text=_READBACK_TEXT)
+    erster = geschichten.naechster_baustein(story, lage)
+    assert erster["baustein"] == "readback_nein"
+    lage["frage"] = "telefon_check"
+    lage["biancaText"] = _READBACK_TEXT
+    zweiter = geschichten.naechster_baustein(story, lage)
+    assert zweiter["baustein"] == "readback_ja"
+
+
+def test_telefon_check_ohne_readback_text_gilt_nicht_als_readback():
+    """Gegenprobe zur Wache: steht frage=telefon_check, Bianca hat aber kein
+    Readback gesprochen, antwortet der Testanrufer NICHT mit Ja/Nein auf
+    eine Nummer, die er nie gehoert hat."""
     story = geschichten.automatik(9)
     story["readbackFehler"] = True
     story["abschweifer"] = []
     lage = _lage_mit("telefon_check")
     erster = geschichten.naechster_baustein(story, lage)
-    assert erster["baustein"] == "readback_nein"
-    lage["frage"] = "telefon_check"
-    zweiter = geschichten.naechster_baustein(story, lage)
-    assert zweiter["baustein"] == "readback_ja"
+    assert erster["baustein"] not in {"readback_nein", "readback_ja"}, erster
 
 
 def test_abschluss_nichts_mehr_dann_abschied():

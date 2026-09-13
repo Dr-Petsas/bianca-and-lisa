@@ -67,7 +67,10 @@ def test_globale_navigation_und_anruf_unterseiten_existieren():
     assert Path(antwort.path).name == "anrufe.js"
     html_anrufe = open("bianca_web/anrufe.html", encoding="utf-8").read()
     js_anrufe = open("bianca_web/anrufe.js", encoding="utf-8").read()
-    assert "anrufe.js?v=a16" in html_anrufe
+    import re as _re
+    # Cache-Buster muss da sein (sonst sieht der Browser Altlast), die
+    # konkrete Nummer wird bei jedem JS-Deploy gebumpt — nicht festnageln.
+    assert _re.search(r'anrufe\.js\?v=a\d+', html_anrufe), "anrufe.js ohne Cache-Buster"
     assert "praxis.js?v=5" in html_anrufe
     assert "Testanrufe" in html_anrufe
     assert "Praxis-Live" in html_anrufe

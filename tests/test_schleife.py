@@ -21,6 +21,18 @@ def _sit() -> dict:
             "motivKatalog": list(KATALOG)}
 
 
+# Seit der Nachname-zuerst-Aufnahme (08.09.2026) lautet die Namensfrage
+# "Wie lautet der Nachname?" (frage=buchstabieren) statt "Wie heißt …?"
+# (frage=name). Der Test prueft die SACHE — es wird nach dem Namen gefragt,
+# nicht erneut nach dem Eintragen — und nicht den Wortlaut.
+_NAMENSFRAGEN = {"name", "buchstabieren"}
+
+
+def _fragt_namen(text: str) -> bool:
+    t = (text or "").lower()
+    return "heißt" in t or "nachname" in t or "heissen" in t
+
+
 def _ohne_hintergrund(fn):
     echt = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
@@ -113,9 +125,9 @@ def test_nein_dann_der_name_fragt_nach_dem_sohn():
         z2 = flow.zug(sit, "Der Name.")
         assert z2, z2
         assert "eintragen" not in z2["text"].lower()
-        assert "heißt" in z2["text"].lower() and "sohn" in z2["text"].lower()
+        assert _fragt_namen(z2["text"]) and "sohn" in z2["text"].lower(), z2
         assert not s["nachname"] and not s["vorname"]
-        assert s["frage"] == "name"
+        assert s["frage"] in _NAMENSFRAGEN, s["frage"]
         assert s["slotIso"] == "2026-09-08T09:30:00+02:00"
         assert s["telefon"] == "015253904756"
         assert s["kontaktName"] == "Kiriakos Tzannis"
@@ -143,7 +155,7 @@ def test_der_name_direkt_auf_die_bestaetigung():
         s = _bis_bestaetigen(sit)
         z = flow.zug(sit, "Der Name.")
         assert z and "eintragen" not in z["text"].lower(), z
-        assert "heißt" in z["text"].lower()
+        assert _fragt_namen(z["text"]), z
         assert not s["nachname"]
         assert s["slotIso"]
     _ohne_hintergrund(lauf)
@@ -189,8 +201,8 @@ def test_unbekannter_arzt_stellt_namensfrage_im_selben_zug():
         z = flow.zug(sit, "Keine Ahnung, wie der Zahnarzt heisst.")
         assert z, z
         assert "finden wir schon" in z["text"].lower()
-        assert "heißt" in z["text"].lower() and "sohn" in z["text"].lower()
+        assert _fragt_namen(z["text"]) and "sohn" in z["text"].lower(), z
         assert "eintragen" not in z["text"].lower()
         assert (s.get("arzt") or {}).get("typ") == "unbekannt"
-        assert s["frage"] == "name"
+        assert s["frage"] in _NAMENSFRAGEN, s["frage"]
     _ohne_hintergrund(lauf)

@@ -22,9 +22,13 @@ Z4 = "cal-zi4"
 PROPHY = Z3
 
 THALER_KAT = [
+    # Praxisregel Thaler (09.09.2026): JEDER Haupttermin liegt in Zimmer 4 —
+    # auch der Notfall. Die alte Bindung Notfall -> Zimmer 1 ueberschreibt
+    # zimmer_map.karte(); die zimmerMap unten traegt sie absichtlich noch
+    # ("akut": [1]), damit der Test die Ueberschreibung mitprueft.
     {"id": "kch-akute-beschwerden-notfall-30min", "name": "KCH Akute Beschwerden / Notfall",
      "nameForPatient": "Akute Beschwerden", "allowOnlineBooking": True,
-     "calendarIds": [Z1]},
+     "calendarIds": [Z4]},
     {"id": "ze-besprechung-25min", "name": "ZE Besprechung",
      "nameForPatient": "Zahnersatz-Besprechung", "allowOnlineBooking": True,
      "calendarIds": [Z4]},
@@ -113,27 +117,33 @@ def test_arztwahl_nennt_prophylaxe_nicht():
     assert "Thaler" in frage or "Behandler" in frage
 
 
-def test_neupatient_fragt_thaler_oder_prophylaxe():
+def test_neupatient_bekommt_keine_arztfrage_sondern_den_grund():
+    """Seit W-THALER-MOTIVE (09.09.2026) kennt Thaler keine Arztwahl: der
+    Besuchsgrund routet deterministisch (Zimmer 4 bzw. PZR Zimmer 3/2).
+    Ein Neupatient hoert also die sechs buchbaren Gruppen — nie
+    'Frau Thaler oder Prophylaxe' (Prophylaxe ist kein Behandler)."""
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({"modus": "buchen", "warSchonMal": False})
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "arzt", (fid, frage)
-    assert "Frau Thaler" in frage
-    assert "Prophylaxe" in frage
+    assert fid == "grund", (fid, frage)
+    assert "Zahnreinigung" in frage and "Schmerzen" in frage
+    assert "Prophylaxe" not in frage
     assert "Behandler" not in frage
 
 
 def test_bestand_fragt_nicht_letzten_behandler():
+    """Bestand bei Thaler: weder 'bei wem waren Sie zuletzt?' noch eine
+    Arztwahl — es geht direkt in die Datenaufnahme (Nachname)."""
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({"modus": "buchen", "warSchonMal": True})
     sit["anruferKartei"] = {"calendarId": EVA, "calendarName": "Dr. Eva Thaler"}
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "arzt", (fid, frage)
-    assert "Frau Thaler" in frage and "Prophylaxe" in frage
+    assert fid not in {"arzt", "arzt_check"}, (fid, frage)
+    assert fid == "buchstabieren", (fid, frage)
     assert "zuletzt" not in frage.lower()
-    assert "Behandler" not in frage
+    assert "Behandler" not in frage and "Prophylaxe" not in frage
 
 
 def test_deute_prophylaxe_ist_kein_arzt():
@@ -216,11 +226,16 @@ def test_schmerz_bleibt_notfall():
         "motivName": "KCH Akute Beschwerden / Notfall",
         "grundWortlaut": "Ich habe starke Zahnschmerzen",
     })
-    vm = gehirn.motiv_fuer_kalender(sit, Z1)
+    vm = gehirn.motiv_fuer_kalender(sit, Z4)
     assert vm and vm["id"] == "kch-akute-beschwerden-notfall-30min", vm
     gehirn.kalender_zu_grund(sit)
-    assert s["arzt"]["calendarId"] == Z1
-    assert s["arzt"]["raeume"] == [Z1]
+    # Praxisregel Thaler (zimmer_map.karte): JEDER Haupttermin — auch der
+    # Notfall — liegt in Zimmer 4; die alte DB-Zuordnung Notfall -> Zimmer 1
+    # ist ueberschrieben. Das MOTIV bleibt der Notfall (kein stiller
+    # Kontroll-Fallback), nur der Raum ist Zimmer 4.
+    assert s["arzt"]["calendarId"] == Z4
+    assert s["arzt"]["raeume"] == [Z4]
+    assert s["motivId"] == "kch-akute-beschwerden-notfall-30min"
 
 
 def test_meddent_fuellung_wird_nicht_umgebogen():

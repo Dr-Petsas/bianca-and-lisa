@@ -165,6 +165,21 @@ def pruefen(gehoert: str, antwort: str) -> str:
     return "nackte-frage"
 
 
+def ohne_bezug(antwort: str) -> str:
+    """Einen von W-EINGEHEN vorangestellten Bezug wieder abnehmen.
+
+    Gedacht fuer den Fall, dass ein AEUSSERER Vorspann ("Das freut mich.")
+    vor die Antwort tritt — sonst hoert der Anrufer zwei Bezuege hintereinander
+    ("Das freut mich. Gerne. Habe ich Sie richtig erkannt?"). Entfernt wird
+    NUR ein exakter Satz aus ALLE_BEZUEGE, nie eine Quittung der Maschine.
+    """
+    t = _s(antwort)
+    for bezug in ALLE_BEZUEGE:
+        if t.startswith(bezug + " ") or t == bezug:
+            return t[len(bezug):].strip()
+    return t
+
+
 def anwenden(sit: dict, gehoert: str, antwort: str, *, art: str = "") -> tuple[str, str]:
     """(Text, Spur-Grund). Stellt in ``enforce`` den Bezug voran."""
     text = _s(antwort)
