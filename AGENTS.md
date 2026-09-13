@@ -2543,7 +2543,8 @@ wächter haben". `hirn.auto_resume_modus()` liefert jetzt `enforce` als Default
 
 | Stand | Tag | Anleitung |
 | --- | --- | --- |
-| **V2.1, 13.09.2026 (aktuell)** | `telefonki-produktionsstand-v2.1-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
+| **V2.2, 13.09.2026 (aktuell)** | `telefonki-produktionsstand-v2.2-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.2.md` |
+| V2.1, 13.09.2026 | `telefonki-produktionsstand-v2.1-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
 | V2.0, 13.09.2026 — NICHT benutzen | `telefonki-produktionsstand-v2.0-2026-09-13` | trägt die fehlende Behandlerwahl vor dem PZR-Angebot und die kaputte Dock-Kodierung (siehe Handbuch) |
 | V1.0, 10.09.2026 | `telefonki-produktionsstand-v1.0-2026-09-10` | nur Git-/Image-Tags |
 
@@ -2554,7 +2555,11 @@ laufenden Container auf pickadoc1, ein Schnappschuss von Live-`.env`,
 Docker-Volumes unter `/home/cursor/telefonki-backups/produktionsstand-…`
 sowie eine lokale Kopie samt Git-Bundle in `_snapshot-produktionsstand-…`
 (gitignoriert). Tokens, Service-Account-Key und Patientendaten aus den
-Mitschnitten gehen NIE nach GitHub. Skripte: `tools/_produktionsstand_v2_server.sh`.
+Mitschnitten gehen NIE nach GitHub. Skripte:
+`tools/_produktionsstand_v2_server.sh` (Schnappschuss + Image-Tags) und
+`tools/_produktionsstand_v2_abnahme.sh` (Abnahme), beide mit `VERSION=vX.Y`.
+**LF-Zeilenenden**: PowerShell schreibt CRLF, `ssh "bash -s"` bricht daran ab
+(`set: -: invalid option`) — Datei vorher konvertieren und per scp schicken.
 
 ## Server-Deploy (pickadoc1) — die .env-Falle
 

@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# Abnahme Produktionsstand V2.0 — read-only.
-S=/home/cursor/telefonki-backups/produktionsstand-v2.0-20260913
+# Abnahme eines Produktionsstands — read-only, kein Container wird gestoppt.
+#
+# Aufruf (LF-Zeilenenden! PowerShell schreibt CRLF — deshalb vorher
+# konvertieren oder die Datei per scp schicken und dort mit bash starten):
+#   VERSION=v2.2 bash tools/_produktionsstand_v2_abnahme.sh
+VERSION=${VERSION:-v2.2}
+STAMP=${STAMP:-$(date +%Y%m%d)}
+MARKE="produktionsstand-$VERSION-$STAMP"
+S=/home/cursor/telefonki-backups/$MARKE
 cd /home/cursor/telefonki || exit 1
+echo "== Abnahme $MARKE"
+echo
 echo "== Sicherungs-Images vorhanden"
-docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep produktionsstand-v2.0
+docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep "$MARKE"
 echo
 echo "== Archive lesbar (Stichprobe)"
 for f in tenants secrets; do
@@ -14,8 +23,13 @@ n=$(tar tzf "$S/volume-telefonki_telefonki-data.tgz" | wc -l)
 echo "volume data = $n Eintraege"
 echo
 echo "== Live-Code in den Containern"
-echo -n "anrede_wache in bianca: "; docker exec telefonki-bianca-1 python -c 'from kern import anrede_wache; print(anrede_wache.modus())'
-echo -n "abschied in bianca:     "; docker exec telefonki-bianca-1 python -c 'from kern import abschied; print(abschied.an())'
+echo -n "anrede_wache in bianca:  "; docker exec telefonki-bianca-1 python -c 'from kern import anrede_wache; print(anrede_wache.modus())'
+echo -n "abschied in bianca:      "; docker exec telefonki-bianca-1 python -c 'from kern import abschied; print(abschied.an())'
+# V2.2: Widerspruch zuerst korrigieren, jeden Zug auf das Gesagte beziehen,
+# und die Job-Kette findet zurueck (Auto-Resume als Code-Default).
+echo -n "einwand in bianca:       "; docker exec telefonki-bianca-1 python -c 'from kern import einwand; print(einwand.modus())'
+echo -n "eingehen in bianca:      "; docker exec telefonki-bianca-1 python -c 'from kern import eingehen; print(eingehen.modus())'
+echo -n "auto-resume in bianca:   "; docker exec telefonki-bianca-1 python -c 'from kern import hirn; print(hirn.auto_resume_modus())'
 echo -n "auflegen in der Bruecke: "; docker exec telefonki-sipbridge-1 grep -c ausklingen_und_auflegen /app/sip_bridge/server.py
 echo -n "Dock-Cache-Buster:       "; docker exec telefonki-bianca-1 grep -o 'app.js?v=b[0-9]*' /app/bianca_web/index.html
 echo
