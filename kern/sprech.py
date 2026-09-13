@@ -237,6 +237,11 @@ _EURO_SPANNE_RE = re.compile(
 _EURO_RE = re.compile(rf"(?<![\d,.])({_EURO_ZAHL})\s*(?:Euros?\b|€)")
 
 
+def zahl_wort(n: int) -> str:
+    """Reine Zahl als Wort: 4 -> 'vier', 21 -> 'einundzwanzig', 0 -> 'null'."""
+    return betrag_wort(n)
+
+
 def _betrag_gesprochen(n: int) -> str:
     return "ein" if n == 1 else betrag_wort(n)
 

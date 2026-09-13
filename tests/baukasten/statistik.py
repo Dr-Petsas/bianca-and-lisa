@@ -97,6 +97,11 @@ def _studio_gespraeche(basis: Path) -> list[dict[str, Any]]:
                 "art": "Studio",
                 "laufId": lauf_id,
                 "storyId": story_id,
+                # Anruf-UID des Mitschnitts: damit die Ergebnisseite direkt in
+                # die Anrufuebersicht springen kann. Aeltere Berichte kennen
+                # das Feld nur ueber den letzten Anruf.
+                "sid": str(bericht.get("sessionId")
+                           or (bericht.get("lastCall") or {}).get("sessionId") or ""),
                 "tenant": tenant,
                 "zeit": _zeit(bericht.get("start"), str(lauf.get("gestartet") or lauf_id)),
                 "ok": ok,
@@ -124,6 +129,7 @@ def _last_gespraeche(basis: Path) -> list[dict[str, Any]]:
                 "art": "Belastung",
                 "laufId": lauf_id,
                 "storyId": f"Gespräch {call.get('nr') or i}",
+                "sid": str(call.get("sessionId") or ""),
                 "tenant": str(call.get("tenant") or ""),
                 "zeit": zeit,
                 "ok": ok,
@@ -180,6 +186,10 @@ def aus_berichten(basis: Path, tenant: str = "") -> dict[str, Any]:
     })
     probleme: Counter[str] = Counter()
     letzte_problemzeit: dict[str, str] = {}
+    # Je Problem die betroffenen Gespraeche (Chef 13.09.2026: "zu jedem fehler
+    # auch das Gespräch mit link") — neueste zuerst, damit die Ergebnisseite
+    # sie als Akkordeon aufklappen und in die Anrufuebersicht verlinken kann.
+    problem_gespraeche: dict[str, list[dict[str, Any]]] = defaultdict(list)
     analysen: list[dict[str, Any]] = []
     for g in gespraeche:
         tag = (g["zeit"] or "unbekannt")[:10]
@@ -197,6 +207,14 @@ def aus_berichten(basis: Path, tenant: str = "") -> dict[str, Any]:
             if problem:
                 probleme[problem] += 1
                 letzte_problemzeit[problem] = g["zeit"]
+                problem_gespraeche[problem].append({
+                    "art": g["art"],
+                    "laufId": g["laufId"],
+                    "storyId": g["storyId"],
+                    "sid": g.get("sid") or "",
+                    "zeit": g["zeit"],
+                    "tenant": g["tenant"],
+                })
         if not g["ok"] or g["probleme"]:
             gruende = g["probleme"] or ["Gespräch nicht erfolgreich"]
             analysen.append({
@@ -252,6 +270,7 @@ def aus_berichten(basis: Path, tenant: str = "") -> dict[str, Any]:
             "anzahl": n,
             "zuletzt": letzte_problemzeit.get(p, ""),
             "empfehlung": _empfehlung(p),
+            "gespraeche": list(reversed(problem_gespraeche.get(p, [])))[:12],
         }
         for p, n in probleme.most_common(12)
     ]

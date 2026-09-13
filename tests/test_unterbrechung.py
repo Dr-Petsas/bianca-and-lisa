@@ -58,6 +58,64 @@ def test_eingang_nach_dem_ende_kein_rest():
     assert S3 in sit["messages"][-1]["content"], "Protokoll bleibt unangetastet"
 
 
+# --- fast fertig gesprochener Satz (Vorfall 13.09.2026, Anruf e5c25e25) ----
+
+# Echte Live-Werte: Ansage 4570 ms, "Gut." endet bei 720 ms, die Frage bei
+# 4570 ms, die Bruecke meldete den Knacks bei 4020 ms (`bruecke-ohr-barge
+# ms=4020`). Der Anrufer hatte 86 % der Frage gehoert.
+_LIVE_KURZ = "Gut."
+_LIVE_FRAGE = ("Ich will nichts falsch schreiben: Buchstabieren Sie mir "
+               "den Nachnamen bitte einmal kurz?")
+
+
+def _sit_live(enden: list[int]) -> dict:
+    sit = {"messages": [
+        {"role": "user", "content": "Vormittags."},
+        {"role": "assistant", "content": f"{_LIVE_KURZ} {_LIVE_FRAGE}"},
+    ]}
+    unterbrechung.merken(
+        sit, url="/api/audio-stream/c38306ad2e1f.wav",
+        karte={"saetze": [_LIVE_KURZ, _LIVE_FRAGE], "endenMs": enden},
+        text=f"{_LIVE_KURZ} {_LIVE_FRAGE}")
+    return sit
+
+
+def test_knacks_kurz_vor_satzende_wiederholt_die_frage_nicht():
+    """Chef 13.09.2026: "da gab es eine 100prozentige wiederholung".
+
+    Ein fast fertig gesprochener Satz ist GEHOERT — er darf nicht als Rest
+    wortgleich erneut gesprochen werden. Ohne Rest bleibt Bianca still und
+    hoert zu, statt die Frage ein zweites Mal zu stellen."""
+    sit = _sit_live([720, 4570])
+    assert not unterbrechung.eingang(sit, "/api/audio-stream/c38306ad2e1f.wav", 4020)
+    assert "unterbrochen" not in sit
+    assert unterbrechung.wiederaufnahme(sit) == ""
+
+
+def test_knacks_in_der_satzmitte_bleibt_rest():
+    """Gegenprobe — der teurere Fehler waere, echten Inhalt zu verschlucken.
+    Mitten im Satz hat der Anrufer die Frage NICHT gehoert."""
+    sit = _sit_live([720, 4570])
+    assert unterbrechung.eingang(sit, "/api/audio-stream/c38306ad2e1f.wav", 2000)
+    assert sit["unterbrochen"]["rest"] == [_LIVE_FRAGE]
+    assert sit["unterbrochen"]["gesprochen"] == _LIVE_KURZ
+
+
+def test_langer_satz_mit_langem_restschwanz_bleibt_rest():
+    """Anteil allein genuegt nicht: bei einem langen Satz sind die letzten
+    14 % immer noch mehr als eine Sekunde Inhalt."""
+    sit = _sit_live([720, 12000])
+    assert unterbrechung.eingang(sit, "/api/audio-stream/c38306ad2e1f.wav", 10600)
+    assert sit["unterbrochen"]["rest"] == [_LIVE_FRAGE]
+
+
+def test_fast_fertig_notaus(monkeypatch):
+    monkeypatch.setenv("BARGE_FAST_FERTIG", "0")
+    sit = _sit_live([720, 4570])
+    assert unterbrechung.eingang(sit, "/api/audio-stream/c38306ad2e1f.wav", 4020)
+    assert sit["unterbrochen"]["rest"] == [_LIVE_FRAGE]
+
+
 def test_eingang_fremde_url_tut_nichts():
     sit = _sit()
     assert not unterbrechung.eingang(sit, "/api/audio/filler123.wav", 500)

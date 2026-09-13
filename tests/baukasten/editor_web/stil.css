@@ -397,6 +397,30 @@ a.gross.leiste-link {
 .analyse-problem { margin-top: 6px; color: #ffafb6; font-size: 13px; }
 .analyse-empfehlung { margin-top: 5px; color: var(--dim); font-size: 12px; }
 
+/* Betroffene Gespraeche unter einem Problem (Akkordeon) — der Klick fuehrt
+   in die Anrufuebersicht, das Gespraech ist dort vorgewaehlt. */
+.problem-akkordeon summary { cursor: pointer; }
+.problem-akkordeon[open] summary { margin-bottom: 6px; }
+.problem-gespraeche { display: grid; gap: 4px; }
+.analyse .problem-gespraech { margin-top: 7px; }
+.problem-gespraech {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid #2a3442;
+  border-radius: 6px;
+  background: #17283a;
+  color: var(--akzent);
+  font-size: 12px;
+  text-decoration: none;
+  width: fit-content;
+}
+.problem-gespraech:hover { border-color: var(--akzent); }
+.problem-gespraech code { font-size: 11px; color: var(--dim); }
+.problem-gespraech.tot { background: #1c1b22; color: var(--dim); cursor: default; }
+
 .klein { font-size: 12px; color: var(--dim); }
 .fehlerbox {
   color: var(--rot);

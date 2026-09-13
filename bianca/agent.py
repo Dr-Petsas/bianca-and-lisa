@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, anrede_wache, antwort_wache, fachprofil, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, anrede_wache, antwort_wache, fachprofil, fakten_wache, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import spur
 from kern import wissen as kern_wissen
 # #region agent log
@@ -1165,6 +1165,27 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return _maschinen_antwort(
             sit, {"text": einwort_frage, "book": None}, msgs,
         )
+
+    # W-ABSCHWEIFEN (Chef 13.09.2026 zum Anruf 48673eca): „zähl mal von 1 bis
+    # 4" / „buchstabiere meinen Namen Abdullah" ist der Talk-Floor — eine
+    # harmlose Probe, ob die Assistentin wirklich zuhoert. Live landete die
+    # Zahlen-Bitte als RUECKRUF-NOTIZ im Abgeben-Zweig und die Buchstabier-
+    # Bitte beim Modell ("Danke für Ihren Namen."). Deshalb VOR dem Fluss:
+    # deterministisch erfuellen, offene Pflichtfrage anhaengen, Zustand
+    # unberuehrt lassen. Waehrend eines Diktats (Nummer/Buchstabieren) nie —
+    # dort gehoert jedes Zeichen der Erfassung.
+    if abschweifen.an() and not _diktat_offen(sit):
+        s_ab = sit.get("sammler") or {}
+        spiel = abschweifen.antwort(
+            arbeits_text,
+            name=_s(s_ab.get("nachname")) or _s(s_ab.get("name"))
+            or _s(s_ab.get("vorname")),
+        )
+        if spiel:
+            offene = _offene_frage(sit)
+            text = f"{spiel} {offene}".strip() if offene else spiel
+            spur.merken(sit, "abschweifen", arbeits_text[:60])
+            return _maschinen_antwort(sit, {"text": text, "book": None}, msgs)
 
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     #    W-TASK-GRENZE: transparenter Adapter (bianca/tasks) vor flow.zug —

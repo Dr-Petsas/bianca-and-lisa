@@ -306,6 +306,10 @@ class Anruf:
 
         bericht = {
             "id": self.story.get("id") or "",
+            # Anruf-UID: die Ergebnisseite verlinkt damit den Mitschnitt in
+            # der Anrufuebersicht. Bewusst eigenes Feld — `lastCall` fehlt,
+            # wenn Auflegen oder /api/last-call scheitert.
+            "sessionId": self.session_id,
             "start": start_zeit,
             "dauerS": round(time.perf_counter() - t_lauf, 1),
             "story": {k: v for k, v in self.story.items()},

@@ -987,6 +987,68 @@ def test_statistik_zaehlt_zeitverlauf_und_mandant():
         assert statistik.aus_berichten(basis, "thaler")["gesamt"]["gespraeche"] == 1
 
 
+def test_statistik_verlinkt_betroffene_gespraeche_je_problem():
+    """Chef 13.09.2026: zu jedem Fehler muss das Gespraech verlinkt sein.
+
+    Die Ergebnisseite klappt die Liste als Akkordeon auf und springt mit der
+    Anruf-UID in die Anrufuebersicht — ohne UID im Bericht gibt es keinen
+    Link, nur einen toten Text-Eintrag. Beides wird hier festgenagelt."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from tests.baukasten import statistik
+
+    def schreiben(p: Path, data: dict) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data), encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as d:
+        basis = Path(d)
+        lauf = basis / "20260913-120000"
+        schreiben(lauf / "lauf.json", {
+            "laufId": lauf.name, "tenant": "meddent",
+            "gestartet": "2026-09-13T12:00:00",
+            "stories": [{"id": "rot-neu", "ok": False}, {"id": "rot-alt", "ok": False}],
+        })
+        # Neuer Bericht: eigenes sessionId-Feld (runner seit 13.09.2026).
+        schreiben(lauf / "rot-neu" / "bericht.json", {
+            "id": "rot-neu", "start": "2026-09-13T12:05:00",
+            "sessionId": "48673eca83514cbebb94ed18f1deb3dd",
+            "story": {"tenant": "meddent"},
+            "zuege": [{"wer": "anrufer", "text": "Hallo", "gehoert": "Hallo"}],
+            "ergebnis": {"ok": False, "checks": [{"name": "Telefon", "ok": False}]},
+        })
+        # Aelterer Bericht: UID nur ueber den letzten Anruf.
+        schreiben(lauf / "rot-alt" / "bericht.json", {
+            "id": "rot-alt", "start": "2026-09-13T12:01:00",
+            "story": {"tenant": "meddent"},
+            "zuege": [{"wer": "anrufer", "text": "Hallo", "gehoert": "Hallo"}],
+            "lastCall": {"sessionId": "aaaabbbbccccddddeeeeffff00001111"},
+            "ergebnis": {"ok": False, "checks": [{"name": "Telefon", "ok": False}]},
+        })
+        # Belastungslauf ohne UID: derselbe Fehlertext, aber kein Mitschnitt.
+        last = basis / "last-20260913-130000"
+        schreiben(last / "lasttest.json", {
+            "laufId": last.name, "gestartet": "2026-09-13T13:00:00",
+            "laeufe": [{"nr": 1, "tenant": "meddent", "ok": False,
+                        "fehler": "Telefon", "zuege": []}],
+        })
+
+        s = statistik.aus_berichten(basis, "meddent")
+        problem = next(p for p in s["probleme"] if p["problem"] == "Telefon")
+        assert problem["anzahl"] == 3
+        gespraeche = problem["gespraeche"]
+        # Neueste zuerst — der Belastungslauf lief nach dem Studio-Lauf.
+        assert [g["storyId"] for g in gespraeche] == ["Gespräch 1", "rot-neu", "rot-alt"]
+        assert gespraeche[0]["sid"] == ""
+        assert gespraeche[1]["sid"] == "48673eca83514cbebb94ed18f1deb3dd"
+        assert gespraeche[2]["sid"] == "aaaabbbbccccddddeeeeffff00001111"
+        # Die Einzelanalyse traegt die UID ebenfalls (eigener Link dort).
+        assert {a["storyId"]: a["sid"] for a in s["analysen"]}["rot-neu"] == (
+            "48673eca83514cbebb94ed18f1deb3dd")
+
+
 if __name__ == "__main__":
     fehler = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

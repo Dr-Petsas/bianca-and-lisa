@@ -191,6 +191,40 @@ function chartVolumen(daten) {
   ctx.fillStyle = "#4da3ff"; ctx.fillText("■ Züge", box.l + 90, box.t + 7);
 }
 
+/** Anrufuebersicht-Adresse eine Ebene ueber dem Studio: /studio/ -> /anrufe
+    (hinter Lisas Durchreiche /bianca/studio/ -> /bianca/anrufe). Die Anruf-UID
+    steht im Fragment — die Uebersicht waehlt das Gespraech damit vor. */
+function anrufeUrl(sid) {
+  const eltern = studioWurzel().replace(/[^/]+\/$/, "") || "/";
+  const ziel = new URL("anrufe", location.origin + eltern);
+  if (sid) ziel.hash = String(sid);
+  return ziel.href;
+}
+
+/** Anruf-UID kurz: die ersten acht Hex-Stellen reichen zum Wiedererkennen. */
+function uidKurz(sid) {
+  const h = String(sid || "").replace(/-/g, "");
+  return h ? h.slice(0, 8) : "";
+}
+
+/** Ein Problem mit den betroffenen Gespraechen darunter (Akkordeon).
+    Jedes Gespraech fuehrt in die Anrufuebersicht; fehlt die UID (alte
+    Berichte, Belastungslauf), bleibt der Eintrag als Text stehen statt
+    einen toten Link anzubieten. */
+function problemZelle(p) {
+  const liste = (p.gespraeche || []).map((g) => {
+    const marke = `${esc(g.art || "")} · ${esc(datumKurz(g.zeit))}`;
+    const name = esc(g.storyId || g.laufId || "Gespräch");
+    if (!g.sid) return `<span class="problem-gespraech tot">${name} <span class="klein">${marke}</span></span>`;
+    return `<a class="problem-gespraech" href="${esc(anrufeUrl(g.sid))}" target="_blank" rel="noopener"` +
+      ` title="in der Anrufübersicht öffnen">${name} <code>${esc(uidKurz(g.sid))}</code>` +
+      ` <span class="klein">${marke}</span></a>`;
+  }).join("");
+  if (!liste) return esc(p.problem);
+  return `<details class="problem-akkordeon"><summary>${esc(p.problem)}</summary>` +
+    `<div class="problem-gespraeche">${liste}</div></details>`;
+}
+
 function statistikZeichnen(d) {
   letzteStatistik = d;
   const g = d.gesamt || {};
@@ -212,17 +246,22 @@ function statistikZeichnen(d) {
     `<div class="warnung ${esc(w.stufe)}">${esc(w.text)}</div>`
   ).join("");
   $("stat-probleme").innerHTML = (d.probleme || []).map((p) =>
-    `<tr><td>${esc(p.problem)}</td><td>${esc(p.anzahl)}</td><td>${esc(datumKurz(p.zuletzt))}</td><td>${esc(p.empfehlung)}</td></tr>`
+    `<tr><td>${problemZelle(p)}</td><td>${esc(p.anzahl)}</td><td>${esc(datumKurz(p.zuletzt))}</td><td>${esc(p.empfehlung)}</td></tr>`
   ).join("") || '<tr><td colspan="4" class="klein">Keine wiederkehrenden Probleme.</td></tr>';
   $("stat-analysen").innerHTML = (d.analysen || []).map((a) => `
     <div class="analyse" data-lauf="${esc(a.laufId)}" data-story="${esc(a.storyId)}" data-art="${esc(a.art)}">
       <div class="analyse-kopf"><strong>${esc(a.storyId)}</strong><span class="klein">${esc(a.art)} · ${esc(datumKurz(a.zeit))} · ${esc(a.turns)} Züge</span></div>
       <div class="analyse-problem">${esc((a.probleme || []).join(" · "))}</div>
       <div class="analyse-empfehlung">${esc(a.empfehlung)}</div>
+      ${a.sid ? `<a class="problem-gespraech" href="${esc(anrufeUrl(a.sid))}" target="_blank" rel="noopener"
+        title="in der Anrufübersicht öffnen">Anrufübersicht <code>${esc(uidKurz(a.sid))}</code></a>` : ""}
     </div>`).join("") || '<span class="klein">Keine Gespräche mit Verbesserungsbedarf.</span>';
   document.querySelectorAll(".analyse[data-art='Studio']").forEach((el) => {
     el.style.cursor = "pointer";
-    el.addEventListener("click", () => {
+    el.addEventListener("click", (ev) => {
+      // Der Link in die Anrufuebersicht gewinnt — sonst oeffnete der Klick
+      // zusaetzlich den Dialog auf dieser Seite.
+      if (ev.target.closest("a")) return;
       laufOeffnen(el.dataset.lauf).then(() => storyOeffnen(el.dataset.lauf, el.dataset.story));
     });
   });

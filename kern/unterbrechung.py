@@ -66,6 +66,10 @@ _ABBRUCH_RE = re.compile(
 )
 _ABBRUCH_KURZ = {"stopp", "stop", "halt", "schluss", "genug", "ruhe", "still", "leise"}
 
+# Schwellen fuer `_fast_fertig` (Vorfall 13.09.2026 — Begruendung dort).
+_FAST_FERTIG_ANTEIL = 0.8
+_FAST_FERTIG_REST_MS = 1000.0
+
 
 def ist_abbruch(text: str) -> bool:
     """Will der Anrufer die Wiedergabe beenden (nicht nur einwenden)?"""
@@ -113,6 +117,34 @@ def merken(sit: dict, *, url: str, karte: dict, text: str,
     }
 
 
+def fast_fertig_an() -> bool:
+    return _s(os.getenv("BARGE_FAST_FERTIG", "1")).strip() not in {"0", "false", "nein"}
+
+
+def _fast_fertig(start_ms: float, ende_ms: float, barge_ms: float) -> bool:
+    """Wurde dieser Satz so gut wie ganz gesprochen, als der Knacks kam?
+
+    Vorfall 13.09.2026 (Anruf e5c25e25, Chef: "da gab es eine 100prozentige
+    wiederholung"): Die Bruecke meldete ``bruecke-ohr-barge ms=4020`` bei
+    einer 4570 ms langen Ansage ("Gut. Ich will nichts falsch schreiben:
+    Buchstabieren Sie mir den Nachnamen bitte einmal kurz?"). Der Fragesatz
+    endete erst bei 4570, galt damit als ungesprochen — der Anrufer hatte
+    86 % davon gehoert und bekam die Frage WORTGLEICH noch einmal.
+
+    Bewusst ZWEI Bedingungen, damit nie echter Inhalt verschluckt wird: der
+    Satz muss fast durch sein UND der fehlende Schwanz kurz. Ein Knacks in
+    der Satzmitte und ein langer Restschwanz bleiben Rest wie bisher.
+    """
+    if not fast_fertig_an():
+        return False
+    dauer = ende_ms - start_ms
+    gespielt = barge_ms - start_ms
+    if dauer <= 0 or gespielt <= 0:
+        return False
+    return (gespielt >= _FAST_FERTIG_ANTEIL * dauer
+            and (ende_ms - barge_ms) <= _FAST_FERTIG_REST_MS)
+
+
 def eingang(sit: dict, barge_url: str, barge_ms: Any) -> bool:
     """Dock-Meldung: Wiedergabe von ``barge_url`` wurde bei ``barge_ms``
     unterbrochen. Merkt den ungesprochenen Rest (sit["unterbrochen"]) und
@@ -150,14 +182,20 @@ def eingang(sit: dict, barge_url: str, barge_ms: Any) -> bool:
             if ms < 800:
                 return False
             return False
+        vorher = 0.0
         for i, satz in enumerate(alle):
             ende = enden[i] if i < len(enden) else None
-            if isinstance(ende, (int, float)) and float(ende) <= ms:
+            if not isinstance(ende, (int, float)):
+                # kein End-Zeitpunkt (noch nicht gerendert / Render-Fehler)
+                # => ungesprochen.
+                rest.append(satz)
+                continue
+            ende_f = float(ende)
+            if ende_f <= ms or _fast_fertig(vorher, ende_f, ms):
                 gesprochen.append(satz)
             else:
-                # kein End-Zeitpunkt (noch nicht gerendert / Render-Fehler)
-                # oder nach der Unterbrechung => ungesprochen.
                 rest.append(satz)
+            vorher = ende_f
     else:
         # Fremdes Audio (Füller, Jingle, Stups) — keine Karte, kein Rest.
         return False

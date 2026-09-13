@@ -81,7 +81,7 @@ _WECHSEL_RE = re.compile(
     r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*|(?:ä|ae)nder\w*|"
     r"r(?:ü|ue)ckruf\w*|zur(?:ü|ue)ckruf\w*|"
-    r"rechnung\w*|abrechnung\w*|rezept\w*|(?:ü|ue)berweisung\w*|befund\w*|"
+    r"rechnung\w*|abrechnung\w*|rezept(?!ion)\w*|(?:ü|ue)berweisung\w*|befund\w*|"
     r"heil\w*kostenplan|\bhkp\b|kostenvoranschlag|\bkva\b|"
     r"frage\b|fragen\b|wissen\b|fertig\b|urlaub\b|ge(?:ö|oe)ffnet|offen\b|"
     r"mitarbeiter\w*|anmeldung|empfang|buchhaltung|praxisleitung|"
@@ -269,9 +269,11 @@ _FB_RUECKRUF_RE = re.compile(
     r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back|"
     # W-SVETLANA (04.09.2026): Rezept/Überweisung ABHOLEN ist kein Termin —
     # die Praxis soll eine Notiz kriegen, Bianca darf nicht ins Buchen kippen.
-    r"\brezept\w*|\b(?:ü|ue)berweisung\b|(?:ü|ue)berweisen|"
-    r"abhol\w*.{0,24}(?:rezept|(?:ü|ue)berweis)|"
-    r"(?:rezept|(?:ü|ue)berweis)\w*.{0,24}abhol",
+    # W-REZEPTION (13.09.2026): nie "Rezeption" mitfangen — der Wunsch nach
+    # der ANMELDUNG landete so im Rueckruf-Zweig.
+    r"\brezept(?!ion)\w*|\b(?:ü|ue)berweisung\b|(?:ü|ue)berweisen|"
+    r"abhol\w*.{0,24}(?:rezept(?!ion)|(?:ü|ue)berweis)|"
+    r"(?:rezept(?!ion)|(?:ü|ue)berweis)\w*.{0,24}abhol",
     re.I,
 )
 _FB_AUSKUNFT_RE = re.compile(

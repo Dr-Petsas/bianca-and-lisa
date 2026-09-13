@@ -377,6 +377,29 @@ _ROLLEN: dict[str, tuple[str, str]] = {
     "pfleger": ("Ihr Pfleger", "Ihren Pfleger"),
     "pflegerin": ("Ihre Pflegerin", "Ihre Pflegerin"),
 }
+# W-ROLLE-GESCHLECHT (Chef 13.09.2026 zum Anruf e5c25e25): "es ist von einem
+# SOHN die rede, wieso sagt Bianca dann dass es sich um den Termin bei FRAU
+# tzannis handelt […] wenn ausdrücklich vom sohn geredet wird muss das
+# bereits klar sein und überstimmt werden." Die ausgesprochene Rolle ist eine
+# HARTE Angabe — der Vornamen-Waechter raet dagegen nur (und landet bei
+# unklarem Vornamen nach Chef-Default nun mal auf "weiblich", live "Levy").
+# Bewusst NUR eindeutige Rollen: Kind/Enkelkind/Patenkind/Partner sagen
+# nichts ueber das Geschlecht — dort wird weiter nicht geraten.
+_ROLLE_GESCHLECHT: dict[str, str] = {
+    "sohn": "m", "mann": "m", "vater": "m", "papa": "m", "opa": "m",
+    "grossvater": "m", "enkel": "m", "bruder": "m", "onkel": "m",
+    "cousin": "m", "neffe": "m", "nachbar": "m", "freund": "m",
+    "kollege": "m", "chef": "m", "schwiegervater": "m", "schwiegersohn": "m",
+    "schwager": "m", "mitbewohner": "m", "betreuer": "m", "pfleger": "m",
+    "lebensgefaehrte": "m",
+    "tochter": "f", "frau": "f", "mutter": "f", "mama": "f", "oma": "f",
+    "grossmutter": "f", "enkelin": "f", "schwester": "f", "tante": "f",
+    "cousine": "f", "kusine": "f", "nichte": "f", "nachbarin": "f",
+    "freundin": "f", "kollegin": "f", "chefin": "f", "schwiegermutter": "f",
+    "schwiegertochter": "f", "schwaegerin": "f", "mitbewohnerin": "f",
+    "betreuerin": "f", "pflegerin": "f", "lebensgefaehrtin": "f",
+    "partnerin": "f",
+}
 # Flektierte/alternative Formen -> kanonische Rolle. Rollen ohne klares
 # Genus (Bekannte/Verwandte/Eltern) laufen generisch als "andere" — die
 # Namensfrage ("Für wen ist der Termin denn …") passt dann immer.
@@ -492,6 +515,25 @@ def fuer_wen_phrase(s: dict, *, fall: str = "wer") -> str:
     if not eintrag:
         return ""
     return eintrag[1] if fall == "wen" else eintrag[0]
+
+
+def geschlecht_aus_rolle(s: dict) -> str:
+    """Geschlecht aus der Fuer-Wen-Rolle: Sohn ist maennlich, Tochter weiblich.
+
+    W-ROLLE-GESCHLECHT (13.09.2026). Rangfolge der Quellen: AKTE ("akte")
+    schlaegt ROLLE ("rolle") schlaegt VORNAMEN-SCHAETZUNG ("rate"). Nur so
+    kann "Levy" (unklarer Vorname -> Chef-Default weiblich) nicht mehr zu
+    "Frau Tzannis" werden, waehrend der Anrufer vom Sohn spricht. Gibt das
+    geltende Geschlecht zurueck. Nie werfend, nie fragend.
+    """
+    g = _ROLLE_GESCHLECHT.get(_s(s.get("fuerWen")).lower(), "")
+    if not g or s.get("geschlechtQuelle") == "akte":
+        return _s(s.get("geschlecht"))
+    if s.get("geschlecht") != g or s.get("geschlechtQuelle") != "rolle":
+        s["geschlecht"] = g
+        s["geschlechtQuelle"] = "rolle"
+        s["geschlechtUnklar"] = False
+    return g
 
 
 def _fuer_wen_name_frage(s: dict) -> str:
@@ -666,6 +708,17 @@ FELDER_START = {
     # die Buchstaben korrigieren ihn und liefern zugleich die Enderkennung.
     "vornameTeil": "",
     "vornameGehoert": "",
+    # W-NAME-EINWAND (Chef 13.09.2026 zum Anruf e5c25e25: "der Nachname wurde
+    # nicht richtig erkannt und sie springt trotzdem vor der klärung zum
+    # vornamen weiter..... der einwand des anrufers wird überhört"). Live kam
+    # auf "Thomas." der Widerspruch "nicht Thomas, Thannes ist mein Nachname"
+    # — die Korrektur landete still im Sammler, gesagt wurde nur "Danke."
+    # ``nameKorrekturAlt`` traegt den verhoerten Wert fuer GENAU EINE
+    # Quittung (flow._quittung poppt ihn), ``nachnameKlaeren`` zieht die
+    # Buchstabier-Frage sofort vor, statt erst nach Grund und Wunschzeit.
+    "nameKorrekturAlt": "",
+    "nameKorrekturFeld": "",
+    "nachnameKlaeren": False,
     "grundWortlaut": "",
     # Nacktes Motiv ("Zahnreinigung"): erst nachfragen, ob ein Termin
     # gewollt ist — nicht sofort die Buchungsmaschine starten.
@@ -1138,6 +1191,23 @@ def _kartei_vor_namensaenderung(
         _kartei_zuruecksetzen(s)
 
 
+def _korrektur_merken(s: dict, feld: str, alt: str) -> None:
+    """Einen ueberschriebenen Namensteil fuer die Quittung vormerken.
+
+    W-NAME-EINWAND (13.09.2026): Der Anrufer muss HOEREN, dass sein Einwand
+    angekommen ist ("ich hatte Thomas gehoert, korrigiert: Thannes") — und
+    ein frisch korrigierter Nachname wird SOFORT buchstabiert, nicht erst
+    nach Grund und Wunschzeit. Ohne alten Wert gibt es nichts zu quittieren
+    (Erst-Erfassung ist keine Korrektur).
+    """
+    if not _s(alt):
+        return
+    s["nameKorrekturAlt"] = _s(alt)
+    s["nameKorrekturFeld"] = feld
+    if feld == "nachname":
+        s["nachnameKlaeren"] = True
+
+
 def _name_korrektur(s: dict, text: str) -> bool:
     """"Ich heiße Meier, nicht Müller" / "nicht Müller, sondern Meier":
     sofort übernehmen — auch wenn der Name längst gespeichert ist."""
@@ -1171,6 +1241,7 @@ def _name_korrektur(s: dict, text: str) -> bool:
                     alt_nach = s["nachname"]
                     s["nachname"] = toks[0].capitalize()
                 if s["nachname"] != alt_nach:
+                    _korrektur_merken(s, "nachname", alt_nach)
                     s["buchstabiert"] = False
                     _kartei_zuruecksetzen(s)
                 return True
@@ -1180,6 +1251,7 @@ def _name_korrektur(s: dict, text: str) -> bool:
     neu_name = neu_wert.capitalize()
     alt = alt_wert.lower()
     if alt == s["vorname"].lower() and s["vorname"]:
+        _korrektur_merken(s, "vorname", s["vorname"])
         s["vorname"] = neu_name
         if s["patientId"] or s["bekannt"]:
             _kartei_zuruecksetzen(s)
@@ -1187,6 +1259,7 @@ def _name_korrektur(s: dict, text: str) -> bool:
     # Standard: der Nachname wird korrigiert (auch wenn "alt" nur ähnlich
     # klingt wie das Gespeicherte — STT hatte ja gerade falsch gehört).
     if s["nachname"] and neu_name != s["nachname"]:
+        _korrektur_merken(s, "nachname", s["nachname"])
         s["buchstabiert"] = False
         _kartei_zuruecksetzen(s)
     s["nachname"] = neu_name
@@ -1216,6 +1289,8 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     mv = _TEIL_VOR_RE.search(text) or _TEIL_VOR_UMGEKEHRT_RE.search(text)
     if mv and mv.group(1).lower() not in _NAME_STOP:
         neu_vor = mv.group(1).capitalize()
+        if neu_vor != s["vorname"]:
+            _korrektur_merken(s, "vorname", s["vorname"])
         _kartei_vor_namensaenderung(s, first=neu_vor)
         s["vorname"] = neu_vor
         getroffen = True
@@ -1223,6 +1298,7 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     if mn and mn.group(1).lower() not in _NAME_STOP:
         neu_nach = mn.group(1).capitalize()
         if neu_nach != s["nachname"]:
+            _korrektur_merken(s, "nachname", s["nachname"])
             s["buchstabiert"] = False
             _kartei_vor_namensaenderung(s, last=neu_nach)
         s["nachname"] = neu_nach
@@ -1678,6 +1754,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     buch_fragment = False
     name_toks = _name_tokens(t)
     vorname_fragment = False
+    # W-NAME-EINWAND (13.09.2026): Eine AUSDRUECKLICHE Zuweisung ("Mein
+    # Nachname ist Thannes" / "Thannes ist mein Nachname") ist niemals eine
+    # Buchstabier-Kette. Ohne diese Wache zog `buchstaben.teil` daraus ein
+    # Fragment ("h") und die Angabe verschwand ungehoert — Bianca antwortete
+    # "Den Anfang habe ich. Bitte mit den restlichen Buchstaben weiter".
+    explizit = bool(_TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
+                    or _TEIL_NACH_RE.search(t) or _TEIL_NACH_UMGEKEHRT_RE.search(t))
 
     # Live 08.09.2026: „Srinivasa, S, R, I …“ — Bianca nahm schon den
     # verhörten Wortanfang als fertigen Vornamen und stellte mitten in der
@@ -1685,7 +1768,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # zwei explizite Buchstaben folgen, bleibt der Mund still. Stimmen Länge
     # und Ähnlichkeit der zusammengesetzten Buchstaben mit dem gesprochenen
     # Kandidaten überein, ist das Ende auch OHNE „fertig“ sicher erkennbar.
-    if s["frage"] == "vorname":
+    if s["frage"] == "vorname" and not explizit:
         einzeln = _einzelbuchstaben(t)
         if s["vornameTeil"] or len(einzeln) >= 2:
             if not s["vornameTeil"] and name_toks:
@@ -1722,7 +1805,17 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 neu.add("vornameTeil")
             vorname_fragment = True
 
-    if (s["frage"] == "buchstabieren" and not s["nachname"]
+    if (s["frage"] == "buchstabieren" and explizit
+            and _name_aufnehmen(s, t, erzwungen=True)):
+        # Ausdrueckliche Zuweisung auf die Buchstabier-Frage: uebernehmen und
+        # eine offene Buchstaben-Kette verwerfen — sie gehoerte zum alten,
+        # verhoerten Namen. Der klar gesprochene Name gilt wie der
+        # vollstaendige natuerliche Name unten als geliefert.
+        s["buchstabiert"] = True
+        s["buchstabenTeil"] = ""
+        s["buchstabierHilfe"] = False
+        neu.add("name")
+    elif (s["frage"] == "buchstabieren" and not s["nachname"]
             and not s["buchstabenTeil"] and not _DIKTAT_FERTIG_RE.search(t)
             and len(name_toks) >= 2 and not buch
             and _name_aufnehmen(s, t, erzwungen=True)):
@@ -2084,6 +2177,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["geschlechtUnklar"] = not g
         s["geschlechtQuelle"] = "rate"
         s["geschlechtVon"] = s["vorname"]
+    # W-ROLLE-GESCHLECHT: die ausdrueckliche Rolle ("mein Sohn") schlaegt die
+    # Schaetzung — in JEDEM Zug, weil Rolle und Vorname in beliebiger
+    # Reihenfolge fallen koennen.
+    geschlecht_aus_rolle(s)
 
     # Eine Namenskorrektur muss die alte Akte SOFORT aus allen Spiegeln
     # entfernen. Sonst könnte ein LLM-Notiztool noch vor flow._ctx_bauen mit
@@ -3406,6 +3503,18 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 f"{einstieg}Wie lautet der Nachname? "
                 "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
                 "sagen Sie am Ende einfach fertig.",
+            )
+        # W-NAME-EINWAND: Ein frisch korrigierter Nachname wird SOFORT
+        # gesichert — nicht erst nach Grund und Wunschzeit (live e5c25e25
+        # fragte Bianca nach dem Widerspruch einfach den Vornamen ab und
+        # buchstabierte erst sechs Zuege spaeter). Der zweite Verhoerer in
+        # Folge ist die haeufigste Fehlsuchen-Ursache.
+        if (s.get("nachnameKlaeren") and s["nachname"]
+                and not s["buchstabiert"] and not s["bekannt"]):
+            return _buchstabier_frage(
+                s,
+                f"Damit ich nichts Falsches in die Kartei schreibe: "
+                f"Buchstabieren Sie mir {s['nachname']} bitte einmal?",
             )
         if not s["vorname"]:
             return "vorname", "Und der Vorname?"

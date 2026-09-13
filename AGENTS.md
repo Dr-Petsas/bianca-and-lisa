@@ -2292,6 +2292,100 @@ bleibt stehen („Gerne. Ich buche Ihnen einen Termin").
 - Tests: `tests/test_anrede_wache.py` — die Gegenprobe (belegte Anrede bleibt
   unangetastet) ist der teurere Fehler und deshalb breiter abgedeckt.
 
+## Auf das Gesagte eingehen (Anruf e5c25e25, 13.09.2026 — nicht rückbauen)
+
+Chef zum Live-Anruf e5c25e25 (wörtlich): „da gab es eine 100prozentige
+wiederholung, warum? […] der Nachname wurde nicht richtig erkannt und sie
+springt trotzdem vor der klärung zum vornamen weiter … der einwand des
+anrufers wird überhört!! das ist ein NO GO … Bianca MUSS auf das gesagte
+eingehen!!! in jedem ZUG! […] es ist von einem SOHN die rede, wieso sagt
+Bianca dann dass es sich um den Termin bei FRAU tzannis handelt […] 'der
+frühere' wurde nicht in seinem relativen bezug verstanden."
+
+Vier Befunde, vier Wachen. Regressionen: `tests/test_anruf_tzannis.py`,
+`tests/test_unterbrechung.py`; Live-Probe im Container:
+`tools/_probe_e5c25e_live.py`.
+
+- **W-BARGE-FASTFERTIG** (`kern/unterbrechung.py`): Die Brücke meldete
+  `bruecke-ohr-barge ms=4020` bei einer **4570 ms** langen Ansage („Gut. Ich
+  will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte
+  einmal kurz?"). Der Fragesatz endete erst bei 4570, galt damit als
+  ungesprochen — der Anrufer hatte **86 %** davon gehört und bekam die Frage
+  WORTGLEICH noch einmal. `_fast_fertig` zählt einen Satz als gehört, wenn
+  mindestens `_FAST_FERTIG_ANTEIL` (80 %) gespielt waren UND der fehlende
+  Schwanz unter `_FAST_FERTIG_REST_MS` (1 s) liegt. Bewusst ZWEI Bedingungen:
+  ein Knacks in der Satzmitte und ein langer Restschwanz bleiben Rest wie
+  bisher — echten Inhalt zu verschlucken wäre der teurere Fehler. Notaus:
+  `BARGE_FAST_FERTIG=0`.
+- **W-NAME-EINWAND** (`bianca/gehirn.py`, `bianca/flow.py`): Auf „Thomas."
+  kam „Nein, nein, nicht Thomas, Thannes ist mein Nachname." — die Korrektur
+  landete still im Sammler, gesagt wurde nur „Danke. Wie ist Ihr Vorname?".
+  Drei Stellen: (1) `_korrektur_merken` merkt den verhörten Wert vor,
+  `flow._quittung` spricht ihn GENAU EINMAL aus („Entschuldigung — ich hatte
+  Thomas gehört. Dann korrigiere ich auf Thannes.") und geht dabei VOR jede
+  andere Quittung; (2) `nachnameKlaeren` zieht die Buchstabier-Frage sofort
+  vor, statt erst nach Grund und Wunschzeit zu klären (live sechs Züge
+  später) — der zweite Verhörer in Folge ist die häufigste Fehlsuchen-Ursache;
+  (3) eine AUSDRÜCKLICHE Zuweisung („Mein Nachname ist Thannes") ist niemals
+  eine Buchstabier-Kette: `buchstaben.teil` zog daraus das Fragment „h" und
+  die Angabe verschwand ungehört („Den Anfang habe ich. Bitte mit den
+  restlichen Buchstaben weiter"). Die Erst-Erfassung ist KEINE Korrektur —
+  sonst quittiert Bianca jeden Namen mit „ich hatte … gehört".
+- **W-ROLLE-GESCHLECHT** (`bianca/gehirn.py`): Die ausgesprochene Rolle ist
+  eine HARTE Angabe, der Vornamen-Wächter rät dagegen nur (und landet bei
+  unklarem Vornamen nach Chef-Default auf weiblich — live „Levy" ⇒ „Frau
+  Tzannis", während der Anrufer vom SOHN sprach). Rangfolge der Quellen:
+  **akte > rolle > rate** (`geschlecht_aus_rolle`, aufgerufen in
+  `einsammeln` nach der Vornamen-Schätzung). Bewusst NUR eindeutige Rollen:
+  Kind/Enkelkind/Patenkind/Partner sagen nichts über das Geschlecht — dort
+  wird weiter nicht geraten.
+- **W-SLOT-RELATIV** (`bianca/flow.py`): „Der frühere." landete als unklar
+  bei der Talk-Schicht („Ich habe „Der frühere" verstanden. Was meinen Sie
+  damit?"). Komparativ UND Superlativ (früher/früheste/eher/vorne bzw.
+  später/späteste/hinten) greifen auf die ANGEBOTENE Liste zu (`min`/`max`
+  nach ISO) — aber nur, wenn der Satz keine eigene Zeitangabe trägt: „Geht
+  es später, gegen vierzehn Uhr?" ist ein neuer Wunsch, keine Wahl.
+
+## Abwegige Bitten ernst nehmen (W-ABSCHWEIFEN 13.09.2026 — nicht rückbauen)
+
+Chef zum Anruf 48673eca: „ausserdem bist du nicht auf den anrufer eingegangen
+als der verlangte: zähl mal von 1 bis 4 oder buchstabiere meinen namen
+Abdullah … die ki muss dann schon gezielter auf solche abwägigen themen
+eingehen können. das ist ja unser talk floor eigentlich … ein abschweifen …
+das wurde nicht gut genug bearbeitet."
+
+Live lief genau das schief: „Wiederhol mal die Zahlen 1, 2, 3, 4." landete als
+RÜCKRUF-NOTIZ im Abgeben-Zweig („die Praxis prüft Ihren Wunsch"),
+„buchstabiere meinen Namen Abdullah" beantwortete das Modell mit „Danke für
+Ihren Namen.". Solche Bitten sind harmlos, sofort erfüllbar und eine Probe, ob
+die Assistentin wirklich zuhört.
+
+- `kern/abschweifen.py` antwortet deterministisch (0 ms, kein Modell):
+  zählen (von/bis, Zahlwörter, rückwärts, gedeckelt auf `_MAX_ZAEHLEN` = 20),
+  Ziffern nachsprechen, Namen buchstabieren (Tafel aus `bianca/buchstaben`).
+  Nichts davon berührt Kalender, Kartei oder Sammler — es wird NUR gesprochen.
+- Einhängung in `bianca/agent.user_turn` VOR dem Fluss; die offene
+  Pflichtfrage (`_offene_frage`) hängt im SELBEN Zug hinterher, damit der
+  Faden nicht reißt. Spur: `abschweifen`.
+- **Die Gegenproben sind der wichtigere Teil:** während eines Diktats
+  (`_diktat_offen`: Nummer, Buchstabieren) schlägt der Baustein NIE zu, und
+  eine Bitte muss AN Bianca gerichtet sein (`_an_bianca`: Imperativ am
+  Satzanfang oder Anrede). „Ich buchstabiere: Tzannis" und „T-Z-A-N-N-I-S."
+  gehören der Namens-Ernte — eine gekaperte Datenerfassung wäre teurer als
+  eine verpasste Spielerei. Ohne belegten Namen wird bei „buchstabiere meinen
+  Namen" nie geraten.
+- Notaus: `ABSCHWEIFEN=0`. Tests: `tests/test_abschweifen.py`.
+
+## „Rezeption" ist kein „Rezept" (W-REZEPTION 13.09.2026)
+
+`\brezept\w*` traf auch **Rezeption**: auf den Wunsch nach der ANMELDUNG
+antwortete Bianca „Rezept und Überweisung kann ich am Telefon nicht
+ausstellen" (Anruf 48673eca), und im Intent landete der Satz im Rückruf-Zweig.
+Alle drei Stellen tragen jetzt `\brezept(?!ion)\w*`: `bianca/flow._DOKUMENT_RE`,
+`kern/hirn._DOKUMENT_SPIEGEL_RE`, `kern/intent` (`_WECHSEL_RE`,
+`_FB_RUECKRUF_RE`). Gegenprobe mit im Test: das echte Rezept greift weiter
+(`test_rezeption_ist_kein_rezept` in `tests/test_weiterleiten.py`).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

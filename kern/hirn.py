@@ -480,7 +480,8 @@ _REGEL_JE_HANDLUNG = {
 }
 
 _DOKUMENT_SPIEGEL_RE = re.compile(
-    r"\brezept\w*|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
+    # W-REZEPTION (13.09.2026): nie "Rezeption" mitfangen (s. flow._DOKUMENT_RE).
+    r"\brezept(?!ion)\w*|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
     re.I,
 )
 

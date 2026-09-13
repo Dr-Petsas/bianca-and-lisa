@@ -214,6 +214,16 @@ def _zeit_von(t: str) -> tuple[int | None, int | None]:
     return None, None
 
 
+# Relative Wahl aus der angebotenen Liste (W-SLOT-RELATIV 13.09.2026, Chef:
+# "der frühere der früheste etc... der spätere der späteste... das muss
+# verstanden werden"). Komparativ UND Superlativ, weil am Telefon beides
+# kommt; "eher/vorne" bzw. "hinten" sind die umgangssprachlichen Formen.
+_FRUEHER_RE = re.compile(
+    r"\b(?:früher|frueher|frühest|fruehest|eher|vorher|vordere|vorne)\w*", re.I)
+_SPAETER_RE = re.compile(
+    r"\b(?:später|spaeter|spätest|spaetest|hintere|hinten)\w*", re.I)
+
+
 def _slot_wahl(text: str, offered: list[dict]) -> str:
     """Welchen der angebotenen Termine meint der Anrufer? '' wenn unklar."""
     if not offered:
@@ -300,6 +310,20 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         return offered[2]["iso"]
     if re.search(r"\b(letzte[rns]?)\b", t):
         return offered[-1]["iso"]
+
+    # W-SLOT-RELATIV (Chef 13.09.2026, Anruf e5c25e25): "Der frühere." landete
+    # als unklar bei der Talk-Schicht ("Ich habe „Der frühere" verstanden. Was
+    # meinen Sie damit?") — gemeint war der erste der beiden genannten
+    # Termine. Frueher/spaeter beziehen sich auf die ANGEBOTENE Liste; nur
+    # wenn der Satz keine eigene Zeitangabe traegt, sonst gewinnt die
+    # Uhrzeit oben ("Geht es später, gegen vierzehn Uhr?" ist ein neuer
+    # Wunsch, keine Wahl).
+    if (hour is None and wd is None and not dm and not tag and not rel
+            and "vormittag" not in t and "nachmittag" not in t):
+        if _FRUEHER_RE.search(t):
+            return min(offered, key=lambda o: o["iso"])["iso"]
+        if _SPAETER_RE.search(t):
+            return max(offered, key=lambda o: o["iso"])["iso"]
 
     if len(offered) == 1 and (gehirn.ist_ja(t) or re.search(r"nehm|passt|gerne|gut\b", t)):
         return offered[0]["iso"]
@@ -434,6 +458,20 @@ def _grund_sprechbar(s: dict) -> str:
 
 
 def _quittung(s: dict, neu: set[str]) -> str:
+    # W-NAME-EINWAND (Chef 13.09.2026, Anruf e5c25e25): Ein Widerspruch gegen
+    # einen verhoerten Namen ("Nein, nein, nicht Thomas, Thannes ist mein
+    # Nachname") wurde live nur mit "Danke." beantwortet — der Anrufer hoerte
+    # nicht, dass seine Korrektur ankam. Sie geht deshalb VOR jede andere
+    # Quittung: erst der Einwand, dann der Rest.
+    alt = _s(s.get("nameKorrekturAlt"))
+    if alt:
+        feld = _s(s.get("nameKorrekturFeld"))
+        jetzt = _s(s.get("vorname") if feld == "vorname" else s.get("nachname"))
+        s["nameKorrekturAlt"] = ""
+        s["nameKorrekturFeld"] = ""
+        if jetzt and jetzt.casefold() != alt.casefold():
+            return (f"Entschuldigung — ich hatte {alt} gehört. "
+                    f"Dann korrigiere ich auf {jetzt}. ")
     if "fuerWen" in neu and s.get("fuerWen"):
         # W-FUER-WEN (Chef 03.09.2026): der Termin ist fuer jemand anderen —
         # das SOFORT quittieren, bevor irgendein "Danke, <Anrufername>"
@@ -1706,7 +1744,10 @@ def _frisch_absagen(sit: dict, melde: Melde = None) -> dict:
 
 
 _DOKUMENT_RE = re.compile(
-    r"\brezept\w*|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
+    # W-REZEPTION (13.09.2026, Anruf 48673eca): `\brezept\w*` traf auch
+    # "Rezeption" — auf den Wunsch nach der ANMELDUNG antwortete Bianca
+    # "Rezept und Überweisung kann ich am Telefon nicht ausstellen".
+    r"\brezept(?!ion)\w*|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
     re.I,
 )
 

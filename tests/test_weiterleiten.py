@@ -345,6 +345,20 @@ def test_allgemeine_personal_stichworte_bekommen_ueberlastungs_erklaerung():
         assert not z.get("transfer")
 
 
+def test_rezeption_ist_kein_rezept():
+    """W-REZEPTION (13.09.2026, Anruf 48673eca): `\\brezept\\w*` traf auch
+    "Rezeption" — auf den Wunsch nach der ANMELDUNG antwortete Bianca
+    "Rezept und Überweisung kann ich am Telefon nicht ausstellen".
+    Gegenprobe gleich mit: das echte Rezept muss weiter greifen."""
+    for text in ("Ich möchte bitte zur Rezeption.",
+                 "Verbinden Sie mich mit der Rezeption, bitte."):
+        z = flow.zug(_sit(), text)
+        assert z and "Rezept" not in z["text"], text
+        assert "Anmeldung" in z["text"], text
+    z = flow.zug(_sit(), "Ich brauche ein Rezept.")
+    assert z and "Rezepte" in z["text"]
+
+
 def test_erneutes_bestehen_ohne_rollenziel_bietet_rueckruf_an():
     sit = _sit()
     events: list[str] = []

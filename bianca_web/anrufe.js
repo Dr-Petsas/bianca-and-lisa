@@ -466,8 +466,22 @@ function maleDetail(a) {
   wurzel.appendChild(fluss);
 }
 
+/** Anruf-UID aus dem Fragment (#<uid>) — der Link der Ergebnisseite.
+    Nur echte uuid4-Hex zaehlt, damit kein fremdes Fragment einen Ladeversuch
+    auf einen erfundenen Mitschnitt ausloest. */
+function sidAusAdresse() {
+  const roh = decodeURIComponent(String(location.hash || "").replace(/^#/, "")).trim();
+  const h = roh.replace(/-/g, "").toLowerCase();
+  return /^[0-9a-f]{32}$/.test(h) ? h : "";
+}
+
 async function oeffne(sid) {
   aktivId = sid;
+  // Adresse mitschreiben: die Seite ist damit teilbar und der Rueckweg aus
+  // der Ergebnisseite landet wieder auf demselben Gespraech.
+  if (sidAusAdresse() !== String(sid || "").replace(/-/g, "").toLowerCase()) {
+    try { history.replaceState(null, "", `#${sid}`); } catch { /* */ }
+  }
   maleListe();
   stoppTon();
   try {
@@ -543,6 +557,12 @@ function maleListe() {
     e.onclick = () => oeffne(a.id);
     wurzel.appendChild(e);
   }
+  // Verlinktes Gespraech ins Bild holen: bei 100+ Mitschnitten liegt der
+  // markierte Eintrag sonst weit unterhalb des sichtbaren Bereichs.
+  const markiert = wurzel.querySelector(".eintrag.aktiv");
+  if (markiert) {
+    try { markiert.scrollIntoView({ block: "nearest" }); } catch { /* */ }
+  }
 }
 
 async function ladeListe() {
@@ -581,11 +601,22 @@ function filterBinden() {
   });
 }
 
+/** Verlinktes Gespraech oeffnen (Ergebnisseite -> Anrufuebersicht). Der
+    Art-Filter geht dafuer auf "alle": ein Testanruf war sonst ausgeblendet
+    und der Eintrag fehlte in der Liste, obwohl der Mitschnitt existiert. */
+function adresseFolgen() {
+  const sid = sidAusAdresse();
+  if (!sid || sid === aktivId) return;
+  if (artFilter !== "alle") { artSchreiben("alle"); }
+  oeffne(sid);
+}
+
 $("neuLaden").onclick = () => { ladeListe(); if (aktivId) oeffne(aktivId); };
 artFilter = artLesen();
 filterBinden();
+window.addEventListener("hashchange", adresseFolgen);
 if (typeof praxisSeiteStart === "function") {
-  praxisSeiteStart({ onchange: () => ladeListe() }).then(ladeListe);
+  praxisSeiteStart({ onchange: () => ladeListe() }).then(ladeListe).then(adresseFolgen);
 } else {
-  ladeListe();
+  ladeListe().then(adresseFolgen);
 }

@@ -67,7 +67,7 @@ def test_globale_navigation_und_anruf_unterseiten_existieren():
     assert Path(antwort.path).name == "anrufe.js"
     html_anrufe = open("bianca_web/anrufe.html", encoding="utf-8").read()
     js_anrufe = open("bianca_web/anrufe.js", encoding="utf-8").read()
-    assert "anrufe.js?v=a14" in html_anrufe
+    assert "anrufe.js?v=a16" in html_anrufe
     assert "praxis.js?v=5" in html_anrufe
     assert "Testanrufe" in html_anrufe
     assert "Praxis-Live" in html_anrufe
@@ -80,3 +80,32 @@ def test_globale_navigation_und_anruf_unterseiten_existieren():
     assert "x-forwarded-prefix" in src_proxy
     assert "location_hinter_prefix" in src_proxy
     assert "html_studio_pfade" in src_proxy
+
+
+def test_ergebnisseite_verlinkt_gespraech_in_die_anrufuebersicht():
+    """Chef 13.09.2026: zu jedem Fehler das Gespraech verlinkt, Klick landet
+    in der Anrufuebersicht beim richtigen Gespraech.
+
+    Die zwei Haelften muessen zusammenpassen: die Ergebnisseite haengt die
+    Anruf-UID als Fragment an (`#<uid>`), die Anrufuebersicht liest genau
+    dieses Fragment. Wer eine Seite aendert, faellt hier auf."""
+    erg_js = open("tests/baukasten/editor_web/ergebnisse.js", encoding="utf-8").read()
+    erg_html = open("tests/baukasten/editor_web/ergebnisse.html", encoding="utf-8").read()
+    anrufe_js = open("bianca_web/anrufe.js", encoding="utf-8").read()
+
+    # Sendeseite: Adresse eine Ebene ueber dem Studio + UID im Fragment.
+    assert "function anrufeUrl" in erg_js
+    assert 'new URL("anrufe"' in erg_js
+    assert "ziel.hash = String(sid)" in erg_js
+    # Akkordeon mit den betroffenen Gespraechen unter dem Problem.
+    assert "problem-akkordeon" in erg_js
+    assert "<details" in erg_js
+    assert "problemZelle(p)" in erg_js
+    assert "web/ergebnisse.js?v=13" in erg_html
+
+    # Empfangsseite: Fragment lesen, Filter oeffnen, Gespraech vorwaehlen.
+    assert "function sidAusAdresse" in anrufe_js
+    assert "hashchange" in anrufe_js
+    assert "adresseFolgen" in anrufe_js
+    # Ein Testanruf darf nicht am Art-Filter haengen bleiben.
+    assert 'artSchreiben("alle")' in anrufe_js
