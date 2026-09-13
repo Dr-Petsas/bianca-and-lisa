@@ -225,3 +225,53 @@ def test_llm_zug_bei_meddent_behaelt_zahn(monkeypatch):
     sit = _meddent_sit()
     aus = bianca_agent.user_turn(sit, "Ich hätte gern eine Zahnreinigung.")
     assert "Zahnreinigung" in aus["text"]
+
+
+# --- Punkt 6: 116 117 nur mit Blessing-Notfallregel ---------------------------
+
+from kern import praxisregeln  # noqa: E402
+
+
+def test_zahnpraxis_nennt_nie_den_bereitschaftsdienst():
+    sit = _meddent_sit()
+    text = ("Das tut mir leid. Wenden Sie sich bitte an den ärztlichen "
+            "Bereitschaftsdienst unter 116 117. Möchten Sie einen Akut-Termin?")
+    neu = bianca_agent._notdienst_wache_anwenden(sit, text)
+    assert "116" not in neu
+    assert neu == "Das tut mir leid. Möchten Sie einen Akut-Termin?"
+    assert any(e.get("w") == "notdienst-wache" for e in sit["_spur"])
+
+
+@pytest.mark.parametrize("text", [
+    "Rufen Sie die 116117 an.",
+    "Der Bereitschaftsdienst hat die Nummer 116 117.",
+    "Wählen Sie 1 1 6 1 1 7.",
+])
+def test_nur_notdienst_wird_ehrlicher_satz(text):
+    sit = _meddent_sit()
+    neu = bianca_agent._notdienst_wache_anwenden(sit, text)
+    assert "116" not in neu and "1 1 6" not in neu
+    assert neu == "Bei akuten Beschwerden helfen wir Ihnen hier in der Praxis weiter."
+
+
+def test_blessing_mit_db_marker_darf_116117_sagen():
+    """Die Blessing-Notfallregel kommt per DB-Marker — dort ist der Verweis
+    gewollt (Chef 09.09.2026) und bleibt stehen."""
+    sit = _blessing_sit()
+    sit["tenant"]["dbPrompt"] = f"{praxisregeln.NOTFALL_MARKER}: Sprechzeiten Mo-Fr 8-17 Uhr."
+    text = "Wenden Sie sich bitte an den Bereitschaftsdienst unter 116 117."
+    assert bianca_agent._notdienst_wache_anwenden(sit, text) == text
+
+
+def test_feste_notfallantwort_nur_mit_marker():
+    """Die deterministische Notfall-Antwort (mit 116 117) faellt in
+    Zahnpraxen nie — sie haengt am DB-Marker."""
+    med = laden("meddent")
+    assert praxisregeln.notfall_antwort(med, "Ich habe starke Schmerzen und Blutung") == ""
+    assert praxisregeln.notdienst_erlaubt(med) is False
+
+
+def test_andere_zahlen_bleiben():
+    sit = _meddent_sit()
+    text = "Die Praxis hat die Nummer 0211 1161170 und öffnet um 11 Uhr 6."
+    assert bianca_agent._notdienst_wache_anwenden(sit, text) == text

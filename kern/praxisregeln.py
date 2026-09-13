@@ -156,6 +156,40 @@ def dokument_vorsprache_aktiv(tenant: dict | None) -> bool:
     return DOKUMENT_MARKER in _prompt(tenant)
 
 
+# Chef 13.09.2026 (Punkt 6): Der Verweis auf den aerztlichen Bereitschafts-
+# dienst 116 117 gehoert NUR zur Blessing-Notfallregel (DB-Marker). In den
+# Zahnpraxen (MedDent, Thaler) gibt es den Akut-Termin im Haus — dort darf
+# weder die Maschine noch das Modell die 116 117 nennen. Der feste Text oben
+# ist ueber `notfall_sofort_aktiv` gegated; diese Wache faengt das MODELL.
+_NOTDIENST_RE = re.compile(r"\b116\s?117\b|\b1\s?1\s?6\s+1\s?1\s?7\b", re.I)
+
+
+def notdienst_erlaubt(tenant: dict | None) -> bool:
+    """Darf die 116 117 in dieser Praxis ueberhaupt fallen? Nur mit Marker."""
+    return notfall_sofort_aktiv(tenant)
+
+
+def notdienst_saeubern(tenant: dict | None, text: str) -> tuple[str, bool]:
+    """(Text ohne 116-117-Saetze, gestrichen?) — unveraendert, wenn erlaubt.
+
+    Streicht satzweise (kern.sprech.tts_saetze); bleibt nichts uebrig, kommt
+    ein ehrlicher Satz statt Stille — der Frage-Anker haengt die offene
+    Frage an."""
+    t = _s(text)
+    if not t or notdienst_erlaubt(tenant) or not _NOTDIENST_RE.search(t):
+        return text, False
+    from kern import sprech
+    # tts_saetze trennt NIE hinter einer Ziffer ("im 3. Stock") — endet der
+    # 116-117-Satz auf die Nummer, wuerde der Folgesatz mit ihm fallen. Der
+    # markierte Satz verschwindet gleich, das Satzzeichen hoert also niemand.
+    t = re.sub(r"(116\s?117)\.(\s+[A-ZÄÖÜ])", r"\1!\2", t)
+    behalten = [s for s in sprech.tts_saetze(t) if not _NOTDIENST_RE.search(s)]
+    neu = " ".join(behalten).strip()
+    if not neu:
+        neu = "Bei akuten Beschwerden helfen wir Ihnen hier in der Praxis weiter."
+    return neu, True
+
+
 def lebensgefahr(text: str) -> bool:
     return bool(_LEBENSGEFAHR_RE.search(_s(text)))
 

@@ -2684,10 +2684,21 @@ Code-Punkte in Kürze, jeder mit eigenem Modul, Notaus und Tests:
    wäre der teurere Fehler. Stufen `FACH_WACHE=off|shadow|enforce`
    (Default enforce). Tests: `tests/test_fach_wache.py`.
 
+7. **Notdienst-Wache** (`praxisregeln.notdienst_saeubern`, Punkt 6 —
+   Chef: „kein Verweis auf 116/117"): die feste Notfallantwort mit 116 117
+   hängt am Blessing-DB-Marker (`notfall_sofort_aktiv`) und fällt in den
+   Zahnpraxen nie. Damit auch das MODELL sie dort nicht nennt, streicht
+   `agent._notdienst_wache_anwenden` (Endtext + P5-Satz) jeden Satz mit
+   „116 117"/„116117"/„1 1 6 1 1 7", wenn der Mandant den Marker nicht
+   trägt; bleibt nichts, kommt „Bei akuten Beschwerden helfen wir Ihnen
+   hier in der Praxis weiter." Blessing unverändert. Tests: Punkt-6-Block
+   in `tests/test_fach_wache.py`.
+
 Reine Betriebs-Punkte ohne Code: Clara/Lena bleiben bis zum Hardware-
-Upgrade aus (4); kein Verweis auf 116117 in Zahnpraxen (6 — nur Blessing
-trägt die Regel per DB-Marker); Telefon-Notizen laufen ins MAS-Gedächtnis,
-das Praxisteam sichtet CallR (7).
+Upgrade aus (4); Telefon-Notizen laufen ins MAS-Gedächtnis, das Praxisteam
+sichtet CallR (7 — Schreibweg für alle drei Mandanten am 13.09. live
+geprüft: `/brain/events` + `/brain/caller-context` 200, `bianca_call`-
+Reports vorhanden).
 
 Dabei entfernt: die Debug-Instrumentierung der Sitzung a62ee2 vom
 12.09. (`kern/dbg_a62ee2.py`, `#region agent log`-Blöcke in Brücke,

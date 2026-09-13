@@ -906,6 +906,20 @@ def _fach_wache_anwenden(sit: dict, text: str) -> str:
     return neu or text
 
 
+def _notdienst_wache_anwenden(sit: dict, text: str) -> str:
+    """Chef 13.09.2026 (Punkt 6): 116 117 nur in der Praxis mit der
+    DB-Notfallregel (Blessing). In den Zahnpraxen darf das Modell den
+    Bereitschaftsdienst nie nennen — Akutfaelle bekommen den Termin im Haus."""
+    if not _s(text):
+        return text
+    from kern import praxisregeln
+    neu, gestrichen = praxisregeln.notdienst_saeubern(sit.get("tenant") or {}, text)
+    if gestrichen:
+        spur.merken(sit, "notdienst-wache", "116117 gestrichen")
+        return neu or text
+    return text
+
+
 def _fakten_wache_anwenden(
     sit: dict, text: str, *, nutzertext: str | None = None
 ) -> str:
@@ -1504,6 +1518,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # W-FACH-WACHE: ein Zahn-Satz beim Hautarzt faellt ebenfalls HIER
             # — gesprochen waere er nicht mehr einzufangen.
             satz = _fach_wache_anwenden(sit, satz)
+            satz = _notdienst_wache_anwenden(sit, satz)
             # W-FRAGE-GATE: eine Daten-Frage darf auch hier nicht raus — sie
             # waere gesprochen, bevor die Wache am Zugende sie streichen kann,
             # und die Maschine wuerde sie danach ein zweites Mal stellen.
@@ -1545,6 +1560,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit, bewacht, nutzertext=text_in)
     bewacht = _anrede_wache_anwenden(sit, bewacht)
     bewacht = _fach_wache_anwenden(sit, bewacht)
+    bewacht = _notdienst_wache_anwenden(sit, bewacht)
     bewacht = _frage_gate_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
