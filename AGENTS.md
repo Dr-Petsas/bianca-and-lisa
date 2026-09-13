@@ -2539,11 +2539,58 @@ wächter haben". `hirn.auto_resume_modus()` liefert jetzt `enforce` als Default
 überschrieben, s. `.env`-Falle unten). Rückweg unverändert
 `HIRN_AUTO_RESUME=off`. Wache: `test_default_ist_enforce`.
 
+## Fünf Feldtest-Fixes (13.09.2026 abends — nicht rückbauen)
+
+Vor den Feldtests in drei Praxen (Chef: „1-4 dürfen NIEMALS Probleme
+machen") wurden die groben Befunde der Analyse EINZELN korrigiert — je ein
+Commit, je eigene Tests, die Opus-Wächter (W-EINWAND, W-EINGEHEN,
+W-FRAGE-GATE, W-HIRN-GATE, Anrufe Tzannis/Rateike) blieben in jedem Schritt
+grün. Voll-Suite 14 → 11 Altfehler (9 bekannte + 2 `audioop`), kein neuer.
+
+1. **Dokument-Hook mandanten- und kontextscharf** (`kern/praxisregeln.
+   unterlagen_antwort`, Einhängung in `flow.zug`). Vorher lief der feste
+   Blessing-Text („Rezepte nur persönlich") bei JEDEM Mandanten und räumte
+   mitten in der Buchung `s["frage"]` — die Kette strandete. Jetzt: der
+   Vorsprache-Text nur mit DB-Marker UND echter ANFORDERUNG
+   (`dokument_anforderung`); „ich habe eine Überweisung" ist Besitz
+   (`hat_ueberweisung`) = Buchungsgrund; „Befundbesprechung"/„Röntgentermin"
+   sind Termine (`_TERMIN_KONTEXT_RE`). Läuft eine Aufgabe, gibt Bianca die
+   Auskunft und stellt die offene Frage (`flussFrage`) im SELBEN Zug erneut.
+   Tests: `tests/test_dokument_hook.py`.
+2. **Überweisung ≠ Rückruf** (`kern/intent.py`): `_FB_RUECKRUF_RE` ist
+   geteilt in Kern (Rückruf-Wörter) und Dokument; `_rueckruf()` schweigt,
+   wenn das Dokument ein Buchungsgrund ist, `_ueberwiesen()` öffnet ANLEGEN.
+   „Ich brauche ein Rezept" bleibt ABGEBEN. Tests:
+   `tests/test_intent_ueberweisung.py`.
+3. **Dringlichkeit ≠ Notfall** (Blessing, `praxisregeln.akut`): „dringend",
+   „sofort", „heute unbedingt" sind aus `_AKUT_RE` raus; Notfall nur bei
+   `_DRINGLICHKEIT_RE` PLUS `_BESCHWERDE_RE` (Haut/Ausschlag/brennt/
+   geschwollen …) oder echtem Akut-/Lebensgefahr-Wort. `haut\w*` matcht
+   bewusst nicht „Hautarzt". Tests in `tests/test_blessing_praxisregeln.py`.
+4. **W-EINWAND ohne Fehltreffer** (`kern/einwand.py`,
+   `_teil_ist_kein_einwand`): „keine Beschwerden/Schmerzen", „keine
+   andere/neue Nummer", „keinen anderen Arzt", Bestätigung mit
+   vorangestelltem Nein ohne harten Marker („Nein die Nummer stimmt"),
+   Unwissen des Anrufers („ich weiß den Namen nicht", „ich habe die Nummer
+   nicht verstanden" — „SIE haben … falsch verstanden" bleibt Einwand),
+   Alter, Neupatient, Rückblick/Bewertung. `beschwerden` ist kein
+   Grund-Feldwort mehr; `arzt` steht vor `name` („Der Arzt heißt nicht
+   Petsas"). Jeder Negativ-Fall hat seine Positiv-Gegenprobe in
+   `tests/test_einwand.py`.
+5. **Notleine 6 → 8 Stupse** (`kern/stille.GESAMT_MAX`): vier Stille-Phasen
+   statt drei, die 15er-Schleife aus 9395e2ce wird weiter gefangen; die
+   Opus-Tests leiten die Phasenzahl aus den Konstanten ab. Dazu wärmt
+   `gehirn.feste_saetze` die W-EINGEHEN-Bezüge (`eingehen.ALLE_BEZUEGE`),
+   die `_EINWAND_VORSATZ`-Sätze und die W-HIRN-GATE-Quittungen vor — der
+   Dienst spricht satzweise aus dem Cache, ein ungewärmter Vorsatz kostete
+   sonst eine eigene Synthese vor der gewärmten Frage.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
 | --- | --- | --- |
-| **V2.2, 13.09.2026 (aktuell)** | `telefonki-produktionsstand-v2.2-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.2.md` |
+| **V2.3, 13.09.2026 (aktuell)** | `telefonki-produktionsstand-v2.3-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.2.md` (gleicher Ablauf, `VERSION=v2.3`) |
+| V2.2, 13.09.2026 | `telefonki-produktionsstand-v2.2-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.2.md` |
 | V2.1, 13.09.2026 | `telefonki-produktionsstand-v2.1-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
 | V2.0, 13.09.2026 — NICHT benutzen | `telefonki-produktionsstand-v2.0-2026-09-13` | trägt die fehlende Behandlerwahl vor dem PZR-Angebot und die kaputte Dock-Kodierung (siehe Handbuch) |
 | V1.0, 10.09.2026 | `telefonki-produktionsstand-v1.0-2026-09-10` | nur Git-/Image-Tags |
