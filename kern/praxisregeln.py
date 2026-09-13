@@ -219,6 +219,12 @@ def dokument_antwort() -> str:
     )
 
 
+def hat_ueberweisung(text: str) -> bool:
+    """Der Anrufer HAT eine Ueberweisung / ist ueberwiesen worden — das ist
+    ein Buchungsgrund, kein Dokumentwunsch (Fix 1/2, 13.09.2026)."""
+    return bool(_HAT_UEBERWEISUNG_RE.search(_s(text)))
+
+
 def dokument_anforderung(text: str) -> bool:
     """Will der Anrufer ein Rezept/eine Ueberweisung BEKOMMEN (nicht: er hat
     eine und will deshalb einen Termin)? Fix 1, 13.09.2026."""

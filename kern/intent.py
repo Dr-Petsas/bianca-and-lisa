@@ -264,18 +264,55 @@ _FB_VERSCHIEBEN_RE = re.compile(
     r"verschieb\w*|umbuch\w*|verleg\w*|umleg\w*|vorverleg\w*|anderen\s+tag",
     re.I,
 )
-_FB_RUECKRUF_RE = re.compile(
+_FB_RUECKRUF_KERN_RE = re.compile(
     r"r(?:ü|ue)ckruf|zur(?:ü|ue)ckruf\w*|ruft\s+mich|meldet\s+(?:sich|euch)|"
-    r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back|"
-    # W-SVETLANA (04.09.2026): Rezept/Überweisung ABHOLEN ist kein Termin —
-    # die Praxis soll eine Notiz kriegen, Bianca darf nicht ins Buchen kippen.
-    # W-REZEPTION (13.09.2026): nie "Rezeption" mitfangen — der Wunsch nach
-    # der ANMELDUNG landete so im Rueckruf-Zweig.
+    r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back",
+    re.I,
+)
+# W-SVETLANA (04.09.2026): Rezept/Überweisung ABHOLEN ist kein Termin —
+# die Praxis soll eine Notiz kriegen, Bianca darf nicht ins Buchen kippen.
+# W-REZEPTION (13.09.2026): nie "Rezeption" mitfangen — der Wunsch nach
+# der ANMELDUNG landete so im Rueckruf-Zweig.
+_FB_DOKUMENT_RE = re.compile(
     r"\brezept(?!ion)\w*|\b(?:ü|ue)berweisung\b|(?:ü|ue)berweisen|"
     r"abhol\w*.{0,24}(?:rezept(?!ion)|(?:ü|ue)berweis)|"
     r"(?:rezept(?!ion)|(?:ü|ue)berweis)\w*.{0,24}abhol",
     re.I,
 )
+
+
+def _dokument_ist_buchungsgrund(t: str) -> bool:
+    """Fix 2 (13.09.2026, Feldtest-Analyse): „Ueberweisung" im Satz ist
+    NICHT automatisch ein Dokumentwunsch (ABGEBEN).
+
+    Vorher gewann `_FB_RUECKRUF_RE` gegen den Terminwunsch: „Ich habe eine
+    Ueberweisung vom Hausarzt und brauche einen Termin" wurde ein
+    Rueckruf-Vorgang, „Ich bin ueberwiesen worden" mitten in der Buchung
+    parkte die Buchung. Buchungsgrund ist es, wenn der Anrufer die
+    Ueberweisung HAT (praxisregeln.hat_ueberweisung) oder ein Terminwunsch
+    im Satz steht, ohne dass ein Dokument angefordert wird. Ein echter
+    Dokumentwunsch („Ich brauche ein Rezept", „Ueberweisung abholen") bleibt
+    ABGEBEN wie bisher."""
+    from kern import praxisregeln
+    if praxisregeln.hat_ueberweisung(t):
+        return True
+    if ((_FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t))
+            and not praxisregeln.dokument_anforderung(t)):
+        return True
+    return False
+
+
+def _rueckruf(t: str) -> bool:
+    """Rueckruf-/Nachrichten-Wunsch oder echter Dokumentwunsch (ABGEBEN)."""
+    if _FB_RUECKRUF_KERN_RE.search(t):
+        return True
+    return bool(_FB_DOKUMENT_RE.search(t)) and not _dokument_ist_buchungsgrund(t)
+
+
+def _ueberwiesen(t: str) -> bool:
+    """Ueberweisung HABEN ohne Dokumentwunsch = Terminbedarf (ANLEGEN)."""
+    from kern import praxisregeln
+    return praxisregeln.hat_ueberweisung(t) and not praxisregeln.dokument_anforderung(t)
 _FB_AUSKUNFT_RE = re.compile(
     r"wann\s+(?:ist|war|habe?\s+ich)\b.{0,30}termin|"
     r"habe?\s+ich\s+(?:noch\s+)?(?:irgend)?einen\s+termin|"
@@ -418,7 +455,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
         if _FB_ABSAGE_RE.search(t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
-        if _FB_RUECKRUF_RE.search(t):
+        if _rueckruf(t):
             return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
         if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
                 and not _FREIER_TERMIN_RE.search(t):
@@ -426,6 +463,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
         if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
                 or _FREIER_TERMIN_RE.search(t)
+                or _ueberwiesen(t)
                 or (not _motivkatalog_da(sit)
                     and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
                     and not _NEGATION_RE.search(t))) or (
@@ -452,14 +490,15 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
     if _FB_ABSAGE_RE.search(t):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
-    if _FB_RUECKRUF_RE.search(t):
+    if _rueckruf(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
     if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
             and not _FREIER_TERMIN_RE.search(t):
         gg = "VORGANG" if "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
     if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
-            or _FREIER_TERMIN_RE.search(t)):
+            or _FREIER_TERMIN_RE.search(t)
+            or _ueberwiesen(t)):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     if (not _motivkatalog_da(sit)
             and _FB_BEHANDLUNGSWUNSCH_RE.search(t)
@@ -495,14 +534,15 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
         treffer.append(("VERSCHIEBEN", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}))
     if _FB_ABSAGE_RE.search(t):
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))
-    if _FB_RUECKRUF_RE.search(t):
+    if _rueckruf(t):
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))
     if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
             and not _FREIER_TERMIN_RE.search(t):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
                                      "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
     if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
-            or _FREIER_TERMIN_RE.search(t)):
+            or _FREIER_TERMIN_RE.search(t)
+            or _ueberwiesen(t)):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
     if _FB_SYMPTOM_RE.search(t):
         treffer.append(("SYMPTOM", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
