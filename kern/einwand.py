@@ -46,6 +46,12 @@ _NICHT_MEHR_RE = re.compile(r"\bnicht\s+mehr\b", re.I)
 # Feldwoerter. Absichtlich ohne "Termin"/"Zeit": der Slot hat seine eigene
 # Ablehnungs-Logik ("der passt nicht" waehlt einen anderen Slot) — die hier
 # anzufassen wuerde die Buchungskette brechen.
+#
+# Fix 4 (13.09.2026): `arzt` steht VOR `name` — "Der Arzt heisst nicht
+# Petsas" bestreitet den Behandler, nicht den Patientennamen (das Wort
+# "heisst" gehoert sonst dem Namensfeld). `beschwerden` ist kein Feldwort
+# mehr: "Ich habe keine Beschwerden" ist eine Zustandsangabe, kein
+# Widerspruch gegen den Besuchsgrund.
 _FELDER: list[tuple[str, re.Pattern[str]]] = [
     ("nummer", re.compile(
         r"\b(?:telefon|telefonnummer|handy|handynummer|mobilnummer|"
@@ -53,14 +59,14 @@ _FELDER: list[tuple[str, re.Pattern[str]]] = [
     ("versicherung", re.compile(
         r"\b(?:versichert|versicherung|krankenkasse|kasse|privat|"
         r"gesetzlich|privatpatient|kassenpatient)\b", re.I)),
-    ("name", re.compile(
-        r"\b(?:name|namen|nachname|nachnamen|familienname|familiennamen|"
-        r"vorname|vornamen|heiße|heisse|heiss|heisst|heißt)\b", re.I)),
     ("arzt", re.compile(
         r"\b(?:arzt|ärztin|aerztin|zahnarzt|zahnärztin|behandler|"
         r"behandlerin|doktor|doc)\b", re.I)),
+    ("name", re.compile(
+        r"\b(?:name|namen|nachname|nachnamen|familienname|familiennamen|"
+        r"vorname|vornamen|heiße|heisse|heiss|heisst|heißt)\b", re.I)),
     ("grund", re.compile(
-        r"\b(?:grund|besuchsgrund|anliegen|behandlung|beschwerden)\b", re.I)),
+        r"\b(?:grund|besuchsgrund|anliegen|behandlung)\b", re.I)),
 ]
 
 # Der Anrufer FRAGT etwas ("Stimmt meine Nummer nicht?") — dann ist nichts
@@ -70,6 +76,52 @@ _FRAGE_RE = re.compile(r"[?]")
 # Eine Bitte um Wiederholung ist kein Widerspruch ("wie war die Nummer?").
 _NOCHMAL_RE = re.compile(
     r"\b(?:nochmal|noch\s+einmal|wiederhol\w*|wie\s+war)\b", re.I)
+
+# --- Fix 4 (13.09.2026, Feldtest-Analyse): Fehltreffer eng machen -----------
+# Ein falscher Einwand wirft einen feststehenden Wert weg und stellt die
+# Frage neu — genau die Schleife, die wir bekaempfen. Deshalb werden
+# Wendungen ausgenommen, in denen ein Marker steht, aber NICHTS bestritten
+# wird. Jede Ausnahme hat eine Gegenprobe in tests/test_einwand.py.
+
+# "keine andere Nummer" / "keinen anderen Arzt" = ausdruecklich KEINE
+# Aenderung; "keine Beschwerden/Schmerzen" = Zustand; "8 Jahre alt" = Alter;
+# "neue Patientin" = Neupatient, nicht "neuer Name".
+_KEIN_WIDERSPRUCH_RE = re.compile(
+    r"\bkein\w*\s+(?:andere\w*|neue\w*|zweite\w*|weitere\w*)\b"
+    r"|\bkein\w*\s+(?:beschwerden|schmerzen|probleme?|ahnung|sorge)\b"
+    r"|\bjahre?\s+alt\b"
+    r"|\bneue[nrs]?\s+patient\w*"
+    # Unwissen/Hoeren des ANRUFERS ist kein Widerspruch: "Ich weiss den Namen
+    # nicht", "Ich habe den Namen nicht verstanden". (Umgekehrt "SIE haben
+    # den Namen falsch verstanden" bleibt ein Einwand — kein "ich" davor.)
+    r"|\b(?:wei(?:ß|ss)|wusste|kenne|kennen|erinnere)\b"
+    r"|\bich\b[^,;.!?]*?\b(?:nicht|nichts)\s+(?:verstanden|geh(?:ö|oe)rt|mitbekommen)\b"
+    # Rueckblick/Bewertung ("die Behandlung letztes Mal war nicht gut") ist
+    # Erzaehlung, keine Korrektur der aktuellen Daten.
+    r"|\b(?:letzte[sn]?\s+mal|damals|fr(?:ü|ue)her|neulich|beim\s+letzten)\b"
+    r"|\b(?:gut|schlecht|toll|super|zufrieden|unzufrieden|unfreundlich|nett|"
+    r"gewartet|teuer|schmerzhaft)\b",
+    re.I,
+)
+
+# Bestaetigung mit vorangestelltem "Nein" ohne harte Verneinung im Teilsatz
+# ("Nein die Nummer stimmt", "Nein der Name passt so") — STT verschluckt das
+# Komma, der Anrufer bestaetigt aber. Nur ein HARTER Marker im selben
+# Teilsatz macht daraus wieder einen Widerspruch ("die Nummer stimmt nicht").
+_BESTAETIGT_RE = re.compile(
+    r"\b(?:stimmt|passt|richtig|korrekt|bleibt|behalten|so\s+lassen|"
+    r"ist\s+ok(?:ay)?|in\s+ordnung)\b", re.I)
+_HART_RE = re.compile(
+    r"\b(?:nicht|nich|nichts|kein\w*|falsch|verkehrt|(?:ge)?(?:ä|ae)ndert|"
+    r"veraltet|alt|(?:ü|ue)berholt|ueberholt)\b", re.I)
+
+
+def _teil_ist_kein_einwand(teil: str) -> bool:
+    if _KEIN_WIDERSPRUCH_RE.search(teil):
+        return True
+    if _BESTAETIGT_RE.search(teil) and not _HART_RE.search(teil):
+        return True
+    return False
 
 
 def modus() -> str:
@@ -104,6 +156,10 @@ def feld(text: str) -> str:
         if not teil:
             continue
         if not (_MARKER_RE.search(teil) or _NICHT_MEHR_RE.search(teil)):
+            continue
+        if _teil_ist_kein_einwand(teil):
+            # Fix 4: Marker ohne Widerspruch (Bestaetigung, Unwissen,
+            # "keine andere", Rueckblick) — nichts bestritten.
             continue
         for name, cre in _FELDER:
             if cre.search(teil):

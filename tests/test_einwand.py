@@ -100,6 +100,91 @@ def test_marker_im_anderen_teilsatz_zaehlt_nicht():
     assert einwand.feld("Nein danke, sonst nichts, die Nummer passt.") == ""
 
 
+# --- Fix 4 (13.09.2026): Fehltreffer eng — ein falscher Einwand wirft einen
+# feststehenden Wert weg. Hinter jedem Negativ-Fall steht der Positiv-Fall,
+# der weiterhin greifen MUSS (sonst schluckt die Ausnahme echte Einwaende).
+
+def test_zustandsangabe_keine_beschwerden_ist_kein_einwand():
+    for satz in ("Ich habe keine Beschwerden.",
+                 "Ich habe keine Schmerzen, nur zur Kontrolle.",
+                 "Kein Problem, die Behandlung machen wir dann.",
+                 "Keine Ahnung, welche Behandlung das war."):
+        assert einwand.feld(satz) == "", satz
+    # Gegenprobe: der Grund wird wirklich bestritten.
+    assert einwand.feld("Nein, der Grund ist falsch, ich komme wegen Schmerzen.") == "grund"
+    assert einwand.feld("Die Behandlung ist nicht richtig, ich will eine Zahnreinigung.") == "grund"
+
+
+def test_keine_andere_nummer_ist_keine_aenderung():
+    # "keine andere/neue Nummer" heisst: die hinterlegte BLEIBT.
+    for satz in ("Ich habe keine andere Nummer.",
+                 "Ich habe keine neue Nummer, nehmen Sie die.",
+                 "Ich möchte keinen anderen Arzt.",
+                 "Nein, keinen anderen Behandler, bei Doktor Petsas bleibt es."):
+        assert einwand.feld(satz) == "", satz
+    # Gegenprobe: "eine andere Nummer" ist eine echte Aenderung.
+    assert einwand.feld("Ich habe jetzt eine andere Nummer.") == "nummer"
+    assert einwand.feld("Ich hätte gern einen anderen Behandler.") == "arzt"
+
+
+def test_bestaetigung_mit_vorangestelltem_nein_ist_kein_einwand():
+    # STT verschluckt das Komma: "Nein die Nummer stimmt" bestaetigt.
+    for satz in ("Nein die Nummer stimmt.",
+                 "Nein der Name passt so.",
+                 "Nein, die Nummer bleibt.",
+                 "Nein privat ist richtig."):
+        assert einwand.feld(satz) == "", satz
+    # Gegenprobe: harte Verneinung im selben Teilsatz bleibt ein Einwand.
+    assert einwand.feld("Nein die Nummer stimmt nicht.") == "nummer"
+    assert einwand.feld("Die Nummer ist nicht richtig.") == "nummer"
+    assert einwand.feld("Nein, privat ist nicht mehr korrekt.") == "versicherung"
+
+
+def test_unwissen_des_anrufers_ist_kein_einwand():
+    for satz in ("Ich weiß den Namen nicht.",
+                 "Ich kenne den Namen vom Arzt nicht.",
+                 "Ich habe den Namen nicht verstanden.",
+                 "Ich habe die Nummer nicht mitbekommen.",
+                 "Ich erinnere mich nicht an den Behandler."):
+        assert einwand.feld(satz) == "", satz
+    # Gegenprobe: BIANCA hat falsch verstanden — das ist ein Einwand.
+    assert einwand.feld("Sie haben den Namen falsch verstanden.") == "name"
+    assert einwand.feld("Sie haben die Nummer nicht richtig verstanden.") == "nummer"
+
+
+def test_alter_und_neupatient_sind_keine_aenderung():
+    for satz in ("Mein Sohn ist acht Jahre alt mit dem Namen Max.",
+                 "Ich bin 70 Jahre alt, der Name ist Berger.",
+                 "Ich bin eine neue Patientin mit dem Namen Berger.",
+                 "Wir sind neue Patienten, der Behandler ist uns egal."):
+        assert einwand.feld(satz) == "", satz
+    # Gegenprobe: "veraltete Nummer" / "neuer Name" bleiben Aenderungen.
+    # (Bewusst NICHT "meine alte Nummer": `alt` ist nur als ganzes Wort
+    # Marker — "mein alter Zahnarzt" darf den Behandler nie wegwerfen.)
+    assert einwand.feld("Die hinterlegte Nummer ist veraltet.") == "nummer"
+    assert einwand.feld("Ich habe einen neuen Namen, ich habe geheiratet.") == "name"
+
+
+def test_rueckblick_und_bewertung_sind_kein_einwand():
+    for satz in ("Die Behandlung letztes Mal war nicht gut.",
+                 "Damals war der Behandler nicht so nett.",
+                 "Ich war früher nicht bei diesem Arzt.",
+                 "Beim letzten Mal hat die Behandlung nicht gepasst."):
+        assert einwand.feld(satz) == "", satz
+    # Gegenprobe (Opus-Fall bleibt): der AKTUELLE Behandler wird bestritten.
+    assert einwand.feld("Ich war nicht bei dem Behandler.") == "arzt"
+    assert einwand.feld("Nein, bei dem Behandler war ich nicht.") == "arzt"
+
+
+def test_arzt_gewinnt_vor_name_bei_heisst():
+    # "Der Arzt heisst nicht Petsas" bestreitet den Behandler, nicht den
+    # Patientennamen — deshalb steht `arzt` in _FELDER vor `name`.
+    assert einwand.feld("Der Arzt heißt nicht Petsas.") == "arzt"
+    assert einwand.feld("Nein, mein Behandler heißt nicht so.") == "arzt"
+    # Ohne Arztwort bleibt es der Patientenname.
+    assert einwand.feld("Ich heiße nicht Thomas.") == "name"
+
+
 # --- Wirkung im Fluss ------------------------------------------------------
 
 def test_bestrittene_nummer_mitten_im_faden_wird_sofort_korrigiert():
