@@ -283,6 +283,53 @@ def test_transfer_ohne_nummer_oder_uuid_wird_nicht_gemerkt():
     assert not srv._TRANSFERS
 
 
+# --- W-TRANSFER-RUECKKEHR (13.09.2026) --------------------------------------
+
+def test_rueckkehr_store_meldet_sitzung_einmal_und_erkennt_schnell():
+    """Bianca meldet transfer -> Bruecke merkt Sitzung je UUID; der Dialplan
+    holt die Nummer (ab jetzt klingelt es); kommt DIESELBE UUID zurueck,
+    liefert der Store die Sitzung genau einmal — mit 'schnell', wenn die
+    Rueckkehr binnen RUECKKEHR_SCHNELL_S nach der Abfrage kam (besetzt/
+    keine Antwort)."""
+    srv._TRANSFERS.clear()
+    srv._RUECKKEHR.clear()
+    srv.transfer_merken(_UUID_HEX, "+49171234567")
+    srv.rueckkehr_merken(_UUID_HEX, "sitz-abc", "Dr. Petsas")
+    assert srv.transfer_holen(_UUID_DASH) == "+49171234567"
+    rk = srv.rueckkehr_holen(_UUID_HEX)
+    assert rk["session"] == "sitz-abc" and rk["ziel"] == "Dr. Petsas"
+    assert rk["schnell"] is True and rk["seitS"] < 5
+    # Einmal abholbar — der naechste Anruf dieser Nummer ist ein frischer.
+    assert srv.rueckkehr_holen(_UUID_HEX) == {}
+    assert srv.rueckkehr_holen("deadbeef" * 4) == {}
+
+
+def test_rueckkehr_langsam_nach_behandler_gespraech():
+    srv._RUECKKEHR.clear()
+    srv.rueckkehr_merken(_UUID_HEX, "sitz-xyz")
+    k = next(iter(srv._RUECKKEHR))
+    # Dialplan hat vor 2 Minuten geholt: Behandler hat gesprochen und aufgelegt.
+    srv._RUECKKEHR[k]["abgeholt"] = srv.time.monotonic() - 120
+    rk = srv.rueckkehr_holen(_UUID_DASH)
+    assert rk["session"] == "sitz-xyz" and rk["schnell"] is False
+    assert 115 < rk["seitS"] < 125
+
+
+def test_rueckkehr_ttl_raeumt_und_notaus(monkeypatch):
+    srv._RUECKKEHR.clear()
+    srv.rueckkehr_merken(_UUID_HEX, "sitz-alt")
+    k = next(iter(srv._RUECKKEHR))
+    srv._RUECKKEHR[k]["t"] = srv.time.monotonic() - srv.RUECKKEHR_TTL_S - 1
+    assert srv.rueckkehr_holen(_UUID_HEX) == {}
+    assert not srv._RUECKKEHR
+    monkeypatch.setenv("BRIDGE_RUECKKEHR", "0")
+    srv.rueckkehr_merken(_UUID_HEX, "sitz-neu")
+    assert not srv._RUECKKEHR
+    srv.rueckkehr_merken("", "sitz-neu")
+    srv.rueckkehr_merken(_UUID_HEX, "")
+    assert not srv._RUECKKEHR
+
+
 def test_http_peek_beantwortet_dialplan_curl():
     """Voller Weg wie live: TCP-Verbindung auf den AudioSocket-Port, erste
     Bytes "GET" => die Bruecke antwortet HTTP mit der vorgemerkten Nummer

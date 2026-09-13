@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from bianca import agent, gehirn, session, weiterleiten
+from bianca import agent, gehirn, rueckkehr, session, weiterleiten
 from bianca.greeting import begruessung
 from kern import (
     agentprofil,
@@ -101,6 +101,13 @@ class StartIn(BaseModel):
     # Belastungstest: Testanruf sichtbar mitschneiden, aber weder Kalender,
     # Patienten, Praxisnotizen noch MAS-Gedächtnis verändern.
     testNoWrite: bool = False
+    # W-TRANSFER-RUECKKEHR (13.09.2026): die SIP-Bruecke meldet nach einem
+    # Verbinde-Versuch (Dialplan Goto(bianca), gleiche Anruf-UUID) die alte
+    # Sitzung — Bianca setzt fort statt neu zu begruessen.
+    resumeSessionId: str = ""
+    resumeSchnell: bool = False
+    resumeSeitS: float = 0.0
+    resumeZiel: str = ""
 
 
 class TurnIn(BaseModel):
@@ -173,6 +180,24 @@ def api_mandant_cache_leeren():
 
 @app.post("/api/start")
 def api_start(body: StartIn):
+    # W-TRANSFER-RUECKKEHR (13.09.2026): die Bruecke meldet die Sitzung des
+    # Verbinde-Versuchs (gleiche Anruf-UUID, Dialplan Goto(bianca)). Passt
+    # sie zu diesem Anruf, geht es dort weiter — kein fuer_did, kein
+    # call_erfassen (Tenant + phoneCallId bleiben), keine Begruessung.
+    if body.did and body.resumeSessionId:
+        alt = rueckkehr.aufnehmen(
+            body.resumeSessionId, did=body.did, caller=body.caller,
+            schnell=bool(body.resumeSchnell), seit_s=float(body.resumeSeitS or 0.0),
+            ziel=body.resumeZiel,
+        )
+        if alt is not None:
+            t_alt = alt.get("tenant") or {}
+            alt["clientKind"] = "sip"
+            return DIENST.json_antwort(
+                alt, art="start",
+                extra={"sessionId": alt["id"], "praxis": t_alt.get("praxisName"),
+                       "tenantId": t_alt.get("_id") or "", "resumed": True},
+            )
     t = None
     if body.did:
         t = agentprofil.fuer_did(body.did, caller=body.caller)
@@ -407,6 +432,10 @@ def api_hangup(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         return {"ok": True, "empty": True}
+    # W-TRANSFER-RUECKKEHR: Phase JETZT festhalten — kehrt der Anrufer nach
+    # dem Verbinde-Versuch zurueck, waehrend diese Nacharbeit noch laeuft,
+    # bekaeme der alte Report sonst die Event-Id der Fortsetzung.
+    phase = int(sit.get("transferRueckkehrN") or 0)
 
     # Zweiter Schritt NACH dem Auflegen (Chef 27.08.): Kurzfassung des
     # Gespraechs erzeugen und in den Termin schreiben — der Anruf-Pfad
@@ -422,7 +451,7 @@ def api_hangup(body: HangupIn):
         # W-MITSCHNITT: offene Stream-Audios einlösen, Ende-Zeit stempeln.
         mitschnitt.ende(sit, DIENST)
         # W-GEDAECHTNIS: Gesprächszusammenfassung ins Praxisgedächtnis (MAS).
-        gedaechtnis.report_senden(sit)
+        gedaechtnis.report_senden(sit, phase=phase)
         # W-CALLSTATUS: PhoneCall in der Pickadoc-DB abschließen (Transkript
         # + Zusammenfassung) — NACH mitschnitt.ende. Live 06.09.2026: fehlte
         # seit W-LIVE 13:43 → CallR zeigte leere/inProgress-Anrufe.
@@ -439,7 +468,10 @@ def _warm_start():
         DIENST.filler_vorbereiten()
         DIENST.quittungen_vorbereiten()
         DIENST.notfall_vorbereiten()
-        t = tenants.laden(DEFAULT_TENANT)
+        from kern import behandler_sperre
+        # W-BEHANDLER-SPERRE: gewaermt wird die Arztwahl-Frage OHNE die
+        # gesperrten Behandler — genau die Form, die live gesprochen wird.
+        t = behandler_sperre.anwenden(tenants.laden(DEFAULT_TENANT))
         tts.warm(begruessung(tenants.praxis_melde(t)))
         # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
         # aus dem Platten-Cache fragt die Maschine in ~0,2 s statt ~1,2 s
@@ -456,7 +488,7 @@ def _warm_start():
             if info["id"] == DEFAULT_TENANT:
                 continue
             try:
-                andere = tenants.laden(info["id"])
+                andere = behandler_sperre.anwenden(tenants.laden(info["id"]))
                 tts.warm(begruessung(tenants.praxis_melde(andere)))
                 for satz in gehirn.feste_saetze(andere):
                     tts.warm(sprech.sanitize(satz))

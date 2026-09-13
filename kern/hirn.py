@@ -398,6 +398,23 @@ def _nach_abschluss_ruecken(sit: dict) -> dict[str, Any] | None:
     return None
 
 
+def nach_transfer_ruecken(sit: dict) -> dict[str, Any] | None:
+    """W-TRANSFER-RUECKKEHR (13.09.2026): der Anrufer ist nach einem
+    Verbinde-Versuch zurueck in derselben Sitzung. Ein aktives ERREICHEN-
+    Anliegen ist damit bedient (ob der Behandler abgenommen hat oder nicht —
+    die Leitung liegt wieder bei Bianca); das zuletzt geparkte Anliegen
+    (z. B. die unterbrochene Buchung) rueckt wie nach jedem Abschluss zurueck
+    (enforce: mit Checkpoint). Kein ERREICHEN aktiv -> nichts anfassen."""
+    if not _ist_bianca(sit) or "hirn" not in sit:
+        return None
+    a = aktiv(sit)
+    if a is None or _s(a.get("handlung")) != "ERREICHEN":
+        return None
+    a["status"] = "erledigt"
+    hirn(sit)["aktiv"] = ""
+    return _nach_abschluss_ruecken(sit)
+
+
 def wuerde_zuruecksprigen(sit: dict) -> dict[str, Any] | None:
     """Beobachtend (shadow/enforce): meldet, welches geparkte Anliegen jetzt
     zurueckspringen wuerde — ohne die Sitzung zu veraendern. Kriterium: die

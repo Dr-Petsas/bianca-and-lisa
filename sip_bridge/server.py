@@ -337,7 +337,69 @@ def transfer_holen(uuid_roh: str) -> str:
     for k in [k for k, (t, _) in _TRANSFERS.items() if jetzt - t > TRANSFER_TTL_S]:
         _TRANSFERS.pop(k, None)
     hit = _TRANSFERS.pop(_uuid_norm(uuid_roh), None)
+    if hit:
+        rueckkehr_abgeholt(uuid_roh)
     return hit[1] if hit else ""
+
+
+# W-TRANSFER-RUECKKEHR (13.09.2026, Chef: "bei nicht erfolgreichem Verbinden
+# darf nicht auf 0 zurueckgefallen werden im Gespraech!!! es muss da weiter
+# gehen wo man aufgehoert hat"). Der Dialplan kehrt nach JEDEM Dial zum
+# Behandler mit Goto(bianca) zurueck — Behandler besetzt/geht nicht ran
+# ODER Gespraech beim Behandler beendet, der Anrufer haengt noch dran. Bis
+# hierher bekam er eine FRISCHE Sitzung samt Begruessung. Jetzt merkt sich
+# die Bruecke je Anruf-UUID (Anrufer-Ziffern + DID, im Dialplan als __BUUID
+# vererbt, bleibt ueber Goto(bianca) gleich) die Bianca-Sitzung des
+# Transfers; der naechste AudioSocket mit DERSELBEN UUID meldet sie an
+# /api/start als resumeSessionId — Bianca setzt das Gespraech fort.
+# "schnell": kam der Anrufer binnen RUECKKEHR_SCHNELL_S nach der Dialplan-
+# Abfrage zurueck, hat der Behandler praktisch sicher nicht abgenommen
+# (Dial-Timeout 45 s; besetzt kommt in Sekunden) — Bianca darf dann ehrlich
+# sagen, dass die Verbindung nicht zustande kam. Danach nur "Da bin ich
+# wieder." (kein DIALSTATUS ohne Dialplan-Aenderung — bewusst nicht am
+# Vorabend der Feldtests). Notaus: BRIDGE_RUECKKEHR=0 (Alt-Verhalten).
+# TTL bewusst kurz (180 s): legt der ANRUFER waehrend des Klingelns oder
+# nach dem Behandler-Gespraech auf, kehrt nichts zurueck und der Eintrag
+# bliebe liegen — sein naechster Anruf auf derselben DID wuerde sonst als
+# Rueckkehr gedeutet ("Da bin ich wieder" zu einem frischen Anruf). Der
+# Fehlschlag-Fall (besetzt/keine Antwort, Dial-Timeout 45 s) liegt sicher
+# innerhalb der 180 s; ein langes Behandler-Gespraech darf danach mit einer
+# frischen Bianca enden — das ist der billigere Fehler.
+RUECKKEHR_TTL_S = float(os.environ.get("BRIDGE_RUECKKEHR_TTL_S", "180"))
+RUECKKEHR_SCHNELL_S = float(os.environ.get("BRIDGE_RUECKKEHR_SCHNELL_S", "55"))
+_RUECKKEHR: dict[str, dict] = {}
+
+
+def rueckkehr_an() -> bool:
+    return os.environ.get("BRIDGE_RUECKKEHR", "1") != "0"
+
+
+def rueckkehr_merken(uuid_hex: str, session_id: str, ziel: str = "") -> None:
+    u, sid = _uuid_norm(uuid_hex), " ".join(str(session_id or "").split())
+    if u and sid and rueckkehr_an():
+        _RUECKKEHR[u] = {"t": time.monotonic(), "session": sid,
+                         "ziel": " ".join(str(ziel or "").split()), "abgeholt": None}
+
+
+def rueckkehr_abgeholt(uuid_roh: str) -> None:
+    """Der Dialplan hat die Nummer geholt: ab jetzt klingelt es beim Behandler."""
+    hit = _RUECKKEHR.get(_uuid_norm(uuid_roh))
+    if hit:
+        hit["abgeholt"] = time.monotonic()
+
+
+def rueckkehr_holen(uuid_hex: str) -> dict:
+    """Beim Anruf-Start: liegt zur UUID eine Sitzung mit Transfer-Versuch?
+    Einmal abholbar; TTL raeumt Reste. {} = normaler Erstanruf."""
+    jetzt = time.monotonic()
+    for k in [k for k, v in _RUECKKEHR.items() if jetzt - v["t"] > RUECKKEHR_TTL_S]:
+        _RUECKKEHR.pop(k, None)
+    hit = _RUECKKEHR.pop(_uuid_norm(uuid_hex), None)
+    if not hit:
+        return {}
+    seit = jetzt - (hit.get("abgeholt") or hit["t"])
+    return {"session": hit["session"], "ziel": hit.get("ziel") or "",
+            "seitS": round(seit, 1), "schnell": seit <= RUECKKEHR_SCHNELL_S}
 
 
 async def _http_transfer(reader: asyncio.StreamReader,
@@ -1070,6 +1132,17 @@ class Anruf:
             body = {"outboundUuid": self.uuid_hex}
         else:
             body = {"tenant": BRIDGE_TENANT, "did": self.did, "caller": self.caller}
+            # W-TRANSFER-RUECKKEHR: dieselbe UUID nach einem Verbinde-Versuch
+            # -> Bianca-Sitzung fortsetzen statt neu begruessen.
+            rk = rueckkehr_holen(self.uuid_hex)
+            if rk:
+                body["resumeSessionId"] = rk["session"]
+                body["resumeSchnell"] = bool(rk["schnell"])
+                body["resumeSeitS"] = rk["seitS"]
+                body["resumeZiel"] = rk["ziel"]
+                print(f"bruecke-rueckkehr uuid={self.uuid_hex} session={rk['session']} "
+                      f"ziel={rk['ziel']!r} seit={rk['seitS']}s "
+                      f"schnell={rk['schnell']}", flush=True)
         r = await self.http.post("/api/start", json=body)
         if r.status_code != 200:
             print(f"bruecke-start http {r.status_code} body={r.text[:200]!r}", flush=True)
@@ -1079,6 +1152,7 @@ class Anruf:
         self.stille_ms = int(d.get("stilleMs") or STILLE_MS_DEFAULT)
         print(f"bruecke-start mode={BRIDGE_MODE} session={self.session_id} "
               f"did={self.did or '-'} tenant={d.get('tenantId', '')} "
+              f"resumed={bool(d.get('resumed'))} "
               f"text={d.get('text', '')[:60]!r}", flush=True)
         # W-START-RUHE: erst nach einer kurzen Ruhe seit Abheben begruessen —
         # die /api/start-Zeit zaehlt mit, gewartet wird nur der Rest.
@@ -1161,6 +1235,11 @@ class Anruf:
                         tr = ev.get("transfer") if isinstance(ev.get("transfer"), dict) else {}
                         if tr.get("nummer"):
                             transfer_merken(self.uuid_hex, str(tr["nummer"]))
+                            # W-TRANSFER-RUECKKEHR: kommt der Anrufer nach dem
+                            # Dial zurueck (Goto(bianca)), geht es in DIESER
+                            # Sitzung weiter — nie auf null.
+                            rueckkehr_merken(self.uuid_hex, self.session_id,
+                                             str(tr.get("name") or ""))
                             print(f"bruecke-transfer vorgemerkt "
                                   f"{tr.get('name', '')!r} {tr['nummer']}", flush=True)
                         print(f"bruecke-antwort {ev.get('text', '')[:80]!r}"

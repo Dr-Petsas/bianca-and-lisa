@@ -273,7 +273,20 @@ def zusammenfassung(sit: dict) -> str:
     return text[:600]
 
 
-def _event(sit: dict) -> dict:
+def _event_id(sit: dict, kanal: str, phase: int | None = None) -> str:
+    """Idempotente Event-Id. W-TRANSFER-RUECKKEHR (13.09.2026): nach einem
+    Verbinde-Versuch geht dieselbe Sitzung weiter und legt am ECHTEN Ende
+    noch einmal auf — der Report der Fortsetzung (vollstaendiger: Buchung
+    danach, Rueckruf-Notiz) traegt die Phase im Suffix, sonst wuerde das MAS
+    ihn als Duplikat des Transfer-Reports verwerfen (appendEvent ist auf
+    die Id idempotent)."""
+    if phase is None:
+        phase = int(sit.get("transferRueckkehrN") or 0)
+    basis = f"telefonki:{kanal}:{_s(sit.get('id'))}"
+    return basis if phase <= 0 else f"{basis}:r{phase}"
+
+
+def _event(sit: dict, phase: int | None = None) -> dict:
     stimme = notes.stimme_von(sit)
     kanal = "bianca_call" if stimme.lower() == "bianca" else "lisa_call"
     telefon, name = _wer(sit)
@@ -298,7 +311,7 @@ def _event(sit: dict) -> dict:
         ts = None
 
     ev: dict[str, Any] = {
-        "id": f"telefonki:{kanal}:{_s(sit.get('id'))}",
+        "id": _event_id(sit, kanal, phase),
         "channel": kanal,
         # Bianca nimmt eingehende Anrufe an, Lisa ruft hinaus.
         "direction": "in" if kanal == "bianca_call" else "out",
@@ -324,12 +337,16 @@ def _event(sit: dict) -> dict:
     return ev
 
 
-def report_senden(sit: dict) -> dict | None:
+def report_senden(sit: dict, *, phase: int | None = None) -> dict | None:
     """Gesprächs-Report ins Praxisgedächtnis — aus der hangup-Nacharbeit.
 
     Läuft dort schon in einem Daemon-Thread; hier wird also blockierend
     gepostet (Timeout), nie geworfen. Idempotent über die Event-Id — ein
-    zweites Auflegen derselben Sitzung erzeugt kein zweites Event."""
+    zweites Auflegen derselben Sitzung erzeugt kein zweites Event.
+    ``phase``: Transfer-Rueckkehr-Zaehler zum Zeitpunkt des Auflegens (der
+    Aufrufer haelt ihn fest, BEVOR die Nacharbeit laeuft — kehrt der Anrufer
+    waehrenddessen zurueck, darf der alte Report nicht die Id der
+    Fortsetzung bekommen)."""
     if not enabled() or sit.get("testNoWrite"):
         return None
     name = notes.stimme_von(sit).lower()
@@ -338,7 +355,7 @@ def report_senden(sit: dict) -> dict | None:
         print(f"{name}-gedaechtnis: leeres Gespraech, kein Report", flush=True)
         return None
     try:
-        body = _event(sit)
+        body = _event(sit, phase)
         r = httpx.post(f"{MAS_URL}/brain/events", json=body,
                        headers=_headers(_client_id(sit)), timeout=WARTE_S)
         d = r.json() if r.status_code in (200, 201) else {}

@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from bianca import anstand, flow, gehirn, session, tasks, telefon
+from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
@@ -756,8 +756,68 @@ def _letzte_war_presence(sit: dict) -> bool:
     return False
 
 
+def _rueckkehr_reply(sit: dict, rk: dict) -> dict[str, Any]:
+    """W-TRANSFER-RUECKKEHR (13.09.2026): der Anrufer ist nach einem
+    Verbinde-Versuch zurueck in DERSELBEN Sitzung — keine Begruessung, kein
+    Neustart. Kurz sagen, was passiert ist, und den Faden aufnehmen: die
+    offene Pflichtfrage der (zurueckgeholten) Aufgabe, sonst die offene Tuer.
+
+    Chef 13.09.2026: "es muss da weiter gehen wo man aufgehoert hat."
+    `schnell` (Bruecke: Rueckkehr binnen ~55 s nach der Dialplan-Abfrage) =
+    der Behandler hat praktisch sicher nicht abgenommen — nur dann wird das
+    auch gesagt; sonst neutral "Da bin ich wieder." (kein DIALSTATUS)."""
+    rk["offen"] = False
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    wer = arzt_sprechname(_s(rk.get("ziel")), tenant)
+    # Nur ein echter Behandler-/Personenname wird ausgesprochen — "zu Praxis"
+    # oder ein nackter Kalender-Rest klingt falsch.
+    if not re.match(r"^(Doktor|Professor|Herr|Frau)\b", wer):
+        wer = ""
+    zu = f" zu {wer}" if wer else ""
+    if rk.get("schnell"):
+        kopf = f"Da bin ich wieder — die Verbindung{zu} ist leider nicht zustande gekommen."
+    else:
+        kopf = "Da bin ich wieder."
+    frage = _offene_frage(sit)
+    s = sit.get("sammler") or {}
+    if not frage and _s(s.get("modus")) and _s(s.get("phase")) not in {"fertig", "gebucht"}:
+        fid, frage2 = gehirn.naechste_frage(sit)
+        if fid:
+            s["frage"] = fid
+            frage = frage2
+    teile = [kopf]
+    wieder = rk.get("wieder") if isinstance(rk.get("wieder"), dict) else None
+    if frage:
+        if wieder:
+            teile.append(hirn.rueckkehr_bruecke(wieder))
+        teile.append(frage)
+    else:
+        frage = "Kann ich sonst noch etwas für Sie tun?"
+        teile.append(frage)
+    text = " ".join(t for t in teile if t)
+    sit["flussFrage"] = frage
+    msgs = sit.get("messages")
+    if not isinstance(msgs, list):
+        msgs = []
+        sit["messages"] = msgs
+    if not msgs or msgs[0].get("role") != "system":
+        msgs.insert(0, {"role": "system", "content": system_prompt_aktuell(sit)})
+    msgs.append({"role": "user",
+                 "content": f"(Der Verbinde-Versuch{zu} ist beendet — der Anrufer ist "
+                            "wieder in der Leitung. Nicht neu begruessen, nichts "
+                            "erneut erfragen, was schon feststeht.)"})
+    msgs.append({"role": "assistant", "content": text})
+    print(f"bianca-rueckkehr-ansage sid={sit.get('id')!r} text={text[:90]!r}", flush=True)
+    return {"text": text, "book": None}
+
+
 def start_reply(sit: dict) -> dict[str, Any]:
     tenant = sit["tenant"]
+    # W-TRANSFER-RUECKKEHR: Fortsetzung nach einem Verbinde-Versuch — der
+    # Anrufer hat sich schon vorgestellt, die Sitzung kennt alles.
+    rk = rueckkehr.offen(sit)
+    if rk is not None:
+        return _rueckkehr_reply(sit, rk)
     # W-MANDANT: CF-Mandanten ohne kuratierte Datei melden sich mit der in
     # der Pickadoc-DB gepflegten Begruessung (agent.firstMessage).
     text = _s(tenant.get("begruessungText")) or begruessung(tenants.praxis_melde(tenant))
