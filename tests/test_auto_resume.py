@@ -1,7 +1,9 @@
 """W-HIRN-AUTORESUME (09.09.2026): eingeschobene Anliegen zuverlaessig
 fortsetzen. Tasklokale Checkpoints schuetzen Patienten-/Slotzustaende, nach
 phase=fertig rueckt LIFO das zuletzt geparkte Anliegen nach. Dreistufiger
-Notaus HIRN_AUTO_RESUME=off|shadow|enforce (Default off = Alt-Verhalten).
+Notaus HIRN_AUTO_RESUME=off|shadow|enforce — seit 13.09.2026 ist **enforce**
+der Default (Chef: "manchmal strandet sie obwohl wir waechter haben"), der
+Default liegt im CODE, nicht in der Server-.env.
 
 Offline, kein Netz, kein LLM.
 """
@@ -34,6 +36,21 @@ def _buchung_mit_daten(sit: dict) -> None:
     s.update({"grund": "Kontrolle", "vorname": "Anna", "nachname": "Berger",
               "frage": "wunsch"})
     sit["offered"] = [{"iso": "2026-09-10T09:00", "spoken": "morgen um neun"}]
+
+
+# --- Default: scharf (13.09.2026) -------------------------------------------
+
+def test_default_ist_enforce(monkeypatch):
+    """Der Rollout-Schalter darf nicht in der Server-.env haengen: die wird
+    beim Deploy ueberschrieben (AGENTS.md, .env-Falle), und dann strandet die
+    geparkte Buchung wieder. Rueckweg bleibt HIRN_AUTO_RESUME=off."""
+    monkeypatch.delenv("HIRN_AUTO_RESUME", raising=False)
+    assert hirn.auto_resume_modus() == "enforce"
+    sit = _sit()
+    _buchung_mit_daten(sit)
+    hirn.anwenden(sit, _deutung("AENDERN", ersatz=False, spiegel="Termin absagen"))
+    geparkt = [a for a in sit["hirn"]["anliegen"] if a["status"] == "geparkt"]
+    assert geparkt and isinstance(geparkt[0].get("checkpoint"), dict)
 
 
 # --- off: keine Verhaltensaenderung -----------------------------------------

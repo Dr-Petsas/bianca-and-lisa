@@ -53,8 +53,22 @@ _CP_SIT_KEYS = (
 
 
 def auto_resume_modus() -> str:
-    v = (os.environ.get("HIRN_AUTO_RESUME") or "off").strip().lower()
-    return v if v in {"off", "shadow", "enforce"} else "off"
+    """``off`` | ``shadow`` | ``enforce`` (Default seit 13.09.2026: enforce).
+
+    Chef 13.09.2026: "es muss jedoch sichergestellt sein, dass der Job z. B.
+    die Buchungskette oder die Auskunftskette oder die stornierungskette oder
+    die verschiebungskette nicht unterbrochen wird, bzw. dass sie immer wieder
+    zurueckfindet ... manchmal strandet sie obwohl wir waechter haben."
+
+    Genau dafuer ist der Ruecksprung gebaut (Checkpoint je Anliegen, LIFO,
+    EINE Rueckkehrbruecke). Der Default stand seit dem 09.09. auf ``off``;
+    damit blieb ein eingeschobenes Anliegen liegen und die Buchung strandete.
+    Der Default liegt bewusst im CODE und nicht in der Server-.env — die wird
+    beim Deploy zweimal ueberschrieben worden sein (s. AGENTS.md, .env-Falle).
+    Rueckweg: ``HIRN_AUTO_RESUME=off``.
+    """
+    v = (os.environ.get("HIRN_AUTO_RESUME") or "enforce").strip().lower()
+    return v if v in {"off", "shadow", "enforce"} else "enforce"
 
 
 def _checkpoint_machen(sit: dict) -> dict[str, Any]:

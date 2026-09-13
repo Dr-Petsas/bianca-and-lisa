@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, flow, gehirn, session, tasks, telefon
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, abschweifen, anrede_wache, antwort_wache, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import spur
 from kern import wissen as kern_wissen
 # #region agent log
@@ -905,6 +905,25 @@ def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
     return fl
 
 
+def _gehoert_aus(msgs: list[dict]) -> str:
+    """Der letzte Anrufer-Satz — Bezugspunkt fuer W-EINGEHEN."""
+    for m in reversed(msgs or []):
+        if (m or {}).get("role") == "user":
+            return _s(m.get("content"))
+    return ""
+
+
+def _eingehen_anwenden(sit: dict, text: str, gehoert: str) -> str:
+    """W-EINGEHEN (Chef 13.09.2026): eine Antwort, die NUR aus Fragen besteht,
+    bekommt einen kurzen Bezug voran — sonst klingt der Zug wie Nicht-Zuhoeren
+    ("Und der Vorname?"). Kein neuer Inhalt, keine erfundene Tatsache."""
+    neu, grund = eingehen.anwenden(
+        sit, gehoert, text, art=_s((sit or {}).get("anliegenArt")))
+    if grund:
+        spur.merken(sit, grund, _s(text)[:60])
+    return neu
+
+
 def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
     fl = _auto_resume_anhaengen(sit, fl)
@@ -916,6 +935,7 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
             fl["text"] = antwort_wache.saeubern(sit, fl["text"])
         else:
             fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
+        fl["text"] = _eingehen_anwenden(sit, fl["text"], _gehoert_aus(msgs))
         if "?" in fl["text"]:
             sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
         msgs.append({"role": "assistant", "content": fl["text"]})
@@ -1363,6 +1383,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     s = sit.get("sammler") or {}
     mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"} and s.get("phase") not in {"gebucht", "fertig"}
     darf_vorab = vorab is not None and not mitten_drin
+    # Wurde schon ein Satz gesprochen, darf W-EINGEHEN unten NICHTS mehr
+    # voranstellen: llm.rest_nach_vorab findet den Rest sonst nicht mehr und
+    # der Satz kaeme ein zweites Mal (dieselbe Falle wie bei der Anrede-Wache).
+    vorab_gesagt = False
     werkzeuge_vorher = len(sit.get("tools") or [])
     # Weg-/Anfahrtsfragen: einzige erlaubte Langtext-Antwort — Limit anheben,
     # sonst reisst der Anfahrtstext mitten im Wort ab (E2E 27.08.2026).
@@ -1382,7 +1406,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         vorab_blockiert = False
 
         def sicherer_vorab(satz: str) -> None:
-            nonlocal vorab_blockiert
+            nonlocal vorab_blockiert, vorab_gesagt
             if vorab_blockiert:
                 return
             unbelegt = fakten_wache.unbelegte_behauptung(
@@ -1402,6 +1426,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             satz = _frage_gate_anwenden(sit, satz)
             if not _s(satz):
                 return
+            vorab_gesagt = True
             vorab(satz)
 
         out = llm.chat_stream(
@@ -1444,6 +1469,16 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if not _s(text) and not book:
         text = _nie_stumm(sit)
         spur.merken(sit, "nie-stumm", text[:60])
+    if _s(text) and not vorab_gesagt:
+        # W-EINGEHEN: auch der LLM-Zug darf nicht als nackte Frage enden —
+        # typisch, wenn das Frage-Gate die Modell-Frage gestrichen hat und
+        # _nie_stumm die Pflichtfrage nachliefert.
+        mit_bezug = _eingehen_anwenden(sit, text, text_in)
+        if mit_bezug != text:
+            text = mit_bezug
+            if msgs and msgs[-1].get("role") == "assistant":
+                msgs[-1]["content"] = text
+            sit["messages"] = msgs
     if _s(text):
         wiederholung.gesagt_merken(sit, text)
     gespraech.nach_antwort(sit)

@@ -3681,6 +3681,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 and not _s(s.get("vornameCheck"))):
             return "vorname_check", vorname_check_frage(s)
         if not s["vorname"]:
+            if _s(s.get("vornameCheck")) == "nein":
+                # Der Kartei-Vorname war falsch: die Frage nimmt den Einwand
+                # auf, statt ihn mit "Und der Vorname?" zu uebergehen.
+                return "vorname", "Wie lautet Ihr Vorname denn richtig?"
             return "vorname", "Und der Vorname?"
         if s["fuerWen"] and not s["smsEmpfaenger"]:
             return "sms_empfaenger", sms_empfaenger_frage(s)
@@ -3792,12 +3796,17 @@ def besuch_lange_her(s: dict, tage: int = 183) -> bool:
 
 
 def versicherung_check_frage(s: dict) -> str:
-    """Bestands-Rückfrage MIT dem Kartei-Stand (nur privat<->gesetzlich zählt)."""
+    """Bestands-Rückfrage MIT dem Kartei-Stand (nur privat<->gesetzlich zählt).
+
+    W-HIRN-GATE (Chef 13.09.2026, sein Wortlaut): "der datensatz muss
+    hinterfragt werden mit data xy ist richtig, oder? z.b. Privat versichert
+    habe ich hier stehen. ist das noch aktuell?" — der Wert wird also ZUERST
+    genannt und dann bestaetigt, nicht in eine Entweder-oder-Frage versteckt.
+    """
     art = "privat" if _s(s.get("versicherungAkte")) == "privat" else "gesetzlich"
     return (
-        "Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
-        f"Unterlagen: Sind Sie weiterhin {art} versichert, oder hat sich da "
-        "etwas geändert?"
+        "Ihr letzter Besuch ist ja schon eine Weile her — "
+        f"{art} versichert habe ich hier stehen. Ist das noch aktuell?"
     )
 
 

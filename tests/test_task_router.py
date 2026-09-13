@@ -359,7 +359,9 @@ def test_agent_reicht_unklaren_buchungswunsch_semantisch_an_flow():
         agent.intent.enabled = enabled_alt
 
     assert aufrufe == ["", "buchen"]
-    assert antwort["text"] == "Der Termin ist für Sie selbst, richtig?"
+    # W-EINGEHEN (13.09.2026) stellt einer nackten Job-Frage einen kurzen
+    # Bezug voran ("Gerne."); geprueft wird hier das Routing, nicht die Anrede.
+    assert antwort["text"].endswith("Der Termin ist für Sie selbst, richtig?")
     assert sit["sammler"]["frage"] == "anrufer_check"
     assert not sit["tools"]
 
@@ -404,7 +406,7 @@ def test_agent_parkt_laufende_buchung_bei_semantischem_taskwechsel():
         agent.intent.enabled = enabled_alt
 
     assert aufrufe == ["buchen", "absagen"]
-    assert antwort["text"] == "Wie ist Ihr Nachname?"
+    assert antwort["text"].endswith("Wie ist Ihr Nachname?")  # W-EINGEHEN-Vorsatz
     assert [a["status"] for a in sit["hirn"]["anliegen"]] == ["geparkt", "aktiv"]
     assert not sit["tools"]
 
@@ -450,7 +452,7 @@ def test_agent_verliert_bei_ja_aber_weder_antwort_noch_task(monkeypatch):
         ("absagen", "ich möchte meinen bestehenden Termin absagen."),
     ]
     assert sit["sammler"]["anruferCheck"] == "ja"
-    assert antwort["text"] == "Wie ist Ihr Nachname?"
+    assert antwort["text"].endswith("Wie ist Ihr Nachname?")  # W-EINGEHEN-Vorsatz
     assert [a["status"] for a in sit["hirn"]["anliegen"]] == ["geparkt", "aktiv"]
     assert any(w.get("w") == "mischzug" for w in sit.get("_spur") or [])
 
@@ -484,4 +486,4 @@ def test_presence_ja_bestaetigt_keine_patientenidentitaet(monkeypatch):
         "absagen", "Ja, aber ich möchte meinen bestehenden Termin absagen."
     )]
     assert not sit["sammler"].get("anruferCheck")
-    assert antwort["text"] == "Wie ist Ihr Nachname?"
+    assert antwort["text"].endswith("Wie ist Ihr Nachname?")  # W-EINGEHEN-Vorsatz

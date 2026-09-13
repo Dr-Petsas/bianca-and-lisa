@@ -1657,10 +1657,11 @@ zurückkehren — ohne Datenverlust und ohne Schleife.
   `_maschinen_antwort`-Pfad): `hirn.rueckkehr_bruecke` + die gespeicherte
   Pflichtfrage werden EINMAL an die Maschinen-Antwort gehängt; nie mitten in
   Buchung/Transfer/Diktat (book/hangup/transfer/warte).
-- **Notaus dreistufig** `HIRN_AUTO_RESUME=off|shadow|enforce` (Default **off**
-  = byte-identisches Alt-Verhalten: nächstes OFFENES Anliegen wie bisher, kein
-  Checkpoint, kein Rücksprung). `shadow` schreibt nur die Wächterspur
-  (`auto-resume-shadow`), ändert kein Verhalten; `enforce` führt zurück.
+- **Notaus dreistufig** `HIRN_AUTO_RESUME=off|shadow|enforce` — seit
+  13.09.2026 ist **enforce** der Default (im CODE, s. W-EINGEHEN). `off` ist
+  das byte-identische Alt-Verhalten (nächstes OFFENES Anliegen wie bisher,
+  kein Checkpoint, kein Rücksprung), `shadow` schreibt nur die Wächterspur
+  (`auto-resume-shadow`) und ändert kein Verhalten.
 - Tests: `tests/test_auto_resume.py` (offline). Rollout: erst `shadow` gegen
   Replays, dann `enforce`.
 
@@ -2451,6 +2452,85 @@ Dazu aus demselben Anruf, weil Zustands-Verfall dieselbe Doppelfrage erzeugt:
   Zehen" ist in einer Zahnarztpraxis „schiefe Zähne" → KFO-Besprechung statt
   Kontrolle. NUR für die Motiv-Zuordnung; Sammler und Terminnotiz behalten den
   echten Wortlaut, beim Hautarzt bleiben Zehen Zehen.
+
+## Widerspruch wird zuerst korrigiert (W-EINWAND 13.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „denk daran auch korrekturen einzubauen wenn eine angabe nicht
+stimmt. telefon oder vorname oder was auch immer und der patient da
+widerspricht, dass das dann zunächst korrigiert wird und nicht übergangen wird
+[…] dann würde bianca nie wieder einwände einfach übergehen."
+
+Die Korrektur gab es nur an der Readback-Frage („Soll ich das so eintragen?" →
+Nein → `_aenderung_zug`), beim Namen (W-NAME-EINWAND) und bei der Nummer
+(`_TEL_FALSCH_RE` in `einsammeln`). Mitten im Fragenfaden lief ein Einwand
+gegen Versichertenstatus, Behandler oder Besuchsgrund ins Leere: die Maschine
+stellte einfach ihre offene Frage weiter.
+
+- **Erkennung** `kern/einwand.py` (pur, bianca-frei): `feld(text)` braucht im
+  SELBEN Teilsatz einen Widerspruchs-Marker (nein/falsch/stimmt nicht/nicht
+  mehr/geändert) UND ein Feldwort. Bewusst eng — ein falscher Treffer wirft
+  einen feststehenden Wert weg (genau die Katastrophe aus Anruf 1fbda5db).
+  Deshalb fallen Fragen des Anrufers („Stimmt meine Nummer nicht?"), Bitten um
+  Wiederholung und Marker im ANDEREN Teilsatz („Nein, zur Kontrolle bei Doktor
+  Petsas") heraus.
+- **Wirkung** `flow._einwand_zug` (vor dem Fragenfaden, nach `verwalten.zug`):
+  ruft `_aenderung_zug(feld=…, streng=True)` und stellt die ausgesprochene
+  Korrektur voran („Entschuldigung — dann korrigiere ich den Behandler."). Neu
+  im `_aenderung_zug`: `versicherung` (Status wird neu erhoben) und `arzt` (mit
+  ihm ist der Slot-Vorrat wertlos — er kam aus dem falschen Kalender, also
+  `_vorrat_leeren`). **Geräumt wird NUR das bestrittene Feld**, die Kette läuft
+  danach an derselben Stelle weiter (`naechste_frage` liest ja den Sammler).
+- **`streng`**: der Widerspruch nennt oft nur den ALTEN Wert („gesetzlich
+  stimmt nicht mehr"). Ohne die Sperre hätte die Ernte im selben Satz denselben
+  Wert gleich wieder festgeschrieben und Bianca hätte den bestrittenen Stand
+  bestätigt.
+- **Wer schon korrigiert hat, gewinnt:** hat `einsammeln` den Einwand bereits
+  verarbeitet (jeder Ernte-Schlüssel des Feldes steht in `_EINWAND_ERNTE` —
+  inkl. `telefonOffen`/`telefonKorrektur`) oder ist die eigene Ja/Nein-Frage
+  des Feldes offen (`_EINWAND_EIGENE_FRAGE`: telefon_check, versicherung_check,
+  arzt_check, vorname_check), hält W-EINWAND sich heraus. Absage/Verschieben
+  bleiben bei W-NAMESKORREKTUR.
+- Notaus `EINWAND=off|shadow|enforce` (Default **enforce**). Tests:
+  `tests/test_einwand.py` — hinter jedem Positiv-Fall steht ein Negativ-Fall.
+
+## Jeder Zug geht auf das Gesagte ein (W-EINGEHEN 13.09.2026 — nicht rückbauen)
+
+Chef (wörtlich): „genau dafür brauchen wir, dass auf das gesagte eingegangen
+wird […] weil dann würde es endlich ein Gespräch!!! und kein Monolog […] es
+gibt keinen Wächter, der pro Zug erzwingt, dass die Antwort erkennbar auf den
+letzten Satz eingeht. Das muss deshalb angepasst werden … nur so entsteht
+KONVERSATION."
+
+Die Maschine quittiert jede ERNTE längst (`flow._quittung`). Der Monolog
+entsteht in den Zügen DAZWISCHEN: der Anrufer sagt etwas, das kein Feld füllt,
+und die Antwort ist eine nackte Frage („Und der Vorname?").
+
+- **Regel** (`kern/eingehen.py`, pur): eine Antwort, die NUR aus Fragesätzen
+  besteht, bekommt einen kurzen, inhaltsfreien Bezug voran — rotierend
+  („Verstehe." / „Alles klar." / „Mhm, verstehe." / „In Ordnung."), bei einem
+  Wunsch „Gerne.", bei Beschwerde/Notfall (`anliegenArt`) „Das tut mir leid.".
+  Kein neuer Inhalt, keine Tatsache — die Fakten-Wache bleibt unberührt.
+- **Nie angefasst:** Antworten mit Aussagesatz (Quittung, Readback, Angebot),
+  Antworten die schon mit einem Bezug beginnen (`_SCHON_BEZUG_RE` — doppelt
+  klingt schlimmer als keiner), Presence-Stupse, Züge ohne substanzielle
+  Äußerung („Ja.", „Hm.") und eine **Frage des Anrufers**: ein „Verstehe."
+  davor wäre eine Scheinantwort (nur Spur `eingehen-frage-offen`; dort gehört
+  die Talk-Schicht hin).
+- **Einbau** `bianca/agent.py`: im Maschinen-Zug NACH dem Wiederholungs-
+  Wächter (der vergleicht also weiter den reinen Fragesatz) und im LLM-Zug nur,
+  wenn noch NICHTS gesprochen wurde (`vorab_gesagt`) — sonst fände
+  `llm.rest_nach_vorab` den Rest nicht und der Satz käme zweimal (dieselbe
+  Falle wie bei der Anrede-Wache). Kein nacktes „Gut."/„Okay." als Vorsatz:
+  das sind die Quittungen der Maschine und würden im Gedächtnis des
+  Wiederholungs-Wächters eine echte Quittung als „schon gesagt" streichen.
+- Notaus `EINGEHEN=off|shadow|enforce` (Default **enforce**). Tests:
+  `tests/test_eingehen.py`.
+
+**Auto-Resume ist seit heute scharf.** Chef: „manchmal strandet sie obwohl wir
+wächter haben". `hirn.auto_resume_modus()` liefert jetzt `enforce` als Default
+— und zwar im CODE, nicht in der Server-`.env` (die wird beim Deploy
+überschrieben, s. `.env`-Falle unten). Rückweg unverändert
+`HIRN_AUTO_RESUME=off`. Wache: `test_default_ist_enforce`.
 
 ## Rückrollpunkte (Produktionsstände)
 

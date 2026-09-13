@@ -15,6 +15,7 @@ from bianca import besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiter
 from kern import abschied
 from kern import anliegen_art
 from kern import dossier
+from kern import einwand
 from kern import fachprofil
 from kern import gedaechtnis
 from kern import motive
@@ -506,6 +507,14 @@ def _quittung(s: dict, neu: set[str]) -> str:
         # Name stand unmittelbar zuvor im Hallo/Identitätscheck; danach nur
         # noch Pronomen statt „Danke, Michael Petsas“.
         return "Danke. "
+    if "vornameCheck" in neu:
+        # W-HIRN-GATE (Chef 13.09.2026, sein Wortlaut: "vorname Michael, ja?
+        # dann habe ich Sie gefunden"). Das Ja auf den Kartei-Vornamen ist der
+        # Moment, in dem die Akte steht — das gehoert gesagt. Das Nein bekommt
+        # eine ausgesprochene Korrektur, nie ein stilles Weiterfragen.
+        if s.get("vornameCheck") == "nein":
+            return "Entschuldigung — dann korrigiere ich das. "
+        return "Prima, dann habe ich Sie gefunden. "
     if "fuerWenCheck" in neu:
         return "Alles klar. "
     if "warSchonMal" in neu:
@@ -1945,14 +1954,117 @@ def _vorrat_leeren(sit: dict) -> None:
     sit.pop("buchIntent", None)
 
 
-def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
+# W-EINWAND: welche offene Frage gehoert dem Feld SELBST? Dort urteilen die
+# bestehenden Ja/Nein-Zweige (telefon_check, versicherung_check, arzt_check,
+# vorname_check) — der Einwand-Zweig haelt sich da heraus.
+_EINWAND_EIGENE_FRAGE = {
+    "nummer": {"telefon", "telefon_check", "telefon_alt", "sms_nummer",
+               "sms_empfaenger", "telefon_bestaetigen"},
+    "name": {"name", "nachname", "vorname", "vorname_check", "buchstabieren",
+             "nachname_korr", "anrufer_check", "fuer_wen_check"},
+    "versicherung": {"versicherung", "versicherung_check"},
+    "arzt": {"arzt", "arzt_check"},
+    "grund": {"grund", "termin_anbieten"},
+}
+
+# Hat die Ernte den Einwand schon verarbeitet, haelt W-EINWAND sich heraus:
+# entweder weil der neue Wert im SELBEN Satz mitkam ("nicht 0177, sondern
+# 0170…") oder weil das Feld seine eigene Korrektur besitzt — die Nummer
+# raeumt und SPERRT sich ueber `telefonKorrektur` (_TEL_FALSCH_RE) selbst.
+# Hier gehoert JEDER Ernte-Schluessel des Feldes hinein; ein fehlender warf
+# im Test den frisch diktierten Wert gleich wieder weg.
+_EINWAND_ERNTE = {
+    "nummer": {"telefon", "telefonOffen", "telefonTeil", "telefonAkte",
+               "telefonAlt", "telefonBekannt", "telefonKorrektur"},
+    "name": {"name", "nachname", "vorname", "vornameCheck", "vornameTeil",
+             "buchstabenTeil"},
+    "versicherung": {"versicherung", "versicherungCheck"},
+    "arzt": {"arzt", "arztCheck"},
+    "grund": {"grund", "grundNichtBuchbar"},
+}
+
+# Ausgesprochene Korrektur je Feld. Bewusst OHNE Ziffern: der alte Wert wird
+# benannt, nicht vorgelesen (eine Ziffernfolge muesste durch den
+# Nachhoer-Waechter und macht den Zug lang).
+_EINWAND_VORSATZ = {
+    "nummer": "Entschuldigung — dann streiche ich die Nummer, die ich hatte. ",
+    "versicherung": "Entschuldigung — dann korrigiere ich den Versichertenstatus. ",
+    "arzt": "Entschuldigung — dann korrigiere ich den Behandler. ",
+    "grund": "Entschuldigung — dann korrigiere ich den Besuchsgrund. ",
+}
+
+
+def _einwand_belegt(s: dict, feld: str) -> bool:
+    """Steht zu dem bestrittenen Feld ueberhaupt ein Wert?"""
+    if feld == "nummer":
+        return bool(_s(s.get("telefon")) or s.get("telefonAkte"))
+    if feld == "versicherung":
+        return bool(s.get("versicherungOk") or _s(s.get("versicherungAkte")))
+    if feld == "name":
+        return bool(_s(s.get("nachname")) or _s(s.get("vorname")))
+    if feld == "arzt":
+        return bool(s.get("arzt"))
+    if feld == "grund":
+        return bool(_s(s.get("grund")) or _s(s.get("motivId")))
+    return False
+
+
+def _einwand_zug(sit: dict, t: str, neu: set, melde: Melde = None) -> dict | None:
+    """W-EINWAND (Chef 13.09.2026): Widerspruch gegen einen feststehenden Wert
+    wird ZUERST korrigiert — nie ueberhoert.
+
+    Chef woertlich: "denk daran auch korrekturen einzubauen wenn eine angabe
+    nicht stimmt. telefon oder vorname oder was auch immer und der patient da
+    widerspricht, dass das dann zunaechst korrigiert wird und nicht
+    uebergangen wird." Bis heute gab es die Korrektur nur an der
+    Readback-Frage und beim Namen; mitten im Fragenfaden ("Moment, die Nummer
+    stimmt nicht") lief der Einwand ins Leere.
+
+    Geraeumt wird NUR das bestrittene Feld — die Buchungskette laeuft danach
+    an derselben Stelle weiter (naechste_frage kommt ja aus dem Sammler).
+    """
+    if einwand.modus() == "off":
+        return None
+    s = gehirn.sammler(sit)
+    if s["modus"] and s["modus"] != "buchen":
+        return None
+    feld = einwand.feld(t)
+    if not feld or not _einwand_belegt(s, feld):
+        return None
+    if _s(s.get("frage")) in _EINWAND_EIGENE_FRAGE.get(feld, set()):
+        return None
+    if set(neu or ()) & _EINWAND_ERNTE.get(feld, set()):
+        return None
+    if einwand.modus() == "shadow":
+        spur.merken(sit, "einwand-shadow", feld)
+        return None
+    spur.merken(sit, "einwand", feld)
+    antwort = _aenderung_zug(sit, t, melde, feld=feld, streng=True)
+    if antwort is None:
+        return None
+    vorsatz = _EINWAND_VORSATZ.get(feld, "")
+    text = _s(antwort.get("text"))
+    if vorsatz and text and not text.startswith("Entschuldigung"):
+        antwort["text"] = (vorsatz + text).strip()
+    return antwort
+
+
+def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
+                   feld: str = "", streng: bool = False) -> dict | None:
     """Nach 'Nein' auf die Bestätigung: nur das gewählte Feld neu einsammeln.
 
     Slot/Angebot bleiben stehen, solange nicht die Zeit geändert wird —
     sonst fragt Bianca den ganzen Termin nochmal ab (Live-Schleife
-    03.09.2026: viermal 'Soll ich das so eintragen?')."""
+    03.09.2026: viermal 'Soll ich das so eintragen?').
+
+    ``feld`` von aussen: W-EINWAND reicht das bestrittene Feld durch, auch
+    wenn der Satz die Readback-Formulierung nicht traegt.
+
+    ``streng``: der Satz ist ein WIDERSPRUCH, nennt den alten Wert also
+    womoeglich nur, um ihn zu bestreiten ("gesetzlich stimmt nicht mehr").
+    Dann darf die Ernte denselben Wert nicht gleich wieder festschreiben."""
     s = gehirn.sammler(sit)
-    feld = _aenderung_feld(t)
+    feld = _s(feld) or _aenderung_feld(t)
     if feld == "name":
         # W-NAME-EINWAND-2 (13.09.2026, Anruf 1fbda5db): Traegt der Einwand die
         # Korrektur schon in sich ("Ich heisse nicht Rateike fertig, sondern
@@ -1996,6 +2108,53 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
         s["phase"] = ""
         s["frage"] = "telefon"
         return {"text": "Welche Handynummer darf ich eintragen?"}
+    if feld == "versicherung":
+        # W-EINWAND: "gesetzlich? nein, das stimmt nicht mehr" — der Status
+        # wird neu erhoben, nicht aus der Akte weiterbenutzt. versicherung
+        # wandert beim Buchen ohnehin in die Kartei (masUpdatePatientInsurance).
+        alt = _s(s.get("versicherung")) or _s(s.get("versicherungAkte"))
+        s["versicherung"] = ""
+        s["versicherungOk"] = False
+        s["versicherungWechsel"] = False
+        s["phase"] = ""
+        s["frage"] = "versicherung"
+        neu = gehirn.einsammeln(sit, t)
+        sit["ernteZuletzt"] = sorted(neu)
+        if s["versicherungOk"] and not (streng and _s(s["versicherung"]) == alt):
+            fid, frage = gehirn.naechste_frage(sit)
+            s["frage"] = fid
+            if fid:
+                return {"text": (_quittung(s, neu) + frage).strip()}
+            return _readback(sit) if s["slotIso"] else _angebot(sit, melde)
+        # Der bestrittene Satz nennt NUR den alten Wert ("gesetzlich stimmt
+        # nicht mehr") — den darf die Ernte nicht gleich wieder festschreiben.
+        s["versicherung"] = ""
+        s["versicherungOk"] = False
+        s["frage"] = "versicherung"
+        return {"text": "Sind Sie privat oder gesetzlich versichert?"}
+    if feld == "arzt":
+        # Der Behandler traegt den Kalender — mit ihm ist der Slot-Vorrat
+        # wertlos (die freien Zeiten kamen aus dem falschen Kalender).
+        alt = _s(((s.get("arzt") or {}) if isinstance(s.get("arzt"), dict) else {}).get("calendarId"))
+        s["arzt"] = None
+        s["arztCheck"] = ""
+        s["slotIso"] = ""
+        s["phase"] = ""
+        s["frage"] = "arzt"
+        _vorrat_leeren(sit)
+        neu = gehirn.einsammeln(sit, t)
+        sit["ernteZuletzt"] = sorted(neu)
+        jetzt = _s((s.get("arzt") or {}).get("calendarId")) if isinstance(s.get("arzt"), dict) else ""
+        if s["arzt"] and not (streng and jetzt and jetzt == alt):
+            hintergrund.anstossen(sit)
+            fid, frage = gehirn.naechste_frage(sit)
+            s["frage"] = fid
+            if fid:
+                return {"text": (_quittung(s, neu) + frage).strip()}
+            return _angebot(sit, melde)
+        s["arzt"] = None
+        s["frage"] = "arzt"
+        return {"text": gehirn.arztwahl_frage(sit.get("tenant"))}
     if feld == "zeit":
         s["slotIso"] = ""
         s["wunsch"] = None
@@ -2006,6 +2165,7 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
         s["frage"] = "wunsch"
         return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
     if feld == "grund":
+        alt = _s(s.get("grund"))
         s["grund"] = ""
         s["grundWortlaut"] = ""
         s["motivId"] = ""
@@ -2017,6 +2177,13 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
         neu = gehirn.einsammeln(sit, t)
         sit["ernteZuletzt"] = sorted(neu)
         hintergrund.anstossen(sit)
+        if streng and _s(s["grund"]) == alt:
+            # Der Widerspruch nennt nur den ALTEN Grund ("Kontrolle stimmt
+            # nicht") — nicht gleich wieder festschreiben.
+            s["grund"] = ""
+            s["grundWortlaut"] = ""
+            s["motivId"] = ""
+            s["motivName"] = ""
         if s["grund"]:
             fid, frage = gehirn.naechste_frage(sit)
             s["frage"] = fid
@@ -2386,6 +2553,13 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit["gefundenKey"] = ""
             sit["upcoming"] = []
         return verwalten.zug(sit, t, neu, melde)
+
+    # W-EINWAND (Chef 13.09.2026): "Moment, die Nummer stimmt nicht" mitten im
+    # Fragenfaden — das bestrittene Feld wird SOFORT korrigiert, alle anderen
+    # Werte und der Slot bleiben stehen.
+    ew = _einwand_zug(sit, t, neu, melde)
+    if ew is not None:
+        return ew
 
     # PZR-Preis/Kasse (Chef 08.09.2026): deterministisch, nie LLM-Zahlen.
     # Nicht in Nummer/Slot/Confirm-Pflichtfragen — dort bleibt der Anker.
