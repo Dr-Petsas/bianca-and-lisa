@@ -19,6 +19,7 @@ from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, f
 from kern import fach_wache
 from kern import qwen_korrektor
 from kern import spur
+from kern import warteschleife
 from kern import wissen as kern_wissen
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
@@ -1120,6 +1121,35 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
+    # W-WARTESCHLEIFE (14.09.2026, Thaler 9311a9e2/e2badc4c): Ansagen der
+    # Praxis-Telefonanlage ("Einen kleinen Augenblick noch bitte, wir sind
+    # gleich persönlich für Sie da", "online finden Sie uns … unter www.…")
+    # kommen als Anrufer-Text an, wenn die Anlage den Anrufer in ihre
+    # Warteschleife zurückholt. Live bedankte sich das Modell für den
+    # "Hinweis", die Buchungsmaschine startete auf eine Ansage, und der
+    # Anruf lief minutenlang gegen die Schleife. Deshalb VOR stille.reset,
+    # Verlauf und Fluss: reine Ansage => still bleiben (kein Ton, kein
+    # Modell, nichts im Verlauf); Schleife => sauber auflegen. Anrufer-
+    # Sprache neben einer Ansage wird normal verarbeitet.
+    ws = warteschleife.bewerten(sit, text_in)
+    if ws.get("aktion") == "rest":
+        spur.merken(sit, "warteschleife-rest", (ws.get("ansage") or "")[:80])
+        text_in = _s(ws.get("text"))
+        if not text_in:
+            return {"text": "", "book": None}
+    elif ws.get("aktion") == "warte":
+        spur.merken(sit, "warteschleife", (ws.get("ansage") or "")[:80])
+        return {"text": "", "book": None, "warte": True,
+                "stilleMs": warteschleife.WARTE_MS}
+    elif ws.get("aktion") == "auflegen":
+        spur.merken(sit, "warteschleife-auflegen",
+                    f"n={warteschleife.stand(sit).get('n')}")
+        print(f"bianca-warteschleife auflegen: {(ws.get('ansage') or '')[:80]!r}",
+              flush=True)
+        if not abschied.an():
+            return {"text": "", "book": None, "warte": True,
+                    "stilleMs": warteschleife.WARTE_MS}
+        return {"text": "", "book": None, "hangup": True}
     if _NUR_LAUT_RE.match(text_in):
         # Kurz-Laut ohne Inhalt: wie Funkstille behandeln (Stups statt
         # LLM-Rede) — bewusst VOR stille.reset, damit der Stups-Deckel

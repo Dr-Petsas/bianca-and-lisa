@@ -3012,6 +3012,105 @@ Kontext, Dienst und `/api/hoeren` Ende-zu-Ende), `tests/test_stt_qwen.py`
 (rechtzeitiges Qwen gewinnt trotz Sperre nicht, kein Grace-Warten, Sperre
 ohne Grund/mit Exception ändert nichts).
 
+## Bestandsauskunft mit Folgefrage (W-BESTAND-ANSAGE 14.09.2026 — nicht rückbauen)
+
+Anruf 9dd61a59 (MedDent): „Ich habe meinen Termin vergessen … habe ich da
+einen Termin?" wurde erst nach dem dritten Anlauf als Frage nach dem
+BESTEHENDEN Termin erkannt; die Ansage nannte den Grund nicht, endete ohne
+Frage (`frage=""`), und „Alles gut, alles gut." fiel ans Modell. Auf „im
+Oktober" (kein Treffer, Termin im Dezember) strich die Fakten-Wache den
+ehrlichen Satz „Im Oktober sehe ich keinen Termin" als unbelegt.
+
+- **Erkennung:** `kern/intent._BESTANDSFRAGE_RE` und `gehirn._AUSKUNFT_RE`
+ kennen „Termin vergessen/verschwitzt/verpennt" (nicht: „vergessen, einen
+ Termin zu machen") und „habe ich (da/denn/überhaupt/bei Ihnen) einen
+ Termin" am Satz-/Teilsatzanfang. „Dann habe ich einen Termin" bleibt
+ bewusst draußen (Terminwunsch-Formulierung).
+- **Ansage** (`verwalten._ansagen`): nennt den Besuchsgrund
+ (`grund_am_telefon`), stellt danach eine DETERMINISTISCHE Folgefrage —
+ `termin_ok` („Passt der so, oder möchten Sie ihn verschieben oder
+ absagen?") bzw. `sonst_noch` — und trägt bei einem Zeitraum-Hinweis
+ (`verwHinweis` aus dem Einstiegssatz, relativ geparst) den ehrlichen
+ Vorsatz („Im Oktober sehe ich keinen Termin für Sie — Ihr nächster Termin
+ ist …"). Ist eine Buchung geparkt (`hirn.hat_geparktes`), gibt es keine
+ Folgefrage: Auto-Resume bringt die Buchung zurück.
+- **Folgezug** (`verwalten._termin_ok_zug`, VOR dem restlichen `zug`):
+ `_ist_passt` versteht „alles gut", „passt", „so lassen", „der bleibt" —
+ auch mit Datum („Alles gut, 21. Dezember.": das Datum ist der BESTAND,
+ `einsammeln` hat es eben als Neubuchungs-Wunsch geerntet — `wunsch` wird
+ geräumt, sonst vergiftet es eine spätere Verschiebe-Suche). Reihenfolge:
+ Änderungswunsch (verschieben/absagen → `_umschalten`, kein Modell) →
+ klarer Abschied → Zustimmung → kurzes Nein (`termin_aendern`: „verschieben
+ oder absagen?") → Abschied. „Nein danke." auf `termin_ok` = nichts ändern.
+ `termin_ok`/`termin_aendern`/`sonst_noch` sind Formular-Fragen
+ (`intent._FORMULAR_FRAGEN`, `_STILLE_KURZ`, `FRAGE_VARIANTEN`,
+ `agent._FRAGE_KERN`/`_kanonische_frage`).
+- **Fakten-Wache** (`kern/fakten_wache`): eine verneinte Bestandsaussage
+ mit Zeitraum („Im Oktober haben Sie keinen Termin", „sehe ich keinen
+ Termin") ist BELEGT, wenn `agentFindPatientAppointments` lief und KEINER
+ der gefundenen Termine in diesem Zeitraum liegt (`_zeitraum_negativ_belegt`
+ über `parse_slot_wish`: Monat/Wochentag/Datum/von–bis). Ihr „keinen Termin"
+ zählt danach nicht mehr als Slot-Claim (`st_slot`: die belegte Aussage
+ wird vor der Slot-Wache aus dem Satz entfernt) — sonst schlug die
+ Slot-Wache ohne Slotsuche zu. Inversionen („haben Sie keinen", „sehe ich
+ keinen") sind in `_CLAIM_BESTAND_NEGATIV`.
+- Tests: `tests/test_anruf_9dd61a59.py` (Regex-Gegenproben, `_ist_passt`,
+ Ansage mit Grund und Vorsatz, Live-Nachstellung Ende-zu-Ende ohne Modell,
+ geparkte Buchung, Fakten-Wache belegt/unbelegt).
+
+## Warteschleifen-Wache (W-WARTESCHLEIFE 14.09.2026 — nicht rückbauen)
+
+Chef zu Thaler-Anruf e2badc4c: „da kommen so sachen vor plötzlich: Übrigens,
+online finden Sie uns rund um die Uhr … unter www.zahnarztpraxis-mainburg.de
+… ich weiss nicht woher das kommt". Befund: die Sätze kommen NICHT von
+Bianca — sie HÖRT sie. Es sind die Ansagen der Praxis-Telefonanlage
+(„Einen kleinen Augenblick noch bitte, wir sind gleich persönlich für Sie
+da."), die den Anrufer in ihre Warteschleife zurückgeholt hat; am anderen
+Ende spricht kein Mensch mehr. Sweep über alle 583 Live-Anrufer-Züge
+(14.09.): 11 reine Ansage-Züge in vier Thaler-Anrufen (08f4995c, 14d91fb9,
+9311a9e2, e2badc4c) plus ein gemischter Zug — und KEIN menschlicher Satz
+darunter. Live bedankte sich das Modell für den „Hinweis", die
+Buchungsmaschine startete auf eine Ansage (anrufer_check), der Anruf lief
+141 s bzw. 331 s mit „Sind Sie noch dran?" gegen die Schleife, bis die
+Notleine griff. Die Konfiguration der Anlage ist Sache der Praxis (Mail an
+Frau Thaler vom 14.09., `docs/mails/thaler-warteschleife-…`); Bianca
+verhält sich seitdem so:
+
+- **Erkennung** (`kern/warteschleife.ist_ansage`, deterministisch, 0 ms):
+ Anlagen-Sätze sprechen aus PRAXIS-Perspektive ZUM Anrufer („wir sind
+ gleich für Sie da", „Sie werden gleich verbunden", „alle Leitungen sind
+ besetzt", „Ihr Anruf ist uns wichtig", „bleiben Sie in der Leitung",
+ „online finden Sie uns", „unter www.…", „dort haben Sie die Möglichkeit",
+ „Danke für Ihren Anruf", „hinterlassen Sie eine Nachricht"). Ein „Einen
+ Moment bitte, ich hole den Kalender" des Anrufers trägt diese Perspektive
+ nicht — Gegenproben (15 Anrufersätze) sind der größere Teil der Tests.
+- **Zerlegen** (`zerlegen`): Ansage-Sätze vom echten Anrufer-Rest trennen
+ (e2badc4c Zug 4: „Ja, ich wurde angerufen, von wem? Keine Ahnung." + Ansage
+ → nur der Anfang wird verarbeitet). Ein Rest OHNE Sprecher-Marker (ich/
+ mir/ja/nein/Termin …) neben einer erkannten Ansage gilt als unbekannter
+ Ansagesatz („Herzlich willkommen bei …"); „wir/uns" ist bewusst KEIN
+ Sprecher-Marker (so sprechen Anlagen).
+- **Aktion** (`bewerten`, eingehängt in `agent.user_turn` VOR
+ `stille.reset`, Verlauf, Intent und Fluss): reine Ansage → `warte` (kein
+ Ton, kein Modell, nichts im Verlauf, Stille-Zähler und Maschinenzustand
+ unberührt; `stilleMs` 1500); gemischt → nur der Rest läuft normal weiter;
+ ab der ZWEITEN reinen Ansage (Anrufer hatte im Anruf schon gesprochen)
+ bzw. der DRITTEN (noch kein Anrufer-Wort — eine Begrüßungsansage vor dem
+ Durchstellen darf einen echten Anruf nie beenden) → `auflegen` ohne
+ Abschiedssatz (spricht ja niemand). Aufgelegt wird NIE in einem Zug mit
+ Anrufer-Sprache. Brücke und Dock kennen `warte`/`hangup` mit leerem Text
+ bereits (`_spielen` leer → `_ausklingen_und_auflegen`).
+- **Sichtbar:** Manifest `warteschleife` {n, aufgelegt, texte} →
+ `/anrufe` zeigt die Marke „Warteschleife (N Ansagen, aufgelegt)" und die
+ gehörten Ansagen im Kopf; Gedächtnis-Report/CallR bekommt die Zeile
+ „Anruf endete in der Warteschleife der Praxis-Telefonanlage (…)"; Spuren
+ `warteschleife` / `warteschleife-rest` / `warteschleife-auflegen`.
+- Notaus: `WARTESCHLEIFE=0`. Tests: `tests/test_warteschleife.py` (37:
+ Live-Wortlaute inkl. Verhörer „meinburg", weitere Anlagen-Phrasen, 15
+ Anrufer-Gegenproben, Zerlegen, Schwellen mit/ohne Anrufer-Sprache,
+ gemischter Zug legt nie auf, Agent Ende-zu-Ende: still/auflegen/Report/
+ Manifest, echter Anrufersatz unverändert).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

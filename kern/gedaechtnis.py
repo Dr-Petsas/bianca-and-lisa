@@ -270,6 +270,15 @@ def zusammenfassung(sit: dict) -> str:
     text = kopf + "; ".join(teile) + "."
     for zeile in notes.besondere_zeilen(sit):
         text += f" {zeile}."
+    # W-WARTESCHLEIFE: hat die Anlage den Anrufer zurueckgeholt, steht das
+    # im Report — die Praxis sieht so, warum der Anruf ohne Abschied endete.
+    try:
+        from kern import warteschleife
+        ws = warteschleife.zusammenfassung_zeile(sit)
+        if ws:
+            text += f" {ws}."
+    except Exception:
+        pass
     return text[:600]
 
 

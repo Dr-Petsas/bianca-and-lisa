@@ -538,6 +538,16 @@ function maleDetail(a) {
     n.innerHTML = `Praxis-Notiz: <b>${a.praxisNotiz}</b>`;
     wurzel.appendChild(n);
   }
+  if (a.warteschleife && a.warteschleife.n) {
+    const w = document.createElement("div");
+    w.className = "zeiten";
+    w.style.marginTop = "8px";
+    const texte = (a.warteschleife.texte || []).map((t) => `„${t}“`).join(" · ");
+    w.textContent = a.warteschleife.aufgelegt
+      ? `Warteschleife der Praxis-Telefonanlage: ${a.warteschleife.n} Ansagen gehört, kein Anrufer mehr in der Leitung — Bianca hat aufgelegt. ${texte}`
+      : `Ansage der Praxis-Telefonanlage gehört (${a.warteschleife.n}x, nicht als Anrufer gewertet). ${texte}`;
+    wurzel.appendChild(w);
+  }
 
   const fluss = document.createElement("div");
   fluss.className = "zuege";
@@ -669,6 +679,17 @@ function maleListe() {
     marke.className = `marke ${farbe}`;
     marke.textContent = text;
     marken.appendChild(marke);
+    if (a.warteschleife && a.warteschleife.n) {
+      // W-WARTESCHLEIFE: die Praxis-Anlage hat den Anrufer zurueckgeholt —
+      // Bianca hoerte Ansagen statt eines Menschen (und legte ggf. auf).
+      const ws = document.createElement("span");
+      ws.className = "marke grau";
+      ws.title = (a.warteschleife.texte || []).join(" | ");
+      ws.textContent = a.warteschleife.aufgelegt
+        ? `Warteschleife (${a.warteschleife.n} Ansagen, aufgelegt)`
+        : `Warteschleife (${a.warteschleife.n})`;
+      marken.appendChild(ws);
+    }
     kopf.appendChild(name);
     kopf.appendChild(marken);
     const meta = document.createElement("div");

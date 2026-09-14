@@ -151,6 +151,15 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
         manifest["praxisNotiz"] = sit["praxisNotiz"]
     if sit.get("tools"):
         manifest["tools"] = sit.get("tools")
+    # W-WARTESCHLEIFE: Ansagen der Praxis-Anlage gehoert / deshalb aufgelegt —
+    # in /anrufe sichtbar, sonst sieht die Liste nur "ohne Buchung".
+    ws = sit.get("warteschleife")
+    if isinstance(ws, dict) and int(ws.get("n") or 0):
+        manifest["warteschleife"] = {
+            "n": int(ws.get("n") or 0),
+            "aufgelegt": bool(ws.get("aufgelegt")),
+            "texte": list(ws.get("texte") or [])[:6],
+        }
 
 
 def _stream_render_s(dienst, url: str) -> float | None:
@@ -480,6 +489,7 @@ def liste(stimme: str, limit: int = 200, tenant_id: str = "") -> list[dict[str, 
             "lastMove": m.get("lastMove"),
             "praxisNotiz": m.get("praxisNotiz") or "",
             "offen": m.get("endedAt") is None,
+            "warteschleife": m.get("warteschleife") or None,
         })
     aus.sort(key=lambda e: e.get("startedAt") or "", reverse=True)
     return aus[:max(1, limit)]
