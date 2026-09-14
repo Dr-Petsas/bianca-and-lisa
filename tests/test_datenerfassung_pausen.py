@@ -257,7 +257,10 @@ def test_vorname_wird_beim_buchstabieren_nicht_unterbrochen_und_endet_automatisc
     assert z2 and not z2.get("warte")
     assert s["vorname"] == "Srinivasa"
     assert not s["vornameTeil"]
-    assert "Handynummer" in z2["text"]
+    # W-TELEFON-ZULETZT: der Faden laeuft weiter (Zusatzangebot/Versicherung),
+    # die Handynummer kommt erst nach dem Okay zum Termin.
+    assert z2["text"] and "Handynummer" not in z2["text"]
+    assert s["frage"] != "vorname"
 
 
 def test_abgebrochene_vornamenfortsetzung_bleibt_still():
@@ -281,7 +284,8 @@ def test_vorname_am_stueck_bleibt_schneller_weg():
     z = flow.zug(sit, "Srinivasa")
     assert z and not z.get("warte")
     assert s["vorname"] == "Srinivasa"
-    assert "Handynummer" in z["text"]
+    assert z["text"] and "Handynummer" not in z["text"]  # W-TELEFON-ZULETZT
+    assert s["frage"] != "vorname"
 
 
 def test_agent_ruft_bei_nummernfragment_keine_talk_schicht():
@@ -332,14 +336,40 @@ def test_nachname_wird_nicht_nach_vor_und_nachname_erneut_gefragt():
     s["frage"] = fid2
     gehirn.einsammeln(sit, "Efthimios")
     fid3, frage3 = gehirn.naechste_frage(sit)
-    assert fid3 == "telefon"
+    # W-TELEFON-ZULETZT: nach dem Namen kommt beim Neupatienten die
+    # Versicherung — die Nummer erst nach dem Okay zum Termin.
+    assert fid3 == "versicherung"
     assert "Nachname" not in frage3
+    assert "Handynummer" not in frage3
 
 
 def test_voller_neupatientenfluss_über_fragmentierte_daten():
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    def _slot(tage: int, h: int, m: int) -> str:
+        d = datetime.now(ZoneInfo("Europe/Berlin")).replace(
+            hour=h, minute=m, second=0, microsecond=0) + timedelta(days=tage)
+        return d.isoformat(timespec="seconds")
+
+    gebucht: list[dict] = []
+
+    def _book(tenant, ctx, slot_iso=""):
+        gebucht.append(dict(ctx))
+        return {
+            "ok": True, "booked": True, "slotIso": slot_iso,
+            "appointmentId": "e7ho", "spoken": "Der Termin ist fest eingetragen.",
+        }
+
     sit = _sit()
     echt = flow.hintergrund.anstossen
+    echt_find, echt_book = flow.kal.find_slots, flow.kal.book_slot
     flow.hintergrund.anstossen = lambda _sit: None
+    flow.kal.find_slots = lambda *a, **k: {
+        "ok": True, "slots": [_slot(7, 9, 15), _slot(8, 10, 30)],
+        "doctorName": "Dr. Petsas",
+    }
+    flow.kal.book_slot = _book
     try:
         assert task_router.anwenden(
             sit,
@@ -373,8 +403,23 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
             assert z and z.get("warte") is True and not z["text"]
         z7 = flow.zug(sit, "S wie Samuel, fertig.")
         assert z7 and "Vorname" in z7["text"]
+        # W-TELEFON-ZULETZT (Chef 14.09.2026): nach dem Namen KEINE Nummer —
+        # erst Versicherung, dann steht der Termin, dann (als Letztes vor der
+        # SMS) die Handynummer.
         z7b = flow.zug(sit, "Theo")
-        assert z7b and "Handynummer" in z7b["text"]
+        assert z7b and "Handynummer" not in z7b["text"]
+        assert "privat" in z7b["text"].lower() or "gesetzlich" in z7b["text"].lower()
+
+        z7c = flow.zug(sit, "Gesetzlich.")
+        assert z7c and "frei" in z7c["text"].lower()
+        assert "Handynummer" not in z7c["text"]
+        z7d = flow.zug(sit, "Der erste bitte.")
+        assert z7d and "halte ich fest" in z7d["text"].lower()
+        assert "Handynummer" not in z7d["text"]
+        z7e = flow.zug(sit, "Ja, passt.")
+        assert z7e and "notiz" in z7e["text"].lower()  # PZR war schon durch
+        z7f = flow.zug(sit, "Nein.")
+        assert z7f and "Handynummer" in z7f["text"]
 
         for text in (
             "null eins sieben sieben",
@@ -386,12 +431,14 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
         z8 = flow.zug(sit, "null null")
         assert z8 and "wiederhole" in z8["text"].lower()
         z9 = flow.zug(sit, "Ja, stimmt.")
-        assert z9 and ("privat" in z9["text"].lower() or "gesetzlich" in z9["text"].lower())
+        assert z9 and "eingetragen" in z9["text"].lower()
 
         s = gehirn.sammler(sit)
         assert s["vorname"] == "Theo"
         assert s["nachname"] == "Tzannis"
         assert s["telefon"] == "01776004600"
         assert s["telefonOk"] is True
+        assert gebucht and gebucht[0].get("phone") == "01776004600"
     finally:
         flow.hintergrund.anstossen = echt
+        flow.kal.find_slots, flow.kal.book_slot = echt_find, echt_book

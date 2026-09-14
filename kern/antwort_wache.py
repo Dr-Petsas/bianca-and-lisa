@@ -74,25 +74,89 @@ def _greeting_tokens(s: str) -> list[str]:
     return [t for t in re.findall(r"[A-Za-zÄÖÜäöüß]+", (s or "").lower()) if len(t) > 1]
 
 
+# Live MedDent 14.09.2026 (Anruf e7191c7e, Zug 3): Begruessung „Zahnärzte im
+# Medical Center, guten Tag! Mein Name ist Bianca. …“, Re-Greeting des Modells
+# „Guten Tag, hier ist Bianca von den Zahnärzten im Medical Center. Wie kann
+# ich Ihnen helfen?“ — wortgenau ueberlappten nur 4 von 11 Tokens
+# („Zahnärzte“≠„Zahnärzten“, „Mein Name ist“≠„hier ist“), die Schwelle lag bei
+# 6, die zweite Begruessung ging raus. Deshalb: Wortstaemme statt Woerter,
+# und eine Selbstvorstellung MIT Grusswort ist mitten im Gespraech immer ein
+# Re-Greeting — samt der Eroeffnungsfrage, die daran haengt.
+_SELBSTVORSTELLUNG_RE = re.compile(
+    r"(?i)\b(?:hier\s+(?:ist|spricht)|mein\s+name\s+ist|ich\s+bin|"
+    r"sie\s+sprechen\s+mit|am\s+apparat\s+ist)\s+([A-Za-zÄÖÜäöüß]+)"
+)
+_GRUSSWORT_RE = re.compile(
+    r"(?i)\b(?:guten\s+(?:tag|morgen|abend)|gr(?:ü|ue)(?:ß|ss)\s+gott|"
+    r"(?:herzlich\s+)?willkommen)\b|^\W*hallo\b"
+)
+_OPENER_FRAGE_RE = re.compile(
+    r"(?i)^\W*(?:wie|was|womit)\s+kann\s+ich\s+(?:ihnen\s+(?:helfen|behilflich\s+sein)|"
+    r"f(?:ü|ue)r\s+sie\s+tun)\W*$"
+)
+_STAMM_LAENGE = 6
+
+
+def _stamm(tok: str) -> str:
+    return tok[:_STAMM_LAENGE]
+
+
+def _assistentin_name(greeting: str) -> str:
+    m = _SELBSTVORSTELLUNG_RE.search(greeting or "")
+    return m.group(1).lower() if m else ""
+
+
 def strip_repeated_greeting(text: str, greeting: str) -> str:
     """Mid-Call-Re-Greeting streichen (phone_agent strip_repeated_greeting)."""
     if not text or not greeting:
         return text
-    g_distinct = {t for t in _greeting_tokens(greeting) if t not in _GREETING_STOPWORDS}
-    if len(g_distinct) < 2:
+    name = _assistentin_name(greeting)
+    if not name and not _GRUSSWORT_RE.search(greeting):
+        # Die Referenz ist selbst keine Begruessung (z. B. erste Assistenten-
+        # Zeile einer Sitzung ohne Begruessungs-Feld = Sachfrage): dann gibt es
+        # kein Re-Greeting zu streichen — sonst fiele eine legitime Wieder-
+        # holung derselben Frage („unter welcher Nummer erreichen wir Sie?“).
         return text
+    g_distinct = {t for t in _greeting_tokens(greeting) if t not in _GREETING_STOPWORDS}
+    if len(g_distinct) < 2 and not name:
+        return text
+    g_staemme = {_stamm(t) for t in g_distinct}
     threshold = max(2, (len(g_distinct) + 1) // 2)
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
     kept: list[str] = []
     dropped = False
-    for p in parts:
-        overlap = g_distinct & set(_greeting_tokens(p))
-        if len(overlap) >= threshold:
+
+    def _nur_gruss(p: str) -> bool:
+        return len(_greeting_tokens(p)) <= 3 and bool(_GRUSSWORT_RE.search(p))
+
+    for i, p in enumerate(parts):
+        toks = [t for t in _greeting_tokens(p) if t not in _GREETING_STOPWORDS]
+        overlap = {_stamm(t) for t in toks} & g_staemme
+        m = _SELBSTVORSTELLUNG_RE.search(p)
+        vorstellung = bool(name and m and m.group(1).lower() == name)
+        # Nur Vorstellung + Grusswort zaehlt („Guten Tag, hier ist Bianca …“,
+        # auch als „Guten Tag! Hier ist Bianca …“ in zwei Saetzen): „Ich bin
+        # Bianca, die Telefonassistentin“ auf „Wer sind Sie?“ ist eine
+        # legitime Antwort und bleibt stehen.
+        gruss_dabei = bool(_GRUSSWORT_RE.search(p)) or (i > 0 and _nur_gruss(parts[i - 1]))
+        # Gestrichen wird NUR, was wie eine Begruessung klingt (Grusswort oder
+        # Selbstvorstellung) UND mit der echten Begruessung ueberlappt. Reine
+        # Wort-Ueberlappung reicht nicht: eine Sachfrage, die Woerter mit der
+        # Begruessung teilt („… erreichen wir Sie?“), ist kein Re-Greeting.
+        if (gruss_dabei or vorstellung) and (
+                len(overlap) >= threshold or (vorstellung and gruss_dabei)):
             dropped = True
             continue
         kept.append(p)
     if not dropped:
         return text
+    # Was am Re-Greeting haengt, faellt mit: ein blosses „Guten Tag!“ davor
+    # und die Eroeffnungsfrage („Wie kann ich Ihnen helfen?“) dahinter.
+    kept = [
+        p for p in kept
+        if not _OPENER_FRAGE_RE.match(p)
+        and not (len(_greeting_tokens(p)) <= 3 and _GRUSSWORT_RE.search(p))
+    ]
     return " ".join(kept).strip()
 
 
@@ -140,11 +204,8 @@ def collapse_stacked_identity_ask(text: str) -> str:
     return f"{preamble}. {ask}"
 
 
-def saeubern(sit: dict, text: str) -> str:
-    """Gates vor TTS: Re-Greeting raus, gestapelte Identitätsfragen kollabieren."""
-    t = _s(text)
-    if not t:
-        return t
+def begruessung(sit: dict) -> str:
+    """Die gesprochene Begrüßung dieses Anrufs (Referenz für Re-Greetings)."""
     begr = _s(sit.get("begruessungText"))
     if not begr and sit.get("messages"):
         # Erste Assistenten-Antwort = Begrüßung
@@ -152,6 +213,23 @@ def saeubern(sit: dict, text: str) -> str:
             if m.get("role") == "assistant" and _s(m.get("content")):
                 begr = _s(m.get("content"))
                 break
-    t = strip_repeated_greeting(t, begr)
+    return begr
+
+
+def regreeting_raus(sit: dict, text: str) -> str:
+    """Nur die Re-Greeting-Wache — für den P5-Streaming-Ausgang, wo ein Satz
+    gesprochen wird, bevor `saeubern` am Zugende greifen kann."""
+    t = _s(text)
+    if not t:
+        return t
+    return strip_repeated_greeting(t, begruessung(sit))
+
+
+def saeubern(sit: dict, text: str) -> str:
+    """Gates vor TTS: Re-Greeting raus, gestapelte Identitätsfragen kollabieren."""
+    t = _s(text)
+    if not t:
+        return t
+    t = strip_repeated_greeting(t, begruessung(sit))
     t = collapse_stacked_identity_ask(t)
     return t

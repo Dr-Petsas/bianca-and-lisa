@@ -376,9 +376,18 @@ _FREIER_TERMIN_RE = re.compile(
     r"(?:noch|irgendwas|irgendetwas|etwas|was)\b[^?.!]{0,12}\bfrei\w*\b",
     re.I,
 )
+# Live MedDent 14.09.2026 (Anruf e7191c7e): „Hallo, ich habe gerne einen
+# Termin.“ — Parakeets Fassung von „hätte gerne“ — traf KEINEN Zweig. Die
+# Buchung wurde nicht erkannt, der Eisbrecher stellte die Wohlseinsfrage,
+# das Modell begruesste danach ein zweites Mal, und erst „Ich brauche einen
+# Termin“ (Zug 4) startete den Fluss. Deshalb auch die Hoerfehler-/Konjunktiv-
+# Formen: „hab(e) gern“, „bräuchte“, „wollte“, „würde gern“, „Termin
+# bekommen/kriegen“. _BESTANDSFRAGE_RE bleibt Vorfilter (bestehender Termin).
 _FB_NEU_RE = re.compile(
-    r"(?:termin\w*)\s*(?:\w+\s+){0,4}?(?:vereinbar\w*|ausmach\w*|buch\w*|machen|haben|brauch\w*)|"
-    r"(?:brauch\w*|h(?:ä|ae)tte?\s+gern\w*|m(?:ö|oe)chte\w*|will)\s+(?:\w+\s+){0,4}?termin",
+    r"(?:termin\w*)\s*(?:\w+\s+){0,4}?"
+    r"(?:vereinbar\w*|ausmach\w*|buch\w*|machen|haben|brauch\w*|bekomm\w*|krieg\w*|reservier\w*)|"
+    r"(?:br(?:ä|ae|a)uch\w*|h(?:ä|ae|a)(?:tt|b)e?\s+gern\w*|w(?:ü|ue)rde\s+gern\w*|"
+    r"m(?:ö|oe)chte\w*|will|wollte|w(?:ü|ue)nsch\w*)\s+(?:\w+\s+){0,4}?termin",
     re.I,
 )
 # Behandlungswunsch OHNE das Wort „Termin“: Der Besuchsgrund-Katalog wird

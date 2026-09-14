@@ -309,6 +309,10 @@ def test_ja_das_stimmt_bleibt_eine_eindeutige_buchungsbestaetigung():
     s = gehirn.sammler(sit)
     s["pzr"] = "nein"
     s["arztNotizFrage"] = "nein"
+    # W-TELEFON-ZULETZT: die Nummer ist der letzte Schritt vor dem
+    # Eintragen — hier schon bestaetigt, damit das Ja direkt bucht.
+    s["telefon"] = "01776004600"
+    s["telefonOk"] = True
     echt_book = flow.kal.book_slot
     echt_note = flow.kal.note_appointment
     flow.kal.book_slot = lambda *a, **k: {

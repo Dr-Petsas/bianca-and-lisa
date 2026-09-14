@@ -69,9 +69,11 @@ _ANRUFER_FRAGT_RE = re.compile(
     r"gibt\s+es|ist\s+das|geht\s+das|darf\s+ich)\b", re.I)
 
 # Ein Wunsch/Auftrag ("ich haette gern…") verdient "Gerne." statt "Verstehe."
+# Parakeets Hoerfehler-Formen zaehlen mit: „ich habe gerne einen Termin“
+# (live 14.09.2026, Anruf e7191c7e — gemeint war „hätte gerne“).
 _WUNSCH_RE = re.compile(
-    r"\b(?:ich\s+(?:m(?:ö|oe)chte|will|w(?:ü|ue)rde|h(?:ä|ae)tte|brauche|"
-    r"br(?:ä|ae)uchte|suche|bitte)|w(?:ü|ue)rde\s+gern|h(?:ä|ae)tte\s+gern|"
+    r"\b(?:ich\s+(?:m(?:ö|oe)chte|will|wollte|w(?:ü|ue)rde|h(?:ä|ae)tte|brauche|"
+    r"br(?:ä|ae)uchte|suche|bitte)|w(?:ü|ue)rde\s+gern|h(?:ä|ae|a)(?:tt|b)e?\s+gern|"
     r"machen\s+sie|k(?:ö|oe)nnten\s+sie|bitte\s+um)\b", re.I)
 
 # Bewusst KEIN nacktes "Gut." / "Okay.": das sind die ueblichen Quittungen der

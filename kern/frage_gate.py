@@ -92,11 +92,20 @@ _FELDER: list[tuple[str, re.Pattern[str], Callable[[dict], bool]]] = [
      lambda s: s.get("warSchonMal") is not None),
     ("buchstabieren", re.compile(r"buchstabier", re.I),
      lambda s: bool(s.get("buchstabiert"))),
+    # Live MedDent 14.09.2026 (Anruf e7191c7e, Zug 7): das Modell fragte
+    # „Haben Sie denn eine Vorstellung, wann es Ihnen am besten passt?“,
+    # waehrend die Maschine noch auf den GRUND wartete — einen Zug spaeter
+    # stellte sie die Zeitfrage selbst („Wann passt es Ihnen am besten —
+    # eher vormittags oder nachmittags?“): dieselbe Frage zweimal. Die
+    # Nebensatz-Form („wann es/Ihnen …“), „Vorstellung, wann“ und die
+    # Tageszeit-Alternative gehoeren deshalb mit ins Muster.
     ("wunsch", re.compile(
-        r"wann\s+(?:passt|hätten|haetten|würde|wuerde|können|koennen|"
-        r"möchten|moechten|wollen|darf|soll)\b|"
+        r"wann\s+(?:passt|hätten|haetten|würde|wuerde|wäre|waere|können|koennen|"
+        r"möchten|moechten|wollen|darf|soll|es|ihnen|dir)\b|"
+        r"vorstellung\w*,?\s+wann\b|"
         r"welche[rn]?\s+(?:tag|wochentag|uhrzeit|zeitpunkt)|"
-        r"an\s+welchem\s+tag|zu\s+welcher\s+(?:zeit|uhrzeit)", re.I),
+        r"an\s+welchem\s+tag|zu\s+welcher\s+(?:zeit|uhrzeit)|"
+        r"\b(?:vormittags?|nachmittags?)\s+oder\s+(?:nachmittags?|vormittags?)\b", re.I),
      lambda s: s.get("wunsch") is not None),
     ("versicherung", re.compile(
         r"privat\s+oder\s+gesetzlich|gesetzlich\s+oder\s+privat|"

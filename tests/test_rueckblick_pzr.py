@@ -400,7 +400,9 @@ def test_petsas_so_eintragen_bitte_schreibt_pzr_notiz():
 def test_buchen_traegt_plus_pzr_notiz():
     sit = _sit()
     s = _bestand(sit, 900, "IMP OP Implantation")
-    s.update({"pzr": "ja", "slotIso": "2026-09-07T09:00", "arzt": {"typ": "egal"}})
+    s.update({"pzr": "ja", "slotIso": "2026-09-07T09:00", "arzt": {"typ": "egal"},
+              # W-TELEFON-ZULETZT: Nummer ist vor dem Eintragen bestaetigt.
+              "telefon": "01776004600", "telefonOk": True})
     echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
     notes: list[str] = []
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {

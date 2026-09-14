@@ -826,6 +826,10 @@ def start_reply(sit: dict) -> dict[str, Any]:
     # Praxisgedächtnis schon zur Begrüßung — der Rückrufer fragt oft im
     # ersten Satz nach dem Grund (Herbst 08.09.: Notiz lag 2 min vorher).
     gedaechtnis.kontext_anstossen(sit)
+    # Referenz fuer die Re-Greeting-Wache (antwort_wache.begruessung): die
+    # WIRKLICH gesprochene Begruessung — nicht die erste Assistenten-Zeile
+    # raten, die nach einer Sitzungs-Wiederherstellung eine Sachfrage sein kann.
+    sit["begruessungText"] = text
     sit["messages"] = [
         {"role": "system", "content": system_prompt_aktuell(sit)},
         {"role": "user", "content": "(Ein Anrufer ist in der Leitung. Du hast dich gerade gemeldet.)"},
@@ -1557,6 +1561,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # waere gesprochen, bevor die Wache am Zugende sie streichen kann,
             # und die Maschine wuerde sie danach ein zweites Mal stellen.
             satz = _frage_gate_anwenden(sit, satz)
+            # Re-Greeting (Live MedDent 14.09.2026, Anruf e7191c7e): „Guten
+            # Tag, hier ist Bianca von den Zahnärzten …“ mitten im Gespraech
+            # kam als P5-Satz sofort aus dem Mund — die Wache am Zugende
+            # (`_entdoppelt` -> antwort_wache.saeubern) war zu spaet.
+            gesaeubert = antwort_wache.regreeting_raus(sit, satz)
+            if gesaeubert != satz:
+                spur.merken(sit, "regreeting-vorab", _s(satz)[:60])
+                satz = gesaeubert
             if not _s(satz):
                 return
             vorab_gesagt = True
@@ -1596,6 +1608,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     bewacht = _fach_wache_anwenden(sit, bewacht)
     bewacht = _notdienst_wache_anwenden(sit, bewacht)
     bewacht = _frage_gate_anwenden(sit, bewacht)
+    # Gleiche Re-Greeting-Wache wie am P5-Ausgang — sonst faende
+    # llm.rest_nach_vorab den gestrichenen Satz im Endtext und spraeche ihn
+    # doch noch (der Buchungs-Pfad von _nachbessern laeuft nicht durch
+    # antwort_wache.saeubern).
+    ohne_gruss = antwort_wache.regreeting_raus(sit, bewacht)
+    if ohne_gruss != bewacht:
+        spur.merken(sit, "regreeting", _s(bewacht)[:60])
+        bewacht = ohne_gruss
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht

@@ -81,22 +81,43 @@ def test_nur_einmal_pro_anruf():
 
 
 def test_arzt_ja_bietet_keine_aufhellung():
-    """Live 08.09.: „Ja, ist richtig.“ auf den Behandler → Aufhellung."""
+    """Live 08.09.: „Ja, ist richtig.“ auf den Behandler → Aufhellung.
+
+    Seit W-TELEFON-ZULETZT (14.09.2026) folgt auf den bestaetigten Behandler
+    keine Nummernfrage mehr, sondern direkt das Terminangebot — auch dort
+    darf die Aufhellung nicht dazwischenrutschen."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    def _slot(tage: int, h: int) -> str:
+        d = datetime.now(ZoneInfo("Europe/Berlin")).replace(
+            hour=h, minute=0, second=0, microsecond=0) + timedelta(days=tage)
+        return d.isoformat(timespec="seconds")
+
     echt = flow.hintergrund.anstossen
+    echt_find = flow.kal.find_slots
     flow.hintergrund.anstossen = lambda sit: None
+    flow.kal.find_slots = lambda *a, **k: {
+        "ok": True, "slots": [_slot(5, 9), _slot(6, 10)], "doctorName": "Dr. Petsas",
+    }
     try:
         sit = _sit()
         s = _pzr_sammler(sit)
         s["wunsch"] = {}
         s["arztCheck"] = "gefragt"
         s["frage"] = "arzt_check"
-        s["arzt"] = {"typ": "akte", "calendarName": "Dr. Petsas",
-                     "calendarId": "cal-1"}
+        s["arzt"] = None
+        sit["anruferKartei"] = {
+            "calendarId": "cal-1", "calendarName": "Dr. Petsas", "doctorName": "Petsas",
+        }
         r = flow.zug(sit, "Ja, ist richtig.")
         assert r and "aufhell" not in (r.get("text") or "").lower(), r
+        assert (s.get("arzt") or {}).get("calendarId") == "cal-1"
+        assert "handynummer" not in (r.get("text") or "").lower()
         assert not gehirn.bleaching_faellig(sit)
     finally:
         flow.hintergrund.anstossen = echt
+        flow.kal.find_slots = echt_find
 
 
 def test_nicht_faellig_ohne_wunschzeit():

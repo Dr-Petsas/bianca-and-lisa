@@ -464,7 +464,11 @@ def test_dritttermin_fragt_sms_ziel_vor_einer_fremden_nummer():
         "buchstabiert": True,
         "kontaktTelefon": "015253904756",
     })
-    fid, frage = gehirn.naechste_frage(sit)
+    # W-TELEFON-ZULETZT: der Fragenfaden fragt weder Nummer noch SMS-Ziel —
+    # das kommt im Tor vor dem Eintragen (gehirn.telefon_frage).
+    fid, _ = gehirn.naechste_frage(sit)
+    assert fid not in {"sms_empfaenger", "telefon", "telefon_check"}
+    fid, frage = gehirn.telefon_frage(sit)
     assert fid == "sms_empfaenger"
     assert "Niko Tzannis oder an Sie" in frage
 
@@ -472,6 +476,7 @@ def test_dritttermin_fragt_sms_ziel_vor_einer_fremden_nummer():
     gehirn.einsammeln(sit, "An mich bitte.")
     assert s["smsEmpfaenger"] == "anrufer"
     assert s["telefonOk"] and s["telefon"] == "015253904756"
+    assert gehirn.telefon_frage(sit) == ("", "")
 
 
 def test_dritttermin_nimmt_nummer_nur_fuer_drittperson_auf():
@@ -524,6 +529,16 @@ def test_buchung_traegt_angehoerigen_notiz():
         flow.kal.note_appointment = (
             lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
         try:
+            # W-TELEFON-ZULETZT: das Tor vor dem Eintragen klaert erst das
+            # SMS-Ziel (die Vater-Nummer wurde beim Loesen der Identitaet
+            # bewusst aus dem Patientenfeld genommen) — gebucht wird erst,
+            # wenn der Anrufer sie als Ziel bestaetigt hat.
+            tor = flow._buchen(sit)
+            assert tor and "oder an Sie" in tor["text"], tor
+            assert not notes
+            assert s["frage"] == "sms_empfaenger"
+            gehirn.einsammeln(sit, "An mich bitte.")
+            assert s["smsEmpfaenger"] == "anrufer" and s["telefonOk"]
             flow._buchen(sit)
         finally:
             flow.kal.book_slot = echt_book

@@ -61,6 +61,36 @@ def test_rueckfrage_gegen_belegten_wert_bleibt():
         assert raus == text
 
 
+def test_modell_fragt_die_zeit_im_nebensatz_waehrend_die_maschine_den_grund_will():
+    """Live MedDent 14.09.2026 (Anruf e7191c7e, Zug 7/8): auf STT-Muell
+    („Alles gut, wenn man das noch.“) erfand das Modell „also eine
+    Routinekontrolle“ und fragte „Haben Sie denn eine Vorstellung, wann es
+    Ihnen am besten passt?“ — die Maschine wartete noch auf den GRUND und
+    stellte die Zeitfrage einen Zug spaeter selbst. Die Nebensatz-Form fiel
+    durch das alte Muster (nur „wann passt/hätten/…“)."""
+    sit = _sit(frage="grund", vorname="Michael", nachname="Petsas")
+    for text in (
+        "Verstehe. Haben Sie denn eine Vorstellung, wann es Ihnen am besten passt?",
+        "Alles klar. Wann wäre es Ihnen denn recht?",
+        "Gut. Lieber vormittags oder nachmittags?",
+        "Verstehe. Wann Ihnen ein Termin am besten passen würde?",
+    ):
+        raus, feld, belegt = frage_gate.saeubern(sit, text)
+        assert feld == "wunsch", text
+        assert belegt is False
+        assert "?" not in raus, (text, raus)
+    # Gegenprobe: eine Rueckblick-Frage ist keine Wunsch-Frage.
+    raus, feld, _ = frage_gate.saeubern(
+        sit, "Wann waren Sie denn zuletzt bei uns?")
+    assert feld == ""
+    assert raus == "Wann waren Sie denn zuletzt bei uns?"
+    # Und fragt die Maschine GERADE nach dem Wunsch, bleibt die Frage stehen.
+    sit_w = _sit(frage="wunsch", grund="Kontrolle")
+    text_w = "Gerne. Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
+    raus_w, feld_w, _ = frage_gate.saeubern(sit_w, text_w)
+    assert feld_w == "" and raus_w == text_w
+
+
 def test_frage_nach_belegtem_feld_fliegt_mit_hinweis_belegt():
     sit = _sit(frage="wunsch", telefon="01776004600", telefonOk=True)
     raus, feld, belegt = frage_gate.saeubern(

@@ -782,6 +782,10 @@ FELDER_START = {
     "telefonTeil": "",
     "telefonOk": False,
     "telefonAkte": False,
+    # W-TELEFON-ZULETZT (Chef 14.09.2026): die Plattform hat gesagt, dass sie
+    # OHNE Nummer keine Akte anlegen kann — "gleichen wir spaeter ab" gilt
+    # dann nicht mehr, die Nummer ist Pflicht (sonst Rueckruf-Notiz).
+    "telefonPflicht": False,
     "patientId": "",
     "bekannt": False,
     "aktePhone": "",
@@ -2697,6 +2701,9 @@ def anrufer_hallo_fragt(text: str) -> bool:
     return bool(t and t.endswith("?") and t.count("?") == 1)
 
 
+_TERMIN_WORT_RE = re.compile(r"\btermin", re.I)
+
+
 def _anrufer_hallo_feststellung(sit: dict) -> str:
     """Neutrale Alternative, wenn hinter dem Hallo direkt Inhalt folgt."""
     wer = anrufer_anrede(sit)
@@ -2718,6 +2725,13 @@ def hallo_frage_unpassend(sit: dict, text: str = "") -> bool:
     geht). Dann bleibt nur die Feststellung."""
     from kern import anliegen_art, hirn
     if anliegen_art.art(text) in {"notfall", "beschwerde"}:
+        return True
+    # Live MedDent 14.09.2026 (Anruf e7191c7e): „Hallo, ich habe gerne einen
+    # Termin.“ fiel durch die Intent-Muster, der Eisbrecher fragte „wie geht
+    # es Ihnen?“, danach begruesste das Modell erneut — drei Zuege, bis die
+    # Buchung begann. Das Wort „Termin“ im ersten Satz IST das Anliegen;
+    # unabhaengig davon, ob die Intent-Schicht es schon eingeordnet hat.
+    if _TERMIN_WORT_RE.search(_s(text)):
         return True
     a = hirn.aktiv(sit)
     if a is not None and _s(a.get("handlung")):
@@ -3698,6 +3712,20 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             return "telefon_check", sms_nummer_frage(s["telefonOffen"])
         return "telefon_check", readback_text(s["telefonOffen"])
 
+    # W-TELEFON-ZULETZT: die Nummernfrage stellt das Tor in flow._buchen —
+    # LAEUFT sie aber (Anrufer diktiert in Etappen, oder die Frage ist offen),
+    # fuehrt der Fragenfaden sie zu Ende. So sehen Frage-Anker, Wiederholungs-
+    # Waechter und Eskalation dieselbe Frage wie das Tor.
+    if s["telefonTeil"] and not s["telefonOk"]:
+        return "telefon", (
+            "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
+            "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
+        )
+    if s["frage"] in {"telefon", "sms_empfaenger"} and not s["telefonOk"]:
+        fid_t, frage_t = telefon_frage(sit)
+        if fid_t:
+            return fid_t, frage_t
+
     # Akte gefunden, traegt aber eine ANDERE Nummer als die gerade
     # rueckbestaetigte: der Anrufer entscheidet (Chef 29.08.2026) — alte
     # Nummer loeschen/ersetzen oder die Bestaetigungs-SMS an die alte.
@@ -3796,8 +3824,6 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 # auf, statt ihn mit "Und der Vorname?" zu uebergehen.
                 return "vorname", "Wie lautet Ihr Vorname denn richtig?"
             return "vorname", "Und der Vorname?"
-        if s["fuerWen"] and not s["smsEmpfaenger"]:
-            return "sms_empfaenger", sms_empfaenger_frage(s)
         if not s["grund"]:
             from kern import zimmer_map
             if zimmer_map.aktiv(sit.get("tenant") or {}):
@@ -3813,21 +3839,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 "Ich will nichts falsch schreiben: "
                 "Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
             )
-        if not s["telefonOk"]:
-            bekannte_nr = s["telefonBekannt"] or (
-                s["aktePhone"] if s["bekannt"] else ""
-            )
-            if bekannte_nr and not _telefon_gesperrt(s, bekannte_nr):
-                s["telefonBekannt"] = telefon.normaliert(bekannte_nr)
-                s["telefonOffen"] = s["telefonBekannt"]
-                return "telefon_check", sms_nummer_frage(s["telefonBekannt"])
-            if not s["telefonAkte"]:
-                if s["telefonTeil"]:
-                    return "telefon", (
-                        "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
-                        "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
-                    )
-                return "telefon", "Und unter welcher Handynummer erreichen wir Sie?"
+        # W-TELEFON-ZULETZT (Chef 14.09.2026): Handynummer und SMS-Empfaenger
+        # werden NICHT mehr hier erfragt, sondern erst nach dem Okay zum
+        # Termin — unmittelbar vor dem Eintragen (`telefon_frage`, Tor in
+        # flow._buchen). Hier bleibt nur noch die Versicherung.
         fid_v, frage_v = _versicherung_frage(s)
         if fid_v:
             return fid_v, frage_v
@@ -3868,29 +3883,78 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         )
     if not s["vorname"]:
         return "vorname", "Und der Vorname?"
-    if s["fuerWen"] and not s["smsEmpfaenger"]:
-        return "sms_empfaenger", sms_empfaenger_frage(s)
     if not s["buchstabiert"] and not s["bekannt"]:
         return _buchstabier_frage(
             s,
             "Damit ich nichts falsch schreibe: "
             "Buchstabieren Sie den Nachnamen bitte einmal kurz?",
         )
-    if not s["telefonOk"]:
-        if s["telefonBekannt"] and not _telefon_gesperrt(s, s["telefonBekannt"]):
-            s["telefonOffen"] = s["telefonBekannt"]
-            return "telefon_check", sms_nummer_frage(s["telefonBekannt"])
-        if not s["telefonAkte"]:
-            if s["telefonTeil"]:
-                return "telefon", (
-                    "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
-                    "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
-                )
-            return "telefon", "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung."
+    # W-TELEFON-ZULETZT: Nummer/SMS-Empfaenger erst nach dem Okay zum Termin
+    # (`telefon_frage`), hier nur noch die Versicherung.
     fid_v, frage_v = _versicherung_frage(s)
     if fid_v:
         return fid_v, frage_v
     return "", ""
+
+
+def telefon_frage(sit: dict) -> tuple[str, str]:
+    """Handynummer als LETZTER Schritt vor dem Eintragen (W-TELEFON-ZULETZT).
+
+    Chef 14.09.2026 (Anruf e7191c7e, woertlich): "sie fragt zu frueh nach der
+    handy nummer, bevor der termin ueberhaupt steht! die handynummer sollte
+    das letzte vor Versand der sms sein, das abgefragt wird." Der Termin
+    steht, der Anrufer hat Ja gesagt, PZR/Doktor-Notiz sind durch — JETZT
+    kommt die Nummer, und direkt danach book_slot (= SMS). Reihenfolge hier:
+
+    1. gehoerte, noch unbestaetigte Nummer -> Rueckbestaetigung (nie ohne),
+    2. Dritttermin ohne SMS-Ziel -> "an den Patienten oder an Sie?",
+    3. hinterlegte Nummer (Anrufer-ID / Akte) -> "SMS an die … schicken?",
+    4. sonst die Nummer erfragen — es sei denn, der Anrufer hat sie zweimal
+       nicht genannt (telefonAkte) und die Plattform verlangt sie nicht
+       (telefonPflicht).
+    ("", "") heisst: nichts zu fragen, buchen.
+    """
+    s = sammler(sit)
+    if s["telefonOk"]:
+        return "", ""
+    if s["telefonOffen"]:
+        if (s["telefonBekannt"]
+                and telefon.normaliert(s["telefonOffen"])
+                == telefon.normaliert(s["telefonBekannt"])):
+            return "telefon_check", sms_nummer_frage(s["telefonOffen"])
+        return "telefon_check", readback_text(s["telefonOffen"])
+    if s["fuerWen"] and not s["smsEmpfaenger"]:
+        return "sms_empfaenger", sms_empfaenger_frage(s)
+    bekannte_nr = s["telefonBekannt"] or (s["aktePhone"] if s["bekannt"] else "")
+    if bekannte_nr and not _telefon_gesperrt(s, bekannte_nr):
+        s["telefonBekannt"] = telefon.normaliert(bekannte_nr)
+        s["telefonOffen"] = s["telefonBekannt"]
+        return "telefon_check", sms_nummer_frage(s["telefonBekannt"])
+    # "Meine Nummer haben Sie in der Akte" (telefonAkte) wird EINMAL geglaubt:
+    # buchen, die Plattform sucht die Akte ueber den Namen. Erst wenn SIE die
+    # Nummer verlangt (kein Treffer / Akte ohne Handy -> `book_slot` sagt
+    # "Handynummer", flow._buchen setzt telefonPflicht), ist sie Pflicht —
+    # dann nicht noch einmal vertagen (sonst Eskalation -> _buchen -> Fehler
+    # -> Eskalation im Kreis).
+    pflicht = bool(s.get("telefonPflicht"))
+    if s["telefonAkte"] and not pflicht:
+        return "", ""
+    if s["telefonTeil"]:
+        return "telefon", (
+            "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
+            "restlichen Ziffern; am Ende können Sie einfach fertig sagen."
+        )
+    if s["telefonAkte"] and pflicht:
+        # Schon einmal vertagt ("spaeter abgleichen") — jetzt geht es nicht mehr ohne.
+        s["telefonAkte"] = False
+        return "telefon", (
+            "Ohne Handynummer kann ich den Termin leider nicht eintragen — "
+            "unter welcher Nummer erreichen wir Sie?"
+        )
+    return "telefon", (
+        "Dann brauche ich für die Terminbestätigung per SMS noch Ihre Handynummer — "
+        "unter welcher Nummer erreichen wir Sie?"
+    )
 
 
 def besuch_lange_her(s: dict, tage: int = 183) -> bool:

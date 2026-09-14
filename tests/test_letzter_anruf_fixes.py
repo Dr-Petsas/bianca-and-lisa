@@ -100,6 +100,9 @@ def test_fuer_wen_notiz_nennt_anrufer_und_beziehung():
     s.update({"modus": "buchen", "fuerWen": "nachbar",
               "vorname": "Peter", "nachname": "Schmattke", "buchstabiert": True,
               "warSchonMal": False, "versicherungOk": True, "telefon": "+491776004600",
+              # W-TELEFON-ZULETZT: Nummer und SMS-Ziel sind vor dem Eintragen
+              # bestaetigt — sonst haelt das Tor die Buchung (richtig) an.
+              "telefonOk": True, "smsEmpfaenger": "anrufer",
               "slotIso": "2026-09-09T12:45:00+02:00",
               "phase": "bestaetigen", "frage": "bestaetigung"})
     notes: list[str] = []

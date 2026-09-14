@@ -696,6 +696,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     # phase auf fertig/angebot und bot erneut Slots an.
     if _schon_gebucht(sit) and s.get("phase") in {"gebucht", "fertig"}:
         return {"text": "Kann ich sonst noch etwas für Sie tun?"}
+    if sit.get("buchIntent") and _s(s.get("slotIso")):
+        # W-TELEFON-ZULETZT: Slot gewaehlt UND Ja gesagt — dazwischen lag nur
+        # eine Klaerung (Handynummer, Akten-Nummer, Versicherung). Direkt
+        # eintragen, NIE erneut Slots anbieten (live 09.09.2026: "Welcher
+        # davon passt Ihnen?" doppelt; die telefon_alt-/versicherung-Zweige
+        # und die Eskalation liefen sonst alle hier in ein neues Angebot).
+        return _buchen(sit, melde)
 
     # "Weiß nicht, bei wem ich war": erst die Behandler-Recherche abwarten
     # (Füller überbrückt), NICHT sofort global suchen — Chef-Vorgabe.
@@ -1150,8 +1157,33 @@ def _arzt_notiz_zug(sit: dict, t: str, melde: Melde = None) -> dict:
     return _buchen(sit, melde)
 
 
+def _telefon_tor(sit: dict) -> dict | None:
+    """W-TELEFON-ZULETZT (Chef 14.09.2026): die Handynummer ist der LETZTE
+    Schritt vor dem Eintragen — unmittelbar vor der Bestaetigungs-SMS.
+
+    Der Termin steht (Slot gewaehlt, Ja gesagt, PZR/Doktor-Notiz durch);
+    JETZT klaert Bianca Nummer bzw. SMS-Ziel (`gehirn.telefon_frage`) und
+    bucht direkt danach. Phase geht auf "" — die Antwort auf die Nummern-
+    frage laeuft durch den normalen Fragenfaden (einsammeln -> telefon_check
+    -> telefon_alt), `buchIntent` + `slotIso` fuehren am Ende ohne neues
+    Angebot in `_buchen` (Guard in `_angebot`)."""
+    s = gehirn.sammler(sit)
+    if not _s(s.get("slotIso")):
+        return None
+    fid, frage = gehirn.telefon_frage(sit)
+    if not fid:
+        return None
+    s["phase"] = ""
+    s["frage"] = fid
+    sit["buchIntent"] = True
+    return {"text": frage}
+
+
 def _buchen(sit: dict, melde: Melde = None) -> dict:
     s = gehirn.sammler(sit)
+    tor = _telefon_tor(sit)
+    if tor is not None:
+        return tor
     if (s["telefonAlt"] == "neu" and s["patientId"] and s["telefon"] and s["aktePhone"]
             and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
         # Sicherheitsnetz (Eskalations-/Renn-Fall): Entscheidung "neue Nummer"
@@ -1441,6 +1473,12 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     if "nummer" in gesagt.lower() or "handy" in gesagt.lower():
         s["frage"] = "telefon"
         s["telefonOk"] = False
+        # W-TELEFON-ZULETZT: die Plattform verlangt die Nummer (keine Akte
+        # ohne Handy / needs_phone) — "gleichen wir spaeter ab" (telefonAkte)
+        # gilt dann nicht mehr, sonst liefe Eskalation -> _buchen -> Fehler
+        # -> Eskalation im Kreis.
+        s["telefonPflicht"] = True
+        s["telefonAkte"] = False
         # Slot war schon gewaehlt und bestaetigt, nur die Handynummer fehlte.
         # Intent merken, damit die Buchung nach der Nummer DIREKT laeuft und
         # nicht erneut Slots anbietet (live 09.09.2026: "Welcher davon passt
@@ -1541,6 +1579,12 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
     einen Zug; naechste_frage stellt sie danach von selbst wieder."""
     s = gehirn.sammler(sit)
     if sit.get("rueckrufBuchung"):
+        return None
+    if sit.get("buchIntent") and _s(s.get("slotIso")):
+        # W-TELEFON-ZULETZT: nach dem Ja zum Termin nur noch Nummer -> SMS.
+        # PZR/Doktor-Notiz sind in _nach_ok_buchen durch; ein Rueckblick oder
+        # ein Aufhellungs-Angebot darf sich nicht zwischen Nummer und
+        # Eintragen schieben.
         return None
     if (s.get("modus") == "buchen" and s.get("anruferCheck") == "ja"
             and not s.get("fuerWenCheck") and not s.get("fuerWen")):
@@ -1708,9 +1752,38 @@ def _eskalieren(sit: dict, fid: str) -> str:
         s["telefonTeil"] = ""
         return "Dann nehme ich die Nummer so auf. "
     if fid in {"telefon", "telefon_check"}:
-        s["telefonAkte"] = True
         s["telefonOffen"] = ""
         s["telefonTeil"] = ""
+        if s.get("telefonPflicht"):
+            # W-TELEFON-ZULETZT: die Plattform hat die Nummer schon verlangt
+            # (keine Akte ohne Handy / needs_phone -> telefonPflicht) und der
+            # Anrufer nennt sie zweimal nicht — "spaeter abgleichen" fuehrte
+            # in die Schleife Eskalation -> _buchen -> Fehler -> Eskalation.
+            # Ehrlich abschliessen; der Wunsch bleibt als Notiz fuer die Praxis.
+            wann = spoken_slot(s["slotIso"]) if _s(s.get("slotIso")) else "den gewünschten Zeitpunkt"
+            beim = arzt_sprechname(
+                _s((s["arzt"] or {}).get("calendarName")),
+                sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+            )
+            verwalten.abgeben_notiz(
+                sit,
+                was=(
+                    f"Terminwunsch {wann}" + (f" bei {beim}" if beim else "")
+                    + " — Anrufer konnte keine Handynummer nennen, Termin NICHT eingetragen"
+                ),
+            )
+            s["phase"] = "fertig"
+            s["frage"] = ""
+            sit.pop("buchIntent", None)
+            sit["keinSlotFertig"] = True
+            return (
+                "Ohne Handynummer kann ich den Termin leider nicht fest eintragen — "
+                "die Praxis braucht sie für Ihre Akte und die Bestätigung. Ich habe "
+                "Ihren Wunsch notiert. Wenn Sie die Nummer zur Hand haben, rufen Sie "
+                "gern noch einmal an — oder Sie erreichen die Praxis direkt zu den "
+                "Sprechzeiten. "
+            )
+        s["telefonAkte"] = True
         return "Die Nummer gleichen wir später in Ruhe ab. "
     if fid == "telefon_alt":
         # Zweimal keine klare Wahl: die gerade Ziffer fuer Ziffer bestaetigte
@@ -2857,6 +2930,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # Zweiter Leerlauf: Standard setzen und WEITERGEHEN — nie wieder
             # dieselbe Frage im Kreis (Live-Schleife 27.08.2026).
             uebergang = _eskalieren(sit, fid)
+            if s["phase"] == "fertig":
+                # Die Eskalation hat den Vorgang abgeschlossen (Pflicht-Nummer
+                # zweimal nicht genannt -> Notiz): nichts mehr fragen, nichts
+                # mehr anbieten.
+                s["frage"] = ""
+                return {"text": uebergang.strip()}
             fid2, frage2 = gehirn.naechste_frage(sit)
             if not fid2:
                 s["frage"] = ""

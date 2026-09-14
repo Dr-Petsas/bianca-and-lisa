@@ -2755,6 +2755,71 @@ Telefon-Agenten (source pickadoc-bianca) von dem Gate ausnehmen — beides
 Entscheidung des Chefs, nicht dieses Repos. Tests:
 `tests/test_motiv_konsistent.py` (12).
 
+## Handynummer als letzter Schritt + kein Eisbrecher vor dem Anliegen (W-TELEFON-ZULETZT 14.09.2026 — nicht rückbauen)
+
+Chef 14.09.2026 07:00 zum MedDent-Anruf e7191c7e (wörtlich): „es gab bei der
+Erkennung des Patienten dopplungen die überflüssig sind / biancas reihenfolge
+der datenabfrage ist schlecht . sie fragt zu früh nach der handy nummer, bevor
+der termin überhaupt steht! die handynummer sollte das letzte vor Versand der
+sms sein, das abgefragt wird."
+
+Live (Anrufer per Rufnummer als Michael Petsas erkannt): „Hallo, ich habe gerne
+einen Termin." → „Ah, Herr Petsas, wie geht es Ihnen?" → „Danke, gut." → „Das
+freut mich. Guten Tag, hier ist Bianca von den Zahnärzten … Wie kann ich Ihnen
+helfen?" → erst in Zug 4 der Identitätscheck; in Zug 7/8 die Zeitfrage doppelt
+(Modell im Nebensatz, Maschine danach); in Zug 9 — direkt nach dem Zeitwunsch,
+VOR jedem Slot — „Soll ich die Bestätigungs-SMS an die 0177 … schicken?".
+
+**Reihenfolge (Buchung):** Anliegen → Identität (`anrufer_check`) → „für Sie
+selbst?" → Behandler → Grund → Wunschzeit → Name → Versicherung → Slots →
+Readback + Ja → PZR/Doktor-Notiz → **Handynummer / SMS-Ziel** → `book_slot`
+(= SMS). Nachstellung des Anrufs gegen den Code (offline, LLM gestubbt):
+`python tools/_probe_e7191c7e.py` — 14.09.2026 ALLE GRUEN.
+
+- **`gehirn.telefon_frage(sit)`** ist die EINE Stelle für Nummer und SMS-Ziel
+  (Reihenfolge: gehörte Nummer rückbestätigen → Dritttermin „an den Patienten
+  oder an Sie?" → hinterlegte Nummer „SMS an die … schicken?" → Nummer
+  erfragen). `gehirn.naechste_frage` erfragt die Nummer NICHT mehr; es führt
+  sie nur zu Ende, wenn sie schon läuft (`telefonTeil`, offene `telefon`-/
+  `sms_empfaenger`-Frage) — damit Frage-Anker, Wiederholungs-Wächter und
+  Eskalation dieselbe Frage sehen wie das Tor.
+- **`flow._telefon_tor`** sitzt am Anfang von `flow._buchen`: Slot gewählt,
+  Ja gesagt, Zusatzfragen durch → JETZT die Nummernfrage (`phase=""`,
+  `frage=telefon|telefon_check|sms_empfaenger`, `buchIntent=True`). Nach der
+  Antwort läuft der Fragenfaden weiter (`telefon_check` → ggf. `telefon_alt`),
+  und `_angebot` bucht bei `buchIntent + slotIso` DIREKT (Guard oben in
+  `_angebot`) — nie wieder „Welcher passt Ihnen?" nach der Nummer.
+  `_einschub` (Rückblick/Bleaching) schiebt sich nicht mehr zwischen Nummer
+  und Eintragen.
+- **`telefonPflicht`**: „Meine Nummer haben Sie" (`telefonAkte`) wird EINMAL
+  geglaubt und gebucht; sagt die Plattform „Handynummer" (Akte ohne Handy),
+  setzt `_buchen` die Pflicht. Nennt der Anrufer sie dann zweimal nicht,
+  schließt `_eskalieren` den Vorgang EHRLICH ab (Rückruf-Notiz, `phase=
+  fertig`) — vorher lief Eskalation → `_buchen` → Fehler → Eskalation im Kreis.
+- **Kein Eisbrecher vor dem Anliegen:** steht „Termin" im ersten Satz, gibt
+  es keine Wohlseinsfrage (`gehirn.hallo_frage_unpassend`), sondern die
+  Feststellungs-Variante und sofort den Identitätscheck. `kern/intent.
+  _FB_NEU_RE` kennt Parakeets Hörfehler-/Konjunktivformen („hab(e) gern",
+  „bräuchte", „wollte", „würde gern", „Termin bekommen/kriegen").
+- **Re-Greeting-Wache** (`kern/antwort_wache.strip_repeated_greeting`):
+  Wortstämme statt Wörter („Zahnärzte" = „Zahnärzten"), Selbstvorstellung +
+  Grußwort mitten im Gespräch zählt immer, die Eröffnungsfrage („Wie kann ich
+  Ihnen helfen?") fällt mit. Referenz ist die WIRKLICH gesprochene Begrüßung
+  (`sit["begruessungText"]`, gesetzt in `agent.start_reply`); ist die
+  Referenz selbst keine Begrüßung, wird nichts gestrichen — sonst fiele eine
+  legitime Wiederholung der Nummernfrage. Eingehängt am Zugende UND im P5-
+  Strom (`agent.user_turn` → `antwort_wache.regreeting_raus`), sonst ist der
+  Satz gesprochen, bevor die Wache greift. Spur: `regreeting`/`regreeting-vorab`.
+- **Frage-Gate** kennt die Nebensatz-Zeitfrage („Vorstellung, wann es Ihnen
+  passt?", „vormittags oder nachmittags?") — Rückblick-Fragen („Wann waren
+  Sie zuletzt bei uns?") bleiben.
+- Tests: `test_fluss_fragenkette_bis_angebot` (ganze Kette bis `book_slot`),
+  `test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter`,
+  `test_modell_fragt_die_zeit_im_nebensatz_…` (frage_gate), angepasste
+  Fixtures (`telefonOk`/`smsEmpfaenger` vor `_buchen`) in
+  `test_fuer_wen`/`test_rueckblick_pzr`/`test_thaler_rebrovic`/
+  `test_versicherung_geschlecht`/`test_datenerfassung_pausen`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

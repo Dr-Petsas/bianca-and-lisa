@@ -222,15 +222,18 @@ def _bestand(sit: dict, *, tage_her: int, akte: str = "gesetzlich") -> dict:
 def test_bestand_rueckfrage_nur_nach_sechs_monaten():
     sit = _sit()
     s = _bestand(sit, tage_her=250)
-    # Zuerst laeuft der Nummernschritt (SMS an die hinterlegte Nummer,
-    # W-ANRUFER-CHECK); die Versicherungs-Rueckfrage ist danach die LETZTE
-    # Pflichtfrage — nicht die erste.
-    assert gehirn.naechste_frage(sit)[0] == "telefon_check"
-    s["telefon"] = s["aktePhone"]
-    s["telefonOk"] = True
+    # W-TELEFON-ZULETZT (Chef 14.09.2026): der Nummernschritt (SMS an die
+    # hinterlegte Nummer) laeuft NICHT mehr im Fragenfaden, sondern erst nach
+    # dem Okay zum Termin (Tor in flow._buchen -> telefon_frage). Die
+    # Versicherungs-Rueckfrage ist damit die LETZTE Pflichtfrage der Kette.
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "versicherung_check"
     assert "gesetzlich" in frage
+    assert gehirn.telefon_frage(sit)[0] == "telefon_check"
+    s["telefon"] = s["aktePhone"]
+    s["telefonOk"] = True
+    assert gehirn.telefon_frage(sit) == ("", "")
+    assert gehirn.naechste_frage(sit)[0] == "versicherung_check"
 
     sit2 = _sit()
     s2 = _bestand(sit2, tage_her=60)
