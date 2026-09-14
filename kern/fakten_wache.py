@@ -89,7 +89,12 @@ _CLAIM_SLOT_NEGATIV = re.compile(
 _CLAIM_BESTAND_NEGATIV = re.compile(
     r"\b(?:sie|du)\s+hab(?:en|t)\s+(?:aktuell\s+|derzeit\s+|noch\s+)?"
     r"kein(?:en|e)?\s+(?:kommenden\s+|weiteren\s+|anderen\s+)?termin\b|"
+    # Inversion nach Zeitangabe: "Im Oktober haben Sie keinen Termin" (9dd61a59).
+    r"\bhab(?:en|t)\s+(?:sie|du)\s+(?:aktuell\s+|derzeit\s+|noch\s+|da\s+|dann\s+)?"
+    r"kein(?:en|e)?\s+(?:kommenden\s+|weiteren\s+|anderen\s+)?termin\b|"
     r"\bich\s+(?:sehe|finde)\b[^.!?]{0,45}\bkein(?:en|e)?\s+"
+    r"(?:kommenden\s+|weiteren\s+|anderen\s+)?termin\b|"
+    r"\b(?:sehe|finde)\s+ich\b[^.!?]{0,45}\bkein(?:en|e)?\s+"
     r"(?:kommenden\s+|weiteren\s+|anderen\s+)?termin\b|"
     r"\bkein(?:e|en)?\s+(?:weiteren?|anderen?|kommenden?)\s+termine?\b",
     re.I,
@@ -195,6 +200,66 @@ def _ev_bestand(sit: dict, *, leer: bool) -> bool:
     return anzahl == 0 if leer else anzahl > 0
 
 
+def _termin_isos(sit: dict) -> list[str]:
+    """ISO-Startzeiten der zuletzt GEFUNDENEN Bestandstermine (verwalten legt
+    sie in sit['gefunden'] ab; Rueckfall: upcoming)."""
+    aus: list[str] = []
+    for a in (sit.get("gefunden") or sit.get("upcoming") or []):
+        if isinstance(a, dict):
+            iso = str(a.get("iso") or a.get("start") or a.get("startIso") or "")
+        else:
+            iso = str(a or "")
+        if iso:
+            aus.append(iso)
+    return aus
+
+
+def _iso_im_zeitraum(iso: str, w: dict) -> bool:
+    """Faellt der Termin in den im Satz genannten Zeitraum (Datum, von..bis,
+    Wochentag)? Konservativ: bei unlesbarem ISO gilt 'ja' (Behauptung bleibt
+    unbelegt)."""
+    try:
+        from kern.slots import _weekday_of
+        tag = str(iso)[:10]
+        if len(tag) != 10:
+            return True
+        if w.get("date") and tag != str(w["date"])[:10]:
+            return False
+        if w.get("von") and tag < str(w["von"])[:10]:
+            return False
+        if w.get("bis") and tag > str(w["bis"])[:10]:
+            return False
+        if w.get("weekday") is not None and _weekday_of(tag) != int(w["weekday"]):
+            return False
+        return True
+    except Exception:
+        return True
+
+
+def _zeitraum_negativ_belegt(sit: dict, satz: str) -> bool:
+    """W-BESTAND-ANSAGE (Anruf 9dd61a59): 'Im Oktober haben Sie keinen Termin'
+    ist WAHR, wenn die Terminsuche lief und KEINER der gefundenen Termine in den
+    genannten Zeitraum faellt — auch wenn es andere Termine gibt. Ohne Zeitbezug
+    im Satz gilt weiter die harte Regel (leer=True)."""
+    tool = _letztes_tool(
+        sit, {"agentFindPatientAppointments", "list_appointments"})
+    if not _ok(tool) or tool.get("notFound") or tool.get("mehrdeutig"):
+        return False
+    if "resultCount" not in tool:
+        return False
+    try:
+        from kern.slots import parse_slot_wish
+        w = parse_slot_wish(satz) or {}
+    except Exception:
+        return False
+    if not (w.get("date") or w.get("von") or w.get("bis") or w.get("weekday") is not None):
+        return False
+    if w.get("date") and w.get("weekday") is not None and not (w.get("von") or w.get("bis")):
+        # Wochentag + daraus abgeleitetes Datum: das Datum reicht.
+        w = dict(w, weekday=None)
+    return not any(_iso_im_zeitraum(iso, w) for iso in _termin_isos(sit))
+
+
 def _ev_sms(sit: dict) -> bool:
     buch = sit.get("lastBook")
     return bool(_ok(buch) and not (buch or {}).get("verificationFailed"))
@@ -235,15 +300,21 @@ def unbelegte_behauptung(
         st = satz.strip()
         if not st:
             continue
-        if (_CLAIM_BESTAND_NEGATIV.search(st)
-                and not _ev_bestand(sit, leer=True)):
-            return "bestand"
+        st_slot = st
+        if _CLAIM_BESTAND_NEGATIV.search(st):
+            if (not _ev_bestand(sit, leer=True)
+                    and not _zeitraum_negativ_belegt(sit, st)):
+                return "bestand"
+            # Belegte Bestands-Aussage ("Im Oktober haben Sie keinen Termin"):
+            # ihr "keinen Termin" ist KEIN Slot-Claim — sonst schlug die
+            # Slot-Wache ohne Slotsuche zu (Anruf 9dd61a59, W-BESTAND-ANSAGE).
+            st_slot = _CLAIM_BESTAND_NEGATIV.sub(" ", st)
         if (_CLAIM_BESTAND_POSITIV.search(st)
                 and not _ev_bestand(sit, leer=False)):
             return "bestand"
-        if (_CLAIM_SLOT_NEGATIV.search(st) and not _ev_slot_negativ(sit)):
+        if (_CLAIM_SLOT_NEGATIV.search(st_slot) and not _ev_slot_negativ(sit)):
             return "slots"
-        if (_ZEIT_MARK.search(st) and _CLAIM_SLOT_POSITIV.search(st)
+        if (_ZEIT_MARK.search(st_slot) and _CLAIM_SLOT_POSITIV.search(st_slot)
                 and not _ev_slot_positiv(sit)):
             return "slots"
         if _CLAIM_SMS.search(st) and not _ev_sms(sit):

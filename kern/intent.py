@@ -166,6 +166,9 @@ _FORMULAR_FRAGEN = {
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
     "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",
     "arzt_notiz",
+    # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen ("Passt der so?",
+    # "Sonst noch etwas?") — "alles gut"/"nein danke" sind Ernte, kein Anliegen.
+    "termin_ok", "termin_aendern", "sonst_noch",
 }
 
 # Eine knappe Ja/Nein-Antwort kann im selben Atemzug ein zweites Anliegen
@@ -345,7 +348,27 @@ _BESTANDSFRAGE_RE = re.compile(
     # Nebensatz-Wortstellung: „ich möchte wissen, OB ICH noch einen Termin
     # HABE“. Ohne diesen Zweig gewann irrtümlich _FB_NEU_RE („Termin haben“)
     # und das freie LLM fragte nach bestehend-vs-neu, statt nachzusehen.
-    r"\bob\s+ich\b[^?.!]{0,38}?\btermine?\b[^?.!]{0,16}?\bhab(?:e|')?\b",
+    r"\bob\s+ich\b[^?.!]{0,38}?\btermine?\b[^?.!]{0,16}?\bhab(?:e|')?\b|"
+    # W-TERMIN-VERGESSEN (Anruf 9dd61a59, 14.09.2026): „Ich habe meinen
+    # Termin vergessen“ / „ich habe einen Termin, aber ich habe ihn
+    # vergessen“ — der Anrufer will wissen, WANN sein bestehender Termin
+    # ist. Beide Saetze trafen keinen Zweig, das freie LLM begruesste ein
+    # zweites Mal und fragte nach bestehend-vs-neu, statt nachzusehen.
+    # „vergessen, einen Termin ZU MACHEN“ bleibt Neubuchung (Lookahead);
+    # „Termin verpasst“ bewusst nicht — das ist ein versaeumter, kein
+    # gesuchter Termin.
+    r"\btermine?\b(?![^?.!]{0,20}\bzu\s+(?:machen|vereinbaren|buchen|ausmachen)\b)"
+    r"[^?.!]{0,30}?\b(?:vergessen|verschwitzt|verpennt|verbummelt)\b|"
+    # „Habe ich DA/DENN/EVENTUELL einen Termin?“ — Frageform mit Fuellwort
+    # am TEILSATZ-Anfang (Verb zuerst). _FB_AUSKUNFT_RE kennt nur „habe ich
+    # (noch) einen Termin“ ohne Fuellwort. Bewusst am Teilsatz-Anfang
+    # verankert: „Wie schnell habe ich einen Termin?“ (Neubuchung) und „Da
+    # habe ich schon einen Termin“ (Konflikt im Slotangebot) sind kein
+    # Treffer dieses Zweigs.
+    r"(?:^|[.!?,;:]\s*|\b(?:und|oder|aber|also|denn)\s+)hab(?:e|')?\s+ich\s+"
+    r"(?:(?:da|dort|denn|eigentlich|vielleicht|eventuell|zufällig|zufaellig|"
+    r"überhaupt|ueberhaupt|noch|jetzt|momentan|aktuell|derzeit|schon|"
+    r"bei\s+(?:ihnen|euch))\s+){0,3}(?:irgend)?einen\s+termin\b",
     re.I,
 )
 # Freie-Slot-Frage aus Anbietersicht: „Haben Sie noch einen Termin diese

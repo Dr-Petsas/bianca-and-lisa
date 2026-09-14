@@ -285,6 +285,11 @@ _KEIN_WUNSCH_TOKEN = (
 _AUSKUNFT_RE = re.compile(
     r"wann\s+(ist|war|wäre|waere|hab(e)?\s+ich)\b.{0,30}termin|"
     r"hab(e)?\s+ich\s+(überhaupt\s+|ueberhaupt\s+)?(noch\s+)?(irgend)?einen\s+termin|"
+    # W-BESTAND-ANSAGE (Anruf 9dd61a59): "Ich habe meinen Termin vergessen" /
+    # "Habe ich da einen Termin?" — Bestandsauskunft, keine Neubuchung
+    # (Rueckfall ohne Hirn; mit Hirn faengt intent._BESTANDSFRAGE_RE).
+    r"termin\b(?![^?.!]{0,20}\bzu\s+(?:machen|vereinbaren|buchen|ausmachen)\b)[^?.!]{0,30}?\b(?:vergessen|verschwitzt|verpennt|verbummelt)\b|"
+    r"hab(?:e|')?\s+ich\s+(?:(?:da|dort|denn|eigentlich|vielleicht|eventuell|zufällig|zufaellig|jetzt|momentan|aktuell|derzeit|bei\s+(?:ihnen|euch))\s+){1,3}(?:irgend)?einen\s+termin\b|"
     r"welche[nr]?\s+termin(e)?\s+(hab|steht|stehen)|"
     r"termin\s+(nochmal|noch\s+mal|nochmals)\s*(sagen|nennen|durchgeben)?|"
     r"wann\s+(muss|soll|darf)\s+ich\s+(kommen|da\s+sein|vorbeikommen)|"
@@ -2484,6 +2489,19 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Soll ich Ihnen stattdessen einen neuen Termin heraussuchen?",
         "Darf ich Ihnen direkt einen neuen Termin anbieten?",
     ),
+    # W-BESTAND-ANSAGE (Anruf 9dd61a59): Folgefragen nach dem Vorlesen.
+    "termin_ok": (
+        "Passt der Termin so, oder möchten Sie ihn verschieben oder absagen?",
+        "Bleibt es bei dem Termin, oder soll ich ihn verschieben oder absagen?",
+    ),
+    "termin_aendern": (
+        "Möchten Sie den Termin verschieben oder absagen?",
+        "Verschieben oder absagen — was darf ich für Sie tun?",
+    ),
+    "sonst_noch": (
+        "Kann ich sonst noch etwas für Sie tun?",
+        "Gibt es sonst noch etwas, das ich für Sie tun kann?",
+    ),
     "buchstabieren": (
         "Buchstabieren Sie mir den Nachnamen bitte einmal?",
         "Mögen Sie den Nachnamen kurz buchstabieren?",
@@ -3747,7 +3765,10 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "rueckblick", "folge_kontrolle", "anrufer_check",
                 "fuer_wen_check", "arzt_check", "vorname_check",
                 "frisch_absage_ok", "absage_ok",
-                "termin_anbieten", "arzt_notiz"}
+                "termin_anbieten", "arzt_notiz",
+                # W-BESTAND-ANSAGE: "Passt der so?" / "Sonst noch etwas?" —
+                # kurze Ja/Nein-/"alles gut"-Antworten.
+                "termin_ok", "sonst_noch", "termin_aendern"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.

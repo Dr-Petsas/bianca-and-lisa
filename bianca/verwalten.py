@@ -288,9 +288,13 @@ def _hinweis_hat(w: dict | None) -> bool:
     )
 
 
-def _hinweis_merken(sit: dict, text: str) -> bool:
-    """Zeitangabe zum BESTANDSTERMIN aus dem Satz ziehen und merken."""
+def _hinweis_merken(sit: dict, text: str, *, relativ: bool = False) -> bool:
+    """Zeitangabe zum BESTANDSTERMIN aus dem Satz ziehen und merken.
+    relativ=True nimmt auch heute/morgen/uebermorgen mit (Auskunft: "Habe
+    ich morgen einen Termin?")."""
     w = parse_slot_wish(text)
+    if relativ and not _hinweis_hat(w):
+        w = gehirn._wunsch_deuten(text) or {}
     if not _hinweis_hat(w):
         return False
     sit["verwHinweis"] = w
@@ -781,24 +785,295 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
     return {"text": res.get("spoken") or "Das Verschieben hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück."}
 
 
+_WOCHENTAG_WORT = ["Sonntag", "Montag", "Dienstag", "Mittwoch",
+                   "Donnerstag", "Freitag", "Samstag"]  # Index wie %w (0=So)
+
+
+def _monatsende(iso: str) -> bool:
+    try:
+        d = datetime.strptime(iso[:10], "%Y-%m-%d")
+        return (d + timedelta(days=1)).month != d.month
+    except Exception:
+        return False
+
+
+def _zeitraum_wort(w: dict | None) -> str:
+    """Die Zeitangabe des Anrufers als Sprechform: 'Im Oktober', 'Ab November',
+    'Am Dienstag', 'Am Montag, den fünften Oktober'. Leer, wenn nichts
+    Greifbares (dann sagt die Ansage 'Zu dieser Zeit')."""
+    from kern import sprech
+    w = w or {}
+    von = str(w.get("von") or "")[:10]
+    bis = str(w.get("bis") or "")[:10]
+    try:
+        if von and bis:
+            if von[:7] == bis[:7] and von.endswith("-01") and _monatsende(bis):
+                return f"Im {sprech._MONAT[int(von[5:7])]}"
+            return "In dem genannten Zeitraum"
+        if von:
+            if von.endswith("-01"):
+                return f"Ab {sprech._MONAT[int(von[5:7])]}"
+            return "In dem genannten Zeitraum"
+        if bis:
+            if _monatsende(bis):
+                return f"Bis Ende {sprech._MONAT[int(bis[5:7])]}"
+            return "In dem genannten Zeitraum"
+        if w.get("date"):
+            wort = sprech.slot_wort(str(w["date"])[:10])  # 'am Montag, den …' / 'morgen'
+            return wort[:1].upper() + wort[1:]
+        if w.get("weekday") is not None:
+            return f"Am {_WOCHENTAG_WORT[int(w['weekday']) % 7]}"
+        if w.get("hour") is not None:
+            return f"Um {sprech.zeit_wort(int(w['hour']))}"
+    except Exception:
+        return ""
+    return ""
+
+
+_MOTIV_NUMMER_RE = re.compile(r"^\s*\d{1,3}[.)]?\s+")
+_MOTIV_KLAMMER_RE = re.compile(r"\s*\([^)]{0,12}\)")
+
+
+def _motiv_sprechbar(termin: dict) -> str:
+    """Besuchsgrund des Bestandstermins fuers Vorlesen — ohne Nummerierung
+    ('01 Kontrolluntersuchung'), ohne Kuerzel-Klammer ('(PZR)'), '+' als 'und'."""
+    name = _s(termin.get("motivName"))
+    if not name:
+        return ""
+    try:
+        wort = gehirn.grund_am_telefon(name)
+    except Exception:
+        wort = name
+    wort = _MOTIV_NUMMER_RE.sub("", wort)
+    wort = _MOTIV_KLAMMER_RE.sub("", wort)
+    wort = _s(wort.replace(" + ", " und ").replace("+", " und "))
+    return wort
+
+
+def _termin_sprechbar(termin: dict) -> str:
+    """'am Dienstag um neun Uhr bei Doktor Petsas, eingetragen als Kontrolle'."""
+    wort = _s(termin.get("spoken"))
+    motiv = _motiv_sprechbar(termin)
+    return f"{wort}, eingetragen als {motiv}" if motiv else wort
+
+
 def _ansagen(sit: dict) -> dict:
+    """Gefundene Bestandstermine vorlesen (W-BESTAND-ANSAGE, Anruf 9dd61a59).
+
+    - Hat der Anrufer einen ZEITRAUM genannt ("Habe ich im Oktober einen
+      Termin?"), wird ehrlich gesagt, ob DORT etwas liegt; liegt nichts
+      dort, kommt der naechste Termin trotzdem ("Im Oktober sehe ich keinen
+      Termin für Sie — Ihr nächster Termin: …").
+    - Der Besuchsgrund wird mitgesprochen ("eingetragen als Kontrolle").
+    - Danach bleibt die Folgefrage OFFEN (frage=termin_ok bzw. sonst_noch):
+      "Alles gut" / "passt" / "nein danke" werden deterministisch verstanden,
+      statt ans Modell zu fallen — live machte es daraus eine Neubuchung.
+    - Liegt ein GEPARKTES Anliegen bereit (die Frage kam mitten in einer
+      Buchung), stellt die Ansage KEINE eigene Frage: der Ruecksprung
+      (W-HIRN-AUTORESUME) haengt die offene Buchungsfrage an; zwei Fragen
+      hintereinander waeren ein Monolog.
+    """
+    from kern import hirn
     s = gehirn.sammler(sit)
-    termine = sit.get("gefunden") or []
+    termine = list(sit.get("gefunden") or [])
     s["phase"] = "fertig"
     s["frage"] = ""
+    w = sit.get("verwHinweis") or {}
+    vorsatz = ""
+    if termine and _hinweis_hat(w):
+        drin = [a for a in termine if _hinweis_passt(a, w)]
+        zeitraum = _zeitraum_wort(w) or "Zu dieser Zeit"
+        if drin:
+            termine = drin
+            vorsatz = (f"{zeitraum} sehe ich einen Termin für Sie: " if len(drin) == 1
+                       else f"{zeitraum} sehe ich {len(drin)} Termine für Sie: ")
+        else:
+            vorsatz = f"{zeitraum} sehe ich keinen Termin für Sie — "
+    geparkt = hirn.hat_geparktes(sit)
     if len(termine) == 1:
         _arzt_uebernehmen(sit, termine[0])
         sit["verwaltenTermin"] = _s(termine[0].get("id"))
         # Gespraechsnotiz beim Auflegen an DIESEN Termin haengen.
         sit.setdefault("booking", {})["appointmentId"] = _s(termine[0].get("id"))
-        return {"text": (
-            f"Ihr nächster Termin: {termine[0].get('spoken')}. "
-            "Passt der so, oder möchten Sie ihn verschieben oder absagen?"
-        )}
-    return {"text": (
-        f"Sie haben {len(termine)} kommende Termine: {_liste_sprechbar(termine)}. "
-        "Kann ich sonst noch etwas für Sie tun?"
-    )}
+        wort = _termin_sprechbar(termine[0])
+        kern_text = (f"{vorsatz}{wort}." if vorsatz.endswith(": ")
+                     else f"{vorsatz}Ihr nächster Termin: {wort}.")
+        if geparkt:
+            return {"text": kern_text}
+        s["frage"] = "termin_ok"
+        return {"text": f"{kern_text} Passt der so, oder möchten Sie ihn verschieben oder absagen?"}
+    liste = "; ".join(_termin_sprechbar(a) for a in termine[:3] if _s(a.get("spoken")))
+    kern_text = (f"{vorsatz}{liste}." if vorsatz.endswith(": ")
+                 else f"{vorsatz}Sie haben {len(termine)} kommende Termine: {liste}.")
+    if geparkt:
+        return {"text": kern_text}
+    s["frage"] = "sonst_noch"
+    return {"text": f"{kern_text} Kann ich sonst noch etwas für Sie tun?"}
+
+
+# W-BESTAND-ANSAGE: Antworten auf die Folgefragen nach der Ansage.
+_ANSAGE_FRAGEN = {"termin_ok", "sonst_noch", "termin_aendern"}
+_PASST_KERN = (
+    r"alles\s+(?:gut|klar|bestens|in\s+ordnung)|passt(?:\s+(?:so|schon|gut|mir))?|"
+    r"in\s+ordnung|bleibt\s+(?:so|dabei|bestehen)|so\s+lassen|lassen\s+wir\s+(?:so|dabei)|"
+    r"der\s+(?:passt|bleibt|stimmt)|das\s+(?:passt|stimmt|reicht)|stimmt\s+so|"
+    r"dann\s+ist\s+(?:ja\s+)?(?:alles\s+)?gut|(?:ist\s+)?(?:gut|okay|ok|super|prima|perfekt|wunderbar)"
+)
+_PASST_KERN_RE = re.compile(rf"\b(?:{_PASST_KERN})\b", re.I)
+# Woerter, die neben der Zustimmung stehen duerfen, ohne dass der Satz etwas
+# ANDERES traegt ("Bis alles gut, alles gut." — live Zug 9, 'Bis' ist ein
+# Verhoerer; "Ja, passt so, danke.").
+_PASST_FUELL_RE = re.compile(
+    r"\b(?:ja|jaja|jawohl|nein|nö|noe|ne|nee|okay|ok|gut|super|prima|perfekt|"
+    r"danke|dankeschön|dankeschoen|vielen|lieben|dank|genau|richtig|klar|schön|"
+    r"schoen|fein|top|dann|so|bis|also|äh|ähm|hm|mhm|und|es|ist|das|der|die|"
+    r"den|alles|mir|mit|dem|termin|wunderbar|natürlich|natuerlich|sicher|"
+    r"gerne|gern|doch|ganz|sehr|wirklich|eigentlich|schon|halt|einfach|nur|"
+    r"bleibt|bleiben|wir|dabei|lassen|ihn|ihr|ihnen|sie|ich)\b",
+    re.I,
+)
+_PASST_REST_RE = re.compile(r"[^\wäöüß]+", re.I)
+_KLAR_ABSCHIED_RE = re.compile(
+    r"wiederh[oö]ren|\btsch[uü]s{0,2}\b|\bciao\b|das\s+(?:war'?s|wars)|"
+    r"nichts\s+weiter|sch[oö]nen\s+tag",
+    re.I,
+)
+
+
+def _ist_passt(t: str, termine: list[dict] | None = None) -> bool:
+    """Zustimmung zum vorgelesenen Termin: ein Kern ("alles gut", "passt",
+    "in Ordnung", "bleibt so" …) und daneben NICHTS Sachliches — hoechstens
+    Fuellwoerter oder die wiederholte Terminangabe ("Alles gut, es ist in
+    Ordnung, 21. Dezember." — live Zug 10)."""
+    if not t or not _PASST_KERN_RE.search(t):
+        return False
+    rest = _PASST_FUELL_RE.sub(" ", _PASST_KERN_RE.sub(" ", t))
+    rest = _PASST_REST_RE.sub(" ", rest).strip()
+    if not rest:
+        return True
+    # Rest = reine Zeitangabe, die auf einen der vorgelesenen Termine passt?
+    w = parse_slot_wish(rest) or {}
+    if not _hinweis_hat(w):
+        return False
+    return any(_hinweis_passt(a, w) for a in (termine or []))
+
+
+_VERSCHIEB_WUNSCH_RE = re.compile(r"\bverschieb\w*|\bverleg\w*", re.I)
+_ABSAGE_WUNSCH_RE = re.compile(r"\babsag\w*|\bstornier\w*|\bcancel\w*", re.I)
+_ABSCHIED_TEXT = "Sehr gerne. Dann wünsche ich Ihnen einen schönen Tag — auf Wiederhören!"
+
+
+def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
+    """Antworten auf die Folgefragen der Bestands-Ansage (W-BESTAND-ANSAGE):
+    'Passt der so, oder …?' (termin_ok), 'Kann ich sonst noch etwas für Sie
+    tun?' (sonst_noch), 'verschieben oder absagen?' (termin_aendern).
+    None => normale Kette (Modus-Wechsel, neues Anliegen, Modell)."""
+    from bianca.flow import _ABSCHIED_RE  # kein Kreis-Import auf Modulebene
+    from kern import abschied
+    s = gehirn.sammler(sit)
+    frage = s["frage"]
+    if frage not in _ANSAGE_FRAGEN:
+        return None
+    # Ein Modus-Wechsel (Hirn/einsammeln: "dann verschieben Sie ihn bitte")
+    # laeuft in die bestehende Absage-/Verschiebe-Strecke — Frage schliessen.
+    if s["modus"] != "auskunft" or "modus" in neu:
+        s["frage"] = ""
+        return None
+    kurz = len(t.split()) <= 4
+    aendern = bool(_VERSCHIEB_WUNSCH_RE.search(t) or _ABSAGE_WUNSCH_RE.search(t))
+    passt = not aendern and _ist_passt(t, sit.get("gefunden") or [])
+    nein = gehirn.ist_nein(t) and not passt
+    ja = gehirn.ist_ja(t) and not nein
+    klar_abschied = bool(_KLAR_ABSCHIED_RE.search(t))
+    if (passt or klar_abschied) and "wunsch" in neu:
+        # "Alles gut, 21. Dezember." wiederholt den BESTANDSTERMIN — einsammeln
+        # hat das Datum eben als Neubuchungs-Wunsch geerntet; das darf keine
+        # spaetere Verschiebe-Suche vergiften.
+        s["wunsch"] = None
+        s["wunschText"] = ""
+
+    def _nachfrage_zeitraum() -> dict | None:
+        # "Und im November?" — dieselben Termine, anderer Blick. Die
+        # Zeitangabe gehoert zum BESTAND: einsammeln hat sie eben als
+        # Neubuchungs-Wunsch geerntet, das nehmen wir zurueck.
+        if sit.get("gefunden") and _hinweis_merken(sit, t, relativ=True):
+            if "wunsch" in neu:
+                s["wunsch"] = None
+                s["wunschText"] = ""
+            return _ansagen(sit)
+        return None
+
+    def _umschalten() -> None:
+        # Ohne Hirn (Notaus INTENT_SCHICHT=0) trotzdem deterministisch in
+        # die Verschiebe-/Absage-Strecke — mit Hirn hat _schalten das
+        # laengst getan und die Frage geraeumt (dann kommen wir nicht her).
+        s["modus"] = "verschieben" if _VERSCHIEB_WUNSCH_RE.search(t) else "absagen"
+        s["phase"] = ""
+        s["frage"] = ""
+        neu.add("modus")
+
+    if frage == "sonst_noch":
+        if aendern:
+            _umschalten()
+            return None
+        if _ABSCHIED_RE.search(t) or passt or (nein and kurz):
+            s["frage"] = ""
+            return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
+        if ja and kurz:
+            s["frage"] = ""
+            return {"text": "Gerne — was kann ich noch für Sie tun?"}
+        aus = _nachfrage_zeitraum()
+        if aus is not None:
+            return aus
+        s["frage"] = ""
+        return None
+
+    if frage == "termin_aendern":
+        if aendern:
+            _umschalten()
+            return None
+        if klar_abschied:
+            s["frage"] = ""
+            return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
+        if passt or (nein and kurz):
+            s["frage"] = "sonst_noch"
+            return {"text": "Alles klar, der Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
+        if ja and kurz:
+            # "Ja" ist auf "verschieben oder absagen?" keine Antwort — einmal
+            # nachhaken, statt das Modell raten zu lassen.
+            return {"text": "Verschieben oder absagen — was darf ich für Sie tun?"}
+        s["frage"] = ""
+        return None
+
+    # frage == "termin_ok": "Passt der so, oder möchten Sie ihn verschieben oder absagen?"
+    if aendern:
+        _umschalten()
+        return None
+    if klar_abschied:
+        # "Alles gut, Dankeschön, Wiederhören." — der Termin bleibt, Schluss.
+        s["frage"] = ""
+        return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
+    if passt or (ja and kurz):
+        # VOR dem Abschied pruefen: "Danke, passt so." ist Zustimmung, kein
+        # Auflegen (_ABSCHIED_RE faengt jedes fuehrende "Danke").
+        s["frage"] = "sonst_noch"
+        return {"text": "Schön, dann bleibt es dabei. Kann ich sonst noch etwas für Sie tun?"}
+    if nein and kurz:
+        if _ABSCHIED_RE.search(t):
+            # "Nein danke." auf 'passt der so, oder …?' = nichts aendern.
+            s["frage"] = "sonst_noch"
+            return {"text": "Alles klar, der Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
+        s["frage"] = "termin_aendern"
+        return {"text": "Möchten Sie den Termin verschieben oder absagen?"}
+    if _ABSCHIED_RE.search(t):
+        s["frage"] = ""
+        return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
+    aus = _nachfrage_zeitraum()
+    if aus is not None:
+        return aus
+    # Neues Anliegen/Zwischenfrage: Hirn bzw. Modell uebernimmt.
+    s["frage"] = ""
+    return None
 
 
 def _bestaetigen(sit: dict, termin: dict, melde: Melde) -> dict:
@@ -1005,6 +1280,15 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         return None
     _richtung_merken(sit, t)
 
+    # 0) Folgefragen der Bestands-Ansage (W-BESTAND-ANSAGE, Anruf 9dd61a59):
+    #    "Passt der so, oder …?" / "Kann ich sonst noch etwas tun?" — "alles
+    #    gut", Ja, Nein, verschieben/absagen, Abschied deterministisch.
+    #    None = Frage geschlossen, normale Kette (Modus-Wechsel, Modell).
+    if s["frage"] in _ANSAGE_FRAGEN:
+        aus = _termin_ok_zug(sit, t, neu)
+        if aus is not None:
+            return aus
+
     # 1) Offene Bestaetigungen zuerst — ein "ja" traegt sonst nichts Neues.
     if s["phase"] == "absage_bestaetigen":
         if gehirn.ist_ja(t):
@@ -1121,6 +1405,16 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         return None
 
     # 6) Auskunft: Nachname reicht — Termine holen und vorlesen.
+    if "modus" in neu:
+        # Neues Auskunfts-Anliegen: die Zeitangabe im Satz ("Habe ich im
+        # Oktober einen Termin?") beschreibt den BESTAND — merken fuer die
+        # ehrliche Ansage, und nie als Neubuchungs-Wunsch stehen lassen
+        # (einsammeln hat sie eben als Wunsch geerntet; W-BESTAND-ANSAGE).
+        sit["verwHinweis"] = {}
+        sit["verwHinweisText"] = ""
+        if _hinweis_merken(sit, t, relativ=True) and "wunsch" in neu:
+            s["wunsch"] = None
+            s["wunschText"] = ""
     if not s["nachname"]:
         if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
             # Live 06.09.2026 Petsas: LLM fragte "Wie lautet Ihr Name?" und

@@ -154,6 +154,10 @@ _FRAGE_KERN = {
     "folge_kontrolle": r"kontrolle\s+buch|kontrolle\s+eintrag",
     "frisch_absage_ok": r"absagen|stornier|wirklich",
     "absage_ok": r"absagen|stornier|wirklich",
+    # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen des Bestandstermins.
+    "termin_ok": r"passt|bleibt|verschieben|absagen",
+    "termin_aendern": r"verschieben|absagen",
+    "sonst_noch": r"sonst\s+noch|noch\s+etwas",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -219,6 +223,10 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         return gehirn.folge_kontrolle_frage()
     if fid == "rueckblick":
         return gehirn.rueckblick_text(sit.get("sammler") or {}, sit)
+    if fid in {"termin_ok", "termin_aendern", "sonst_noch"}:
+        # W-BESTAND-ANSAGE: Folgefragen der Verwaltung — naechste_frage kennt
+        # sie nicht, der Anker holt sie nach einem Modell-Zug so zurueck.
+        return (gehirn.FRAGE_VARIANTEN.get(fid) or ("",))[0]
     fid2, frage = gehirn.naechste_frage(sit)
     return frage if fid2 == fid else ""
 

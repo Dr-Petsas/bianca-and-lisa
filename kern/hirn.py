@@ -195,6 +195,25 @@ def aktiv(sit: dict) -> dict[str, Any] | None:
     return None
 
 
+def hat_geparktes(sit: dict) -> bool:
+    """Liegt ein GEPARKTES Anliegen bereit, das nach dem Abschluss des
+    aktiven zurueckspringt (W-HIRN-AUTORESUME enforce)? Die Maschine stellt
+    dann am Ende eines eingeschobenen Anliegens KEINE eigene Folgefrage —
+    der Ruecksprung haengt die offene Frage der geparkten Aufgabe an, zwei
+    Fragen hintereinander waeren ein Monolog (W-BESTAND-ANSAGE)."""
+    if not _ist_bianca(sit) or "hirn" not in sit:
+        return False
+    if auto_resume_modus() != "enforce":
+        return False
+    try:
+        from kern import intent  # agent._auto_resume_anhaengen haengt daran
+        if not intent.enabled():
+            return False
+    except Exception:
+        return False
+    return any(k.get("status") == "geparkt" for k in hirn(sit).get("anliegen") or [])
+
+
 def _anhaengen(sit: dict, a: dict[str, Any], *, aktivieren: bool) -> dict[str, Any]:
     h = hirn(sit)
     n = int(h.get("naechsteId") or 1)
