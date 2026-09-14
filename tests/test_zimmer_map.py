@@ -59,7 +59,7 @@ def test_pzr_sucht_zimmer3_dann_zimmer2():
     """Zimmer 3 leer → Zimmer 2 gewinnt, Buchung bindet Z2."""
     gesehen = []
 
-    def fake(tenant, ctx, *, start_date="", egal=False, source=""):
+    def fake(tenant, ctx, *, start_date="", egal=False, source="", wish=None):
         cid = ctx.get("calendarId")
         gesehen.append(cid)
         if cid == Z3:

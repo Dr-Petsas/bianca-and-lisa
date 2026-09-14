@@ -757,6 +757,12 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         vorrat = [v for v in vorrat if str(v)[:16] not in keys]
     wish = s["wunsch"]
     egal = not a.get("calendarId")
+    dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
+    # W-SUCHFENSTER (14.09.2026): der Wunsch geht MIT in die Suche — deckt
+    # die erste Plattform-Seite (20 Zeiten/30 Tage) ihn nicht, blaettert
+    # `kal.find_slots` vorwaerts (max. 6 Monate). Bei Dringlichkeit zaehlt
+    # der naechste freie Platz, nicht der Wunschtag — kein Blaettern.
+    such_wunsch = None if dringend else (dict(wish) if isinstance(wish, dict) else None)
 
     def _laden() -> dict:
         if melde:
@@ -768,6 +774,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 sit["tenant"], ctx, raeume,
                 start_date=gehirn.start_datum(s),
                 source="pickadoc-bianca",
+                wish=such_wunsch,
             )
             win = found.get("calendar") if isinstance(found.get("calendar"), dict) else None
             if win and _s(win.get("id")):
@@ -780,6 +787,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 sit["tenant"], ctx,
                 start_date=gehirn.start_datum(s),
                 source="pickadoc-bianca",
+                wish=such_wunsch,
             )
         else:
             found = kal.find_slots(
@@ -787,6 +795,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 start_date=gehirn.start_datum(s),
                 egal=egal,
                 source="pickadoc-bianca",
+                wish=such_wunsch,
             )
         if found.get("ok"):
             frisch = kal._iso_liste(found.get("slots") or [])
@@ -847,7 +856,6 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         })
         sit["vorratGemerkt"] = True
 
-    dringend = bool(_DRINGEND_RE.search(f"{s['grund']} {s['motivName']}"))
     picked = pick_slots(vorrat, wish=wish, dringend=dringend, exclude_isos=gesperrt)
     if wish and not picked["wishMatched"] and not nachladen:
         # Der Vorrat passt nicht zum Wunsch (z. B. "nächste Woche"): einmal

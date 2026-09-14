@@ -3,16 +3,34 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from kern.config import CF_BASE, WRITE_LIVE
 from kern import notes, patients
-from kern.slots import REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
+from kern.slots import (
+    FENSTER_TAGE, REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot,
+)
 from kern.sprech import slot_wort
 from kern.tenants import ist_akut_motiv, kalender_von, motiv_von
+
+TZ = ZoneInfo("Europe/Berlin")
+
+# W-SUCHFENSTER (14.09.2026): Plattform-Vertrag getFreeTimeSlots — je Aufruf
+# hoechstens 20 Zeiten aus 30 Tagen ab startDate (Quelle: appointments.ts,
+# maxSlots=20 / firstDaysToSearch=30; ohne Treffer sucht sie selbst 90 Tage
+# weiter). Bei offenem Wunsch blaettert `find_slots` bis zu SEITEN_MAX
+# weitere Seiten vorwaerts, gedeckelt auf FENSTER_TAGE (6 Monate).
+SEITE_MAX_SLOTS = 20
+try:
+    SEITEN_MAX = max(0, int(os.getenv("SLOT_SEITEN", "3") or 3))
+except ValueError:
+    SEITEN_MAX = 3
 
 NO_CONTEXT = "Ich komme hier gerade nicht an den Kalender. Die Praxis meldet sich zeitnah mit Terminvorschlägen."
 NO_CONTEXT_REGIE = "Kein Kalenderkontext in dieser Sitzung. Biete einen Rückruf an, nenne keine erfundenen Zeiten."
@@ -139,8 +157,33 @@ def _mit_dispatch(result: dict[str, Any], dispatch: dict | None) -> dict[str, An
     return result
 
 
+def _kontrolle_ersatz(tenant: dict, such: dict) -> dict | None:
+    """Ersatz-Suchkontext mit dem Kontroll-Motiv — oder None, wenn es keinen
+    sinnvollen Ersatz gibt (kein Kontroll-Motiv, schon Kontrolle, Akut)."""
+    vm = motiv_von(tenant, "Kontrolluntersuchung")
+    alt_id = _s((vm or {}).get("id"))
+    # Nie auf Notfall/Akut ausweichen, nur weil das Spezialfenster leer war
+    # (Blessing/Thaler: visitMotives[0] = Akutsprechstunde).
+    if not alt_id or alt_id == _s(such.get("visitMotiveId")) or ist_akut_motiv(vm):
+        return None
+    alt = dict(such)
+    alt["visitMotiveId"] = alt_id
+    alt["visitMotiveName"] = _s((vm or {}).get("name")) or "Kontrolluntersuchung"
+    return alt
+
+
+def _mit_motiv_fallback(found: dict[str, Any], such: dict) -> dict[str, Any]:
+    found["motivFallback"] = "kontrolle"
+    found["motivOriginal"] = {
+        "id": _s(such.get("visitMotiveId")),
+        "name": _s(such.get("visitMotiveName")),
+    }
+    return found
+
+
 def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
-                         source: str = "", motiv_fallback: bool = True) -> dict[str, Any]:
+                         source: str = "", motiv_fallback: bool = True,
+                         wish: dict | None = None) -> dict[str, Any]:
     """Slots NUR in diesem Kalender. Leeres Motiv-Fenster → Kontrolle.
 
     Chef 08.09.2026 (Lülf): die Praxis war frei, PAR-AIT-geschlossen lieferte
@@ -160,7 +203,7 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
     im Sammler, der O-Ton landet in der Terminnotiz.
     """
     such = dict(ctx or {})
-    found = find_slots(tenant, such, start_date=start_date, egal=False, source=source)
+    found = find_slots(tenant, such, start_date=start_date, egal=False, source=source, wish=wish)
     if not found.get("ok"):
         return found
     slots = _iso_liste(found.get("slots") or [])
@@ -168,49 +211,59 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
         return found
     if not motiv_fallback:
         return found
-    vm = motiv_von(tenant, "Kontrolluntersuchung")
-    alt_id = _s((vm or {}).get("id"))
-    # Nie auf Notfall/Akut ausweichen, nur weil das Spezialfenster leer war
-    # (Blessing/Thaler: visitMotives[0] = Akutsprechstunde).
-    if not alt_id or alt_id == _s(such.get("visitMotiveId")) or ist_akut_motiv(vm):
+    alt = _kontrolle_ersatz(tenant, such)
+    if not alt:
         return found
-    alt = dict(such)
-    alt["visitMotiveId"] = alt_id
-    alt["visitMotiveName"] = _s((vm or {}).get("name")) or "Kontrolluntersuchung"
-    zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source)
+    zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source, wish=wish)
     if zweit.get("ok") and _iso_liste(zweit.get("slots") or []):
-        zweit["motivFallback"] = "kontrolle"
-        zweit["motivOriginal"] = {
-            "id": _s(such.get("visitMotiveId")),
-            "name": _s(such.get("visitMotiveName")),
-        }
-        return zweit
+        return _mit_motiv_fallback(zweit, such)
     return found
 
 
 def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
-                      start_date: str = "", source: str = "") -> dict[str, Any]:
+                      start_date: str = "", source: str = "",
+                      motiv_fallback: bool = True,
+                      wish: dict | None = None) -> dict[str, Any]:
     """Slots nacheinander in den gegebenen Zimmern — erster Treffer gewinnt.
 
     Thaler: PZR Zimmer 3 dann 2, Notfall 1, Behandlung 4. Die Antwort
     traegt ``calendar``, damit die Buchung denselben Raum trifft.
+
+    W-SUCHFENSTER (14.09.2026, Anruf da746a65): liefert KEIN Zimmer Zeiten
+    fuer das Wunsch-Motiv, laeuft — wie bei `find_slots_behandler` — eine
+    zweite Runde mit dem Kontroll-Motiv ueber dieselben Zimmer (Antwort
+    traegt ``motivFallback`` + ``motivOriginal``, gebucht wird mit dem
+    Ersatz, der O-Ton landet in der Notiz). Vorher endete der Zimmer-Weg
+    still in "kein freier Termin" + Rueckruf, waehrend der Behandler-Weg
+    laengst Kontrolle angeboten haette.
     """
     letzter: dict[str, Any] = {"ok": False, "slots": []}
-    for cal in raeume or []:
-        if not isinstance(cal, dict) or not _s(cal.get("id")):
-            continue
-        such = dict(ctx or {})
-        such["calendarId"] = cal["id"]
-        such["calendarName"] = _s(cal.get("name"))
-        found = find_slots(
-            tenant, such, start_date=start_date, egal=False, source=source)
-        if found.get("ok") and _iso_liste(found.get("slots") or []):
-            found["calendar"] = {
-                "id": cal["id"],
-                "name": _s(cal.get("name")),
-            }
-            return found
-        letzter = found
+    kandidaten = [
+        cal for cal in (raeume or [])
+        if isinstance(cal, dict) and _s(cal.get("id"))
+    ]
+    runden: list[tuple[dict, bool]] = [(dict(ctx or {}), False)]
+    if motiv_fallback:
+        alt = _kontrolle_ersatz(tenant, dict(ctx or {}))
+        if alt:
+            runden.append((alt, True))
+    for basis, ersatz in runden:
+        for cal in kandidaten:
+            such = dict(basis)
+            such["calendarId"] = cal["id"]
+            such["calendarName"] = _s(cal.get("name"))
+            found = find_slots(
+                tenant, such, start_date=start_date, egal=False, source=source, wish=wish)
+            if found.get("ok") and _iso_liste(found.get("slots") or []):
+                found["calendar"] = {
+                    "id": cal["id"],
+                    "name": _s(cal.get("name")),
+                }
+                if ersatz:
+                    _mit_motiv_fallback(found, dict(ctx or {}))
+                return found
+            if not ersatz or not letzter.get("ok"):
+                letzter = found
     if letzter.get("ok") and not letzter.get("calendar"):
         erster = next(
             (c for c in (raeume or [])
@@ -225,8 +278,104 @@ def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
     return letzter
 
 
+def _wunsch_gedeckt(slots: list, wish: dict | None) -> bool:
+    """Deckt der Vorrat den Wunsch (Tag/Zeitraum/Wochentag/Uhrzeit) ab?"""
+    if not wish:
+        return True
+    isos = _iso_liste(slots or [])
+    if not isos:
+        return False
+    return bool(pick_slots(isos, wish=wish).get("wishMatched"))
+
+
+def _tag_plus(iso_tag: str, tage: int) -> str:
+    return (date.fromisoformat(iso_tag[:10]) + timedelta(days=tage)).isoformat()
+
+
+def _naechste_seite(page_start: str, slots: list[str], heute: str) -> str:
+    """Startdatum der Folgeseite — oder "" (Plattform-Fenster ausgeschoepft).
+
+    Plattform-Vertrag (getFreeTimeSlots, appointments.ts): eine Seite =
+    hoechstens ``SEITE_MAX_SLOTS`` Zeiten aus 30 Tagen ab startDate; ohne
+    Treffer sucht sie selbst die 90 Tage danach (Tag 30-120, wieder auf 20
+    gekappt). Kommen also 20 Zeiten, ist die Liste am letzten Tag gekappt
+    (dort weitermachen, Dubletten filtert der Aufrufer); kommen weniger,
+    ist das durchsuchte Fenster komplett — 30 Tage, oder 120 Tage, wenn die
+    letzte Zeit schon hinter Tag 30 liegt (dann lief der 90-Tage-Weg);
+    kommt nichts, hat die Plattform 120 Tage gesehen — Schluss.
+    """
+    if not slots:
+        return ""
+    basis = (page_start or heute)[:10]
+    letzter = max(str(x)[:10] for x in slots)
+    if len(slots) >= SEITE_MAX_SLOTS:
+        naechster = letzter if letzter > basis else _tag_plus(basis, 1)
+    elif letzter > _tag_plus(basis, 30):
+        naechster = _tag_plus(basis, 120)
+    else:
+        naechster = _tag_plus(basis, 30)
+    return naechster if naechster > basis else ""
+
+
 def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
-               source: str = "") -> dict[str, Any]:
+               source: str = "", wish: dict | None = None) -> dict[str, Any]:
+    """Freie Zeiten der Plattform — bei offenem Wunsch seitenweise vorwaerts.
+
+    W-SUCHFENSTER (14.09.2026, Anrufe da746a65/5aa87268): die Plattform
+    liefert je Aufruf hoechstens 20 Zeiten aus 30 Tagen — bei vollem
+    Kalender endete der Vorrat mitten im laufenden Monat, und "am Donnerstag
+    nachmittags" oder "Ende Oktober" hiess "kein freier Termin". Ist ein
+    ``wish`` uebergeben, das die erste Seite nicht deckt, holt die Suche bis
+    zu ``SEITEN_MAX`` weitere Seiten (Startdatum wandert vor), gedeckelt auf
+    ``FENSTER_TAGE`` (6 Monate) ab heute. Ohne ``wish`` genau EIN Aufruf wie
+    bisher. ``dispatch`` traegt die erste Seite plus ``seiten`` (Startdatum
+    und Trefferzahl je Seite) fuer die Gespraechsansicht.
+    """
+    heute = datetime.now(TZ).date().isoformat()
+    erste = _find_slots_seite(tenant, ctx, start_date=start_date, egal=egal, source=source)
+    if not erste.get("ok") or not wish:
+        return erste
+    slots = list(erste.get("slots") or [])
+    seite_slots = _iso_liste(slots)  # Zeiten der zuletzt geladenen Seite
+    seiten = [{"startDate": start_date or heute, "n": len(slots)}]
+    horizont = _tag_plus(heute, FENSTER_TAGE)
+    page_start = start_date or heute
+    ctx_seite = dict(ctx or {})
+    if egal:
+        # "egal": die Plattform hat den schnellsten Arzt gewaehlt (doctor_name)
+        # — die Folgeseiten blaettern in DESSEN Kalender, statt neu zu wuerfeln.
+        gewinner = kalender_von(tenant, _s(erste.get("doctorName")).split(",")[0].strip())
+        if gewinner and _s(gewinner.get("id")):
+            ctx_seite["calendarId"] = gewinner["id"]
+            ctx_seite["calendarName"] = _s(gewinner.get("name"))
+    bekannt = {x[:16] for x in seite_slots}
+    while len(seiten) <= SEITEN_MAX and not _wunsch_gedeckt(slots, wish):
+        naechster = _naechste_seite(page_start, seite_slots, heute)
+        if not naechster or naechster > horizont:
+            break
+        weitere = _find_slots_seite(
+            tenant, ctx_seite, start_date=naechster, egal=False, source=source)
+        seite_slots = _iso_liste(weitere.get("slots") or []) if weitere.get("ok") else []
+        seiten.append({"startDate": naechster, "n": len(seite_slots)})
+        if not seite_slots:
+            break
+        for x in weitere.get("slots") or []:
+            key = str(x).replace(" ", "T")[:16] if isinstance(x, str) else ""
+            if not key:
+                iso = _iso_liste([x])
+                key = iso[0][:16] if iso else ""
+            if key and key not in bekannt:
+                slots.append(x)
+                bekannt.add(key)
+        page_start = naechster
+    erste["slots"] = slots
+    if isinstance(erste.get("dispatch"), dict) and len(seiten) > 1:
+        erste["dispatch"]["seiten"] = seiten
+    return erste
+
+
+def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
+                      source: str = "") -> dict[str, Any]:
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -342,8 +491,8 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
         if not any(str(iso).startswith(wish["date"]) for iso in vorrat):
             nachladen = True
     if nachladen:
-        start = _s(start_date) or (wish or {}).get("date") or ""
-        found = find_slots(tenant, ctx, start_date=start)
+        start = _s(start_date) or (wish or {}).get("date") or (wish or {}).get("von") or ""
+        found = find_slots(tenant, ctx, start_date=start, wish=wish)
         if not found.get("ok") and not vorrat:
             return _mit_dispatch({
                 "ok": False,

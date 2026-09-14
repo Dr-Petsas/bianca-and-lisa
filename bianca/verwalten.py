@@ -284,6 +284,7 @@ def _hinweis_hat(w: dict | None) -> bool:
     return bool(
         w.get("date") or w.get("weekday") is not None or w.get("hour") is not None
         or w.get("hourMin") is not None or w.get("minDaysAhead")
+        or w.get("von") or w.get("bis")  # W-SUCHFENSTER: "mein Termin im Oktober"
     )
 
 
@@ -302,6 +303,11 @@ def _hinweis_passt(a: dict, w: dict) -> bool:
     if len(iso) < 16:
         return True
     if w.get("date") and iso[:10] != w["date"]:
+        return False
+    # W-SUCHFENSTER: Zeitraum ("im Oktober" = von/bis, "ab November" = nur von).
+    if w.get("von") and iso[:10] < str(w["von"])[:10]:
+        return False
+    if w.get("bis") and iso[:10] > str(w["bis"])[:10]:
         return False
     if w.get("weekday") is not None and _weekday_of(iso[:10]) != w["weekday"]:
         return False
@@ -645,6 +651,8 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
         # passen. Ein freier 30-Minuten-Kontrollslot beweist nicht, dass ein
         # 60-Minuten-PZR-Termin dorthin verschoben werden kann.
         motiv_fallback=False,
+        # W-SUCHFENSTER: "auf einen Donnerstag im November" blaettert vorwaerts.
+        wish=s["wunsch"] if isinstance(s.get("wunsch"), dict) else None,
     )
     merke_tool(sit, "getFreeTimeSlots", found)
     if not found.get("ok"):

@@ -2820,6 +2820,80 @@ Readback + Ja → PZR/Doktor-Notiz → **Handynummer / SMS-Ziel** → `book_slot
   `test_fuer_wen`/`test_rueckblick_pzr`/`test_thaler_rebrovic`/
   `test_versicherung_geschlecht`/`test_datenerfassung_pausen`.
 
+## Suchfenster sechs Monate (W-SUCHFENSTER 14.09.2026 — nicht rückbauen)
+
+Chef 14.09.2026 12:05 (wörtlich): „bianca macht nur im laufenden monat
+termine...das fenster muss auf 6 monate erweitert werden." Live-Belege:
+Anruf `5aa87268` (MedDent, „heute um halb zwei/zwei") — die CF lieferte 20
+Zeiten ab morgen, `pick_slots` warf ALLE weg, weil keine auf heute passte,
+Bianca sagte „keinen freien Termin" und schrieb eine Rückruf-Notiz. Anruf
+`da746a65` (Thaler, „Schmerzen") — Akut-Kalender Eva Thaler hatte im
+120-Tage-Fenster genau EINEN Slot, keine Ausweichzeit, kein Angebot.
+
+Die Cloud Function `getFreeTimeSlots` liefert je Aufruf höchstens
+`maxSlots=20` Zeiten ab `startDate` (30 Tage, ohne Treffer automatisch
++90 Tage) — bei zwei Kalendern mit je zehn Zeiten pro Tag ist die Seite nach
+EINEM Tag voll, und alles „im Oktober" lag jenseits der Seite. Deshalb vier
+Bausteine, alle an der bestehenden Kette (kein CF-Deploy nötig):
+
+1. **Wunsch liest Monate und Zeiträume** (`kern/slots.parse_slot_wish` →
+   `zeitraum_aus_text`): „im Oktober", „Anfang/Mitte/Ende November", „ab
+   Dezember", „bis Oktober", „nächsten/übernächsten Monat", „noch in diesem
+   Monat", „in drei Wochen/zwei Monaten/vierzehn Tagen" werden zu
+   `von`/`bis` (ISO) bzw. `minDaysAhead`; Wochentag im Monat („ein Dienstag
+   im Oktober") kombiniert beides. Uhrzeiten OHNE „Uhr" („halb zwei", „um
+   zwei") zählen jetzt — „um zwei Termine" bleibt keine Uhrzeit. Ein
+   Monatsname in der Vergangenheit meint das nächste Jahr.
+2. **Suche startet beim Wunsch** (`gehirn.start_datum`): frühestes Datum aus
+   `von`, `minDaysAhead` und Wochentag — nie in der Vergangenheit. „heute"/
+   „morgen" räumt einen alten Monatsbereich (`_relatives_datum`), ein neuer
+   Bereich räumt ein altes Einzeldatum (`_wunsch_mischen`); Monatswünsche
+   sind „gehaltvoll" (`_wunsch_deuten`), sonst hätte die Wunschfrage sie
+   ignoriert. `vorrat_schluessel` trägt das Startdatum — ein Vorrat von vor
+   dem Wunsch wird umgeschlüsselt und gezielt nachgeladen.
+3. **Vorwärts-Blättern über die CF** (`kern/calendar.find_slots`, Helfer
+   `_naechste_seite`/`slots_der_seite`): deckt die erste Seite den Wunsch
+   nicht (`_wunsch_gedeckt`: Datum, `von`..`bis`, Wochentag), holt Bianca
+   bis `SEITEN_MAX` (`.env` `SLOT_SEITEN`, Default 3) weitere Seiten —
+   innerhalb `FENSTER_TAGE` (183 = sechs Monate ab heute). Volle Seite (20)
+   → weiter am Tag des letzten Slots (Dubletten filtert der Aufrufer; lag
+   alles auf dem Starttag: +1 Tag); kurze Seite → CF-Fenster ausgeschöpft,
+   +30 Tage bzw. +120, wenn der 90-Tage-Rückfall der Plattform schon lief;
+   leere Seite → Schluss (die Plattform hat 120 Tage gesehen). Bei `egal`
+   (schnellster Arzt) bleiben die
+   Folgeseiten im Kalender des Gewinners der ersten Seite; Dubletten werden
+   gemerged, ein Fehler auf einer Folgeseite verwirft nicht die schon
+   gefundenen Zeiten. `dispatch.seiten` protokolliert die Kette; `/anrufe`
+   zeigt sie als „Suchfenster: N Seiten — …" an der Tool-Karte.
+   `find_slots_behandler`/`find_slots_raeume` reichen `wish` durch;
+   `find_slots_raeume` kennt jetzt denselben Kontroll-Ersatz wie
+   `find_slots_behandler` (`_kontrolle_ersatz`/`_mit_motiv_fallback`,
+   `motivFallback`+`motivOriginal`) — Thaler-Akut ohne Zeiten fällt sichtbar
+   auf Kontrolle zurück statt in die Rückruf-Notiz. Der Hintergrund-Vorrat
+   (`hintergrund.vorrat_anstossen`) setzt den Gewinner-Kalender in den Kontext,
+   BEVOR er den Ersatz pinnt.
+4. **Nächstbestes statt „kein Termin"** (`slots.pick_slots` →
+   `_naechstbestes`): passt keine Zeit exakt auf den Wunsch, kommen die drei
+   Zeiten, die dem Wunschzeitpunkt am nächsten liegen (Zeitanker aus Datum,
+   Wochentag, `von`), gesprochen als „Genau dann ist leider nichts frei. Frei
+   wäre …" (`spoken_offer(wish_matched=False)`). NICHT bei `schieben`
+   (Verschiebe-Richtung) und nicht bei harter Uhrzeit-Untergrenze
+   (`minutenMin`) — dort bleibt die strenge Filterung. Die Rückruf-Notiz
+   („die Praxis meldet sich") gibt es nur noch, wenn die CF WIRKLICH nichts
+   im Fenster hat.
+
+Rückweg ohne Deploy: `SLOT_SEITEN=0` = keine Folgeseiten (Parser,
+Startdatum und Nächstbestes bleiben — sie sind reine Verbesserungen der
+schon geladenen Seite). Tests: `tests/test_suchfenster.py` (37: Parser,
+Mischen, Startdatum, pick_slots, Paging, Zimmer-Ersatz, Angebot Ende-zu-
+Ende, Bestandstermin „im Oktober"). Live-Gegenprobe 14.09. (read-only,
+MedDent): CF akzeptiert `startDate` in der Zukunft (Oktober → 20 Zeiten ab
+01.10.), Parser/Mischen/Startdatum wortgleich mit den Live-Sätzen.
+
+Offen (Praxis-Konfiguration, nicht Code): Eva Thalers Akut-Kalender hat im
+Sechs-Monats-Fenster praktisch keine freien Akut-Zeiten — der Ersatz bucht
+Kontrolle mit Notiz; die Praxis sollte Akut-Fenster freigeben.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

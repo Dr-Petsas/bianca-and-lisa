@@ -372,6 +372,23 @@ function toolKarte(t) {
     body.appendChild(abs);
   }
 
+  // W-SUCHFENSTER (14.09.2026): hat die Slot-Suche ueber mehrere Plattform-
+  // Seiten geblaettert (20 Zeiten je Aufruf), steht hier der Weg — Request/
+  // Response oben sind die der ERSTEN Seite.
+  if (Array.isArray(d.seiten) && d.seiten.length > 1) {
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const lab = document.createElement("b");
+    lab.textContent = `Suchfenster: ${d.seiten.length} Seiten`;
+    abs.appendChild(lab);
+    const v = document.createElement("div");
+    v.textContent = d.seiten
+      .map((p) => `${p.startDate || "heute"} (${p.n != null ? p.n : "?"})`)
+      .join(" → ");
+    abs.appendChild(v);
+    body.appendChild(abs);
+  }
+
   if (d.response != null) {
     const abs = document.createElement("div");
     abs.className = "tool-abs";

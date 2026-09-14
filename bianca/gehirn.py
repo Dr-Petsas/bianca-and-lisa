@@ -1108,6 +1108,7 @@ def _wunsch_deuten(text: str) -> dict | None:
     rel = _relatives_datum(f" {_s(text).lower()} ")
     if rel and not wish.get("date"):
         wish["date"] = rel
+        wish["von"], wish["bis"] = None, None
     # "gleich"/"sofort"/"heute noch" = heute, so früh wie möglich
     # (nicht "ganz gleich" — das ist egal, s. _WUNSCH_EGAL_RE).
     tpad = f" {_s(text).lower()} "
@@ -1118,6 +1119,7 @@ def _wunsch_deuten(text: str) -> dict | None:
     gehaltvoll = any([
         wish.get("date"), wish.get("weekday") is not None, wish.get("hour") is not None,
         wish.get("hourMin") is not None, wish.get("minDaysAhead"),
+        wish.get("von"), wish.get("bis"),  # W-SUCHFENSTER: "im Oktober"
     ])
     return wish if gehaltvoll else None
 
@@ -1128,10 +1130,24 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
     for k, v in neu.items():
         if v not in (None, 0, ""):
             out[k] = v
-    for k in ("weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date", "tage"):
+    for k in ("weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date", "tage", "von", "bis"):
         out.setdefault(k, None if k not in ("minDaysAhead",) else 0)
+    if (neu.get("von") or neu.get("bis")) and not (neu.get("date") or neu.get("tage")):
+        # W-SUCHFENSTER: ein neuer Zeitraum ("dann lieber im Oktober") ersetzt
+        # alten Tag UND alten Zeitraum komplett — kein Mischen "heute" + "im
+        # Oktober" oder "ab Oktober" + "bis September".
+        out["date"], out["tage"] = None, None
+        out["von"], out["bis"] = neu.get("von") or None, neu.get("bis") or None
+    elif neu.get("minDaysAhead") and not (neu.get("von") or neu.get("bis")):
+        # "im Oktober" -> spaeter "dann doch naechste Woche": der relative
+        # Abstand ersetzt den Zeitraum (sonst filtert apply() beides zugleich).
+        out["von"], out["bis"] = None, None
     if out.get("date") or out.get("tage"):
         out["weekday"] = None
+        # Ein konkreter Tag ersetzt einen frueheren Zeitraum-Wunsch ("im
+        # Oktober" -> "dann der 3. Oktober"); ein Zeitraum ausserhalb des
+        # Tages waere sonst ein Widerspruch, den apply() leer filtert.
+        out["von"], out["bis"] = None, None
     return out
 
 
@@ -4604,14 +4620,38 @@ def _motiv_an_kalender(sit: dict) -> None:
 
 
 def start_datum(s: dict) -> str:
-    """Ab wann suchen? Wunschdatum > 'nächste Woche' > sofort."""
+    """Ab wann suchen? Wunschdatum > Zeitraum/'in drei Wochen' > Wochentag > sofort.
+
+    W-SUCHFENSTER (14.09.2026): auch der Zeitraum ("im Oktober" -> Monatsanfang,
+    nie in der Vergangenheit) und der NAECHSTE Wochentag ("am Donnerstag")
+    setzen den Suchstart. Vorher lief die Plattform-Suche bei beidem stur ab
+    heute; ihre 20 Slots endeten mitten im laufenden Monat, der Wunschtag war
+    nie im Vorrat — "kein freier Termin" bei vollem Kalender (Anrufe
+    da746a65/5aa87268).
+    """
     w = s.get("wunsch") or {}
+    if not isinstance(w, dict):
+        return ""
     daten = [str(d) for d in (w.get("tage") or []) if d]
     if w.get("date"):
         daten.append(str(w["date"]))
     if daten:
         return min(daten)
+    heute = datetime.now(TZ).date()
+    start = heute
+    if w.get("von"):
+        try:
+            start = max(start, datetime.fromisoformat(str(w["von"])[:10]).date())
+        except ValueError:
+            pass
     tage = int(w.get("minDaysAhead") or 0)
     if tage:
-        return (datetime.now(TZ).date() + timedelta(days=tage)).isoformat()
-    return ""
+        start = max(start, heute + timedelta(days=tage))
+    if w.get("weekday") is not None:
+        try:
+            # Python: Montag=0 ... Sonntag=6; Wunsch (WEEKDAYS): Sonntag=0, Montag=1.
+            ziel = (int(w["weekday"]) - 1) % 7
+            start = start + timedelta(days=(ziel - start.weekday()) % 7)
+        except (TypeError, ValueError):
+            pass
+    return start.isoformat() if start != heute else ""
