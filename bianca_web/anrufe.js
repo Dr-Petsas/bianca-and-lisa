@@ -193,6 +193,9 @@ function ohrChips(st) {
     const tipp = [];
     if (q.status) tipp.push(`Qwen: ${q.status}`);
     if (q.reason) tipp.push(q.reason);
+    // W-QWEN-SICHER: Namensfrage/Diktat/erwartete Antwort — Qwen durfte
+    // diesen Zug nicht live uebernehmen.
+    if (q.sperre) tipp.push(`Qwen live gesperrt: ${q.sperre}`);
     if (st.parakeet && st.parakeet.suspicious) tipp.push("Parakeet-Text auffällig");
     if (tipp.length) c.title = tipp.join(" · ");
     aus.push(c);
@@ -204,7 +207,8 @@ function ohrChips(st) {
     c.className = `chip ohr-spaet`;
     c.title = `Qwen nach ${spaet.s != null ? Math.round(Number(spaet.s) * 1000) + " ms" : "?"}: „${spaet.qwen}“`
       + (spaet.auth ? "" : " (nicht autoritativ)")
-      + (spaet.gelernt && spaet.gelernt.length ? ` · gelernt: ${spaet.gelernt.join(", ")}` : "");
+      + (spaet.gelernt && spaet.gelernt.length ? ` · gelernt: ${spaet.gelernt.join(", ")}` : "")
+      + (spaet.gesperrt ? ` · kein Lernen/Vorzug (${spaet.gesperrt})` : "");
     aus.push(c);
   } else if (winner === "parakeet" && st.qwen && st.qwen.status
              && st.qwen.status !== "aus" && st.qwen.status !== "abgelehnt"

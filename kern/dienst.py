@@ -764,11 +764,24 @@ class Dienst:
                         def _qwen_nachtrag(info: dict, _n: int = zug_n) -> None:
                             qwen_korrektor.nachtrag(sit, _n, info)
 
+                        # W-QWEN-SICHER: Namensfrage/Diktat/erwartete Antwort
+                        # -> Qwen darf diesen Zug nicht live ueberstimmen.
+                        sperr_grund: list[str] = []
+
+                        def _qwen_sperre(lokal: str) -> str:
+                            g = qwen_korrektor.live_sperre(sit, lokal)
+                            if g:
+                                sperr_grund.append(g)
+                            return g
+
                         gesagt, stt_info = stt_spur.transcribe(
                             stt_blob, mime=stt_mime, name=stt_name, keywords=kw,
-                            nachtrag=_qwen_nachtrag,
+                            nachtrag=_qwen_nachtrag, qwen_sperre=_qwen_sperre,
                         )
                         stt_info["zug"] = zug_n
+                        if sperr_grund and isinstance(stt_info.get("qwen"), dict):
+                            stt_info["qwen"]["sperre"] = sperr_grund[0]
+                            spur.merken(sit, "qwen-live-sperre", sperr_grund[0])
                         teile = sit.pop("_sttZugTeile", None)
                         if teile:
                             # W-HALBSATZ: gehaltene Fragmente hatten eigene

@@ -80,6 +80,115 @@ _STRUKTUR = {
     "ihr", "ihre", "ihren", "sondern", "eigentlich", "vielleicht", "gleich",
     "leider", "wieder", "nochmal", "noch",
 }
+# W-QWEN-SICHER (14.09.2026, Anrufe 3baead87 / 48d3ac3f / 5aa87268): Woerter,
+# die der Korrektor NIE lernt — weder als Verhoerer noch als Qwen-Fassung.
+# Ein falsches Paar hier verfaelscht nicht nur Folgezuege, es lenkt den
+# FLUSS um: live lernte er "Termin Absage" -> "Terminabfrage" (aus einer
+# Absage waere eine Auskunft geworden) und "versichert" -> "interessiert"
+# (die Versicherungs-Antwort waere im Folgezug gefressen worden).
+_JOB = {
+    "termin", "termine", "termins", "absage", "absagen", "abgesagt", "absag",
+    "abfrage", "abfragen", "auskunft", "stornieren", "storniert", "storno",
+    "canceln", "cancel", "verschieben", "verschoben", "umbuchen", "umgebucht",
+    "buchen", "gebucht", "buchung", "vereinbaren", "vereinbart", "ausmachen",
+    "verbinden", "verbunden", "durchstellen", "weiterleiten", "sprechen",
+    "rückruf", "rueckruf", "zurückrufen", "zurueckrufen", "anrufen",
+    "rezept", "überweisung", "ueberweisung", "krankmeldung", "notfall",
+    "schmerzen", "kontrolle", "zahnreinigung", "behandler", "arzt", "doktor",
+    "nachname", "vorname", "name", "namen", "nummer", "handynummer",
+    "buchstabieren", "buchstabiere",
+}
+_ANTWORT = {
+    "privat", "privatversichert", "privatpatient", "privatpatientin",
+    "gesetzlich", "versichert", "versicherung", "versicherte", "kasse",
+    "krankenkasse", "kassenpatient", "kassenpatientin", "beihilfe",
+    "selbstzahler", "stimmt", "korrekt", "passt", "klar", "natürlich",
+    "natuerlich", "sicher", "nee", "nö", "noe", "jawohl", "jep", "jap",
+    "erste", "ersten", "erstes", "erstmal", "neu", "neue", "neuer", "nie",
+    "bereits", "bekannt", "patient", "patientin", "stammpatient",
+    "stammpatientin", "öfter", "oefter", "egal", "ahnung", "weiß", "weiss",
+    "zweite", "zweiten", "dritte", "dritten", "frühere", "fruehere",
+    "früher", "frueher", "spätere", "spaetere", "später", "spaeter",
+    "beide", "keiner", "keins", "lieber", "selbst", "selber", "mich", "sohn",
+    "tochter", "mann", "frau", "mutter", "vater", "kind",
+}
+_ZEIT = {
+    "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag",
+    "sonntag", "vormittag", "vormittags", "nachmittag", "nachmittags",
+    "mittag", "mittags", "abend", "abends", "früh", "frueh", "spät", "spaet",
+    "übermorgen", "uebermorgen", "woche", "wochen", "wochenende", "monat",
+    "monate", "monats", "jahr", "jahre", "januar", "februar", "märz", "maerz",
+    "april", "mai", "juni", "juli", "august", "september", "oktober",
+    "november", "dezember", "nächste", "naechste", "nächsten", "naechsten",
+    "nächster", "naechster", "diese", "dieser", "diesen", "kommende",
+    "kommenden", "übernächste", "uebernaechste", "übernächsten",
+    "uebernaechsten", "anfang", "mitte", "ende",
+}
+_NIE_LERNEN = _STRUKTUR | _ZAHLWORT | _JOB | _ANTWORT | _ZEIT
+
+# Fragen, deren Antwort ein NAME ist (oder sein kann): dort gibt es kein
+# Vokabular, gegen das ein Zweit-Ohr "richtiger" sein koennte — Qwen
+# halluzinierte live "Da sagt Gott" auf Parakeets "Casacop." (Anruf
+# 48d3ac3f). Bei offener Namensfrage uebernimmt Qwen NIE live, das
+# Woerterbuch wird weder befuellt noch angewendet, und ein spaetes Qwen
+# zum Namens-Zug gibt keinen Vorzug (Wiederholung/Widerspruch).
+_NAMENSFRAGEN = {"name", "nachname", "vorname", "buchstabieren",
+                 "nachname_korr", "vorname_check", "aenderung"}
+# Diktat: Ziffern gehoeren Parakeet + Readback-Waechter (W-STT-SCHWANZ).
+_DIKTATFRAGEN = {"telefon"}
+_DIKTAT_SCHLUESSEL = ("buchstabenTeil", "telefonTeil")
+
+# Erwartungs-Vokabular je offener Frage: traegt Parakeets Text ein
+# erwartetes Wort, hat das Live-Ohr die Frage verstanden — Qwen darf es
+# dann nicht mit einer anderen Lesart ueberstimmen ("Gesetze versichert"
+# war fuer den Fluss richtig; Qwens "interessiert" haette die Antwort
+# gekostet), und das Wort wird nie als Verhoerer verlernt.
+_JA_NEIN = {
+    "ja", "jap", "jep", "jawohl", "genau", "richtig", "stimmt", "korrekt",
+    "passt", "gerne", "okay", "klar", "natürlich", "natuerlich", "sicher",
+    "nein", "nee", "nö", "noe", "falsch", "doch", "nicht",
+}
+_VERSICHERUNG = _JA_NEIN | {
+    "privat", "privatversichert", "privatpatient", "privatpatientin",
+    "gesetzlich", "versichert", "versicherung", "kasse", "krankenkasse",
+    "kassenpatient", "kassenpatientin", "beihilfe", "selbstzahler", "aok",
+    "tk", "techniker", "barmer", "dak", "ikk", "bkk", "kkh", "knappschaft",
+    "debeka", "allianz", "axa", "dkv", "signal", "iduna", "huk", "ergo",
+    "hansemerkur", "hallesche", "continentale", "gothaer",
+}
+_SCHONMAL = _JA_NEIN | {
+    "erste", "ersten", "erstes", "erstmal", "neu", "neue", "neuer", "nie",
+    "bereits", "schon", "bekannt", "patient", "patientin", "stammpatient",
+    "stammpatientin", "öfter", "oefter", "mal", "jahren", "monaten",
+}
+_WAHL = _JA_NEIN | _ZEIT | {
+    "uhr", "erste", "ersten", "zweite", "zweiten", "dritte", "dritten",
+    "frühere", "fruehere", "früher", "frueher", "spätere", "spaetere",
+    "später", "spaeter", "beide", "keiner", "keins", "lieber", "egal",
+    "morgen", "heute",
+}
+_WUNSCH = _ZEIT | {"uhr", "morgen", "heute", "egal", "bald", "schnell",
+                   "möglich", "moeglich", "möglichst", "moeglichst"}
+_ARZT = _JA_NEIN | {"egal", "ahnung", "weiß", "weiss"}
+_FUER_WEN = _JA_NEIN | {"selbst", "selber", "mich", "sohn", "tochter",
+                        "mann", "frau", "mutter", "vater", "kind"}
+_ERWARTUNG: dict[str, set[str]] = {
+    "schonmal": _SCHONMAL,
+    "arzt": _ARZT,
+    "arzt_check": _ARZT,
+    "versicherung": _VERSICHERUNG,
+    "versicherung_check": _VERSICHERUNG,
+    "pzr_kasse": _VERSICHERUNG,
+    "slotwahl": _WAHL,
+    "terminwahl": _WAHL,
+    "wunsch": _WUNSCH,
+    "fuer_wen_check": _FUER_WEN,
+}
+for _fid in ("bestaetigung", "pzr", "bleaching", "bleaching_check", "telefon_alt",
+             "telefon_check", "sms_empfaenger", "rueckblick", "folge_kontrolle",
+             "anrufer_check", "frisch_absage_ok", "absage_ok", "termin_anbieten",
+             "arzt_notiz", "verschieb_ok", "neubuchung"):
+    _ERWARTUNG.setdefault(_fid, _JA_NEIN)
 # Widerspruch/Nachdruck am Satzanfang oder im Satz — der Anrufer korrigiert.
 _WIDERSPRUCH_RE = re.compile(
     r"^\W*(?:nein|nee|nö|näh|falsch|nicht|quatsch|ich\s+(?:sagte|habe\s+gesagt|hab\s+gesagt|meinte|meine)|"
@@ -120,7 +229,88 @@ def _ratio(a: str, b: str) -> float:
 
 def _lernbar(wort: str) -> bool:
     w = wort.casefold()
-    return len(w) >= _MIN_WORT and w not in _STRUKTUR and w not in _ZAHLWORT
+    return len(w) >= _MIN_WORT and w not in _NIE_LERNEN
+
+
+def _woerter_cf(text: str) -> set[str]:
+    return {w.casefold() for w in _woerter(text)}
+
+
+# --------------------------------------------------- Frage-Kontext je Zug
+
+def _frage_kontext(sit: dict) -> tuple[str, bool]:
+    """(offene Maschinen-Frage, laeuft ein Diktat?) aus Biancas Sammler.
+    Lisa hat keinen Sammler -> ("", False) = keine Einschraenkung."""
+    s = sit.get("sammler") if isinstance(sit, dict) else None
+    if not isinstance(s, dict):
+        return "", False
+    fid = _s(s.get("frage"))
+    diktat = any(_s(s.get(k)) for k in _DIKTAT_SCHLUESSEL)
+    return fid, diktat
+
+
+def _kontext_merken(sit: dict, zug: int) -> None:
+    """Zu welcher Frage gehoert Zug n? Das spaete Qwen-Ergebnis kommt an,
+    wenn die Maschine laengst die naechste Frage gestellt hat — gelernt
+    wird nach dem Kontext des QUELL-Zugs, nicht des aktuellen."""
+    fid, diktat = _frage_kontext(sit)
+    tabelle = sit.setdefault("_zugFrage", {})
+    if not isinstance(tabelle, dict):
+        tabelle = sit["_zugFrage"] = {}
+    tabelle[str(zug)] = {"frage": fid, "diktat": diktat}
+    for alt in sorted(tabelle, key=lambda k: int(k))[:-12]:
+        tabelle.pop(alt, None)
+
+
+def _zug_frage(sit: dict, zug: int) -> tuple[str, bool]:
+    tabelle = sit.get("_zugFrage") if isinstance(sit, dict) else None
+    e = (tabelle or {}).get(str(int(zug or 0))) if isinstance(tabelle, dict) else None
+    if not isinstance(e, dict):
+        return "", False
+    return _s(e.get("frage")), bool(e.get("diktat"))
+
+
+def _namens_kontext(fid: str, diktat: bool) -> str:
+    """Leer = Qwen darf mitreden; sonst der Grund, warum nicht."""
+    if diktat:
+        return "diktat"
+    if fid in _NAMENSFRAGEN:
+        return f"namensfrage:{fid}"
+    if fid in _DIKTATFRAGEN:
+        return f"diktat:{fid}"
+    return ""
+
+
+def _erwartet(fid: str, text: str) -> str:
+    """Erstes erwartetes Wort der offenen Frage in Parakeets Text, sonst ""."""
+    erwartet = _ERWARTUNG.get(fid)
+    if not erwartet or not text:
+        return ""
+    treffer = sorted(_woerter_cf(text) & erwartet)
+    return treffer[0] if treffer else ""
+
+
+def live_sperre_an() -> bool:
+    return os.environ.get("QWEN_LIVE_SPERRE", "1").strip().lower() not in {"0", "off", "aus", "false"}
+
+
+def live_sperre(sit: dict, lokal: str) -> str:
+    """W-QWEN-SICHER: darf Qwen in DIESEM Zug das Live-Ohr ueberstimmen?
+    Leer = ja (wie bisher). Sonst der Grund: `namensfrage:<id>` / `diktat`
+    (Namen und Ziffern gehoeren Parakeet + Buchstabier-/Readback-Weg) oder
+    `erwartet:<id>:<wort>` (Parakeet hat die offene Frage erkennbar
+    verstanden — eine andere Lesart waere kein Gewinn, nur ein Risiko).
+    Wird VOR dem Grace-Warten gefragt: gesperrt = kein Warten auf Qwen."""
+    if not live_sperre_an() or not isinstance(sit, dict):
+        return ""
+    fid, diktat = _frage_kontext(sit)
+    grund = _namens_kontext(fid, diktat)
+    if grund:
+        return grund
+    wort = _erwartet(fid, lokal)
+    if wort:
+        return f"erwartet:{fid}:{wort}"
+    return ""
 
 
 def _vokabular(sit: dict) -> set[str]:
@@ -147,12 +337,17 @@ def zug_nr(sit: dict) -> int:
 def naechster_zug(sit: dict) -> int:
     n = zug_nr(sit) + 1
     sit["_zugNr"] = n
+    try:
+        _kontext_merken(sit, n)
+    except Exception:
+        pass
     return n
 
 
 # --------------------------------------------------------------- Nachtrag
 
-def _lernen(sit: dict, zug: int, parakeet: str, qwen: str, vokabular: set[str]) -> list[str]:
+def _lernen(sit: dict, zug: int, parakeet: str, qwen: str, vokabular: set[str],
+            erwartet: set[str] | None = None) -> list[str]:
     """Verhoerer-Paare aus Parakeet- und Qwen-Fassung eines Zugs ziehen.
 
     Token-Alignment per SequenceMatcher: jeder 'replace'-Block mit hoechstens
@@ -160,12 +355,15 @@ def _lernen(sit: dict, zug: int, parakeet: str, qwen: str, vokabular: set[str]) 
     campbellt" -> "Röntgenbild"). Streng gefiltert — ein falsch gelerntes Wort
     wuerde Folge-Zuege verfaelschen. Der Quell-Zug wird mitgemerkt
     (`qwenWoerterZug`): ein Paar gilt erst ab dem FOLGE-Zug — im eigenen Zug
-    hat das Live-Ohr entschieden, das hebelt der Korrektor nicht aus."""
+    hat das Live-Ohr entschieden, das hebelt der Korrektor nicht aus.
+    `erwartet`: Erwartungs-Vokabular der Frage, auf die der Zug antwortete —
+    ein erwartetes Wort auf Parakeets Seite ist kein Verhoerer."""
     p_w, q_w = _woerter(parakeet), _woerter(qwen)
     if not p_w or not q_w:
         return []
     p_cf = [w.casefold() for w in p_w]
     q_cf = [w.casefold() for w in q_w]
+    erwartet = erwartet or set()
     neu: dict[str, str] = {}
     neu_hot: list[str] = []
     gelernt: list[str] = []
@@ -188,6 +386,10 @@ def _lernen(sit: dict, zug: int, parakeet: str, qwen: str, vokabular: set[str]) 
             continue
         # Parakeets Fassung traegt ein Mandanten-Wort (Behandler): vertrauen.
         if any(w in vokabular for w in p_cf[i1:i2]):
+            continue
+        # Parakeets Fassung traegt die erwartete Antwort auf die offene Frage
+        # ("versichert" auf die Versicherungsfrage): kein Verhoerer.
+        if any(w in erwartet for w in p_cf[i1:i2]):
             continue
         # Phonetisch muss es noch verwandt sein — sonst ist es kein Verhoerer,
         # sondern ein anderer Satz (dann lernt man Unsinn).
@@ -238,19 +440,30 @@ def nachtrag(sit: dict, zug: int, info: dict) -> dict | None:
         "s": info.get("s"),
         "t": time.time(),
     }
+    # Kontext des QUELL-Zugs (W-QWEN-SICHER): Namens-/Diktat-Zuege sind
+    # keine Lernquelle (kein Vokabular, Qwen halluziniert dort Woerter),
+    # und sie geben spaeter keinen Vorzug — `anwenden` liest das Feld.
+    fid, diktat = _zug_frage(sit, eintrag["zug"])
+    kontext = _namens_kontext(fid, diktat)
+    eintrag["frage"] = fid
+    if kontext:
+        eintrag["gesperrt"] = kontext
     liste = sit.setdefault("qwenSpaet", [])
     liste.append(eintrag)
     del liste[:-_MAX_SPAET]
     gelernt: list[str] = []
     anders = bool(qwen and parakeet) and _ratio(parakeet, qwen) < 0.999
-    if auth and parakeet and anders and _ziffern(parakeet) == _ziffern(qwen):
-        gelernt = _lernen(sit, eintrag["zug"], parakeet, qwen, _vokabular(sit))
+    if (auth and parakeet and anders and not kontext
+            and _ziffern(parakeet) == _ziffern(qwen)):
+        gelernt = _lernen(sit, eintrag["zug"], parakeet, qwen, _vokabular(sit),
+                          _ERWARTUNG.get(fid))
     eintrag["gelernt"] = gelernt
     lage = "spaet" if eintrag["spaet"] else "abgelehnt"
     spur.merken(
         sit, "qwen-nachtrag",
         f"z{eintrag['zug']} {lage} auth={int(auth)} qwen={qwen[:60]!r}"
-        + (f" gelernt={gelernt}" if gelernt else ""),
+        + (f" gelernt={gelernt}" if gelernt else "")
+        + (f" gesperrt={kontext}" if kontext else ""),
     )
     print(f"qwen-korrektor nachtrag z{eintrag['zug']} {lage} auth={int(auth)} "
           f"s={eintrag['s']} parakeet={parakeet[:50]!r} qwen={qwen[:50]!r} "
@@ -260,6 +473,7 @@ def nachtrag(sit: dict, zug: int, info: dict) -> dict | None:
         mitschnitt.stt_nachtragen(sit, eintrag["zug"], {
             "qwen": qwen, "auth": auth, "s": eintrag["s"],
             "reason": eintrag["reason"], "gelernt": gelernt,
+            **({"gesperrt": kontext} if kontext else {}),
         })
     except Exception as exc:
         print(f"qwen-korrektor mitschnitt fail {type(exc).__name__}: {exc}", flush=True)
@@ -275,16 +489,20 @@ def hotwords(sit: dict) -> list[str]:
 
 # --------------------------------------------------------------- Anwenden
 
-def _woerterbuch_anwenden(text: str, woerter: dict[str, str], vokabular: set[str]) -> tuple[str, list[str]]:
+def _woerterbuch_anwenden(text: str, woerter: dict[str, str], vokabular: set[str],
+                          geschuetzt: set[str] | None = None) -> tuple[str, list[str]]:
     """Gelernte Verhoerer im neuen Zug ersetzen (Wort oder Phrase bis 3 Woerter).
 
     Unscharf (Ratio >= 0.80), rechts-nach-links ersetzt, nie ueberlappend,
-    nie ein Mandanten-Wort, nie Ziffern."""
+    nie ein Mandanten-Wort, nie Ziffern, nie ein geschuetztes Wort
+    (Nie-lernen-Liste + Erwartungs-Vokabular der offenen Frage — sonst
+    koennte ein unscharfer Treffer "versichert" oder "Montag" umschreiben)."""
     if not woerter or not text:
         return text, []
     treffer_liste = [(m.start(), m.end(), m.group(0)) for m in _WORT_RE.finditer(text)]
     if not treffer_liste:
         return text, []
+    tabu = _NIE_LERNEN | (geschuetzt or set())
     ersetzungen: list[tuple[int, int, str, str]] = []  # (start, ende, alt, neu)
     belegt: set[int] = set()
     for garble, richtig in woerter.items():
@@ -297,6 +515,11 @@ def _woerterbuch_anwenden(text: str, woerter: dict[str, str], vokabular: set[str
             stueck = treffer_liste[i:i + n]
             phrase = " ".join(w.casefold() for _, _, w in stueck)
             if any(w.casefold() in vokabular for _, _, w in stueck):
+                continue
+            # Ein Wort: geschuetzt = nie anfassen. Phrase: nur wenn ALLE
+            # Woerter geschuetzt sind ("brennt ein builder" traegt "ein",
+            # ist aber als Ganzes ein echter Verhoerer).
+            if all(w.casefold() in tabu for _, _, w in stueck):
                 continue
             if phrase == richtig.casefold():
                 continue
@@ -374,13 +597,30 @@ def anwenden(sit: dict, text: str) -> tuple[str, dict[str, Any]]:
     vokabular = _vokabular(sit)
     aktuell = zug_nr(sit)
 
-    # a) Woerterbuch (nur Paare aus FRUEHEREN Zuegen)
-    neu, ersetzt = _woerterbuch_anwenden(text, _woerterbuch_gueltig(sit, aktuell), vokabular)
+    # W-QWEN-SICHER: antwortet der Anrufer gerade auf eine Namensfrage oder
+    # diktiert er, bleibt der Zug unangetastet — ein Woerterbuch-Treffer
+    # wuerde einen Namen "korrigieren", ein Vorzug einen halluzinierten
+    # Qwen-Namen in den Verlauf schreiben.
+    fid, diktat = _frage_kontext(sit)
+    kontext = _namens_kontext(fid, diktat)
+    if kontext:
+        spur.merken(sit, "qwen-korrektor-pause", kontext)
+        return text, {"pause": kontext}
+
+    # a) Woerterbuch (nur Paare aus FRUEHEREN Zuegen; erwartete Antwort-
+    #    woerter der offenen Frage sind tabu)
+    neu, ersetzt = _woerterbuch_anwenden(text, _woerterbuch_gueltig(sit, aktuell), vokabular,
+                                         _ERWARTUNG.get(fid))
     if ersetzt:
         detail["woerterbuch"] = ersetzt
 
-    # b) Wiederholung/Widerspruch gegen den vorigen Zug
+    # b) Wiederholung/Widerspruch gegen den vorigen Zug — nie, wenn jener
+    #    Zug selbst eine Namens-/Diktat-Antwort war (Qwen kennt den Namen
+    #    nicht besser; "Da sagt Gott" darf keinen Vorzug bekommen).
     e = _letzter_offener(sit, aktuell)
+    if e and e.get("gesperrt"):
+        spur.merken(sit, "qwen-korrektor-pause", f"z{e.get('zug')} {e.get('gesperrt')}")
+        e = None
     if e and e.get("auth") and e.get("qwen") and e.get("parakeet"):
         para, qwen = _s(e["parakeet"]), _s(e["qwen"])
         anders = _ratio(para, qwen) < _ANDERS_MAX_RATIO

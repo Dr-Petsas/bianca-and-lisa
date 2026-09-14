@@ -317,9 +317,13 @@ def _dienst_mit_ohr(monkeypatch, gehoert: list[str], qwen_spaet: dict[str, str])
 
     d.json_antwort = antwort
 
-    def transcribe(audio, *, mime="audio/wav", name="zug.wav", keywords="", nachtrag=None):
+    def transcribe(audio, *, mime="audio/wav", name="zug.wav", keywords="", nachtrag=None,
+                   qwen_sperre=None):
         text = gehoert.pop(0)
-        aufrufe.append({"keywords": keywords, "nachtrag": nachtrag is not None})
+        # W-QWEN-SICHER: das echte Ohr fragt die Sperre mit Parakeets Text.
+        sperre = qwen_sperre(text) if qwen_sperre is not None else None
+        aufrufe.append({"keywords": keywords, "nachtrag": nachtrag is not None,
+                        "sperre": sperre})
         info = {"pipeline": "audio", "winner": "parakeet",
                 "parakeet": {"text": text, "suspicious": text in qwen_spaet},
                 "qwen": {"text": "", "status": "parallel_zu_spaet"}}
@@ -372,3 +376,176 @@ def test_dienst_ohne_qwen_bleibt_byteidentisch(monkeypatch):
     assert "korrektur" not in gesehen[0]["stt"]
     assert "qwenSpaet" not in sit and "qwenWoerter" not in sit
     assert aufrufe[0]["keywords"] == ",".join(dienst_mod.tenants.stt_keywords({}))
+
+
+# ------------------------------------------------ W-QWEN-SICHER (14.09.2026)
+# Live-Befunde vom 13./14.09.: der Korrektor lernte "Termin Absage" ->
+# "Terminabfrage" (Anruf 3baead87) und "versichert" -> "interessiert"
+# (5aa87268); Qwen halluzinierte auf der Nachnamen-Frage "Da sagt Gott"
+# fuer Parakeets "Casacop." (48d3ac3f). Namen, Job-Woerter, Antwort-Woerter
+# und Zeitwoerter sind seitdem tabu; bei offener Namensfrage/Diktat oder
+# schon erkannter Antwort ist Qwen im Zug gesperrt.
+
+def _sit_frage(fid: str, **sammler) -> dict:
+    sit = _sit()
+    sit["sammler"] = {"frage": fid, **sammler}
+    return sit
+
+
+def test_job_und_antwortwoerter_werden_nie_gelernt():
+    sit = _sit_frage("grund")
+    qk.naechster_zug(sit)
+    # Anruf 3baead87: aus einer Absage waere im Folgezug eine Auskunft geworden.
+    _qwen(sit, 1, "Ich möchte eine Termin Absage machen.",
+          "Ich möchte eine Terminabfrage machen.")
+    assert "qwenWoerter" not in sit
+    # Anruf 5aa87268: die Versicherungs-Antwort haette Qwen "verlernt".
+    qk.naechster_zug(sit)
+    _qwen(sit, 2, "Ich bin gesetzlich versichert.", "Ich bin gesetzlich interessiert.")
+    assert "qwenWoerter" not in sit
+    # Zeitwoerter: ein Wochentag darf nie in einen anderen umgeschrieben werden.
+    qk.naechster_zug(sit)
+    _qwen(sit, 3, "Am Montag bitte.", "Am Sonntag bitte.")
+    assert "qwenWoerter" not in sit
+    assert qk.hotwords(sit) == []
+
+
+def test_erwartete_antwort_der_offenen_frage_ist_kein_verhoerer():
+    """Kassen-Name auf die Versicherungsfrage: Parakeet hat die erwartete
+    Antwort, Qwens Lesart ist kein Gewinn — nichts lernen."""
+    sit = _sit_frage("versicherung")
+    qk.naechster_zug(sit)
+    _qwen(sit, 1, "Bei der Barmer.", "Bei der Wärmer.")
+    assert "qwenWoerter" not in sit
+    # Gegenprobe: dieselbe Lesart auf einer offenen Frage OHNE Erwartungs-
+    # Vokabular (Besuchsgrund) wird weiterhin gelernt.
+    sit2 = _sit_frage("grund")
+    qk.naechster_zug(sit2)
+    _qwen(sit2, 1, "Bei der Barmer.", "Bei der Wärmer.")
+    assert sit2["qwenWoerter"] == {"barmer": "Wärmer"}
+
+
+def test_namenszug_ist_keine_lernquelle_und_gibt_keinen_vorzug():
+    """Anruf 48d3ac3f: Parakeet 'Casacop.' (auffaellig), Qwen 'Da sagt Gott.'
+    — kein Woerterbuch, kein Hotword, und auch die Wiederholung des Namens
+    im Folgezug darf Qwens Fassung nicht zum Zug machen."""
+    sit = _sit_frage("nachname")
+    sit["messages"].append({"role": "user", "content": "Casacop."})
+    z = qk.naechster_zug(sit)
+    e = _qwen(sit, z, "Casacop.", "Da sagt Gott.")
+    assert e["gesperrt"] == "namensfrage:nachname" and e["frage"] == "nachname"
+    assert "qwenWoerter" not in sit and qk.hotwords(sit) == []
+    # Folgezug: die Maschine fragt nach dem Buchstabieren, der Anrufer
+    # wiederholt den Namen — Wiederholung des Verhoerers.
+    sit["sammler"]["frage"] = "buchstabieren"
+    qk.naechster_zug(sit)
+    neu, detail = qk.anwenden(sit, "Casacop.")
+    assert neu == "Casacop." and not detail.get("vorzug")
+    assert sit["messages"][-1]["content"] == "Casacop."  # Verlauf unangetastet
+    assert "qwenKorrekturHinweis" not in sit
+    # Auch spaeter, auf einer normalen Frage, gibt der Namens-Zug keinen Vorzug.
+    sit["sammler"]["frage"] = "grund"
+    qk.naechster_zug(sit)
+    neu, detail = qk.anwenden(sit, "Nein, Casacop!")
+    assert neu == "Nein, Casacop!" and not detail.get("vorzug")
+
+
+def test_anwenden_pausiert_waehrend_namensfrage_und_diktat():
+    """Ein gelerntes Paar darf einen NAMEN nie 'korrigieren' — und waehrend
+    des Ziffern-/Buchstabier-Diktats bleibt der Zug unangetastet."""
+    sit = _sit_frage("grund")
+    qk.naechster_zug(sit)
+    _qwen(sit, 1, "Rentenbild bitte.", "Röntgenbild bitte.")
+    assert sit["qwenWoerter"] == {"rentenbild": "Röntgenbild"}
+    qk.naechster_zug(sit)
+    # Auf die Vornamen-Frage kommt etwas, das dem Verhoerer aehnelt.
+    sit["sammler"]["frage"] = "vorname"
+    neu, detail = qk.anwenden(sit, "Rentenbald.")
+    assert neu == "Rentenbald." and detail == {"pause": "namensfrage:vorname"}
+    # Laufendes Buchstabier-Diktat: ebenso Pause.
+    sit["sammler"] = {"frage": "grund", "buchstabenTeil": "R E N"}
+    neu, detail = qk.anwenden(sit, "Rentenbald.")
+    assert neu == "Rentenbald." and detail == {"pause": "diktat"}
+    # Gegenprobe: auf der Besuchsgrund-Frage greift das Woerterbuch.
+    sit["sammler"] = {"frage": "grund"}
+    neu, detail = qk.anwenden(sit, "Rentenbald.")
+    assert neu == "Röntgenbild." and detail["woerterbuch"] == ["Rentenbald->Röntgenbild"]
+
+
+def test_woerterbuch_laesst_geschuetzte_woerter_in_ruhe():
+    """Unscharfer Treffer gegen ein Antwort-/Zeitwort: 'versichert' ~
+    'versickert', 'Montag' ~ 'sontag' — beides bleibt stehen."""
+    sit = _sit_frage("versicherung")
+    sit["qwenWoerter"] = {"versickert": "Verschickt", "sontag": "Sonntag"}
+    sit["qwenWoerterZug"] = {"versickert": 1, "sontag": 1}
+    sit["_zugNr"] = 3
+    neu, detail = qk.anwenden(sit, "Ich bin gesetzlich versichert, am Montag.")
+    assert neu == "Ich bin gesetzlich versichert, am Montag." and detail == {}
+
+
+def test_live_sperre_je_frage_kontext(monkeypatch):
+    monkeypatch.delenv("QWEN_LIVE_SPERRE", raising=False)
+    assert qk.live_sperre(_sit_frage("nachname"), "Casacop.") == "namensfrage:nachname"
+    assert qk.live_sperre(_sit_frage("buchstabieren"), "T Z A") == "namensfrage:buchstabieren"
+    assert qk.live_sperre(_sit_frage("grund", buchstabenTeil="T Z"), "A N") == "diktat"
+    assert qk.live_sperre(_sit_frage("telefon"), "null eins sieben") == "diktat:telefon"
+    # Parakeet traegt die erwartete Antwort -> Qwen darf nicht anders lesen.
+    assert qk.live_sperre(_sit_frage("versicherung"), "Gesetze versichert.") == \
+        "erwartet:versicherung:versichert"
+    assert qk.live_sperre(_sit_frage("schonmal"), "Nein, das erste Mal.") == "erwartet:schonmal:erste"
+    assert qk.live_sperre(_sit_frage("slotwahl"), "Der frühere.") == "erwartet:slotwahl:frühere"
+    # Offen: Besuchsgrund ohne Erwartungs-Vokabular, Lisa ohne Sammler, Notaus.
+    assert qk.live_sperre(_sit_frage("grund"), "Brent Campbellt.") == ""
+    assert qk.live_sperre(_sit_frage("versicherung"), "Äh, wie bitte?") == ""
+    assert qk.live_sperre(_sit(), "Casacop.") == ""
+    monkeypatch.setenv("QWEN_LIVE_SPERRE", "0")
+    assert qk.live_sperre(_sit_frage("nachname"), "Casacop.") == ""
+
+
+def test_dienst_fragt_die_sperre_mit_parakeets_text(monkeypatch):
+    """Ende-zu-Ende im Dienst: auf der Nachnamen-Frage bekommt das Ohr die
+    Sperre, die Diagnose traegt sie fuer die Anrufliste, der Nachtrag lernt
+    nichts aus dem Namens-Zug."""
+    d, gesehen, aufrufe = _dienst_mit_ohr(
+        monkeypatch, ["Casacop."], {"Casacop.": "Da sagt Gott."})
+    sit = {"tenant": {}, "messages": [{"role": "system", "content": "s"}],
+           "sammler": {"frage": "nachname"}}
+    z = _zeilen(d, sit, art="listen", stt_blob=b"x" * 4000, stt_mime="audio/wav", stt_name="a.wav")
+    assert z[-1]["type"] == "reply"
+    assert aufrufe[0]["sperre"] == "namensfrage:nachname"
+    assert gesehen[0]["stt"]["qwen"]["sperre"] == "namensfrage:nachname"
+    assert sit["qwenSpaet"][0]["gesperrt"] == "namensfrage:nachname"
+    assert "qwenWoerter" not in sit and qk.hotwords(sit) == []
+
+
+def test_vorab_ohr_der_docks_fragt_dieselbe_sperre(monkeypatch):
+    """W-TEMPO-Vorab (`/api/hoeren`) transkribiert VOR dem echten Zug — ohne
+    die Sperre haette Qwen dort bei offener Namensfrage gewinnen koennen und
+    der Zug waere als TEXT mit Qwens Lesart an /api/listen gegangen."""
+    import asyncio
+    import io
+
+    from fastapi import UploadFile
+
+    from bianca import server as bianca_server
+
+    sit = _sit_frage("nachname")
+    monkeypatch.setattr(bianca_server.session, "holen", lambda sid: sit if sid == "s1" else None)
+    gesehen: list[dict] = []
+
+    def transcribe(audio, *, mime="audio/webm", name="turn.webm", keywords="", **extra):
+        sperre = extra.get("qwen_sperre")
+        gesehen.append({"keywords": keywords,
+                        "sperre": sperre("Casacop.") if sperre is not None else None})
+        return "Casacop."
+
+    monkeypatch.setattr(bianca_server.stt, "transcribe", transcribe)
+    datei = UploadFile(file=io.BytesIO(b"x" * 64), filename="vorab.webm")
+    aus = asyncio.run(bianca_server.api_hoeren(sessionId="s1", audio=datei))
+    assert aus == {"ok": True, "text": "Casacop."}
+    assert gesehen[0]["sperre"] == "namensfrage:nachname"
+    # Ohne Sammler-Frage (Lisa/leer) bleibt die Sperre leer wie bisher.
+    sit["sammler"] = {}
+    datei = UploadFile(file=io.BytesIO(b"x" * 64), filename="vorab.webm")
+    asyncio.run(bianca_server.api_hoeren(sessionId="s1", audio=datei))
+    assert gesehen[1]["sperre"] == ""

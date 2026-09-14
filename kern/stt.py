@@ -149,6 +149,11 @@ def _vergleich(text: str) -> str:
 
 
 def _qwen_darf_uebernehmen(lokal: str, kandidat: dict, auffaellig: bool) -> bool:
+    # W-QWEN-SICHER (14.09.2026): der Aufrufer hat den Zug gesperrt (offene
+    # Namensfrage, Diktat, erwartete Antwort schon bei Parakeet) — Qwen
+    # bleibt Zweit-Ohr, sein Text geht nur in den Nachtrag.
+    if kandidat.get("live_sperre"):
+        return False
     qwen = _sauber(kandidat.get("text"))
     if not qwen or not kandidat.get("authoritative"):
         return False
@@ -571,6 +576,8 @@ def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | Non
 
 
 Nachtrag = Callable[[dict], None]
+# W-QWEN-SICHER: bekommt Parakeets Text, liefert einen Sperr-Grund oder "".
+Sperre = Callable[[str], str]
 
 
 def _nachtrag_anmelden(qwen: Future, lokal: str, kandidat: dict | None,
@@ -617,6 +624,7 @@ def _parallel_transcribe(
     name: str,
     keywords: str,
     nachtrag: Nachtrag | None = None,
+    qwen_sperre: Sperre | None = None,
 ) -> str:
     """Parakeet sofort; nur auffaellige Texte warten gedeckelt auf Qwen."""
     t0 = time.perf_counter()
@@ -638,10 +646,21 @@ def _parallel_transcribe(
         return lokal
 
     auffaellig = _parakeet_braucht_qwen(lokal, keywords)
+    # W-QWEN-SICHER (14.09.2026): der Aufrufer weiss, worauf der Anrufer
+    # gerade antwortet. Bei Namensfrage/Diktat oder wenn Parakeet die
+    # erwartete Antwort schon traegt, darf Qwen nicht live gewinnen — und
+    # es wird auch nicht auf Qwen gewartet (kein Grace-Deckel umsonst).
+    sperre = ""
+    if qwen_sperre is not None:
+        try:
+            sperre = str(qwen_sperre(lokal) or "")
+        except Exception as exc:  # die Sperre darf das Ohr nie stoeren
+            print(f"stt-qwen-sperre fail {type(exc).__name__}: {exc}", flush=True)
+            sperre = ""
     kandidat: dict | None = None
     if qwen.done():
         kandidat = qwen.result()
-    elif auffaellig and STT_QWEN_GRACE_S > 0:
+    elif auffaellig and not sperre and STT_QWEN_GRACE_S > 0:
         try:
             kandidat = qwen.result(timeout=max(0.0, STT_QWEN_GRACE_S))
         except FutureTimeout:
@@ -650,6 +669,11 @@ def _parallel_transcribe(
                 f"{STT_QWEN_GRACE_S:.2f}s Zusatzdeckel",
                 flush=True,
             )
+    if kandidat and sperre:
+        kandidat = dict(kandidat)
+        kandidat["live_sperre"] = sperre
+        kandidat["reason"] = f"live_gesperrt:{sperre}"
+        print(f"stt-qwen-parallel: live gesperrt ({sperre}), parakeet bleibt", flush=True)
 
     if kandidat and _qwen_darf_uebernehmen(lokal, kandidat, auffaellig):
         print(
@@ -666,10 +690,13 @@ def _parallel_transcribe(
 # ------------------------------------------------------------------ Einstieg
 
 def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
-               keywords: str = "", nachtrag: Nachtrag | None = None) -> str:
+               keywords: str = "", nachtrag: Nachtrag | None = None,
+               qwen_sperre: Sperre | None = None) -> str:
     """`nachtrag` (optional): bekommt ein Qwen-Ergebnis nachgereicht, das
-    NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). Ohne den
-    Parameter verhaelt sich alles byte-identisch wie zuvor."""
+    NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). `qwen_sperre`
+    (optional, W-QWEN-SICHER): Parakeets Text -> Sperr-Grund oder "" — bei
+    Grund uebernimmt Qwen diesen Zug nie live. Ohne die Parameter verhaelt
+    sich alles byte-identisch wie zuvor."""
     if not audio or len(audio) < 800:
         return ""
     if _qwen_konfiguriert():
@@ -680,6 +707,7 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
                 name=name,
                 keywords=keywords,
                 nachtrag=nachtrag,
+                qwen_sperre=qwen_sperre,
             )
         if _qwen_aktiv():
             try:

@@ -2952,6 +2952,66 @@ kein Ton, „Patrikis" danach = Behandler der Buchung, kein Jingle). Die
 bestehenden Verbinde-Tests (echter Wunsch → Jingle/Transfer, Whitelist,
 Sperre) bleiben unverändert grün.
 
+## Zweit-Ohr kennt die offene Frage (W-QWEN-SICHER 14.09.2026 — nicht rückbauen)
+
+Chef: „schaue, ob du für das Verhören Qwen besser als jetzt einspannen
+kannst, beschränke dich auf die bisher erkannten Probleme OHNE eine
+Verschlechterung zu riskieren." Befund aus den Anrufen 3baead87 / 48d3ac3f /
+9dd61a59: der Korrektor (W-QWEN-KORREKTOR) lernte aus Verhörern UNSINN —
+„Terminabfrage" → „Termin Absage", „interessiert" → „versichert" (Qwens Text
+war hier der falsche; Parakeets „Gesetze versichert" war für den Fluss
+richtig) — und bei der Nachnamen-Frage übernahm Qwen LIVE eine
+Halluzination („Casacop." → „Da sagt Gott."), weil Parakeet den Namen als
+auffällig markiert hatte. Namen haben kein Vokabular, gegen das ein
+Zweit-Ohr „richtiger" sein könnte.
+
+Der Korrektor weiß jetzt je Zug, WELCHE Frage offen ist (`sammler["frage"]`
++ laufendes Diktat `buchstabenTeil`/`telefonTeil`; `_kontext_merken` legt
+das je Zug-Nummer ab, damit ein SPÄTES Qwen nach dem Kontext des
+Quell-Zugs behandelt wird, nicht nach der inzwischen nächsten Frage):
+
+- **Live-Sperre** (`qwen_korrektor.live_sperre(sit, lokal)` → Grund oder
+ `""`): bei Namensfrage (`_NAMENSFRAGEN`: name/nachname/vorname/
+ buchstabieren/nachname_korr/vorname_check/aenderung), laufendem Diktat und
+ Nummern-Frage übernimmt Qwen NIE live; trägt Parakeets Text die erwartete
+ Antwort der offenen Frage (`_ERWARTUNG`: „privat/gesetzlich/…" auf
+ versicherung, „ja/nein/…" auf Ja/Nein-Fragen, „erste/neu/…" auf schonmal,
+ „frühere/zweite/…" auf slotwahl, Wochentage/Tageszeiten auf wunsch),
+ ebenfalls nicht — und das Ohr WARTET dann auch nicht die Grace-Zeit auf
+ Qwen. Verdrahtet als `qwen_sperre`-Callable durch `stt.transcribe` /
+ `stt_spur.transcribe` (`kern/dienst.py`, Closure mit der Sitzung) UND im
+ Dock-Vorab-Ohr `/api/hoeren` (sonst käme der Zug als TEXT mit Qwens
+ Lesart). Ohne Grund ist alles byte-identisch wie vorher.
+- **Nie Lernstoff** (`_NIE_LERNEN` = Struktur + Zahlwörter + `_JOB`
+ (termin, absage, buchen, verschieben, kontrolle, …) + `_ANTWORT` (privat,
+ gesetzlich, versichert, egal, jawohl, …) + `_ZEIT` (Wochentage,
+ Tageszeiten, woche/monat)); `_lernen` überspringt außerdem Phrasen, in
+ denen Parakeet ein erwartetes Wort der offenen Frage hatte, und den
+ ganzen Zug bei Namens-/Diktat-Kontext (`gesperrt=<grund>` am
+ `qwenSpaet`-Eintrag — der Vorzug bei Wiederholung/Widerspruch entfällt
+ für diesen Zug).
+- **Wörterbuch schont Geschütztes** (`_woerterbuch_anwenden(…, geschuetzt)`):
+ unscharfe Treffer gegen `_NIE_LERNEN` oder das Erwartungs-Vokabular der
+ offenen Frage werden nicht ersetzt („versichert" bleibt, auch wenn
+ „versickert→Verschickt" gelernt wäre); `anwenden` pausiert komplett bei
+ Namensfrage/Diktat (`{"pause": grund}`, Spur `qwen-korrektor-pause`).
+- **Sichtbar**: Manifest `stt.qwen.sperre` (live) und `stt.qwen.spaet.gesperrt`
+ (spät) → `/anrufe` Tooltip „Qwen live gesperrt: namensfrage:nachname" /
+ „kein Lernen/Vorzug (…)", Studio-Ergebnisse dieselbe Zeile; Spur
+ `qwen-live-sperre`.
+- Notaus nur für die Live-Sperre: `QWEN_LIVE_SPERRE=0` (Lernsperren und
+ Wörterbuch-Schutz bleiben — sie sind reine Verschlechterungs-Bremsen).
+ `QWEN_KORREKTOR=0` schaltet wie bisher alles ab.
+
+BEWUSST NICHT gebaut: ein Kartei-Abgleich für Namen („Dideritch" vs. Kartei
+„Vidovic", Anruf 48d3ac3f) — das ist keine STT-Frage, sondern gehört in die
+Patientensuche (eigenes Arbeitspaket). Tests: `tests/test_qwen_korrektor.py`
+(Job-/Antwortwörter nie gelernt, erwartete Antwort kein Verhörer, Namens-Zug
+keine Lernquelle, anwenden pausiert, Wörterbuch-Schutz, live_sperre je
+Kontext, Dienst und `/api/hoeren` Ende-zu-Ende), `tests/test_stt_qwen.py`
+(rechtzeitiges Qwen gewinnt trotz Sperre nicht, kein Grace-Warten, Sperre
+ohne Grund/mit Exception ändert nichts).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

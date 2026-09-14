@@ -362,7 +362,12 @@ function bubbleBauen(z, basis) {
       const qwenTag = document.createElement("span");
       qwenTag.className = "tag stt-status";
       qwenTag.textContent = `Qwen: ${String(z.stt.qwen.status).replaceAll("_", " ")}`;
-      if (q) qwenTag.title = q;
+      // W-QWEN-SICHER: Namensfrage/Diktat/erwartete Antwort — Qwen durfte
+      // diesen Zug nicht live uebernehmen (gleiche Anzeige wie in /anrufe).
+      const qTipp = [];
+      if (q) qTipp.push(q);
+      if (z.stt.qwen.sperre) qTipp.push(`live gesperrt: ${z.stt.qwen.sperre}`);
+      if (qTipp.length) qwenTag.title = qTipp.join("\n");
       meta.appendChild(qwenTag);
     }
     // W-QWEN-KORREKTOR: das Zweit-Ohr hat diesen Zug vor dem Hirn berichtigt.

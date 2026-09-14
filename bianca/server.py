@@ -21,6 +21,7 @@ from kern import (
     halbsatz,
     llm,
     mitschnitt,
+    qwen_korrektor,
     sprech,
     standort,
     stt,
@@ -350,8 +351,12 @@ async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
     blob = await audio.read()
     try:
         kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+        # W-QWEN-SICHER: dieselbe Live-Sperre wie der echte Zug — sonst
+        # koennte Qwen im Vorab-Ohr bei offener Namensfrage gewinnen und der
+        # Zug kaeme als TEXT mit Qwens Lesart an /api/listen.
         gesagt = stt.transcribe(blob, mime=audio.content_type or "application/octet-stream",
-                                name=audio.filename or "vorab.webm", keywords=kw)
+                                name=audio.filename or "vorab.webm", keywords=kw,
+                                qwen_sperre=lambda lokal: qwen_korrektor.live_sperre(sit, lokal))
     except RuntimeError as e:
         return {"ok": False, "text": "", "error": str(e)}
     print(f"bianca-vorab-stt bytes={len(blob)} text={gesagt!r}", flush=True)

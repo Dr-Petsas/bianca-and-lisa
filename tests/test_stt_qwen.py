@@ -312,6 +312,103 @@ def test_abgelehntes_qwen_wird_ebenfalls_nachgetragen():
     _umgebung(lauf, lokal_text=parakeet_text, qwen_candidate=qwen)
 
 
+def test_live_sperre_laesst_rechtzeitiges_qwen_nicht_gewinnen():
+    """W-QWEN-SICHER (14.09.2026, Anruf 48d3ac3f): der Aufrufer meldet ueber
+    `qwen_sperre`, dass der Anrufer gerade auf die NACHNAMEN-Frage antwortet.
+    Qwen ist rechtzeitig und wuerde das auffaellige Parakeet sonst
+    ueberstimmen — bleibt aber Zweit-Ohr: Parakeets Text gilt, der Kandidat
+    geht mit dem Sperr-Grund in den Nachtrag."""
+    nachtraege: list[dict] = []
+    angekommen = threading.Event()
+    qwen_fertig = threading.Event()
+    gefragt: list[str] = []
+
+    def qwen(_pcm, _keywords=""):
+        qwen_fertig.set()
+        return _kandidat("Ein Röntgenbild.")
+
+    def nachtrag(info: dict) -> None:
+        nachtraege.append(info)
+        angekommen.set()
+
+    def sperre(lokal: str) -> str:
+        gefragt.append(lokal)
+        return "namensfrage:nachname"
+
+    def lauf(fake_lokal):
+        echt = fake_lokal.post
+
+        def langsam(url, files=None, data=None, **kwargs):
+            qwen_fertig.wait(timeout=0.5)
+            time.sleep(0.02)
+            return echt(url, files=files, data=data, **kwargs)
+
+        fake_lokal.post = langsam
+        text = stt.transcribe(BLOB, keywords="Röntgenbild", nachtrag=nachtrag,
+                              qwen_sperre=sperre)
+        assert text == "Ein Rhön Biepfeld."
+        assert gefragt == ["Ein Rhön Biepfeld."]  # die Sperre sieht Parakeets Text
+        assert angekommen.wait(timeout=1.0)
+        n = nachtraege[0]
+        assert n["text"] == "Ein Röntgenbild." and n["parakeet"] == "Ein Rhön Biepfeld."
+        assert n["spaet"] is False
+        assert n["reason"] == "live_gesperrt:namensfrage:nachname"
+
+    _umgebung(lauf, lokal_text="Ein Rhön Biepfeld.", qwen_candidate=qwen)
+
+
+def test_live_sperre_wartet_nicht_auf_langsames_qwen():
+    """Gesperrter Zug = kein Grace-Warten, auch wenn Parakeet auffaellig ist
+    (sonst zahlte jeder Namens-Zug den Zusatzdeckel umsonst). Das spaete
+    Qwen landet trotzdem im Nachtrag."""
+    release = threading.Event()
+    angekommen = threading.Event()
+    nachtraege: list[dict] = []
+
+    def slow_qwen(_pcm, _keywords=""):
+        release.wait(timeout=0.5)
+        return _kandidat("Ein Röntgenbild.")
+
+    def nachtrag(info: dict) -> None:
+        nachtraege.append(info)
+        angekommen.set()
+
+    def lauf(_fake_lokal):
+        started = time.perf_counter()
+        text = stt.transcribe(BLOB, keywords="Röntgenbild", nachtrag=nachtrag,
+                              qwen_sperre=lambda lokal: "diktat:telefon")
+        elapsed = time.perf_counter() - started
+        assert text == "Bröntgempelt."
+        assert elapsed < 0.1  # trotz grace=0.25 kein Warten
+        release.set()
+        assert angekommen.wait(timeout=1.0)
+        assert nachtraege[0]["spaet"] is True
+        assert nachtraege[0]["text"] == "Ein Röntgenbild."
+
+    _umgebung(lauf, lokal_text="Bröntgempelt.", qwen_candidate=slow_qwen, grace=0.25)
+
+
+def test_sperre_ohne_grund_aendert_nichts():
+    """Leerer Sperr-Grund = Verhalten wie ohne Parameter: auffaelliges
+    Parakeet uebernimmt rechtzeitiges Qwen; eine werfende Sperre stoert das
+    Ohr nie."""
+    def lauf(_fake_lokal):
+        assert stt.transcribe(BLOB, keywords="Röntgenbild",
+                              qwen_sperre=lambda lokal: "") == "Ein Röntgenbild."
+
+    _umgebung(lauf, lokal_text="Ein Rhön Biepfeld.",
+              qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."))
+
+    def kaputt(lokal: str) -> str:
+        raise ValueError("sperre kaputt")
+
+    def lauf2(_fake_lokal):
+        assert stt.transcribe(BLOB, keywords="Röntgenbild", qwen_sperre=kaputt) == "Ein Röntgenbild."
+
+    _umgebung(lauf2, lokal_text="Ein Rhön Biepfeld.",
+              qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."))
+
+
 def test_qwen_only_ohne_parakeet_bleibt_moeglich():
     def lauf(fake_lokal):
         assert stt.transcribe(BLOB) == "Nur Qwen."

@@ -104,7 +104,7 @@ def test_ergebnisseite_verlinkt_gespraech_in_die_anrufuebersicht():
     assert "problem-akkordeon" in erg_js
     assert "<details" in erg_js
     assert "problemZelle(p)" in erg_js
-    assert "web/ergebnisse.js?v=13" in erg_html
+    assert "web/ergebnisse.js?v=14" in erg_html
 
     # Empfangsseite: Fragment lesen, Filter oeffnen, Gespraech vorwaehlen.
     assert "function sidAusAdresse" in anrufe_js

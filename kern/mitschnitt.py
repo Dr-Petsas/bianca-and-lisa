@@ -254,7 +254,8 @@ def _stt_kompakt(stt: dict | None) -> dict[str, Any] | None:
     if p:
         aus["parakeet"] = {k: p[k] for k in ("text", "suspicious", "error") if p.get(k)}
     if q:
-        aus["qwen"] = {k: q[k] for k in ("text", "status", "authoritative", "reason", "spaet") if q.get(k)}
+        aus["qwen"] = {k: q[k] for k in ("text", "status", "authoritative", "reason", "spaet", "sperre")
+                       if q.get(k)}
     if isinstance(stt.get("korrektur"), dict) and stt["korrektur"]:
         aus["korrektur"] = stt["korrektur"]
     for k in ("zuege", "teile"):
@@ -285,7 +286,7 @@ def stt_nachtragen(sit: dict, zug_nr: int, info: dict) -> bool:
     if not an() or not isinstance(sit, dict):
         return False
     try:
-        kompakt = {k: info[k] for k in ("qwen", "auth", "s", "reason", "gelernt") if k in info}
+        kompakt = {k: info[k] for k in ("qwen", "auth", "s", "reason", "gelernt", "gesperrt") if k in info}
         pfad = ordner(sit)
         if pfad is not None and (pfad / "anruf.json").is_file():
             with _LOCK:
