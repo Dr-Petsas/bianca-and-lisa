@@ -47,6 +47,13 @@ echo -n "abschied in bianca:      "; docker exec telefonki-bianca-1 python -c 'f
 echo -n "einwand in bianca:       "; docker exec telefonki-bianca-1 python -c 'from kern import einwand; print(einwand.modus())'
 echo -n "eingehen in bianca:      "; docker exec telefonki-bianca-1 python -c 'from kern import eingehen; print(eingehen.modus())'
 echo -n "auto-resume in bianca:   "; docker exec telefonki-bianca-1 python -c 'from kern import hirn; print(hirn.auto_resume_modus())'
+# V2.4-V2.6: Chef-Punkte 13.09. (Fach-Wache, Qwen-Korrektor, Standort-Zeiten),
+# W-MOTIV-KONSISTENT (14.09. frueh) und W-TELEFON-ZULETZT (14.09. vormittags).
+echo -n "fach_wache in bianca:    "; docker exec telefonki-bianca-1 python -c 'from kern import fach_wache; print(fach_wache.modus())'
+echo -n "qwen_korrektor an:       "; docker exec telefonki-bianca-1 python -c 'from kern import qwen_korrektor; print(qwen_korrektor.an())'
+echo -n "standort-zeiten an:      "; docker exec telefonki-bianca-1 python -c 'from kern import standort; print(standort.an())'
+echo -n "telefon_tauglich (motiv):"; docker exec telefonki-bianca-1 python -c 'from kern import motive; print(callable(getattr(motive, "telefon_tauglich", None)))'
+echo -n "_telefon_tor in flow:    "; docker exec telefonki-bianca-1 grep -c '_telefon_tor' /app/bianca/flow.py
 echo -n "auflegen in der Bruecke: "; docker exec telefonki-sipbridge-1 grep -c ausklingen_und_auflegen /app/sip_bridge/server.py
 echo -n "Dock-Cache-Buster:       "; docker exec telefonki-bianca-1 grep -o 'app.js?v=b[0-9]*' /app/bianca_web/index.html
 echo
