@@ -214,9 +214,23 @@ def in_tenant_mergen(tenant: dict[str, Any]) -> None:
     cals = list(tenant.get("calendars") or [])
     have = {_s(c.get("id")) for c in cals if isinstance(c, dict)}
     for c in stand.get("calendars") or []:
-        if _s(c.get("id")) and c["id"] not in have:
-            cals.append({"id": c["id"], "name": c["name"]})
-            have.add(c["id"])
+        cid = _s(c.get("id"))
+        if not cid:
+            continue
+        if cid in have:
+            # Live 14.09.2026 (Nacht vor dem Feldtest): die CF benennt den
+            # Kalender nach seinem BESITZER ("Franziska Schmidt"), Firestore
+            # nach seiner FUNKTION ("Prophylaxe"). Weil die Id schon da war,
+            # blieb der Personenname stehen — prophylaxe_kalender fand keinen
+            # Treffer, und jede Zahnreinigung waere in Eva Thalers Kalender
+            # gelandet. Fuer Funktionskalender gewinnt der Firestore-Name.
+            for alt in cals:
+                if isinstance(alt, dict) and _s(alt.get("id")) == cid and _s(alt.get("name")) != _s(c.get("name")):
+                    print(f"kalender-db umbenannt {alt.get('name')!r} -> {c['name']!r}", flush=True)
+                    alt["name"] = c["name"]
+            continue
+        cals.append({"id": cid, "name": c["name"]})
+        have.add(cid)
     tenant["calendars"] = cals
     if stand.get("rooms"):
         tenant["rooms"] = list(stand["rooms"])
