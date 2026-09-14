@@ -1758,8 +1758,36 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["arzt"] = gedeutet
             neu.add("arzt")
 
-    # Thaler: "zur Prophylaxe" / "bei Frau Thaler" — kein Behandler-Roster.
+    # W-ARZT-JANEIN (Anruf 984282e3, 14.09.2026): "Wissen Sie noch, bei
+    # welchem Behandler Sie zuletzt waren?" ist grammatisch eine Ja/Nein-
+    # Frage. "Ja." war eine korrekte Antwort — die Maschine erntete nichts,
+    # der Zug fiel ans Modell, das daraus eine Weiterleitung anbot (Jingle,
+    # Transfer, Buchung weg). Ja/Nein bleiben deterministisch: das erste Ja
+    # fragt die Namen zur Wahl nach (naechste_frage), ein zweites Ja ohne
+    # Namen und jedes Nein gelten wie "weiß nicht" (Standard-Behandler,
+    # Kette laeuft weiter). Nur die Bestands-Frage — die Neupatienten-Wahl
+    # nennt die Namen schon selbst. Nur KURZE Antworten: ein Widerspruch
+    # ("Nein, bei dem Behandler war ich nicht") gehoert W-EINWAND, ein
+    # langer Satz dem normalen Weg.
     from kern import zimmer_map as _zimmer_map
+    if (s["frage"] == "arzt" and not gedeutet and s["warSchonMal"]
+            and not (s["arzt"] or {}).get("calendarId")
+            and not _zimmer_map.aktiv(tenant)
+            and _arzt_janein_kurz(t)):
+        if ist_nein(t):
+            s["arzt"] = {"typ": "unbekannt"}
+            s["arztJa"] = False
+            neu.add("arzt")
+        elif ist_ja(t):
+            if s.get("arztJa"):
+                s["arzt"] = {"typ": "unbekannt"}
+                s["arztJa"] = False
+                neu.add("arzt")
+            else:
+                s["arztJa"] = True
+                neu.add("arztJa")
+
+    # Thaler: "zur Prophylaxe" / "bei Frau Thaler" — kein Behandler-Roster.
     if (_zimmer_map.aktiv(tenant)
             and not (s.get("arzt") or {}).get("calendarId")):
         spur = _zimmer_map.spur_deute(t)
@@ -2576,6 +2604,61 @@ def arztwahl_frage(tenant: dict | None) -> str:
         return ARZTWAHL_VARIANTEN[0]
     liste = ", ".join(namen[:-1]) + " oder " + namen[-1]
     return f"Zu welchem unserer Behandler möchten Sie — {liste}?"
+
+
+def _behandler_sprechnamen(tenant: dict | None) -> list[str]:
+    """Sprechnamen der telefonisch buchbaren Behandler in Sprech-Reihenfolge
+    (gesperrte Kalender hat behandler_sperre.anwenden schon entfernt; die
+    Sperr-Liste wird trotzdem noch einmal gegengeprueft — eine vor dem
+    Deploy persistierte Sitzung traegt den ungefilterten Mandanten)."""
+    from kern import behandler_sperre
+
+    t = tenant or {}
+    namen: list[str] = []
+    for c in kern_tenants.behandler_reihe(t):
+        roh = _s((c or {}).get("name"))
+        if behandler_sperre.ist_gesperrt(t, roh):
+            continue
+        n = arzt_sprechname(roh, t)
+        if n and n not in namen:
+            namen.append(n)
+    return namen
+
+
+_ARZT_JANEIN_MAX_WOERTER = 5
+
+
+def _arzt_janein_kurz(t: str) -> bool:
+    """Ist die Antwort auf die Behandler-Frage ein BLOSSES Ja/Nein ("Ja.",
+    "Ja, genau.", "Nein, leider nicht.")? Ein Widerspruch mit Inhalt ("Nein,
+    bei dem Behandler war ich nicht") oder ein langer Satz ist es nicht —
+    der gehoert W-EINWAND bzw. dem normalen Weg."""
+    from kern import einwand as _einwand
+    woerter = [w for w in re.split(r"[^\wäöüß]+", _s(t).lower()) if w]
+    if not woerter or len(woerter) > _ARZT_JANEIN_MAX_WOERTER:
+        return False
+    try:
+        if _einwand.feld(t):
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def arzt_nachfrage(sit: dict) -> str:
+    """W-ARZT-JANEIN (Anruf 984282e3): Nachfrage nach einem blossen "Ja" auf
+    "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?" — die Namen
+    zur Wahl, damit der Anrufer nur noch einen nennen muss. Traegt "Doktor"
+    bzw. "Behandler" (Kern-Wort der arzt-Frage fuer den Wiederholungs-
+    Waechter)."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    namen = _behandler_sprechnamen(tenant)
+    if len(namen) >= 2:
+        liste = ", ".join(namen[:-1]) + " oder " + namen[-1]
+        return f"Bei wem denn — {liste}?"
+    if namen:
+        return f"Bei {namen[0]}?"
+    return "Bei welchem Behandler waren Sie denn zuletzt?"
 
 
 def thaler_spur_frage(tenant: dict | None = None) -> str:
@@ -3794,6 +3877,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 # (Kartei) ist telefonisch gesperrt — nicht "bei wem waren
                 # Sie zuletzt?" fragen (die Antwort waere wieder der
                 # Gesperrte), sondern ehrlich sagen und die freien anbieten.
+                if s.get("arztJa"):
+                    # W-ARZT-JANEIN: "Ja" auf die Bestands-Frage — jetzt die
+                    # Namen zur Wahl, deterministisch statt LLM.
+                    return "arzt", arzt_nachfrage(sit)
                 gesperrt_frage = _arzt_gesperrt_frage(sit)
                 if gesperrt_frage:
                     return "arzt", gesperrt_frage

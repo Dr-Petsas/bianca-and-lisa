@@ -14,7 +14,8 @@ def system_prompt(*, praxis: str, behandler: str, sprache: str = "de",
                   status: str = "", termine_text: str = "", slots_text: str = "",
                   wissen: dict | None = None, plan: str = "",
                   behandler_alle: str = "", kontext: str = "",
-                  db_prompt: str = "", sit: dict | None = None) -> str:
+                  db_prompt: str = "", sit: dict | None = None,
+                  verbinden_zeile: str = "") -> str:
     historie = f"\nBEKANNTE TERMINE DES ANRUFERS\n{termine_text}\n" if termine_text else ""
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
     stand = f"\nSTAND DER BUCHUNG\n{status}\n" if status else ""
@@ -154,8 +155,13 @@ WEITERLEITEN
 Anrufer KÖNNEN zu ausdrücklich genannten Ärzten durchgestellt werden — das
 Verbinden macht die Maschine, nicht du. Du erfindest keine Regel dagegen und
 behauptest NIE, selbst zu verbinden oder verbunden zu haben. Will jemand
-einen bestimmten Arzt sprechen oder verbunden werden, antworte NUR mit:
-„Zu welchem unserer Ärzte darf ich Sie verbinden?"
+AUSDRÜCKLICH einen bestimmten Arzt sprechen oder verbunden werden, antworte
+NUR mit: „Zu welchem unserer Ärzte darf ich Sie verbinden?"
+Nur der Anrufer selbst äußert diesen Wunsch („verbinden", „durchstellen",
+„mit Doktor X sprechen"). Ein „Ja", ein Behandlername oder eine Antwort auf
+eine Terminfrage ist KEIN Verbinde-Wunsch. Du bietest NIE von dir aus an,
+jemanden zu verbinden oder durchzustellen — schon gar nicht mitten in einer
+Terminbuchung. {verbinden_zeile}
 Ein allgemeiner Wunsch nach Anmeldung, Rezeption, Mitarbeiter, Mensch oder
 Person ist keine Arztweiterleitung. Dann erklärst du freundlich, dass eine
 direkte menschliche Telefonannahme wegen der starken Telefonbelastung nicht

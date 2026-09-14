@@ -2894,6 +2894,64 @@ Offen (Praxis-Konfiguration, nicht Code): Eva Thalers Akut-Kalender hat im
 Sechs-Monats-Fenster praktisch keine freien Akut-Zeiten — der Ersatz bucht
 Kontrolle mit Notiz; die Praxis sollte Akut-Fenster freigeben.
 
+## Verbinden nur auf echten Anrufer-Wunsch (W-VERBINDEN-BEWEIS / W-ARZT-JANEIN 14.09.2026 — nicht rückbauen)
+
+Chef zum MedDent-Anruf 984282e303cb414ab6c32125877473c2: „hier wurde
+durchgestellt, obwohl der patient sagt er wolle einen termin." Kette live:
+Buchung lief, Maschine fragte „Wissen Sie noch, bei welchem Behandler Sie
+zuletzt waren?" → Anrufer „Ja." → die Maschine erntete NICHTS (die Frage
+ist grammatisch Ja/Nein, es gab keinen Ja-Zweig) → erster Leerlauf-Zug
+fiel ans Modell → das Modell bot aus „Behandler + Ja" ein DURCHSTELLEN zu
+„Doktor Petsas, Patrikis oder Nikolaou" an (Namen aus dem PRAXIS-PROFIL —
+Sperre und Whitelist kannte es nicht) → Anrufer „Patrikis" → `weiterleiten.
+zug` Pfad (b) nahm die Modell-Rückfrage als Beweis (`_RUECKFRAGE_RE`) und
+verband: Jingle, Transfer, Buchung weg. Vier Wachen:
+
+1. **Ja/Nein auf die Bestands-Behandlerfrage sind deterministisch**
+   (`gehirn.einsammeln`, `_arzt_janein_kurz`): das erste „Ja" setzt
+   `arztJa` und `naechste_frage` stellt `arzt_nachfrage` — die Namen zur
+   Wahl („Bei wem denn — Doktor Petsas oder Doktor Patrikis?"), aus
+   `_behandler_sprechnamen` (Sperr-Liste gegengeprüft, Nikolaou nie).
+   „Nein" und ein zweites „Ja" ohne Namen gelten wie „weiß nicht"
+   (`typ=unbekannt` → Standard-Behandler, Kette läuft). NUR kurze Antworten
+   (≤ 5 Wörter) und NIE ein Widerspruch (`einwand.feld` ≠ "") — „Nein, bei
+   dem Behandler war ich nicht" gehört W-EINWAND. Nur Bestand
+   (`warSchonMal`), nicht Thaler-Zimmerkarte, nicht die Neupatienten-Wahl
+   (die nennt die Namen selbst).
+2. **Modell-Rückfrage ist kein Beweis, wenn die Maschine arbeitet**
+   (`weiterleiten.maschine_beschaeftigt`): Pfad (b) verbindet auf „Zu
+   welchem unserer Ärzte …?" + Name NUR, wenn keine Maschinen-Frage offen
+   ist, kein Angebot/Readback läuft, kein `buchIntent` steht und das
+   Session-Hirn kein aktives Nicht-ERREICHEN-Anliegen führt. Der freie
+   Rückweg der Prompt-Leitplanke (Maschine wirklich frei) bleibt.
+3. **Erfundene Verbinde-Angebote fallen** (`weiterleiten.angebot_saeubern`,
+   `agent._verbinden_wache_anwenden` — am Zugende UND im P5-Strom, sonst
+   ist der Satz gesprochen, bevor die Wache greift): „Darf/Soll/Kann ich
+   Sie … durchstellen/verbinden/weiterleiten?" und „Ich kann/könnte Sie
+   … verbinden." werden gestrichen, wenn der Anrufer keinen Verbinde-Wunsch
+   geäußert hat (`erkannt(gesagt)` leer, kein `hirnVerbinden`) und die
+   Maschine beschäftigt ist. Verneinungen („kann Sie leider nicht
+   verbinden") und Sachtext bleiben. Spur: `verbinden-wache`.
+4. **Der Prompt weiß, wohin überhaupt** (`weiterleiten.verbinden_zeile` →
+   `prompt.system_prompt(verbinden_zeile=…)`): „Durchgestellt werden kann
+   NUR zu: Doktor Petsas, Doktor Patrikis." aus `verbindenErlaubt` ×
+   Kalender, plus „Telefonisch weder erreichbar noch buchbar: Doktor
+   Nikolaou — nenne diesen Namen nie als Möglichkeit." aus
+   `behandler_sperre.gesperrte_kalender`. Ohne Whitelist (Thaler,
+   Blessing): „In dieser Praxis wird telefonisch NICHT durchgestellt —
+   biete es nie an." Die WEITERLEITEN-Leitplanke sagt außerdem: nur der
+   Anrufer äußert den Wunsch; ein „Ja", ein Behandlername oder eine
+   Antwort auf eine Terminfrage ist KEIN Verbinde-Wunsch; nie von sich aus
+   anbieten, schon gar nicht mitten in der Buchung.
+
+Tests: `tests/test_anruf_984282e3.py` (19 — Ja/Nein/zweites Ja/Name,
+Widerspruch-Gegenprobe, Maschine frei vs. beschäftigt, Angebots-Wache mit
+Verneinungs- und Sachtext-Gegenprobe, Prompt-Zeile, Nachstellung des
+Anrufs mit dem Modell als Täter: wortgleiches Live-Angebot samt Nikolaou →
+kein Ton, „Patrikis" danach = Behandler der Buchung, kein Jingle). Die
+bestehenden Verbinde-Tests (echter Wunsch → Jingle/Transfer, Whitelist,
+Sperre) bleiben unverändert grün.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

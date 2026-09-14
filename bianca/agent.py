@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon
+from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
@@ -726,6 +726,9 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
         praxis=_s(tenant.get("praxisName")),
         behandler=_s(tenant.get("behandler")),
         behandler_alle=_behandler_alle(tenant),
+        # W-VERBINDEN-BEWEIS: wohin ueberhaupt durchgestellt werden kann und
+        # wer nie genannt werden darf (Nikolaou stand live zur Wahl).
+        verbinden_zeile=weiterleiten.verbinden_zeile(tenant),
         sprache=_s(tenant.get("sprache")) or "de",
         status=flow.status_zeile(sit),
         termine_text=_termine_zeile(sit),
@@ -908,6 +911,23 @@ def _fach_wache_anwenden(sit: dict, text: str) -> str:
         return text
     spur.merken(sit, "fach-wache", "; ".join(treffer)[:60])
     return neu or text
+
+
+def _verbinden_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
+    """W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): ein Verbinde-Angebot
+    des Modells ("Darf ich Sie zu Doktor Petsas, Patrikis oder Nikolaou
+    durchstellen?") mitten in einer laufenden Aufgabe, ohne dass der Anrufer
+    je verbunden werden wollte — der naechste Zug wurde live ein Transfer
+    (Jingle), der Terminwunsch war weg. Der Satz faellt; die Maschine stellt
+    ihre offene Frage danach selbst (_nie_stumm / W-FOKUS). Bei freier
+    Maschine bleibt die Rueckfrage der Prompt-Leitplanke erlaubt."""
+    if not _s(text):
+        return text
+    neu, gestrichen = weiterleiten.angebot_saeubern(sit, text, gesagt)
+    if not gestrichen:
+        return text
+    spur.merken(sit, "verbinden-wache", _s(text)[:60])
+    return neu
 
 
 def _notdienst_wache_anwenden(sit: dict, text: str) -> str:
@@ -1557,6 +1577,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # — gesprochen waere er nicht mehr einzufangen.
             satz = _fach_wache_anwenden(sit, satz)
             satz = _notdienst_wache_anwenden(sit, satz)
+            # W-VERBINDEN-BEWEIS: ein erfundenes Verbinde-Angebot darf nicht
+            # gesprochen werden — der Anrufer wuerde mit dem Namen antworten
+            # und der naechste Zug waere ein Transfer.
+            satz = _verbinden_wache_anwenden(sit, satz, text_in)
             # W-FRAGE-GATE: eine Daten-Frage darf auch hier nicht raus — sie
             # waere gesprochen, bevor die Wache am Zugende sie streichen kann,
             # und die Maschine wuerde sie danach ein zweites Mal stellen.
@@ -1607,6 +1631,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     bewacht = _anrede_wache_anwenden(sit, bewacht)
     bewacht = _fach_wache_anwenden(sit, bewacht)
     bewacht = _notdienst_wache_anwenden(sit, bewacht)
+    bewacht = _verbinden_wache_anwenden(sit, bewacht, text_in)
     bewacht = _frage_gate_anwenden(sit, bewacht)
     # Gleiche Re-Greeting-Wache wie am P5-Ausgang — sonst faende
     # llm.rest_nach_vorab den gestrichenen Satz im Endtext und spraeche ihn

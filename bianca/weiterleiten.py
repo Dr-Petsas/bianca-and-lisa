@@ -191,9 +191,93 @@ _SPRECH_VERB_RE = re.compile(
 # gefragt, zaehlt der blosse Behandler-Name im naechsten Zug als Zielangabe.
 _RUECKFRAGE_RE = re.compile(r"(?:verbind|durchstell)\w*[^.!?]*\?", re.I)
 
+# W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): ein Verbinde-ANGEBOT des
+# Modells ("Darf ich Sie zu Doktor Petsas durchstellen?", "Soll ich Sie
+# verbinden?", "Ich kann Sie gern weiterleiten") mitten in einer laufenden
+# Aufgabe. Nur Angebots-/Frage-Saetze mit Verbinde-Verb; die ehrliche
+# Absage ("verbinden kann ich Sie nicht") und die Anmeldungs-Wahrheit
+# bleiben stehen (Negations-Wache).
+_ANGEBOT_RE = re.compile(
+    r"(?:\b(?:darf|soll|kann|könnte|koennte|möchten|moechten|wollen)\b[^.!?]*"
+    r"(?:verbind|durchstell|weiterleit)\w*[^.!?]*\?"
+    r"|\bich\s+(?:kann|könnte|koennte|würde|wuerde)\s+sie\s+(?:gern[e]?\s+)?"
+    r"[^.!?]*(?:verbind|durchstell|weiterleit)\w*[^.!?]*[.!?])",
+    re.I,
+)
+_ANGEBOT_NEGATION_RE = re.compile(
+    r"\b(?:nicht|kein\w*|leider|nie)\b[^.!?]{0,40}(?:verbind|durchstell|weiterleit)"
+    r"|(?:verbind|durchstell|weiterleit)\w*[^.!?]{0,30}\b(?:nicht|leider|nie)\b",
+    re.I,
+)
+_SATZ_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
+
+
+def maschine_beschaeftigt(sit: dict) -> bool:
+    """Fuehrt die deterministische Maschine gerade eine Aufgabe (Buchung,
+    Absage, Verschieben, Auskunft) mit offener Frage oder laufendem
+    Angebot? Dann ist eine Verbinde-Rueckfrage des Modells KEIN Beweis fuer
+    einen Anrufer-Wunsch — der Anrufer beantwortet gerade die Maschine.
+    Das Session-Hirn zaehlt mit: ein aktives Anliegen, das nicht ERREICHEN
+    ist, heisst ebenfalls beschaeftigt."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    # Eine offene Maschinen-Frage zaehlt IMMER — der Anrufer antwortet gerade
+    # ihr, egal ob der Modus schon gesetzt ist (anrufer_check, telefon ...).
+    if _s(s.get("frage")):
+        return True
+    if _s(s.get("modus")):
+        if _s(s.get("phase")) in {"angebot", "bestaetigen"}:
+            return True
+        if sit.get("buchIntent") and _s(s.get("slotIso")):
+            return True
+    try:
+        a = session_hirn.aktiv(sit)
+    except Exception:
+        a = None
+    if a and _s(a.get("handlung")) not in {"", "ERREICHEN", "KEINE"} \
+            and _s(a.get("status")) not in {"erledigt", "fertig"}:
+        return True
+    return False
+
+
+def angebot_saeubern(sit: dict, text: str, gesagt: str = "") -> tuple[str, bool]:
+    """Verbinde-Angebote des Modells streichen, wenn der Anrufer nie verbunden
+    werden wollte (W-VERBINDEN-BEWEIS, Anruf 984282e3).
+
+    Live sagte der Anrufer "Ja." auf die Behandler-Frage der Buchung; das
+    Modell antwortete "Darf ich Sie zu Doktor Petsas, Patrikis oder Nikolaou
+    durchstellen?" — und der naechste Zug wurde ein Transfer. Gestrichen
+    wird NUR, wenn (1) der aktuelle Anrufersatz keinen Verbinde-Wunsch traegt,
+    (2) das Hirn keinen ERREICHEN-Zettel haelt und (3) die Maschine gerade
+    beschaeftigt ist. Ist die Maschine frei, bleibt die Rueckfrage der
+    Prompt-Leitplanke ("Zu welchem unserer Ärzte …?") erlaubt — sie ist dann
+    der Backstop fuer Verbinde-Saetze, die die Regex nicht fasst.
+    Rueckgabe: (Text, gestrichen?)."""
+    t = _s(text)
+    if not t or not _ANGEBOT_RE.search(t):
+        return text, False
+    if gesagt and erkannt(gesagt):
+        return text, False
+    if isinstance(sit.get("hirnVerbinden"), dict):
+        return text, False
+    if not maschine_beschaeftigt(sit):
+        return text, False
+    behalten: list[str] = []
+    gestrichen = False
+    for satz in _SATZ_SPLIT_RE.split(t):
+        st = _s(satz)
+        if not st:
+            continue
+        if _ANGEBOT_RE.search(st) and not _ANGEBOT_NEGATION_RE.search(st):
+            gestrichen = True
+            continue
+        behalten.append(st)
+    if not gestrichen:
+        return text, False
+    return " ".join(behalten).strip(), True
 
 
 def erkannt(text: str) -> bool:
@@ -345,6 +429,50 @@ def verbinden_erlaubt(tenant: dict | None) -> set[str]:
             if len(w) >= 3 and w not in _TITEL_WORTE:
                 out.add(w)
     return out
+
+
+def verbinden_zeile(tenant: dict | None) -> str:
+    """Prompt-Zeile fuer das Modell (W-VERBINDEN-BEWEIS, Anruf 984282e3):
+    WOHIN in dieser Praxis ueberhaupt durchgestellt werden kann — und wer
+    NICHT genannt werden darf. Live bot das Modell "Doktor Petsas, Patrikis
+    oder Nikolaou" zur Weiterleitung an: die Namen kannte es aus dem
+    PRAXIS-PROFIL der DB, die Sperre (W-BEHANDLER-SPERRE) und die Whitelist
+    (W-VERBINDEN-WHITELIST) kannte es nicht. Leer/kein Ziel = ehrliche
+    Ansage, dass telefonisch nicht durchgestellt wird."""
+    from kern import behandler_sperre
+
+    t = tenant or {}
+    erlaubt = verbinden_erlaubt(t)
+    ziele: list[str] = []
+    if erlaubt:
+        for k in (t.get("calendars") or []):
+            name = _s((k or {}).get("name"))
+            toks = [w for w in re.split(r"[^\wäöüß]+", name.lower())
+                    if len(w) >= 3 and w not in _TITEL_WORTE]
+            if any(tok in erlaubt for tok in toks):
+                sn = arzt_sprechname(name, t) or name
+                if sn and sn not in ziele:
+                    ziele.append(sn)
+    gesperrt: list[str] = []
+    try:
+        for k in behandler_sperre.gesperrte_kalender(t):
+            name = _s((k or {}).get("name"))
+            sn = arzt_sprechname(name, t) or name
+            if sn and sn not in gesperrt and sn not in ziele:
+                gesperrt.append(sn)
+    except Exception:
+        gesperrt = []
+    teile: list[str] = []
+    if ziele:
+        teile.append("Durchgestellt werden kann NUR zu: " + ", ".join(ziele) + ".")
+    else:
+        teile.append("In dieser Praxis wird telefonisch NICHT durchgestellt — "
+                     "biete es nie an; das Anliegen übernimmst du selbst.")
+    if gesperrt:
+        teile.append(
+            "Telefonisch weder erreichbar noch buchbar: " + ", ".join(gesperrt)
+            + " — nenne diesen Namen nie als Möglichkeit.")
+    return " ".join(teile)
 
 
 def weiterleitungs_ziel(tenant: dict, ziel: dict) -> dict:
@@ -618,8 +746,15 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # (b) Rueckweg der Prompt-Leitplanke: das LLM hat "Zu welchem
             #     unserer Ärzte darf ich Sie verbinden?" gefragt — der blosse
             #     Name ist die Zielangabe (die Maschine war nicht bewaffnet).
+            #     W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): NUR wenn
+            #     die Maschine wirklich frei war. Live lief eine Buchung
+            #     ("Wissen Sie noch, bei welchem Behandler Sie zuletzt
+            #     waren?" -> "Ja."), das Modell erfand daraus die Verbinde-
+            #     Rueckfrage, und "Patrikis" wurde zum Transfer — der Anrufer
+            #     wollte einen Termin und landete im Jingle.
             letzte = wiederholung.letzte_antworten(sit.get("messages") or [], 1)
-            if letzte and _RUECKFRAGE_RE.search(letzte[0]):
+            if (letzte and _RUECKFRAGE_RE.search(letzte[0])
+                    and not maschine_beschaeftigt(sit)):
                 _arzt_merken(s, ziel0)
                 return zaluma_weiterleitung(sit, ziel0, melde)
         return None
