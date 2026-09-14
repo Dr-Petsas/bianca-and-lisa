@@ -134,11 +134,33 @@ RUECKRUF_UNKLAR = "Ein kurzes Ja oder Nein genügt: Soll ich einen Rückruf zur 
 ABGELEHNT = "Alles klar — dann klären Sie das am besten direkt in der Praxis."
 ABGELEHNT_KURZ = "Alles klar."
 NAME_FRAGE = "Gerne. Für den Rückruf: Wie ist Ihr Name?"
+NUMMER_FRAGE = "Danke. Und unter welcher Nummer erreicht die Praxis Sie am besten?"
+# Nummer wie W-RUECKRUF-NUMMER: Readback (gehirn.readback_text) -> Ja -> fest.
+NUMMER_NOCHMAL = ("Entschuldigung. Dann sagen Sie mir die Nummer bitte noch einmal — "
+                  "gern in kleinen Gruppen.")
+NUMMER_KEINE_LEITUNG = ("In der Leitung wird mir leider keine Nummer angezeigt. "
+                        "Unter welcher Rufnummer erreicht die Praxis Sie?")
+NUMMER_UNSICHER = ("Die Nummer bekomme ich am Telefon leider nicht sicher notiert. "
+                   "Ihren Rückrufwunsch habe ich mit Ihrem Namen für die Praxis "
+                   "festgehalten — am sichersten klären Sie die Rechnung direkt vor Ort.")
+# Zwischenfrage/Unklares auf die Nummern-Frage — deterministisch, das Modell
+# wuesste auch nicht, WANN die Praxis anruft (W-RUECKRUF-NUMMER).
+NUMMER_ZWISCHENFRAGE = ("Das kann ich Ihnen leider nicht genau sagen — die Praxis meldet "
+                        "sich, sobald sie Ihren Wunsch sieht. Dafür bräuchte sie noch Ihre "
+                        "Nummer: Unter welcher Rufnummer erreicht sie Sie am besten?")
+NUMMER_ERINNERUNG = ("Für den Rückruf bräuchte die Praxis noch eine Nummer — "
+                     "unter welcher Rufnummer erreicht sie Sie am besten?")
+NOTIERT = "Alles notiert — die Praxis meldet sich wegen der Rechnung bei Ihnen."
+SONST_NOCH = "Kann ich sonst noch etwas für Sie tun?"
+SONST_NOCH_JA = "Gerne — was kann ich noch für Sie tun?"
+SONST_NOCH_NEIN = "Sehr gerne. Dann wünsche ich Ihnen einen schönen Tag — auf Wiederhören!"
 WACHE_ERSATZ = ERKLAERUNG
 
 SAETZE = (
     ERKLAERUNG, RUECKRUF_FRAGE, ERKLAERUNG_WIEDERHOLT, RUECKRUF_FRAGE_WIEDERHOLT,
-    RUECKRUF_UNKLAR, ABGELEHNT, ABGELEHNT_KURZ, NAME_FRAGE,
+    RUECKRUF_UNKLAR, ABGELEHNT, ABGELEHNT_KURZ, NAME_FRAGE, NUMMER_FRAGE,
+    NUMMER_NOCHMAL, NUMMER_KEINE_LEITUNG, NUMMER_UNSICHER, NUMMER_ZWISCHENFRAGE,
+    NUMMER_ERINNERUNG, NOTIERT, SONST_NOCH, SONST_NOCH_JA, SONST_NOCH_NEIN,
 )
 
 

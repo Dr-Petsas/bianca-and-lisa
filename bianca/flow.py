@@ -1919,13 +1919,16 @@ _DOKUMENT_RE = re.compile(
 )
 
 
-def _abgeben_kontakt(sit: dict) -> None:
+def _abgeben_kontakt(sit: dict, *, sofort: bool = True) -> None:
     """Name + Nummer fuer die Notiz: Anrufer aus der Leitung, sonst Diktat.
 
     Live Berger 08.09.: dieselbe 0151… dreimal richtig transkribiert, aber
     die Notiz sah nur s['telefon'] — die Ernte legt die Kette nach
     telefonOffen (Buchungs-Readback). Beim Abgeben gilt die gehoerte
     Nummer sofort; ein bekannter Anrufer wird nicht nochmal ausgefragt.
+    `sofort=False` (W-RECHNUNG): die diktierte Nummer bleibt in telefonOffen
+    und wird erst nach dem Ja auf das Readback fest (_abgeben_zug) — die
+    Nummer aus der Leitung/Akte gilt weiterhin ohne Rueckfrage.
     """
     s = gehirn.sammler(sit)
     a = gehirn.anrufer_bekannt(sit)
@@ -1944,12 +1947,120 @@ def _abgeben_kontakt(sit: dict) -> None:
             if telefon.plausibel(d):
                 s["telefon"] = d
                 s["telefonOk"] = True
-    if not s["telefon"] and s.get("telefonOffen"):
+    if sofort and not s["telefon"] and s.get("telefonOffen"):
         d = telefon.mit_fuehrender_null(s["telefonOffen"])
         if telefon.plausibel(d):
             s["telefon"] = d
             s["telefonOk"] = True
             s["telefonOffen"] = ""
+
+
+# W-RECHNUNG (14.09.2026, Live-Probe Szenario B): "Ja, richtig." auf den
+# Schlusssatz mit der Nummer fiel ans Modell ("Was meinen Sie damit?"), und
+# eine Korrektur ("die letzte war eine neun") aenderte die schon geschriebene
+# Notiz nicht mehr. Die Rueckruf-Nummer zur Rechnung laeuft deshalb wie
+# W-RUECKRUF-NUMMER: Readback Ziffer fuer Ziffer -> Ja -> Notiz. Hoechstens
+# so viele Anlaeufe, dann ehrlich ohne sichere Nummer abschliessen.
+_RECHNUNG_NUMMER_ANLAEUFE = 3
+
+
+def _rechnung_nummer_readback(sit: dict, s: dict, st: dict) -> dict:
+    """Die gehoerte Nummer Ziffer fuer Ziffer vorlesen, Ja/Nein-Frage stellen."""
+    st["nummerAnlaeufe"] = int(st.get("nummerAnlaeufe") or 0) + 1
+    sit["rechnungStand"] = st
+    s["frage"] = "telefon_check"
+    s["telefonOk"] = False
+    frage = gehirn.readback_text(s["telefonOffen"])
+    sit["flussFrage"] = frage
+    spur.merken(sit, "rechnung", f"nummer-readback:{st['nummerAnlaeufe']}")
+    return {"text": frage}
+
+
+def _rechnung_nummer_aufgeben(sit: dict, s: dict, ab: dict, st: dict) -> dict:
+    """Zu viele Anlaeufe: den Wunsch MIT Namen notieren (die Praxis findet die
+    Nummer in der Kartei) — aber nie eine unsichere Nummer als sicher."""
+    from kern import rechnung
+
+    s["telefonOffen"] = ""
+    s["telefonTeil"] = ""
+    s["telefonOk"] = False
+    s["frage"] = ""
+    sit["flussFrage"] = ""
+    ab["offen"] = False
+    sit["hirnAbgeben"] = ab
+    st["status"] = "rueckruf"
+    sit["rechnungStand"] = st
+    was = _s(ab.get("was")) or "Rechnung"
+    verwalten.abgeben_notiz(
+        sit, was=f"{was} — Rückrufnummer am Telefon nicht sicher erfasst, bitte Kartei",
+    )
+    spur.merken(sit, "rechnung", "nummer-aufgegeben")
+    _abgeben_kontakt_weitergeben(sit)  # den Namen kennt die geparkte Buchung dann schon
+    ruecksprung = _anliegen_abschliessen(sit)
+    text = rechnung.NUMMER_UNSICHER
+    if not ruecksprung and not s.get("modus"):
+        text = f"{text} {rechnung.SONST_NOCH}"
+        s["frage"] = "sonst_noch"
+        sit["flussFrage"] = rechnung.SONST_NOCH
+    return {"text": text}
+
+
+def _rechnung_nummer_zug(sit: dict, s: dict, ab: dict, t: str, neu: set) -> dict:
+    """Rueckruf-Nummer zur Rechnung einsammeln — Readback, Ja, dann fest.
+
+    Aufgerufen, solange KEINE bestaetigte Nummer steht (s['telefon'] leer —
+    ein Ja auf das Readback setzt sie in gehirn.einsammeln, die Leitungs-/
+    Akten-Nummer _abgeben_kontakt). Reihenfolge: gehoerte Nummer -> vorlesen;
+    Nein/„falsch"/gesperrte Kette -> einmal neu erfragen; weder Ja noch Nein
+    noch Ziffern auf das Readback -> noch einmal vorlesen; nach
+    _RECHNUNG_NUMMER_ANLAEUFE Vorlesern ehrlich aufgeben. Liefert IMMER einen
+    Zug — die Nummer und die Frage danach entscheidet nie das Modell."""
+    from kern import rechnung
+
+    st = _rechnung_stand(sit)
+    anlaeufe = int(st.get("nummerAnlaeufe") or 0)
+    offen = _s(s.get("telefonOffen"))
+    if offen and not s.get("telefonOk"):
+        if anlaeufe >= _RECHNUNG_NUMMER_ANLAEUFE:
+            return _rechnung_nummer_aufgeben(sit, s, ab, st)
+        return _rechnung_nummer_readback(sit, s, st)
+    if "telefonKorrektur" in neu:
+        # Nein auf das Readback / "die Nummer war falsch" / gesperrte Kette:
+        # die Kette ist verworfen (einsammeln) — einmal neu erfragen.
+        if anlaeufe >= _RECHNUNG_NUMMER_ANLAEUFE:
+            return _rechnung_nummer_aufgeben(sit, s, ab, st)
+        s["frage"] = "telefon"
+        sit["flussFrage"] = rechnung.NUMMER_NOCHMAL
+        spur.merken(sit, "rechnung", "nummer-korrektur")
+        return {"text": rechnung.NUMMER_NOCHMAL}
+    if s["frage"] == "telefon" and ({"telefonAkte", "telefonBekannt"} & neu):
+        # "Meine Nummer haben Sie doch" — die Leitung zeigt aber keine
+        # (sonst haette _abgeben_kontakt sie laengst uebernommen).
+        s["telefonAkte"] = False
+        s["telefonBekannt"] = ""
+        sit["flussFrage"] = rechnung.NUMMER_KEINE_LEITUNG
+        return {"text": rechnung.NUMMER_KEINE_LEITUNG}
+    if s["frage"] in {"telefon", "telefon_check"} and not neu and (
+            (gehirn.ist_nein(t) and not gehirn.ist_ja(t))
+            or _RUECKRUF_ABLEHNUNG_RE.search(t) or _RUECKRUF_NICHTS_MEHR_RE.search(t)):
+        # Keine Nummer nennen wollen: ehrlich ohne Rueckruf abschliessen.
+        return _rechnung_nein(sit, t, persoenlich=rechnung.persoenlich_klaeren(t),
+                              terminwunsch=False)
+    if s["frage"] == "telefon" and not neu:
+        # Zwischenfrage/Unklares auf die Nummern-Frage — deterministisch wie
+        # W-RUECKRUF-NUMMER (das Modell wuesste auch nicht, WANN die Praxis
+        # anruft); zweimal, dann ehrlich ohne sichere Nummer abschliessen.
+        st["nummerUnklar"] = int(st.get("nummerUnklar") or 0) + 1
+        sit["rechnungStand"] = st
+        if st["nummerUnklar"] >= 2:
+            return _rechnung_nummer_aufgeben(sit, s, ab, st)
+        text = rechnung.NUMMER_ZWISCHENFRAGE if "?" in t else rechnung.NUMMER_ERINNERUNG
+        sit["flussFrage"] = text
+        spur.merken(sit, "rechnung", f"nummer-unklar:{st['nummerUnklar']}")
+        return {"text": text}
+    s["frage"] = "telefon"
+    sit["flussFrage"] = rechnung.NUMMER_FRAGE
+    return {"text": rechnung.NUMMER_FRAGE}
 
 
 def _abgeben_zug(sit: dict, t: str) -> dict | None:
@@ -1979,7 +2090,15 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
         return {"text": praxisregeln.dokument_antwort()}
     neu = gehirn.einsammeln(sit, t)
     sit["ernteZuletzt"] = sorted(neu)
-    _abgeben_kontakt(sit)
+    # W-RECHNUNG: die diktierte Nummer wird erst nach dem Ja auf das Readback
+    # fest (_rechnung_nummer_zug) — beim allgemeinen Rueckruf gilt sie sofort.
+    _abgeben_kontakt(sit, sofort=not rech)
+    if "telefonKorrektur" in neu:
+        # Korrektur schlaegt Fragment (W-RUECKRUF-NUMMER): "Nein, die letzte
+        # war eine neun" liesse sonst ein einsames "9" als Diktat-Anfang
+        # stehen und Bianca schwiege.
+        s["telefonTeil"] = ""
+        neu.discard("telefonTeil")
     if {"buchstabenTeil", "vornameTeil", "telefonTeil"} & neu:
         # Diktat laeuft (W-DATEN-FLOOR): still weiterhoeren, kein Stups.
         return {"text": "", "warte": True, "stilleMs": gehirn.stille_ms(s)}
@@ -2004,6 +2123,10 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
             return {"text": rechnung.NAME_FRAGE}
         return {"text": "Das richte ich gern aus. Für den Rückruf: Wie ist Ihr Name?"}
     tel = s["telefon"] or s["aktePhone"]
+    if not tel and rech:
+        # W-RECHNUNG: Readback -> Ja -> fest (wie W-RUECKRUF-NUMMER). None
+        # nur bei einer Zwischenfrage auf die Nummern-Frage.
+        return _rechnung_nummer_zug(sit, s, ab, t, neu)
     if not tel:
         # Eine gehoerte Nummer gilt beim Abgeben sofort (_abgeben_kontakt,
         # Berger 08.09.) und wird im Schlusssatz vorgelesen; nur eine
@@ -2051,10 +2174,22 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
             f"nicht.{sonst}"
         )}
     if rech:
-        return {"text": (
-            f"Alles notiert — die Praxis meldet sich wegen der Rechnung bei "
-            f"Ihnen unter der {telefon.sprechbar(tel)}.{sonst}"
-        )}
+        # Eben Ziffer fuer Ziffer bestaetigt ("telefon" in neu): nicht noch
+        # einmal vorlesen — auf den Schlusssatz mit Nummer kam live "Ja,
+        # richtig." und fiel ans Modell. Die Leitungs-/Akten-Nummer dagegen
+        # hoert der Anrufer hier zum ersten Mal.
+        if "telefon" in neu:
+            text = rechnung.NOTIERT
+        else:
+            text = (f"Alles notiert — die Praxis meldet sich wegen der Rechnung bei "
+                    f"Ihnen unter der {telefon.sprechbar(tel)}.")
+        if not ruecksprung and not s.get("modus"):
+            # "Kann ich sonst noch etwas fuer Sie tun?" ist danach die offene
+            # Frage — Ja/Nein deterministisch (_rechnung_zug), kein Modell.
+            s["frage"] = "sonst_noch"
+            sit["flussFrage"] = rechnung.SONST_NOCH
+            return {"text": f"{text} {rechnung.SONST_NOCH}"}
+        return {"text": text}
     return {"text": (
         f"Alles notiert — die Praxis meldet sich bei Ihnen unter der "
         f"{telefon.sprechbar(tel)}.{sonst}"
@@ -2251,7 +2386,9 @@ def _rechnung_start(sit: dict, t: str) -> dict:
             # kommt ueber den Ruecksprung zurueck.
             if _anliegen_abschliessen(sit):
                 return {"text": text}
-            return {"text": f"{text} Kann ich sonst noch etwas für Sie tun?"}
+            s["frage"] = "sonst_noch"
+            sit["flussFrage"] = rechnung.SONST_NOCH
+            return {"text": f"{text} {rechnung.SONST_NOCH}"}
         # Die Intent-Schicht hat GEHALTEN: eine laufende Aufgabe (Buchung,
         # Absage ...) bleibt unberuehrt — Auskunft plus ihre offene Frage im
         # selben Zug (wie der Dokument-Hook), nie die Kette abreissen.
@@ -2263,7 +2400,10 @@ def _rechnung_start(sit: dict, t: str) -> dict:
                 if fid and frage:
                     s["frage"] = fid
             return {"text": f"{text} {frage}".strip()}
-        return {"text": f"{text} Kann ich sonst noch etwas für Sie tun?"}
+        if not s.get("modus"):
+            s["frage"] = "sonst_noch"
+            sit["flussFrage"] = rechnung.SONST_NOCH
+        return {"text": f"{text} {rechnung.SONST_NOCH}"}
 
     _rechnung_anliegen_sichern(sit, t)
     # hirn._schalten legt hirnAbgeben {"offen": True} an — die Frage kommt
@@ -2356,7 +2496,16 @@ def _rechnung_nein(sit: dict, t: str, *, persoenlich: bool, terminwunsch: bool,
     if abschied.ist_abschied(t):
         return {"text": f"{rechnung.ABGELEHNT} Auf Wiederhören.",
                 "hangup": abschied.an(), "_wiederholungErlaubt": True}
-    return {"text": f"{rechnung.ABGELEHNT} Kann ich sonst noch etwas für Sie tun?"}
+    if s.get("modus"):
+        # Der Abschluss hat ein weiteres OFFENES Anliegen aktiviert (zwei
+        # Wuensche in einem Satz): dessen Maschine fragt im naechsten Zug.
+        return {"text": rechnung.ABGELEHNT}
+    # Die Folgefrage bleibt OFFEN (frage=sonst_noch): "Nein"/"Danke" legt
+    # freundlich auf, "Ja" oeffnet — deterministisch (_rechnung_sonst_noch),
+    # nie "Was meinen Sie damit?" vom Modell.
+    s["frage"] = "sonst_noch"
+    sit["flussFrage"] = rechnung.SONST_NOCH
+    return {"text": f"{rechnung.ABGELEHNT} {rechnung.SONST_NOCH}"}
 
 
 def _rechnung_antwort(sit: dict, t: str) -> dict | None:
@@ -2423,6 +2572,41 @@ def _rechnung_antwort(sit: dict, t: str) -> dict | None:
     return {"text": rechnung.RUECKRUF_UNKLAR}
 
 
+_RECHNUNG_SONST_NOCH_STATUS = {"notiert", "rueckruf", "abgelehnt", "persoenlich"}
+_DANK_RE = re.compile(r"\bdank\w*\b", re.I)
+
+
+def _rechnung_sonst_noch(sit: dict, t: str) -> dict | None:
+    """'Kann ich sonst noch etwas fuer Sie tun?' nach der Rechnungs-Auskunft
+    (W-BESTAND-ANSAGE-Muster): Nein/Danke/Abschied -> freundlich auflegen,
+    kurzes Ja -> 'Gerne — was kann ich noch fuer Sie tun?'. Ein erneutes
+    Rechnungsthema und alles andere geht mit geraeumter Frage an den Rest
+    von zug() (Rechnung: _rechnung_start; Terminwunsch: die Intent-Schicht
+    hat den Modus laengst geschaltet — dann kommen wir gar nicht her)."""
+    from kern import rechnung
+
+    s = gehirn.sammler(sit)
+    s["frage"] = ""
+    sit["flussFrage"] = ""
+    if rechnung.erkannt(t, sit):
+        return None
+    kurz = len(t.split()) <= 4
+    nein = gehirn.ist_nein(t) and not gehirn.ist_ja(t)
+    ja = gehirn.ist_ja(t) and not nein
+    if (_ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t)
+            or _RUECKRUF_NICHTS_MEHR_RE.search(t)
+            or (kurz and (nein or _DANK_RE.search(t)))):
+        # "Nein." / "Nein, das war alles." / "Ja, danke." / "Danke, tschüss."
+        spur.merken(sit, "rechnung", "sonst-noch:nein")
+        return {"text": rechnung.SONST_NOCH_NEIN, "hangup": abschied.an(),
+                "_wiederholungErlaubt": True}
+    if ja and kurz:
+        spur.merken(sit, "rechnung", "sonst-noch:ja")
+        return {"text": rechnung.SONST_NOCH_JA}
+    spur.merken(sit, "rechnung", "sonst-noch:offen")
+    return None
+
+
 def _rechnung_zug(sit: dict, t: str) -> dict | None:
     """Einhaengung in zug(): laeuft die Rueckruf-Frage, gehoert ihr der Satz;
     sonst ein frisch erkanntes Rechnungsthema. None = kein Rechnungsthema
@@ -2434,6 +2618,13 @@ def _rechnung_zug(sit: dict, t: str) -> dict | None:
     s = gehirn.sammler(sit)
     if _rechnung_sammelt(sit):
         return None
+    if (s.get("frage") == "sonst_noch" and not s.get("modus")
+            and _rechnung_stand(sit).get("status") in _RECHNUNG_SONST_NOCH_STATUS):
+        # Unsere Folgefrage nach der Rechnungs-Auskunft (verwaltens
+        # sonst_noch traegt modus=auskunft und bleibt dort).
+        aus = _rechnung_sonst_noch(sit, t)
+        if aus is not None:
+            return aus
     ab = sit.get("hirnAbgeben")
     if (isinstance(ab, dict) and ab.get("offen") and not ab.get("rechnung")
             and s.get("frage") in {"name", "buchstabieren", "telefon"}):

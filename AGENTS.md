@@ -3198,10 +3198,28 @@ und „Fehlerhafte Rechnung." zweimal der Unklar-Satz — zwei verschenkte Züge
 - **Zug** (`bianca/flow._rechnung_zug`, VOR `weiterleiten.zug`, nach dem
   Dokument-Hook): Erklärung + „Soll ich Ihnen dafür einen Rückruf
   einrichten?" (`frage=rechnung_rueckruf`, Formular-Frage, kurze Ruhe-
-  Schwelle). Ja → der bewährte ABGEBEN-Weg (`_abgeben_zug`: Name, Nummer mit
-  Rückbestätigung Ziffer für Ziffer, `verwalten.abgeben_notiz` — die
-  JSONL-Zeile trägt jetzt `was` = worum es geht). „Rufen Sie mich wegen der
-  Rechnung zurück" überspringt die Frage. Nein / „ich komme vorbei" →
+  Schwelle). Ja → der bewährte ABGEBEN-Weg (`_abgeben_zug`: Name, Nummer,
+  `verwalten.abgeben_notiz` — die JSONL-Zeile trägt jetzt `was` = worum es
+  geht). „Rufen Sie mich wegen der Rechnung zurück" überspringt die Frage.
+  **Nummer wie W-RUECKRUF-NUMMER** (`_rechnung_nummer_zug`; Live-Probe im
+  Container nach dem ersten Deploy: die diktierte Nummer wurde sofort
+  geglaubt, im Schlusssatz vorgelesen und die Notiz geschrieben — „Ja,
+  richtig." darauf fiel ans Modell („Was meinen Sie damit?"), eine Korrektur
+  hätte die Notiz nicht mehr geändert): `_abgeben_kontakt(sofort=False)`
+  lässt die gehörte Nummer in `telefonOffen`, Bianca liest sie Ziffer für
+  Ziffer vor (`telefon_check`), erst das Ja macht sie fest und schreibt die
+  Notiz; Nein/„die letzte war eine neun" → einmal neu erfragen (Korrektur
+  schlägt Fragment); Zwischenfrage/Unklares auf die Nummern-Frage →
+  deterministische Erinnerung, beim zweiten Mal bzw. nach drei Vorlesern
+  ehrlich OHNE sichere Nummer abschließen (Notiz mit Namen + „bitte
+  Kartei", `NUMMER_UNSICHER`). Leitungs-/Akten-Nummer gilt weiter ohne
+  Rückfrage. Der Schlusssatz liest eine eben bestätigte Nummer nicht noch
+  einmal vor. Danach bleibt „Kann ich sonst noch etwas für Sie tun?" als
+  OFFENE Frage (`frage=sonst_noch`, nur wenn kein anderes Anliegen läuft):
+  Nein/Danke/Abschied → freundlich auflegen, kurzes Ja → „Gerne — was kann
+  ich noch für Sie tun?", alles andere (Termin, erneutes Rechnungswort) →
+  normaler Fluss (`_rechnung_sonst_noch`) — nie „Was meinen Sie damit?".
+  Nein / „ich komme vorbei" →
   ehrlich abschließen (`ABGELEHNT`); unklar → EINE Nachfrage, dann gilt
   Nein (kein Verhör). „Nein, aber ich brauche einen Termin" eröffnet die
   Buchung; „Nein, verbinden Sie mich mit Doktor X" verbindet; ein bloßer
@@ -3232,7 +3250,7 @@ und „Fehlerhafte Rechnung." zweimal der Unklar-Satz — zwei verschenkte Züge
   `bianca/prompt.py`.
 - Notaus: `RECHNUNG=0` (Erkennung aus — Verhalten wie vor dem 14.09.),
   `RECHNUNG_WACHE=off|shadow|enforce` (Default enforce). Tests:
-  `tests/test_rechnung.py` (57), Buchhaltung-Fälle in
+  `tests/test_rechnung.py` (62), Buchhaltung-Fälle in
   `tests/test_weiterleiten.py`.
 
 ## Rückrollpunkte (Produktionsstände)

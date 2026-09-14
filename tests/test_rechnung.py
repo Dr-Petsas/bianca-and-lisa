@@ -168,7 +168,8 @@ def test_rueckruf_wunsch_und_persoenlich():
 
 def test_anruf_3ad3b6d3_rechnungsreklamation_bis_zur_notiz(ohne_netz):
     """Kein Unklar-Satz mehr: Erklaerung + Rueckruf-Frage, Ja -> Name ->
-    Nummer -> echte Notiz mit Nummer, Stand notiert, Report traegt es."""
+    Nummer -> Readback Ziffer fuer Ziffer -> Ja -> echte Notiz mit Nummer,
+    Stand notiert, Report traegt es; 'Nein, das war alles' legt auf."""
     sit = _sit()
     t1 = _zug(sit, "Rechnungsreklamation.")
     assert rechnung.ERKLAERUNG in t1 and rechnung.RUECKRUF_FRAGE in t1
@@ -182,13 +183,23 @@ def test_anruf_3ad3b6d3_rechnungsreklamation_bis_zur_notiz(ohne_netz):
     assert _stand(sit) == "rueckruf" and sit["hirnAbgeben"]["offen"] is True
 
     t3 = _zug(sit, "Müller.")
-    assert "Nummer" in t3
+    assert t3 == rechnung.NUMMER_FRAGE
     t4 = _zug(sit, "0177 1234567")
-    assert "notiert" in t4 and "Rechnung" in t4 and "null eins sieben sieben" in t4
-    assert "sonst noch etwas" in t4
+    # Readback statt Notiz: die Nummer wird erst nach dem Ja fest.
+    assert t4.startswith("Ich wiederhole die Nummer") and "Stimmt das so?" in t4
+    assert "null eins sieben sieben" in t4.lower()
+    s = gehirn.sammler(sit)
+    assert s["frage"] == "telefon_check" and s["telefonOffen"] == "01771234567"
+    assert not s["telefon"] and ohne_netz() == [] and _stand(sit) == "rueckruf"
+
+    t5 = _zug(sit, "Ja, richtig.")
+    # Kein zweites Vorlesen der eben bestaetigten Nummer, dafuer die Folgefrage.
+    assert t5 == f"{rechnung.NOTIERT} {rechnung.SONST_NOCH}"
+    assert "null eins sieben sieben" not in t5.lower()
     assert _stand(sit) == "notiert"
     assert _hirn(sit) == [("ABGEBEN", "erledigt", True)]
     assert sit["hirnAbgeben"]["offen"] is False
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
 
     n = ohne_netz()
     assert len(n) == 1
@@ -198,6 +209,103 @@ def test_anruf_3ad3b6d3_rechnungsreklamation_bis_zur_notiz(ohne_netz):
 
     report = gedaechtnis.zusammenfassung(sit)
     assert "Rückruf-Notiz" in report and "Rechnungsthema angesprochen" in report
+
+    aus = agent.user_turn(sit, "Nein, das war alles.")
+    assert _s(aus.get("text")) == rechnung.SONST_NOCH_NEIN and aus.get("hangup") is True
+    assert len(ohne_netz()) == 1
+
+
+def test_nummer_nein_auf_readback_einmal_neu_dann_ja(ohne_netz):
+    """'Nein, die letzte war eine neun' auf das Readback: Korrektur schlaegt
+    Fragment (kein einsames '9'), die Nummer wird neu erfragt, das zweite
+    Readback bestaetigt — erst DANN steht die Notiz, mit der richtigen Nummer."""
+    sit = _sit()
+    _zug(sit, "Die Rechnung ist falsch.")
+    _zug(sit, "Ja.")
+    _zug(sit, "Berger.")
+    t = _zug(sit, "0151 2345678")
+    assert "Stimmt das so?" in t
+    t2 = _zug(sit, "Nein, die letzte war eine neun.")
+    assert t2 == rechnung.NUMMER_NOCHMAL
+    s = gehirn.sammler(sit)
+    assert s["frage"] == "telefon" and s["telefonTeil"] == "" and s["telefonOffen"] == ""
+    assert ohne_netz() == []
+    t3 = _zug(sit, "0151 2345679")
+    assert "Stimmt das so?" in t3 and "neun" in t3
+    t4 = _zug(sit, "Ja.")
+    assert t4.startswith(rechnung.NOTIERT)
+    n = ohne_netz()
+    assert len(n) == 1 and n[0]["telefon"] == "01512345679"
+
+
+def test_nummer_unklar_zweimal_dann_ehrlich_ohne_nummer(ohne_netz):
+    """Zwischenfrage auf die Nummern-Frage: deterministisch beantwortet und
+    erneut erfragt; beim zweiten Mal ehrlich ohne sichere Nummer abschliessen
+    — die Notiz traegt den Namen, nie eine geratene Nummer. Kein Modell."""
+    sit = _sit()
+    _zug(sit, "Ich habe eine Mahnung bekommen.")
+    _zug(sit, "Ja, gerne.")
+    _zug(sit, "Krause.")
+    t = _zug(sit, "Wie lange dauert das denn?")
+    assert t == rechnung.NUMMER_ZWISCHENFRAGE
+    assert gehirn.sammler(sit)["frage"] == "telefon"
+    t2 = _zug(sit, "Das weiß ich jetzt nicht.")
+    assert t2.startswith(rechnung.NUMMER_UNSICHER) and rechnung.SONST_NOCH in t2
+    assert _stand(sit) == "rueckruf"
+    n = ohne_netz()
+    assert len(n) == 1 and not n[0]["telefon"] and n[0]["name"].endswith("Krause")
+    assert "nicht sicher erfasst" in n[0]["was"]
+    assert "Kontaktdaten blieben unvollständig" in gedaechtnis.zusammenfassung(sit)
+
+
+def test_nummer_dreimal_unklar_auf_readback_gibt_auf(ohne_netz):
+    """Weder Ja noch Nein noch Ziffern auf das Readback: noch einmal vorlesen,
+    nach drei Anlaeufen ehrlich aufgeben — keine Endlosschleife."""
+    sit = _sit()
+    _zug(sit, "Abrechnungsfehler.")
+    _zug(sit, "Ja.")
+    _zug(sit, "Vogel.")
+    t = _zug(sit, "0170 1112233")
+    assert "Stimmt das so?" in t
+    t2 = _zug(sit, "Moment, ich suche gerade.")
+    assert "Stimmt das so?" in t2
+    t3 = _zug(sit, "Äh, wie bitte?")
+    assert "Stimmt das so?" in t3
+    t4 = _zug(sit, "Hm, weiß nicht.")
+    assert t4.startswith(rechnung.NUMMER_UNSICHER)
+    assert len(ohne_netz()) == 1 and not ohne_netz()[0]["telefon"]
+
+
+def test_sonst_noch_ja_und_danach_termin(ohne_netz):
+    """'Ja.' auf 'Kann ich sonst noch etwas fuer Sie tun?' -> 'Gerne — was
+    kann ich noch fuer Sie tun?'; der Terminwunsch danach eroeffnet die
+    Buchung. 'Ja, danke.' dagegen ist ein hoeflicher Abschluss."""
+    sit = _sit()
+    _zug(sit, "Meine Rechnung stimmt nicht.")
+    _zug(sit, "Nein.")
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
+    assert _zug(sit, "Ja.") == rechnung.SONST_NOCH_JA
+    assert gehirn.sammler(sit)["frage"] == ""
+    t = _zug(sit, "Ich brauche einen Termin zur Kontrolle.")
+    assert "schon einmal bei uns" in t
+    assert gehirn.sammler(sit)["modus"] == "buchen"
+
+    sit2 = _sit()
+    _zug(sit2, "Meine Rechnung stimmt nicht.")
+    _zug(sit2, "Nein.")
+    aus = agent.user_turn(sit2, "Ja, danke.")
+    assert _s(aus.get("text")) == rechnung.SONST_NOCH_NEIN and aus.get("hangup") is True
+
+
+def test_sonst_noch_rechnung_erneut_bleibt_deterministisch(ohne_netz):
+    """Auf die Folgefrage kommt das Rechnungsthema noch einmal: kuerzere
+    Erklaerung + Rueckruf-Frage (kein Modell), das Ja fuehrt zur Sammelei."""
+    sit = _sit()
+    _zug(sit, "Die Rechnung ist falsch.")
+    _zug(sit, "Nein.")
+    t = _zug(sit, "Aber die Rechnung ist wirklich falsch, da stimmt der Betrag nicht.")
+    assert rechnung.ERKLAERUNG_WIEDERHOLT in t and rechnung.RUECKRUF_FRAGE_WIEDERHOLT in t
+    assert _zug(sit, "Ja.") == rechnung.NAME_FRAGE
 
 
 def test_rueckruf_direkt_verlangt_keine_frage(ohne_netz):
@@ -216,7 +324,7 @@ def test_nein_persoenlich_schliesst_ehrlich_ab(ohne_netz):
     t = _zug(sit, "Nein danke, ich komme vorbei.")
     assert t.startswith(rechnung.ABGELEHNT) and "sonst noch etwas" in t
     assert _stand(sit) == "persoenlich"
-    assert gehirn.sammler(sit)["frage"] == ""
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
     assert _hirn(sit) == [("ABGEBEN", "erledigt", True)]
     assert ohne_netz() == []
     assert "persönlich in der Praxis" in gedaechtnis.zusammenfassung(sit)
@@ -241,6 +349,7 @@ def test_unklar_einmal_nachfragen_dann_gilt_nein(ohne_netz):
     t3 = _zug(sit, "Was soll das denn.")
     assert t3.startswith(rechnung.ABGELEHNT)
     assert _stand(sit) == "abgelehnt" and gehirn.sammler(sit)["frage"] == ""
+    assert rechnung.SONST_NOCH not in t3  # aufgegeben: kurz, ohne Folgefrage
 
 
 def test_abschied_auf_die_frage_legt_auf_und_gilt_als_nein(ohne_netz):
@@ -319,10 +428,15 @@ def test_in_der_buchung_ja_kontakt_landet_im_checkpoint(ohne_netz):
     _zug(sit, "Schmidt.")
     _zug(sit, "Anna.")
     t = _zug(sit, "0170 9876543")
-    assert "notiert" in t and "zurück zu Ihrem Termin" in t and "Behandler" in t
+    assert "Stimmt das so?" in t and "zurück zu Ihrem Termin" not in t
+    assert _hirn(sit) == [("ANLEGEN", "geparkt", False), ("ABGEBEN", "aktiv", True)]
+    t = _zug(sit, "Ja.")
+    assert t.startswith(rechnung.NOTIERT) and "zurück zu Ihrem Termin" in t and "Behandler" in t
+    assert rechnung.SONST_NOCH not in t  # der Ruecksprung stellt die Frage
     s = gehirn.sammler(sit)
     assert s["modus"] == "buchen" and s["frage"] == "arzt"
     assert s["nachname"] == "Schmidt" and s["vorname"] == "Anna"
+    assert s["telefonBekannt"] == "01709876543" and not s["telefon"]
     assert _stand(sit) == "notiert"
     assert _hirn(sit) == [("ANLEGEN", "aktiv", False), ("ABGEBEN", "erledigt", True)]
     n = ohne_netz()
@@ -361,7 +475,9 @@ def test_nach_der_notiz_noch_ein_termin(ohne_netz):
     _zug(sit, "Ja.")
     _zug(sit, "Krause.")
     _zug(sit, "0160 1112233")
+    _zug(sit, "Ja, stimmt.")
     assert _stand(sit) == "notiert"
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
     t = _zug(sit, "Ich brauche aber auch noch einen Termin zur Kontrolle.")
     assert "schon einmal bei uns" in t
     s = gehirn.sammler(sit)
@@ -387,13 +503,16 @@ def test_erneut_nach_notiz_keine_zweite_sammelei(ohne_netz):
     _zug(sit, "Rufen Sie mich wegen der Rechnung zurück.")
     _zug(sit, "Meier.")
     _zug(sit, "0171 2223344")
+    _zug(sit, "Ja.")
     assert _stand(sit) == "notiert" and len(ohne_netz()) == 1
     t = _zug(sit, "Und was ist jetzt mit der Rechnung?")
     assert "schon notiert" in t and "meldet sich" in t
     assert rechnung.RUECKRUF_FRAGE not in t and rechnung.NAME_FRAGE not in t
     assert _stand(sit) == "notiert" and len(ohne_netz()) == 1
-    assert gehirn.sammler(sit)["frage"] == ""
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
     assert not (sit.get("hirnAbgeben") or {}).get("offen")
+    aus = agent.user_turn(sit, "Okay, danke.")
+    assert aus.get("hangup") is True
 
 
 # --- Diktat-Sicherheit --------------------------------------------------------
