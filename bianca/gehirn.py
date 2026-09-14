@@ -317,7 +317,13 @@ _SCHONMAL_JA_RE = re.compile(
 # noch „Nicht Neu“ als Personenname ernten.
 _SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE = re.compile(
     r"\b(?:ich\s+)?bin\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
-    r"\b(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b",
+    r"\b(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
+    # Live Thaler 5aa87268 (14.09.2026) Zug 4: "Nein, noch nicht das erste
+    # Mal." — die Doppelverneinung heisst BESTAND ("nicht zum ersten Mal");
+    # _SCHONMAL_NEIN_RE sah nur "das erste Mal" und machte einen Neupatienten
+    # daraus. Dieses Muster wird VOR der Nein-Regel geprueft.
+    r"\bnicht\s+(?:das\s+|zum\s+|mein\s+)?erste[sn]?\s+mal\b|"
+    r"\bkeine?\s+neupatient(?:in)?\b",
     re.I,
 )
 # "bin neu" braucht die Wortgrenze und darf Fuellwoerter tragen: ohne \b traf

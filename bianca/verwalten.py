@@ -33,7 +33,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from bianca import gehirn, hintergrund
+from bianca import gehirn, hintergrund, telefon
 from kern import agentprofil
 from kern import calendar as kal
 from kern import gespraech, motive
@@ -463,6 +463,64 @@ def _kein_termin(sit: dict, modus: str) -> dict:
     )}
 
 
+def rueckruf_nummer(sit: dict) -> str:
+    """Nummer, unter der die Praxis den Anrufer erreicht — oder "".
+
+    W-RUECKRUF-NUMMER (14.09.2026, Anrufe da746a65/5aa87268): "die Praxis
+    meldet sich" ist ein leeres Versprechen, wenn die Notiz keine Nummer
+    traegt. Quellen in dieser Reihenfolge — alles, was die Sitzung SICHER
+    weiss: bestaetigte Nummer aus dem Gespraech, Akte, Kontakt-Nummer
+    (Dritttermin: der Anrufer), Anrufer-ID aus der Leitung. NIE eine bloss
+    gehoerte, unbestaetigte Nummer (telefonOffen) — die wird erst Ziffer
+    fuer Ziffer rueckbestaetigt.
+    """
+    s = gehirn.sammler(sit)
+    for roh in (s["telefon"], s["aktePhone"], _s(s.get("kontaktTelefon")),
+                gehirn._anrufer_nummer(sit)):
+        if not _s(roh):
+            continue
+        d = telefon.mit_fuehrender_null(roh)
+        if telefon.plausibel(d):
+            return d
+    return ""
+
+
+def rueckruf_nummer_fehlt(sit: dict) -> bool:
+    """True = die Praxis koennte nicht zurueckrufen (keine Nummer bekannt)."""
+    return not rueckruf_nummer(sit)
+
+
+def rueckruf_nummer_nachtragen(sit: dict) -> str:
+    """Die eben rueckbestaetigte Nummer in Notiz (zweite JSONL-Zeile) + Dock
+    nachtragen. Liefert die Nummer oder "" (nichts zum Nachtragen)."""
+    nummer = rueckruf_nummer(sit)
+    if not nummer:
+        return ""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    if not sit.get("testNoWrite"):
+        eintrag = {
+            "zeit": datetime.now(gehirn.TZ).isoformat(timespec="seconds"),
+            "stimme": _s(sit.get("stimme")) or "Bianca",
+            "anliegen": "rueckrufnummer",
+            "name": name,
+            "telefon": nummer,
+            "status": "Rueckrufnummer nachgetragen",
+        }
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with (DATA_DIR / "praxis_notizen.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    notiz = _s(sit.get("praxisNotiz"))
+    if notiz and "Tel:" not in notiz:
+        sit["praxisNotiz"] = _s(f"{notiz} Tel: {nummer}.")
+    merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True,
+                                     "notiz": _s(sit.get("praxisNotiz")), "telefon": nummer})
+    return nummer
+
+
 def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
                      dock_text: str = "") -> None:
     """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock."""
@@ -476,7 +534,9 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
         "stimme": _s(sit.get("stimme")) or "Bianca",
         "anliegen": anliegen or s["modus"],
         "name": name,
-        "telefon": s["telefon"] or s["aktePhone"] or "",
+        # W-RUECKRUF-NUMMER: Kontakt-/Anrufer-Nummer als Rueckfall — die
+        # Leitung kennt den Anrufer oft, auch wenn im Gespraech keine Nummer fiel.
+        "telefon": s["telefon"] or s["aktePhone"] or rueckruf_nummer(sit),
         "behandler": _s((s["arzt"] or {}).get("calendarName")),
         "wann": _s(sit.get("verwHinweisText")) or _s(s.get("wunschText")),
         "behandlung": _s(sit.get("verwBehandlung")) or _s(s.get("grundWortlaut") or s.get("grund")),
@@ -494,6 +554,10 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
         f"Behandlung: {eintrag['behandlung']}" if eintrag["behandlung"] else "",
         f"Tel: {eintrag['telefon']}" if eintrag["telefon"] else "",
     ) if x)
+    if dock_text and eintrag["telefon"] and "Tel:" not in dock_text:
+        # W-RUECKRUF-NUMMER: die Praxis sieht im Dock/Report sofort, WO sie
+        # anrufen kann — nicht nur in der JSONL-Zeile.
+        dock_text = _s(dock_text) + f" Tel: {eintrag['telefon']}."
     sit["praxisNotiz"] = _s(dock_text or (
         f"{name} wollte einen Termin {s['modus']} — im Kalender nicht gefunden"
         + (f" ({hinweise})" if hinweise else "") + ". Bitte pruefen und zurueckrufen."

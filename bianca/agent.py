@@ -58,16 +58,24 @@ _ANGEBOT_VERB_RE = re.compile(
     re.I,
 )
 # Kurz-Laut ohne Inhalt ("Hm.", "Ähm", "Well." als STT-Artefakt): kein
-# Gesprächszug — statt einer langen LLM-Grundsatzrede kommt der Stille-Stups
-# (Stand + offene Frage, gedeckelt). Live 29.08.2026: zwei "Hm."/"Well."
+# Gesprächszug — keine LLM-Grundsatzrede. Live 29.08.2026: zwei "Hm."/"Well."
 # ergaben zwei fast identische ~4-s-Meta-Reden. "Ja"/"Nein"/"Okay" bleiben
 # echte Antworten und stehen hier bewusst NICHT drin.
+# W-KURZLAUT (14.09.2026, Anrufe 9dd61a59 z02/z07 "Oh." und 5aa87268 z02
+# "Puff."): ein Ausruf heisst "ich bin dran und hole gerade Luft" — er
+# bekam bisher SOFORT den Stups ("Sind Sie noch dran?") bzw. fiel ans
+# Modell. Jetzt: still weiterhoeren (warte, die Bruecke schont den Stups
+# 8 s); erst eine SERIE ohne Inhalt (_KURZLAUT_SERIE) laeuft wieder auf den
+# Stille-Stups, damit Leitungs-Artefakte das Gespraech nicht einfrieren.
 _NUR_LAUT_RE = re.compile(
     r"^\s*(?:hm+|mhm+|hmm+|ähm*|aehm*|äh+|aeh+|ehm+|öhm*|oehm*|"
-    r"tja+|na\s*ja|well|puh+|hach+|oh(?:je)?)"
+    r"tja+|na\s*ja|well|puh+|puff+|uff+|hach+|oh(?:\s*je)?|oha+|"
+    r"ups|hoppla|huch|boah+|ach\s*so|aha+)"
     r"[\s.,!?…]*$",
     re.I,
 )
+_KURZLAUT_SERIE = 2  # so viele Ausrufe in Folge bekommen den Warte-Zug
+_KURZLAUT_WARTE_MS = 900
 # Nach „Sind Sie noch dran?“: Ja / „ich bin noch dran“ ist KEIN Buchungs-Ja
 # (Thaler 08.09.2026: Presence-Schleife statt offener Änderungsfrage).
 _PRESENCE_ANTWORT_RE = re.compile(
@@ -1151,10 +1159,20 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                     "stilleMs": warteschleife.WARTE_MS}
         return {"text": "", "book": None, "hangup": True}
     if _NUR_LAUT_RE.match(text_in):
-        # Kurz-Laut ohne Inhalt: wie Funkstille behandeln (Stups statt
-        # LLM-Rede) — bewusst VOR stille.reset, damit der Stups-Deckel
-        # (MAX_STUPSE) auch eine "Hm."-Serie beendet.
+        # Kurz-Laut ohne Inhalt — bewusst VOR stille.reset, damit der
+        # Stups-Deckel (MAX_STUPSE) auch eine "Hm."-Serie beendet.
+        # W-KURZLAUT: die ersten Ausrufe in Folge sind ein Luftholen, kein
+        # Schweigen -> still weiterhoeren (warte); die Bruecke haelt den
+        # Stups 8 s zurueck, das Dock stoppt den Watchdog. Erst die Serie
+        # (Leitungs-Artefakt "Hm. Hm. Hm.") laeuft wie bisher auf den Stups.
+        serie = int(sit.get("kurzlautSerie") or 0) + 1
+        sit["kurzlautSerie"] = serie
+        if serie <= _KURZLAUT_SERIE:
+            spur.merken(sit, "kurzlaut-warte", f"{serie}:{text_in[:24]}")
+            return {"text": "", "book": None, "warte": True,
+                    "stilleMs": _KURZLAUT_WARTE_MS}
         return stille_zug(sit)
+    sit.pop("kurzlautSerie", None)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
     if _DENK_RE.match(text_in):
         # phone_agent skip_turn: nachdenkende Anrufer nicht anstupsen.

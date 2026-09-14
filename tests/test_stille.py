@@ -55,15 +55,21 @@ def test_zaehler_cap_und_reset():
 def test_kurzlaut_stupst_statt_llm():
     """Live 29.08.2026: 'Hm.' und 'Well.' (STT-Artefakt) gingen als volle
     Zuege ans LLM und ergaben zwei fast identische ~4-s-Meta-Reden. Kurz-Laute
-    laufen jetzt als Stille-Stups — gedeckelt, offline, nie durchs LLM."""
+    laufen NIE durchs LLM. Seit W-KURZLAUT (14.09.2026, Anruf 9dd61a59: "Oh."
+    holte sofort "Sind Sie noch dran?") sind die ersten Ausrufe ein stiller
+    Warte-Zug (Luftholen); erst die Serie laeuft auf den Stille-Stups —
+    gedeckelt, offline."""
     sit = _buchungs_sit(frage="telefon")
-    z1 = bianca_agent.user_turn(sit, "Hm.")
-    assert z1["text"], "erster Kurz-Laut: Presence"
-    assert "noch dran" in z1["text"].casefold()
-    z2 = bianca_agent.user_turn(sit, "Well.")
-    assert z2["text"], "zweiter Kurz-Laut: kurze Frage"
+    for laut in ("Hm.", "Well."):
+        z = bianca_agent.user_turn(sit, laut)
+        assert z.get("warte") is True and z["text"] == "", "Luftholen: still weiterhoeren"
     z3 = bianca_agent.user_turn(sit, "Ähm...")
-    assert z3["text"] == "", "nach MAX_STUPSE Stupsen ist Schweigen"
+    assert z3["text"], "Serie ohne Inhalt: Presence"
+    assert "noch dran" in z3["text"].casefold()
+    z4 = bianca_agent.user_turn(sit, "Hm.")
+    assert z4["text"], "zweiter Stups: kurze Frage"
+    z5 = bianca_agent.user_turn(sit, "Hm.")
+    assert z5["text"] == "", "nach MAX_STUPSE Stupsen ist Schweigen"
     # Echte Kurz-Antworten bleiben unberuehrt (kein Match).
     for echt in ("Ja.", "Nein.", "Okay.", "Stopp."):
         assert not bianca_agent._NUR_LAUT_RE.match(echt), echt

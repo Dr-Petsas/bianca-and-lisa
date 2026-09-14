@@ -158,6 +158,25 @@ _SCHON_TERMIN_RE = re.compile(
     r"termin.{0,20}(schon|gemacht|gebucht|vereinbart)",
     re.I,
 )
+# W-RUECKRUF-NUMMER (14.09.2026): "Nichts mehr" auf die Nummernfrage nach der
+# Rueckruf-Notiz — der Anrufer will keine Nummer nennen UND ist fertig.
+_RUECKRUF_NICHTS_MEHR_RE = re.compile(
+    r"das\s+war(?:'?s|s|\s+(?:schon\s+)?alles)|mehr\s+brauche?\s+ich\s+nicht|"
+    r"alles\s+erledigt|das\s+reicht|nichts\s+weiter|sonst\s+nichts",
+    re.I,
+)
+# "Keine Nummer", "lieber nicht", "ich melde mich selbst" — Ablehnung ohne
+# Abschied: die Notiz bleibt (ohne Nummer), das Gespraech geht weiter.
+_RUECKRUF_ABLEHNUNG_RE = re.compile(
+    r"keine\s+nummer|ohne\s+nummer|lieber\s+nicht|nicht\s+n[öo]e?tig|"
+    r"m[öo]e?chte\s+(?:ich\s+)?(?:keine|nicht)|brauch\w*\s+(?:ich|es|sie)\s+nicht|"
+    r"melde\s+mich\s+(?:dann\s+)?(?:selbst|selber|nochmal|noch\s+einmal|wieder)|"
+    r"rufe?\s+(?:dann\s+)?(?:selbst|selber|nochmal|noch\s+einmal|wieder|spaeter|später)\s+an|"
+    r"muss\s+(?:ich\s+)?nicht\s+sein",
+    re.I,
+)
+_RUECKRUF_NUMMER_FRAGE = "Unter welcher Rufnummer erreicht die Praxis Sie am besten?"
+
 _NOCH_EIN_TERMIN_RE = re.compile(
     r"noch\s+ein(?:en)?\s+termin|zweiten\s+termin|weiteren\s+termin|"
     r"neuen\s+termin",
@@ -900,6 +919,11 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         s["frage"] = ""
         sit["keinSlotFertig"] = True
         verwalten.rueckruf_notiz(sit)
+        # W-RUECKRUF-NUMMER: ohne Nummer kann die Praxis nicht zurueckrufen —
+        # dann ist die Nummer jetzt die offene Frage (Anrufe da746a65/5aa87268).
+        nummer_frage = _rueckruf_nummer_start(sit)
+        if nummer_frage:
+            return {"text": spoken_offer([], wish_matched=True) + " " + nummer_frage}
         return {"text": spoken_offer([], wish_matched=True)
                 + " Kann ich sonst noch etwas für Sie tun?"}
     s["phase"] = "angebot"
@@ -1461,12 +1485,15 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             sit["offered"] = []
             sit["keinSlotFertig"] = True
             verwalten.rueckruf_notiz(sit)
+            # W-RUECKRUF-NUMMER: "Meine Nummer haben Sie" (telefonAkte) wurde
+            # geglaubt — steht wirklich keine Nummer, jetzt nachfragen.
+            nummer_frage = _rueckruf_nummer_start(sit)
             return {
                 "text": (
                     "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
                     "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
                     "und die Praxis meldet sich gleich bei Ihnen mit einem Termin. "
-                    "Kann ich sonst noch etwas für Sie tun?"
+                    + (nummer_frage or "Kann ich sonst noch etwas für Sie tun?")
                 ),
                 "book": book,
             }
@@ -2308,6 +2335,128 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
     return {"text": "Was darf ich ändern — der Zeitpunkt, der Name, die Nummer oder der Besuchsgrund?"}
 
 
+def _rueckruf_nummer_start(sit: dict) -> str:
+    """W-RUECKRUF-NUMMER (Chef 14.09.2026, Anrufe da746a65/5aa87268): die
+    Rueckruf-Notiz steht, aber OHNE Nummer — dann ist die Nummer jetzt die
+    offene Frage. Liefert den Fragesatz oder "" (Nummer bekannt: Anrufer-ID,
+    Akte, bestaetigte Nummer -> nichts fragen, die Notiz traegt sie schon).
+
+    Live Thaler da746a65 / MedDent 5aa87268: "Die Praxis meldet sich
+    kurzfristig bei Ihnen" + "Kann ich sonst noch etwas fuer Sie tun?" — und
+    in der Notiz stand keine Nummer, die Praxis konnte gar nicht zurueckrufen.
+    """
+    if not verwalten.rueckruf_nummer_fehlt(sit):
+        sit.pop("rueckrufNummer", None)
+        return ""
+    s = gehirn.sammler(sit)
+    sit["rueckrufNummer"] = {"offen": True, "unklar": 0}
+    if s["telefonOffen"] and not s["telefonOk"]:
+        # Eine gehoerte, noch unbestaetigte Nummer liegt vor: erst Ziffer fuer
+        # Ziffer rueckbestaetigen (W-DATEN 08.09.: nie eine Nummer ungeprueft).
+        s["frage"] = "telefon_check"
+        spur.merken(sit, "rueckruf-nummer", "frage:check")
+        return gehirn.readback_text(s["telefonOffen"])
+    s["frage"] = "telefon"
+    spur.merken(sit, "rueckruf-nummer", "frage")
+    return _RUECKRUF_NUMMER_FRAGE
+
+
+def _rueckruf_abschluss(sit: dict, *, mit_nummer: bool, abschied_satz: bool = False) -> dict:
+    """Nummernfrage nach der Rueckruf-Notiz beenden — mit oder ohne Nummer."""
+    s = gehirn.sammler(sit)
+    sit.pop("rueckrufNummer", None)
+    s["frage"] = ""
+    s["phase"] = "fertig"
+    sit["keinSlotFertig"] = True
+    if mit_nummer:
+        nummer = verwalten.rueckruf_nummer_nachtragen(sit)
+        spur.merken(sit, "rueckruf-nummer", "nachgetragen" if nummer else "nachtrag-leer")
+        if abschied_satz:
+            return {"text": "Danke, notiert — die Praxis meldet sich unter dieser Nummer bei Ihnen. "
+                            "Auf Wiederhören.",
+                    "hangup": abschied.an(), "_wiederholungErlaubt": True}
+        return {"text": (
+            "Danke, notiert. Die Praxis meldet sich unter dieser Nummer bei Ihnen. "
+            "Kann ich sonst noch etwas für Sie tun?"
+        )}
+    spur.merken(sit, "rueckruf-nummer", "ohne")
+    kern = (
+        "In Ordnung. Ihren Terminwunsch habe ich für die Praxis notiert — "
+        "Sie erreichen die Praxis zu den Sprechzeiten auch direkt."
+    )
+    if abschied_satz:
+        return {"text": kern + " Auf Wiederhören.",
+                "hangup": abschied.an(), "_wiederholungErlaubt": True}
+    return {"text": kern + " Kann ich sonst noch etwas für Sie tun?"}
+
+
+def _rueckruf_nummer_zug(sit: dict, t: str) -> dict:
+    """Antwort auf die Nummernfrage nach der Rueckruf-Notiz (W-RUECKRUF-NUMMER).
+
+    Deterministisch wie telefon_check: Ziffern -> Rueckbestaetigung -> Ja ->
+    Nummer in Notiz + Dock nachgetragen. Nein auf das Readback -> neue Nummer.
+    Ablehnung/"nichts mehr" -> ehrlich ohne Nummer abschliessen (die Notiz
+    bleibt, die Praxis kann nicht zurueckrufen — der Anrufer hoert das).
+    Zwei unklare Antworten -> ebenfalls ohne Nummer, nie eine Schleife.
+    Liefert IMMER einen Zug (kein LLM auf diesem Pfad).
+    """
+    s = gehirn.sammler(sit)
+    rn = sit.get("rueckrufNummer") or {}
+    neu = gehirn.einsammeln(sit, t)
+    sit["ernteZuletzt"] = sorted(neu)
+    # 1. Nummer rueckbestaetigt (Ja auf das Readback)
+    if s["telefonOk"] and s["telefon"]:
+        return _rueckruf_abschluss(sit, mit_nummer=True,
+                                   abschied_satz=bool(_RUECKRUF_NICHTS_MEHR_RE.search(t)
+                                                      or _ABSCHIED_RE.search(t)))
+    # 2. Nummer gehoert (ganz, oder das Diktat ist fertig): Ziffer fuer Ziffer vorlesen
+    if s["telefonOffen"]:
+        s["frage"] = "telefon_check"
+        return {"text": gehirn.readback_text(s["telefonOffen"])}
+    # 3. Nein auf das Readback / "die Nummer war falsch": einmal neu erfragen.
+    #    VOR dem Fragment-Zweig: "Nein, die letzte war eine neun" liesse sonst
+    #    ein einsames "9" als Diktat-Anfang stehen und Bianca schwiege.
+    if "telefonKorrektur" in neu:
+        s["telefonTeil"] = ""
+        rn["unklar"] = int(rn.get("unklar") or 0) + 1
+        if rn["unklar"] >= 3:
+            return _rueckruf_abschluss(sit, mit_nummer=False)
+        s["frage"] = "telefon"
+        return {"text": "Entschuldigung. Dann sagen Sie mir die Nummer bitte noch einmal — "
+                        "gern in kleinen Gruppen."}
+    # 4. Diktat laeuft (Fragment gespeichert): still weiterhoeren, kein Stups
+    if "telefonTeil" in neu and s["telefonTeil"]:
+        s["frage"] = "telefon"
+        return {"text": "", "book": None, "warte": True, "stilleMs": 1500, "textIn": t}
+    # 5. "Meine Nummer haben Sie doch" — die Leitung zeigt aber keine
+    if "telefonAkte" in neu or "telefonBekannt" in neu:
+        s["telefonAkte"] = False
+        rn["unklar"] = int(rn.get("unklar") or 0) + 1
+        if rn["unklar"] >= 2:
+            return _rueckruf_abschluss(sit, mit_nummer=False)
+        s["frage"] = "telefon"
+        return {"text": "In der Leitung wird mir leider keine Nummer angezeigt. "
+                        "Unter welcher Rufnummer erreicht die Praxis Sie?"}
+    # 6. Nichts mehr / Ablehnung / Abschied: ohne Nummer abschliessen
+    if _RUECKRUF_NICHTS_MEHR_RE.search(t) or _ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t):
+        return _rueckruf_abschluss(sit, mit_nummer=False, abschied_satz=True)
+    if gehirn.ist_nein(t) or _RUECKRUF_ABLEHNUNG_RE.search(t):
+        return _rueckruf_abschluss(sit, mit_nummer=False)
+    # 7. Unklar / Zwischenfrage — deterministisch (kein LLM: es wuesste auch
+    # nicht, WANN die Praxis anruft, und der kein-Slot-Block darunter wuerde
+    # die Zwischenfrage ohnehin mit "bereits notiert" abfangen).
+    rn["unklar"] = int(rn.get("unklar") or 0) + 1
+    if rn["unklar"] >= 2:
+        return _rueckruf_abschluss(sit, mit_nummer=False)
+    s["frage"] = "telefon"
+    if "?" in t:
+        return {"text": "Das kann ich Ihnen leider nicht genau sagen — die Praxis meldet "
+                        "sich, sobald sie Ihren Wunsch sieht. Dafür bräuchte sie noch Ihre "
+                        "Nummer: Unter welcher Rufnummer erreicht sie Sie am besten?"}
+    return {"text": "Für den Rückruf bräuchte die Praxis noch eine Nummer — "
+                    "unter welcher Rufnummer erreicht sie Sie am besten?"}
+
+
 def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     """Rückrufer fragt nach dem Grund — mitteilen, als erledigt setzen, Zeit fragen.
 
@@ -2463,6 +2612,25 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # Schleifenbremse. Der abgeschlossene Job verabschiedet sich sofort.
         return {"text": "Sehr gerne. Auf Wiederhören.", "hangup": abschied.an(),
                 "_wiederholungErlaubt": True}
+
+    # W-RUECKRUF-NUMMER (14.09.2026): nach der Rueckruf-Notiz ist die Nummer
+    # die offene Frage — deterministisch wie telefon_check. Ein anderes
+    # Anliegen (Hirn-Wechsel, Task-Handoff, "noch einen Termin") gewinnt: die
+    # Notiz bleibt wie sie ist, die Frage wird nicht durchgedrueckt.
+    rn = sit.get("rueckrufNummer")
+    if isinstance(rn, dict) and rn.get("offen"):
+        if (hirn_modus_neu or task_handoff or s["modus"] != "buchen"
+                or _NOCH_EIN_TERMIN_RE.search(t)):
+            sit.pop("rueckrufNummer", None)
+            spur.merken(sit, "rueckruf-nummer", "abgebrochen:anliegen")
+            if s["frage"] in {"telefon", "telefon_check"}:
+                s["frage"] = ""
+                s["telefonOffen"] = ""
+                s["telefonTeil"] = ""
+        else:
+            aus = _rueckruf_nummer_zug(sit, t)
+            if aus is not None:
+                return aus
 
     # Kein Slot gefunden, echte Rückrufnotiz geschrieben: der Vorgang ist
     # abgeschlossen. Dank/Abschied beendet freundlich; andere Folgesätze

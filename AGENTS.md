@@ -3111,6 +3111,65 @@ verhält sich seitdem so:
  gemischter Zug legt nie auf, Agent Ende-zu-Ende: still/auflegen/Report/
  Manifest, echter Anrufersatz unverändert).
 
+## Luftholen, doppelte Verneinung, Rückrufnummer (W-KURZLAUT / W-SCHONMAL-DOPPELT / W-RUECKRUF-NUMMER 14.09.2026 — nicht rückbauen)
+
+Drei Kleinbefunde aus den Anrufen 9dd61a59 (MedDent), 5aa87268 und da746a65
+(Thaler), jeder für sich harmlos, zusammen der Grund, warum sich ein Anruf
+„nicht wie ein Gespräch" anfühlte:
+
+- **W-KURZLAUT** (`bianca/agent.py`, `_NUR_LAUT_RE` + `kurzlautSerie`):
+ „Oh." (9dd61a59 z02/z07) holte SOFORT „Sind Sie noch dran?", „Puff."
+ (5aa87268 z02) fiel ans Modell. Ein Ausruf heißt „ich bin dran und hole
+ Luft" — kein Schweigen. Die ersten `_KURZLAUT_SERIE` (2) Ausrufe in Folge
+ sind jetzt ein stiller `warte`-Zug (900 ms Ruhe-Schwelle; die Brücke hält
+ den Stups über `_diktat_weiterhoeren` 8 s zurück, das Dock stoppt den
+ Watchdog). Erst die SERIE ohne Inhalt („Hm. Hm. Hm." = Leitungs-Artefakt)
+ läuft wie seit dem 29.08. auf den gedeckelten Stille-Stups — bewusst VOR
+ `stille.reset`, damit `MAX_STUPSE` die Serie beendet. Jeder echte Satz
+ nullt die Serie. Die Liste kennt jetzt auch puff/uff/oha/ups/hoppla/huch/
+ boah/„ach so"/aha; Ja/Nein/Okay/Stopp stehen bewusst NICHT drin.
+ `test_kurzlaut_stupst_statt_llm` (test_stille) bildet den neuen Vertrag ab:
+ zwei Warte-Züge, dann Presence, kurze Frage, Schweigen — nie das LLM.
+- **W-SCHONMAL-DOPPELT** (`gehirn._SCHONMAL_BESTAND_TROTZ_KEIN_TERMIN_RE`):
+ „Nein, noch nicht das erste Mal." (5aa87268 z04) heißt BESTAND — die
+ Nein-Regel sah nur „das erste Mal" und machte einen Neupatienten daraus
+ (Behandler-Wahl statt Karteisuche). „nicht das/zum/mein erste(n) Mal" und
+ „kein(e) Neupatient(in)" werden VOR `_SCHONMAL_NEIN_RE` geprüft; ein
+ einfaches „Nein, das erste Mal" bleibt Neupatient (Gegenprobe im Test).
+- **W-RUECKRUF-NUMMER** (`flow._rueckruf_nummer_start/_zug/_abschluss`,
+ `verwalten.rueckruf_nummer/_fehlt/_nachtragen`): fand die Suche nichts
+ (5aa87268, da746a65), versprach Bianca „die Praxis meldet sich" — die
+ JSONL-Notiz trug KEINE Nummer: seit W-TELEFON-ZULETZT kommt die Nummer
+ erst nach dem Slot, die Suche scheiterte davor, der Anrufer hatte keine
+ Rufnummer übermittelt. Die Praxis konnte gar nicht zurückrufen.
+ `verwalten.rueckruf_nummer(sit)` ist die EINE Quelle (bestätigte Nummer >
+ Akte > Kontakt-Nummer bei Dritt-Terminen > übermittelte Anrufernummer,
+ normalisiert und plausibel); `_notiz_schreiben` nutzt sie und hängt
+ „Tel: …" an den Dock-/Report-Text. Fehlt sie, setzt `_rueckruf_nummer_start`
+ nach der Notiz die Nummernfrage (`sit["rueckrufNummer"] = {offen: True}`,
+ `frage=telefon`; eine gehörte, unbestätigte Nummer geht erst ins Readback).
+ `flow.zug` reicht Folgezüge an `_rueckruf_nummer_zug` — deterministisch
+ wie `telefon_check`, KEIN Modell auf diesem Pfad (es wüsste auch nicht,
+ WANN die Praxis anruft): Ziffern → Readback Ziffer für Ziffer → Ja →
+ `rueckruf_nummer_nachtragen` (zweite JSONL-Zeile, `praxisNotiz` + Dock
+ mit Nummer); Nein/„die letzte war eine neun" → Korrektur schlägt Fragment
+ (sonst stünde ein einsames „9" als Diktat-Anfang und Bianca schwiege) →
+ einmal neu erfragen; „Meine Nummer haben Sie doch" ohne Anrufer-ID →
+ ehrlich „In der Leitung wird mir leider keine Nummer angezeigt";
+ Ablehnung/„das war's" oder ZWEI unklare Antworten → ehrlich ohne Nummer
+ abschließen (Notiz bleibt, der Anrufer hört, dass er die Praxis direkt
+ erreichen kann) — nie eine Schleife; Zwischenfrage („Wie lange dauert
+ das?") wird deterministisch beantwortet und die Nummer erneut erfragt.
+ Ein ANDERES Anliegen (Hirn-Wechsel, Task-Handoff, `_NOCH_EIN_TERMIN_RE`)
+ gewinnt: die Nummernfrage wird abgebrochen (Spur
+ `rueckruf-nummer abgebrochen:anliegen`), die Notiz bleibt wie sie ist.
+ Gilt an beiden Notiz-Stellen: `_angebot` (leere Suche) und `_buchen`
+ (`slotTaken` ≥ 2).
+- Tests: `tests/test_kurzlaut_bestand.py` (Ausruf-Liste, Serie → Stups,
+ Doppelverneinung mit Gegenprobe), `tests/test_rueckruf_nummer.py` (alle
+ Zweige inkl. `_buchen`-Fehlpfad und Abbruch durch anderes Anliegen);
+ die Live-Wortlaute der drei Anrufe stehen dort wortgleich drin.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
