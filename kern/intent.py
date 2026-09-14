@@ -48,7 +48,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
-from kern import llm
+from kern import llm, rechnung
 from kern.leitung import ist_leitung_check
 
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="intent")
@@ -81,7 +81,8 @@ _WECHSEL_RE = re.compile(
     r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*|(?:ä|ae)nder\w*|"
     r"r(?:ü|ue)ckruf\w*|zur(?:ü|ue)ckruf\w*|"
-    r"rechnung\w*|abrechnung\w*|rezept(?!ion)\w*|(?:ü|ue)berweisung\w*|befund\w*|"
+    r"rechnung\w*|abrechnung\w*|mahn\w*|inkasso|lastschrift|quittung\w*|zahlung\w*|"
+    r"rezept(?!ion)\w*|(?:ü|ue)berweisung\w*|befund\w*|"
     r"heil\w*kostenplan|\bhkp\b|kostenvoranschlag|\bkva\b|"
     r"frage\b|fragen\b|wissen\b|fertig\b|urlaub\b|ge(?:ö|oe)ffnet|offen\b|"
     r"mitarbeiter\w*|anmeldung|empfang|buchhaltung|praxisleitung|"
@@ -109,6 +110,11 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     Meddent-/Blessing-Auswertung; was es faengt, entscheidet weiter das LLM.
     """
     if _WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t):
+        return True
+    # W-RECHNUNG: auch die weichen Formen ("Der Betrag stimmt nicht") sind
+    # mitten in einer Buchung ein neues Fass — Rechnungsthemen gehoeren nie
+    # der laufenden Ernte.
+    if rechnung.erkannt(t, sit):
         return True
     # Frage nach einem BESTEHENDEN Termin ("habe ich noch einen anderen
     # Termin?") ist auch MITTEN in einer Buchung ein Wechsel-Verdacht — sonst
@@ -169,6 +175,9 @@ _FORMULAR_FRAGEN = {
     # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen ("Passt der so?",
     # "Sonst noch etwas?") — "alles gut"/"nein danke" sind Ernte, kein Anliegen.
     "termin_ok", "termin_aendern", "sonst_noch",
+    # W-RECHNUNG: "Soll ich Ihnen dafuer einen Rueckruf einrichten?" — Ja/Nein
+    # gehoert der Maschine (bianca/flow._rechnung_antwort), nie dem Modell.
+    "rechnung_rueckruf",
 }
 
 # Eine knappe Ja/Nein-Antwort kann im selben Atemzug ein zweites Anliegen
@@ -476,6 +485,12 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "WISSEN", "gegenstand": "REGEL"}
     if _FB_SCHIENE_ABHOL_RE.search(t):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
+    # W-RECHNUNG (14.09.2026, Anruf 3ad3b6d3): Rechnung/Mahnung/Buchhaltung
+    # ist ABGEBEN x SACHE — VOR dem Frontdesk-/ERREICHEN-Zweig, sonst wuerde
+    # "Kann ich mit der Buchhaltung sprechen?" zum Durchstell-Dialog. Ein
+    # NAMENTLICH verlangter Behandler bleibt ERREICHEN (rechnung.erkannt).
+    if rechnung.erkannt(t, sit):
+        return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     im_angebot = _s(s.get("phase")) in {"angebot", "bestaetigen"}
     # Eine genannte Abteilung ist oft nur der vermeintliche Lösungsweg.
@@ -546,10 +561,18 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
 _NEGATION_RE = re.compile(r"\bnicht\b|\bkein\w*|\bniemals\b|\bnie\b", re.I)
 
 
-def _eindeutig(t: str) -> dict[str, Any] | None:
+def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
     """Genau EIN Kategorie-Treffer, keine Verneinung, kein Roman ->
     Deutung sofort (0 ms). Mehrdeutiges geht weiter ans LLM."""
-    if len(t.split()) > 18 or _NEGATION_RE.search(t):
+    if len(t.split()) > 18:
+        return None
+    # W-RECHNUNG: VOR der Verneinungs-Sperre — "Die Rechnung stimmt nicht"
+    # traegt fast immer ein "nicht" und ist trotzdem eindeutig.
+    if rechnung.erkannt(t, sit):
+        return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
+                "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
+                "handlung": "ABGEBEN", "gegenstand": "SACHE"}
+    if _NEGATION_RE.search(t):
         return None
     if ist_leitung_check(t):
         return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
@@ -774,7 +797,7 @@ def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
             return {"kanal": "ok", "zug": "halten", "handlung": "KEINE",
                     "gegenstand": "", "quelle": "fastpath-still"}
     else:
-        schnell = _eindeutig(t)
+        schnell = _eindeutig(t, sit)
         if schnell is not None:
             return schnell
         # Nacktes "Zahnreinigung": die Maschine fragt nach dem Termin —

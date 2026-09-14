@@ -1963,37 +1963,66 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     W-MEDDENT (04.09.2026): Rezept/Überweisung nie „ausstellen“ — klar sagen,
     dass die Praxis entscheidet; Notiz + Abholung/Termin.
     """
-    from kern import hirn as kern_hirn
+    from kern import rechnung
 
     s = gehirn.sammler(sit)
     ab = sit.get("hirnAbgeben") or {}
-    dok = bool(_DOKUMENT_RE.search(_s(ab.get("was")) + " " + t))
+    rech = bool(ab.get("rechnung"))  # W-RECHNUNG: Rueckruf zur Rechnung
+    dok = (not rech) and bool(_DOKUMENT_RE.search(_s(ab.get("was")) + " " + t))
     if dok and praxisregeln.dokument_vorsprache_aktiv(sit.get("tenant")):
         # Praxisregel (DB): Blessing nimmt am Telefon keinen Rezept-/
         # Ueberweisungsauftrag auf. Persoenliche Vorsprache, ggf. kurze
         # aerztliche Kontrolle — freundlich, ohne Name/Nummer-Sammelei.
         ab["offen"] = False
         sit["hirnAbgeben"] = ab
-        s["frage"] = ""
-        s["phase"] = "fertig"
-        kern_hirn.erledigt(sit)
+        _anliegen_abschliessen(sit)
         return {"text": praxisregeln.dokument_antwort()}
     neu = gehirn.einsammeln(sit, t)
     sit["ernteZuletzt"] = sorted(neu)
     _abgeben_kontakt(sit)
+    if {"buchstabenTeil", "vornameTeil", "telefonTeil"} & neu:
+        # Diktat laeuft (W-DATEN-FLOOR): still weiterhoeren, kein Stups.
+        return {"text": "", "warte": True, "stilleMs": gehirn.stille_ms(s)}
     if not s["nachname"]:
-        if s["frage"] == "name" and not neu:
+        if rech and not neu and s["frage"] in {"name", "buchstabieren"} \
+                and gehirn.ist_nein(t) and not gehirn.ist_ja(t):
+            # "Nein, lassen Sie mal" auf die Namensfrage: der Rueckruf ist
+            # doch nicht gewuenscht — ehrlich abschliessen, nicht weiter sammeln.
+            return _rechnung_nein(sit, t, persoenlich=rechnung.persoenlich_klaeren(t),
+                                  terminwunsch=False)
+        if s["frage"] in {"name", "buchstabieren"} and not neu:
             return None  # Zwischenfrage — LLM antwortet, die Frage bleibt offen
-        s["frage"] = "name"
+        if s["frage"] != "buchstabieren":
+            s["frage"] = "name"
         if dok:
             return {"text": (
                 "Rezept und Überweisung kann ich am Telefon nicht ausstellen — "
                 "das entscheidet die Praxis. Ich notiere Ihren Wunsch gern. "
                 "Wie ist Ihr Name?"
             )}
+        if rech:
+            return {"text": rechnung.NAME_FRAGE}
         return {"text": "Das richte ich gern aus. Für den Rückruf: Wie ist Ihr Name?"}
     tel = s["telefon"] or s["aktePhone"]
     if not tel:
+        # Eine gehoerte Nummer gilt beim Abgeben sofort (_abgeben_kontakt,
+        # Berger 08.09.) und wird im Schlusssatz vorgelesen; nur eine
+        # gesperrte/als falsch bezeichnete Kette wird neu erfragt.
+        if "telefonKorrektur" in neu:
+            s["frage"] = "telefon"
+            return {"text": "Entschuldigung. Dann sagen Sie mir die Nummer bitte noch "
+                            "einmal — gern in kleinen Gruppen."}
+        if s["frage"] == "telefon" and ({"telefonAkte", "telefonBekannt"} & neu):
+            # "Meine Nummer haben Sie doch" — die Leitung zeigt aber keine
+            # (sonst haette _abgeben_kontakt sie laengst uebernommen).
+            s["telefonAkte"] = False
+            return {"text": "In der Leitung wird mir leider keine Nummer angezeigt. "
+                            "Unter welcher Rufnummer erreicht die Praxis Sie?"}
+        if rech and s["frage"] == "telefon" and not neu \
+                and gehirn.ist_nein(t) and not gehirn.ist_ja(t):
+            # Keine Nummer nennen wollen: ehrlich ohne Rueckruf abschliessen.
+            return _rechnung_nein(sit, t, persoenlich=rechnung.persoenlich_klaeren(t),
+                                  terminwunsch=False)
         if s["frage"] == "telefon" and not neu:
             return None
         s["frage"] = "telefon"
@@ -2004,19 +2033,451 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     verwalten.abgeben_notiz(sit, was=was)
     ab["offen"] = False
     sit["hirnAbgeben"] = ab
-    s["frage"] = ""
-    s["phase"] = "fertig"
-    kern_hirn.erledigt(sit)
+    if rech:
+        st = sit.get("rechnungStand") if isinstance(sit.get("rechnungStand"), dict) else {}
+        st["status"] = "notiert"
+        sit["rechnungStand"] = st
+    # Was der Rueckruf an Kontaktdaten eingesammelt hat, bekommt eine
+    # geparkte Buchung mit (W-HIRN-GATE: nie erneut nach Belegtem fragen).
+    _abgeben_kontakt_weitergeben(sit)
+    ruecksprung = _anliegen_abschliessen(sit)
+    # Folgt der Ruecksprung in eine geparkte Aufgabe, haengt DER die Frage an
+    # — zwei Fragen hintereinander waeren ein Monolog (W-BESTAND-ANSAGE).
+    sonst = "" if ruecksprung else " Kann ich sonst noch etwas für Sie tun?"
     if dok:
         return {"text": (
             f"Alles notiert — die Praxis prüft Ihren Wunsch und meldet sich "
             f"unter der {telefon.sprechbar(tel)}. Ausstellen kann ich selbst "
-            f"nicht. Kann ich sonst noch etwas für Sie tun?"
+            f"nicht.{sonst}"
+        )}
+    if rech:
+        return {"text": (
+            f"Alles notiert — die Praxis meldet sich wegen der Rechnung bei "
+            f"Ihnen unter der {telefon.sprechbar(tel)}.{sonst}"
         )}
     return {"text": (
         f"Alles notiert — die Praxis meldet sich bei Ihnen unter der "
-        f"{telefon.sprechbar(tel)}. Kann ich sonst noch etwas für Sie tun?"
+        f"{telefon.sprechbar(tel)}.{sonst}"
     )}
+
+
+def _anliegen_abschliessen(sit: dict) -> bool:
+    """Ein eingeschobenes Anliegen (Rueckruf, Notiz, Rechnung) ist zu Ende.
+
+    Liegt eine GEPARKTE Aufgabe bereit (W-HIRN-AUTORESUME enforce), bleibt
+    das aktive Anliegen mit phase=fertig stehen: agent._maschinen_antwort ->
+    _auto_resume_anhaengen -> hirn.abschluss_ruecksprung_live hakt es ab
+    und holt die Aufgabe samt Checkpoint zurueck ("So, zurueck zu Ihrem
+    Termin. …"). Ein hirn.erledigt() an dieser Stelle raeumte frueher das
+    aktive Anliegen SOFORT — der Ruecksprung fand danach nichts mehr, das
+    die Bedingung "aktiv + fertig" erfuellt, und die geparkte Buchung
+    strandete (W-RECHNUNG 14.09.2026, beim Bau entdeckt).
+    Zurueckgesprungen wird nur in eine MASCHINEN-Aufgabe (Buchung, Absage,
+    Verschieben, Auskunft): dort gibt es eine Pflichtfrage, die den Faden
+    wieder aufnimmt. Ein geparktes Frei-Anliegen (WISSEN/ERREICHEN) hat
+    keine — naechste_frage wuerde dort eine Buchungsfrage erfinden.
+    Nach einer BUCHUNG bleibt phase=gebucht stehen (Frisch-Absage-Sonderwege
+    in zug(); dort gibt es nichts zurueckzuholen).
+    Rueckgabe: True = der Ruecksprung folgt in diesem Zug."""
+    from kern import hirn as kern_hirn
+
+    s = gehirn.sammler(sit)
+    s["frage"] = ""
+    if s.get("phase") != "gebucht":
+        s["phase"] = "fertig"
+    ziel = kern_hirn.geparktes_ziel(sit)
+    if (ziel is not None and kern_hirn.modus_von(ziel)
+            and kern_hirn.aktiv(sit) is not None and s.get("phase") == "fertig"):
+        return True
+    kern_hirn.erledigt(sit)
+    return False
+
+
+def _abgeben_kontakt_weitergeben(sit: dict) -> None:
+    """Name/Nummer aus dem Rueckruf-Diktat in den Checkpoint der geparkten
+    Aufgabe legen (kern.hirn.checkpoint_ergaenzen) — nur DIKTIERTES: ein per
+    Rufnummer erkannter Anrufer (Kartei) bekommt in der Buchung weiterhin
+    seinen eigenen Identitaets-Check (W-ANRUFER-CHECK), die Buchung liest die
+    Nummer am Tor als SMS-Ziel vor statt sie still zu uebernehmen."""
+    from kern import hirn as kern_hirn
+
+    s = gehirn.sammler(sit)
+    a = gehirn.anrufer_bekannt(sit) or {}
+    felder: dict = {}
+    if s.get("nachname") and _s(s.get("nachname")).lower() != _s(a.get("nachname")).lower():
+        felder["nachname"] = s["nachname"]
+        if s.get("vorname"):
+            felder["vorname"] = s["vorname"]
+            felder["vornameQuelle"] = _s(s.get("vornameQuelle")) or "gesagt"
+        if s.get("buchstabiert"):
+            felder["buchstabiert"] = True
+    tel_akte = telefon.mit_fuehrender_null(a.get("telefon") or "")
+    tel = _s(s.get("telefon"))
+    if tel and telefon.plausibel(tel) and tel != tel_akte:
+        felder["telefonBekannt"] = tel
+    if felder:
+        kern_hirn.checkpoint_ergaenzen(sit, felder)
+
+
+# --- W-RECHNUNG (14.09.2026, Chef zum Thaler-Anruf 3ad3b6d3) -----------------
+# "Rechnungsreklamation., Fehlerhafte Rechnung., Fehler, abrechnungsfehler,
+# Buchhaltung...Rechnung... diese und aehnliche Worte/Saetze muessen wir
+# nachschaerfen dadurch, dass Bianca sagt, dass Rechnungsthemen nur
+# persoenlich in der Praxis besprochen werden koennen, oder sie einen
+# Rueckruf anbietet und einrichtet auf Wunsch. Sie selbst hat keine
+# Autorisation, ueber Rechnungen zu reden."
+#
+# Erkennung + feste Saetze: kern/rechnung.py. Hier der Zug: Erklaerung +
+# Rueckruf-Frage (frage=rechnung_rueckruf), Ja -> der bewaehrte ABGEBEN-Weg
+# (_abgeben_zug: Name, Nummer, echte Notiz), Nein -> ehrlich abschliessen.
+# Mitten in einer Buchung wird diese geparkt (Checkpoint) und kommt danach
+# ueber den Ruecksprung zurueck. Zustand: sit["rechnungStand"] = {status:
+# offen|notiert|abgelehnt|persoenlich, was, gefragt} — im `sit`, nicht im
+# Sammler: der Sammler wird beim Parken/Zurueckholen ausgetauscht.
+
+_RECHNUNG_TERMINWUNSCH_RE = re.compile(
+    r"\btermin\w*|\bbuchen\b|\bvereinbar\w*|\bausmachen\b", re.I,
+)
+
+
+def _rechnung_stand(sit: dict) -> dict:
+    st = sit.get("rechnungStand")
+    return st if isinstance(st, dict) else {}
+
+
+def _rechnung_offen(sit: dict) -> bool:
+    """Die Rueckruf-Frage steht im Raum (noch kein Ja/Nein)."""
+    return _rechnung_stand(sit).get("status") == "offen"
+
+
+def _rechnung_sammelt(sit: dict) -> bool:
+    """Der Rueckruf zur Rechnung wurde bejaht, Name/Nummer werden eingesammelt
+    (_abgeben_zug ueber hirnAbgeben.offen)."""
+    ab = sit.get("hirnAbgeben")
+    return bool(isinstance(ab, dict) and ab.get("offen") and ab.get("rechnung"))
+
+
+def rechnung_abbrechen(sit: dict, grund: str = "anliegen") -> bool:
+    """Offene Rueckruf-Frage zur Rechnung aufgeben (der Anrufer hat etwas
+    anderes angefangen): Frage raeumen, Stand = abgelehnt, ein ABGEBEN-
+    Anliegen dazu abhaken — ob aktiv oder schon vom Hirn geparkt. Nie eine
+    geparkte BUCHUNG anfassen. Rueckgabe: True = es gab etwas aufzugeben."""
+    from kern import hirn as kern_hirn
+
+    if not _rechnung_offen(sit):
+        return False
+    s = gehirn.sammler(sit)
+    st = _rechnung_stand(sit)
+    st["status"] = "abgelehnt"
+    sit["rechnungStand"] = st
+    if s.get("frage") == "rechnung_rueckruf":
+        s["frage"] = ""
+    ab = sit.get("hirnAbgeben")
+    if isinstance(ab, dict) and ab.get("rechnung"):
+        ab["offen"] = False
+    a = kern_hirn.aktiv(sit)
+    if a is not None and _s(a.get("handlung")) == "ABGEBEN" and a.get("rechnung"):
+        kern_hirn.erledigt(sit, naechstes=False)
+        # Nichts mehr aktiv, aber die Buchung liegt geparkt ("Nein, wann
+        # haben Sie geoeffnet?"): sofort zurueckholen (Checkpoint), sonst
+        # straendet sie bis zum naechsten Zug — die Auskunft haengt die
+        # offene Frage dann an DIESEN Zug.
+        zurueck = kern_hirn.geparktes_zurueckholen(sit)
+        if zurueck is not None:
+            spur.merken(sit, "rechnung", f"zurueck:{_s(zurueck.get('handlung'))}")
+    kern_hirn.geparkte_abhaken(sit, handlung="ABGEBEN", frage="rechnung_rueckruf")
+    spur.merken(sit, "rechnung", f"abgebrochen:{grund}")
+    return True
+
+
+def _rechnung_anliegen_sichern(sit: dict, t: str) -> None:
+    """Das Rechnungsthema als ABGEBEN-Anliegen im Hirn fuehren, wenn die
+    Intent-Schicht es nicht schon getan hat. Laeuft eine Buchung (Modus
+    buchen, noch nicht gebucht/fertig), wird sie dabei GEPARKT (Checkpoint)
+    — der Ruecksprung holt sie nach der Rechnung zurueck.
+
+    NACH einer Buchung (phase=gebucht) fuehrt der Sammler weiter modus=buchen
+    (Frisch-Absage-Sonderwege in zug()). Ein ABGEBEN-Anliegen daneben liesse
+    hirn.sync_nach_zug jeden Zug ein Phantom-ANLEGEN anlegen und das
+    Rechnungs-Anliegen parken — der Ruecksprung ginge dann ins Rechnungs-
+    Anliegen statt zurueck. Dort steuert allein sit["rechnungStand"]: ein von
+    der Intent-Schicht angelegtes ABGEBEN wird sofort abgehakt, eine dabei
+    geparkte (schon gebuchte) Aufgabe ebenso — sie hat keine Frage mehr."""
+    from kern import hirn as kern_hirn
+
+    if "hirn" not in sit:
+        return
+    s = gehirn.sammler(sit)
+    a = kern_hirn.aktiv(sit)
+    if s.get("phase") in {"gebucht", "fertig"}:
+        # Abgeschlossene Aufgabe (gebucht / Rueckruf-Notiz geschrieben): nichts
+        # zu parken — ein Ruecksprung faende keine Pflichtfrage mehr und
+        # naechste_frage erfaende eine. Ein fertiger Sammler bleibt liegen,
+        # hirn.sync_nach_zug hakt sein Anliegen wie gewohnt ab.
+        if a is not None and _s(a.get("handlung")) == "ABGEBEN":
+            kern_hirn.erledigt(sit, naechstes=False)
+        kern_hirn.geparkte_abhaken(sit, handlung="ANLEGEN", phasen=("gebucht", "fertig"))
+        return
+    if a is not None and _s(a.get("handlung")) == "ABGEBEN":
+        a["rechnung"] = True
+        return
+    neu = kern_hirn.anliegen_neu("ABGEBEN", "VORGANG", spiegel=t[:160])
+    neu["rechnung"] = True
+    kern_hirn.anliegen_hinzufuegen(sit, neu, aktivieren=True)
+
+
+def _rechnung_start(sit: dict, t: str) -> dict:
+    """Rechnungsthema erkannt: Erklaerung + Rueckruf-Frage (oder gleich der
+    Rueckruf, wenn der Anrufer ihn selbst verlangt)."""
+    from kern import hirn as kern_hirn, rechnung
+
+    s = gehirn.sammler(sit)
+    st = _rechnung_stand(sit)
+    status = _s(st.get("status"))
+
+    if status == "notiert":
+        # Rueckruf steht schon — nicht noch einmal einrichten.
+        spur.merken(sit, "rechnung", "erneut:notiert")
+        text = ("Den Rückruf zur Rechnung habe ich schon notiert — die Praxis "
+                "meldet sich bei Ihnen. Mehr kann ich dazu am Telefon leider nicht sagen.")
+        ab = sit.get("hirnAbgeben")
+        if isinstance(ab, dict):
+            # Ein frischer Zettel der Intent-Schicht: keine zweite Sammelei.
+            ab["offen"] = False
+        a = kern_hirn.aktiv(sit) if "hirn" in sit else None
+        if a is not None and _s(a.get("handlung")) == "ABGEBEN":
+            # Die Intent-Schicht hat fuer diesen Satz ein NEUES ABGEBEN eroeffnet
+            # (und eine laufende Buchung dafuer geparkt): abhaken — die Buchung
+            # kommt ueber den Ruecksprung zurueck.
+            if _anliegen_abschliessen(sit):
+                return {"text": text}
+            return {"text": f"{text} Kann ich sonst noch etwas für Sie tun?"}
+        # Die Intent-Schicht hat GEHALTEN: eine laufende Aufgabe (Buchung,
+        # Absage ...) bleibt unberuehrt — Auskunft plus ihre offene Frage im
+        # selben Zug (wie der Dokument-Hook), nie die Kette abreissen.
+        offene = _s(s.get("frage"))
+        if s.get("modus") and offene and s.get("phase") != "fertig":
+            frage = _s(sit.get("flussFrage"))
+            if not frage:
+                fid, frage = gehirn.naechste_frage(sit)
+                if fid and frage:
+                    s["frage"] = fid
+            return {"text": f"{text} {frage}".strip()}
+        return {"text": f"{text} Kann ich sonst noch etwas für Sie tun?"}
+
+    _rechnung_anliegen_sichern(sit, t)
+    # hirn._schalten legt hirnAbgeben {"offen": True} an — die Frage kommt
+    # ZUERST, die Sammelei erst nach dem Ja.
+    ab = sit.get("hirnAbgeben") if isinstance(sit.get("hirnAbgeben"), dict) else {}
+    ab["rechnung"] = True
+    ab["was"] = "Rechnung: " + t[:160]
+    ab["offen"] = False
+    sit["hirnAbgeben"] = ab
+
+    if rechnung.rueckruf_gewuenscht(t):
+        # "Rufen Sie mich wegen der Rechnung zurueck" — die Frage entfaellt.
+        sit["rechnungStand"] = {"status": "rueckruf", "was": t, "gefragt": 0}
+        ab["offen"] = True
+        s["frage"] = ""
+        spur.merken(sit, "rechnung", "rueckruf-direkt")
+        aus = _abgeben_zug(sit, t) or {}
+        text = _s(aus.get("text"))
+        if not text:
+            s["frage"] = "name"
+            text = rechnung.NAME_FRAGE
+        return {**aus, "text": f"{rechnung.ERKLAERUNG} {text}"}
+
+    wieder = status in {"abgelehnt", "persoenlich"}
+    sit["rechnungStand"] = {
+        "status": "offen", "was": t,
+        "gefragt": int(st.get("gefragt") or 0) + 1, "unklar": 0,
+        # "Kann ich mit der Buchhaltung sprechen?": der Anrufer wollte einen
+        # Menschen — nennt er auf die Frage einen Behandler, gilt der Wunsch
+        # fuer den (s. _rechnung_antwort). "Die Rechnung ist falsch." nicht.
+        "sprechwunsch": bool(weiterleiten.erkannt(t)),
+    }
+    s["frage"] = "rechnung_rueckruf"
+    frage = rechnung.RUECKRUF_FRAGE_WIEDERHOLT if wieder else rechnung.RUECKRUF_FRAGE
+    erkl = rechnung.ERKLAERUNG_WIEDERHOLT if wieder else rechnung.ERKLAERUNG
+    sit["flussFrage"] = frage
+    spur.merken(sit, "rechnung", "erneut" if wieder else "erkannt")
+    return {"text": f"{erkl} {frage}"}
+
+
+def _rechnung_nein(sit: dict, t: str, *, persoenlich: bool, terminwunsch: bool,
+                   aufgegeben: bool = False, weiter: bool = False) -> dict | None:
+    """Kein Rueckruf: ehrlich abschliessen; eine geparkte Buchung kommt
+    ueber den Ruecksprung zurueck, ein Terminwunsch im selben Satz eroeffnet
+    die Buchung (None => der Rest von zug() uebernimmt den Satz).
+    `weiter`: der Satz traegt ein ANDERES Anliegen (Verbinde-Wunsch) — nur
+    aufraeumen, nichts zurueckholen, der Rest von zug() uebernimmt."""
+    from kern import hirn as kern_hirn, rechnung
+
+    s = gehirn.sammler(sit)
+    st = _rechnung_stand(sit)
+    st["status"] = "persoenlich" if persoenlich else "abgelehnt"
+    sit["rechnungStand"] = st
+    ab = sit.get("hirnAbgeben")
+    if isinstance(ab, dict) and ab.get("rechnung"):
+        ab["offen"] = False
+    grund = "rueckruf-unklar:aufgegeben" if aufgegeben else "rueckruf-nein"
+    spur.merken(sit, "rechnung", grund + (":termin" if terminwunsch else "")
+                + (":weiter" if weiter else ""))
+    if weiter:
+        # "Nein, verbinden Sie mich mit Doktor Patrikis": das Rechnungs-
+        # Anliegen ist damit vom Tisch; eine geparkte Buchung bleibt liegen
+        # (nach einem gescheiterten Verbinden holt nach_transfer_ruecken sie).
+        if s.get("frage") == "rechnung_rueckruf":
+            s["frage"] = ""
+        if "hirn" in sit:
+            a = kern_hirn.aktiv(sit)
+            if a is not None and _s(a.get("handlung")) == "ABGEBEN" and a.get("rechnung"):
+                kern_hirn.erledigt(sit, naechstes=False)
+        return None
+    ruecksprung = _anliegen_abschliessen(sit)
+    if ruecksprung:
+        # Die geparkte Buchung kommt ueber den Ruecksprung zurueck — auch
+        # "Nein, aber ich brauche noch einen Termin" meint SIE.
+        return {"text": rechnung.ABGELEHNT_KURZ}
+    if terminwunsch:
+        # Kein Rueckruf, aber ein Termin: die Buchung deterministisch
+        # eroeffnen (Hirn: ANLEGEN); der Rest von zug() uebernimmt den Satz.
+        s["phase"] = ""
+        if "hirn" in sit:
+            kern_hirn.anwenden(sit, {"zug": "wechseln", "handlung": "ANLEGEN",
+                                     "gegenstand": "VORGANG", "spiegel": t[:160]})
+            sit.pop("hirnModusNeu", None)  # zug() hat sein Signal fuer diesen Zug schon gelesen
+        else:
+            s["modus"] = "buchen"
+            s["frage"] = ""
+        return None
+    if aufgegeben:
+        return {"text": rechnung.ABGELEHNT}
+    if abschied.ist_abschied(t):
+        return {"text": f"{rechnung.ABGELEHNT} Auf Wiederhören.",
+                "hangup": abschied.an(), "_wiederholungErlaubt": True}
+    return {"text": f"{rechnung.ABGELEHNT} Kann ich sonst noch etwas für Sie tun?"}
+
+
+def _rechnung_antwort(sit: dict, t: str) -> dict | None:
+    """Antwort auf 'Soll ich Ihnen dafuer einen Rueckruf einrichten?'."""
+    from kern import rechnung
+
+    s = gehirn.sammler(sit)
+    st = _rechnung_stand(sit)
+    ja = gehirn.ist_ja(t) and not gehirn.ist_nein(t)
+    nein = gehirn.ist_nein(t) and not ja
+    persoenlich = rechnung.persoenlich_klaeren(t)
+    terminwunsch = bool(_RECHNUNG_TERMINWUNSCH_RE.search(t))
+
+    if ja or (rechnung.rueckruf_gewuenscht(t) and not nein):
+        st["status"] = "rueckruf"
+        sit["rechnungStand"] = st
+        ab = sit.get("hirnAbgeben") if isinstance(sit.get("hirnAbgeben"), dict) else {}
+        ab["rechnung"] = True
+        ab["offen"] = True
+        ab["was"] = ab.get("was") or ("Rechnung: " + _s(st.get("was"))[:160])
+        sit["hirnAbgeben"] = ab
+        s["frage"] = ""
+        spur.merken(sit, "rechnung", "rueckruf-ja")
+        return _abgeben_zug(sit, t)
+
+    verbinden = bool(weiterleiten.erkannt(t)
+                     or weiterleiten.arzt_verlangt(t, sit.get("tenant") or {}))
+    if verbinden and not rechnung.erkannt(t, sit, im_diktat=True):
+        # "Nein, verbinden Sie mich mit Doktor Patrikis" / "Dann lieber
+        # Doktor Petsas sprechen": anderes Anliegen im Satz — die Frage gilt
+        # als verneint, weiterleiten.zug uebernimmt den Satz. ("Ich will mit
+        # der Buchhaltung sprechen" bleibt dagegen Rechnungsthema: Nein oder
+        # Nachfrage, nie die Rollen-Erklaerung der Weiterleitung.)
+        return _rechnung_nein(sit, t, persoenlich=False, terminwunsch=False, weiter=True)
+
+    if (st.get("sprechwunsch") and not terminwunsch and "termin" not in t.lower()
+            and len(t.split()) <= 6):
+        d = weiterleiten.arztmod.deute(t, sit.get("tenant") or {})
+        if d and d.get("typ") in {"genannt", "gesperrt"}:
+            # "Kann ich mit der Buchhaltung sprechen?" -> Erklaerung + Frage ->
+            # "Dann zu Doktor Patrikis, bitte.": der Sprech-Wunsch des Einstiegs
+            # gilt fuer den genannten Behandler — Nein zur Rueckruf-Frage, und
+            # weiterleiten.zug nimmt den Namen als Ziel (Sperre/Jingle wie bei
+            # der Arzt-Rueckfrage). OHNE Sprech-Wunsch am Einstieg ("Die
+            # Rechnung ist falsch." -> "Doktor Patrikis.") bleibt ein blosser
+            # Name unklar — nie raten (W-VERBINDEN-BEWEIS); lange Saetze mit
+            # Namen ("Nein, ich war bei Doktor Patrikis") ebenso.
+            sit["weiterleiten"] = {"frage": "arzt", "leer": 0}
+            spur.merken(sit, "rechnung", f"arzt-statt-rueckruf:{_s(d.get('calendarName'))}")
+            return _rechnung_nein(sit, t, persoenlich=False, terminwunsch=False, weiter=True)
+
+    if nein or persoenlich or terminwunsch:
+        return _rechnung_nein(sit, t, persoenlich=persoenlich, terminwunsch=terminwunsch)
+
+    # Weder Ja noch Nein: einmal nachfragen, dann gilt Nein (kein Verhoer).
+    unklar = int(st.get("unklar") or 0) + 1
+    st["unklar"] = unklar
+    sit["rechnungStand"] = st
+    if unklar >= 2:
+        return _rechnung_nein(sit, t, persoenlich=False, terminwunsch=False,
+                              aufgegeben=True)
+    spur.merken(sit, "rechnung", "rueckruf-unklar")
+    sit["flussFrage"] = rechnung.RUECKRUF_UNKLAR
+    return {"text": rechnung.RUECKRUF_UNKLAR}
+
+
+def _rechnung_zug(sit: dict, t: str) -> dict | None:
+    """Einhaengung in zug(): laeuft die Rueckruf-Frage, gehoert ihr der Satz;
+    sonst ein frisch erkanntes Rechnungsthema. None = kein Rechnungsthema
+    (bzw. die Rueckruf-Sammelei laeuft — die gehoert _abgeben_zug unten)."""
+    from kern import hirn as kern_hirn, rechnung
+
+    if not rechnung.enabled():
+        return None
+    s = gehirn.sammler(sit)
+    if _rechnung_sammelt(sit):
+        return None
+    ab = sit.get("hirnAbgeben")
+    if (isinstance(ab, dict) and ab.get("offen") and not ab.get("rechnung")
+            and s.get("frage") in {"name", "buchstabieren", "telefon"}):
+        # Ein allgemeiner Rueckruf wird gerade eingesammelt ("Rufen Sie mich
+        # zurueck" ... "es geht um die Rechnung"): das Thema kommt auf DIESEN
+        # Zettel, die Sammelei laeuft weiter — keine zweite Frage. (Ein in
+        # DIESEM Zug von der Intent-Schicht eroeffnetes ABGEBEN hat noch
+        # keine Frage — das faellt unten in _rechnung_start.) Auch waehrend
+        # das Diktat der Nummer laeuft: hier wird nichts umgeschaltet, nur
+        # der Zettel beschriftet.
+        if rechnung.erkannt(t, sit, im_diktat=True):
+            ab["rechnung"] = True
+            if "rechnung" not in _s(ab.get("was")).lower():
+                ab["was"] = ("Rechnung: " + _s(ab.get("was"))).strip()
+            spur.merken(sit, "rechnung", "rueckruf-laeuft")
+        return None
+    if _rechnung_offen(sit):
+        a = kern_hirn.aktiv(sit) if "hirn" in sit else None
+        # Die Frage gehoert uns, solange kein ANDERES Anliegen das Ruder hat
+        # (a is None: kein Hirn oder nach gebucht/fertig sofort abgehakt).
+        eigenes = a is None or (_s(a.get("handlung")) == "ABGEBEN" and a.get("rechnung"))
+        if s.get("frage") == "rechnung_rueckruf" and eigenes:
+            return _rechnung_antwort(sit, t)
+        # Die Intent-Schicht hat den Satz als NEUES Anliegen gedeutet (Frage
+        # geraeumt oder ein anderes Anliegen aktiviert — "Nein, verbinden Sie
+        # mich mit Doktor Petsas"): die Rueckruf-Frage gilt als verneint, der
+        # Rest von zug() uebernimmt den Satz. Hat das Hirn dabei eine ZWEITE
+        # Buchung eroeffnet, waehrend die erste noch geparkt liegt, ist die
+        # geparkte eine stehengebliebene Kopie: der lebende Sammler traegt
+        # ihre Daten weiter (hirn tauscht ihn beim Parken nicht aus) —
+        # abhaken, sonst kaeme sie spaeter als "So, zurueck zu Ihrem Termin."
+        # mit altem Stand zurueck.
+        rechnung_abbrechen(sit, "anliegen")
+        s = gehirn.sammler(sit)  # abbrechen kann die geparkte Buchung zurueckgeholt haben
+        if (a is not None and _s(a.get("handlung")) == "ANLEGEN"
+                and s.get("modus") == "buchen"
+                and kern_hirn.geparkte_abhaken(sit, handlung="ANLEGEN")):
+            spur.merken(sit, "rechnung", "buchung-doppelt-abgehakt")
+        return None
+    # rechnung.erkannt schweigt von selbst, solange ein Diktat laeuft
+    # (Nummer/Buchstabieren) — "Rechnungshofer" ist dort ein Nachname.
+    if not rechnung.erkannt(t, sit):
+        return None
+    return _rechnung_start(sit, t)
 
 
 def _aenderung_feld(t: str) -> str:
@@ -2568,6 +3029,17 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return {"text": dokument_text}
         s["frage"] = ""
         return {"text": dokument_text}
+
+    # W-RECHNUNG (14.09.2026): Rechnungsthemen VOR der Weiterleitung —
+    # "Buchhaltung" ist ein Rechnungsthema, kein Durchstell-Wunsch; ein
+    # NAMENTLICH verlangter Behandler ("mit Doktor Petsas ueber die Rechnung
+    # sprechen") bleibt Weiterleitung (rechnung.erkannt prueft das selbst).
+    rz = _rechnung_zug(sit, t)
+    if rz is not None:
+        return rz
+    # Eine verneinte Rueckruf-Frage kann die geparkte Buchung zurueckgeholt
+    # haben (Checkpoint = neuer Sammler): nie mit dem alten weiterarbeiten.
+    s = gehirn.sammler(sit)
 
     # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
     # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris

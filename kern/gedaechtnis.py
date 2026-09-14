@@ -279,6 +279,16 @@ def zusammenfassung(sit: dict) -> str:
             text += f" {ws}."
     except Exception:
         pass
+    # W-RECHNUNG: ein angesprochenes Rechnungsthema steht auch dann im Report,
+    # wenn kein Rueckruf gewuenscht war — sonst saehe die Praxis nur
+    # "Gespraech ohne Kalenderaenderung".
+    try:
+        from kern import rechnung
+        rz = rechnung.zusammenfassung_zeile(sit)
+        if rz:
+            text += f" {rz}."
+    except Exception:
+        pass
     return text[:600]
 
 

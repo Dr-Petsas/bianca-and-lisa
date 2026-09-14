@@ -257,17 +257,36 @@ def test_mitarbeiter_mit_bekanntem_arzt_wird_nicht_zum_arzt_umgeleitet():
     assert sit["weiterleiten"]["frage"] == "anliegen"
 
 
-def test_buchhaltung_bekommt_entlastung_und_anliegenfrage():
+def test_buchhaltung_ist_rechnungsthema_arzt_danach_erreichbar():
+    """W-RECHNUNG (14.09.2026): 'Buchhaltung' ist ein Rechnungsthema — Bianca
+    hat dafuer keine Autorisation, also die feste Erklaerung + Rueckruf-Frage
+    (nicht mehr die Rollen-Erklaerung der Weiterleitung, kein 'Worum geht
+    es'). Ein danach namentlich verlangter Arzt bleibt direkt erreichbar:
+    der Sprech-Wunsch des Einstiegs gilt fuer ihn."""
+    from kern import rechnung
     sit = _sit()
     z = flow.zug(sit, "Kann ich mit der Buchhaltung sprechen?")
-    assert z and weiterleiten.WAHRHEIT in z["text"]
+    assert z and rechnung.ERKLAERUNG in z["text"] and rechnung.RUECKRUF_FRAGE in z["text"]
+    assert weiterleiten.WAHRHEIT not in z["text"]
     assert "Ärzte" not in z["text"] and "durchstellen" not in z["text"]
-    assert "Worum geht es" in z["text"]
-    # Ein danach namentlich verlangter Arzt bleibt direkt erreichbar.
     events: list[str] = []
     z2 = flow.zug(sit, "Dann zu Doktor Patrikis, bitte.", events.append)
     assert z2 and z2.get("transfer", {}).get("nummer") == "+4921130293034"
     assert z2.get("hangup") and weiterleiten.JINGLE_EVENT in events
+    assert (sit.get("rechnungStand") or {}).get("status") == "abgelehnt"
+
+
+def test_rechnungsfrage_ohne_sprechwunsch_blosser_arztname_verbindet_nicht():
+    """Gegenprobe: 'Die Rechnung ist falsch.' traegt keinen Sprech-Wunsch —
+    ein blosser Behandlername auf die Rueckruf-Frage ist KEIN Verbinde-Wunsch
+    (W-VERBINDEN-BEWEIS: nie raten), sondern eine unklare Antwort."""
+    from kern import rechnung
+    sit = _sit()
+    flow.zug(sit, "Die Rechnung ist falsch.")
+    events: list[str] = []
+    z2 = flow.zug(sit, "Doktor Patrikis.", events.append)
+    assert z2 and rechnung.RUECKRUF_UNKLAR in z2["text"]
+    assert not z2.get("transfer") and weiterleiten.JINGLE_EVENT not in events
 
 
 def test_anmeldungswunsch_nennt_keinen_inaktiven_aktenbehandler():

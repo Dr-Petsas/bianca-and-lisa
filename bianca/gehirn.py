@@ -2508,6 +2508,13 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Kann ich sonst noch etwas für Sie tun?",
         "Gibt es sonst noch etwas, das ich für Sie tun kann?",
     ),
+    # W-RECHNUNG (14.09.2026): Rechnungsthemen klaert nur die Praxis —
+    # Bianca bietet den Rueckruf an; jede Variante traegt "Rückruf".
+    "rechnung_rueckruf": (
+        "Soll ich Ihnen dafür einen Rückruf einrichten?",
+        "Möchten Sie, dass ich zur Rechnung einen Rückruf einrichte?",
+        "Soll ich einen Rückruf zur Rechnung für Sie notieren?",
+    ),
     "buchstabieren": (
         "Buchstabieren Sie mir den Nachnamen bitte einmal?",
         "Mögen Sie den Nachnamen kurz buchstabieren?",
@@ -3667,6 +3674,11 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Entschuldigung — dann korrigiere ich das.",
         "Prima, dann habe ich Sie gefunden.",
     ])
+    # W-RECHNUNG (14.09.2026): Erklaerung, Rueckruf-Frage und Quittungen der
+    # Rechnungs-Strecke — feste Saetze ohne Patientenbezug, satzweise
+    # gesprochen; ungewaermt kostete die Erklaerung eine eigene Synthese.
+    from kern import rechnung as _re_
+    out.extend(_re_.SAETZE)
     # Behandler-Wahl fuer Neupatienten: die Erstform traegt die Namen aus
     # dem Tenant (nur mit Tenant baubar), die Varianten sind statisch.
     if tenant:
@@ -3774,7 +3786,9 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "termin_anbieten", "arzt_notiz",
                 # W-BESTAND-ANSAGE: "Passt der so?" / "Sonst noch etwas?" —
                 # kurze Ja/Nein-/"alles gut"-Antworten.
-                "termin_ok", "sonst_noch", "termin_aendern"}
+                "termin_ok", "sonst_noch", "termin_aendern",
+                # W-RECHNUNG: "Soll ich Ihnen dafuer einen Rueckruf einrichten?"
+                "rechnung_rueckruf"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.

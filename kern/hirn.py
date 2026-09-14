@@ -95,6 +95,110 @@ def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
             sit[k] = copy.deepcopy(cp[k])
 
 
+# Fragen, deren Feld ein eingeschobenes Anliegen inzwischen gefuellt haben
+# kann — dann darf die geparkte Aufgabe sie nicht noch einmal stellen.
+# BEWUSST nicht "telefon": die Nummer wandert als `telefonBekannt` in den
+# Checkpoint (s. checkpoint_ergaenzen) — die Buchung fragt am Tor dann nur
+# noch "SMS an die … schicken?" (W-TELEFON-ZULETZT bleibt: Nummer zuletzt).
+_CP_FRAGE_FELD = {
+    "name": ("nachname",), "nachname": ("nachname",), "vorname": ("vorname",),
+    "buchstabieren": ("nachname",),
+}
+# Der Name ist EINE Angabe: Nachname, Vorname, Kartei-Bindung und Schreibweise
+# gehoeren zusammen (P0-Bindung Name<->patientId, 10.09.2026). Hat die
+# geparkte Aufgabe schon einen Nachnamen — oder gilt sie einem Dritten
+# (fuerWen) — wird NICHTS aus der Gruppe eingetragen.
+_CP_NAME_GRUPPE = ("nachname", "vorname", "patientId", "bekannt", "buchstabiert",
+                   "vornameQuelle", "vornameCheck")
+_CP_TELEFON_SPERRE = ("telefon", "telefonOk", "telefonAkte", "telefonBekannt",
+                      "telefonOffen", "telefonTeil", "kontaktTelefon")
+
+
+def checkpoint_ergaenzen(sit: dict, felder: dict[str, Any]) -> bool:
+    """W-RECHNUNG (14.09.2026): was ein EINGESCHOBENES Anliegen an Kontaktdaten
+    eingesammelt hat (Name, Nummer fuer den Rueckruf), gehoert auch der
+    geparkten Aufgabe — sonst fragt die Buchung nach dem Ruecksprung erneut
+    "Wie ist Ihr Name?" (W-HIRN-GATE: keine Frage zu einem belegten Wert).
+
+    Nur der JUENGSTE geparkte Checkpoint, nur LEERE Felder, nie etwas
+    ueberschreiben, was die geparkte Aufgabe selbst schon wusste:
+    - Namensgruppe (`_CP_NAME_GRUPPE`) nur komplett und nur, wenn dort noch
+      kein Nachname steht und der Termin nicht fuer einen Dritten ist;
+    - `telefonBekannt` nur, wenn dort noch keine Nummer in irgendeiner Form
+      liegt — die Buchung liest sie am Tor als SMS-Ziel vor ("Soll ich die
+      SMS an die … schicken?"), statt sie still zu uebernehmen;
+    - ist damit die offene Frage des Checkpoints beantwortet (Name), wird
+      sie geraeumt — naechste_frage rechnet sie beim Ruecksprung neu.
+    """
+    if not isinstance(felder, dict) or not felder:
+        return False
+    for kand in reversed(hirn(sit).get("anliegen") or []):
+        if kand.get("status") != "geparkt":
+            continue
+        cp = kand.get("checkpoint")
+        if not isinstance(cp, dict) or not isinstance(cp.get("sammler"), dict):
+            return False
+        s_cp = cp["sammler"]
+        geaendert = False
+        name_frei = not s_cp.get("nachname") and not s_cp.get("fuerWen")
+        tel_frei = not any(s_cp.get(k) for k in _CP_TELEFON_SPERRE)
+        for k, v in felder.items():
+            if v in (None, "", False):
+                continue
+            if k in _CP_NAME_GRUPPE:
+                if not name_frei or (s_cp.get(k) and k != "vornameQuelle"):
+                    continue
+            elif k == "telefonBekannt":
+                if not tel_frei:
+                    continue
+            elif s_cp.get(k):
+                continue
+            s_cp[k] = copy.deepcopy(v)
+            geaendert = True
+        if geaendert:
+            for feld in _CP_FRAGE_FELD.get(_s(s_cp.get("frage")), ()):
+                if s_cp.get(feld):
+                    s_cp["frage"] = ""
+                    break
+        return geaendert
+    return False
+
+
+def geparkte_abhaken(sit: dict, *, handlung: str = "", frage: str = "",
+                     phasen: tuple[str, ...] = ()) -> int:
+    """Geparkte Anliegen abhaken (erledigt, Checkpoint weg), die KEIN
+    Rueckkehrziel mehr sind. Alle angegebenen Filter muessen passen:
+    `handlung` — nur diese Handlung; `frage` — der Checkpoint-Sammler stand
+    auf dieser Frage; `phasen` — der Checkpoint-Sammler stand auf einer
+    dieser Phasen. Rueckgabe: Anzahl.
+
+    W-RECHNUNG (14.09.2026), zwei Faelle: (a) eine schon GEBUCHTE/fertige
+    Aufgabe, die der Rechnungs-Einschub geparkt hat — ein Ruecksprung ("So,
+    zurueck zu Ihrem Termin.") liefe ins Leere, die Maschine haette dort
+    keine Frage mehr; (b) die offene Rueckruf-Frage zur Rechnung, wenn der
+    Anrufer stattdessen ein neues Anliegen anfaengt — die Frage gilt als
+    verneint, nicht als geparkt (sonst kaeme sie nach der Buchung als
+    "So, zurueck zu Ihrem Anliegen." ohne Inhalt zurueck)."""
+    if "hirn" not in sit:
+        return 0
+    n = 0
+    for kand in hirn(sit).get("anliegen") or []:
+        if kand.get("status") != "geparkt":
+            continue
+        if handlung and _s(kand.get("handlung")) != handlung:
+            continue
+        cp = kand.get("checkpoint") if isinstance(kand.get("checkpoint"), dict) else {}
+        s_cp = cp.get("sammler") if isinstance(cp.get("sammler"), dict) else {}
+        if frage and _s(s_cp.get("frage")) != frage:
+            continue
+        if phasen and _s(s_cp.get("phase")) not in phasen:
+            continue
+        kand["status"] = "erledigt"
+        kand.pop("checkpoint", None)
+        n += 1
+    return n
+
+
 _RUECKKEHR_BRUECKE = {
     "ANLEGEN": "So, zurück zu Ihrem Termin.",
     "AENDERN": "So, zurück zu Ihrem bestehenden Termin.",
@@ -247,6 +351,17 @@ def _reaktivieren(sit: dict, kand: dict[str, Any]) -> dict[str, Any]:
     return kand
 
 
+def geparktes_ziel(sit: dict) -> dict[str, Any] | None:
+    """Das geparkte Anliegen, das ein Ruecksprung (LIFO) reaktivieren wuerde
+    — beobachtend, ohne die Sitzung zu veraendern. None = nichts geparkt."""
+    if "hirn" not in sit:
+        return None
+    for kand in reversed(hirn(sit).get("anliegen") or []):
+        if kand.get("status") == "geparkt":
+            return kand
+    return None
+
+
 def anliegen_hinzufuegen(sit: dict, a: dict[str, Any] | None,
                          *, aktivieren: bool = True) -> dict[str, Any] | None:
     """Oeffentlicher Weg fuer neue Anliegen von aussen (z. B. Lisas
@@ -254,6 +369,14 @@ def anliegen_hinzufuegen(sit: dict, a: dict[str, Any] | None,
     if not isinstance(a, dict):
         return None
     return _anhaengen(sit, a, aktivieren=aktivieren)
+
+
+def anliegen_neu(handlung: str, gegenstand: str = "", *, spiegel: str = "",
+                 quelle: str = "maschine") -> dict[str, Any]:
+    """Oeffentlicher Bau eines Anliegens fuer die Maschinen (W-RECHNUNG:
+    bianca/flow legt das ABGEBEN-Anliegen selbst an, wenn die Intent-Schicht
+    den Rechnungssatz nicht als Wechsel gedeutet hat)."""
+    return _anliegen(handlung, gegenstand, spiegel=spiegel, quelle=quelle)
 
 
 def modus_von(a: dict[str, Any] | None) -> str:
@@ -415,6 +538,18 @@ def _nach_abschluss_ruecken(sit: dict) -> dict[str, Any] | None:
             _schalten(sit, kand)
             return kand
     return None
+
+
+def geparktes_zurueckholen(sit: dict) -> dict[str, Any] | None:
+    """Nichts aktiv, aber etwas liegt geparkt — ein eingeschobenes Anliegen
+    wurde OHNE Nachfolger abgehakt (W-RECHNUNG: die Rueckruf-Frage zur
+    Rechnung wird verneint, waehrend die Buchung geparkt liegt): das zuletzt
+    geparkte Anliegen sofort zuruecknehmen, wie nach jedem Abschluss
+    (enforce: mit Checkpoint; off/shadow: nur ein offenes). Ist noch etwas
+    aktiv, wird nichts angefasst. Rueckgabe: das reaktivierte Anliegen."""
+    if not _ist_bianca(sit) or "hirn" not in sit or aktiv(sit) is not None:
+        return None
+    return _nach_abschluss_ruecken(sit)
 
 
 def nach_transfer_ruecken(sit: dict) -> dict[str, Any] | None:

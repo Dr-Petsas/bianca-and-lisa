@@ -522,7 +522,7 @@ def rueckruf_nummer_nachtragen(sit: dict) -> str:
 
 
 def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
-                     dock_text: str = "") -> None:
+                     dock_text: str = "", was: str = "") -> None:
     """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock."""
     if sit.get("testNoWrite"):
         sit["testNotizUnterdrueckt"] = True
@@ -542,6 +542,11 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
         "behandlung": _s(sit.get("verwBehandlung")) or _s(s.get("grundWortlaut") or s.get("grund")),
         "status": status or "Termin nicht gefunden — bitte pruefen und zurueckrufen",
     }
+    if _s(was):
+        # W-RECHNUNG: WORUM es beim Rueckruf geht, gehoert in die Zeile fuer
+        # die Praxis — "Rueckruf erbeten" allein sagt nicht, dass es eine
+        # Rechnungsreklamation ist.
+        eintrag["was"] = _s(was)
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with (DATA_DIR / "praxis_notizen.jsonl").open("a", encoding="utf-8") as f:
@@ -607,6 +612,7 @@ def abgeben_notiz(sit: dict, *, was: str = "") -> None:
         sit, anliegen="rueckruf",
         status="Rueckruf erbeten — bitte melden",
         dock_text=f"{name} bittet um Rueckruf: {anliegen_text}.",
+        was=anliegen_text,
     )
 
 

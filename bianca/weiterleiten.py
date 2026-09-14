@@ -297,6 +297,25 @@ def erkannt(text: str) -> bool:
     )
 
 
+def arzt_verlangt(text: str, tenant: dict | None) -> bool:
+    """Nennt der Satz einen BEHANDLER namentlich und will der Anrufer ihn
+    sprechen bzw. verbunden werden? (W-RECHNUNG 14.09.2026: "Ich möchte mit
+    Doktor Petsas über die Rechnung sprechen" bleibt Weiterleitung — die
+    Rechnungs-Erklaerung greift nur ohne konkreten Behandler-Wunsch.)
+    Info-/Bestandsfragen ("Gibt es Doktor Petsas bei euch?") zaehlen nicht."""
+    t = _s(text)
+    if not t or _INFOFRAGE_RE.search(t):
+        return False
+    if not (_SPRECH_VERB_RE.search(t) or _VERBINDEN_RE.search(t)
+            or _ARZT_SPRECHEN_RE.search(t)):
+        return False
+    try:
+        d = arztmod.deute(t, tenant or {})
+    except Exception:
+        return False
+    return bool(d and d.get("typ") in {"genannt", "gesperrt"})
+
+
 def _mensch_frueher_verlangt(sit: dict) -> bool:
     """Hat der Anrufer in diesem Gespräch schon einen Menschen verlangt?
 

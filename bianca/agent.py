@@ -167,6 +167,8 @@ _FRAGE_KERN = {
     "termin_ok": r"passt|bleibt|verschieben|absagen",
     "termin_aendern": r"verschieben|absagen",
     "sonst_noch": r"sonst\s+noch|noch\s+etwas",
+    # W-RECHNUNG (14.09.2026): "Soll ich Ihnen dafuer einen Rueckruf einrichten?"
+    "rechnung_rueckruf": r"rückruf|rueckruf|zurückrufen|zurueckrufen",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -232,9 +234,10 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         return gehirn.folge_kontrolle_frage()
     if fid == "rueckblick":
         return gehirn.rueckblick_text(sit.get("sammler") or {}, sit)
-    if fid in {"termin_ok", "termin_aendern", "sonst_noch"}:
+    if fid in {"termin_ok", "termin_aendern", "sonst_noch", "rechnung_rueckruf"}:
         # W-BESTAND-ANSAGE: Folgefragen der Verwaltung — naechste_frage kennt
         # sie nicht, der Anker holt sie nach einem Modell-Zug so zurueck.
+        # W-RECHNUNG: dito fuer die Rueckruf-Frage zur Rechnung.
         return (gehirn.FRAGE_VARIANTEN.get(fid) or ("",))[0]
     fid2, frage = gehirn.naechste_frage(sit)
     return frage if fid2 == fid else ""
@@ -961,6 +964,27 @@ def _notdienst_wache_anwenden(sit: dict, text: str) -> str:
     return text
 
 
+def _rechnung_wache_anwenden(sit: dict, text: str) -> str:
+    """W-RECHNUNG (14.09.2026): Bianca hat keine Autorisation, ueber
+    Rechnungen zu reden. Ein Modell-Satz mit Rechnungs-Vokabular, der weder
+    auf die Praxis verweist (persoenlich, vor Ort, Rueckruf) noch die eigene
+    Grenze nennt, ist eine erfundene Behauptung (Betrag, Zahlungsstand, "ich
+    pruefe das") und faellt; bleibt nichts, kommt die feste Erklaerung.
+    Preise (PZR, Bleaching) sind kein Rechnungs-Vokabular und bleiben."""
+    from kern import rechnung
+    m = rechnung.wache_modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, weg = rechnung.saeubern(text)
+    if not weg:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "rechnung-wache-shadow", " | ".join(x[:60] for x in weg))
+        return text
+    spur.merken(sit, "rechnung-wache", " | ".join(x[:60] for x in weg))
+    return neu
+
+
 def _fakten_wache_anwenden(
     sit: dict, text: str, *, nutzertext: str | None = None
 ) -> str:
@@ -1195,6 +1219,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # selbst auflegte (Live 11.09.2026: 23 Minuten).
     if abschied.an() and abschied.ist_abschied(text_in, streng=_diktat_offen(sit)):
         spur.merken(sit, "abschied-auflegen", text_in[:60])
+        # W-RECHNUNG: "Nein danke, auf Wiederhoeren" auf die Rueckruf-Frage —
+        # die Frage gilt als verneint (Report: kein Rueckruf gewuenscht),
+        # nicht als "ohne Antwort".
+        flow.rechnung_abbrechen(sit, "abschied")
         return _maschinen_antwort(
             sit,
             {
@@ -1304,6 +1332,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         text_in,
     )
     if praxis_text:
+        # W-RECHNUNG: "Nein, wann haben Sie geöffnet?" auf die Rueckruf-Frage
+        # zur Rechnung — das Nein gilt (Frage weg, geparkte Buchung kommt
+        # zurueck), die Auskunft haengt dann DEREN offene Frage an, nicht
+        # noch einmal die Rueckruf-Frage.
+        s_pa = sit.get("sammler") or {}
+        if _s(s_pa.get("frage")) == "rechnung_rueckruf" and gehirn.ist_nein(text_in):
+            flow.rechnung_abbrechen(sit, "praxis-auskunft")
         offene = _offene_frage(sit)
         if offene:
             praxis_text = f"{praxis_text} {offene}"
@@ -1633,6 +1668,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # — gesprochen waere er nicht mehr einzufangen.
             satz = _fach_wache_anwenden(sit, satz)
             satz = _notdienst_wache_anwenden(sit, satz)
+            # W-RECHNUNG: eine erfundene Rechnungs-Auskunft ebenso HIER.
+            satz = _rechnung_wache_anwenden(sit, satz)
             # W-VERBINDEN-BEWEIS: ein erfundenes Verbinde-Angebot darf nicht
             # gesprochen werden — der Anrufer wuerde mit dem Namen antworten
             # und der naechste Zug waere ein Transfer.
@@ -1687,6 +1724,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     bewacht = _anrede_wache_anwenden(sit, bewacht)
     bewacht = _fach_wache_anwenden(sit, bewacht)
     bewacht = _notdienst_wache_anwenden(sit, bewacht)
+    bewacht = _rechnung_wache_anwenden(sit, bewacht)
     bewacht = _verbinden_wache_anwenden(sit, bewacht, text_in)
     bewacht = _frage_gate_anwenden(sit, bewacht)
     # Gleiche Re-Greeting-Wache wie am P5-Ausgang — sonst faende

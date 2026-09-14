@@ -3170,6 +3170,71 @@ Drei Kleinbefunde aus den Anrufen 9dd61a59 (MedDent), 5aa87268 und da746a65
  Zweige inkl. `_buchen`-Fehlpfad und Abbruch durch anderes Anliegen);
  die Live-Wortlaute der drei Anrufe stehen dort wortgleich drin.
 
+## Rechnungsthemen nur persönlich — oder Rückruf (W-RECHNUNG 14.09.2026 — nicht rückbauen)
+
+Chef zum Thaler-Anruf 3ad3b6d3 (wörtlich): „Rechnungsreklamation., Fehlerhafte
+Rechnung., Fehler, abrechnungsfehler, Buchhaltung...Rechnung... diese und
+ähnliche Worte/Sätze müssen wir nachschärfen dadurch, dass Bianca sagt, dass
+Rechnungsthemen nur persönlich in der Praxis besprochen werden können, oder
+sie einen Rückruf anbietet und einrichtet auf Wunsch. Sie selbst hat keine
+Autorisation über Rechnungen zu reden." Live kam auf „Rechnungsreklamation."
+und „Fehlerhafte Rechnung." zweimal der Unklar-Satz — zwei verschenkte Züge.
+
+- **Erkennung** (`kern/rechnung.py`, deterministisch, 0 ms): harte Wörter
+  (Rechnung + Komposita, Reklamation, Mahnung, Abrechnung/Abrechnungsfehler,
+  Honorar, Zahlungserinnerung, Inkasso, zu viel bezahlt, doppelt abgebucht,
+  „keine Rechnung bekommen") immer; weiche (Betrag, Kosten, bezahlt …) nur mit
+  Beschwerde-Marker und ohne Termin-/Kassen-Kontext; **„Buchhaltung" ist ein
+  Rechnungsthema**, kein Durchstell-Wunsch (die Rollen-Erklärung der
+  Weiterleitung kommt nicht mehr). Gegenproben sind der größere Teil der
+  Tests: Preisfragen („Was kostet die PZR?"), Kassenfragen, Termine, ein
+  NAMENTLICH verlangter Behandler („mit Doktor Petsas über die Rechnung
+  sprechen" → Weiterleitung), Nachnamen („Rechnungshofer") und Verneinungen
+  („es geht nicht um die Rechnung"). **Im Diktat nie** (`diktat_laeuft`:
+  Nummer/Buchstabieren offen oder Fragment) — auch die Intent-Schicht
+  (`kern/intent.py`: `_eindeutig`, `_fallback`, `_wechsel_verdacht`) fragt
+  `rechnung.erkannt(text, sit)`, sonst räumte ein Wechsel-Verdacht die
+  Nummern-Frage und parkte die Buchung.
+- **Zug** (`bianca/flow._rechnung_zug`, VOR `weiterleiten.zug`, nach dem
+  Dokument-Hook): Erklärung + „Soll ich Ihnen dafür einen Rückruf
+  einrichten?" (`frage=rechnung_rueckruf`, Formular-Frage, kurze Ruhe-
+  Schwelle). Ja → der bewährte ABGEBEN-Weg (`_abgeben_zug`: Name, Nummer mit
+  Rückbestätigung Ziffer für Ziffer, `verwalten.abgeben_notiz` — die
+  JSONL-Zeile trägt jetzt `was` = worum es geht). „Rufen Sie mich wegen der
+  Rechnung zurück" überspringt die Frage. Nein / „ich komme vorbei" →
+  ehrlich abschließen (`ABGELEHNT`); unklar → EINE Nachfrage, dann gilt
+  Nein (kein Verhör). „Nein, aber ich brauche einen Termin" eröffnet die
+  Buchung; „Nein, verbinden Sie mich mit Doktor X" verbindet; ein bloßer
+  Behandlername auf die Frage verbindet NUR, wenn der Einstieg ein
+  Sprech-Wunsch war („Kann ich mit der Buchhaltung sprechen?" →
+  `rechnungStand.sprechwunsch`) — sonst unklar, nie raten. Abschied auf die
+  Frage = Nein + Auflegen.
+- **Mitten in der Buchung** wird sie geparkt (Hirn: ABGEBEN mit
+  `rechnung=True`, Checkpoint) und kommt nach Nein/Notiz zurück („Alles
+  klar. So, zurück zu Ihrem Termin. Zu welchem Behandler …?") — beim
+  Rückruf diktierte Kontaktdaten stehen dann schon im Sammler der Buchung
+  (`hirn.checkpoint_ergaenzen`: Name nur als Gruppe, Nummer als
+  `telefonBekannt` → SMS-Frage statt Diktat). Wird die Frage OHNE Nachfolger
+  verneint, holt `hirn.geparktes_zurueckholen` die Buchung sofort (sonst
+  strandete sie einen Zug). Stale-Sammler-Falle: nach `rechnung_abbrechen`
+  ist `sit["sammler"]` ein neues Dict (Checkpoint) — `zug()` holt `s` neu.
+- **Stand** `sit["rechnungStand"]` (offen/rueckruf/notiert/abgelehnt/
+  persoenlich, `was`, `gefragt`, `unklar`): nach Ablehnung fragt ein
+  erneutes Rechnungswort kürzer (`ERKLAERUNG_WIEDERHOLT`), nach der Notiz
+  gibt es keine zweite Sammelei („schon notiert — die Praxis meldet sich").
+  `kern/gedaechtnis.zusammenfassung` hängt `rechnung.zusammenfassung_zeile`
+  an — das Thema steht im Report AUCH ohne Rückruf.
+- **LLM-Ausgang** (`agent._rechnung_wache_anwenden`, Endtext UND P5-Satz):
+  ein Modell-Satz mit hartem Rechnungs-Vokabular, der weder auf die Praxis
+  verweist noch die eigene Grenze nennt, fällt (Betrag, Zahlungsstand, „ich
+  kümmere mich"); bleibt nichts, kommt die feste Erklärung. Preise (PZR,
+  Bleaching) sind kein Rechnungs-Vokabular. Prompt-Block RECHNUNGEN in
+  `bianca/prompt.py`.
+- Notaus: `RECHNUNG=0` (Erkennung aus — Verhalten wie vor dem 14.09.),
+  `RECHNUNG_WACHE=off|shadow|enforce` (Default enforce). Tests:
+  `tests/test_rechnung.py` (57), Buchhaltung-Fälle in
+  `tests/test_weiterleiten.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
