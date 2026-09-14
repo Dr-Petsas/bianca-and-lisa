@@ -397,6 +397,13 @@ def vorrat_anstossen(sit: dict) -> None:
             if found.get("ok") and sit.get("vorratKey") == mein_key:
                 isos = calendar._iso_liste(found.get("slots") or [])
                 sit["slotVorrat"] = isos
+                # W-MOTIV-KONSISTENT (14.09.2026): fand erst das Ersatz-Motiv
+                # Zeiten, wird es gepinnt und der Rahmen-Schluessel darauf
+                # umgestellt — sonst haelt flow._angebot den Vorrat fuer
+                # fremd und laedt synchron nach (eine CF-Runde umsonst).
+                if isos and gehirn.motiv_fallback_merken(sit, found, ctx["calendarId"]):
+                    mein_key = _vorrat_schluessel(sit)
+                    sit["vorratKey"] = mein_key
                 # Fuer WELCHEN Rahmen wurde geladen? flow._angebot nutzt den
                 # Vorrat NUR, wenn dieser Marker zum aktuellen Stand passt
                 # (W-MOTIV-FENSTER: nie Zeiten aus fremden Motiv-Fenstern).

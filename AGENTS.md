@@ -2705,6 +2705,56 @@ Dabei entfernt: die Debug-Instrumentierung der Sitzung a62ee2 vom
 `agent.py`, `weiterleiten.py` — NDJSON nach `/tmp/debug-a62ee2.log`); sie
 war zur Fehlersuche gedacht und hatte in V2.3 nichts mehr zu tun.
 
+## Gesucht = gebucht (W-MOTIV-KONSISTENT 14.09.2026 — nicht rückbauen)
+
+Chef 14.09.2026 06:1x: „hör dir das letzte gespräch an med dent — die buchung
+klappt nicht." Der Anrufer sagte auf das Angebot „Ja" und hörte nur „Termin
+ist gerade weg". Im Tool-Ledger: `getFreeTimeSlots` mit „KCH
+Kontrolluntersuchung" (Zeiten da), `masBookAppointment` mit
+`selfCheckinEmergencyVisitMotive` → 400 „The slot is not available.".
+
+Drei Ursachen, drei Wachen (`kern/motive.py`, `bianca/gehirn.py`,
+`kern/calendar.py`, `bianca/flow.py`, `bianca/hintergrund.py`):
+
+1. **Terminal-Pseudo-Motiv nie am Telefon** (`motive.telefon_tauglich`):
+   Die Plattform führt „Notfall (Selbst-Check-in)" mit fester Id
+   (docgendaweb `SELF_CHECKIN_EMERGENCY_VISIT_MOTIVE_ID`) für die
+   Check-in-Terminals, `allowOnlineBooking=false` — die CF liefert dafür nie
+   Zeiten und lehnt jede Buchung ab. `motive.holen` und `motive.katalog`
+   filtern es (auch aus persistierten Sitzungen und der Mandanten-Liste).
+2. **Buchbar zuerst — über die GANZE Kette** (`gehirn.motiv_fuer_kalender`):
+   die Buchbar-Bevorzugung galt nur innerhalb einer Mapping-Stufe; „Ich hab
+   Schmerzen" gewann exakt/Konzept/Fuzzy jeweils ein unbuchbares Motiv,
+   obwohl „KCH akute Beschwerden/Notfall" buchbar im Katalog stand. Jetzt
+   läuft exakt → Konzept → Fuzzy erst über die buchbaren Motive, dann über
+   den vollen Katalog (unbuchbarer Wunsch wird NICHT still zu Kontrolle —
+   die Slotsuche sagt ehrlich, dass telefonisch nichts geht, bzw. fällt
+   sichtbar zurück, s. 3). Live-Gegenprobe gegen den echten MedDent-Katalog
+   (133 Motive, 122 nicht online-buchbar): Schmerzen → 6QHf… „KCH akute
+   Beschwerden/Notfall" (buchbar).
+3. **Ersatz-Motiv wird gebucht** (`find_slots_behandler` → `motivFallback`
+   + `motivOriginal`; `gehirn.motiv_fallback_merken` pinnt es in
+   `sammler["motivFallback"]`, `_motiv_fallback_pin` hält es in
+   `motiv_fuer_kalender`, solange Kalender UND Grund gleich bleiben):
+   `masBookAppointment` prüft die Verfügbarkeit JE MOTIV (`isSlotAvailable`
+   → `getFreeTimeSlots`); wer mit Kontrolle sucht und mit dem Original bucht,
+   scheitert IMMER — die Lülf-Regel vom 08.09. („gebucht wird weiter mit dem
+   Original-Motiv") konnte nie funktionieren. Der Wunsch bleibt im Sammler
+   (`grund`/`grundWortlaut`) und landet als Notiz am Termin: „Gewünscht:
+   „Füllung" (KCH Füllung klein) — dafür war telefonisch nichts buchbar,
+   eingetragen als KCH Kontrolluntersuchung. Bitte Besuchsgrund und Dauer
+   prüfen." Der Hintergrund-Vorrat pinnt ebenso und stempelt `vorratFuer`
+   auf das Ersatz-Motiv um (sonst lud `_angebot` eine CF-Runde umsonst nach).
+
+Offen und NICHT in Biancas Hand: `allowOnlineBooking=false` sperrt in der
+CF auch Telefon-Buchungen. Bei **Thaler** sind „KCH Kontrolluntersuchung"
+und „KCH Erstuntersuchung/Neupatient" (zwei der sechs freigegebenen
+Gruppen) so markiert → 0 Zeiten, Rückruf-Notiz statt Termin. Lösung: im
+Portal Online-Buchung für diese Motive freischalten ODER in der CF den
+Telefon-Agenten (source pickadoc-bianca) von dem Gate ausnehmen — beides
+Entscheidung des Chefs, nicht dieses Repos. Tests:
+`tests/test_motiv_konsistent.py` (12).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

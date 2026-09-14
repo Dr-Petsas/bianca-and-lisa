@@ -53,6 +53,27 @@ def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
 
 
+# W-MOTIV-TELEFON (14.09.2026, MedDent-Anruf 06:0x): Die Plattform fuehrt ein
+# Pseudo-Motiv "Notfall (Selbst-Check-in)" mit fester Id fuer die
+# Check-in-Terminals (docgendaweb visitMotivesService
+# SELF_CHECKIN_EMERGENCY_VISIT_MOTIVE_ID). Es hat allowOnlineBooking=false,
+# die Cloud Function liefert dafuer NIE freie Zeiten und lehnt jede Buchung
+# ab ("The slot is not available."). Live mappte Bianca "Ich hab Schmerzen"
+# genau darauf: die Suche fiel auf Kontrolle zurueck und fand Zeiten, die
+# Buchung lief mit dem Pseudo-Motiv und scheiterte — der Anrufer bekam nach
+# "Ja" nur "Termin ist gerade weg". Das Motiv gehoert nicht ans Telefon.
+SELFCHECKIN_PSEUDO_ID = "selfCheckinEmergencyVisitMotive"
+
+
+def telefon_tauglich(vm: dict) -> bool:
+    """Kann dieses Motiv ueberhaupt am Telefon gebucht werden?"""
+    return isinstance(vm, dict) and _s(vm.get("id")) != SELFCHECKIN_PSEUDO_ID
+
+
+def _telefon_katalog(kat: list) -> list[dict]:
+    return [m for m in kat if telefon_tauglich(m)]
+
+
 def holen(tenant: dict) -> list[dict]:
     """Katalog live von der Plattform (masVisitMotives) — [] bei Fehler."""
     try:
@@ -70,7 +91,9 @@ def holen(tenant: dict) -> list[dict]:
     if not isinstance(data, dict) or data.get("status") != "success":
         return []
     motive = data.get("motives")
-    return [m for m in motive if isinstance(m, dict) and _s(m.get("id"))] if isinstance(motive, list) else []
+    if not isinstance(motive, list):
+        return []
+    return _telefon_katalog([m for m in motive if isinstance(m, dict) and _s(m.get("id"))])
 
 
 def anstossen(sit: dict) -> None:
@@ -104,10 +127,12 @@ def katalog(sit: dict) -> list[dict]:
     """Frisch geholter Katalog der Sitzung — sonst die Mandanten-Liste."""
     kat = sit.get("motivKatalog")
     if isinstance(kat, list) and kat:
-        return kat
+        # Auch Sitzungen, deren Katalog vor dem Deploy geladen wurde
+        # (Persistenz), sehen das Terminal-Pseudo-Motiv nicht mehr.
+        return _telefon_katalog(kat)
     tenant = sit.get("tenant") or {}
     vms = tenant.get("visitMotives")
-    return vms if isinstance(vms, list) else []
+    return _telefon_katalog(vms) if isinstance(vms, list) else []
 
 
 def erlaubt(vm: dict, calendar_id: str) -> bool:

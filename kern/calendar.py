@@ -144,9 +144,20 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
     """Slots NUR in diesem Kalender. Leeres Motiv-Fenster → Kontrolle.
 
     Chef 08.09.2026 (Lülf): die Praxis war frei, PAR-AIT-geschlossen lieferte
-    []. Gesucht wird am Behandler, unabhängig vom Spezialgrund; gebucht/
-    verschoben wird weiter mit dem Original-Motiv. Nie andere Ärzte, ausser
-    der Anrufer fragt ausdrücklich danach (dann steht deren calendarId im ctx).
+    []. Gesucht wird am Behandler, unabhängig vom Spezialgrund. Nie andere
+    Ärzte, ausser der Anrufer fragt ausdrücklich danach (dann steht deren
+    calendarId im ctx).
+
+    W-MOTIV-KONSISTENT (14.09.2026, MedDent-Anruf 06:0x): GEBUCHT wird mit
+    dem Motiv, das die Zeiten geliefert hat — nicht mehr mit dem Original.
+    masBookAppointment prueft die Verfuegbarkeit je Motiv (isSlotAvailable ->
+    getFreeTimeSlots mit visitMotiveId); ein Motiv ohne Fenster/ohne
+    allowOnlineBooking liefert dort [] und die Buchung scheitert mit "The
+    slot is not available." — genau so lief es live: gesucht mit Kontrolle,
+    gebucht mit dem Notfall-Pseudo-Motiv, Anrufer bekam nach "Ja" nur
+    "Termin ist gerade weg". Die Antwort traegt deshalb ``motivFallback`` +
+    ``motivOriginal``; `gehirn.motiv_fallback_merken` pinnt das Ersatz-Motiv
+    im Sammler, der O-Ton landet in der Terminnotiz.
     """
     such = dict(ctx or {})
     found = find_slots(tenant, such, start_date=start_date, egal=False, source=source)
@@ -169,6 +180,10 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
     zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source)
     if zweit.get("ok") and _iso_liste(zweit.get("slots") or []):
         zweit["motivFallback"] = "kontrolle"
+        zweit["motivOriginal"] = {
+            "id": _s(such.get("visitMotiveId")),
+            "name": _s(such.get("visitMotiveName")),
+        }
         return zweit
     return found
 

@@ -732,6 +732,9 @@ FELDER_START = {
     "grund": "",
     "motivId": "",
     "motivName": "",
+    # W-MOTIV-KONSISTENT: Ersatz-Motiv, mit dem die Slotsuche Zeiten fand
+    # ({calendarId, von, vonName, id, name}) — gebucht wird GENAU damit.
+    "motivFallback": None,
     "wunsch": None,
     "wunschText": "",
     "vorname": "",
@@ -4348,23 +4351,95 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     wortlaut = zimmer_map.mapping_text(
         tenant, f"{s['grundWortlaut']} {s['grund']}")
     muster = besuchsgrund.konzept_muster(wortlaut)
-    vm = besuchsgrund.katalog_exakt(
-        wortlaut, katalog=kat, calendar_id=calendar_id)
-    if not vm and muster:
-        vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=kat, calendar_id=calendar_id)
+
+    def _aufloesen(pool: list[dict]) -> dict | None:
+        vm = besuchsgrund.katalog_exakt(
+            wortlaut, katalog=pool, calendar_id=calendar_id)
+        if not vm and muster:
+            vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=pool, calendar_id=calendar_id)
+        if not vm and wortlaut:
+            # W-MOTIV-KATALOG (03.09.2026): kein Konzept-Treffer — den
+            # Wortlaut generisch gegen den Behandler-Katalog mappen (Namen +
+            # Erklärtexte), bevor das alte Motiv oder Kontrolle greift.
+            vm = besuchsgrund.katalog_treffer(wortlaut, katalog=pool, calendar_id=calendar_id)
+        return vm
+
+    # W-MOTIV-BUCHBAR (14.09.2026, MedDent-Anruf 06:0x): Die Cloud Function
+    # liefert fuer Motive mit allowOnlineBooking=false KEINE freien Zeiten
+    # und lehnt die Buchung ab. Live gewann fuer "Ich hab Schmerzen" ueber
+    # alle drei Stufen hinweg ein nicht buchbares Notfall-Motiv, obwohl
+    # "KCH akute Beschwerden/Notfall" buchbar im Katalog stand — die
+    # Buchbar-Bevorzugung galt nur INNERHALB einer Stufe. Deshalb laeuft
+    # die ganze Kette zuerst ueber die buchbaren Motive; erst wenn dort
+    # nichts passt, ueber den vollen Katalog (dann sagt die leere Slotsuche
+    # ehrlich, dass telefonisch nichts geht — nie still etwas anderes).
+    buchbar = [v for v in kat if v.get("allowOnlineBooking") is not False]
+    vm = _aufloesen(buchbar) if buchbar and len(buchbar) < len(kat) else None
     if not vm:
-        # W-MOTIV-KATALOG (03.09.2026): kein Konzept-Treffer — den Wortlaut
-        # generisch gegen den Behandler-Katalog mappen (Namen + Erklärtexte),
-        # bevor das alte Motiv oder der Kontrolle-Fallback greift.
-        if wortlaut:
-            vm = besuchsgrund.katalog_treffer(wortlaut, katalog=kat, calendar_id=calendar_id)
+        vm = _aufloesen(kat)
     if not vm and s["motivId"]:
         aktuell = next((v for v in kat if _s(v.get("id")) == s["motivId"]), None)
         if aktuell and motive.erlaubt(aktuell, calendar_id):
             vm = aktuell
     if not vm and s["grund"] and motive.ist_zahn(kat):
         vm = besuchsgrund.fallback_motiv(tenant, katalog=kat, calendar_id=calendar_id)
-    return _besprechung_oder(sit, vm, calendar_id)
+    vm = _besprechung_oder(sit, vm, calendar_id)
+    return _motiv_fallback_pin(s, vm, calendar_id, kat)
+
+
+def _motiv_fallback_pin(s: dict, vm: dict | None, calendar_id: str,
+                        kat: list[dict]) -> dict | None:
+    """W-MOTIV-KONSISTENT: Hat die Slotsuche fuer diesen Kalender erst mit
+    dem Ersatz-Motiv Zeiten gefunden, bleibt GENAU dieses Motiv das Buchungs-
+    Motiv — solange Kalender und Grund dieselben sind. Wechselt der Anrufer
+    Grund oder Behandler, verfaellt der Pin und das Mapping laeuft frisch."""
+    pin = s.get("motivFallback")
+    if not isinstance(pin, dict) or not _s(pin.get("id")):
+        return vm
+    vm_id = _s((vm or {}).get("id"))
+    if (_s(pin.get("calendarId")) == _s(calendar_id)
+            and vm_id in {_s(pin.get("von")), _s(pin.get("id"))}):
+        ersatz = next((v for v in kat if _s(v.get("id")) == _s(pin["id"])), None)
+        return ersatz or {"id": _s(pin["id"]), "name": _s(pin.get("name"))}
+    s["motivFallback"] = None
+    return vm
+
+
+def motiv_fallback_merken(sit: dict, found: dict, calendar_id: str) -> bool:
+    """Ersatz-Motiv aus einer Slotsuche (`find_slots_behandler`) pinnen.
+
+    W-MOTIV-KONSISTENT (14.09.2026): masBookAppointment prueft die
+    Verfuegbarkeit je Motiv — wer mit Kontrolle sucht und mit dem
+    Original-Motiv bucht, bekommt "The slot is not available." (live
+    MedDent 06:0x: der Anrufer sagte Ja und hoerte nur "Termin ist gerade
+    weg"). Deshalb wird das Motiv, das die Zeiten geliefert hat, zum
+    Buchungs-Motiv; der gewuenschte Grund bleibt im Sammler (grund/
+    grundWortlaut) und landet als Notiz am Termin. True = gepinnt.
+    """
+    if not isinstance(found, dict) or not found.get("motivFallback"):
+        return False
+    mv = found.get("motive") if isinstance(found.get("motive"), dict) else {}
+    fb_id, fb_name = _s(mv.get("id")), _s(mv.get("name"))
+    if not fb_id:
+        return False
+    s = sammler(sit)
+    orig = found.get("motivOriginal") if isinstance(found.get("motivOriginal"), dict) else {}
+    von_id = _s(orig.get("id")) or _s(s.get("motivId"))
+    von_name = _s(orig.get("name")) or _s(s.get("motivName"))
+    if von_id == fb_id:
+        return False
+    s["motivFallback"] = {
+        "calendarId": _s(calendar_id),
+        "von": von_id,
+        "vonName": von_name,
+        "id": fb_id,
+        "name": fb_name,
+    }
+    s["motivId"] = fb_id
+    s["motivName"] = fb_name
+    print(f"bianca-motiv-fallback: {von_name or von_id!r} -> {fb_name!r} "
+          f"(Kalender {_s(calendar_id) or '-'})", flush=True)
+    return True
 
 
 def kalender_zu_grund(sit: dict) -> None:

@@ -789,6 +789,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             if frisch:
                 sit["slotVorrat"] = frisch
                 ctx["slotVorrat"] = list(frisch)
+                # W-MOTIV-KONSISTENT (14.09.2026): kamen die Zeiten erst mit
+                # dem Ersatz-Motiv (Kontrolle), wird GENAU damit gebucht —
+                # vor dem Vorrat-Stempel, damit der Schluessel zum Motiv
+                # passt, mit dem gesucht wurde.
+                if gehirn.motiv_fallback_merken(sit, found, ctx.get("calendarId") or ""):
+                    ctx["visitMotiveId"] = s["motivId"]
+                    ctx["visitMotiveName"] = s["motivName"]
                 sit["vorratFuer"] = hintergrund.vorrat_schluessel(sit)
                 sit["vorratDispatch"] = (
                     found.get("dispatch")
@@ -1325,7 +1332,18 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             # O-Ton des Anrufers nicht wörtlich ab (Fallback- oder Fuzzy-
             # Mapping), bekommt die Praxis den Wortlaut ans Terminpopup.
             o_ton = kern_notes.grund_kurz(sit)
-            if (o_ton and s["motivName"]
+            pin = s.get("motivFallback") if isinstance(s.get("motivFallback"), dict) else None
+            if pin and _s(pin.get("id")) == _s(s["motivId"]) and _s(pin.get("vonName")):
+                # W-MOTIV-KONSISTENT (14.09.2026): gebucht wurde das Ersatz-
+                # Motiv, weil das gewuenschte telefonisch keine Zeiten hatte
+                # — die Praxis muss Grund und Dauer am Termin nachziehen.
+                wunsch = f"„{o_ton}“ ({pin['vonName']})" if o_ton else pin["vonName"]
+                hinweise.append(
+                    f"Gewünscht: {wunsch} — dafür war telefonisch nichts "
+                    f"buchbar, eingetragen als {s['motivName']}. "
+                    "Bitte Besuchsgrund und Dauer prüfen."
+                )
+            elif (o_ton and s["motivName"]
                     and not besuchsgrund.deckt_ab(f"{s['motivName']} {s['grund']}", o_ton)):
                 hinweise.append(
                     f"Anrufer wörtlich: „{o_ton}“ — gebucht als {s['motivName']}."
