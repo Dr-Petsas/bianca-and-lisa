@@ -2759,7 +2759,8 @@ Entscheidung des Chefs, nicht dieses Repos. Tests:
 
 | Stand | Tag | Anleitung |
 | --- | --- | --- |
-| **V2.4, 14.09.2026 02:10 (aktuell)** | `telefonki-produktionsstand-v2.4-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.4.md` — App-Image `6305bd4450a7`; neun Chef-Punkte vom 13.09. abends + Thaler-Kalender-Merge; Abnahme Suite 1606/0, prod_smoke, Feldprobe 68/68 live |
+| **V2.5, 14.09.2026 06:50 (aktuell)** | `telefonki-produktionsstand-v2.5-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.5.md` — App-Image `00f8b9c73f87`; V2.4 + W-MOTIV-KONSISTENT (MedDent-Schmerz-Buchung 06:0x); Abnahme Live-Nachstellung 8/8, prod_smoke, Feldprobe 68/68 nach dem Deploy |
+| V2.4, 14.09.2026 02:10 | `telefonki-produktionsstand-v2.4-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.4.md` — App-Image `6305bd4450a7`; neun Chef-Punkte vom 13.09. abends + Thaler-Kalender-Merge; Abnahme Suite 1606/0, prod_smoke, Feldprobe 68/68 live. Ohne Motiv-Fix: Schmerz-Buchung bei MedDent scheitert |
 | V2.3, 13.09.2026 | `telefonki-produktionsstand-v2.3-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.3.md` — App-Image `9bb32ed3a5c9`; Sicherungsskript-Falle (Tag zeigte erst auf das V2.2-Image) dort dokumentiert |
 | V2.2, 13.09.2026 | `telefonki-produktionsstand-v2.2-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.2.md` |
 | V2.1, 13.09.2026 | `telefonki-produktionsstand-v2.1-2026-09-13` | `docs/PRODUKTIONSSTAND-V2.md` |
