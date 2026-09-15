@@ -3480,11 +3480,11 @@ geprüft). Kurz:
    (32 Motive in Firestore, eines filtert `motive.telefon_tauglich`) — darunter
    Krebsvorsorge, PAP/HPV, Schwangerschaftsvorsorge, Spirale. Die Zuordnung
    trifft live korrekt („Krebsvorsorge" → `GYN Krebsvorsorge`), die CF liefert
-   dafür aber 0 Zeiten. **Der Ausweich-Weg ist hier gefährlich:** Rüther führt
-   kein Kontroll-Motiv, also greift in `tenants._sicheres_default` der blinde
-   „erster Eintrag"-Rückfall und `_kontrolle_ersatz` nimmt
-   `GYN Endometriose Erstberatung` (45 min) — eine Krebsvorsorge würde als
-   Endometriose-Erstberatung eingetragen. Fix-Vorschlag im Befund-Dokument.
+   dafür aber 0 Zeiten. Seit W-ERSATZ-MOTIV/V2.8.1 wird dafür niemals mehr
+   eine Endometriose-Erstberatung angeboten: Ben sagt ehrlich, dass diese
+   Terminart telefonisch nicht vergeben werden darf, und schreibt eine
+   Rückruf-Notiz. Für echte Telefonbuchungen muss die Praxis die gewünschten
+   Motive im Portal trotzdem freischalten.
 4. Die Öffnungszeiten stehen auf dem Portal-Default (alle sieben Tage
    08:00–18:00). `standort.zeiten_von` verwirft genau dieses Muster absichtlich
    („nie raten") — damit hat Ben zu den Zeiten KEINE Quelle. Er verwies
@@ -3493,6 +3493,32 @@ geprüft). Kurz:
 5. Der Dialplan-Eintrag für 4160 liegt als Referenzkopie in
    `sip_bridge/extensions_bianca.conf`; der Live-Asterisk braucht ihn noch
    (kein Shell-Zugang von hier).
+
+## Nur echte Kontroll-Motive als Ausweich (W-ERSATZ-MOTIV 15.09.2026 — nicht rückbauen)
+
+Rüther führt kein generisches Kontroll-Motiv. Der alte Rückfall
+`tenants._sicheres_default` lieferte deshalb für „Krebsvorsorge“ die
+`GYN Endometriose Erstberatung` — andere Leistung, andere Dauer.
+
+- `tenants.taugt_als_ersatz` und `calendar._kontrolle_ersatz` erlauben nur
+  echte Kontroll-, Vorsorge-, Nachsorge-, Recall- oder Check-up-Motive.
+- Ist das gewünschte Motiv im frischen Sitzungs-Katalog ausdrücklich
+  `allowOnlineBooking=false` und existiert kein sicherer Ersatz, trägt die
+  Slotsuche `motivNichtTelefonisch`. `flow._angebot` nennt weder internes
+  GYN-Kürzel noch das Wort „Krebs“, sondern sagt ehrlich „Diese Terminart darf
+  ich telefonisch nicht vergeben“ und legt eine echte Rückruf-Notiz an.
+- MedDent, Thaler und Blessing behalten ihre echten Kontroll-Ausweichmotive.
+  Notaus `MOTIV_ERSATZ_STRENG=0` stellt nur die alte Ersatz-Auswahl wieder her.
+- Das erste V2.8-Image enthielt zwar die strenge Auswahl, aber wegen eines
+  partiellen Server-Syncs nicht die Übergabe `visitMotiveOnline` in
+  `calendar._nicht_telefonisch`; dadurch blieb der gesprochene Satz noch
+  fälschlich bei „kein freier Termin“. V2.8.1 synchronisiert genau diese
+  fehlende Datei. Die Produktionsabnahme prüft den Marker seitdem hart.
+
+Tests: `tests/test_ersatz_motiv.py` (31). Live-Probe, vollständig read-only
+bis auf eine Rückruf-Notiz im temporären Verzeichnis:
+`docker exec -w /app telefonki-bianca-1 python
+tools/_probe_ersatz_motiv_live.py`.
 
 ## Keine erfundenen Öffnungszeiten (W-ZEITEN-WACHE 15.09.2026 — nicht rückbauen)
 
@@ -3787,7 +3813,8 @@ alle anderen Mandanten bleiben unverändert. Regressionen:
 
 | Stand | Tag | Anleitung |
 | --- | --- | --- |
-| **V2.8, 15.09.2026 19:20 (aktuell — Blessing Namen, Aufgaben, Motive, Slots und knapper Mund)** | `telefonki-produktionsstand-v2.8-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.8.md` — Live-Image `0f2a38889c0f`; vollständiger Server-Schnappschuss, Git-Bundle und lokale Kopie; SIP/TTS/STT unverändert |
+| **V2.8.1, 15.09.2026 19:30 (aktuell — V2.8 plus vollständiger W-ERSATZ-MOTIV-Nachzug)** | `telefonki-produktionsstand-v2.8.1-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.8.1.md` — Live-Image `574c2de2068d`; Rüther hört bei gesperrtem Motiv ehrlich „telefonisch nicht vergeben“, niemals Endometriose-Ausweich |
+| V2.8, 15.09.2026 19:20 (Blessing Namen, Aufgaben, Motive, Slots und knapper Mund; partieller W-ERSATZ-MOTIV-Rollout) | `telefonki-produktionsstand-v2.8-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.8.md` — Image `0f2a38889c0f`; Blessing-Paket vollständig, aber `kern/calendar.py` ohne Sitzungs-Katalog-Nachzug; nur über `produktionsstand-v2.8-partial-20260915` zurückrollen |
 | V2.7, 15.09.2026 16:16 (Rückrollpunkt VOR den Blessing-Fixes) | `telefonki-produktionsstand-v2.7-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.7.md` — Live-Image `cf97be2244d9` (Rüther/Ben, Handy-Akte, Buchungsbeweis, Zeiten-Wache); SIP-Brücke als Dateisystem-Tar (`eb97b3d3e0e7`, Layer weg); `tts-stimmen.tgz` (Bianca+Ben) |
 | V2.6, 14.09.2026 12:10 | `telefonki-produktionsstand-v2.6-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.6.md` — App-Image `c04b16aada71`; V2.5 + W-TELEFON-ZULETZT (`f92951f`); erstmals SIP-Brücken-Image als Tar, Parakeet-Qwen-Repo (Bundle + 24 uncommittete Einträge), komplettes lokales `.data/`; Live-Asterisk 212.132.104.205 ohne Shell-Zugang → Dialplan nur als Referenzkopie |
 | V2.5, 14.09.2026 06:50 | `telefonki-produktionsstand-v2.5-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.5.md` — App-Image `00f8b9c73f87`; V2.4 + W-MOTIV-KONSISTENT (MedDent-Schmerz-Buchung 06:0x); Abnahme Live-Nachstellung 8/8, prod_smoke, Feldprobe 68/68 nach dem Deploy |

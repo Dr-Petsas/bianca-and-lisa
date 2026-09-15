@@ -1,5 +1,11 @@
 # Produktionsstand V2.8 — 15.09.2026, 19:20 Uhr
 
+> Abgelöst durch V2.8.1. Das Blessing-Paket ist vollständig, im Image fehlt
+> jedoch der bereits in Git enthaltene Sitzungs-Katalog-Nachzug von
+> W-ERSATZ-MOTIV. Rückfall nur über den erhaltenen Image-Tag
+> `telefonki:produktionsstand-v2.8-partial-20260915`; Details:
+> `docs/PRODUKTIONSSTAND-V2.8.1.md`.
+
 V2.8 ist der erste Live-Stand des Blessing-Verbesserungspakets. Ziel ist,
 die belegte Tagesbasis von **0 Prozent super / 6,7 Prozent super+gut** durch
 weniger Leerlauf und mehr korrekt abgeschlossene Terminaufgaben anzuheben.
