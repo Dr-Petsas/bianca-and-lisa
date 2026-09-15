@@ -72,7 +72,7 @@ echo -n "W-ERSATZ-MOTIV komplett: "; docker exec telefonki-bianca-1 python -c \
 # Aerztin ist ein eigener Schritt; nach der Buchung gibt es keine offene
 # Sonst-noch-Schleife. Relative Slotwahl bleibt bei reiner Ansagekorrektur.
 echo -n "Blessing-Ruhe-V2.9:      "; docker exec telefonki-bianca-1 python -c \
-  'import json; from kern import sprech; t=json.load(open("/app/tenants/blessing.json")); k=("terminNotizNachBuchung","buchungAbschlussKompakt"); assert all(t.get(x) is True for x in k); assert t.get("arztNotizFrageText"); assert "arztNotizAutomatisch" not in t; assert sprech.ohne_krebs("Hautkrebs-Screening") == "Hautscreening"; print("OK")' \
+  'import json; from kern import sprech; t=json.load(open("/app/tenants/blessing.json")); k=("terminNotizNachBuchung","buchungAbschlussKompakt"); gruss="Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der Ka-ih Assistentin Bianca ...Wie kann ich helfen?"; assert all(t.get(x) is True for x in k); assert t.get("arztNotizFrageText"); assert "arztNotizAutomatisch" not in t; assert t.get("begruessungText") == gruss; assert sprech.ohne_krebs("Hautkrebs-Screening") == "Hautscreening"; print("OK")' \
   || exit 1
 echo -n "Blessing-Ein-Thema-Code: "; docker exec telefonki-bianca-1 grep -c \
   'task_auswahl and gespraech.kompakt_aktiv' /app/bianca/agent.py

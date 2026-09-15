@@ -5,7 +5,7 @@ from kern.tenants import laden
 
 
 BLESSING_GRUSS = (
-    "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der Ki "
+    "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der Ka-ih "
     "Assistentin Bianca ...Wie kann ich helfen?"
 )
 

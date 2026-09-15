@@ -3809,8 +3809,10 @@ in einem rund 16 Sekunden langen Block. Vier Bitten, noch eine Notiz für die
   wiederholt nur die offene Frage, ohne neue Begrüßung. So kommt pro Zug nur
   ein Thema aus dem Mund.
 - Die Meldeansage lautet in Pickadoc-DB und lokalem Rückfall exakt:
-  „Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der Ki Assistentin
-  Bianca ...Wie kann ich helfen?“ Die DB bleibt die Wahrheit; nach einer
+  „Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der Ka-ih Assistentin
+  Bianca ...Wie kann ich helfen?“ Die Schreibweise „Ka-ih“ (statt „Ki“) zwingt
+  den TTS-Container, die Buchstaben K und I einzeln zu sprechen; „Ki“ wurde als
+  „Kie“ verschliffen (Chef 15.09.2026). Die DB bleibt die Wahrheit; nach einer
   Portaländerung den Mandanten-Cache leeren.
 - Die neuen Verhaltensschalter und Texte stehen nur in `tenants/blessing.json`;
   MedDent, Thaler und Rüther behalten ihren bisherigen Pfad.
