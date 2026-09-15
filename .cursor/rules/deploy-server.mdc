@@ -81,9 +81,27 @@ cd /home/cursor/telefonki/stt_serve && docker compose up -d --build
 
 Engine-/Stimmwechsel: App-`.env` `TTS_BASE`/`STT_BASE` setzen + App recreate; TTS-Platten-Cache im Volume ggf. leeren (`.data/tts-cache/`).
 
-## Asterisk / Dialplan (selten)
+## Asterisk / Dialplan
 
-Referenzkopie: Repo `sip_bridge/extensions_bianca.conf`. Live: `ssh -J pickadoc1 asterisk-strato`, Backup vor Edit, dann Dialplan reload. Brücken-Code selbst = `sipbridge`-Rebuild wie oben.
+**Live-Asterisk ist IMMER der neue Server** (Umzug 12.09.2026):
+
+| | |
+| --- | --- |
+| **Live** | `root@212.132.104.205` (SSH vom Dev-Rechner direkt) |
+| **Alt — NIE für Live-Änderungen** | `asterisk-strato` = `87.106.34.137` (Alias in `~/.ssh/config` zeigt noch auf den Alten) |
+| Tunnel-Ziel (pickadoc1) | `ASTERISK_SSH=root@212.132.104.205` in Server-`.env` / Compose-`tunnel` |
+
+Bei „Asterisk“, „Dialplan“, „DID einrichten“, „Nummer auf Asterisk“:
+
+1. Repo-Referenz pflegen: `sip_bridge/extensions_bianca.conf` (+ ggf. `BRIDGE_DID_MAP` in `compose.yml` / `sip_bridge/server.py`, Tenant unter `tenants/`).
+2. Live **nur** auf `212.132.104.205`: Backup → Datei nach `/etc/asterisk/extensions_bianca.conf` → `asterisk -rx 'dialplan reload'`.
+3. Vorher mit `hostname -I` prüfen, dass die Adresse `212.132.104.205` ist — nie `asterisk-strato` / `87.106…` für Produktion anfassen.
+4. Brücken-Code / DID-Map = `sipbridge`-Rebuild auf pickadoc1 wie oben.
+
+```powershell
+scp -o BatchMode=yes sip_bridge/extensions_bianca.conf root@212.132.104.205:/tmp/extensions_bianca.conf
+ssh -o BatchMode=yes root@212.132.104.205 "set -e; cp -a /etc/asterisk/extensions_bianca.conf /etc/asterisk/extensions_bianca.conf.bak-$(date +%Y%m%d); install -o asterisk -g asterisk -m 640 /tmp/extensions_bianca.conf /etc/asterisk/extensions_bianca.conf; rm -f /tmp/extensions_bianca.conf; asterisk -rx 'dialplan reload'"
+```
 
 ## Abnahme (kurz)
 
