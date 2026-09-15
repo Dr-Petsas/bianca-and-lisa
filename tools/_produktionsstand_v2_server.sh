@@ -28,6 +28,11 @@ for s in tts_serve stt_serve; do
   [ -f "$s/compose.yml" ] && cp -a "$s/compose.yml" "$ZIEL/compose-$s.yml"
   [ -f "$s/.env" ] && cp -a "$s/.env" "$ZIEL/env-$s"
 done
+# Die Stimm-Referenzen (15.09.2026): sie liegen NUR hier. Im Git sind sie
+# bewusst nicht (tts_serve/.gitignore -> stimmen/*.wav, Stimmproben sind
+# biometrische Daten), und ohne sie kann kein Container die Stimmen neu
+# registrieren — ein Serverausfall haette Bianca UND Ben stumm gemacht.
+[ -d tts_serve/stimmen ] && tar czf "$ZIEL/tts-stimmen.tgz" tts_serve/stimmen
 [ -f sip_bridge/extensions_bianca.conf ] && cp -a sip_bridge/extensions_bianca.conf "$ZIEL/extensions_bianca.conf"
 
 echo "== 2/5 Aufgeloeste Compose-Konfiguration (so lief es wirklich)"
