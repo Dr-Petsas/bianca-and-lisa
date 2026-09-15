@@ -3478,11 +3478,61 @@ einen unbekannten Namen weiblich — wer einen männlichen Assistenten will, set
    zurück, s. W-MOTIV-KONSISTENT).
 3. Die Öffnungszeiten stehen auf dem Portal-Default (alle sieben Tage
    08:00–18:00). `standort.zeiten_von` verwirft genau dieses Muster absichtlich
-   („nie raten"), also nennt Ben keine Zeiten, sondern verweist auf die Praxis
-   — gegengelesen am 15.09.: `standort … -> Zeiten nein`.
+   („nie raten") — damit hat Ben zu den Zeiten KEINE Quelle. Er verwies
+   deshalb aber nicht auf die Praxis, sondern erfand sie (s. W-ZEITEN-WACHE);
+   seit dem 15.09.2026 fällt die Erfindung. Die Zeiten gehören ins Portal.
 4. Der Dialplan-Eintrag für 4160 liegt als Referenzkopie in
    `sip_bridge/extensions_bianca.conf`; der Live-Asterisk braucht ihn noch
    (kein Shell-Zugang von hier).
+
+## Keine erfundenen Öffnungszeiten (W-ZEITEN-WACHE 15.09.2026 — nicht rückbauen)
+
+Live-Probe gegen den ECHTEN Prompt der neuen Praxis Rüther (Ben, DID …4160).
+Der Agent-Prompt aus dem Portal trägt dort keine einzige Praxis-Tatsache
+(nur Datum/Zeitzone/Anrede), die Standorteinstellungen stehen auf dem
+Portal-Default. Drei Fragen, drei frei erfundene Zeitpläne:
+
+| Frage | Antwort des Modells |
+| --- | --- |
+| „Wann haben Sie geöffnet?" | „Wir sind heute von 8 bis 12 Uhr und von 14 bis 16 Uhr für Sie da." |
+| „Wann habt ihr auf?" | „montags, mittwochs und freitags von 8 bis 12 Uhr, dienstags und donnerstags von 14 bis 18 Uhr" |
+| „Haben Sie am Freitag offen?" | „Ja, wir sind freitags von 8 bis 12 Uhr für Sie da." |
+
+Wer das glaubt, steht vor verschlossener Tür — und merkt es erst dort. Zwei
+Ursachen, zwei Stellen:
+
+- **Die Frage erreichte das Modell überhaupt** (`wissen._oeffnungszeiten_thema`):
+  erkannt wurden nur „Öffnungszeiten/Sprechzeiten" und „wann … offen/geöffnet".
+  „Wann habt ihr auf?" und „Haben Sie am Freitag offen?" fielen durch und
+  landeten als freies Talk-Thema beim LLM. `offen`/`auf` zählt jetzt hinter
+  einem Praxis-Subjekt („haben Sie/habt ihr/ist die Praxis"), aber NIE mit
+  Termin-Bezug — „Haben Sie den Termin noch offen?" bleibt draußen.
+- **Der LLM-Ausgang war unbewacht** (`kern/zeiten_wache.py`, eingehängt in
+  `agent._zeiten_wache_anwenden` am Zugende UND im P5-Strom — sonst ist der
+  Satz gesprochen, bevor die Wache greift; dieselbe Doppel-Einhängung wie
+  W-ANREDE/W-FACH-WACHE). Eine Zeit-Auskunft darf nur raus, wenn die Zeiten
+  BELEGT sind: `standort["text"]` (W-STANDORT), eine ausdrückliche Zeile im
+  Agent-Prompt („Öffnungszeiten: …" bei MedDent, der „SPRECHZEITEN"-Block bei
+  Thaler/Blessing) oder lokales `wissen.oeffnungszeiten`. Sonst fällt der
+  Satz; bleibt nichts, kommt „Die genauen Öffnungszeiten habe ich hier leider
+  nicht vorliegen — einen Termin kann ich Ihnen aber gern direkt geben."
+
+Die **Belegt-Seite ist bewusst großzügig** (Öffnungs-Vokabular plus Zeitangabe
+irgendwo im Praxis-Prompt genügt) und ohne Mandant ist die Wache AUS: eine
+gestrichene ECHTE Auskunft wäre der teurere Fehler — dann könnte die Praxis
+ihre eigenen Zeiten nicht mehr sagen. Ebenso unangetastet bleiben Sätze mit
+Termin-/Buchungs-Bezug: „Am Montag um neun Uhr hätte ich einen Termin frei"
+ist eine Kalender-Aussage und hat ihre eigene Wache (W-FAKTEN-WACHE,
+Slot-Claim).
+
+- Stufen/Notaus: `ZEITEN_WACHE=off|shadow|enforce` (Default **enforce**).
+  Spur: `zeiten-wache` / `zeiten-wache-shadow`.
+- Tests: `tests/test_zeiten_wache.py` (19) — die Gegenproben (belegte Praxis
+  spricht weiter, Termin-Sätze mit Uhrzeit bleiben, Frage-Erkennung greift
+  nicht bei Terminfragen) sind der größere Teil. Live-Gegenprobe im
+  Container: `docker exec -w /app telefonki-bianca-test-1 python
+  tools/_probe_zeiten_live.py` — stellt allen vier Mandanten dieselben drei
+  Fragen und prüft beide Richtungen.
 
 ## Rückrollpunkte (Produktionsstände)
 

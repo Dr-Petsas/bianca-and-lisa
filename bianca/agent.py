@@ -21,6 +21,7 @@ from kern import qwen_korrektor
 from kern import spur
 from kern import warteschleife
 from kern import wissen as kern_wissen
+from kern import zeiten_wache
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
 
@@ -934,6 +935,28 @@ def _fach_wache_anwenden(sit: dict, text: str) -> str:
     return neu or text
 
 
+def _zeiten_wache_anwenden(sit: dict, text: str) -> str:
+    """W-ZEITEN-WACHE (15.09.2026): Oeffnungszeiten nur, wenn sie belegt sind.
+
+    Live-Probe gegen den echten Ruether-Prompt (Ben, leerer Praxis-Prompt +
+    Portal-Default-Zeiten): drei Fragen, drei frei erfundene Zeitplaene
+    ("Wir sind heute von 8 bis 12 Uhr und von 14 bis 16 Uhr fuer Sie da").
+    Wer davor steht, steht vor verschlossener Tuer. Scharf NUR ohne belegte
+    Zeiten (Standorteinstellungen, Prompt-Zeile, lokales wissen); Saetze mit
+    Termin-Bezug bleiben immer (die hat die Fakten-Wache)."""
+    m = zeiten_wache.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, weg = zeiten_wache.saeubern(sit, text)
+    if not weg:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "zeiten-wache-shadow", " | ".join(x[:60] for x in weg))
+        return text
+    spur.merken(sit, "zeiten-wache", " | ".join(x[:60] for x in weg))
+    return neu or text
+
+
 def _verbinden_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
     """W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): ein Verbinde-Angebot
     des Modells ("Darf ich Sie zu Doktor Petsas, Patrikis oder Nikolaou
@@ -1672,6 +1695,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # W-FACH-WACHE: ein Zahn-Satz beim Hautarzt faellt ebenfalls HIER
             # — gesprochen waere er nicht mehr einzufangen.
             satz = _fach_wache_anwenden(sit, satz)
+            # W-ZEITEN-WACHE: erfundene Oeffnungszeiten ebenso HIER — danach
+            # steht die Patientin vor verschlossener Tuer.
+            satz = _zeiten_wache_anwenden(sit, satz)
             satz = _notdienst_wache_anwenden(sit, satz)
             # W-RECHNUNG: eine erfundene Rechnungs-Auskunft ebenso HIER.
             satz = _rechnung_wache_anwenden(sit, satz)
@@ -1728,6 +1754,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit, bewacht, nutzertext=text_in)
     bewacht = _anrede_wache_anwenden(sit, bewacht)
     bewacht = _fach_wache_anwenden(sit, bewacht)
+    bewacht = _zeiten_wache_anwenden(sit, bewacht)
     bewacht = _notdienst_wache_anwenden(sit, bewacht)
     bewacht = _rechnung_wache_anwenden(sit, bewacht)
     bewacht = _verbinden_wache_anwenden(sit, bewacht, text_in)
