@@ -3681,6 +3681,37 @@ Neubuchung mit Versicherungs- und Besuchsgrundfragen.
   Regressionen: `tests/test_blessing_abschluss.py`; Einführung nach V2.7,
   noch nicht deployt.
 
+## Blessing-Gründe konkret statt Notfall/Absage (W-BLESSING-MOTIVKLARHEIT 15.09.2026 — nicht rückbauen)
+
+Blessing bot am Telefon selbst „eine Beratung oder etwas anderes“ an und
+antwortete auf genau diese Auswahl anschließend „Diese Leistung wird nicht
+angeboten“. Außerdem traf das alte Zahn-Konzept `eiter` als Teilwort in
+„WEITERbehandlung“ und „WEITERE Medikamentenkontrolle“: beide wurden zum
+Notfall-Motiv. Echte Hautgründe wie Rosacea, Wunden, Atherom/„Atterom“ und
+Grützbeutel liefen dadurch falsch oder blieben ohne Motiv.
+
+- Nur Blessing trägt `dermaMotivKlarheit=true`. Reines „Beratung“ wird
+  deterministisch über die tatsächlich buchbaren Beratungs-Motive
+  konkretisiert; „etwas anderes“ fragt offen nach, was die Ärztin ansehen
+  soll. Es wird noch kein Motiv geraten und keine Slotsuche gestartet.
+- Der Dermatologiepfad läuft vor den alten Zahn-Konzepten. Er bindet
+  Erkrankungen und Sprechgründe an den echten Blessing-Katalog; Weiter- und
+  Medikamentenkontrolle gehen auf `Kontrolle`, allgemeine Haut-/Nagel-/
+  Fußbeschwerden auf `Sprechstunde`, Atherom/Grützbeutel auf die
+  Entfernung-Beratung. Ein echtes Akut-Signal braucht eine Wortgrenze:
+  `eiter` trifft nie wieder `weiter`.
+- Zahnwünsche bleiben bei Blessing fachfremd und werden weiter abgelehnt.
+  MedDent, Thaler und Rüther tragen den Schalter nicht; der Gegenbeweis hält
+  dort den bisherigen Mapper byte-identisch.
+- Nur Blessing trägt zusätzlich `einArztOhneBehandlerfrage=true`: solange die
+  Praxis genau einen Behandlerkalender führt, bindet auch der Bestandsweg
+  diesen direkt. Die inhaltslose Frage „Bei welchem Behandler waren Sie
+  zuletzt?“ entfällt; käme ein zweiter Kalender hinzu, erscheint die Frage
+  wieder.
+
+Regressionen: `tests/test_blessing_motive.py`; Einführung nach V2.7, noch
+nicht deployt.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
