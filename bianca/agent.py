@@ -1013,6 +1013,7 @@ def _fakten_wache_anwenden(
         "sms": "Eine Bestätigungs-SMS kann ich erst nach einer bestätigten Buchung zusagen.",
         "rueckruf": "Einen Rückruf habe ich noch nicht angelegt.",
         "transfer": "Eine Weiterleitung habe ich noch nicht gestartet.",
+        "nummer": "Ihre Nummer steht noch nicht in der Akte.",
     }.get(
         unbelegt,
         "Da will ich nichts falsch machen — das ist noch nicht erledigt.",

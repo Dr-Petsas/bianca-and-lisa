@@ -60,6 +60,10 @@ _BOOK_VERIFY_DELAYS = (0.0, 0.2, 0.45)
 # richtige Akte nicht, beweist ein zweiter Weg ueber die patientId. 0 =
 # byte-identisches Verhalten von vor dem 15.09.2026 (nur Namensliste).
 BOOK_VERIFY_AKTE = (os.getenv("BOOK_VERIFY_AKTE", "1") or "1").strip() != "0"
+# W-AKTE-HANDY (15.09.2026): sagt die Plattform needs_phone, obwohl Bianca eine
+# rueckbestaetigte Handynummer in der Hand hat, wird sie in die Akte geschrieben
+# und EINMAL neu gebucht. 0 = Verhalten von vor dem 15.09.2026 (nur nachfragen).
+BOOK_FIX_PHONE = (os.getenv("BOOK_FIX_PHONE", "1") or "1").strip() != "0"
 
 # W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
 # endlos speichern — erste N reichen zur Diagnose, Rest als total.
@@ -627,6 +631,21 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "appointmentStartDate": iso,
     }
     status, data, dispatch = _cf_call("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
+    if (BOOK_FIX_PHONE and status == 200 and isinstance(data, dict)
+            and data.get("status") == "needs_phone"):
+        heilung = _handy_nachtragen(tenant, ctx, patient_id=patient_id)
+        if heilung.get("ok"):
+            erster = dispatch
+            status, data, dispatch = _cf_call(
+                "masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
+            if isinstance(dispatch, dict):
+                dispatch["phoneFix"] = {
+                    k: v for k, v in heilung.items() if k != "dispatch"
+                }
+                if isinstance(heilung.get("dispatch"), dict):
+                    dispatch["phoneFixDispatch"] = heilung["dispatch"]
+                if isinstance(erster, dict):
+                    dispatch["needsPhoneVorher"] = erster.get("response")
     if status == 0:
         # Netzfehler/Timeout: die Buchung kann trotzdem gelandet sein —
         # NACHSCHAUEN statt raten (sonst bucht der Anrufer doppelt).
@@ -752,6 +771,53 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "spoken": "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.",
         "regie": f"Buchung fehlgeschlagen ({meldung or status}). Keinen Erfolg behaupten.",
     }, dispatch)
+
+
+def _handy_nachtragen(tenant: dict, ctx: dict, *, patient_id: str) -> dict[str, Any]:
+    """needs_phone: die rueckbestaetigte Handynummer in die Akte schreiben.
+
+    Vorfall Blessing 15.09.2026 (Anruf a8fcbcb4): In der Akte stand nur eine
+    Festnetznummer. Die Anruferin nannte ihr Handy und bestaetigte es Ziffer
+    fuer Ziffer — die Plattform lehnte die Buchung trotzdem VIERMAL mit
+    `needs_phone` ab, weil niemand die Nummer in die Kartei schrieb. Bianca
+    sagte am Ende "dann ist alles fuer Sie eingetragen"; im Kalender stand
+    nichts.
+
+    Geschrieben wird NUR eine rueckbestaetigte deutsche MOBILnummer
+    (`ctx["phoneConfirmed"]`, gesetzt in flow._ctx_bauen aus telefon +
+    telefonOk): eine bloss gehoerte Nummer kommt nie in die Kartei, und eine
+    Festnetznummer als Handy einzutragen wuerde die SMS erneut ins Leere
+    schicken. `ctx["aktePhoneNeu"]`/`aktePhoneAlt` melden den Erfolg an den
+    Fluss zurueck, damit der Sammler nachzieht (sonst haengt die Erfolgs-
+    Ansage eine "Bitte Akte aktualisieren"-Notiz an einen Termin, dessen
+    Nummer gerade korrekt geschrieben wurde)."""
+    nummer = _s(ctx.get("phoneConfirmed"))
+    if not _s(patient_id) or not nummer or not patients.ist_handy_de(nummer):
+        return {"ok": False, "grund": "keine bestaetigte Handynummer"}
+    e164 = patients.handy_e164(nummer)
+    status, data, dispatch = _cf_call("masUpdatePatientPhone", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "patientId": _s(patient_id),
+        "mobilePhoneNumber": e164,
+    })
+    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
+        ctx["phone"] = nummer
+        ctx["aktePhoneNeu"] = nummer
+        ctx["aktePhoneAlt"] = _s(data.get("previous"))
+        return {
+            "ok": True,
+            "mobilePhoneNumber": _s(data.get("mobilePhoneNumber")) or e164,
+            "previous": _s(data.get("previous")),
+            "dispatch": dispatch,
+        }
+    print(
+        "book_slot needs_phone: Akten-Update fehlgeschlagen — "
+        f"status={status} message={_s((data or {}).get('message'))!r} "
+        f"patientId={_s(patient_id)!r}",
+        flush=True,
+    )
+    return {"ok": False, "grund": "update fehlgeschlagen", "dispatch": dispatch}
 
 
 def _buchung_beweis_ueber_akte(

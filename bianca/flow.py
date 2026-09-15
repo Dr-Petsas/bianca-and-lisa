@@ -468,6 +468,13 @@ def _ctx_bauen(sit: dict) -> dict:
     tel = s["telefon"] or s["aktePhone"]
     if tel:
         ctx["phone"] = tel
+    # Nur die RUECKBESTAETIGTE Nummer darf in eine bestehende Akte geschrieben
+    # werden (kern.calendar._handy_nachtragen bei needs_phone) — `phone` oben
+    # traegt notfalls die Akten-Nummer und taugt dafuer nicht.
+    if s["telefon"] and s["telefonOk"]:
+        ctx["phoneConfirmed"] = s["telefon"]
+    else:
+        ctx.pop("phoneConfirmed", None)
     # Fuer eine NEUE Akte (book_slot -> akte_anlegen): Geschlecht aus dem
     # Vornamen-Waechter und der erfragte Versichertenstatus (29.08.2026).
     if s["vorname"] and not s["geschlecht"] and s["geschlechtQuelle"] != "akte":
@@ -925,7 +932,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         if nummer_frage:
             return {"text": spoken_offer([], wish_matched=True) + " " + nummer_frage}
         return {"text": spoken_offer([], wish_matched=True)
-                + " Kann ich sonst noch etwas für Sie tun?"}
+                + " " + _sonst_noch_frage(sit)}
     s["phase"] = "angebot"
     s["frage"] = "slotwahl"
     vor = ""
@@ -1216,11 +1223,18 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     tor = _telefon_tor(sit)
     if tor is not None:
         return tor
-    if (s["telefonAlt"] == "neu" and s["patientId"] and s["telefon"] and s["aktePhone"]
-            and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
+    if (s["patientId"] and s["telefon"] and s["telefonOk"] and s["aktePhone"]
+            and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])
+            and (s["telefonAlt"] == "neu"
+                 # W-AKTE-HANDY: Akten-Nummer ist kein Handy -> die Wahlfrage
+                 # wurde nie gestellt (gehirn.naechste_frage). Die
+                 # rueckbestaetigte Handynummer wird hier nachgetragen, sonst
+                 # lehnt die Plattform die Buchung mit needs_phone ab.
+                 or (not s["telefonAlt"] and not telefon.ist_handy(s["aktePhone"])))):
         # Sicherheitsnetz (Eskalations-/Renn-Fall): Entscheidung "neue Nummer"
         # steht, aber das Update lief noch nicht — JETZT nachholen, BEVOR die
         # Buchung die Bestaetigungs-SMS an die Akten-Nummer schickt.
+        s["telefonAlt"] = "neu"
         _telefon_alt_ausfuehren(sit, melde)
     if (s["versicherungWechsel"] and s["patientId"] and s["versicherung"]
             and s["versicherungAkte"] != s["versicherung"]):
@@ -1233,6 +1247,16 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     ctx = _ctx_bauen(sit)
     res = kal.book_slot(sit["tenant"], ctx, slot_iso=s["slotIso"])
     merke_tool(sit, "book_slot", res)
+    if _s(ctx.get("aktePhoneNeu")):
+        # W-AKTE-HANDY: die Plattform hat needs_phone gemeldet, kern.calendar
+        # hat die rueckbestaetigte Handynummer selbst nachgetragen. Sammler
+        # nachziehen — sonst haelt die Erfolgs-Ansage die Akte weiter fuer
+        # veraltet und haengt eine "Bitte Akte aktualisieren"-Notiz an.
+        alt = _s(ctx.pop("aktePhoneAlt", ""))
+        s["aktePhone"] = _s(ctx.pop("aktePhoneNeu"))
+        s["telefonAlt"] = "neu"
+        if alt:
+            sit["telefonUpdateAlt"] = telefon.normaliert(alt)
     book = {
         "booked": bool(res.get("booked")),
         "dryRun": bool(res.get("dryRun")),
@@ -1493,7 +1517,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
                     "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
                     "und die Praxis meldet sich gleich bei Ihnen mit einem Termin. "
-                    + (nummer_frage or "Kann ich sonst noch etwas für Sie tun?")
+                    + (nummer_frage or _sonst_noch_frage(sit))
                 ),
                 "book": book,
             }
@@ -2576,6 +2600,48 @@ _RECHNUNG_SONST_NOCH_STATUS = {"notiert", "rueckruf", "abgelehnt", "persoenlich"
 _DANK_RE = re.compile(r"\bdank\w*\b", re.I)
 
 
+_SONST_NOCH = "Kann ich sonst noch etwas für Sie tun?"
+
+
+def _sonst_noch_frage(sit: dict) -> str:
+    """Die Abschluss-Frage stellen UND registrieren: nur mit frage=sonst_noch
+    bekommt _sonst_noch_antwort den naechsten Zug. Wer den Satz von Hand
+    anhaengt, baut die Schleife vom 15.09. wieder ein."""
+    gehirn.sammler(sit)["frage"] = "sonst_noch"
+    sit["sonstNochGefragt"] = True
+    return _SONST_NOCH
+
+
+def _sonst_noch_antwort(
+    sit: dict, t: str, *, ja_text: str, nein_text: str,
+) -> dict | None:
+    """Antwort auf 'Kann ich sonst noch etwas fuer Sie tun?' — die EINE Stelle
+    fuer die Fragen, die der Fluss selbst stellt (Rechnungs-Auskunft,
+    Rueckruf-Notiz nach leerer Slotsuche; verwaltens eigene Ansage-Fragen
+    behandelt verwalten.zug). Nein/Danke/Abschied -> freundlich auflegen,
+    kurzes Ja -> Einladung. None = der Satz gehoert nicht uns; die Frage ist
+    dann GERAEUMT, damit sie sich nie wortgleich wiederholt.
+
+    Wer diese Frage stellt, MUSS ihre Antwort hierher geben: live am 15.09.
+    (Thaler, 07:45) stellte der Rueckruf-Zweig sie ohne Empfaenger — 'Nein.',
+    'Ja.' und 'Dann kann ich auflegen.' bekamen fuenfmal denselben Satz."""
+    s = gehirn.sammler(sit)
+    s["frage"] = ""
+    sit["flussFrage"] = ""
+    kurz = len(t.split()) <= 4
+    nein = gehirn.ist_nein(t) and not gehirn.ist_ja(t)
+    ja = gehirn.ist_ja(t) and not nein
+    if (_ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t)
+            or _RUECKRUF_NICHTS_MEHR_RE.search(t)
+            or (kurz and (nein or _DANK_RE.search(t)))):
+        # "Nein." / "Nein, das war alles." / "Ja, danke." / "Danke, tschüss."
+        return {"text": nein_text, "hangup": abschied.an(),
+                "_wiederholungErlaubt": True}
+    if ja and kurz:
+        return {"text": ja_text}
+    return None
+
+
 def _rechnung_sonst_noch(sit: dict, t: str) -> dict | None:
     """'Kann ich sonst noch etwas fuer Sie tun?' nach der Rechnungs-Auskunft
     (W-BESTAND-ANSAGE-Muster): Nein/Danke/Abschied -> freundlich auflegen,
@@ -2590,21 +2656,14 @@ def _rechnung_sonst_noch(sit: dict, t: str) -> dict | None:
     sit["flussFrage"] = ""
     if rechnung.erkannt(t, sit):
         return None
-    kurz = len(t.split()) <= 4
-    nein = gehirn.ist_nein(t) and not gehirn.ist_ja(t)
-    ja = gehirn.ist_ja(t) and not nein
-    if (_ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t)
-            or _RUECKRUF_NICHTS_MEHR_RE.search(t)
-            or (kurz and (nein or _DANK_RE.search(t)))):
-        # "Nein." / "Nein, das war alles." / "Ja, danke." / "Danke, tschüss."
-        spur.merken(sit, "rechnung", "sonst-noch:nein")
-        return {"text": rechnung.SONST_NOCH_NEIN, "hangup": abschied.an(),
-                "_wiederholungErlaubt": True}
-    if ja and kurz:
-        spur.merken(sit, "rechnung", "sonst-noch:ja")
-        return {"text": rechnung.SONST_NOCH_JA}
-    spur.merken(sit, "rechnung", "sonst-noch:offen")
-    return None
+    aus = _sonst_noch_antwort(
+        sit, t,
+        ja_text=rechnung.SONST_NOCH_JA,
+        nein_text=rechnung.SONST_NOCH_NEIN,
+    )
+    marke = "offen" if aus is None else ("nein" if aus.get("hangup") else "ja")
+    spur.merken(sit, "rechnung", "sonst-noch:" + marke)
+    return aus
 
 
 def _rechnung_zug(sit: dict, t: str) -> dict | None:
@@ -3029,7 +3088,7 @@ def _rueckruf_abschluss(sit: dict, *, mit_nummer: bool, abschied_satz: bool = Fa
                     "hangup": abschied.an(), "_wiederholungErlaubt": True}
         return {"text": (
             "Danke, notiert. Die Praxis meldet sich unter dieser Nummer bei Ihnen. "
-            "Kann ich sonst noch etwas für Sie tun?"
+            + _sonst_noch_frage(sit)
         )}
     spur.merken(sit, "rueckruf-nummer", "ohne")
     kern = (
@@ -3039,7 +3098,7 @@ def _rueckruf_abschluss(sit: dict, *, mit_nummer: bool, abschied_satz: bool = Fa
     if abschied_satz:
         return {"text": kern + " Auf Wiederhören.",
                 "hangup": abschied.an(), "_wiederholungErlaubt": True}
-    return {"text": kern + " Kann ich sonst noch etwas für Sie tun?"}
+    return {"text": kern + " " + _sonst_noch_frage(sit)}
 
 
 def _rueckruf_nummer_zug(sit: dict, t: str) -> dict:
@@ -3306,19 +3365,37 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if s["modus"] == "buchen" and s["phase"] == "fertig" and kein_slot_fertig:
         if _NOCH_EIN_TERMIN_RE.search(t):
             sit.pop("keinSlotFertig", None)
+            sit.pop("sonstNochGefragt", None)
             s["phase"] = ""
             s["frage"] = "wunsch"
             s["wunsch"] = None
             s["wunschText"] = ""
             sit["offered"] = []
             return {"text": "Gerne. Wann passt es Ihnen für den weiteren Termin?"}
+        if s["frage"] == "sonst_noch":
+            # Live 15.09. (Thaler, 07:45): die Frage wurde gestellt, aber
+            # nirgends beantwortet — "Nein.", "Ja.", "Dann kann ich auflegen."
+            # bekamen fuenfmal denselben Satz. Jetzt ist sie eine echte
+            # Formular-Frage; eine unklare Antwort gehoert der Talk-Schicht
+            # (None), die leere Slotsuche laeuft dabei NICHT erneut.
+            aus = _sonst_noch_antwort(
+                sit, t,
+                ja_text="Gerne — was kann ich noch für Sie tun?",
+                nein_text="Sehr gerne. Auf Wiederhören.",
+            )
+            marke = "offen" if aus is None else ("nein" if aus.get("hangup") else "ja")
+            spur.merken(sit, "kein-slot", "sonst-noch:" + marke)
+            return aus
         if _ABSCHIED_RE.search(t):
             return {"text": "Sehr gerne. Auf Wiederhören.",
                     "hangup": abschied.an(), "_wiederholungErlaubt": True}
-        return {"text": (
-            "Die Rückrufbitte ist bereits für die Praxis notiert. "
-            "Kann ich sonst noch etwas für Sie tun?"
-        )}
+        if sit.get("sonstNochGefragt"):
+            # Die Notiz ist bestaetigt und die Frage war schon gestellt: denselben
+            # Satz nie ein zweites Mal. Der Satz gehoert der Talk-Schicht.
+            spur.merken(sit, "kein-slot", "schon-gefragt")
+            return None
+        return {"text": ("Die Rückrufbitte ist bereits für die Praxis notiert. "
+                         + _sonst_noch_frage(sit))}
 
     # Rueckruf-/Notiz-Anliegen (ABGEBEN): eigener deterministischer Zweig —
     # Name + Nummer einsammeln, echte Notiz schreiben, KEIN Termin-Angebot.

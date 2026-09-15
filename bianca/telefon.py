@@ -168,6 +168,15 @@ def plausibel(nummer: str) -> bool:
     return d.startswith("0") and 10 <= len(d) <= 13
 
 
+def ist_handy(nummer: str) -> bool:
+    """Deutsche Mobilfunknummer? (015x/016x/017x, auch als +49…)
+
+    Gebraucht fuer die Akten-Nummer: eine Bestaetigungs-SMS ans Festnetz
+    kommt nie an, und die Plattform verlangt zum Buchen ein Handy."""
+    d = mit_fuehrender_null(nummer)
+    return d.startswith(("015", "016", "017")) and 10 <= len(d) <= 13
+
+
 def aus_satz(text: str) -> str:
     """Beste Telefonnummer aus dem Satz — '' wenn nichts Plausibles."""
     kette = ziffern(text)

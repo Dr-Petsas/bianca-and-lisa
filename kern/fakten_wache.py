@@ -36,7 +36,23 @@ _CLAIM_BUCHEN = re.compile(
     r"\b(gebucht|eingebucht|reserviert|fest\s+(?:ein)?getragen|"
     r"ist\s+(?:jetzt\s+)?(?:im|in\s+dem)\s+kalender|"
     r"hab(?:e)?\s+(?:ihn(?:en)?\s+|den\s+termin\s+)?(?:jetzt\s+|so\s+)?eingetragen|"
-    r"ist\s+(?:jetzt\s+)?eingetragen|termin\s+steht)\b",
+    # "Dann ist alles fuer Sie eingetragen." (Blessing 15.09., Anruf a8fcbcb4 —
+    # es war NICHTS eingetragen). Die Fuellwoerter stehen einzeln da, damit eine
+    # ehrliche VERNEINUNG ("ist noch nicht eingetragen") nie als Behauptung gilt.
+    r"ist\s+(?:jetzt\s+|alles\s+|damit\s+|somit\s+|dann\s+)*"
+    r"(?:f(?:ü|ue)r\s+sie\s+)?(?:alles\s+)?eingetragen|"
+    r"termin\s+steht)\b",
+    re.I,
+)
+# Eine Nummer/Akten-Aenderung ist ein SCHREIBVORGANG — im selben Atemzug wie
+# die Phantom-Buchung behauptete das Modell live auch "die Nummer ist
+# gespeichert", ohne dass masUpdatePatientPhone je lief.
+_CLAIM_NUMMER = re.compile(
+    r"\b(?:handy|ruf|telefon)?nummer\b[^.!?]{0,30}\b"
+    r"(?:gespeichert|hinterlegt|aktualisiert|"
+    r"(?:ü|ue)bernommen|ge(?:ä|ae)ndert)\b|"
+    r"\bhab(?:e)?\s+(?:ihre\s+|die\s+)?(?:handy|ruf|telefon)?nummer\b"
+    r"[^.!?]{0,20}\b(?:eingetragen|gespeichert|hinterlegt)\b",
     re.I,
 )
 _CLAIM_ABSAGEN = re.compile(r"\b(abgesagt|storniert|gestrichen|gel(?:ö|oe)scht)\b", re.I)
@@ -168,6 +184,44 @@ def _ev_anlegen(sit: dict) -> bool:
     return _ok(sit.get("lastCreate")) or _ok(sit.get("lastBook"))  # book legt Neupatient mit an
 
 
+def _nur_ziffern(wert: Any) -> str:
+    """Nummer auf vergleichbare Ziffern bringen (+49 177… == 0177…)."""
+    d = "".join(c for c in str(wert or "") if c.isdigit())
+    if d.startswith("0049"):
+        d = d[4:]
+    elif d.startswith("49") and len(d) >= 11:
+        d = d[2:]
+    return d.lstrip("0")
+
+
+def _ev_nummer(sit: dict) -> bool:
+    """Nur ein gelaufener Schreibvorgang belegt eine gespeicherte Nummer:
+    masUpdatePatientPhone (update_phone), eine neue Akte (die traegt die
+    Nummer) oder eine geglueckte Buchung (Neupatient wird mit angelegt).
+
+    Belegt ist die Aussage ausserdem, wenn in der Akte schon eine Nummer
+    steht und es genau die ist, die Bianca in der Hand hat — dann ist
+    "Ihre Nummer ist hinterlegt" keine Behauptung, sondern der Kartei-Stand
+    (Bianca fragt selbst nach der "hinterlegten Nummer")."""
+    if _ok(sit.get("lastCreate")) or _ok(sit.get("lastBook")):
+        return True
+    if any(
+        isinstance(ein, dict)
+        and str(ein.get("name") or "") in {"update_phone", "masUpdatePatientPhone"}
+        and _ok(ein)
+        for ein in (sit.get("tools") or [])
+    ):
+        return True
+    s = sit.get("sammler")
+    if not isinstance(s, dict):
+        return False
+    akte = _nur_ziffern(s.get("aktePhone"))
+    if not akte:
+        return False
+    gesagt = _nur_ziffern(s.get("telefon"))
+    return not gesagt or gesagt == akte
+
+
 def _letztes_tool(sit: dict, namen: set[str]) -> dict:
     for ein in reversed(sit.get("tools") or []):
         if isinstance(ein, dict) and str(ein.get("name") or "") in namen:
@@ -273,6 +327,7 @@ AKTIONEN: list[tuple[str, re.Pattern, Callable[[dict], bool]]] = [
     ("transfer", _CLAIM_TRANSFER, _ev_transfer),
     ("notiz", _CLAIM_NOTIZ, _ev_notiz),
     ("anlegen", _CLAIM_ANLEGEN, _ev_anlegen),
+    ("nummer", _CLAIM_NUMMER, _ev_nummer),
 ]
 
 

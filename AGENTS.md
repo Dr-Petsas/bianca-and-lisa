@@ -3306,6 +3306,64 @@ Ländervorwahl) — deshalb kam auch keine Bestätigungs-SMS. Biancas eigener
 Weg (`patients.handy_e164`) hätte das nie erzeugt. Sauber wird das nur im
 Portal: Dubletten zusammenführen, Nummer korrigieren.
 
+## Handynummer in die Akte, sonst kein Termin (W-AKTE-HANDY 15.09.2026 — nicht rückbauen)
+
+Blessing-Anruf `a8fcbcb43aad496aa2a1451447a1d50f` (15.09., 07:40, 6:36 min):
+Bestandspatientin, Kontrolltermin am 3. Dezember 14:40 bei Doktor Blessing.
+In der Akte stand NUR eine Festnetznummer. Sie diktierte ihr Handy und
+bestätigte es Ziffer für Ziffer — die Plattform lehnte die Buchung trotzdem
+VIERMAL mit `needs_phone` ab, weil niemand die Nummer in die Kartei schrieb.
+Bianca fragte dieselbe Nummer wieder und wieder ab, sagte dann „Alles klar,
+die Nummer ist gespeichert. Dann ist alles für Sie eingetragen." — im
+Kalender stand nichts — und beendete mit 13× „Kann ich sonst noch etwas für
+Sie tun?". Vier Ursachen, vier Wachen:
+
+1. **Selbstheilung bei `needs_phone`** (`kern/calendar._handy_nachtragen`, in
+   `book_slot`): kommt `needs_phone`, schreibt Bianca die RÜCKBESTÄTIGTE
+   Handynummer per `masUpdatePatientPhone` in die Akte und bucht GENAU EINMAL
+   neu. Geschrieben wird nur `ctx["phoneConfirmed"]` (aus `telefon` +
+   `telefonOk`, gesetzt in `flow._ctx_bauen` — `ctx["phone"]` trägt notfalls
+   die Akten-Nummer und taugt dafür nicht) und nur eine echte deutsche
+   MOBILnummer (`patients.ist_handy_de`; `handy_ok` prüft bloß die Länge, ein
+   Festnetz käme da durch und die SMS liefe erneut ins Leere). Der Weg liegt
+   HINTER dem Trockenlauf-Tor (`WRITE_LIVE`/`_testNoWrite`), schreibt also im
+   Test nie. Sichtbar in der Gesprächsansicht: `dispatch.phoneFix`,
+   `phoneFixDispatch`, `needsPhoneVorher`. Notaus: `BOOK_FIX_PHONE=0`.
+2. **`telefon_alt` nie gegen ein Festnetz** (`gehirn.naechste_frage`,
+   `telefon.ist_handy`): die Wahlfrage „alte Nummer löschen oder SMS an die
+   alte" setzt voraus, dass an der alten Nummer überhaupt eine SMS ankommt.
+   Live wählte die Anruferin folgerichtig „die Bestätigung an die alte
+   Nummer" — und damit war die Buchung unmöglich (`telefonAlt="akte"` → kein
+   Update → `needs_phone` für immer). Gegen eine Festnetz-/Dummy-Nummer wird
+   nicht mehr gefragt; `flow._buchen` trägt die bestätigte Handynummer still
+   nach (dieselbe Stelle wie das Eskalations-Sicherheitsnetz), der Termin
+   bekommt den Vermerk „Alte Nummer … aktualisiert //Bianca". Gegen ein altes
+   HANDY bleibt die Frage wie am 29.08. beschlossen.
+3. **Die Sonst-noch-Frage ist eine echte Formular-Frage**
+   (`flow._sonst_noch_frage`/`_sonst_noch_antwort`): wer sie stellt,
+   REGISTRIERT sie (`frage="sonst_noch"`) — sonst fällt jede Antwort in den
+   Rückruf-Zweig und bekommt denselben Satz. „Nein."/„Danke."/Abschied legen
+   auf, kurzes „Ja." lädt ein, alles andere gehört der Talk-Schicht (Frage
+   geräumt, nie wortgleich wiederholt); war sie schon gestellt, kommt sie nie
+   ein zweites Mal (`sonstNochGefragt`).
+4. **Fakten-Wache kennt den Satz und die Nummer** (`kern/fakten_wache.py`):
+   `_CLAIM_BUCHEN` deckt jetzt die Füllwort-Formen ab („ist alles/damit/
+   somit/dann (für Sie) eingetragen") — die Füllwörter stehen einzeln da,
+   damit eine ehrliche VERNEINUNG („ist noch nicht eingetragen") nie als
+   Behauptung gilt. Neu `_CLAIM_NUMMER` + `_ev_nummer`: „die Nummer ist
+   gespeichert/hinterlegt/aktualisiert" braucht einen gelaufenen
+   Schreibvorgang (`update_phone`, neue Akte, geglückte Buchung) ODER den
+   Kartei-Stand (die Akte trägt genau diese Nummer — Bianca fragt selbst nach
+   der „hinterlegten Nummer", das darf die Wache nicht überschreiben). Hedge:
+   „Ihre Nummer steht noch nicht in der Akte."
+
+Tests: `tests/test_anruf_a8fcbcb4.py` (40, mit den Live-Wortlauten:
+Selbstheilung samt Update-Fehler, fehlendem bestätigtem Handy und Notaus,
+Sammler-Nachzug, Gegenproben der Wache), Abschlussfrage-Block in
+`tests/test_rueckruf_nummer.py`; die `telefon_alt`-Fixtures in
+`tests/test_bianca_bausteine.py` tragen jetzt ein altes HANDY — gegen ein
+Festnetz gibt es dort nichts mehr zu fragen.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

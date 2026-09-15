@@ -3871,7 +3871,14 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     # Nummer loeschen/ersetzen oder die Bestaetigungs-SMS an die alte.
     if (s["telefonOk"] and s["telefon"] and s["patientId"] and s["aktePhone"]
             and not s["telefonAlt"]
-            and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])):
+            and telefon.normaliert(s["telefon"]) != telefon.normaliert(s["aktePhone"])
+            # W-AKTE-HANDY: nur gegen ein ECHTES Handy gibt es etwas zu waehlen.
+            # Steht in der Akte eine Festnetznummer, ist "SMS an die alte
+            # Nummer" keine Option (sie kommt nie an) — und die Plattform
+            # verlangt zum Buchen ohnehin ein Handy. Dann wird die gerade
+            # rueckbestaetigte Handynummer stillschweigend nachgetragen
+            # (flow._buchen), statt eine sinnlose Frage zu stellen.
+            and telefon.ist_handy(s["aktePhone"])):
         return "telefon_alt", telefon_alt_frage(s)
 
     # W-BLEACHING: der Anrufer hat Ja zur Aufhellung gesagt — die

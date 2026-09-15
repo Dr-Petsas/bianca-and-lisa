@@ -292,3 +292,60 @@ def test_nachtragen_ohne_nummer_schreibt_nichts(notizen):
     flow._angebot(sit)
     assert verwalten.rueckruf_nummer_nachtragen(sit) == ""
     assert len(notizen()) == 1
+
+
+# --- Die Abschluss-Frage ist eine echte Frage (Thaler 15.09., 07:45) ---------
+#
+# Live bekam der Anrufer auf "Nein.", "Ja." und "Dann kann ich auflegen."
+# fuenfmal denselben Satz ("Die Rueckrufbitte ist bereits fuer die Praxis
+# notiert. Kann ich sonst noch etwas fuer Sie tun?"): der Zweig STELLTE die
+# Frage, aber niemand verarbeitete die Antwort. Jetzt registriert
+# `_sonst_noch_frage` sie als frage=sonst_noch und `_sonst_noch_antwort`
+# beantwortet sie — und der Satz kommt nie zweimal.
+
+def _bis_zur_abschlussfrage(notizen) -> dict:
+    sit = _sit(anrufer_nummer="+491771234567")  # Nummer bekannt -> direkt die Frage
+    ang = flow._angebot(sit)
+    assert "sonst noch etwas" in ang["text"]
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
+    return sit
+
+
+def test_abschlussfrage_nein_legt_auf(notizen):
+    sit = _bis_zur_abschlussfrage(notizen)
+    r = flow.zug(sit, "Nein.")
+    assert r and r.get("hangup") and "sonst noch etwas" not in r["text"]
+
+
+def test_abschlussfrage_ja_laedt_ein_statt_sich_zu_wiederholen(notizen):
+    sit = _bis_zur_abschlussfrage(notizen)
+    r = flow.zug(sit, "Ja.")
+    assert r and not r.get("hangup")
+    assert "noch für Sie tun" in r["text"]
+    assert not r["text"].startswith("Die Rückrufbitte ist bereits")
+
+
+def test_abschlussfrage_abschied_legt_auf(notizen):
+    sit = _bis_zur_abschlussfrage(notizen)
+    r = flow.zug(sit, "Dann kann ich auflegen. Auf Wiederhören.")
+    assert r and r.get("hangup")
+
+
+def test_abschlussfrage_kommt_nie_zweimal(notizen):
+    """Unklare Antwort: der Satz gehoert der Talk-Schicht (None) — die leere
+    Slotsuche laeuft dabei NICHT erneut und die Frage wird nicht wiederholt."""
+    sit = _bis_zur_abschlussfrage(notizen)
+    r = flow.zug(sit, "Mhm, also ich weiß nicht.")
+    assert r is None
+    for satz in ("Ja, gut.", "Hm.", "Was meinen Sie?"):
+        r = flow.zug(sit, satz)
+        if r is not None:
+            assert not r["text"].startswith("Die Rückrufbitte ist bereits"), satz
+    assert len(notizen()) == 1  # keine zweite Notiz, keine zweite Slotsuche
+
+
+def test_noch_ein_termin_startet_die_buchung_neu(notizen):
+    sit = _bis_zur_abschlussfrage(notizen)
+    s = gehirn.sammler(sit)
+    r = flow.zug(sit, "Ja, ich bräuchte noch einen Termin.")
+    assert r and "Wann passt" in r["text"] and s["frage"] == "wunsch"

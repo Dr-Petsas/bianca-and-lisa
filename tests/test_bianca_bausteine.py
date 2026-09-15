@@ -1682,13 +1682,17 @@ def test_buchen_neue_nummer_weicht_von_akte_ab_keine_sms_zusage():
     """Live 29.08.2026 02:19: Bestandsakte trug 0123456789, der Anrufer
     bestaetigte 0177 6004600 — Bianca versprach 'SMS kommt gleich', die
     Plattform schickte aber an die Akten-Nummer (ins Leere). Jetzt: Notiz
-    an den Termin + ehrliche Ansage, kein SMS-Versprechen."""
+    an den Termin + ehrliche Ansage, kein SMS-Versprechen.
+
+    Die Akte traegt hier ein altes HANDY: nur dann bleibt der Konflikt offen.
+    Eine Festnetz-/Dummy-Nummer traegt _buchen seit W-AKTE-HANDY selbst um
+    (test_anruf_a8fcbcb4), dann geht die SMS an die richtige Nummer."""
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({
         "modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung",
         "vorname": "Peter", "nachname": "Müller", "patientId": "Uz5O",
-        "telefon": "01776004600", "telefonOk": True, "aktePhone": "0123456789",
+        "telefon": "01776004600", "telefonOk": True, "aktePhone": "01701234567",
         "slotIso": "2026-09-01T09:15",
     })
     echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
@@ -1709,7 +1713,7 @@ def test_buchen_neue_nummer_weicht_von_akte_ab_keine_sms_zusage():
         flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
     assert "SMS" not in res["text"]
     assert "neue Handynummer" in res["text"]
-    assert notizen and "01776004600" in notizen[0] and "0123456789" in notizen[0]
+    assert notizen and "01776004600" in notizen[0] and "01701234567" in notizen[0]
 
 
 def test_buchen_gleiche_nummer_wie_akte_verspricht_sms():
@@ -1746,13 +1750,16 @@ def test_buchen_gleiche_nummer_wie_akte_verspricht_sms():
 # --- Akten-Nummer-Konflikt: telefon_alt (Chef 29.08.2026) -------------------
 
 def _konflikt_sit() -> dict:
-    """Bestandsakte mit Alt-Nummer, Anrufer hat eine NEUE Nummer bestaetigt."""
+    """Bestandsakte mit alter HANDY-Nummer, Anrufer hat eine NEUE bestaetigt.
+
+    Nur gegen ein echtes Handy gibt es etwas zu waehlen — an ein Festnetz
+    kommt keine SMS (W-AKTE-HANDY, s. test_anruf_a8fcbcb4)."""
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({
         "modus": "buchen", "warSchonMal": True,
         "vorname": "Peter", "nachname": "Müller", "buchstabiert": True,
-        "patientId": "Uz5O", "bekannt": True, "aktePhone": "0123456789",
+        "patientId": "Uz5O", "bekannt": True, "aktePhone": "01701234567",
         "telefon": "01776004600", "telefonOk": True,
     })
     return sit
@@ -1762,7 +1769,7 @@ def test_telefon_alt_frage_nennt_die_alte_nummer():
     sit = _konflikt_sit()
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "telefon_alt"
-    assert telefon.sprechbar("0123456789") in frage
+    assert telefon.sprechbar("01701234567") in frage
     assert "löschen" in frage and "SMS" in frage
 
 
@@ -1776,7 +1783,7 @@ def test_telefon_alt_loeschen_ruft_update_und_traegt_neue_nummer_ein():
     def _update(tenant, patient_id, phone):
         rufe.append((patient_id, phone))
         return {"ok": True, "patientId": patient_id,
-                "mobilePhoneNumber": "+491776004600", "previous": "0123456789"}
+                "mobilePhoneNumber": "+491776004600", "previous": "01701234567"}
 
     flow.telefon_aktualisieren = _update
     try:
@@ -1786,7 +1793,7 @@ def test_telefon_alt_loeschen_ruft_update_und_traegt_neue_nummer_ein():
     assert rufe == [("Uz5O", "01776004600")]
     assert s["telefonAlt"] == "neu"
     assert s["aktePhone"] == "01776004600"
-    assert sit["telefonUpdateAlt"] == "0123456789"
+    assert sit["telefonUpdateAlt"] == "01701234567"
     assert res and res["text"].startswith("Erledigt")
 
 
@@ -1798,7 +1805,7 @@ def test_telefon_update_schreibt_geforderten_bianca_vermerk_an_termin():
         "phase": "bestaetigen", "frage": "bestaetigung",
         "slotIso": "2026-09-11T09:15",
     })
-    sit["telefonUpdateAlt"] = "0123456789"
+    sit["telefonUpdateAlt"] = "01701234567"
     echt_book, echt_note = flow.kal.book_slot, flow.kal.note_appointment
     notizen: list[str] = []
     flow.kal.book_slot = lambda tenant, ctx, slot_iso="": {
@@ -1814,7 +1821,7 @@ def test_telefon_update_schreibt_geforderten_bianca_vermerk_an_termin():
     finally:
         flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
     assert notizen
-    assert "Alte Nummer 0123456789 aktualisiert //Bianca" in notizen[-1]
+    assert "Alte Nummer 01701234567 aktualisiert //Bianca" in notizen[-1]
 
 
 def test_telefon_alt_sms_an_die_alte_nummer_ohne_update():
@@ -1828,7 +1835,7 @@ def test_telefon_alt_sms_an_die_alte_nummer_ohne_update():
     finally:
         flow.telefon_aktualisieren = echt
     assert s["telefonAlt"] == "akte"
-    assert s["aktePhone"] == "0123456789"
+    assert s["aktePhone"] == "01701234567"
     assert res and "bleibt in der Akte" in res["text"]
 
     # Buchung danach: SMS-Zusage auf die AKTEN-Nummer, keine Praxis-Notiz.
@@ -1852,7 +1859,7 @@ def test_telefon_alt_nochmal_vorlesen_beliebig_oft():
     sit = _konflikt_sit()
     s = gehirn.sammler(sit)
     s["frage"] = "telefon_alt"
-    erwartet = telefon.sprechbar("0123456789")
+    erwartet = telefon.sprechbar("01701234567")
     for satz in ("Wie bitte, welche Nummer?", "Sagen Sie die Nummer bitte nochmal.", "Nochmal langsamer bitte."):
         res = flow.zug(sit, satz)
         assert res and erwartet in res["text"], satz
@@ -1870,7 +1877,7 @@ def test_telefon_alt_update_kaputt_faellt_auf_praxisnotiz_zurueck():
     finally:
         flow.telefon_aktualisieren = echt
     assert s["telefonAlt"] == "notiz"
-    assert s["aktePhone"] == "0123456789"
+    assert s["aktePhone"] == "01701234567"
     assert res and "klappt gerade technisch nicht" in res["text"]
 
     s.update({"phase": "bestaetigen", "frage": "bestaetigung", "slotIso": "2026-09-01T09:15"})

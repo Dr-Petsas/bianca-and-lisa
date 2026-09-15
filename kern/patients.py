@@ -215,6 +215,17 @@ def handy_ok(raw: str) -> bool:
     return 11 <= len(d) <= 14
 
 
+def ist_handy_de(raw: str) -> bool:
+    """Wirklich eine deutsche MOBILnummer (015x/016x/017x)?
+
+    `handy_ok` prueft nur die Laenge — eine Festnetznummer kommt da durch.
+    Wo eine SMS ankommen MUSS (Bestaetigung, Akten-Nachtrag), reicht das
+    nicht: eine Nummer ohne Mobilfunk-Vorwahl gehoert nie als Handy in die
+    Kartei."""
+    d = _digits(handy_e164(raw))
+    return handy_ok(raw) and d.startswith(("4915", "4916", "4917"))
+
+
 def ist_testname(first: str, last: str, name: str = "") -> bool:
     blob = " ".join(x for x in (_s(first), _s(last), _s(name)) if x).lower()
     if blob in {"anna test", "max mustermann", "erika mustermann"}:
