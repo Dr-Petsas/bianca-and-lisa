@@ -3446,12 +3446,40 @@ vom Chef, ElevenLabs-Export „Mark", 4,9 s) und ist im Container über
 TTS-Containers (der 15.09. eine laufende Blessing-Leitung 9 s gekostet hat:
 das nächste Mal in einer Anrufpause).
 
+**Der Agent-Name aus der DB wird durchgereicht** (`agentprofil.tenant_von_pre`
+setzt `t["agentName"]`). Ohne diese eine Zeile hieße jede Praxis OHNE lokale
+`tenants/*.json` für immer „Bianca", egal was im Portal steht — der DB-Weg
+(Chef 30.08.2026: „die Konfig MUSS aus der DB kommen") wäre für den Namen tot.
+Gefahrlos, weil `assistent._aus_db` streng prüft und ALLE heutigen Live-Agenten
+in der DB „Bianca" heißen (17 Datensätze am 15.09. gegengelesen; die übrigen
+tragen Praxis-Namen und fallen durch den Vorname-Filter). Das Genus bleibt für
+einen unbekannten Namen weiblich — wer einen männlichen Assistenten will, setzt
+`assistentGenus` (oder trägt den Namen in `_GENUS_NAMEN` ein).
+
 - **Notaus:** `assistentName`/`assistentGenus`/`stimme` aus `tenants/ruether.json`
   entfernen ⇒ Ben ist wieder Bianca, alles byte-identisch wie vor dem
   15.09.2026. Es gibt bewusst keinen Env-Schalter: die Mandanten-Datei IST der
   Schalter.
-- Tests: `tests/test_assistent.py` (31) — hinter jedem Ben-Fall steht die
-  Gegenprobe, dass MedDent/Bianca sich nicht rührt.
+- Tests: `tests/test_assistent.py` (32) — hinter jedem Ben-Fall steht die
+  Gegenprobe, dass MedDent/Bianca sich nicht rührt. Live-Probe im Container:
+  `docker exec -w /app telefonki-bianca-1 python tools/_probe_stimme_mandant_live.py`
+  (mit `--hoeren` rendert sie Bens Begrüßung im echten TTS-Container und liest
+  sie per STT gegen — 15.09. grün: „…mit dem digitalen Telefonassistenten Ben").
+
+**Noch offen bei Rüther** (nicht Code, sondern Portal/Asterisk):
+
+1. Auf der Nummer liegen ZWEI aktive inbound-Agenten — `LtHkW6I1xSwDpWy5M3vy`
+   („Ben", Buchungs-Tools an) und `jeLZftpLKZdQaDUwVml6` („Bianca", alle Tools
+   aus, leere Begrüßung). Derzeit gewinnt Ben; das ist Zufall der
+   Dokument-ID-Sortierung. Der Bianca-Datensatz muss weg.
+2. 22 von 32 Besuchsgründen stehen auf `allowOnlineBooking=false` — darunter
+   Krebsvorsorge, PAP/HPV, Schwangerschaftsvorsorge, Spirale. Für die findet
+   Ben telefonisch keine Zeiten (er fällt sichtbar auf ein buchbares Motiv
+   zurück, s. W-MOTIV-KONSISTENT).
+3. Öffnungszeiten stehen auf der Vorgabe Mo–So 8–18 Uhr.
+4. Der Dialplan-Eintrag für 4160 liegt als Referenzkopie in
+   `sip_bridge/extensions_bianca.conf`; der Live-Asterisk braucht ihn noch
+   (kein Shell-Zugang von hier).
 
 ## Rückrollpunkte (Produktionsstände)
 

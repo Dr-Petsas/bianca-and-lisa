@@ -308,6 +308,15 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     if gruss:
         # W-MEDDENT (04.09.2026): DB-Tippfehler „Wem kann ich…“ abfangen.
         t["begruessungText"] = gruss.replace("Wem kann ich", "Was kann ich")
+
+    # Wie die Assistenz heisst, steht im Agent-Datensatz (W-STIMME-MANDANT
+    # 15.09.2026). Ohne diese Zeile hiesse jede Praxis OHNE lokale
+    # tenants/*.json fuer immer "Bianca" — egal was im Portal steht.
+    # kern/assistent.py prueft den Wert streng (ein Wort, Vorname-artig): das
+    # Feld traegt in der DB teils den PRAXIS-Namen ('"Med Dent" Zahnklinik
+    # Duesseldorf - Robert'), und den darf sich niemand selbst sagen. Alle
+    # heutigen Live-Agenten heissen dort "Bianca" — es bewegt sich nichts.
+    t["agentName"] = _s(agent.get("name"))
     if not _s(t.get("praxisName")):
         t["praxisName"] = _s(pre.get("locationName")) or _s(agent.get("locationName"))
 

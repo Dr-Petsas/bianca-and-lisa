@@ -83,6 +83,33 @@ def test_mandantenfeld_schlaegt_db():
     assert assistent.name({"agentName": "Klara", "assistentName": "Ben"}) == "Ben"
 
 
+def test_cf_antwort_reicht_den_agent_namen_durch():
+    """Ohne diese Durchreiche hiesse jede Praxis OHNE lokale tenants/*.json
+    fuer immer "Bianca" — egal was im Portal steht."""
+    from kern import agentprofil
+
+    pre = {"agent": {
+        "clientId": "neue-praxis-xyz",
+        "locationId": "loc_neu",
+        "name": "Ben",
+        "firstMessage": "Praxis Beispiel. Hier ist Ben.",
+        "mainLanguage": "de",
+    }}
+    t = agentprofil.tenant_von_pre(pre, "+4900000000")
+    assert t and t["_quelle"] == "cf"      # keine lokale Datei im Spiel
+    assert t["agentName"] == "Ben"
+    assert assistent.name(t) == "Ben"
+    assert assistent.genus(t) == "m"
+
+    # Gegenprobe: so heissen ALLE heutigen Live-Agenten in der DB — es darf
+    # sich kein Zeichen bewegen.
+    for wie in ("Bianca", '"Med Dent" Zahnklinik Duesseldorf - Robert', ""):
+        pre["agent"]["name"] = wie
+        andere = agentprofil.tenant_von_pre(pre, "+4900000000")
+        assert assistent.name(andere) == "Bianca", wie
+        assert assistent.genus(andere) == "f", wie
+
+
 def test_genus_aus_namen_wenn_nicht_gesetzt():
     assert assistent.genus({"assistentName": "Ben"}) == "m"
     assert assistent.genus({"assistentName": "Lisa"}) == "f"
