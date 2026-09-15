@@ -74,7 +74,8 @@ if BRIDGE_MODE not in {"inbound", "outbound"}:
 # mit eigener UUID + Eintrag hier (oder in BRIDGE_DID_MAP).
 _DID_MAP_ROH = (os.environ.get("BRIDGE_DID_MAP")
                 or "4101=+4921154244101,4110=+4921154244110,"
-                   "4120=+4921154244120,4105=+4921154244105").strip()
+                   "4120=+4921154244120,4105=+4921154244105,"
+                   "4160=+4921154244160").strip()
 DID_MAP: dict[str, str] = {}
 for _paar in _DID_MAP_ROH.split(","):
     _k, _, _v = _paar.partition("=")

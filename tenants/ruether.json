@@ -1,0 +1,19 @@
+{
+  "clientId": "AWdFeDldR81P3jmiq869",
+  "locationId": "loc_d7gfcuss",
+  "praxisName": "Praxis Doktor Denise Rüther",
+  "praxisNameMelde": "Praxis Doktor Denise Rüther",
+  "praxisNameVon": "der Praxis Doktor Denise Rüther",
+  "behandler": "Doktor Denise Rüther",
+  "dids": ["+4921154244160"],
+  "telefon": "",
+  "sprache": "de",
+  "sttHotwords": [
+    "Rüther",
+    "Ruether",
+    "Denise"
+  ],
+  "verbindenErlaubt": [],
+  "weiterleitungen": [],
+  "begruessungText": "Hallo, Praxis Doktor Denise Rüther, Sie sprechen mit Bianca, der Telefonassistentin der Praxis. Wie kann ich Ihnen helfen?"
+}
