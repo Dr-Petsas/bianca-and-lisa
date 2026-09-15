@@ -3253,6 +3253,59 @@ und „Fehlerhafte Rechnung." zweimal der Unklar-Satz — zwei verschenkte Züge
   `tests/test_rechnung.py` (62), Buchhaltung-Fälle in
   `tests/test_weiterleiten.py`.
 
+## Rücklese ohne Namensraten (W-BUCHUNG-BEWEIS 15.09.2026 — nicht rückbauen)
+
+Chef zum Thaler-Anruf `831c8b6bd9044569962d20abdc9a5885`: „das war ein
+perfektes gespräch aber die buchungsfunktion failte. warum" — der Termin
+(16.09. 13:00, IMP Besprechung, Kalender Eva Thaler) stand danach sauber im
+Kalender, die Anruferin hörte aber „Die Buchungsantwort ist nicht eindeutig
+im Kalender angekommen".
+
+Der Schreibweg war grün: `masBookAppointment` → HTTP 200, `appointmentId
+5JCHiVjknQCuVJDYj2l8`, Akte `npZu3ptUmDODjsNkuzRE`. Gestolpert ist die
+Read-after-write-Prüfung (`_buchung_verifizieren`, 10.09.), und zwar am
+Plattform-Vertrag: `agentFindPatientAppointments` löst den Patienten über
+**Namens-Ähnlichkeit** auf und liest eine mitgeschickte `patientId` NICHT
+(`functions/src/controllers/agentAppointments.ts`). In der Praxis liegen
+DREI Akten „Eva Thaler" — die Rücklese traf `3DsgqaItzZCbkPDI9wfd` samt
+deren PZR am 21.10., `found_pid != patient_id` schlug zu. Die Prüfung ist
+also richtig streng, sie hatte nur keinen Weg, die gebuchte Akte überhaupt
+zu adressieren.
+
+- **Zweiter, namensfreier Beweisweg** (`_buchung_beweis_ueber_akte`):
+  `masPatientLastDoctor` NIMMT die `patientId` (`masAgent.ts`). Derselbe
+  Vierfach-Beweis (Akte, Startminute, Kalender, echte Termin-ID) läuft damit
+  ohne Namensraten. Bewusst nur `nextAppointment`: liegt ein früherer Termin
+  der Akte davor, beweist dieser Weg nichts und der Termin bleibt
+  unbestätigt — lieber ehrlich als geraten.
+- **Nur bei fehlender Evidenz, nie gegen einen Widerspruch:**
+  `namenspfad_traf_akte` merkt, ob die Namensliste die RICHTIGE Akte
+  überhaupt erreicht hat. Nur wenn nicht (fremder Treffer, notFound,
+  mehrdeutig, CF-Fehler) darf der Akten-Weg ran. Traf sie die Akte und der
+  Termin passte trotzdem nicht, bleibt es unbestätigt — das ist die
+  Tom-Schumann-Klasse vom 11.09. (fremde/recycelte ID) und wird NICHT
+  überstimmt. Auf dem guten Pfad kostet der Beweis keinen Aufruf.
+- **`callerPhone` geht mit** (`verify_ctx["phone"]`): live fehlte die Nummer
+  im Verify-Body. Mit ihr kandidiert die CF ZUERST über das Telefon und
+  nimmt sie sonst als Stichentscheid (`patientsService.findClientLocation
+  PatientUserBySimilarity`) — findet die Nummer nichts, fällt sie selbst auf
+  die Namenssuche zurück. Die Angabe kann also nur helfen.
+- Sichtbar in der Gesprächsansicht: `dispatch.verification.beweis` ist
+  `namensliste` oder `akte`, im zweiten Fall steht der Grund der Namensliste
+  in `namenslisteFehler`. Log: `buchung-beweis akte pid=… aid=… iso=…`.
+- Notaus: `BOOK_VERIFY_AKTE=0` => byte-identisches Verhalten von vor dem
+  15.09.2026 (nur Namensliste). Tests: `tests/test_buchung_beweis.py` (9,
+  mit den echten Live-Payloads des Anrufs) — die Gegenproben (Widerspruch,
+  falsche Startminute, falscher Kalender, kein kommender Termin, Notaus)
+  sind der wichtigere Teil.
+
+**Nicht Biancas Baustelle, aber der Grund für die Dublette:** die Akte
+`npZu3ptUmDODjsNkuzRE` wurde am 14.09.2026 per Import angelegt und trägt die
+kaputte Nummer `+015167807647` (E.164 kennt keine führende Null nach der
+Ländervorwahl) — deshalb kam auch keine Bestätigungs-SMS. Biancas eigener
+Weg (`patients.handy_e164`) hätte das nie erzeugt. Sauber wird das nur im
+Portal: Dubletten zusammenführen, Nummer korrigieren.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

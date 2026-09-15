@@ -56,6 +56,10 @@ _SCHREIB_TIMEOUT = 25.0
 # Kartei steht. Kurze Nachlese-Retries fangen Replikationslatenz ab; der
 # Anrufer hört währenddessen bereits den Werkzeug-Füller.
 _BOOK_VERIFY_DELAYS = (0.0, 0.2, 0.45)
+# W-BUCHUNG-BEWEIS (15.09.2026): erreicht die namensbasierte Ruecklese die
+# richtige Akte nicht, beweist ein zweiter Weg ueber die patientId. 0 =
+# byte-identisches Verhalten von vor dem 15.09.2026 (nur Namensliste).
+BOOK_VERIFY_AKTE = (os.getenv("BOOK_VERIFY_AKTE", "1") or "1").strip() != "0"
 
 # W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
 # endlos speichern — erste N reichen zur Diagnose, Rest als total.
@@ -750,21 +754,49 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     }, dispatch)
 
 
-def _buchung_pruefen(tenant: dict, patient_id: str, iso: str) -> str:
-    """Nach einem Netzfehler: Ist die Buchung doch gelandet? -> appointmentId."""
-    try:
-        status, data = _cf_post("masPatientLastDoctor", {
-            "clientId": _s(tenant.get("clientId")),
-            "locationId": _s(tenant.get("locationId")),
-            "patientId": patient_id,
-        })
-        if status == 200 and isinstance(data, dict):
-            nxt = data.get("nextAppointment") or {}
-            if _s(nxt.get("startIso"))[:16] == _s(iso)[:16]:
-                return _s(nxt.get("appointmentId"))
-    except Exception as e:
-        print(f"buchung_pruefen fail {e}", flush=True)
-    return ""
+def _buchung_beweis_ueber_akte(
+    tenant: dict,
+    *,
+    patient_id: str,
+    iso: str,
+    calendar_id: str,
+) -> dict[str, Any]:
+    """Zweiter, NAMENSFREIER Beweisweg fuer eine frische Buchung.
+
+    Vorfall Thaler 15.09.2026 (Anruf 831c8b6b): der Termin stand sauber im
+    Kalender, die Ruecklese verweigerte ihn trotzdem. Ursache ist der
+    Plattform-Vertrag — `agentFindPatientAppointments` loest den Patienten
+    ueber Namens-Aehnlichkeit auf und liest eine mitgeschickte `patientId`
+    NICHT (functions/src/controllers/agentAppointments.ts). Bei drei Akten
+    "Eva Thaler" traf die Ruecklese eine fremde, `found_pid != patient_id`
+    schlug zu und die Anruferin hoerte "nicht eindeutig angekommen".
+
+    `masPatientLastDoctor` nimmt die `patientId` — damit ist derselbe
+    Vierfach-Beweis (Akte, Startminute, Kalender, echte Termin-ID) ohne
+    Namensraten moeglich. Bewusst nur `nextAppointment`: liegt ein
+    FRUEHERER Termin der Akte davor, beweist dieser Weg nichts und der
+    Termin bleibt unbestaetigt — lieber ehrlich als geraten.
+    """
+    expected_iso = _s(iso).replace(" ", "T")[:16]
+    expected_cal = _s(calendar_id)
+    if not _s(patient_id) or not expected_cal or len(expected_iso) < 16:
+        return {"ok": False}
+    status, data, dispatch = _cf_call("masPatientLastDoctor", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "patientId": _s(patient_id),
+    })
+    if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
+        return {"ok": False, "dispatch": dispatch}
+    nxt = data.get("nextAppointment")
+    if not isinstance(nxt, dict):
+        return {"ok": False, "dispatch": dispatch}
+    aid = _s(nxt.get("appointmentId"))
+    if (not aid
+            or _s(nxt.get("startIso")).replace(" ", "T")[:16] != expected_iso
+            or _s(nxt.get("calendarId")) != expected_cal):
+        return {"ok": False, "dispatch": dispatch}
+    return {"ok": True, "appointmentId": aid, "dispatch": dispatch}
 
 
 def _buchung_verifizieren(
@@ -801,9 +833,20 @@ def _buchung_verifizieren(
         "firstName": _s(ctx.get("firstName")),
         "lastName": _s(ctx.get("lastName")),
         "patientName": _s(ctx.get("patientName")),
+        # Die CF sucht den Patienten ueber Namens-Aehnlichkeit; mit Nummer
+        # kandidiert sie ZUERST ueber das Telefon und nimmt sie sonst als
+        # Stichentscheid (patientsService.findClientLocationPatientUserBy
+        # Similarity). Findet die Nummer nichts, faellt sie selbst auf die
+        # Namenssuche zurueck — die Angabe kann also nur helfen.
+        "phone": _s(ctx.get("phone")),
     }
     letzter_dispatch: dict | None = None
     letzter_fehler = "Termin nach dem Schreiben nicht gefunden"
+    # Hat die Namenssuche ueberhaupt die RICHTIGE Akte erreicht? Nur wenn
+    # nicht, darf der namensfreie Beweisweg ran (s. unten) — traf sie die
+    # Akte und der Termin passte trotzdem nicht, ist das ein echter
+    # Widerspruch und bleibt unbestaetigt.
+    namenspfad_traf_akte = False
     for delay in _BOOK_VERIFY_DELAYS:
         if delay:
             time.sleep(delay)
@@ -817,6 +860,7 @@ def _buchung_verifizieren(
         if found_pid != _s(patient_id):
             letzter_fehler = "Rücklese-Patient stimmt nicht"
             continue
+        namenspfad_traf_akte = True
         kandidaten = []
         for termin in found.get("appointments") or []:
             if not isinstance(termin, dict):
@@ -847,8 +891,36 @@ def _buchung_verifizieren(
             "patientId": _s(patient_id),
             "slotIso": expected_iso,
             "calendarId": expected_cal,
+            "beweis": "namensliste",
             "dispatch": letzter_dispatch,
         }
+    if BOOK_VERIFY_AKTE and not namenspfad_traf_akte:
+        # Die Namenssuche hat die Akte nie erreicht (fremder Treffer,
+        # notFound, mehrdeutig, CF-Fehler) — also liegt KEIN Gegenbeweis
+        # vor, nur fehlende Evidenz. Zweiter Weg ueber die patientId.
+        akte = _buchung_beweis_ueber_akte(
+            tenant,
+            patient_id=patient_id,
+            iso=expected_iso,
+            calendar_id=expected_cal,
+        )
+        if isinstance(akte.get("dispatch"), dict):
+            letzter_dispatch = akte["dispatch"]
+        if akte.get("ok"):
+            wirklich = _s(akte.get("appointmentId"))
+            print(f"buchung-beweis akte pid={_s(patient_id)} aid={wirklich} "
+                  f"iso={expected_iso} (namensliste: {letzter_fehler})", flush=True)
+            return {
+                "ok": True,
+                "appointmentId": wirklich,
+                "idCorrected": bool(expected_aid and wirklich != expected_aid),
+                "patientId": _s(patient_id),
+                "slotIso": expected_iso,
+                "calendarId": expected_cal,
+                "beweis": "akte",
+                "namenslisteFehler": letzter_fehler,
+                "dispatch": letzter_dispatch,
+            }
     return {
         "ok": False,
         "appointmentId": "",

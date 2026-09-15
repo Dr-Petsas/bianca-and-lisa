@@ -393,6 +393,32 @@ function toolKarte(t) {
     body.appendChild(abs);
   }
 
+  // W-BUCHUNG-BEWEIS (15.09.2026): welcher Weg die frische Buchung im
+  // Kalender bewiesen hat — die Namensliste oder (bei Dubletten) die Akte
+  // ueber die patientId. Bei "akte" steht dabei, woran die Namensliste
+  // gescheitert ist.
+  if (d.verification && typeof d.verification === "object") {
+    const ver = d.verification;
+    const abs = document.createElement("div");
+    abs.className = "tool-abs";
+    const lab = document.createElement("b");
+    lab.textContent = "Rücklese (read-after-write)";
+    abs.appendChild(lab);
+    const v = document.createElement("div");
+    const teile = [];
+    if (ver.ok) {
+      teile.push(`bestätigt über ${ver.beweis === "akte" ? "die Akte (patientId)" : "die Namensliste"}`);
+      if (ver.namenslisteFehler) teile.push(`Namensliste: ${ver.namenslisteFehler}`);
+      if (ver.idCorrected) teile.push("Termin-ID korrigiert");
+    } else {
+      teile.push(`nicht bestätigt — ${ver.error || "unbekannt"}`);
+    }
+    if (ver.appointmentId) teile.push(`Termin ${ver.appointmentId}`);
+    v.textContent = teile.join(" · ");
+    abs.appendChild(v);
+    body.appendChild(abs);
+  }
+
   if (d.response != null) {
     const abs = document.createElement("div");
     abs.className = "tool-abs";
