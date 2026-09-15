@@ -3990,46 +3990,31 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
 
     if s["warSchonMal"]:
         if not s["arzt"]:
-            tenant = sit.get("tenant") or {}
-            cals = kern_tenants.behandler_kalender(tenant)
-            if (tenant.get("einArztOhneBehandlerfrage") is True
-                    and len(cals) == 1 and _s(cals[0].get("id"))):
-                # Blessing hat genau eine Aerztin. „Bei welchem Behandler
-                # waren Sie zuletzt?“ kann keine Information gewinnen und
-                # kostete in den Live-Anrufen nur einen Zug. Der explizite
-                # Opt-in bindet den einzigen Kalender, ohne andere Praxen zu
-                # verändern.
-                s["arzt"] = {
-                    "typ": "einzig",
-                    "calendarId": _s(cals[0].get("id")),
-                    "calendarName": _s(cals[0].get("name")),
-                }
+            from kern import zimmer_map
+            if zimmer_map.aktiv(sit.get("tenant") or {}):
+                # Keine Arztfrage bei Thaler; der Grund routet zu Zimmer 4
+                # beziehungsweise PZR zu Zimmer 3/2.
+                pass
             else:
-                from kern import zimmer_map
-                if zimmer_map.aktiv(tenant):
-                    # Keine Arztfrage bei Thaler; der Grund routet zu Zimmer 4
-                    # beziehungsweise PZR zu Zimmer 3/2.
-                    pass
-                else:
-                    if s.get("arztCheck") != "nein":
-                        rq = arzt_check_frage(sit)
-                        if rq:
-                            return "arzt_check", rq
-                    # W-BEHANDLER-SPERRE: der genannte oder der letzte Behandler
-                    # (Kartei) ist telefonisch gesperrt — nicht "bei wem waren
-                    # Sie zuletzt?" fragen (die Antwort waere wieder der
-                    # Gesperrte), sondern ehrlich sagen und die freien anbieten.
-                    if s.get("arztJa"):
-                        # W-ARZT-JANEIN: "Ja" auf die Bestands-Frage — jetzt die
-                        # Namen zur Wahl, deterministisch statt LLM.
-                        return "arzt", arzt_nachfrage(sit)
-                    gesperrt_frage = _arzt_gesperrt_frage(sit)
-                    if gesperrt_frage:
-                        return "arzt", gesperrt_frage
-                    wer = fuer_wen_phrase(s)
-                    if wer:
-                        return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
-                    return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
+                if s.get("arztCheck") != "nein":
+                    rq = arzt_check_frage(sit)
+                    if rq:
+                        return "arzt_check", rq
+                # W-BEHANDLER-SPERRE: der genannte oder der letzte Behandler
+                # (Kartei) ist telefonisch gesperrt — nicht "bei wem waren
+                # Sie zuletzt?" fragen (die Antwort waere wieder der
+                # Gesperrte), sondern ehrlich sagen und die freien anbieten.
+                if s.get("arztJa"):
+                    # W-ARZT-JANEIN: "Ja" auf die Bestands-Frage — jetzt die
+                    # Namen zur Wahl, deterministisch statt LLM.
+                    return "arzt", arzt_nachfrage(sit)
+                gesperrt_frage = _arzt_gesperrt_frage(sit)
+                if gesperrt_frage:
+                    return "arzt", gesperrt_frage
+                wer = fuer_wen_phrase(s)
+                if wer:
+                    return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
+                return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:

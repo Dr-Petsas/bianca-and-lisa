@@ -3720,23 +3720,6 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             "und passt es eher vormittags oder nachmittags?"
         )}
 
-    # W-BLESSING-MOTIVKLARHEIT: „Beratung“ und „etwas anderes“ stehen in
-    # Biancas eigener Auswahlfrage. Solche Antworten als „nicht angeboten“
-    # abzulehnen ist ein Widerspruch. Der Blessing-Opt-in konkretisiert sie
-    # vor der allgemeinen Unbekannt-Leistung-Wache; noch wird kein Motiv
-    # geraten und keine Slotsuche gestartet.
-    if s["modus"] == "buchen" and s["frage"] == "grund" and not s["grund"]:
-        a = s.get("arzt") if isinstance(s.get("arzt"), dict) else {}
-        klaerung = besuchsgrund.grund_klaerungsfrage(
-            sit.get("tenant") or {},
-            t,
-            katalog=motive.katalog(sit),
-            calendar_id=_s(a.get("calendarId")),
-        )
-        if klaerung:
-            spur.merken(sit, "blessing-motiv-klaerung", t)
-            return {"text": klaerung}
-
     neu = gehirn.einsammeln(sit, t)
     if nachname_check_modus == "bestaetigt":
         neu.add("nachnameCheck")

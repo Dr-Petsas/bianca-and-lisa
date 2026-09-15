@@ -14,8 +14,6 @@
   "buchstabierSegmenteTrennen": true,
   "nachnameReadbackNachBuchstabieren": true,
   "bestandsauskunftErweitert": true,
-  "dermaMotivKlarheit": true,
-  "einArztOhneBehandlerfrage": true,
   "sttHotwords": [
     "Blessing",
     "Hautkrebsscreening",
