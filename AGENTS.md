@@ -3476,7 +3476,10 @@ einen unbekannten Namen weiblich — wer einen männlichen Assistenten will, set
    Krebsvorsorge, PAP/HPV, Schwangerschaftsvorsorge, Spirale. Für die findet
    Ben telefonisch keine Zeiten (er fällt sichtbar auf ein buchbares Motiv
    zurück, s. W-MOTIV-KONSISTENT).
-3. Öffnungszeiten stehen auf der Vorgabe Mo–So 8–18 Uhr.
+3. Die Öffnungszeiten stehen auf dem Portal-Default (alle sieben Tage
+   08:00–18:00). `standort.zeiten_von` verwirft genau dieses Muster absichtlich
+   („nie raten"), also nennt Ben keine Zeiten, sondern verweist auf die Praxis
+   — gegengelesen am 15.09.: `standort … -> Zeiten nein`.
 4. Der Dialplan-Eintrag für 4160 liegt als Referenzkopie in
    `sip_bridge/extensions_bianca.conf`; der Live-Asterisk braucht ihn noch
    (kein Shell-Zugang von hier).
