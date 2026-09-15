@@ -3362,7 +3362,9 @@ Selbstheilung samt Update-Fehler, fehlendem bestätigtem Handy und Notaus,
 Sammler-Nachzug, Gegenproben der Wache), Abschlussfrage-Block in
 `tests/test_rueckruf_nummer.py`; die `telefon_alt`-Fixtures in
 `tests/test_bianca_bausteine.py` tragen jetzt ein altes HANDY — gegen ein
-Festnetz gibt es dort nichts mehr zu fragen.
+Festnetz gibt es dort nichts mehr zu fragen. Abnahme am DEPLOYTEN Stand
+(read-only, kein Kalender-Write): `docker exec -w /app telefonki-bianca-test-1
+python tools/_probe_a8fcbcb4_live.py` — 15.09.2026 grün.
 
 ## Rückrollpunkte (Produktionsstände)
 
