@@ -13,6 +13,16 @@ _SAFE_NAME_RE = re.compile(
     r"besprechung|beratung|untersuchung|recall",
     re.I,
 )
+# Als AUSWEICH fuer ein leeres Spezialfenster taugt nur ein GENERISCHER
+# Kontroll-/Vorsorge-Termin. _SAFE_NAME_RE ist dafuer absichtlich zu weit: sie
+# waehlt auch das stille Default-Motiv und kennt "Besprechung"/"Beratung" —
+# bei Ruether (Gynaekologie, kein Kontroll-Motiv) griff darueber
+# "GYN Endometriose Erstberatung" (45 min) als Ersatz fuer eine gewuenschte
+# Krebsvorsorge. Siehe W-ERSATZ-MOTIV (15.09.2026).
+_ERSATZ_NAME_RE = re.compile(
+    r"kontroll|vorsorge|check.?up|nachsorge|recall|untersuchung",
+    re.I,
+)
 
 # Kalender, die KEINE Person sind: Zimmer/Prophylaxe, nicht Behandler.
 # Thaler 08.09.2026: "Prophylaxe" stand als Behandler in der Arztwahl.
@@ -404,6 +414,21 @@ def ist_akut_motiv(vm: dict[str, Any] | None) -> bool:
         return False
     text = f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))} {_sauber(vm.get('id'))}"
     return bool(_AKUT_NAME_RE.search(text))
+
+
+def taugt_als_ersatz(vm: dict[str, Any] | None) -> bool:
+    """Darf dieses Motiv fuer ein leeres Spezialfenster einspringen?
+
+    JA nur bei einem generischen Kontroll-/Vorsorge-Termin. Eine fachliche
+    Erstberatung, eine Besprechung oder eine Zahnreinigung ist KEIN Ersatz
+    fuer eine Krebsvorsorge — der Anrufer bekaeme eine andere Leistung in
+    einer anderen Dauer. Ohne Ersatz sagt die Slotsuche ehrlich, dass diese
+    Terminart telefonisch nicht vergeben wird (W-ERSATZ-MOTIV).
+    """
+    if not isinstance(vm, dict) or ist_akut_motiv(vm) or ist_pzr_motiv(vm):
+        return False
+    text = f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))}"
+    return bool(_ERSATZ_NAME_RE.search(text))
 
 
 def _sicheres_default(vms: list[dict[str, Any]]) -> dict[str, Any] | None:

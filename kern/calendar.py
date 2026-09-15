@@ -17,7 +17,9 @@ from kern.slots import (
     FENSTER_TAGE, REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot,
 )
 from kern.sprech import slot_wort
-from kern.tenants import ist_akut_motiv, kalender_von, motiv_von
+from kern.tenants import (
+    ist_akut_motiv, kalender_von, motiv_von, taugt_als_ersatz,
+)
 
 TZ = ZoneInfo("Europe/Berlin")
 
@@ -64,6 +66,10 @@ BOOK_VERIFY_AKTE = (os.getenv("BOOK_VERIFY_AKTE", "1") or "1").strip() != "0"
 # rueckbestaetigte Handynummer in der Hand hat, wird sie in die Akte geschrieben
 # und EINMAL neu gebucht. 0 = Verhalten von vor dem 15.09.2026 (nur nachfragen).
 BOOK_FIX_PHONE = (os.getenv("BOOK_FIX_PHONE", "1") or "1").strip() != "0"
+# W-ERSATZ-MOTIV (15.09.2026): als Ausweich fuer ein leeres Spezialfenster
+# taugt nur ein echter Kontroll-/Vorsorge-Termin. 0 = Verhalten von vor dem
+# 15.09.2026 (jedes harmlos klingende Motiv durfte einspringen).
+_ERSATZ_STRENG = (os.getenv("MOTIV_ERSATZ_STRENG", "1") or "1").strip() != "0"
 
 # W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
 # endlos speichern — erste N reichen zur Diagnose, Rest als total.
@@ -174,10 +180,41 @@ def _kontrolle_ersatz(tenant: dict, such: dict) -> dict | None:
     # (Blessing/Thaler: visitMotives[0] = Akutsprechstunde).
     if not alt_id or alt_id == _s(such.get("visitMotiveId")) or ist_akut_motiv(vm):
         return None
+    # W-ERSATZ-MOTIV (15.09.2026): fuehrt die Praxis gar kein Kontroll-Motiv,
+    # lieferte motiv_von den ersten harmlos KLINGENDEN Eintrag — bei Ruether
+    # "GYN Endometriose Erstberatung" (45 min) fuer eine Krebsvorsorge. Ein
+    # Ersatz muss wirklich ein Kontroll-/Vorsorge-Termin sein; sonst gibt es
+    # keinen, und der Anrufer hoert ehrlich, dass das telefonisch nicht geht.
+    if _ERSATZ_STRENG and not taugt_als_ersatz(vm):
+        return None
     alt = dict(such)
     alt["visitMotiveId"] = alt_id
     alt["visitMotiveName"] = _s((vm or {}).get("name")) or "Kontrolluntersuchung"
     return alt
+
+
+def _nicht_telefonisch(tenant: dict, such: dict) -> str:
+    """Name des Wunsch-Motivs, wenn es die Praxis NICHT online vergibt.
+
+    `allowOnlineBooking=false` sperrt in der Plattform auch den Telefon-Agenten
+    — die CF liefert dafuer nie Zeiten. Ohne tauglichen Ersatz (W-ERSATZ-MOTIV)
+    ist "im Moment leider kein freier Termin" die falsche Auskunft: es wird
+    nicht kurzfristig einer frei. Der Anrufer soll den echten Grund hoeren.
+    """
+    mid = _s(such.get("visitMotiveId"))
+    if not mid:
+        return ""
+    vms = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
+    for vm in vms:
+        if _s(vm.get("id")) != mid:
+            continue
+        # NUR ein ausdrueckliches False sperrt. Die lokalen tenants/*.json
+        # (MedDent, Thaler) fuehren das Feld gar nicht — ein fehlender Wert
+        # darf den Anrufer nie mit "vergebe ich telefonisch nicht" abweisen.
+        if vm.get("allowOnlineBooking") is not False:
+            return ""
+        return _s(vm.get("nameForPatient")) or _s(vm.get("name")) or _s(such.get("visitMotiveName"))
+    return ""
 
 
 def _mit_motiv_fallback(found: dict[str, Any], such: dict) -> dict[str, Any]:
@@ -221,6 +258,9 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
         return found
     alt = _kontrolle_ersatz(tenant, such)
     if not alt:
+        gesperrt = _nicht_telefonisch(tenant, such)
+        if gesperrt:
+            found["motivNichtTelefonisch"] = gesperrt
         return found
     zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source, wish=wish)
     if zweit.get("ok") and _iso_liste(zweit.get("slots") or []):
@@ -251,10 +291,13 @@ def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
         if isinstance(cal, dict) and _s(cal.get("id"))
     ]
     runden: list[tuple[dict, bool]] = [(dict(ctx or {}), False)]
+    gesperrt = ""
     if motiv_fallback:
         alt = _kontrolle_ersatz(tenant, dict(ctx or {}))
         if alt:
             runden.append((alt, True))
+        else:
+            gesperrt = _nicht_telefonisch(tenant, dict(ctx or {}))
     for basis, ersatz in runden:
         for cal in kandidaten:
             such = dict(basis)
@@ -283,6 +326,8 @@ def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
                 "id": erster["id"],
                 "name": _s(erster.get("name")),
             }
+    if gesperrt and not _iso_liste(letzter.get("slots") or []):
+        letzter["motivNichtTelefonisch"] = gesperrt
     return letzter
 
 

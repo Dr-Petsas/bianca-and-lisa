@@ -845,6 +845,10 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 )
             if egal and _s(found.get("doctorName")):
                 sit["angebotArzt"] = _s(found.get("doctorName")).split(",")[0].strip()
+        # W-ERSATZ-MOTIV (15.09.2026): vergibt die Praxis diese Terminart
+        # gar nicht online und taugt kein Kontroll-Motiv als Ausweich, dann
+        # wird auch nicht "kurzfristig einer frei" — Grund ehrlich sagen.
+        sit["motivNichtTelefonisch"] = _s(found.get("motivNichtTelefonisch"))
         merke_tool(sit, "getFreeTimeSlots", found)
         sit["vorratGemerkt"] = True
         return found
@@ -926,13 +930,20 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         s["frage"] = ""
         sit["keinSlotFertig"] = True
         verwalten.rueckruf_notiz(sit)
+        ansage = spoken_offer([], wish_matched=True)
+        gesperrt = _s(sit.pop("motivNichtTelefonisch", ""))
+        if gesperrt:
+            ansage = (
+                f"Einen Termin für {gesperrt} darf ich telefonisch nicht "
+                "vergeben. Ich habe Ihr Anliegen notiert — die Praxis meldet "
+                "sich kurzfristig bei Ihnen und stimmt den Termin mit Ihnen ab."
+            )
         # W-RUECKRUF-NUMMER: ohne Nummer kann die Praxis nicht zurueckrufen —
         # dann ist die Nummer jetzt die offene Frage (Anrufe da746a65/5aa87268).
         nummer_frage = _rueckruf_nummer_start(sit)
         if nummer_frage:
-            return {"text": spoken_offer([], wish_matched=True) + " " + nummer_frage}
-        return {"text": spoken_offer([], wish_matched=True)
-                + " " + _sonst_noch_frage(sit)}
+            return {"text": ansage + " " + nummer_frage}
+        return {"text": ansage + " " + _sonst_noch_frage(sit)}
     s["phase"] = "angebot"
     s["frage"] = "slotwahl"
     vor = ""
