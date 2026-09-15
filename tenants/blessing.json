@@ -45,7 +45,7 @@
       "name": "Doktor Charlotte Blessing"
     }
   ],
-  "begruessungText": "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit Bianca, der Telefonassistentin der Praxis. Wie kann ich Ihnen helfen?",
+  "begruessungText": "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der Ki Assistentin Bianca ...Wie kann ich helfen?",
   "dbPrompt": "NOTFALL-SOFORTREGEL: Akute dermatologische Notfälle werden nach den festen Praxisregeln behandelt. DOKUMENT-VORSPRACHEREGEL: Rezepte, Überweisungen und Krankmeldungen werden telefonisch nicht bestellt oder zur Abholung zugesagt; dafür ist eine persönliche Vorsprache erforderlich.",
   "weiterleitungen": [],
   "visitMotives": [
