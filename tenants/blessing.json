@@ -13,6 +13,7 @@
   "namensUnklarOhneEcho": true,
   "buchstabierSegmenteTrennen": true,
   "nachnameReadbackNachBuchstabieren": true,
+  "bestandsauskunftErweitert": true,
   "sttHotwords": [
     "Blessing",
     "Hautkrebsscreening",

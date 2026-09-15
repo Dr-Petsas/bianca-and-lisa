@@ -120,7 +120,7 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     # Termin?") ist auch MITTEN in einer Buchung ein Wechsel-Verdacht — sonst
     # bleibt der Satz beim Buchen haengen und das Frei-LLM erfindet eine
     # Kalender-Auskunft (W-BESTANDSFRAGE 09.09.2026, Live Petsas 08.09.).
-    if (_BESTANDSFRAGE_RE.search(t) or _FREIER_TERMIN_RE.search(t)
+    if (ist_bestandsfrage(sit, t) or _FREIER_TERMIN_RE.search(t)
             or _BESTANDSABSAGE_IM_ANGEBOT_RE.search(t)):
         return True
     # "Termin" ist im Buchungs-/Aenderungs-Anliegen Alltagsvokabular der
@@ -199,6 +199,12 @@ def _ist_formular_antwort(sit: dict, text: str) -> bool:
     """True = sicher nur Ernte fuer die laufende Maschine (kein LLM noetig)."""
     t = _s(text)
     if not t or _WECHSEL_RE.search(t):
+        return False
+    # B1 Blessing: „Wann ist mein Termin?“ darf auch auf eine gerade offene
+    # Ja/Nein-/Katalogfrage niemals als kurze Formularantwort geschluckt
+    # werden. Die mandantenscharfe Bestandsfrage wechselt in die echte
+    # Kalenderauskunft.
+    if _bestandsfrage_erweitert(sit, t):
         return False
     if _JA_NEIN_RE.match(t) or _ZIFFERN_RE.match(t) or _ZAHLWORT_RE.match(t) \
             or _BUCHSTABIER_RE.match(t):
@@ -382,6 +388,81 @@ _BESTANDSFRAGE_RE = re.compile(
     r"bei\s+(?:ihnen|euch))\s+){0,3}(?:irgend)?einen\s+termin\b",
     re.I,
 )
+
+# B1 Blessing (15.09.2026): Die drei Gescheidle-Anrufe formulierten dieselbe
+# Bestandsauskunft in der anderen Reihenfolge: „meinen Termin nächste Woche,
+# wann ist der?“, „ich habe einen Termin … und weiß den Tag nicht mehr“. Diese
+# Sätze enthalten weder die alte Wann-vor-Termin-Form noch ein Abschlussverb
+# wie „gebucht“ und liefen dadurch als KEINE bzw. später als Neubuchung.
+# „Charmin“/„Salmin“ sind ausschließlich die beobachteten Blessing-STT-Formen
+# von „Termin“ und greifen nur zusammen mit Besitz + Zeitfrage.
+_BESTANDS_WORT_ERWEITERT = r"(?:termin|charmin|salmin)"
+_BESTANDS_BEZUG_ERWEITERT_RE = re.compile(
+    rf"\bmein(?:en|em|er|e)?\s+{_BESTANDS_WORT_ERWEITERT}\b|"
+    rf"\b(?:der|dieser)\s+{_BESTANDS_WORT_ERWEITERT}\b|"
+    rf"\bich\s+hab(?:e|')?\b[^.!?]{{0,70}}\b"
+    rf"(?:einen|den|meinen)\s+{_BESTANDS_WORT_ERWEITERT}\b",
+    re.I,
+)
+_BESTANDS_ZEITFRAGE_ERWEITERT_RE = re.compile(
+    r"\bwann\b|\bum\s+wie\s+viel\s+uhr\b|"
+    r"\bwelche[nr]?\s+(?:uhrzeit|tag)\b|"
+    r"\b(?:weiß|weiss|wusste|wüsste|wuesste)\b[^.!?]{0,70}\bnicht\b|"
+    r"\bnicht\s+mehr\b[^.!?]{0,30}\b(?:weiß|weiss|wissen)\b",
+    re.I,
+)
+_BESTANDS_STATUS_ERWEITERT_RE = re.compile(
+    rf"\b(?:ist|wurde|steht)\b[^.!?]{{0,24}}\b"
+    rf"(?:mein(?:en|em|er|e)?|der|dieser)\s+{_BESTANDS_WORT_ERWEITERT}\b"
+    rf"[^.!?]{{0,28}}\b(?:eingetragen|gebucht|gespeichert|vermerkt|drin)\b|"
+    rf"\b(?:mein(?:en|em|er|e)?|der|dieser)\s+{_BESTANDS_WORT_ERWEITERT}\b"
+    rf"[^.!?]{{0,16}}\b(?:ist|wurde|steht)\b[^.!?]{{0,16}}"
+    rf"\b(?:eingetragen|gebucht|gespeichert|vermerkt|drin)\b",
+    re.I,
+)
+
+
+def _bestandsfrage_erweitert(sit: dict | None, text: str) -> bool:
+    """Blessing-Opt-in für die beobachteten Terminauskunfts-Sprechweisen."""
+    tenant = (
+        sit.get("tenant")
+        if isinstance(sit, dict) and isinstance(sit.get("tenant"), dict)
+        else {}
+    )
+    if tenant.get("bestandsauskunftErweitert") is not True:
+        return False
+    t = _s(text)
+    if not t or _FREIER_TERMIN_RE.search(t):
+        return False
+
+    status = bool(_BESTANDS_STATUS_ERWEITERT_RE.search(t))
+    if status:
+        s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+        # Während ein ausgewählter Slot noch auf Bestätigung/Schreiben wartet,
+        # bezieht sich „Ist der Termin eingetragen?“ auf DIESEN Vorgang. Dann
+        # darf keine zweite Bestandssuche die laufende Buchung parken.
+        if (
+            _s(s.get("modus")) == "buchen"
+            and (
+                _s(s.get("phase")) in {"angebot", "bestaetigen"}
+                or bool(sit.get("buchIntent"))
+            )
+        ):
+            return False
+        return True
+
+    return bool(
+        _BESTANDS_BEZUG_ERWEITERT_RE.search(t)
+        and _BESTANDS_ZEITFRAGE_ERWEITERT_RE.search(t)
+    )
+
+
+def ist_bestandsfrage(sit: dict | None, text: str) -> bool:
+    """Bestehenden Termin erfragen — generischer Vertrag plus Tenant-Opt-in."""
+    t = _s(text)
+    return bool(_BESTANDSFRAGE_RE.search(t) or _bestandsfrage_erweitert(sit, t))
+
+
 # Freie-Slot-Frage aus Anbietersicht: „Haben Sie noch einen Termin diese
 # Woche?“ fragt nach einer NEUEN Buchung. Das Subjekt „Sie“ ist der wichtige
 # Gegenpol zu _BESTANDSFRAGE_RE („habe ICH ...?“). Ohne diesen Fast-Path lief
@@ -495,6 +576,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     im_angebot = _s(s.get("phase")) in {"angebot", "bestaetigen"}
+    bestandsfrage = ist_bestandsfrage(sit, t)
     # Eine genannte Abteilung ist oft nur der vermeintliche Lösungsweg.
     # Steht das eigentliche Anliegen im selben Satz, gewinnt die Aufgabe:
     # „Anmeldung, ich möchte meinen Termin absagen“ => Absage-Flow, nicht
@@ -506,11 +588,11 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
         if _rueckruf(t):
             return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-        if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
+        if (_FB_AUSKUNFT_RE.search(t) or bestandsfrage) \
                 and not _FREIER_TERMIN_RE.search(t):
-            gg = "VORGANG" if "termin" in t.lower() else "REGEL"
+            gg = "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-        if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+        if ((_FB_NEU_RE.search(t) and not bestandsfrage)
                 or _FREIER_TERMIN_RE.search(t)
                 or _ueberwiesen(t)
                 or (not _motivkatalog_da(sit)
@@ -541,11 +623,11 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
     if _rueckruf(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-    if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
+    if (_FB_AUSKUNFT_RE.search(t) or bestandsfrage) \
             and not _FREIER_TERMIN_RE.search(t):
-        gg = "VORGANG" if "termin" in t.lower() else "REGEL"
+        gg = "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-    if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+    if ((_FB_NEU_RE.search(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
@@ -585,6 +667,7 @@ def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
                 "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
                 "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     treffer: list[tuple[str, dict[str, Any]]] = []
+    bestandsfrage = ist_bestandsfrage(sit, t)
     if _FB_ERREICHEN_RE.search(t):
         treffer.append(("ERREICHEN", {"handlung": "ERREICHEN", "gegenstand": "PERSON"}))
     if _FB_VERSCHIEBEN_RE.search(t):
@@ -593,11 +676,11 @@ def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))
     if _rueckruf(t):
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))
-    if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
+    if (_FB_AUSKUNFT_RE.search(t) or bestandsfrage) \
             and not _FREIER_TERMIN_RE.search(t):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
-                                     "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
-    if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+                                     "gegenstand": "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"}))
+    if ((_FB_NEU_RE.search(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))

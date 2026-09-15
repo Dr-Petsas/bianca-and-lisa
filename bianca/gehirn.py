@@ -1587,7 +1587,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
-        elif _AUSKUNFT_RE.search(t):
+        elif _AUSKUNFT_RE.search(t) or _intent.ist_bestandsfrage(sit, t):
             if (s["modus"] in {"", "buchen"} and s["phase"] in {"", "gebucht", "fertig"}) or (
                 s["modus"] in {"absagen", "verschieben"} and s["phase"] == "fertig"
             ):

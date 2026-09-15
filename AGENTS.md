@@ -3646,6 +3646,32 @@ Akte, bevor der Anrufer die gespeicherte Schreibweise überhaupt gehört hatte.
   zusätzlichen Gesprächszug. Regressionen und Suchsperren:
   `tests/test_blessing_namen.py`; Einführung nach V2.7, noch nicht deployt.
 
+## Blessing-Terminauskunft bleibt Terminauskunft (W-BLESSING-BESTANDSAUSKUNFT 15.09.2026 — nicht rückbauen)
+
+Drei Gescheidle-Anrufe fragten nach einem bereits vereinbarten Termin
+(„Meinen Termin nächste Woche, wann ist der?“, „ich habe einen Termin … und
+weiß den Tag nicht mehr“). Die bisherige Bestandsfrage erkannte nur Formen mit
+„wann“ VOR „Termin“ oder einem Abschlussverb wie „gebucht“. Die Live-Sätze
+liefen dadurch als unklarer Zug oder kippten nach einer Fehlsuche in die
+Neubuchung mit Versicherungs- und Besuchsgrundfragen.
+
+- Nur Blessing trägt `bestandsauskunftErweitert=true`.
+  `kern.intent.ist_bestandsfrage` ergänzt dort die beobachteten
+  Termin-vor-Wann-, Vergessen-/Uhrzeit- und Statusformen. Auch die echten
+  STT-Varianten „Charmin“/„Salmin“ gelten ausschließlich mit Besitzbezug und
+  Zeitfrage als Termin.
+- Der Treffer ist synchron `WISSEN × VORGANG`, auch mitten in einer bereits
+  angelaufenen Neubuchung. Das Session-Hirn parkt diese und schaltet zurück in
+  die echte Bestandskalender-Auskunft; weder freies LLM noch Katalog-/
+  Versicherungsfrage dürfen übernehmen.
+- „Wann kann ich einen Termin bekommen?“ und freie Termine bleiben
+  Neubuchung. „Ist der Termin eingetragen?“ startet während eines noch
+  ungeschriebenen Slot-/Bestätigungsschritts keine zweite Bestandssuche.
+- Der Regex-Rückfall ohne Session-Hirn nutzt denselben mandantenscharfen
+  Wächter. MedDent, Thaler und Rüther behalten ihre bisherige Deutung.
+  Regressionen: `tests/test_blessing_abschluss.py`; Einführung nach V2.7,
+  noch nicht deployt.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
