@@ -44,6 +44,27 @@ def test_ruether_ist_ben_und_maennlich():
     assert assistent.stimme(t) == "ben"
 
 
+def test_did_4160_fuehrt_zu_ben():
+    """Die ganze Kette, die live zaehlt: Dialplan-UUID -> DID -> Mandant ->
+    Stimme/Name. Faellt einer der drei Schritte aus, spricht auf Ruethers
+    Leitung Bianca."""
+    from sip_bridge.server import did_von_uuid
+
+    did = did_von_uuid(bytes.fromhex("b1a2ca000000000000000000" + "00004160"))
+    assert did == "+4921154244160"
+    t = tenants.von_did(did)
+    assert t and t["_id"] == "ruether"
+    assert assistent.name(t) == "Ben"
+    assert assistent.stimme(t) == "ben"
+    # Gegenprobe: die drei Live-Leitungen bleiben bei Bianca.
+    for ende, mid in (("00004101", "meddent"), ("00004105", "thaler")):
+        andere = tenants.von_did(
+            did_von_uuid(bytes.fromhex("b1a2ca000000000000000000" + ende)))
+        assert andere and andere["_id"] == mid
+        assert assistent.name(andere) == "Bianca"
+        assert assistent.stimme(andere) == ""
+
+
 def test_db_agentname_nur_wenn_er_wie_ein_vorname_aussieht():
     """Die Pickadoc-DB fuehrt im Agent-Namen teils den PRAXIS-Namen — den
     darf die Assistenz sich nie selbst sagen."""

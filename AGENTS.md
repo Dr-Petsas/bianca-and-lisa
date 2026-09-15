@@ -46,7 +46,17 @@ Kalender/Motive/Begrüßung/Keywords/Prompts. Kette bei uns:
  auch **+49 211 54244120 = Blessing** (Hautarztpraxis Doktor Blessing,
  Agent samt Begrüßung kommt komplett aus der DB, clientId UUJnPzoYPa4yYyzcaGlm,
  kein lokales tenants-JSON; Asterisk-Backup
- `extensions_bianca.conf.bak-20260830-4120`).
+ `extensions_bianca.conf.bak-20260830-4120`), seit 15.09.2026
+ **+49 211 54244160 = Rüther** (gynäkologische Praxis, Assistent **Ben**
+ männlich — s. W-STIMME-MANDANT; clientId AWdFeDldR81P3jmiq869, Agent
+ LtHkW6I1xSwDpWy5M3vy, dazu `tenants/ruether.json` für Sprechformen,
+ Stimme und Hotwords). Der Map-Default steht im CODE
+ (`sip_bridge/server.py`), nicht nur in der `.env` — eine beim Deploy
+ überschriebene `.env` (s. „Die .env-Falle") würde die Praxis sonst auf
+ dem Default-Mandanten landen lassen. Wache: `did_von_uuid`-Block in
+ `tests/test_agentprofil.py` und `test_did_4160_fuehrt_zu_ben`
+ (`tests/test_assistent.py`, prüft die ganze Kette UUID → DID → Mandant →
+ Name/Stimme).
 - **Auflösung** (`kern/agentprofil.fuer_did`, in `bianca/server.api_start`)
  — DB ZUERST (Chef 30.08.2026 abends, davor stand die lokale Datei vorn):
  1. Cloud Function (Auth `PICKADOC_PHONE_CALL_API_TOKEN` als Bearer +
