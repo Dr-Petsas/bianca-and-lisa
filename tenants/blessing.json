@@ -11,6 +11,7 @@
   "sprache": "de",
   "fachgebiet": "dermatologie",
   "namensUnklarOhneEcho": true,
+  "buchstabierSegmenteTrennen": true,
   "sttHotwords": [
     "Blessing",
     "Hautkrebsscreening",

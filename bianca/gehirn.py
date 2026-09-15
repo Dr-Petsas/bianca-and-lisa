@@ -1225,7 +1225,7 @@ _NACHSPRECH_STOP = _NAME_STOP | {
 }
 
 
-def _nachgesprochen(text: str) -> str:
+def _nachgesprochen(text: str, *, schlusswort_trennen: bool = False) -> str:
     """Auf die Buchstabier-Frage den Namen NOCHMAL gesprochen statt buchstabiert.
 
     STT zerlegt lange Namen gern in Silbenblöcke ("MATTA VATTA" statt
@@ -1235,11 +1235,25 @@ def _nachgesprochen(text: str) -> str:
     """
     if ist_ja(text) or ist_nein(text) or ist_zwischenfrage(text):
         return ""
-    raw = re.sub(r"[^\wäöüßÄÖÜ-]+", " ", _s(text))
+    quelle = (
+        buchstaben.ohne_schlusswort(text)
+        if schlusswort_trennen
+        else _s(text)
+    )
+    raw = re.sub(
+        r"[^\wäöüßÄÖÜ-]+",
+        " ",
+        quelle,
+    )
     toks = [t for t in raw.split() if t]
     if not 1 <= len(toks) <= 2:
         return ""
-    if any(t.lower() in _NACHSPRECH_STOP or t.isdigit() or len(t) < (3 if len(toks) == 2 else 4) for t in toks):
+    stop = _NACHSPRECH_STOP | (
+        {"fertig", "ende", "gewesen", "danke", "wars"}
+        if schlusswort_trennen
+        else set()
+    )
+    if any(t.lower() in stop or t.isdigit() or len(t) < (3 if len(toks) == 2 else 4) for t in toks):
         return ""
     zusammen = "".join(toks)
     if not zusammen.isalpha() or not 4 <= len(zusammen) <= 20:
@@ -1954,7 +1968,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # "MATTA VATTA" gegen gespeichertes "Pidoq" — Bianca beharrte auf Pidoq).
     if _name_korrektur(s, t):
         neu.add("name")
-    buch = buchstaben.deute(t)
+    buch = (
+        buchstaben.deute_feldsegment(t)
+        if tenant.get("buchstabierSegmenteTrennen") is True
+        else buchstaben.deute(t)
+    )
     buch_fragment = False
     name_toks = _name_tokens(t)
     vorname_fragment = False
@@ -2110,7 +2128,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         if mv and mv.group(1).lower() not in _NAME_STOP:
             s["vorname"] = mv.group(1).capitalize()
     elif s["frage"] == "buchstabieren":
-        nach = _nachgesprochen(t)
+        nach = _nachgesprochen(
+            t,
+            schlusswort_trennen=tenant.get("buchstabierSegmenteTrennen") is True,
+        )
         if nach:
             # Statt zu buchstabieren hat der Anrufer den Namen (ggf. in
             # Silben: "MATTA VATTA") noch einmal gesprochen: übernehmen.

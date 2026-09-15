@@ -96,6 +96,26 @@ _ENDE_RE = re.compile(
     r"(?:[\s,.;:!?-]*\b(?:fertig|ende|gewesen|danke|das\s+war(?:'s|s|\s+es)?|"
     r"mehr\s+nicht|war\s+es)\b)+[\s,.;:!?-]*$", re.I)
 
+# Blessing-Liveketten 15.09.2026:
+# - „C wie Cäsar, O“ kam bei Parakeet als C-V-C-S-A-O bzw. C-B-C-S-A-O.
+# - „R-E-N-C-O“ kam als R-EN-C-O; das zusammengeklebte EN wurde danach als
+#   gesprochener Buchstabenname N gelesen und das E ging verloren.
+# Diese Normalisierung wird NUR über ``deute_feldsegment`` verwendet. Der
+# bisherige Standardparser bleibt für alle anderen Mandanten byte-identisch.
+_ZERHACKTES_CAESAR_RE = re.compile(
+    r"\bC(?:\s*-\s*|\s+)[BV](?:\s*-\s*|\s+)C"
+    r"(?:\s*-\s*|\s+)S(?:\s*-\s*|\s+)A"
+    r"(?=(?:\s*-\s*|\s+)O\b)",
+    re.I,
+)
+_EXPLIZITE_KETTE_RE = re.compile(
+    r"\b(?:[A-ZÄÖÜ](?:\s*-\s*[A-ZÄÖÜ]{1,4}){2,})\b"
+)
+_NEUES_WORT_RE = re.compile(
+    r"\b(?:neues?|nächstes?|naechstes?|weiteres?)\s+wort\b",
+    re.I,
+)
+
 
 def _ende_ab(text: str) -> str:
     """Diktat-Schlusswort am Satzende abschneiden ("… E, fertig." -> "… E")."""
@@ -103,6 +123,11 @@ def _ende_ab(text: str) -> str:
     # Nur das Schlusswort allein ("Fertig.") darf nicht zu einem leeren Satz
     # werden — dann bliebe die Kette ohne Bezug und `deute` liefe auf None.
     return gekappt if gekappt else _s(text)
+
+
+def ohne_schlusswort(text: str) -> str:
+    """Öffentliche Form für Name plus Diktat-Ende („Gavranides, fertig“)."""
+    return _ende_ab(text)
 
 
 def _s(v: Any) -> str:
@@ -384,6 +409,81 @@ def deute(text: str) -> dict[str, Any] | None:
     name = zusammen[0].upper() + zusammen[1:]
     sicher = any(w == zusammen for w in woerter)
     return {"name": name, "sicher": sicher}
+
+
+def _explizite_cluster_trennen(text: str) -> str:
+    """Groß geschriebene Hyphen-Cluster innerhalb einer Kette entfalten.
+
+    ``R-EN-C-O`` bedeutet im Buchstabierkontext R-E-N-C-O, nicht R-(gespro-
+    chenes EN=N)-C-O. Normale Wörter und ``T-Mia`` bleiben unangetastet.
+    """
+    def _entfalten(m: re.Match[str]) -> str:
+        teile = re.split(r"\s*-\s*", m.group(0))
+        return "-".join(ch for teil in teile for ch in teil)
+
+    return _EXPLIZITE_KETTE_RE.sub(_entfalten, text)
+
+
+def _feldsegment_vorbereiten(text: str) -> str:
+    raw = ohne_schlusswort(text)
+    # Das zerhackte „C wie Cäsar“ zuerst auf das gemeinte C reduzieren; das O
+    # bleibt durch den Lookahead als nächster Buchstabe erhalten.
+    raw = _ZERHACKTES_CAESAR_RE.sub("C", raw)
+    return _explizite_cluster_trennen(raw)
+
+
+def _hat_explizite_kette(text: str) -> bool:
+    return bool(re.search(
+        r"(?<!\w)[A-Za-zÄÖÜäöüß]"
+        r"(?:\s*-\s*[A-Za-zÄÖÜäöüß]){1,}(?!\w)",
+        text,
+    ))
+
+
+def deute_feldsegment(text: str) -> dict[str, Any] | None:
+    """Buchstabierung für EIN gerade erfragtes Namensfeld.
+
+    Explizites „neues Wort“ bewahrt zusammengesetzte Nachnamen als getrennte
+    Wörter. Ohne diesen Marker endet das aktuelle Feld an einer bereits
+    vollständigen ersten Kette, wenn danach eine zweite vollständige Kette
+    folgt — so wird der Kindesname in „H-A-L-L-W-A-C-H-S, T-A-M-I-A“ nicht
+    an den Nachnamen der Anruferin geklebt.
+
+    Dieser strengere Pfad ist opt-in; ``deute`` selbst bleibt unverändert.
+    """
+    raw = _feldsegment_vorbereiten(text)
+
+    wortteile = [
+        teil.strip(" ,.;:!?-")
+        for teil in _NEUES_WORT_RE.split(raw)
+    ]
+    if len(wortteile) >= 2 and all(_hat_explizite_kette(t) for t in wortteile):
+        gedeutet = [deute(t) for t in wortteile]
+        if all(gedeutet):
+            namen = [str(d["name"]).strip() for d in gedeutet if d]
+            if len(namen) == len(wortteile):
+                return {
+                    "name": " ".join(namen),
+                    "sicher": all(bool(d.get("sicher")) for d in gedeutet if d),
+                }
+
+    # Ein Komma zwischen einzelnen Buchstaben („M, Ü, L, L, E, R“) ist keine
+    # Feldgrenze. Nur eine schon vollständige ERSTE Kette (mindestens vier
+    # Zeichen) wird abgetrennt, wenn später eine weitere vollständige Kette
+    # folgt. „L-O-U, R-EN-C-O“ bleibt deshalb eine einzige Kette.
+    abschnitte = [t.strip() for t in re.split(r"[,;]", raw) if t.strip()]
+    if len(abschnitte) >= 2 and _hat_explizite_kette(abschnitte[0]):
+        erste = deute(abschnitte[0])
+        erste_name = str((erste or {}).get("name") or "")
+        spaetere_kette = any(
+            _hat_explizite_kette(t) and deute(t)
+            for t in abschnitte[1:]
+        )
+        if erste and len(re.sub(r"\W", "", erste_name, flags=re.UNICODE)) >= 4 \
+                and spaetere_kette:
+            return erste
+
+    return deute(raw)
 
 
 def teil(text: str) -> str:

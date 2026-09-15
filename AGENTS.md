@@ -3594,6 +3594,35 @@ Fehler zurück und startete parallel die allgemeine Unklar-Schleife.
 - Tests: `tests/test_blessing_namen.py`. Einführung nach dem
   Produktionsstand V2.7; noch nicht live ausgerollt.
 
+## Blessing-Buchstabiersegmente nicht zusammenkleben (W-BLESSING-BUCHSTABIER-SEGMENTE 15.09.2026 — nicht rückbauen)
+
+Zwei Live-Anrufe zeigten drei verschiedene Verluste im selben Parser:
+`a97bc81a` machte aus „L-O-U-R-E-N-C wie Cäsar O“ je nach Parakeet-Zug
+`Lourencbcsao` bzw. `Lourencvcsao`, las `R-EN-C-O` als `R-N-C-O` und entfernte
+bei „neues Wort“ alle Wortgrenzen. `c7470b98` klebte den erfragten Nachnamen
+Hallwachs und den danach genannten Kindesnamen Tamia zu
+`Hallwachstmiatamia`. Das Zweit-Ohr hatte „Hallwachs. Tamia. T-A-M-I-A“
+korrekt getrennt, durfte eine Namensfrage nach W-QWEN-SICHER aber bewusst
+nicht live überschreiben.
+
+- `bianca/buchstaben.deute_feldsegment` ist ein opt-in Parser VOR dem
+  bewährten `deute`: Großbuchstaben-Cluster in Hyphen-Ketten werden entfaltet
+  (`R-EN-C-O` -> `R-E-N-C-O`), die beiden beobachteten Parakeet-Formen von
+  „C wie Cäsar“ werden auf C reduziert, und ausdrücklich gesagtes „neues Wort“
+  bleibt als Leerzeichen in zusammengesetzten Nachnamen erhalten.
+- Ohne „neues Wort“ endet das gerade erfragte Feld an einer bereits
+  vollständigen ersten Buchstabierkette, wenn danach eine zweite vollständige
+  Kette folgt. Kommas zwischen Einzelbuchstaben und geteilte Ketten
+  (`L-O-U, R-EN-C-O`) bleiben dagegen EIN Name.
+- Ein gesprochenes Schlusswort wird auch im Nachsprech-Rückfall abgeschnitten:
+  „Gavranides, fertig“ speichert `Gavranides`, nie `Gavranidesfertig`.
+- Strikt mandantenscharf: nur Blessing trägt
+  `buchstabierSegmenteTrennen=true`. `buchstaben.deute` und der
+  `_nachgesprochen`-Standardweg bleiben ohne den Schalter byte-identisch für
+  MedDent, Thaler und Rüther.
+- Regressionen mit den wortgleichen Live-Transkripten:
+  `tests/test_blessing_namen.py`; Einführung nach V2.7, noch nicht deployt.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
