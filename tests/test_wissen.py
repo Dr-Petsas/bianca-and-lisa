@@ -152,6 +152,42 @@ def test_agent_beantwortet_live_verhoerer_ohne_llm(monkeypatch):
     assert any(x.get("w") == "praxis-auskunft" for x in sit.get("_spur") or [])
 
 
+# --- Ruether: Adresse belegt, Zeiten NICHT erfunden ------------------------
+
+def test_ruether_traegt_die_belegte_adresse_sprechbar():
+    """Die Adresse steht in den Standorteinstellungen — im Agent-Prompt
+    steht nichts. Ohne den lokalen Rueckfall hat Ben auf "wo ist die
+    Praxis?" keine Antwort und das Modell reimt sich eine zusammen.
+    """
+    import re
+    a = (laden("ruether").get("wissen") or {}).get("anfahrt") or ""
+    assert "Erich-Ollenhauer-Straße" in a
+    assert "Nummer sieben" in a and "Düsseldorf" in a
+    assert not re.search(r"\d", a), "Anfahrtstext muss ziffernfrei sprechbar sein"
+    assert "Parkplatz" not in a and "Parken" not in a  # kennen wir nicht
+
+
+def test_ruether_beantwortet_die_wegfrage_und_erfindet_keine_zeiten():
+    """Der Portal-Standort traegt nur den Mo-So-08-18-Default (siehe
+    test_standort.test_portal_default_gilt_als_nicht_gepflegt) — bei der
+    Zeitenfrage muss Ben schweigen, damit der normale Gespraechspfad
+    uebernimmt."""
+    tenant = laden("ruether")
+    text, themen = praxis_antwort(tenant, "Wie komme ich denn zu Ihnen?")
+    assert themen == {"anfahrt"}
+    assert "Erich-Ollenhauer-Straße" in text
+
+    text, themen = praxis_antwort(tenant, "Wann haben Sie geöffnet?")
+    assert themen == set() and text == ""
+
+    # Beides gefragt: nur der belegte Teil kommt.
+    text, themen = praxis_antwort(
+        tenant, "Wann haben Sie geöffnet und wie komme ich zu Ihnen?")
+    assert themen == {"anfahrt"}
+    assert "Erich-Ollenhauer-Straße" in text
+    assert "Uhr" not in text
+
+
 def test_wissen_block_ohne_anfahrt_kein_abschnitt():
     block = wissen_block({"preise": ["Zahnreinigung: circa 150 Euro."]})
     assert "ANFAHRT" not in block and "ÖPNV" not in block

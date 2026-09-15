@@ -32,6 +32,9 @@
     { "id": "59SyC2dhsiFqesxFvOeO", "name": "Doktor Myriam Rörig" }
   ],
   "begruessungText": "Praxis Doktor Rüther. Sie sprechen mit dem digitalen Telefonassistenten Ben. Wie kann ich Ihnen helfen?",
+  "wissen": {
+    "anfahrt": "Die Praxis Doktor Rüther liegt in der Erich-Ollenhauer-Straße Nummer sieben in Düsseldorf."
+  },
   "weiterleitungen": [],
   "verbindenErlaubt": []
 }
