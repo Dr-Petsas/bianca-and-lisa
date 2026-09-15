@@ -219,6 +219,92 @@ def test_shadow_verbraucht_den_ersatz_nicht():
     assert neu == zeiten_wache.ERSATZ
 
 
+# --- Fortsetzung des gestrichenen Zeitplans --------------------------------
+def test_rueckbezug_faellt_mit(monkeypatch):
+    """Live-Rest vom 15.09.2026: hinter der ehrlichen Auskunft blieb „Danach
+    schließen wir." stehen — ein Rückbezug auf einen Satz, den es nicht mehr
+    gibt."""
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(
+        sit, "Wir sind heute bis 12 Uhr für Sie da. Danach schließen wir. "
+             "Möchten Sie einen Termin?",
+        gefragt="Wann haben Sie geöffnet?")
+    assert len(weg) == 2
+    assert "Danach" not in neu and "schließen" not in neu
+    assert "Möchten Sie einen Termin?" in neu
+
+
+def test_rueckbezug_faellt_auch_im_naechsten_p5_satz():
+    """Im P5-Strom läuft jeder Satz einzeln — der Rückbezug kommt in einem
+    eigenen Aufruf und muss trotzdem fallen."""
+    sit = _sit(_ruether())
+    frage = "Wann haben Sie geöffnet?"
+    zeiten_wache.saeubern(sit, LIVE[0], gefragt=frage)
+    neu, weg = zeiten_wache.saeubern(sit, "Danach schließen wir.", gefragt=frage)
+    assert weg == ["Danach schließen wir."] and neu == ""
+
+
+def test_rueckbezug_allein_bleibt_unangetastet():
+    """Ohne gestrichenen Vorgänger wird nichts gestrichen — sonst fiele ein
+    harmloser Satz mitten im Gespräch."""
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(sit, "Danach schließen wir.")
+    assert weg == [] and neu == "Danach schließen wir."
+
+
+def test_rueckbezug_mit_termin_bezug_bleibt():
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(
+        sit, "Wir sind heute bis 12 Uhr für Sie da. "
+             "Danach hätte ich noch einen Termin frei.",
+        gefragt="Wann haben Sie geöffnet?")
+    assert len(weg) == 1
+    assert "Danach hätte ich noch einen Termin frei." in neu
+
+
+def test_sonst_noch_etwas_ist_kein_rueckbezug():
+    """„Gibt es sonst noch etwas …?" trägt „sonst", aber keine Zeit und kein
+    Schließen — die Abschlussfrage darf nie fallen."""
+    sit = _sit(_ruether())
+    neu, _ = zeiten_wache.saeubern(
+        sit, "Wir sind heute bis 12 Uhr für Sie da. "
+             "Gibt es sonst noch etwas, das ich für Sie tun kann?",
+        gefragt="Wann haben Sie geöffnet?")
+    assert "Gibt es sonst noch etwas, das ich für Sie tun kann?" in neu
+
+
+# --- Auf die Frage genügt die Zeitangabe (streng) ---------------------------
+def test_knappe_antwort_ohne_oeffnungswort_faellt_auf_die_frage():
+    """„Heute von 8 bis 12 Uhr und von 14 bis 16 Uhr." trägt kein
+    Öffnungs-Vokabular — auf die Zeiten-Frage ist es trotzdem die Antwort."""
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(
+        sit, "Heute von 8 bis 12 Uhr und von 14 bis 16 Uhr.",
+        gefragt="Wann haben Sie geöffnet?")
+    assert weg and neu == zeiten_wache.ERSATZ
+
+
+def test_ohne_zeitenfrage_bleibt_eine_blanke_uhrzeit_stehen():
+    """Ohne gestellte Zeiten-Frage bleibt die strenge Regel aus — sonst fiele
+    jeder Satz mit einer Uhrzeit."""
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(
+        sit, "Dann sehen wir uns um 14 Uhr.", gefragt="Passt 14 Uhr?")
+    assert weg == [] and neu == "Dann sehen wir uns um 14 Uhr."
+
+
+def test_termin_saetze_fallen_auch_auf_die_zeitenfrage_nicht():
+    """Die teurere Richtung: auf „Haben Sie am Freitag offen?" darf das
+    Slot-Angebot nicht mitfallen."""
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(
+        sit, "Am Freitag um 9 Uhr hätte ich einen Termin frei. "
+             "Möchten Sie sich für einen Termin vormittags anmelden?",
+        gefragt="Haben Sie am Freitag offen?")
+    assert weg == []
+    assert neu.startswith("Am Freitag um 9 Uhr")
+
+
 def test_ersatz_verspricht_nichts_und_stellt_keine_frage():
     """Der Ersatz darf die Fakten-Wache nicht neu triggern (keine Zeit, kein
     Slot) und das Frage-Gate nicht (keine Datenfrage)."""

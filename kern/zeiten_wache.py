@@ -76,6 +76,28 @@ _ZEIT_RE = re.compile(
     re.I,
 )
 
+# Schließen/Feierabend — trägt keine eigene Uhrzeit, gehört aber zur
+# Öffnungs-Auskunft („Danach schließen wir.", live 15.09.2026 als Rest
+# stehengeblieben).
+_SCHLIESS_RE = re.compile(
+    r"(?:\bschlie(?:ß|ss)\w*|\bschluss\b|\bfeierabend\b|\bzu\s+ende\b)",
+    re.I,
+)
+
+# Rückbezug auf einen VORHERIGEN Satz: solche Sätze sind die Fortsetzung des
+# gestrichenen Zeitplans („Danach schließen wir.", „An den anderen Tagen
+# nachmittags von 14 bis 18 Uhr.") und wären allein sinnlos oder irreführend.
+_RUECKBEZUG_RE = re.compile(
+    r"(?:"
+    r"\bdanach\b|\bdavor\b|\bdazwischen\b|\banschlie(?:ß|ss)end\b"
+    r"|\bansonsten\b|\bau(?:ß|ss)erdem\b|\bzus(?:ä|ae)tzlich\b"
+    r"|\ban\s+den\s+(?:anderen|(?:ü|ue)brigen|restlichen)\s+tagen\b"
+    r"|\bdie\s+(?:anderen|(?:ü|ue)brigen)\s+tage\b"
+    r"|\bsonst\b"
+    r")",
+    re.I,
+)
+
 # Termin-/Buchungs-Bezug: diese Sätze gehören dem Kalender und werden nie
 # angefasst — dort wacht die Fakten-Wache (Slot-Claim).
 _NIE_RE = re.compile(
@@ -144,12 +166,35 @@ def aktiv(sit: dict | None) -> bool:
     return not zeiten_belegt(tenant)
 
 
-def ist_zeit_auskunft(satz: str) -> bool:
-    """Behauptet dieser Satz eine Praxis-Öffnungszeit?"""
+def ist_zeit_auskunft(satz: str, streng: bool = False) -> bool:
+    """Behauptet dieser Satz eine Praxis-Öffnungszeit?
+
+    ``streng`` gilt, wenn der Anrufer GERADE nach den Zeiten gefragt hat: dann
+    ist jeder Satz mit einer Zeitangabe die Antwort darauf, auch ohne
+    Öffnungs-Vokabular („Heute von 8 bis 12 Uhr und von 14 bis 16 Uhr.").
+    Termin-Sätze bleiben in beiden Fällen unangetastet."""
     s = _s(satz)
     if not s or _NIE_RE.search(s):
         return False
-    return bool(_OEFFNUNG_RE.search(s) and _ZEIT_RE.search(s))
+    if not _ZEIT_RE.search(s):
+        return False
+    return bool(streng or _OEFFNUNG_RE.search(s))
+
+
+def ist_fortsetzung(satz: str) -> bool:
+    """Fortsetzung eines gestrichenen Zeitplans?
+
+    Live blieb „Danach schließen wir." hinter der ehrlichen Auskunft stehen —
+    ein Rückbezug auf einen Satz, den es nicht mehr gibt. Solche Sätze fallen
+    NUR, wenn in diesem Text/Zug schon eine Zeit-Behauptung gestrichen wurde;
+    Termin-Bezug schützt wie immer („Danach hätte ich einen Termin frei")."""
+    s = _s(satz)
+    if not s or _NIE_RE.search(s):
+        return False
+    if not _RUECKBEZUG_RE.search(s):
+        return False
+    return bool(_SCHLIESS_RE.search(s) or _ZEIT_RE.search(s)
+                or _OEFFNUNG_RE.search(s))
 
 
 def saeubern(sit: dict | None, text: str, gefragt: str = "",
@@ -172,17 +217,29 @@ def saeubern(sit: dict | None, text: str, gefragt: str = "",
     t = _s(text)
     if not t or not aktiv(sit):
         return text, []
-    saetze = sprech.tts_saetze(t)
-    weg = [s for s in saetze if ist_zeit_auskunft(s)]
+    streng = _ist_zeitenfrage(gefragt)
+    # Im P5-Strom kommt jeder Satz EINZELN: der Rueckbezug ("Danach schliessen
+    # wir.") steht dann in einem eigenen Aufruf und braucht das Wissen, dass
+    # in DIESEM Zug schon ein Zeitplan gefallen ist.
+    schon_weg = _marke_gesetzt(sit, "_zeitenWeg", gefragt)
+    weg: list[str] = []
+    behalten: list[str] = []
+    for s in sprech.tts_saetze(t):
+        fortsetzung = (weg or schon_weg) and ist_fortsetzung(s)
+        if ist_zeit_auskunft(s, streng) or fortsetzung:
+            weg.append(s)
+        else:
+            behalten.append(s)
     if not weg:
         return text, []
-    behalten = [s for s in saetze if not ist_zeit_auskunft(s)]
     if (ERSATZ not in behalten
-            and (_ist_zeitenfrage(gefragt) or not behalten)
-            and _ersatz_frei(sit, gefragt)):
+            and (streng or not behalten)
+            and not _marke_gesetzt(sit, "_zeitenErsatz", gefragt)):
         behalten = [ERSATZ] + behalten
         if merken:
-            _ersatz_merken(sit, gefragt)
+            _marke_setzen(sit, "_zeitenErsatz", gefragt)
+    if merken:
+        _marke_setzen(sit, "_zeitenWeg", gefragt)
     return " ".join(behalten).strip(), weg
 
 
@@ -196,27 +253,27 @@ def _ist_zeitenfrage(gefragt: str) -> bool:
         return False
 
 
-def _riegel(sit: dict | None, gefragt: str) -> tuple[int, str]:
-    """Schlüssel des Einmal-Riegels: laufender Zug + gehörter Satz.
+def _zug_schluessel(sit: dict | None, gefragt: str) -> list:
+    """Schlüssel der Zug-Marken: laufender Zug + gehörter Satz.
 
     Die Zug-Nummer setzt der Dienst je Zug (W-QWEN-KORREKTOR); fragt der
-    Anrufer im nächsten Zug erneut, ist der Schlüssel neu und der Ersatz
-    wieder frei."""
+    Anrufer im nächsten Zug erneut, ist der Schlüssel neu — der Ersatz ist
+    dann wieder frei, sonst bliebe die zweite Frage unbeantwortet."""
     zug = 0
     if isinstance(sit, dict):
         try:
             zug = int(sit.get("_zugNr") or 0)
         except Exception:
             zug = 0
-    return zug, _s(gefragt).casefold()[:120]
+    return [zug, _s(gefragt).casefold()[:120]]
 
 
-def _ersatz_frei(sit: dict | None, gefragt: str) -> bool:
+def _marke_gesetzt(sit: dict | None, feld: str, gefragt: str) -> bool:
     if not isinstance(sit, dict):
-        return True
-    return sit.get("_zeitenErsatz") != list(_riegel(sit, gefragt))
+        return False
+    return sit.get(feld) == _zug_schluessel(sit, gefragt)
 
 
-def _ersatz_merken(sit: dict | None, gefragt: str) -> None:
+def _marke_setzen(sit: dict | None, feld: str, gefragt: str) -> None:
     if isinstance(sit, dict):
-        sit["_zeitenErsatz"] = list(_riegel(sit, gefragt))
+        sit[feld] = _zug_schluessel(sit, gefragt)

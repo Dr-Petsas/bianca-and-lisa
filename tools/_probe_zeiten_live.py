@@ -14,6 +14,7 @@ Aufruf im Container (dort steht das echte LLM/die echte DB):
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -21,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bianca import agent as bagent
 from bianca import session as bsession
-from kern import agentprofil, zeiten_wache
+from kern import agentprofil, sprech, zeiten_wache
 from kern.wissen import auskunft_themen, praxis_antwort
 
 FRAGEN = [
@@ -44,8 +45,33 @@ DIDS = {
 MIT_ZEITEN = {"meddent", "thaler", "blessing"}
 
 
-def _zeile(txt: str, breite: int = 150) -> str:
+def _s(v: object) -> str:
+    return " ".join(str(v or "").split()).strip()
+
+
+def _zeile(txt: str, breite: int = 400) -> str:
     return " ".join(str(txt or "").split())[:breite]
+
+
+# Konkrete Uhrzeit-Spanne — die Signatur eines erfundenen Zeitplans.
+_UHRZEIT_RE = re.compile(r"\b\d{1,2}(?::\d{2})?\s*(?:Uhr\b|bis\b)", re.I)
+
+
+def _rest_zeitplan(text: str) -> list[str]:
+    """Sätze, die NACH der Wache noch nach Zeitplan klingen.
+
+    Satzweise wie die Wache selbst, sonst rutscht ein Rest im Folgesatz durch
+    (live 15.09.: „… Danach schließen wir."). Die ehrliche Auskunft zählt
+    nicht mit."""
+    rest: list[str] = []
+    for s in sprech.tts_saetze(text):
+        if _s(s) == _s(zeiten_wache.ERSATZ):
+            continue
+        if zeiten_wache.ist_fortsetzung(s):
+            rest.append(s)
+        elif _UHRZEIT_RE.search(s) and zeiten_wache.ist_zeit_auskunft(s, True):
+            rest.append(s)
+    return rest
 
 
 def probe(mandant: str) -> list[str]:
@@ -71,11 +97,15 @@ def probe(mandant: str) -> list[str]:
             fehler.append(f"{mandant}/{frage}: {exc}")
             continue
         text = " ".join(str(antw.get("text") or "").split())
-        spur = ", ".join(e.get("w", "") for e in (antw.get("waechter") or []))
+        wachen = antw.get("waechter") or []
+        spur = ", ".join(e.get("w", "") for e in wachen)
         print(f"  F: {frage}")
         print(f"     Thema erkannt: {sorted(themen) or '—'}"
               f" | deterministisch: {'JA' if det else 'nein'}")
         print(f"     A: {_zeile(text)}")
+        for e in wachen:
+            if _s(e.get("w")).startswith("zeiten"):
+                print(f"     gestrichen: {_zeile(e.get('wert'), 200)}")
         if spur:
             print(f"     Waechter: {spur}")
         if belegt:
@@ -87,9 +117,9 @@ def probe(mandant: str) -> list[str]:
                 fehler.append(f"{mandant}/{frage}: deterministische Auskunft "
                               f"kam nicht im Mund an")
         else:
-            if zeiten_wache.ist_zeit_auskunft(text):
+            for r in _rest_zeitplan(text):
                 fehler.append(f"{mandant}/{frage}: ERFUNDENE Zeit noch im "
-                              f"Mund: {_zeile(text, 90)}")
+                              f"Mund: {_zeile(r, 120)}")
             # Wurde eine Erfindung gestrichen, muss die ehrliche Auskunft auf
             # die gestellte Frage auch im Mund ankommen — live blieb nach dem
             # Streichen nur "Möchten Sie sich zur Kontrolle vorstellen?" übrig.

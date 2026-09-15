@@ -3536,14 +3536,34 @@ bleibt der zweite Satz LEER — kein `neu or text`, die Erfindung darf nie als
 Rückfall zurückkommen; am Zugende hängt `_nie_stumm` die offene Pflichtfrage
 an, im P5-Strom wird ein leerer Satz nicht gesprochen.
 
+Zwei Löcher, die die Live-Gegenprobe danach noch zeigte:
+
+- **Die knappe Antwort ohne Öffnungs-Wort.** „Heute von 8 bis 12 Uhr und von
+  14 bis 16 Uhr." trägt kein Öffnungs-Vokabular und blieb stehen. Auf eine
+  GESTELLTE Zeiten-Frage genügt darum die Zeitangabe allein
+  (`ist_zeit_auskunft(satz, streng=True)`); ohne Frage bleibt es bei
+  Vokabular PLUS Zeit — sonst fiele „Dann sehen wir uns um 14 Uhr."
+- **Die Fortsetzung des gestrichenen Plans.** „Danach schließen wir." /
+  „An den anderen Tagen nachmittags von 14 bis 18 Uhr." bezieht sich auf
+  einen Satz, den es nicht mehr gibt. `ist_fortsetzung` streicht solche
+  Rückbezüge (danach/ansonsten/an den anderen Tagen + Schließ- oder
+  Zeitwort) — aber NUR, wenn in diesem Text oder Zug schon ein Zeitplan
+  gefallen ist (`_zeitenWeg`, gleicher Zug-Schlüssel wie `_zeitenErsatz`;
+  im P5-Strom kommt der Rückbezug in einem eigenen Aufruf). Allein stehend
+  bleibt der Satz unangetastet, „sonst noch etwas?" und „Danach hätte ich
+  einen Termin frei" ebenfalls.
+
 - Stufen/Notaus: `ZEITEN_WACHE=off|shadow|enforce` (Default **enforce**).
   Spur: `zeiten-wache` / `zeiten-wache-shadow`.
-- Tests: `tests/test_zeiten_wache.py` (25) — die Gegenproben (belegte Praxis
-  spricht weiter, Termin-Sätze mit Uhrzeit bleiben, Frage-Erkennung greift
-  nicht bei Terminfragen) sind der größere Teil. Live-Gegenprobe im
-  Container: `docker exec -w /app telefonki-bianca-test-1 python
-  tools/_probe_zeiten_live.py` — stellt allen vier Mandanten dieselben drei
-  Fragen und prüft beide Richtungen.
+- Tests: `tests/test_zeiten_wache.py` (33) — die Gegenproben (belegte Praxis
+  spricht weiter, Termin-Sätze mit Uhrzeit bleiben, Rückbezug ohne
+  Vorgänger bleibt, Frage-Erkennung greift nicht bei Terminfragen) sind der
+  größere Teil. Live-Gegenprobe im Container: `docker exec -w /app
+  telefonki-bianca-test-1 python tools/_probe_zeiten_live.py` — lädt die
+  Mandanten über `agentprofil.fuer_did` (NICHT `tenants.laden`: die lokale
+  Datei kennt weder `dbPrompt` noch `standort`, dann sieht die Probe alle
+  vier als „unbelegt"), ruft `start_reply` vor dem ersten Zug und stellt
+  allen vier Mandanten dieselben drei Fragen.
 
 ## Rückrollpunkte (Produktionsstände)
 
