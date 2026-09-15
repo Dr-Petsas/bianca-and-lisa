@@ -2942,6 +2942,10 @@ def anrufer_hallo(sit: dict) -> str:
     haben — nicht weil die Nummer in der Kartei steht.     Erstgespraech
     bleibt „Ich bin die Neue!“. Der Name steht in der Begrüßung,
     nicht nochmal vor der Selbst-Frage."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("halloKompakt") is True:
+        wer = anrufer_anrede(sit)
+        return f"Guten Tag, {wer}." if wer else ""
     wer = anrufer_anrede(sit)
     vor = voriges_gespraech(sit)
     if vor:
@@ -3975,7 +3979,15 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
             and not s["fuerWenCheck"] and not s["fuerWen"]
             and s["frage"] in {"", "anrufer_check", "fuer_wen_check"}):
-        return "fuer_wen_check", "Der Termin ist für Sie selbst, richtig?"
+        tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+        if tenant.get("selbstCheckNurBeiSignal") is True:
+            # Blessing kompakt: Der Anrufer hat seine Rufnummern-Akte soeben
+            # bestätigt und nirgends eine dritte Person genannt. Ein späteres
+            # "für meinen Sohn" gewinnt weiterhin über fuer_wen_signal().
+            s["fuerWenCheck"] = "ja"
+            anrufer_behandler_uebernehmen(sit)
+        else:
+            return "fuer_wen_check", "Der Termin ist für Sie selbst, richtig?"
 
     if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
             and s["fuerWenCheck"] == "ja" and not s["fuerWen"]):
@@ -3990,31 +4002,46 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
 
     if s["warSchonMal"]:
         if not s["arzt"]:
-            from kern import zimmer_map
-            if zimmer_map.aktiv(sit.get("tenant") or {}):
-                # Keine Arztfrage bei Thaler; der Grund routet zu Zimmer 4
-                # beziehungsweise PZR zu Zimmer 3/2.
-                pass
+            tenant = sit.get("tenant") or {}
+            cals = kern_tenants.behandler_kalender(tenant)
+            if (tenant.get("einArztOhneBehandlerfrage") is True
+                    and len(cals) == 1 and _s(cals[0].get("id"))):
+                # Blessing hat genau eine Aerztin. „Bei welchem Behandler
+                # waren Sie zuletzt?“ kann keine Information gewinnen und
+                # kostete in den Live-Anrufen nur einen Zug. Der explizite
+                # Opt-in bindet den einzigen Kalender, ohne andere Praxen zu
+                # verändern.
+                s["arzt"] = {
+                    "typ": "einzig",
+                    "calendarId": _s(cals[0].get("id")),
+                    "calendarName": _s(cals[0].get("name")),
+                }
             else:
-                if s.get("arztCheck") != "nein":
-                    rq = arzt_check_frage(sit)
-                    if rq:
-                        return "arzt_check", rq
-                # W-BEHANDLER-SPERRE: der genannte oder der letzte Behandler
-                # (Kartei) ist telefonisch gesperrt — nicht "bei wem waren
-                # Sie zuletzt?" fragen (die Antwort waere wieder der
-                # Gesperrte), sondern ehrlich sagen und die freien anbieten.
-                if s.get("arztJa"):
-                    # W-ARZT-JANEIN: "Ja" auf die Bestands-Frage — jetzt die
-                    # Namen zur Wahl, deterministisch statt LLM.
-                    return "arzt", arzt_nachfrage(sit)
-                gesperrt_frage = _arzt_gesperrt_frage(sit)
-                if gesperrt_frage:
-                    return "arzt", gesperrt_frage
-                wer = fuer_wen_phrase(s)
-                if wer:
-                    return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
-                return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
+                from kern import zimmer_map
+                if zimmer_map.aktiv(tenant):
+                    # Keine Arztfrage bei Thaler; der Grund routet zu Zimmer 4
+                    # beziehungsweise PZR zu Zimmer 3/2.
+                    pass
+                else:
+                    if s.get("arztCheck") != "nein":
+                        rq = arzt_check_frage(sit)
+                        if rq:
+                            return "arzt_check", rq
+                    # W-BEHANDLER-SPERRE: der genannte oder der letzte Behandler
+                    # (Kartei) ist telefonisch gesperrt — nicht "bei wem waren
+                    # Sie zuletzt?" fragen (die Antwort waere wieder der
+                    # Gesperrte), sondern ehrlich sagen und die freien anbieten.
+                    if s.get("arztJa"):
+                        # W-ARZT-JANEIN: "Ja" auf die Bestands-Frage — jetzt die
+                        # Namen zur Wahl, deterministisch statt LLM.
+                        return "arzt", arzt_nachfrage(sit)
+                    gesperrt_frage = _arzt_gesperrt_frage(sit)
+                    if gesperrt_frage:
+                        return "arzt", gesperrt_frage
+                    wer = fuer_wen_phrase(s)
+                    if wer:
+                        return "arzt", f"Wissen Sie noch, bei welchem Behandler {wer} zuletzt war?"
+                    return "arzt", "Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?"
         # Name früh: dann läuft die Kartei-Suche im Hintergrund, während wir
         # Grund und Wunschzeit klären — genau das macht das Tempo.
         if not s["nachname"]:

@@ -6,6 +6,7 @@ import pytest
 
 from bianca import agent, flow, gehirn, verwalten
 from kern import hirn, intent
+from kern.slots import parse_slot_wish
 from kern.tenants import laden
 
 
@@ -365,3 +366,151 @@ def test_b2_gesprochener_name_mit_fertig_erreicht_den_readback(monkeypatch):
     assert gehirn.sammler(sit)["frage"] == "nachname_check"
     assert "G wie Gustav" in aus["text"]
     assert "richtig" in aus["text"].lower()
+
+
+BACHLE_MOVE = (
+    "Ich habe bei Ihnen einen Termin am 21. Oktober, "
+    "und den möchte ich gerne bis Mitte November enthalten."
+)
+
+
+def test_b3_baechle_verhoerer_ist_blessing_verschiebewunsch():
+    sit = _sit()
+
+    deutung = intent.erkennen(sit, BACHLE_MOVE)
+
+    assert deutung["handlung"] == "AENDERN"
+    assert deutung["gegenstand"] == "VORGANG"
+    assert deutung["ersatz"] is True
+    assert deutung["zug"] == "wechseln"
+
+
+def test_b3_baechle_verhoerer_bleibt_mandantenscharf():
+    for tenant_id in ("meddent", "thaler", "ruether"):
+        sit = _sit(tenant_id)
+        deutung = intent.erkennen(sit, BACHLE_MOVE)
+        assert deutung["handlung"] == "KEINE", (tenant_id, deutung)
+
+
+def test_b3_bestandsdatum_wird_vom_november_ziel_getrennt(monkeypatch):
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "verschieben",
+        "phase": "",
+        "frage": "",
+        "vorname": "Sieglinde",
+        "nachname": "Bächle",
+        "patientId": "patient-baechle",
+        "wunsch": parse_slot_wish(BACHLE_MOVE),
+        "wunschText": BACHLE_MOVE,
+    })
+    gesehen = {}
+
+    def _dispatch(_sit, _melde):
+        gesehen["wunsch"] = dict(gehirn.sammler(_sit)["wunsch"] or {})
+        gesehen["bestand"] = dict(_sit.get("verwHinweis") or {})
+        return {"text": "sicherer Testabschluss"}
+
+    monkeypatch.setattr(verwalten, "_dispatch", _dispatch)
+
+    aus = verwalten._sammeln(
+        sit,
+        BACHLE_MOVE,
+        {"modus", "wunsch"},
+        None,
+    )
+
+    assert aus["text"] == "sicherer Testabschluss"
+    assert gesehen["bestand"]["date"] == "2026-10-21"
+    assert gesehen["wunsch"]["von"] == "2026-11-11"
+    assert gesehen["wunsch"]["bis"] == "2026-11-20"
+    assert gesehen["wunsch"].get("date") is None
+
+
+def _pusch_vor_buchung() -> dict:
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "phase": "bestaetigen",
+        "frage": "bestaetigung",
+        "warSchonMal": False,
+        "bekannt": False,
+        "vorname": "Jelto",
+        "vornameQuelle": "gesagt",
+        "nachname": "Pusch",
+        "buchstabiert": True,
+        "geschlecht": "m",
+        "geschlechtQuelle": "gesagt",
+        "arzt": {
+            "typ": "einzig",
+            "calendarId": "8krcWh7AuXEfgWc1blzQ",
+            "calendarName": "Doktor Charlotte Blessing",
+        },
+        "grund": "Kontrolle",
+        "grundWortlaut": "Kontrolle",
+        "motivId": "UnfQ5DOaMx9FLiTC3L9b",
+        "motivName": "Kontrolle",
+        "versicherung": "gesetzlich",
+        "versicherungOk": True,
+        "slotIso": "2026-09-16T09:30:00+02:00",
+        "pzr": "nein",
+    })
+    sit["offered"] = [{
+        "iso": "2026-09-16T09:30:00+02:00",
+        "spoken": "morgen um neun Uhr dreißig",
+    }]
+    return sit
+
+
+def test_c3_nach_slot_ja_kommt_nur_noch_die_handynummer(monkeypatch):
+    sit = _pusch_vor_buchung()
+
+    def _kein_write(*_args, **_kwargs):
+        raise AssertionError("Vor bestätigter Handynummer darf kein Write laufen")
+
+    monkeypatch.setattr(flow.kal, "book_slot", _kein_write)
+
+    aus = flow._nach_ok_buchen(sit, "Ja, das würde passen.")
+    s = gehirn.sammler(sit)
+
+    assert "Handynummer" in aus["text"]
+    assert s["frage"] == "telefon"
+    assert sit["buchIntent"] is True
+    assert "welchen Termin" not in aus["text"]
+    assert "Vorname" not in aus["text"]
+    assert "Geburtsdatum" not in aus["text"]
+
+
+def test_c3_bestaetigte_handynummer_bucht_ohne_zweite_sammelei(monkeypatch):
+    sit = _pusch_vor_buchung()
+    s = gehirn.sammler(sit)
+    s.update({
+        "telefon": "0151 23456789",
+        "telefonBekannt": "0151 23456789",
+        "telefonOk": True,
+        "smsEmpfaenger": "patient",
+    })
+    aufrufe = []
+
+    def _book(_tenant, ctx, *, slot_iso):
+        aufrufe.append((dict(ctx), slot_iso))
+        return {
+            "ok": True,
+            "booked": True,
+            "slotIso": slot_iso,
+            "appointmentId": "termin-pusch",
+            "spoken": "Der Termin ist fest eingetragen.",
+        }
+
+    monkeypatch.setattr(flow.kal, "book_slot", _book)
+
+    aus = flow._nach_ok_buchen(sit, "Ja, das würde passen.")
+
+    assert len(aufrufe) == 1
+    assert aufrufe[0][1] == "2026-09-16T09:30:00+02:00"
+    assert "fest eingetragen" in aus["text"]
+    assert "welchen Termin" not in aus["text"]
+    assert "vollständigen Namen" not in aus["text"]
+    assert gehirn.sammler(sit)["phase"] == "gebucht"

@@ -11,13 +11,13 @@ from kern.sprech import slot_wort
 
 TZ = ZoneInfo("Europe/Berlin")
 WEEKDAYS = [
-    (1, re.compile(r"\bmontags?\b")),
-    (2, re.compile(r"\bdienstags?\b")),
-    (3, re.compile(r"\bmittwochs?\b")),
-    (4, re.compile(r"\bdonnerstags?\b")),
-    (5, re.compile(r"\bfreitags?\b")),
-    (6, re.compile(r"\bsamstags?\b")),
-    (0, re.compile(r"\bsonntags?\b")),
+    (1, re.compile(r"\bmontags?(?=\b|vormittag|nachmittag|abend)")),
+    (2, re.compile(r"\bdienstags?(?=\b|vormittag|nachmittag|abend)")),
+    (3, re.compile(r"\bmittwochs?(?=\b|vormittag|nachmittag|abend)")),
+    (4, re.compile(r"\bdonnerstags?(?=\b|vormittag|nachmittag|abend)")),
+    (5, re.compile(r"\bfreitags?(?=\b|vormittag|nachmittag|abend)")),
+    (6, re.compile(r"\bsamstags?(?=\b|vormittag|nachmittag|abend)")),
+    (0, re.compile(r"\bsonntags?(?=\b|vormittag|nachmittag|abend)")),
 ]
 
 
@@ -166,6 +166,184 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
         if von or bis:
             wish["von"], wish["bis"] = von or None, bis or None
     return wish
+
+
+# --- Harte Korrekturen auf ein bereits gesprochenes Angebot -----------------
+# Blessing-Live 15.09.2026 (50563be8): „nicht Donnerstag“ wurde sechs Mal
+# verstanden und trotzdem erneut als Donnerstag angeboten; „elf Uhr ist
+# Vormittag, bitte Nachmittag“ wurde sogar als Zusage für 11:15 gelesen.
+_WOCHENTAG_NAME = {
+    1: "Montag", 2: "Dienstag", 3: "Mittwoch", 4: "Donnerstag",
+    5: "Freitag", 6: "Samstag", 0: "Sonntag",
+}
+_NEG_VOR_RE = re.compile(
+    r"(?:\bnicht|\bkein\w*|\bnie|\bohne|\bau(?:ß|ss)er)\s*$",
+    re.I,
+)
+_NEG_NACH_RE = re.compile(
+    r"^\s*(?:geht|passt|klappt|funktioniert|kommt|kann\w*)"
+    r"(?:\s+\w+){0,5}\s+(?:gar\s+)?nicht\b|"
+    r"^\s*(?:ist|w(?:ä|ae)re)\s+(?:ganz\s+)?(?:falsch|schlecht)\b|"
+    r"^\s*(?:scheidet|f(?:ä|ae)llt)\s+aus\b|"
+    r"^.{0,42}\b(?:ganztagsschule|ganztagschule|doppelschule|lange\s+schule)\b",
+    re.I,
+)
+_ANDERER_TAG_RE = re.compile(
+    r"\b(?:ein(?:en)?\s+)?ander(?:er|en|e)\s+(?:tag|wochentag)\b|"
+    r"\bnicht\s+diese[rmn]?\s+tag\b",
+    re.I,
+)
+_TAGESZEIT_RE = re.compile(
+    r"\b(vormittag\w*|morgens?|fr(?:ü|ue)h|nachmittag\w*|abends?|sp(?:ä|ae)t)\b",
+    re.I,
+)
+
+
+def _tageszeit_bereich(wort: str) -> tuple[int, int]:
+    low = wort.casefold()
+    if "nachmittag" in low:
+        return 12, 18
+    if "abend" in low or low.startswith(("spät", "spaet")):
+        return 16, 21
+    return 7, 12
+
+
+def _negiert(t: str, start: int, end: int) -> bool:
+    davor = t[max(0, start - 28):start]
+    danach = t[end:end + 60]
+    return bool(_NEG_VOR_RE.search(davor) or _NEG_NACH_RE.search(danach))
+
+
+def slot_praeferenz_aenderung(text: str) -> dict[str, Any] | None:
+    """Harte Ablehnung/Präferenz aus einem laufenden Slotangebot lesen.
+
+    Reine Auswahl („Montag“) bleibt dem vorhandenen Slot-Wähler. Diese
+    Funktion greift erst bei Ablehnung, mehreren Alternativtagen oder einer
+    ausdrücklichen Tageszeit-Korrektur.
+    """
+    raw = _s(text)
+    if not raw:
+        return None
+    t = raw.casefold()
+    positiv: list[int] = []
+    negativ: list[int] = []
+    vorkommen = 0
+    for idx, cre in WEEKDAYS:
+        for m in cre.finditer(t):
+            vorkommen += 1
+            if _negiert(t, m.start(), m.end()):
+                negativ.append(idx)
+            else:
+                positiv.append(idx)
+
+    tageszeiten: list[tuple[int, int, int, bool]] = []
+    for m in _TAGESZEIT_RE.finditer(t):
+        lo, hi = _tageszeit_bereich(m.group(1))
+        tageszeiten.append((m.start(), lo, hi, _negiert(t, m.start(), m.end())))
+    neg_bereiche = [(lo, hi) for _pos, lo, hi, neg in tageszeiten if neg]
+    pos_bereiche = [(pos, lo, hi) for pos, lo, hi, neg in tageszeiten if not neg]
+
+    ausgeschlossen_stunden: list[int] = []
+    for m in _UHR_RE.finditer(t):
+        h = _stunde_von(m.group(1))
+        if h is not None and _negiert(t, m.start(), m.end()):
+            ausgeschlossen_stunden.append(_praxis_stunde(h))
+    for m in _UHR_ZIFFER_RE.finditer(t):
+        h = _stunde_von(m.group(1))
+        if h is not None and _negiert(t, m.start(), m.end()):
+            ausgeschlossen_stunden.append(_praxis_stunde(h))
+
+    anderer_tag = bool(_ANDERER_TAG_RE.search(t))
+    # „11.15 ist Vormittag, bitte Nachmittag“: kein grammatisches „nicht“,
+    # aber die letzte Tageszeit ist die ausdrückliche Korrektur.
+    tageszeit_korrektur = len({(lo, hi) for _p, lo, hi, _n in tageszeiten}) > 1
+    aenderung = bool(
+        negativ or neg_bereiche or ausgeschlossen_stunden or anderer_tag
+        or vorkommen > 1 or tageszeit_korrektur
+    )
+    if not aenderung:
+        return None
+
+    out: dict[str, Any] = {"andererTag": anderer_tag}
+    if negativ:
+        out["excludeWeekdays"] = sorted(set(negativ))
+    erlaubt = sorted(set(positiv) - set(negativ))
+    if erlaubt:
+        out["weekdays"] = erlaubt
+    if neg_bereiche:
+        out["excludeHourRanges"] = sorted(set(neg_bereiche))
+    if ausgeschlossen_stunden:
+        out["excludeHours"] = sorted(set(ausgeschlossen_stunden))
+    if pos_bereiche:
+        _pos, lo, hi = max(pos_bereiche, key=lambda x: x[0])
+        out["hourMin"], out["hourMax"] = lo, hi
+    return out
+
+
+def wunsch_mit_slot_praeferenz(
+    alt: dict | None,
+    aenderung: dict[str, Any],
+) -> dict[str, Any]:
+    """Harte Angebot-Korrektur in den Wunsch mischen; Ausschlüsse bleiben."""
+    out = dict(alt or {})
+    for key in (
+        "weekday", "hourMin", "hourMax", "hour", "minDaysAhead", "date",
+        "tage", "von", "bis",
+    ):
+        out.setdefault(key, None if key != "minDaysAhead" else 0)
+
+    ex_tage = set(int(x) for x in (out.get("excludeWeekdays") or []))
+    ex_tage.update(int(x) for x in (aenderung.get("excludeWeekdays") or []))
+    if aenderung.get("weekdays"):
+        out["weekdays"] = sorted(
+            set(int(x) for x in aenderung["weekdays"]) - ex_tage
+        )
+        out["weekday"] = None
+    elif out.get("weekday") in ex_tage:
+        out["weekday"] = None
+    out["excludeWeekdays"] = sorted(ex_tage)
+
+    ex_bereiche = {
+        tuple(int(v) for v in x)
+        for x in (out.get("excludeHourRanges") or [])
+        if isinstance(x, (list, tuple)) and len(x) == 2
+    }
+    ex_bereiche.update(
+        tuple(int(v) for v in x)
+        for x in (aenderung.get("excludeHourRanges") or [])
+        if isinstance(x, (list, tuple)) and len(x) == 2
+    )
+    out["excludeHourRanges"] = [list(x) for x in sorted(ex_bereiche)]
+
+    ex_stunden = set(int(x) for x in (out.get("excludeHours") or []))
+    ex_stunden.update(int(x) for x in (aenderung.get("excludeHours") or []))
+    out["excludeHours"] = sorted(ex_stunden)
+
+    if aenderung.get("hourMin") is not None:
+        out["hourMin"] = int(aenderung["hourMin"])
+        out["hourMax"] = int(aenderung["hourMax"])
+        out["hour"] = None
+        out.pop("minutenMin", None)
+        out.pop("minutenMax", None)
+    return out
+
+
+def slot_praeferenz_bestaetigung(aenderung: dict[str, Any]) -> str:
+    """Kurze hörbare Bestätigung, bevor das neue Angebot kommt."""
+    teile: list[str] = []
+    ex = [_WOCHENTAG_NAME.get(int(x), "") for x in aenderung.get("excludeWeekdays") or []]
+    ex = [x for x in ex if x]
+    if ex:
+        teile.append(f"{' und '.join(ex)} scheidet aus")
+    if aenderung.get("andererTag") and not ex:
+        teile.append("der bisherige Wochentag scheidet aus")
+    if aenderung.get("hourMin") == 12:
+        teile.append("es soll nachmittags sein")
+    elif aenderung.get("hourMax") == 12:
+        teile.append("es soll vormittags sein")
+    if not teile:
+        return "Verstanden, ich ändere die Terminauswahl."
+    return "Verstanden, " + "; ".join(teile) + "."
 
 
 # --- Zeitraum: Monat / Monatsdrittel / relativer Abstand ----------------------
@@ -518,6 +696,23 @@ def _schub_dicht(pool: list[dict], max_n: int) -> list[dict]:
     return out
 
 
+def _harte_slotgrenzen(wish: dict | None) -> bool:
+    """Ausschlüsse/Mehrfach-Tage dürfen nie durch Ausweichslots verletzt werden."""
+    if not wish:
+        return False
+    return bool(
+        wish.get("weekdays")
+        or wish.get("excludeWeekdays")
+        or wish.get("excludeHours")
+        or wish.get("excludeHourRanges")
+    )
+
+
+def slot_wunsch_hart(wish: dict | None) -> bool:
+    """Öffentlicher Wächter gegen Ausweichslots aus abgelehnten Klassen."""
+    return _harte_slotgrenzen(wish)
+
+
 def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | None = None,
                exclude_iso: str = "", exclude_isos: list | set | None = None,
                max_n: int = 3, dringend: bool = False,
@@ -563,8 +758,14 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             out = [p for p in out if p["date"] >= str(w["von"])]
         if w.get("bis"):
             out = [p for p in out if p["date"] <= str(w["bis"])]
-        if w.get("weekday") is not None:
+        if w.get("weekdays"):
+            erlaubt = {int(x) for x in w["weekdays"]}
+            out = [p for p in out if _weekday_of(p["date"]) in erlaubt]
+        elif w.get("weekday") is not None:
             out = [p for p in out if _weekday_of(p["date"]) == w["weekday"]]
+        if w.get("excludeWeekdays"):
+            gesperrte_tage = {int(x) for x in w["excludeWeekdays"]}
+            out = [p for p in out if _weekday_of(p["date"]) not in gesperrte_tage]
         if w.get("minDaysAhead"):
             # "Nächste Woche" meint den TAG in einer Woche ab Mitternacht —
             # nicht "mindestens 168 Stunden ab jetzt". Sonst fehlen am Zieltag
@@ -581,10 +782,18 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             out = [p for p in out if lo <= (p["hour"] * 60 + int(p["time"][3:5])) <= hi]
         elif w.get("hourMin") is not None:
             out = [p for p in out if w["hourMin"] <= p["hour"] < w["hourMax"]]
+        if w.get("excludeHours"):
+            gesperrte_stunden = {int(x) for x in w["excludeHours"]}
+            out = [p for p in out if p["hour"] not in gesperrte_stunden]
+        for grenze in w.get("excludeHourRanges") or []:
+            if isinstance(grenze, (list, tuple)) and len(grenze) == 2:
+                lo, hi = int(grenze[0]), int(grenze[1])
+                out = [p for p in out if not lo <= p["hour"] < hi]
         return out
 
     pool = apply(parsed)
     matched = not wish or bool(pool)
+    hart = _harte_slotgrenzen(wish)
     schieben = bool(schub or (wish and wish.get("schub")))
     if not pool and wish and wish.get("date") and not schieben and not wish.get("tage"):
         # Konkretes Datum ohne Treffer: ±2 Tage in der Region, nicht irgendwo.
@@ -602,6 +811,10 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             pool = sorted(pool, key=_nahe)
     naechstbestes = False
     if not pool:
+        if hart:
+            # „Nicht Donnerstag“ ist keine weiche Präferenz. Lieber gezielt
+            # nachladen/keinen Slot melden als Donnerstag erneut anbieten.
+            return {"slots": [], "wishMatched": False}
         if schieben or (wish and wish.get("minutenMin") is not None):
             # Schub ohne Treffer: NICHT auf die drei Vormittagsslots
             # zurückfallen (live 30.08.2026: „keine weiteren“ + dieselben 09:45er).
@@ -622,7 +835,9 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
         # Streu-Fallback auf Vormittage in drei Wochen.
         auswahl = _schub_dicht(pool, max_n)
     else:
-        auswahl = _streuen(pool, parsed, wish, max_n)
+        # Der normale Streu-Fallback darf weiche Wünsche verlassen. Harte
+        # Ausschlüsse dagegen gelten auch für zweite/dritte Alternativen.
+        auswahl = _streuen(pool, pool if hart else parsed, wish, max_n)
     if naechstbestes:
         auswahl = sorted(auswahl, key=lambda p: p["ms"])
     slots = [{"iso": p["iso"], "date": p["date"], "time": p["time"]} for p in auswahl]

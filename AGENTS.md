@@ -3699,6 +3699,93 @@ Testanrufe sind standardmäßig ausgeschlossen. Das Werkzeug verändert nie
 Manifeste oder Kalender; nur ein ausdrücklich gesetztes `--json`-Ziel wird
 geschrieben. Regression: `tests/test_tages_scorer.py`.
 
+## Blessing-Gründe konkret statt Notfall/Absage (W-BLESSING-MOTIVKLARHEIT 15.09.2026 — nicht rückbauen)
+
+Blessing bot am Telefon selbst „eine Beratung oder etwas anderes“ an und
+antwortete auf genau diese Auswahl anschließend „Diese Leistung wird nicht
+angeboten“. Außerdem traf das alte Zahn-Konzept `eiter` als Teilwort in
+„WEITERbehandlung“ und „WEITERE Medikamentenkontrolle“: beide wurden zum
+Notfall-Motiv. Echte Hautgründe wie Rosacea, Wunden, Atherom/„Atterom“ und
+Grützbeutel liefen dadurch falsch oder blieben ohne Motiv.
+
+- Nur Blessing trägt `dermaMotivKlarheit=true`. Reines „Beratung“ wird
+  deterministisch über die tatsächlich buchbaren Beratungs-Motive
+  konkretisiert; „etwas anderes“ fragt offen nach, was die Ärztin ansehen
+  soll. Es wird noch kein Motiv geraten und keine Slotsuche gestartet.
+- Der Dermatologiepfad läuft vor den alten Zahn-Konzepten. Er bindet
+  Erkrankungen und Sprechgründe an den echten Blessing-Katalog; Weiter- und
+  Medikamentenkontrolle gehen auf `Kontrolle`, allgemeine Haut-/Nagel-/
+  Fußbeschwerden auf `Sprechstunde`, Atherom/Grützbeutel auf die
+  Entfernung-Beratung. Ein echtes Akut-Signal braucht eine Wortgrenze:
+  `eiter` trifft nie wieder `weiter`.
+- Zahnwünsche bleiben bei Blessing fachfremd und werden weiter abgelehnt.
+  MedDent, Thaler und Rüther tragen den Schalter nicht; der Gegenbeweis hält
+  dort den bisherigen Mapper byte-identisch.
+- Nur Blessing trägt zusätzlich `einArztOhneBehandlerfrage=true`: solange die
+  Praxis genau einen Behandlerkalender führt, bindet auch der Bestandsweg
+  diesen direkt. Die inhaltslose Frage „Bei welchem Behandler waren Sie
+  zuletzt?“ entfällt; käme ein zweiter Kalender hinzu, erscheint die Frage
+  wieder.
+
+Regressionen: `tests/test_blessing_motive.py`; Einführung nach V2.7, noch
+nicht deployt.
+
+## Blessing kurz und aufgabenbezogen (W-BLESSING-KNAPP 15.09.2026 — nicht rückbauen)
+
+Der Geschwätz-Befund vom 15.09. zeigte vor allem zwei Fragen in einem
+Unklar-Satz, „Ich bin die Neue“, Wohlseins-/Behandler-/Doktor-Notizfragen,
+den langen KI-Erklärtext bei einem Menschenwunsch und offene
+„Sonst noch?“-Nachläufe ohne Ergebnis.
+
+- Nur Blessing trägt die Schalter `gespraechKompakt`, `halloKompakt`,
+  `anmeldungKurz`, `arztNotizAutomatisch`, `selbstCheckNurBeiSignal`,
+  `sonstNochNurNachErfolg` und `presenceEinmal`.
+- Unklare Schnipsel bekommen genau EINE kurze offene Jobfrage; ein echtes
+  Hautfachwort bekommt die gezielte Terminfrage. Ein reiner Gruß führt ohne
+  LLM direkt zum Auftrag. Freies Talk-Gerede wird durch die offene
+  Maschinenfrage ersetzt.
+- Ein bestätigter Anrufer ohne Drittperson-Signal wird nicht zusätzlich
+  gefragt, ob der Termin für ihn selbst ist. „Für meinen Sohn“ gewinnt
+  weiterhin jederzeit über die bestehende Dritttermin-Wache.
+- Rückruf-/Praxisnotizen ohne Buchung enden kurz und legen auf. „Sonst noch?“
+  kommt höchstens einmal und nur nach einem belegten Erfolg.
+- Bei Stille: einmal Presence, einmal offene Jobfrage, danach sauberer
+  Abschluss. Ein noch offenes Anliegen wird dabei über die bestehende
+  Notleine als echte Rückrufnotiz gesichert.
+
+Regressionen: `tests/test_blessing_knapp.py`. Andere Mandanten tragen keinen
+dieser Schalter und bleiben im bisherigen Pfad.
+
+## Blessing hält Slot-Ablehnungen fest (W-BLESSING-SLOTPRÄFERENZ 15.09.2026 — nicht rückbauen)
+
+Live-Anruf `50563be8`: „kein Donnerstag“ wurde mehrfach verstanden, dennoch
+erneut als Donnerstag angeboten; „elf Uhr ist Vormittag, bitte Nachmittag“
+wurde sogar als Wahl von 11:15 Uhr behandelt.
+
+- Nur Blessing trägt `slotPraeferenzenFesthalten=true`.
+- Im laufenden Angebot werden erlaubte/ausgeschlossene Wochentage,
+  Tageszeiten, Stunden und Bereiche kumulativ im Wunsch gespeichert.
+- `pick_slots` behandelt diese Grenzen hart: weder Nächstbestes noch
+  Streu-Auswahl oder Verschiebe-Fallback darf ausgeschlossene Slots
+  zurückholen. Ohne passenden Slot fragt Bianca neu.
+- Das alte Angebot wird vor der Neusuche vollständig geräumt; bei
+  Kalenderfehler oder leerer Verschiebesuche bleiben keine stale Slots
+  auswählbar.
+
+Regressionen: `tests/test_blessing_slotpraeferenzen.py`.
+
+## Blessing-Bestandsdatum und Verschiebeziel (W-BLESSING-BÄCHLE 15.09.2026 — nicht rückbauen)
+
+Im Bächle-Live-Satz „Termin am 21. Oktober … bis Mitte November enthalten“
+beendete `_ALT_REF_RE` die Alt-Referenz fälschlich am Punkt nach „21.“.
+Dadurch blieb Oktober als Zielwunsch stehen. Blessing trägt jetzt
+`bestandsVerschiebenErweitert=true`: nur der beobachtete Satztyp mit
+Bestandstermin, Zielbezug und STT-Wort „enthalten“ öffnet die
+Verschiebe-Maschine. Die Alt-Referenz umfasst „21. Oktober“, der Zielparser
+bekommt ausschließlich „Mitte November“. Ein alleinstehendes „enthalten“ und
+alle anderen Mandanten bleiben unverändert. Regressionen:
+`tests/test_blessing_abschluss.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

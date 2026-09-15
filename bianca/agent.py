@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon, weiterleiten
+from bianca import anstand, besuchsgrund, flow, gehirn, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
@@ -399,6 +399,31 @@ def _namens_unklar_antwort(sit: dict) -> str:
     return "Bitte sagen oder buchstabieren Sie den Nachnamen noch einmal."
 
 
+def _kompakt_fachfrage(sit: dict, text: str) -> str:
+    """Ein echtes Blessing-Fachwort nie als allgemeinen STT-Müll behandeln."""
+    if not gespraech.kompakt_aktiv(sit):
+        return ""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    try:
+        grund, motiv = besuchsgrund.deute(
+            tenant,
+            text,
+            katalog=tenant.get("visitMotives") or [],
+        )
+    except Exception:
+        return ""
+    if grund and motiv:
+        return "Möchten Sie dafür einen Termin vereinbaren?"
+    return ""
+
+
+_KOMPAKT_GRUSS_RE = re.compile(
+    r"^\s*(?:hallo|hi|hey|guten\s+(?:tag|morgen|abend)|grüß\s+gott|"
+    r"gruess\s+gott)[\s.,!?…]*$",
+    re.I,
+)
+
+
 def _diktat_offen(sit: dict) -> bool:
     return _s((sit.get("sammler") or {}).get("frage")) in _DIKTAT_FRAGEN
 
@@ -491,6 +516,11 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         return {"text": "", "book": None}
 
     n = stille.stups_zaehlen(sit)
+    if stille.kompakt_fertig(sit):
+        # Ein drittes Schweigen nicht als endlose offene Leitung stehen
+        # lassen: einmal sauber abschließen; ein offenes Anliegen sichert
+        # _notleine vorher als echte Rückrufnotiz.
+        return _notleine(sit)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
     if stille.gespraech_tot(sit):
@@ -1640,6 +1670,26 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 },
                 msgs,
             )
+        kompakt_text = (
+            _kompakt_fachfrage(sit, text_in)
+            or gespraech.kompakt_unklar(
+                sit,
+                offene_frage=_offene_frage(sit),
+            )
+        )
+        if kompakt_text:
+            sit.pop("unklarFolge", None)
+            sit.pop("ganzsatzHinweisGegeben", None)
+            spur.merken(sit, "blessing-knapp", "unklar")
+            return _maschinen_antwort(
+                sit,
+                {
+                    "text": kompakt_text,
+                    "book": None,
+                    "_wiederholungErlaubt": True,
+                },
+                msgs,
+            )
         unklar_folge = int(sit.get("unklarFolge") or 0) + 1
         sit["unklarFolge"] = unklar_folge
         if unklar_folge >= 2:
@@ -1686,6 +1736,15 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return {"text": text, "book": None}
     sit.pop("unklarFolge", None)
     sit.pop("ganzsatzHinweisGegeben", None)
+
+    if gespraech.kompakt_aktiv(sit) and _KOMPAKT_GRUSS_RE.match(text_in):
+        text = gespraech.kompakt_jobfrage(sit, begruessen=True)
+        spur.merken(sit, "blessing-knapp", "gruss")
+        return _maschinen_antwort(
+            sit,
+            {"text": text, "book": None, "_wiederholungErlaubt": True},
+            msgs,
+        )
 
     # W-FOKUS (12.09.2026, Chef: „auch bei live telefonaten verliert bianca
     # den fokus"): ein Nebenthema darf Züge kosten, aber nicht beliebig
@@ -1830,6 +1889,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 "text": "Gerne. Erzählen Sie mir bitte noch kurz, worum es genau geht.",
                 "book": None,
             }
+        if gespraech.kompakt_aktiv(sit):
+            text = gespraech.kompakt_jobfrage(
+                sit,
+                offene_frage=_offene_frage(sit),
+            )
+            spur.merken(sit, "blessing-knapp", "talk")
+            return _maschinen_antwort(
+                sit,
+                {"text": text, "book": None, "_wiederholungErlaubt": True},
+                msgs,
+            )
     text, msgs, book = zuege.apply_tools(sit, msgs, out, melde=melde)
     gelaufen = [_s(w.get("name")) for w in (sit.get("tools") or [])[werkzeuge_vorher:]]
     werkzeug_lief = bool(gelaufen)

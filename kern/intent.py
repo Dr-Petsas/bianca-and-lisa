@@ -100,6 +100,27 @@ _ABBRUCH_RE = re.compile(
     re.I,
 )
 
+_BESTANDS_VERSCHIEBEN_VERHOERER_RE = re.compile(
+    r"\btermin\w*\b.{0,100}\b(?:auf|bis|in|nach)\b.{0,55}\benthalten\b|"
+    r"\b(?:auf|bis|in|nach)\b.{0,55}\benthalten\b.{0,55}\btermin\w*\b",
+    re.I,
+)
+
+
+def _bestands_verschieben_verhoerer(sit: dict | None, text: str) -> bool:
+    """Blessing-STT: „Termin … bis Mitte November enthalten“ = verschieben.
+
+    ``enthalten`` allein bleibt unangetastet. Nur der mandantenscharfe
+    Live-Satz mit Bestandstermin UND Zielbezug darf die sichere
+    Verschiebe-Maschine öffnen.
+    """
+    tenant = (sit or {}).get("tenant")
+    return bool(
+        isinstance(tenant, dict)
+        and tenant.get("bestandsVerschiebenErweitert")
+        and _BESTANDS_VERSCHIEBEN_VERHOERER_RE.search(_s(text))
+    )
+
 
 def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> bool:
     """Koennte dieser Satz das Anliegen wechseln? Nur dann lohnt das LLM.
@@ -109,7 +130,8 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     KEINEN LLM-Aufschlag mehr. Das Lexikon deckt die Wechsel-Faelle aus der
     Meddent-/Blessing-Auswertung; was es faengt, entscheidet weiter das LLM.
     """
-    if _WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t):
+    if (_WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t)
+            or _bestands_verschieben_verhoerer(sit, t)):
         return True
     # W-RECHNUNG: auch die weichen Formen ("Der Betrag stimmt nicht") sind
     # mitten in einer Buchung ein neues Fass — Rechnungsthemen gehoeren nie
@@ -318,6 +340,13 @@ _FB_VERSCHIEBEN_RE = re.compile(
     r"verschieb\w*|umbuch\w*|verleg\w*|umleg\w*|vorverleg\w*|anderen\s+tag",
     re.I,
 )
+
+
+def _ist_verschieben(sit: dict | None, text: str) -> bool:
+    return bool(
+        _FB_VERSCHIEBEN_RE.search(_s(text))
+        or _bestands_verschieben_verhoerer(sit, text)
+    )
 _FB_RUECKRUF_KERN_RE = re.compile(
     r"r(?:ü|ue)ckruf|zur(?:ü|ue)ckruf\w*|ruft\s+mich|meldet\s+(?:sich|euch)|"
     r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back",
@@ -616,7 +645,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
     # „Anmeldung, ich möchte meinen Termin absagen“ => Absage-Flow, nicht
     # Personal-/Weiterleitungsdialog. Namentliche Ärzte bleiben unberührt.
     if _FB_FRONTDESK_RE.search(t) and not im_angebot:
-        if _FB_VERSCHIEBEN_RE.search(t):
+        if _ist_verschieben(sit, t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
         if _FB_ABSAGE_RE.search(t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
@@ -644,11 +673,11 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             "gegenstand": "VORGANG",
             "ersatz": False,
         }
-    if im_angebot and (_FB_ABSAGE_RE.search(t) or _FB_VERSCHIEBEN_RE.search(t)):
+    if im_angebot and (_FB_ABSAGE_RE.search(t) or _ist_verschieben(sit, t)):
         # "Passt nicht / den nicht" mitten im Slot-Angebot meint das ANGEBOT,
         # keinen Bestandstermin — die Maschine verhandelt selbst weiter.
         return {**aus, "zug": "verfeinern", "handlung": "KEINE", "gegenstand": ""}
-    if _FB_VERSCHIEBEN_RE.search(t) or (
+    if _ist_verschieben(sit, t) or (
         _s(s.get("phase")) == "gebucht"
         and re.search(r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen", t, re.I)
     ):
@@ -704,7 +733,7 @@ def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
     bestandsfrage = ist_bestandsfrage(sit, t)
     if _FB_ERREICHEN_RE.search(t):
         treffer.append(("ERREICHEN", {"handlung": "ERREICHEN", "gegenstand": "PERSON"}))
-    if _FB_VERSCHIEBEN_RE.search(t):
+    if _ist_verschieben(sit, t):
         treffer.append(("VERSCHIEBEN", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}))
     if _FB_ABSAGE_RE.search(t):
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))

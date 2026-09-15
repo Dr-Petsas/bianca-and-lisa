@@ -58,9 +58,20 @@ ENTLASTUNG = (
     "Ich verbessere mich mit jedem Anruf und jedem gemeldeten Problem. "
     "Worum geht es? Ich helfe Ihnen gern direkt."
 )
+ENTLASTUNG_KURZ = (
+    "Ich helfe Ihnen hier direkt; eine menschliche Verbindung ist nicht "
+    "eingerichtet — worum geht es?"
+)
 # Rückwärtskompatibler Name für bestehende Importe; die alte Behauptung
 # „niemand geht ran“ darf nirgends mehr gesprochen werden.
 WAHRHEIT = ENTLASTUNG
+
+
+def _entlastung(sit: dict) -> str:
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("anmeldungKurz") is True:
+        return ENTLASTUNG_KURZ
+    return ENTLASTUNG
 
 SELBST_HILFE = "Ja, gern. Sagen Sie mir einfach, worum es geht."
 RUECKRUF_ANGEBOT = (
@@ -806,7 +817,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit["weiterleiten"] = {"frage": "rueckruf", "rolle": t[:80]}
             return {"text": RUECKRUF_ANGEBOT}
         sit["weiterleiten"] = {"frage": "anliegen", "rolle": t[:80]}
-        return {"text": ENTLASTUNG}
+        return {"text": _entlastung(sit)}
     # Fall 3: Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort
     # ("Können Sie mich bitte weiterleiten?"): bekannten Behandler anbieten,
     # sonst wie bisher nach dem Arzt fragen.

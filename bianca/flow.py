@@ -28,7 +28,17 @@ from kern import calendar as kal
 from kern import gespraech
 from kern.patients import arzt_sprechname, telefon_aktualisieren, versicherung_aktualisieren
 from kern.sitzung import merke_tool
-from kern.slots import WEEKDAYS, _weekday_of, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
+from kern.slots import (
+    WEEKDAYS,
+    _weekday_of,
+    parse_slot_wish,
+    pick_slots,
+    slot_praeferenz_aenderung,
+    slot_praeferenz_bestaetigung,
+    spoken_offer,
+    spoken_slot,
+    wunsch_mit_slot_praeferenz,
+)
 from kern import pzr_kassen
 from kern import tenants as kern_tenants
 from kern.tenants import ist_akut_motiv, motiv_von
@@ -367,6 +377,51 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
     if len(offered) == 1 and (gehirn.ist_ja(t) or re.search(r"nehm|passt|gerne|gut\b", t)):
         return offered[0]["iso"]
     return ""
+
+
+def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
+    """Harte Korrektur eines laufenden Angebots sofort anwenden und neu suchen."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("slotPraeferenzenFesthalten") is not True:
+        return None
+    s = gehirn.sammler(sit)
+    if s.get("phase") not in {"angebot", "bestaetigen"} or not sit.get("offered"):
+        return None
+    aenderung = slot_praeferenz_aenderung(text)
+    if not aenderung:
+        return None
+    if aenderung.get("andererTag") and not aenderung.get("excludeWeekdays"):
+        tage = {
+            _weekday_of(_s(o.get("iso"))[:10])
+            for o in sit.get("offered") or []
+            if _s(o.get("iso"))
+        }
+        if tage:
+            aenderung["excludeWeekdays"] = sorted(tage)
+
+    s["wunsch"] = wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung)
+    s["wunschText"] = _s(f"{_s(s.get('wunschText'))} {text}")
+    sit["angebotZuletzt"] = [o["iso"] for o in sit.get("offered") or []]
+    s["phase"] = ""
+    s["frage"] = "wunsch"
+    s["slotIso"] = ""
+    sit["offered"] = []
+    sit.pop("angebotKalender", None)
+    sit.pop("buchIntent", None)
+    spur.merken(
+        sit,
+        "slot-praeferenz",
+        (
+            f"tage={aenderung.get('weekdays') or []};"
+            f"ohne={aenderung.get('excludeWeekdays') or []};"
+            f"zeit={aenderung.get('hourMin')}-{aenderung.get('hourMax')}"
+        ),
+    )
+    aus = _angebot(sit, melde)
+    vorsatz = slot_praeferenz_bestaetigung(aenderung)
+    if _s(aus.get("text")):
+        aus["text"] = f"{vorsatz} {_s(aus['text'])}"
+    return aus
 
 
 def _kalender_strikt(tenant: dict, name: str) -> dict | None:
@@ -956,7 +1011,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         nummer_frage = _rueckruf_nummer_start(sit)
         if nummer_frage:
             return {"text": ansage + " " + nummer_frage}
-        return {"text": ansage + " " + _sonst_noch_frage(sit)}
+        return _notiz_abschluss(sit, ansage)
     s["phase"] = "angebot"
     s["frage"] = "slotwahl"
     vor = ""
@@ -1069,6 +1124,14 @@ def _nach_ok_buchen(sit: dict, t: str, melde: Melde = None) -> dict:
     if gehirn.hat_arzt_notiz_inhalt(t):
         s["arztNotiz"] = gehirn.arzt_notiz_aus(t)
         s["arztNotizFrage"] = "ja"
+        s["frage"] = ""
+        return _buchen(sit, melde)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("arztNotizAutomatisch") is True:
+        # Blessing kompakt: keinen zusätzlichen Meta-Turn erzwingen. Echte
+        # Abweichungen/Originalgründe schreibt _buchen weiterhin automatisch
+        # in die Terminnotiz; ausdrücklich Gesagtes wurde oben geerntet.
+        s["arztNotizFrage"] = "nein"
         s["frage"] = ""
         return _buchen(sit, melde)
     s["arztNotizFrage"] = "gefragt"
@@ -1489,7 +1552,12 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                         " Die Zusatzhinweise konnte ich nicht sicher am Termin "
                         "speichern; ich habe dafür einen Rückrufvermerk angelegt."
                     )
-            text += " Kann ich sonst noch etwas für Sie tun?"
+            tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+            if tenant.get("sonstNochNurNachErfolg") is True:
+                text += " " + _sonst_noch_frage(sit)
+            else:
+                # Byte-identischer Altpfad für alle übrigen Mandanten.
+                text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
     if res.get("patientMismatch"):
         # Alte Akten-ID und bestätigter Name widersprechen sich. Slot/Grund
@@ -1536,15 +1604,14 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             # W-RUECKRUF-NUMMER: "Meine Nummer haben Sie" (telefonAkte) wurde
             # geglaubt — steht wirklich keine Nummer, jetzt nachfragen.
             nummer_frage = _rueckruf_nummer_start(sit)
-            return {
-                "text": (
-                    "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
-                    "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
-                    "und die Praxis meldet sich gleich bei Ihnen mit einem Termin. "
-                    + (nummer_frage or _sonst_noch_frage(sit))
-                ),
-                "book": book,
-            }
+            text = (
+                "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
+                "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
+                "und die Praxis meldet sich gleich bei Ihnen mit einem Termin."
+            )
+            if nummer_frage:
+                return {"text": text + " " + nummer_frage, "book": book}
+            return _notiz_abschluss(sit, text, book=book)
         # Frisches Angebot OHNE die gesperrten ISOs.
         ang = _angebot(sit, melde)
         txt = _s(ang.get("text"))
@@ -2631,9 +2698,29 @@ def _sonst_noch_frage(sit: dict) -> str:
     """Die Abschluss-Frage stellen UND registrieren: nur mit frage=sonst_noch
     bekommt _sonst_noch_antwort den naechsten Zug. Wer den Satz von Hand
     anhaengt, baut die Schleife vom 15.09. wieder ein."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if (tenant.get("sonstNochNurNachErfolg") is True
+            and sit.get("sonstNochGefragt")):
+        return ""
     gehirn.sammler(sit)["frage"] = "sonst_noch"
     sit["sonstNochGefragt"] = True
     return _SONST_NOCH
+
+
+def _notiz_abschluss(sit: dict, text: str, *, book: dict | None = None) -> dict:
+    """Blessing: ehrlicher Notiz-Abschluss statt offenem Smalltalk-Nachlauf."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("sonstNochNurNachErfolg") is True:
+        s = gehirn.sammler(sit)
+        s["frage"] = ""
+        sit["flussFrage"] = ""
+        return {
+            "text": _s(text).rstrip(" .") + ". Auf Wiederhören.",
+            "book": book,
+            "hangup": abschied.an(),
+            "_wiederholungErlaubt": True,
+        }
+    return {"text": _s(text) + " " + _sonst_noch_frage(sit), "book": book}
 
 
 def _sonst_noch_antwort(
@@ -3099,6 +3186,9 @@ def _rueckruf_nummer_start(sit: dict) -> str:
 def _rueckruf_abschluss(sit: dict, *, mit_nummer: bool, abschied_satz: bool = False) -> dict:
     """Nummernfrage nach der Rueckruf-Notiz beenden — mit oder ohne Nummer."""
     s = gehirn.sammler(sit)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("sonstNochNurNachErfolg") is True:
+        abschied_satz = True
     sit.pop("rueckrufNummer", None)
     s["frage"] = ""
     s["phase"] = "fertig"
@@ -3554,6 +3644,13 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             s["wunschText"] = ""
             sit["offered"] = []
             return {"text": "Gerne. Wann passt es Ihnen für den weiteren Termin?"}
+        tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+        if tenant.get("sonstNochNurNachErfolg") is True:
+            return {
+                "text": "Die Rückrufbitte ist für die Praxis notiert. Auf Wiederhören.",
+                "hangup": abschied.an(),
+                "_wiederholungErlaubt": True,
+            }
         if s["frage"] == "sonst_noch":
             # Live 15.09. (Thaler, 07:45): die Frage wurde gestellt, aber
             # nirgends beantwortet — "Nein.", "Ja.", "Dann kann ich auflegen."
@@ -3647,6 +3744,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 return _frisch_verschieben(sit, t, melde)
             return None
 
+    praef = _slot_praeferenz_zug(sit, t, melde)
+    if praef is not None:
+        return praef
+
     if s["phase"] == "bestaetigen":
         if s["frage"] in {"arzt_notiz", "arzt_notiz_diktat"}:
             return _arzt_notiz_zug(sit, t, melde)
@@ -3719,6 +3820,23 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             "Verstanden. An welchen Tagen sind Sie hier, "
             "und passt es eher vormittags oder nachmittags?"
         )}
+
+    # W-BLESSING-MOTIVKLARHEIT: „Beratung“ und „etwas anderes“ stehen in
+    # Biancas eigener Auswahlfrage. Solche Antworten als „nicht angeboten“
+    # abzulehnen ist ein Widerspruch. Der Blessing-Opt-in konkretisiert sie
+    # vor der allgemeinen Unbekannt-Leistung-Wache; noch wird kein Motiv
+    # geraten und keine Slotsuche gestartet.
+    if s["modus"] == "buchen" and s["frage"] == "grund" and not s["grund"]:
+        a = s.get("arzt") if isinstance(s.get("arzt"), dict) else {}
+        klaerung = besuchsgrund.grund_klaerungsfrage(
+            sit.get("tenant") or {},
+            t,
+            katalog=motive.katalog(sit),
+            calendar_id=_s(a.get("calendarId")),
+        )
+        if klaerung:
+            spur.merken(sit, "blessing-motiv-klaerung", t)
+            return {"text": klaerung}
 
     neu = gehirn.einsammeln(sit, t)
     if nachname_check_modus == "bestaetigt":

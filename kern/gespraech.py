@@ -136,6 +136,10 @@ UNKLAR_AUSWAHL_ANTWORT = (
 UNKLAR_AUSWAHL_OHNE_MITARBEITER = (
     "Geht es um einen Termin oder um eine Auskunft zur Praxis?"
 )
+KOMPAKT_JOBFRAGE = (
+    "Geht es um einen Termin, eine Absage, eine Verschiebung oder eine "
+    "Terminauskunft?"
+)
 
 _STOP = frozenset((
     "nicht", "haben", "hatte", "hatten", "haette", "hätte", "haetten", "hätten",
@@ -187,6 +191,40 @@ def unklar_auswahl_antwort(tenant: dict | None = None) -> str:
     if isinstance(tenant, dict) and tenant.get("mitarbeiterAnbieten") is False:
         return UNKLAR_AUSWAHL_OHNE_MITARBEITER
     return UNKLAR_AUSWAHL_ANTWORT
+
+
+def kompakt_aktiv(sit: dict) -> bool:
+    """Mandantenschalter: freies Talk-Geschwätz durch eine Jobfrage ersetzen."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    return tenant.get("gespraechKompakt") is True
+
+
+def _eine_frage(text: str) -> str:
+    """Eine offene Maschinenfrage nie als Zwei-Fragen-Sermon ausgeben."""
+    text = _s(text)
+    if not text:
+        return ""
+    if "?" in text:
+        return text.split("?", 1)[0].rstrip() + "?"
+    return text.rstrip(".! ") + "?"
+
+
+def kompakt_unklar(sit: dict, *, offene_frage: str = "") -> str:
+    """Kurzer STT-Schnipsel: eine zielgerichtete Frage, kein Echo des Mülls."""
+    if not kompakt_aktiv(sit):
+        return ""
+    return _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
+
+
+def kompakt_jobfrage(
+    sit: dict,
+    *,
+    offene_frage: str = "",
+    begruessen: bool = False,
+) -> str:
+    """Talk ist für diesen Mandanten aus; der Auftrag bekommt sofort den Floor."""
+    frage = _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
+    return f"Guten Tag. {frage}" if begruessen else frage
 
 
 def _inhaltsworte(low: str) -> set[str]:

@@ -41,7 +41,15 @@ from kern import patients
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
-from kern.slots import WEEKDAYS, _weekday_of, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
+from kern.slots import (
+    WEEKDAYS,
+    _weekday_of,
+    parse_slot_wish,
+    pick_slots,
+    slot_wunsch_hart,
+    spoken_offer,
+    spoken_slot,
+)
 
 Melde = Callable[[str], None] | None
 
@@ -55,10 +63,19 @@ _UNKLAR_RE = re.compile(
     re.I,
 )
 
+_MONATE_RE = (
+    r"januar|februar|märz|maerz|april|mai|juni|juli|august|"
+    r"september|oktober|november|dezember"
+)
 # Verschieben-Einstieg: "den Termin AM Dienstag (auf Freitag) verschieben" —
 # das am/vom-Stueck meint den BESTANDSTERMIN, ein auf/zu-Stueck den Wunsch.
+# Der Punkt in "am 21. Oktober" ist KEIN Satzende. Die alte Klasse [.!?;,]
+# kappte dort nach "21.", ließ "Oktober" im Zieltext stehen und suchte deshalb
+# wieder ab Oktober statt wie verlangt Mitte November (Blessing/Bächle live).
 _ALT_REF_RE = re.compile(
-    r"termin\s+(?:vom|am)\s+(.{2,45}?)(?:\s+(?:auf|zum|zur|zu)\s|[.!?;,]|$)", re.I
+    rf"termin\s+(?:vom|am)\s+(.{{2,45}}?)"
+    rf"(?=\s+(?:auf|zum|zur|zu)\s|[!?;,]|\.(?!\s*(?:{_MONATE_RE})\b)|$)",
+    re.I,
 )
 
 # "Früher"/"später" beim Verschieben ist RELATIV zum Bestandstermin — live
@@ -71,10 +88,6 @@ _FRUEHER_RE = re.compile(
 _SPAETER_RE = re.compile(
     r"\bspäter\b|\bspaeter\b|nach\s+hinten\b|weiter\s+hinten|hinten\s*raus",
     re.I,
-)
-_MONATE_RE = (
-    r"januar|februar|märz|maerz|april|mai|juni|juli|august|"
-    r"september|oktober|november|dezember"
 )
 _TAG_OHNE_MONAT_RE = re.compile(
     rf"\b(?:am|dem|den|der)\s+(\d{{1,2}})\."
@@ -732,6 +745,7 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     if not found.get("ok"):
         s["phase"] = "fertig"
         s["frage"] = ""
+        sit["offered"] = []
         return {"text": (
             "Der Terminkalender antwortet gerade nicht. "
             "Die Praxis ruft Sie zum Verschieben kurzfristig zurück."
@@ -760,15 +774,18 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             hinweis = f"Am selben Tag ist {wort} leider nichts mehr frei. "
 
     picked = pick_slots(isos, wish=s["wunsch"])
-    if not picked["slots"] and s["wunsch"]:
+    if not picked["slots"] and s["wunsch"] and not slot_wunsch_hart(s["wunsch"]):
         # Wunsch (z. B. konkrete Uhrzeit) passt nirgends: naechstliegende
-        # Zeiten zeigen statt in der Wunsch-Schleife zu haengen.
+        # Zeiten zeigen statt in der Wunsch-Schleife zu haengen. Ausdrücklich
+        # abgelehnte Tage/Uhrzeiten sind dagegen hart und dürfen im
+        # Verschiebe-Fallback nie wieder erscheinen.
         picked = pick_slots(isos)
         if picked["slots"]:
             hinweis = hinweis or "Genau zu dieser Zeit ist nichts frei. "
     if not picked["slots"]:
         s["phase"] = "verschieb_wunsch"
         s["frage"] = "wunsch"
+        sit["offered"] = []
         return {"text": (
             "Zu diesem Wunsch finde ich gerade nichts Freies. "
             "Ginge auch ein anderer Tag oder eine andere Tageszeit?"

@@ -97,7 +97,16 @@ def gespraech_tot(sit: dict) -> bool:
 
 def presence_erlaubt(sit: dict) -> bool:
     """Hat der Anrufer „Sind Sie noch dran?" schon oft genug gehört?"""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("presenceEinmal") is True:
+        return gesamt(sit) <= 1
     return gesamt(sit) <= PRESENCE_BIS
+
+
+def kompakt_fertig(sit: dict) -> bool:
+    """Opt-in: einmal Presence, einmal Jobfrage, danach sauber beenden."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    return tenant.get("presenceEinmal") is True and gesamt(sit) > 2
 
 
 def anrede(n: int) -> str:
