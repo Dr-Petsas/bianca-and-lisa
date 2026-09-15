@@ -57,6 +57,9 @@
     "behandlung": [4]
   },
   "begruessungText": "Thaler Zahnmedizin. Sie sprechen mit Bianca, der Telefonassistentin der Praxis. Wie kann ich Ihnen helfen?",
+  "wissen": {
+    "anfahrt": "Die Praxis Thaler Zahnmedizin liegt in der Bahnhofstraße zehn A in Mainburg."
+  },
   "weiterleitungen": [],
   "visitMotives": [
     {

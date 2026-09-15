@@ -188,6 +188,33 @@ def test_ruether_beantwortet_die_wegfrage_und_erfindet_keine_zeiten():
     assert "Uhr" not in text
 
 
+# --- Thaler: Weg deterministisch statt Modell-Formulierung -----------------
+
+def test_thaler_beantwortet_die_wegfrage_aus_der_belegten_adresse():
+    """Thalers Agent-Prompt nennt die Bahnhofstrasse im Fliesstext, aber ohne
+    Weg-Regie und ohne Ueberschrift — _prompt_anfahrt findet dort nichts, also
+    formulierte bis 15.09.2026 das Modell die Adresse selbst (Hausnummer frei
+    erfunden moeglich). Der belegte Rueckfall nimmt ihm das ab."""
+    import re
+    tenant = laden("thaler")
+    text, themen = praxis_antwort(tenant, "Wo ist die Praxis denn genau?")
+    assert themen == {"anfahrt"}
+    assert "Bahnhofstraße" in text and "Mainburg" in text
+    assert not re.search(r"\d", text), "Anfahrtstext muss ziffernfrei sein"
+
+
+def test_thaler_zeiten_kommen_weiter_aus_den_standorteinstellungen():
+    """Gegenprobe: der Rueckfall darf die gepflegten Portal-Zeiten (W-STANDORT)
+    nicht verdraengen — nur die Anfahrt war offen."""
+    tenant = laden("thaler")
+    tenant["standort"] = {
+        "text": "montags bis donnerstags 8 Uhr bis 18 Uhr, freitags 8 Uhr bis 14 Uhr"
+    }
+    text, themen = praxis_antwort(tenant, "Wann haben Sie geöffnet?")
+    assert themen == {"oeffnungszeiten"}
+    assert "Uhr" in text and "Bahnhofstraße" not in text
+
+
 def test_wissen_block_ohne_anfahrt_kein_abschnitt():
     block = wissen_block({"preise": ["Zahnreinigung: circa 150 Euro."]})
     assert "ANFAHRT" not in block and "ÖPNV" not in block
