@@ -771,6 +771,11 @@ FELDER_START = {
     # Antwort auf die Bestaetigung.
     "vornameQuelle": "",
     "vornameCheck": "",
+    # Blessing A3 (15.09.2026): Eine vom Anrufer buchstabierte Schreibweise
+    # wird genau einmal vorgelesen und mit Ja/Nein bestätigt, BEVOR eine
+    # Patienten-/Termin-Suche startet. Andere Mandanten aktivieren den
+    # Zustand nicht (Tenant-Opt-in ``nachnameReadbackNachBuchstabieren``).
+    "nachnameCheck": "",
     # W-NAME-EINWAND (Chef 13.09.2026 zum Anruf e5c25e25: "der Nachname wurde
     # nicht richtig erkannt und sie springt trotzdem vor der klärung zum
     # vornamen weiter..... der einwand des anrufers wird überhört"). Live kam
@@ -1540,6 +1545,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     if not t:
         return neu
     vor_start = _s(s.get("vorname"))     # W-HIRN-GATE, s. Ende der Funktion
+    frage_start = _s(s.get("frage"))
+    buchstaben_teil_start = _s(s.get("buchstabenTeil"))
 
     # Anliegen-Modus: absagen/verschieben/auskunft VOR der Buchungs-Erkennung
     # prüfen — "Ich möchte meinen Termin absagen" enthält auch "Termin".
@@ -2457,6 +2464,27 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             and _s(s.get("vornameQuelle")) != "check"):
         s["vornameQuelle"] = "gesagt" if _s(s.get("vorname")) else ""
         s["vornameCheck"] = ""
+    # W-BLESSING-NACHNAME-READBACK (A3): Eine echte Buchstabierkette darf
+    # nicht unmittelbar eine Suche auslösen. Live gingen Pusch/Busch-artige
+    # Verhörer sonst als vermeintlich sicherer Nachname an die Patienten-
+    # suche. Nur der Blessing-Opt-in erzeugt den zusätzlichen Ja/Nein-Zug;
+    # MedDent, Thaler und Rüther bleiben ohne ein einziges Extra-Wort.
+    buchstabiert_jetzt = bool(
+        buch
+        or buchstaben_teil_start
+        or len(_einzelbuchstaben(t)) >= 2
+        or (frage_start == "buchstabieren" and _DIKTAT_FERTIG_RE.search(t))
+    )
+    if (
+        tenant.get("nachnameReadbackNachBuchstabieren") is True
+        and frage_start in {"name", "nachname", "buchstabieren"}
+        and buchstabiert_jetzt
+        and _s(s.get("nachname"))
+        and bool({"name", "nachname"} & neu)
+    ):
+        s["nachnameCheck"] = "offen"
+        s["frage"] = "nachname_check"
+        neu.add("nachnameCheck")
     return neu
 
 
@@ -2490,6 +2518,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "vorname_check": (
         "Ich lese hier den Vornamen — richtig?",
         "Habe ich den richtigen Vornamen vor mir?",
+    ),
+    "nachname_check": (
+        "Stimmt die vorgelesene Schreibweise des Nachnamens so?",
+        "Ist der Nachname genau so geschrieben?",
     ),
     "nachname": (
         "Wie lautet der Nachname?",
@@ -3572,6 +3604,7 @@ def name_fuer_aenderung_leeren(sit: dict, teil: str = "") -> None:
         s["buchstabiert"] = False
         s["buchstabenTeil"] = ""
         s["buchstabierHilfe"] = False
+        s["nachnameCheck"] = ""
     s["bekannt"] = False
     s["patientId"] = ""
     s["gesucht"] = ""
@@ -3813,7 +3846,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "telefon_alt", "telefon_check",
                 "sms_empfaenger",
                 "rueckblick", "folge_kontrolle", "anrufer_check",
-                "fuer_wen_check", "arzt_check", "vorname_check",
+                "fuer_wen_check", "arzt_check", "vorname_check", "nachname_check",
                 "frisch_absage_ok", "absage_ok",
                 "termin_anbieten", "arzt_notiz",
                 # W-BESTAND-ANSAGE: "Passt der so?" / "Sonst noch etwas?" —
@@ -3872,9 +3905,23 @@ def vorname_check_frage(s: dict) -> str:
     return f"Ihr Vorname ist {vor}, richtig?"
 
 
+def nachname_check_frage(s: dict) -> str:
+    """Buchstabierten Nachnamen kurz und eindeutig rückbestätigen (A3)."""
+    nach = _s((s or {}).get("nachname"))
+    tafel = buchstaben.vorlesen(nach)
+    if nach and tafel:
+        return f"Ich habe den Nachnamen {nach} aufgenommen: {tafel}. Ist das richtig?"
+    if nach:
+        return f"Ich habe den Nachnamen {nach} aufgenommen. Ist das richtig?"
+    return "Ist die Schreibweise des Nachnamens richtig?"
+
+
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)
+
+    if _s(s.get("nachnameCheck")) == "offen" and _s(s.get("nachname")):
+        return "nachname_check", nachname_check_frage(s)
 
     # Eine gehörte Nummer wird IMMER erst rückbestätigt (Chef: sicher aufnehmen).
     if s["telefonOffen"] and not s["telefonOk"]:

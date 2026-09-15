@@ -144,6 +144,7 @@ _FRAGE_KERN = {
     # Erkannte Identität und Terminempfänger sind getrennte Ja/Nein-Schritte.
     "anrufer_check": r"erkannt|richtige\s+person",
     "vorname_check": r"vorname|richtig",
+    "nachname_check": r"nachname|schreibweise|richtig",
     "fuer_wen_check": r"selbst|persönlich|persoenlich",
     "arzt_check": r"zuletzt|behandler|arzt|zahnarzt|richtig",
     "telefon_alt": r"nummer|alte|akte|löschen",
@@ -301,6 +302,7 @@ _FEHLT_WORT = {
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
     "vorname_check": "ob der Vorname aus der Kartei stimmt",
+    "nachname_check": "ob die vorgelesene Schreibweise des Nachnamens stimmt",
     "fuer_wen_check": "ob der Termin für Sie selbst ist",
     "rueckblick": "wie es nach dem letzten Besuch war",
     "folge_kontrolle": "ob eine Kontrolle gebucht werden soll",
@@ -344,7 +346,7 @@ _DIKTAT_FRAGEN = {
 }
 _NAMENS_UNKLAR_FRAGEN = {
     "name", "nachname", "buchstabieren", "nachname_korr",
-    "vorname", "vorname_check",
+    "vorname", "vorname_check", "nachname_check",
 }
 
 
@@ -370,6 +372,19 @@ def _namens_unklar_antwort(sit: dict) -> str:
         if vor:
             return f"Ihr Vorname ist {vor}, richtig? Ein kurzes Ja oder Nein genügt."
         return "Ist der Vorname richtig? Ein kurzes Ja oder Nein genügt."
+    if fid == "nachname_check":
+        unklar = int(sit.get("nachnameCheckUnklar") or 0) + 1
+        sit["nachnameCheckUnklar"] = unklar
+        if unklar >= 2:
+            gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+            s["frage"] = "buchstabieren"
+            sit.pop("nachnameCheckUnklar", None)
+            spur.merken(sit, "nachname-readback", "unklar-neustart")
+            return (
+                "Dann gehen wir auf Nummer sicher. "
+                "Buchstabieren Sie den Nachnamen bitte noch einmal langsam."
+            )
+        return gehirn.nachname_check_frage(s) + " Ein kurzes Ja oder Nein genügt."
     if fid == "vorname":
         return "Bitte nennen Sie den Vornamen noch einmal."
     if fid == "name":

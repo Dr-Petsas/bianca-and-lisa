@@ -167,7 +167,7 @@ _SLOTWAHL_RE = re.compile(
 _FORMULAR_FRAGEN = {
     "name", "vorname", "nachname", "telefon", "telefon_check", "telefon_alt",
     "buchstabieren", "schonmal", "versicherung", "anrufer_check",
-    "fuer_wen_check", "arzt_check", "vorname_check",
+    "fuer_wen_check", "arzt_check", "vorname_check", "nachname_check",
     "geburtstag",
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
     "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",
@@ -184,7 +184,9 @@ _FORMULAR_FRAGEN = {
 # tragen. Nur bei nicht-destruktiven Identitäts-/Historienfragen darf der
 # sichere Präfix zuerst geerntet werden. Nummern-Readback, Slotwahl und
 # Buchungsbestätigung bleiben absichtlich unteilbar.
-_GEMISCHT_SICHERE_FRAGEN = {"anrufer_check", "schonmal", "arzt_check"}
+_GEMISCHT_SICHERE_FRAGEN = {
+    "anrufer_check", "schonmal", "arzt_check",
+}
 _GEMISCHT_RE = re.compile(
     r"^\s*(?P<antwort>ja|jawohl|genau|richtig|korrekt|nein|nee|n(?:ö|oe))"
     r"\s*[,;:—-]?\s*(?:aber|allerdings|jedoch|nur)\s+"

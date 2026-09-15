@@ -133,7 +133,7 @@ _NIE_LERNEN = _STRUKTUR | _ZAHLWORT | _JOB | _ANTWORT | _ZEIT
 # Woerterbuch wird weder befuellt noch angewendet, und ein spaetes Qwen
 # zum Namens-Zug gibt keinen Vorzug (Wiederholung/Widerspruch).
 _NAMENSFRAGEN = {"name", "nachname", "vorname", "buchstabieren",
-                 "nachname_korr", "vorname_check", "aenderung"}
+                 "nachname_korr", "vorname_check", "nachname_check", "aenderung"}
 # Diktat: Ziffern gehoeren Parakeet + Readback-Waechter (W-STT-SCHWANZ).
 _DIKTATFRAGEN = {"telefon"}
 _DIKTAT_SCHLUESSEL = ("buchstabenTeil", "telefonTeil")
@@ -187,7 +187,7 @@ _ERWARTUNG: dict[str, set[str]] = {
 for _fid in ("bestaetigung", "pzr", "bleaching", "bleaching_check", "telefon_alt",
              "telefon_check", "sms_empfaenger", "rueckblick", "folge_kontrolle",
              "anrufer_check", "frisch_absage_ok", "absage_ok", "termin_anbieten",
-             "arzt_notiz", "verschieb_ok", "neubuchung"):
+             "arzt_notiz", "verschieb_ok", "neubuchung", "nachname_check"):
     _ERWARTUNG.setdefault(_fid, _JA_NEIN)
 # Widerspruch/Nachdruck am Satzanfang oder im Satz — der Anrufer korrigiert.
 _WIDERSPRUCH_RE = re.compile(

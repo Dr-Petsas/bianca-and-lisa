@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-from bianca import besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
+from bianca import buchstaben, besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
 from kern import abschied
 from kern import anliegen_art
 from kern import dossier
@@ -2827,7 +2827,7 @@ def _vorrat_leeren(sit: dict) -> None:
 _EINWAND_EIGENE_FRAGE = {
     "nummer": {"telefon", "telefon_check", "telefon_alt", "sms_nummer",
                "sms_empfaenger", "telefon_bestaetigen"},
-    "name": {"name", "nachname", "vorname", "vorname_check", "buchstabieren",
+    "name": {"name", "nachname", "vorname", "vorname_check", "nachname_check", "buchstabieren",
              "nachname_korr", "anrufer_check", "fuer_wen_check"},
     "versicherung": {"versicherung", "versicherung_check"},
     "arzt": {"arzt", "arzt_check"},
@@ -3250,6 +3250,153 @@ def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     return {"text": sag}
 
 
+_NACHNAME_CHECK_JA_RE = re.compile(
+    r"\b(?:stimmt|richtig|korrekt|passt)\b",
+    re.I,
+)
+_NACHNAME_CHECK_NEIN_RE = re.compile(
+    r"\b(?:falsch|stimmt\s+nicht|passt\s+nicht|"
+    r"nicht\s+(?:richtig|korrekt)|"
+    r"nicht\s+(?:mein|der)\s+(?:nachname|name)|"
+    r"das\s+ist\s+nicht)\b",
+    re.I,
+)
+_NACHNAME_CHECK_ZUWEISUNG_RE = re.compile(
+    r"\b(?:nachname|familienname|zuname|name)\s+"
+    r"(?:ist|lautet|wäre|waere)\s+[A-Za-zÄÖÜäöüß'-]{2,}\b"
+    r"|\b[A-Za-zÄÖÜäöüß'-]{2,}\s+(?:ist|wäre|waere)\s+"
+    r"(?:mein|der)?\s*(?:nachname|familienname|zuname)\b",
+    re.I,
+)
+_NACHNAME_CHECK_NEIN_MIT_NAME_RE = re.compile(
+    r"^\s*(?:nein|nee|n(?:ö|oe)|ne)\s*[,;:—-]?\s*"
+    r"(?:(?:aber|sondern)\s+)?"
+    r"(?:(?:der|mein)\s+(?:nachname|familienname|zuname|name)\s+"
+    r"(?:ist|lautet|wäre|waere)\s+)?"
+    r"[A-Za-zÄÖÜäöüß'-]{2,}[.!]?\s*$",
+    re.I,
+)
+
+
+def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
+    """A3: Antwort auf den Blessing-Nachnamen-Readback deterministisch deuten.
+
+    Rueckgabe ``(modus, antwort)``:
+    - ``bestaetigt``: intern ohne den Ja-Text zur naechsten Flussstufe;
+    - ``korrektur``: denselben Satz noch einmal als Namensangabe ernten;
+    - ``beantwortet``: die fertige Antwort sofort sprechen;
+    - leer: kein Readback offen.
+    """
+    s = gehirn.sammler(sit)
+    if (
+        _s(s.get("frage")) != "nachname_check"
+        or _s(s.get("nachnameCheck")) != "offen"
+    ):
+        return "", None
+
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if _NOCHMAL_RE.search(t):
+        spur.merken(sit, "nachname-readback", "wiederholt")
+        return "beantwortet", {"text": gehirn.nachname_check_frage(s)}
+    deuter = (
+        buchstaben.deute_feldsegment
+        if tenant.get("buchstabierSegmenteTrennen") is True
+        else buchstaben.deute
+    )
+    buch = deuter(t)
+
+    # Eine neue Buchstabierkette ist schon die Korrektur — auch in
+    # „Nein, B-U-S-C-H“. Sie darf nicht erst in einem weiteren Zug verloren
+    # gehen. Der Vorname und alle Terminangaben bleiben erhalten.
+    if buch:
+        gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+        s["frage"] = "nachname"
+        sit.pop("nachnameCheckUnklar", None)
+        spur.merken(sit, "nachname-readback", "korrektur-buchstabiert")
+        return "korrektur", None
+
+    name_toks = gehirn._name_tokens(t)
+    korrektur_toks = [
+        tok for tok in name_toks
+        if tok.lower() not in {"aber", "sondern", "nicht", "so", "es"}
+    ]
+    hat_zuweisung = bool(_NACHNAME_CHECK_ZUWEISUNG_RE.search(t))
+    hat_korrektur_signal = bool(
+        re.search(r"\b(?:aber|sondern)\b", t, re.I) or hat_zuweisung
+    )
+    nein_mit_name = bool(_NACHNAME_CHECK_NEIN_MIT_NAME_RE.match(t))
+    ist_nein = bool(gehirn.ist_nein(t) or _NACHNAME_CHECK_NEIN_RE.search(t))
+    ist_ja = bool(
+        not ist_nein
+        and (gehirn.ist_ja(t) or _NACHNAME_CHECK_JA_RE.search(t))
+    )
+    # „Ja, aber der Nachname ist Busch“ darf das führende Ja niemals als
+    # Bestätigung des alten Werts verbuchen. Ein direkt mitgelieferter neuer
+    # Name ist die Korrektur; der ganze Satz geht noch einmal in die sichere
+    # Namensernte und wird anschließend erneut vorgelesen.
+    if korrektur_toks and (
+        (ist_nein and (hat_zuweisung or nein_mit_name))
+        or (ist_ja and hat_korrektur_signal)
+    ):
+        gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+        s["frage"] = "nachname"
+        sit.pop("nachnameCheckUnklar", None)
+        spur.merken(sit, "nachname-readback", "korrektur-gesprochen")
+        return "korrektur", None
+
+    if ist_ja:
+        s["nachnameCheck"] = "ja"
+        s["frage"] = ""
+        sit.pop("nachnameCheckUnklar", None)
+        spur.merken(sit, "nachname-readback", "bestaetigt")
+        return "bestaetigt", None
+
+    if ist_nein:
+        gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+        s["frage"] = "buchstabieren"
+        sit.pop("nachnameCheckUnklar", None)
+        spur.merken(sit, "nachname-readback", "verneint")
+        return "beantwortet", {
+            "text": (
+                "Entschuldigung. Dann bitte noch einmal: "
+                "Buchstabieren Sie den Nachnamen langsam; am Ende sagen Sie fertig."
+            )
+        }
+
+    # Nennt der Anrufer statt Ja/Nein direkt einen anderen Namen, ist das
+    # ebenfalls eine Korrektur. Fragen/Erzaehlungen bleiben dagegen beim
+    # unveraenderten Readback und gehen nie ans freie Modell.
+    if (
+        korrektur_toks
+        and len(korrektur_toks) <= 3
+        and not gehirn.ist_zwischenfrage(t)
+    ):
+        gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+        s["frage"] = "nachname"
+        sit.pop("nachnameCheckUnklar", None)
+        spur.merken(sit, "nachname-readback", "korrektur-gesprochen")
+        return "korrektur", None
+
+    unklar = int(sit.get("nachnameCheckUnklar") or 0) + 1
+    sit["nachnameCheckUnklar"] = unklar
+    if unklar >= 2:
+        gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+        s["frage"] = "buchstabieren"
+        sit.pop("nachnameCheckUnklar", None)
+        spur.merken(sit, "nachname-readback", "unklar-neustart")
+        return "beantwortet", {
+            "text": (
+                "Dann gehen wir auf Nummer sicher. "
+                "Buchstabieren Sie den Nachnamen bitte noch einmal langsam."
+            )
+        }
+    spur.merken(sit, "nachname-readback", "unklar")
+    return "beantwortet", {
+        "text": gehirn.nachname_check_frage(s)
+        + " Ein kurzes Ja oder Nein genügt."
+    }
+
+
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     """Ein Anrufer-Satz durch den Buchungsfluss. None => LLM übernimmt."""
     s = gehirn.sammler(sit)
@@ -3325,6 +3472,17 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     rr = _rueckruf_zug(sit, t, melde)
     if rr is not None:
         return rr
+
+    nachname_check_modus, nachname_check_antwort = _nachname_check_vorbereiten(
+        sit, t
+    )
+    if nachname_check_antwort is not None:
+        return nachname_check_antwort
+    if nachname_check_modus == "bestaetigt":
+        # Das Ja selbst darf in Verwaltung/Slotwahl keine zweite Bedeutung
+        # bekommen. Der User-Turn bleibt im Protokoll; nur der Fachfluss sieht
+        # nach der Bestaetigung einen leeren Erntetext.
+        t = ""
 
     if (s["modus"] == "buchen" and s["frage"] in {
             "name", "nachname", "vorname", "buchstabieren",
@@ -3563,6 +3721,18 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         )}
 
     neu = gehirn.einsammeln(sit, t)
+    if nachname_check_modus == "bestaetigt":
+        neu.add("nachnameCheck")
+    elif (
+        nachname_check_modus == "korrektur"
+        and _s(s.get("nachname"))
+        and bool({"name", "nachname"} & neu)
+    ):
+        # Auch eine direkt gesprochene Korrektur (ohne Buchstabenfolge) wird
+        # noch einmal vorgelesen; sie darf nicht am Sicherheitszug vorbeigehen.
+        s["nachnameCheck"] = "offen"
+        s["frage"] = "nachname_check"
+        neu.add("nachnameCheck")
     if hirn_modus_neu:
         neu.add("modus")
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
@@ -3591,6 +3761,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             "warte": True,
             "stilleMs": gehirn.stille_ms(s),
         }
+
+    if "nachnameCheck" in neu and _s(s.get("nachnameCheck")) == "offen":
+        s["frage"] = "nachname_check"
+        spur.merken(sit, "nachname-readback", "offen")
+        return {"text": gehirn.nachname_check_frage(s)}
 
     if "anruferWohl" in neu:
         # "Gut." auf den Hallo-Satz — Identitaet bleibt offen, nur die
@@ -3811,7 +3986,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # heraus verlorengegangen; Wache: test_pzr_kassen,
     # test_neupatient_klaert_erst_behandler_dann_pzr.
     if (fid not in {"telefon_check", "telefon_alt", "anrufer_check", "arzt_check", "arzt",
-                    "name", "nachname", "vorname", "vorname_check",
+                    "name", "nachname", "vorname", "vorname_check", "nachname_check",
                     "buchstabieren", "telefon"}
             and not (fid == "arzt" and "arztCheck" in neu)
             and "wunsch" not in neu

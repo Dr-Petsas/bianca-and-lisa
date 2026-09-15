@@ -3623,6 +3623,29 @@ nicht live überschreiben.
 - Regressionen mit den wortgleichen Live-Transkripten:
   `tests/test_blessing_namen.py`; Einführung nach V2.7, noch nicht deployt.
 
+## Blessing-Nachnamen vor der Suche rückbestätigen (W-BLESSING-NACHNAME-READBACK 15.09.2026 — nicht rückbauen)
+
+Nach A1/A2 konnte Bianca die Buchstabierung sicherer verstehen, verwendete das
+Ergebnis aber weiterhin SOFORT für Patienten- und Termin-Suchen. Ein einzelner
+Rest-Verhörer („Pusch“ statt „Busch“) traf damit eine falsche oder gar keine
+Akte, bevor der Anrufer die gespeicherte Schreibweise überhaupt gehört hatte.
+
+- Nur Blessing trägt `nachnameReadbackNachBuchstabieren=true`. Erkennt
+  `gehirn.einsammeln` in einer Namensfrage eine echte Buchstabierkette, setzt
+  es `nachnameCheck="offen"` und `frage="nachname_check"`.
+- `gehirn.nachname_check_frage` liest den Namen einmal samt Buchstabiertafel
+  vor. `flow._nachname_check_vorbereiten` lässt Patienten-/Bestandssuche erst
+  nach einem klaren Ja weiterlaufen. Nein oder eine neue Buchstabierkette
+  löscht nur den Nachnamen und die daran gebundene Akte; Vorname, Grund,
+  Wunschzeit und Slot bleiben erhalten.
+- Eine direkt gesprochene Korrektur wird ebenfalls noch einmal vorgelesen.
+  Zwei unklare Antworten starten die Buchstabierung frisch, statt das LLM oder
+  eine Endlosschleife zu öffnen. Qwen bleibt während `nachname_check` wie bei
+  jeder Namensfrage gesperrt.
+- MedDent, Thaler und Rüther tragen den Schalter nicht und bleiben ohne
+  zusätzlichen Gesprächszug. Regressionen und Suchsperren:
+  `tests/test_blessing_namen.py`; Einführung nach V2.7, noch nicht deployt.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

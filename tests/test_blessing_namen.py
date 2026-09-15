@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from bianca import agent, buchstaben, gehirn
-from kern import agentprofil, hirn
+from bianca import agent, buchstaben, flow, gehirn
+from kern import agentprofil, hirn, intent
 from kern.tenants import laden
 
 
@@ -64,12 +64,16 @@ def _kein_llm(*_args, **_kwargs):
 def test_blessing_namensschutz_ist_explizit_und_mandantenscharf():
     assert laden("blessing")["namensUnklarOhneEcho"] is True
     assert laden("blessing")["buchstabierSegmenteTrennen"] is True
+    assert laden("blessing")["nachnameReadbackNachBuchstabieren"] is True
     assert "namensUnklarOhneEcho" not in laden("meddent")
     assert "buchstabierSegmenteTrennen" not in laden("meddent")
+    assert "nachnameReadbackNachBuchstabieren" not in laden("meddent")
     assert "namensUnklarOhneEcho" not in laden("thaler")
     assert "buchstabierSegmenteTrennen" not in laden("thaler")
+    assert "nachnameReadbackNachBuchstabieren" not in laden("thaler")
     assert "namensUnklarOhneEcho" not in laden("ruether")
     assert "buchstabierSegmenteTrennen" not in laden("ruether")
+    assert "nachnameReadbackNachBuchstabieren" not in laden("ruether")
     # Live kommt Blessing aus der Cloud Function und wird auf die lokale
     # Fachbasis gemerged. Der Opt-in muss auch auf genau diesem Weg ankommen.
     live_tenant = agentprofil.tenant_von_pre({
@@ -84,6 +88,7 @@ def test_blessing_namensschutz_ist_explizit_und_mandantenscharf():
     }, did="+4921154244120")
     assert live_tenant and live_tenant["namensUnklarOhneEcho"] is True
     assert live_tenant["buchstabierSegmenteTrennen"] is True
+    assert live_tenant["nachnameReadbackNachBuchstabieren"] is True
 
 
 def test_blessing_aqu_bleibt_bei_der_namensfrage_statt_unklar_doppelsatz(
@@ -115,6 +120,7 @@ def test_blessing_aqu_bleibt_bei_der_namensfrage_statt_unklar_doppelsatz(
         ("nachname_korr", "Nachnamen"),
         ("vorname", "Vornamen"),
         ("vorname_check", "Vorname"),
+        ("nachname_check", "Nachname"),
     ],
 )
 def test_blessing_alle_namensfragen_fallen_ohne_echo_zurueck(
@@ -216,3 +222,238 @@ def test_standard_parser_und_meddent_bleiben_byte_identisch():
     gehirn.einsammeln(sit, live)
 
     assert sit["sammler"]["nachname"] == "Hallwachstmiatamia"
+
+
+def test_blessing_buchstabierter_nachname_wird_vor_der_naechsten_frage_vorgelesen(
+    monkeypatch,
+):
+    """A3: Erst Schreibweise bestätigen, dann Vorname/Kalender."""
+    sit = _sit(frage="nachname")
+    monkeypatch.setenv("INTENT_NACHZUG", "0")
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(agent.llm, "chat", _kein_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
+
+    aus = agent.user_turn(sit, "Pusch, P-U-S-C-H.")
+
+    assert aus is not None
+    assert "Pusch" in aus["text"]
+    assert "P wie Paula" in aus["text"]
+    assert aus["text"].rstrip().endswith("richtig?")
+    assert sit["sammler"]["frage"] == "nachname_check"
+    assert sit["sammler"]["nachnameCheck"] == "offen"
+    assert gehirn.stille_ms(sit["sammler"]) == 350
+    assert gehirn.FRAGE_VARIANTEN["nachname_check"]
+    assert "Vorname" not in aus["text"]
+
+    aus = agent.user_turn(sit, "Ja, genau.")
+
+    assert sit["sammler"]["nachnameCheck"] == "ja"
+    assert sit["sammler"]["frage"] == "vorname"
+    assert "Vorname" in aus["text"]
+    assert "P wie Paula" not in aus["text"]
+
+
+def test_blessing_readback_gilt_auch_wenn_buchstabierung_den_gehoerten_namen_bestaetigt(
+    monkeypatch,
+):
+    """Hauptfall: „Pusch“ wurde gehört, danach buchstabiert der Anrufer ihn."""
+    sit = _sit(frage="buchstabieren")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = False
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+
+    aus = flow.zug(sit, "P-U-S-C-H.")
+
+    assert "Pusch" in aus["text"]
+    assert "P wie Paula" in aus["text"]
+    assert s["nachnameCheck"] == "offen"
+    assert s["frage"] == "nachname_check"
+
+
+def test_blessing_nein_auf_nachname_readback_korrigiert_ohne_datenverlust(
+    monkeypatch,
+):
+    sit = _sit(frage="nachname")
+    s = sit["sammler"]
+    s["vorname"] = "Maria"
+    s["vornameQuelle"] = "gesagt"
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+
+    flow.zug(sit, "P-U-S-C-H.")
+    aus = flow.zug(sit, "Nein, B-U-S-C-H.")
+
+    assert aus is not None
+    assert sit["sammler"]["nachname"] == "Busch"
+    assert sit["sammler"]["vorname"] == "Maria"
+    assert sit["sammler"]["nachnameCheck"] == "offen"
+    assert sit["sammler"]["frage"] == "nachname_check"
+    assert "Busch" in aus["text"]
+    assert "B wie Berta" in aus["text"]
+    assert aus["text"].rstrip().endswith("richtig?")
+
+
+def test_blessing_zweimal_unklar_im_readback_startet_schreibweise_neu(
+    monkeypatch,
+):
+    """Kein neuer Zwei-Fragen-Loop innerhalb des A3-Sicherheitszugs."""
+    sit = _sit(frage="nachname_check")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = True
+    s["nachnameCheck"] = "offen"
+    monkeypatch.setenv("INTENT_SCHICHT", "0")
+    monkeypatch.setenv("INTENT_NACHZUG", "0")
+    monkeypatch.setattr(agent.tasks, "zug", lambda *_a, **_k: None)
+    monkeypatch.setattr(agent.llm, "chat", _kein_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
+
+    eins = agent.user_turn(sit, "What?")
+    zwei = agent.user_turn(sit, "Hä?")
+
+    assert "Pusch" in eins["text"]
+    assert "P wie Paula" in eins["text"]
+    assert "Buchstabieren Sie den Nachnamen bitte noch einmal" in zwei["text"]
+    assert s["nachname"] == ""
+    assert s["nachnameCheck"] == ""
+    assert s["frage"] == "buchstabieren"
+
+
+def test_blessing_nochmal_wiederholt_readback_und_wird_nicht_zum_namen():
+    sit = _sit(frage="nachname_check")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = True
+    s["nachnameCheck"] = "offen"
+
+    modus, aus = flow._nachname_check_vorbereiten(sit, "Bitte noch einmal.")
+
+    assert modus == "beantwortet"
+    assert "Pusch" in aus["text"]
+    assert "P wie Paula" in aus["text"]
+    assert s["nachname"] == "Pusch"
+    assert s["nachnameCheck"] == "offen"
+
+
+@pytest.mark.parametrize(
+    "gesagt",
+    ["Pusch ist richtig.", "Der Nachname stimmt.", "So stimmt es."],
+)
+def test_blessing_readback_versteht_natuerliche_bestaetigungen(gesagt):
+    sit = _sit(frage="nachname_check")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = True
+    s["nachnameCheck"] = "offen"
+
+    modus, aus = flow._nachname_check_vorbereiten(sit, gesagt)
+
+    assert (modus, aus) == ("bestaetigt", None)
+    assert s["nachname"] == "Pusch"
+    assert s["nachnameCheck"] == "ja"
+
+
+@pytest.mark.parametrize(
+    "gesagt",
+    [
+        "Das ist falsch.",
+        "Der Nachname stimmt nicht.",
+        "Nicht richtig.",
+        "Falsch verstanden.",
+        "Das haben Sie falsch verstanden.",
+        "Das ist nicht mein Nachname.",
+    ],
+)
+def test_blessing_readback_versteht_natuerliche_verneinungen(gesagt):
+    sit = _sit(frage="nachname_check")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = True
+    s["nachnameCheck"] = "offen"
+
+    modus, aus = flow._nachname_check_vorbereiten(sit, gesagt)
+
+    assert modus == "beantwortet"
+    assert "Buchstabieren Sie den Nachnamen" in aus["text"]
+    assert s["nachname"] == ""
+    assert s["nachnameCheck"] == ""
+
+
+@pytest.mark.parametrize(
+    "gesagt",
+    ["Nein, Busch.", "Nein, der Name ist Busch."],
+)
+def test_blessing_readback_erntet_mitgelieferte_korrektur(gesagt):
+    sit = _sit(frage="nachname_check")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = True
+    s["nachnameCheck"] = "offen"
+
+    aus = flow.zug(sit, gesagt)
+
+    assert aus is not None
+    assert "Busch" in aus["text"]
+    assert "B wie Berta" in aus["text"]
+    assert s["nachname"] == "Busch"
+    assert s["nachnameCheck"] == "offen"
+
+
+def test_blessing_readback_ueberhoert_korrektur_nach_ja_aber_nicht():
+    sit = _sit(frage="nachname_check")
+    s = sit["sammler"]
+    s["nachname"] = "Pusch"
+    s["buchstabiert"] = True
+    s["nachnameCheck"] = "offen"
+    gesagt = "Ja, aber der Nachname ist Busch."
+
+    assert intent.formularantwort_mit_zusatz(sit, gesagt) is None
+    aus = flow.zug(sit, gesagt)
+
+    assert aus is not None
+    assert "Busch" in aus["text"]
+    assert "B wie Berta" in aus["text"]
+    assert "P wie Paula" not in aus["text"]
+    assert s["nachname"] == "Busch"
+    assert s["nachnameCheck"] == "offen"
+    assert s["frage"] == "nachname_check"
+
+
+def test_blessing_nachname_readback_sperrt_bestandssuche_bis_zum_ja(
+    monkeypatch,
+):
+    sit = _sit(frage="nachname")
+    s = sit["sammler"]
+    s["modus"] = "auskunft"
+    aufrufe: list[tuple[str, set[str]]] = []
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+
+    def _verwaltung(_sit, gesagt, neu, _melde):
+        aufrufe.append((gesagt, set(neu)))
+        return {"text": "Suche gestartet."}
+
+    monkeypatch.setattr(flow.verwalten, "zug", _verwaltung)
+
+    aus = flow.zug(sit, "P-U-S-C-H.")
+
+    assert "P wie Paula" in aus["text"]
+    assert aufrufe == [], "vor dem Readback-Ja darf keine Bestandssuche starten"
+
+    aus = flow.zug(sit, "Ja.")
+
+    assert aus == {"text": "Suche gestartet."}
+    assert aufrufe == [("", {"nachnameCheck"})]
+
+
+def test_meddent_buchstabieren_bleibt_ohne_zusaetzlichen_readback(monkeypatch):
+    """Gegenprobe: A3 ist Blessing-Opt-in, kein Prozess-weites Extra-Turn."""
+    sit = _sit("meddent", frage="nachname")
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+
+    aus = flow.zug(sit, "P-U-S-C-H.")
+
+    assert sit["sammler"]["nachname"] == "Pusch"
+    assert not sit["sammler"].get("nachnameCheck")
+    assert sit["sammler"]["frage"] == "vorname"
+    assert "Vorname" in aus["text"]
