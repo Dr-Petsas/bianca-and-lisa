@@ -236,7 +236,7 @@ def test_behandlung_frage_blessing_ohne_zahnreinigung():
     text = (r or {}).get("text") or ""
     assert "Zahnreinigung" not in text
     assert "Krebs" not in text
-    assert "Kontrolle" in text
+    assert "Hautscreening" in text
     assert "Botox" in text
 
 
@@ -269,7 +269,7 @@ def test_blessing_rueckblick_fragt_noch_darum_ohne_krebs():
     assert "Krebs" not in text
     assert "Letztes Mal" in text
     assert "immer noch" in text
-    assert "Kontrolle" in text
+    assert "Hautscreening" in text
     ein = flow._einschub(sit)
     assert ein and "Krebs" not in ein["text"]
     assert s["frage"] == "rueckblick"

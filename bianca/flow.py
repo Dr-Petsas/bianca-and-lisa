@@ -230,6 +230,25 @@ _SMS_LINK_SATZ = (
     " In der SMS ist auch ein Link — darüber füllen Sie bitte vorab kurz die"
     " Unterlagen für Ihren Termin aus, zum Beispiel Anamnese und Datenschutz."
 )
+_SMS_LINK_KOMPAKT = (
+    " Die Bestätigung und der Link zu den Unterlagen kommen per SMS."
+)
+# Live Blessing 89daafaa, 15.09.2026: Nach erfolgreicher Buchung bat der
+# Anrufer viermal um eine Terminnotiz. `phase=gebucht` kannte diesen Auftrag
+# nicht und antwortete jedes Mal nur mit "Sonst noch?". Eine ausdrücklich
+# verlangte Nachricht ist ein eigener, deterministischer Mini-Flow.
+_TERMIN_NOTIZ_WUNSCH_RE = re.compile(
+    r"\b(?:notiz|nachricht|hinweis)\w*\b|"
+    r"\b(?:mitgeb|ausricht|sag|sagen|mitteil)\w*\b"
+    r"[^.!?]{0,50}\b(?:doktor|arzt|ärztin|aerztin)\w*\b",
+    re.I,
+)
+_TERMIN_NOTIZ_INHALT_RE = re.compile(
+    r"\b(?:dass|weil|wegen)\b\s+.+|"
+    r"\b(?:nehme|habe|bin|bekomme|vertrage|allerg|medikament|"
+    r"beschwerd|schmerz|befund|frage)\w*\b",
+    re.I,
+)
 _KUERZEL_RE = re.compile(r"^[A-ZÄÖÜ]{2,4}\s+")
 
 
@@ -1126,18 +1145,10 @@ def _nach_ok_buchen(sit: dict, t: str, melde: Melde = None) -> dict:
         s["arztNotizFrage"] = "ja"
         s["frage"] = ""
         return _buchen(sit, melde)
-    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-    if tenant.get("arztNotizAutomatisch") is True:
-        # Blessing kompakt: keinen zusätzlichen Meta-Turn erzwingen. Echte
-        # Abweichungen/Originalgründe schreibt _buchen weiterhin automatisch
-        # in die Terminnotiz; ausdrücklich Gesagtes wurde oben geerntet.
-        s["arztNotizFrage"] = "nein"
-        s["frage"] = ""
-        return _buchen(sit, melde)
     s["arztNotizFrage"] = "gefragt"
     s["frage"] = "arzt_notiz"
     sit.pop("arztNotizUnklar", None)
-    return {"text": gehirn.arzt_notiz_frage()}
+    return {"text": gehirn.arzt_notiz_frage(s, sit)}
 
 
 def _pzr_weiter(sit: dict, vorsatz: str = "", melde: Melde = None) -> dict:
@@ -1267,7 +1278,7 @@ def _arzt_notiz_zug(sit: dict, t: str, melde: Melde = None) -> dict:
             s["arztNotizFrage"] = "diktat"
             s["frage"] = "arzt_notiz_diktat"
             sit.pop("arztNotizUnklar", None)
-            return {"text": gehirn.arzt_notiz_diktat_frage()}
+            return {"text": gehirn.arzt_notiz_diktat_frage(s, sit)}
         if gehirn.hat_arzt_notiz_inhalt(t):
             _arzt_notiz_schliessen(sit, notiz=gehirn.arzt_notiz_aus(t))
             return _buchen(sit, melde)
@@ -1281,6 +1292,137 @@ def _arzt_notiz_zug(sit: dict, t: str, melde: Melde = None) -> dict:
         return _buchen(sit, melde)
     _arzt_notiz_schliessen(sit)
     return _buchen(sit, melde)
+
+
+def _termin_notiz_inhalt(text: str) -> str:
+    """Nur den eigentlichen Nachrichteninhalt aus einer Terminnotiz-Bitte.
+
+    "Kannst du eine Notiz eintragen?" ist ein Auftrag, aber noch kein Inhalt.
+    "Bitte schreiben Sie: Ich nehme Marcumar" liefert dagegen nur den Teil
+    hinter dem Doppelpunkt. Nie den Meta-Satz selbst ins Terminpopup schreiben.
+    """
+    t = _s(text).strip(" \t\r\n\"„“")
+    if not t:
+        return ""
+    if ":" in t:
+        links, rechts = t.split(":", 1)
+        if _TERMIN_NOTIZ_WUNSCH_RE.search(links) and _s(rechts):
+            return _s(rechts).strip(" .!?\"„“")
+    m = re.search(r"\b(?:dass|weil|wegen)\b\s+.+", t, re.I)
+    if m:
+        return _s(m.group(0)).strip(" .!?\"„“")
+    if _TERMIN_NOTIZ_WUNSCH_RE.search(t) and not _TERMIN_NOTIZ_INHALT_RE.search(t):
+        return ""
+    # "Sagen Sie der Ärztin, ich nehme ..." — der Auftrag vor dem Komma
+    # gehört nicht in die Nachricht.
+    if "," in t and _TERMIN_NOTIZ_WUNSCH_RE.search(t.split(",", 1)[0]):
+        rest = _s(t.split(",", 1)[1]).strip(" .!?\"„“")
+        if rest:
+            return rest[:300]
+    return t.strip(" .!?\"„“")[:300]
+
+
+def _termin_notiz_abschluss(sit: dict, text: str) -> dict:
+    """Nach dem Notiz-Mini-Flow nie wieder in die Sonst-noch-Schleife."""
+    s = gehirn.sammler(sit)
+    s["phase"] = "gebucht"
+    s["frage"] = ""
+    sit["flussFrage"] = ""
+    sit.pop("terminNotiz", None)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("buchungAbschlussKompakt") is True:
+        return {
+            "text": f"{_s(text)} Auf Wiederhören.".strip(),
+            "hangup": abschied.an(),
+            "_wiederholungErlaubt": True,
+        }
+    return {"text": f"{_s(text)} {_sonst_noch_frage(sit)}".strip()}
+
+
+def _termin_notiz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
+    """Ausdrückliche Nachricht NACH einer Buchung sicher in den Termin schreiben.
+
+    Der Inhalt wird erst rückbestätigt und erst nach einem klaren Ja
+    geschrieben. Meta-Bitten ohne Inhalt bekommen genau eine Inhaltsfrage.
+    """
+    s = gehirn.sammler(sit)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("terminNotizNachBuchung") is not True:
+        return None
+    frage = _s(s.get("frage"))
+    offen = frage in {"termin_notiz", "termin_notiz_check"}
+    if not offen and not _TERMIN_NOTIZ_WUNSCH_RE.search(text):
+        return None
+
+    stand = sit.get("terminNotiz")
+    if not isinstance(stand, dict):
+        stand = {"text": "", "unklar": 0}
+        sit["terminNotiz"] = stand
+
+    if frage == "termin_notiz_check":
+        if gehirn.ist_ja(text) and not gehirn.ist_nein(text):
+            notiz = _s(stand.get("text"))
+            if not notiz:
+                s["frage"] = "termin_notiz"
+                return {"text": gehirn.arzt_notiz_diktat_frage(s, sit)}
+            if melde:
+                melde("note_appointment")
+            res = kal.note_appointment(
+                sit["tenant"],
+                _ctx_bauen(sit),
+                sit,
+                note=f"Anrufer an die Ärztin: „{notiz}“ — bitte beim Termin berücksichtigen.",
+            )
+            if not isinstance(res, dict):
+                res = {}
+            merke_tool(sit, "note_appointment", res)
+            sit["lastNote"] = res
+            if res.get("ok"):
+                gesprochen = (
+                    "Im Test würde die Nachricht jetzt in den Termin geschrieben."
+                    if res.get("dryRun")
+                    else "Die Nachricht steht jetzt im Termin."
+                )
+                spur.merken(sit, "termin-notiz", "geschrieben")
+                return _termin_notiz_abschluss(sit, gesprochen)
+            verwalten.abgeben_notiz(
+                sit,
+                was=f"Nachricht zum gebuchten Termin nachtragen: {notiz}",
+            )
+            spur.merken(sit, "termin-notiz", "write-fehler")
+            return _termin_notiz_abschluss(
+                sit,
+                "Die Nachricht konnte ich nicht sicher direkt am Termin speichern; "
+                "die Praxis erhält dafür einen Rückrufvermerk.",
+            )
+        if gehirn.ist_nein(text):
+            stand["text"] = ""
+            stand["unklar"] = 0
+            s["frage"] = "termin_notiz"
+            return {"text": "Alles klar. Was möchten Sie stattdessen in den Termin schreiben?"}
+        stand["unklar"] = int(stand.get("unklar") or 0) + 1
+        if stand["unklar"] >= 2:
+            stand["text"] = ""
+            stand["unklar"] = 0
+            s["frage"] = "termin_notiz"
+            return {"text": "Dann gehen wir auf Nummer sicher. Was soll als Nachricht in den Termin?"}
+        s["frage"] = "termin_notiz_check"
+        return {"text": "Soll ich diese Nachricht genau so in den Termin schreiben? Ein kurzes Ja oder Nein genügt."}
+
+    inhalt = _termin_notiz_inhalt(text)
+    if not inhalt:
+        s["frage"] = "termin_notiz"
+        stand["unklar"] = int(stand.get("unklar") or 0) + 1
+        spur.merken(sit, "termin-notiz", "inhalt-erfragen")
+        return {"text": gehirn.arzt_notiz_diktat_frage(s, sit)}
+
+    stand["text"] = inhalt
+    stand["unklar"] = 0
+    s["frage"] = "termin_notiz_check"
+    spur.merken(sit, "termin-notiz", "readback")
+    return {
+        "text": f"Ich habe notiert: „{inhalt}“. Soll ich genau das in den Termin schreiben?"
+    }
 
 
 def _telefon_tor(sit: dict) -> dict | None:
@@ -1351,6 +1493,8 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         "spoken": res.get("spoken") or "",
     }
     if res.get("ok") and (res.get("booked") or res.get("dryRun")):
+        tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+        abschluss_kompakt = tenant.get("buchungAbschlussKompakt") is True
         s["phase"] = "gebucht"
         s["frage"] = ""
         sit.pop("buchIntent", None)
@@ -1373,8 +1517,14 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 # Frage + masUpdatePatientPhone); dieser Zweig ist der Rest:
                 # Entscheidung "SMS an die alte", ungeklaert oder Update kaputt.
                 if s["telefonAlt"] == "akte":
-                    text += (" Die Bestätigung kommt gleich per SMS an die Nummer aus"
-                             " Ihrer Akte." + _SMS_LINK_SATZ)
+                    if abschluss_kompakt:
+                        text += (
+                            " Die Bestätigung und der Link zu den Unterlagen kommen "
+                            "per SMS an die Nummer aus Ihrer Akte."
+                        )
+                    else:
+                        text += (" Die Bestätigung kommt gleich per SMS an die Nummer aus"
+                                 " Ihrer Akte." + _SMS_LINK_SATZ)
                 else:
                     if melde:
                         melde("note_appointment")
@@ -1404,7 +1554,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                             "speichern; ich habe dafür einen Rückrufvermerk angelegt."
                         )
             elif s["telefon"] or s["aktePhone"]:
-                text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
+                if abschluss_kompakt:
+                    text += _SMS_LINK_KOMPAKT
+                else:
+                    text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
             # Praxis-Notizen ans Terminpopup (29.08.2026): unklares Geschlecht
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
@@ -1552,7 +1705,21 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                         " Die Zusatzhinweise konnte ich nicht sicher am Termin "
                         "speichern; ich habe dafür einen Rückrufvermerk angelegt."
                     )
-            tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+            if abschluss_kompakt:
+                # Blessing: Nach Ergebnis, SMS-Link und bereits VORHER
+                # abgefragter Arzt-Nachricht kein neues Themenpaket öffnen.
+                # Der Live-Zug 89daafaa dauerte sonst rund 16 Sekunden und
+                # mündete in fünf "Sonst noch?"-Antworten.
+                sit.pop("sonstNochGefragt", None)
+                s["frage"] = ""
+                sit["flussFrage"] = ""
+                text += " Auf Wiederhören."
+                return {
+                    "text": text,
+                    "book": book,
+                    "hangup": abschied.an(),
+                    "_wiederholungErlaubt": True,
+                }
             if tenant.get("sonstNochNurNachErfolg") is True:
                 text += " " + _sonst_noch_frage(sit)
             else:
@@ -3120,6 +3287,24 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
         return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
     if feld == "grund":
         alt = _s(s.get("grund"))
+        # Live Blessing 89daafaa: intern war bereits Hautkrebs-Screening
+        # gewählt und der FRÜHESTE Slot bestätigt. Nur die Sprechschicht hatte
+        # daraus fälschlich "Kontrolle" gemacht. Der verständliche Einwand
+        # wurde wie ein echter Motivwechsel behandelt und löschte dadurch
+        # Auswahl + relative Wahl. Wenn die erneute Ernte auf DIESELBE
+        # Motiv-ID kommt, war der Kalenderrahmen die ganze Zeit richtig:
+        # Auswahl exakt erhalten, keine zweite Suche und keine zweite Slotwahl.
+        alt_motiv_id = _s(s.get("motivId"))
+        alt_slot = _s(s.get("slotIso"))
+        alt_arzt = _s((s.get("arzt") or {}).get("calendarId"))
+        fehlend = object()
+        alt_terminrahmen = {
+            key: sit.get(key, fehlend)
+            for key in (
+                "slotVorrat", "vorratKey", "vorratGemerkt", "vorratDispatch",
+                "vorratFuer", "offered", "angebotKalender", "buchIntent",
+            )
+        }
         s["grund"] = ""
         s["grundWortlaut"] = ""
         s["motivId"] = ""
@@ -3130,7 +3315,6 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
         _vorrat_leeren(sit)
         neu = gehirn.einsammeln(sit, t)
         sit["ernteZuletzt"] = sorted(neu)
-        hintergrund.anstossen(sit)
         if streng and _s(s["grund"]) == alt:
             # Der Widerspruch nennt nur den ALTEN Grund ("Kontrolle stimmt
             # nicht") — nicht gleich wieder festschreiben.
@@ -3138,6 +3322,27 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
             s["grundWortlaut"] = ""
             s["motivId"] = ""
             s["motivName"] = ""
+        selbes_motiv = bool(
+            alt_motiv_id
+            and alt_motiv_id == _s(s.get("motivId"))
+            and alt_arzt == _s((s.get("arzt") or {}).get("calendarId"))
+        )
+        if selbes_motiv and alt_slot:
+            for key, wert in alt_terminrahmen.items():
+                if wert is fehlend:
+                    sit.pop(key, None)
+                else:
+                    sit[key] = wert
+            s["slotIso"] = alt_slot
+            s["phase"] = "bestaetigen"
+            s["frage"] = "bestaetigung"
+            rb = _readback(sit)
+            rb["text"] = rb["text"].replace(
+                "Dann halte ich fest:", "Korrigiert. Ausgewählt bleibt:", 1)
+            rb["_wiederholungErlaubt"] = True
+            spur.merken(sit, "motiv-korrektur", "gleiches-motiv-slot-behalten")
+            return rb
+        hintergrund.anstossen(sit)
         if s["grund"]:
             fid, frage = gehirn.naechste_frage(sit)
             s["frage"] = fid
@@ -3517,6 +3722,15 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         from kern import hirn as kern_hirn
         kern_hirn.erledigt(sit)
         return {"text": akut_text}
+
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("terminNotizNachBuchung") is True and _schon_gebucht(sit) and (
+        _s(s.get("frage")) in {"termin_notiz", "termin_notiz_check"}
+        or _TERMIN_NOTIZ_WUNSCH_RE.search(t)
+    ):
+        termin_notiz = _termin_notiz_zug(sit, t, melde)
+        if termin_notiz is not None:
+            return termin_notiz
 
     dokument_text = praxisregeln.unterlagen_antwort(sit.get("tenant"), t)
     if dokument_text:

@@ -3756,12 +3756,12 @@ Regressionen: `tests/test_blessing_motive.py`; seit V2.8 live.
 ## Blessing kurz und aufgabenbezogen (W-BLESSING-KNAPP 15.09.2026 — nicht rückbauen)
 
 Der Geschwätz-Befund vom 15.09. zeigte vor allem zwei Fragen in einem
-Unklar-Satz, „Ich bin die Neue“, Wohlseins-/Behandler-/Doktor-Notizfragen,
+Unklar-Satz, „Ich bin die Neue“, Wohlseins-/Behandlerfragen,
 den langen KI-Erklärtext bei einem Menschenwunsch und offene
 „Sonst noch?“-Nachläufe ohne Ergebnis.
 
 - Nur Blessing trägt die Schalter `gespraechKompakt`, `halloKompakt`,
-  `anmeldungKurz`, `arztNotizAutomatisch`, `selbstCheckNurBeiSignal`,
+  `anmeldungKurz`, `selbstCheckNurBeiSignal`,
   `sonstNochNurNachErfolg` und `presenceEinmal`.
 - Unklare Schnipsel bekommen genau EINE kurze offene Jobfrage; ein echtes
   Hautfachwort bekommt die gezielte Terminfrage. Ein reiner Gruß führt ohne
@@ -3778,6 +3778,41 @@ den langen KI-Erklärtext bei einem Menschenwunsch und offene
 
 Regressionen: `tests/test_blessing_knapp.py`. Andere Mandanten tragen keinen
 dieser Schalter und bleiben im bisherigen Pfad.
+
+## Blessing ruhig, relativ und ohne Endschleife (W-BLESSING-RUHE 15.09.2026 — nicht rückbauen)
+
+Live-Anruf `89daafaa50454560bff69c786a441296`: Der Anrufer wählte aus drei
+Terminen „den frühestmöglichen“. Intern war bereits das richtige
+Hautkrebs-Screening-Motiv gewählt, die Sprechschicht nannte es jedoch
+„Kontrolle“. Auf den berechtigten Einwand löschte der Änderungszweig den
+ausgewählten frühen Termin und fragte erneut nach einem Slot. Nach der
+erfolgreichen Buchung kamen Termin, SMS, Link, Unterlagen und „Sonst noch?“
+in einem rund 16 Sekunden langen Block. Vier Bitten, noch eine Notiz für die
+Ärztin einzutragen, wurden mit derselben Sonst-noch-Frage beantwortet.
+
+- `sprech.ohne_krebs` sagt weiter nie das Wort „Krebs“, unterscheidet aber
+  jetzt `Hautscreening`/`Hautvorsorge` von einer allgemeinen Kontrolle.
+- Korrigiert der Anrufer nur diese Ansage und die erneut ermittelte
+  `motivId` ist identisch, bleiben `slotIso`, Angebot, Kalender und die
+  relative Wahl erhalten. Ein echter Motivwechsel leert den Slot weiter.
+- Blessing fragt vor dem Schreiben in EINEM eigenen Zug:
+  „Möchten Sie der Ärztin für den Termin noch eine Nachricht zur Vorbereitung
+  mitgeben?“ (`arztNotizFrageText`; kein `arztNotizAutomatisch` mehr).
+- Ein ausdrücklicher Notizwunsch nach einer Buchung läuft über den
+  mandantenscharfen Mini-Flow `terminNotizNachBuchung`: Inhalt erfragen,
+  einmal rücklesen, erst nach Ja `masAppointmentNote`; bei Schreibfehler
+  echter Rückrufvermerk, niemals wieder „Sonst noch?“.
+- `buchungAbschlussKompakt` spricht nach einem Erfolg nur Terminbestätigung,
+  die kurze SMS-/Unterlagen-Info und den Abschied; keine neue offene Frage.
+- Ein Task-Auswahl-LLM darf keinen P5-Vorsatz mehr sprechen, bevor feststeht,
+  was der sichere Jobpfad antwortet. Ein Gruß mitten in einem Formular
+  wiederholt nur die offene Frage, ohne neue Begrüßung. So kommt pro Zug nur
+  ein Thema aus dem Mund.
+- Die neuen Verhaltensschalter und Texte stehen nur in `tenants/blessing.json`;
+  MedDent, Thaler und Rüther behalten ihren bisherigen Pfad.
+
+Regressionen: `tests/test_anruf_89daafaa.py`, `tests/test_blessing_knapp.py`,
+`tests/test_sprech.py`, `tests/test_zahn_katalog.py`.
 
 ## Blessing hält Slot-Ablehnungen fest (W-BLESSING-SLOTPRÄFERENZ 15.09.2026 — nicht rückbauen)
 

@@ -15,7 +15,8 @@ KOMPAKT_FLAGS = {
     "gespraechKompakt",
     "halloKompakt",
     "anmeldungKurz",
-    "arztNotizAutomatisch",
+    "terminNotizNachBuchung",
+    "buchungAbschlussKompakt",
     "selbstCheckNurBeiSignal",
     "sonstNochNurNachErfolg",
     "presenceEinmal",
@@ -180,20 +181,26 @@ def test_mensch_wunsch_bekommt_einen_kurzen_satz():
     assert "verbessere mich" not in text
 
 
-def test_doktor_notizfrage_entfaellt(monkeypatch):
+def test_doktor_nachricht_bleibt_ein_eigener_kurzer_schritt(monkeypatch):
     sit = _sit(modus="buchen")
     s = gehirn.sammler(sit)
     s.update({"pzr": "nein", "arztNotizFrage": "", "frage": "bestaetigung"})
     monkeypatch.setattr(gehirn, "pzr_noch_fragen", lambda *a, **k: False)
     monkeypatch.setattr(
-        flow, "_buchen", lambda _sit, melde=None: {"text": "GEBUCHT", "book": {}}
+        flow,
+        "_buchen",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("Nachricht muss vor dem Buchen geklärt werden")
+        ),
     )
 
     aus = flow._nach_ok_buchen(sit, "Ja.")
 
-    assert aus["text"] == "GEBUCHT"
-    assert s["arztNotizFrage"] == "nein"
-    assert s["frage"] == ""
+    assert aus["text"].count("?") == 1
+    assert "Ärztin" in aus["text"]
+    assert "Vorbereitung" in aus["text"]
+    assert s["arztNotizFrage"] == "gefragt"
+    assert s["frage"] == "arzt_notiz"
 
 
 def test_freies_llm_geschwaetz_wird_durch_jobfrage_ersetzt(monkeypatch):

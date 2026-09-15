@@ -379,16 +379,32 @@ def _scrub_tech(text: str) -> str:
     return _s(out.replace("()", "").replace("( )", ""))
 
 
-# Chef 08.09.2026: Krebs wird am Telefon nie gesagt — immer Kontrolle.
+# Chef 08.09.2026: Das Wort "Krebs" wird am Telefon nicht gesagt.
+# Live Blessing 15.09.2026 zeigte aber die teure Nebenwirkung der pauschalen
+# Ersetzung: "Hautkrebs-Screening" wurde als "Kontrolle" vorgelesen. Der
+# Anrufer widersprach, obwohl intern bereits das richtige Screening-Motiv
+# gewählt war. Spezifische Haut-Vorsorge bleibt deshalb spezifisch, nur das
+# belastete Wort fällt: Hautscreening/Hautvorsorge statt Kontrolle.
 _KREBS_TOKEN_RE = re.compile(r"[A-Za-zÄÖÜäöüß\-]*[Kk]rebs[A-Za-zÄÖÜäöüß\-]*")
+_HAUTKREBS_SPEZIFISCH = (
+    (re.compile(r"\bHautkrebs[\s-]*Screening\b", re.I), "Hautscreening"),
+    (re.compile(r"\bHautkrebsscreening\b", re.I), "Hautscreening"),
+    (re.compile(r"\bHautkrebs[\s-]*Vorsorge\b", re.I), "Hautvorsorge"),
+    (re.compile(r"\bHautkrebsvorsorge\b", re.I), "Hautvorsorge"),
+    (re.compile(r"\bHautkrebs[\s-]*Untersuchung\b", re.I), "Hautuntersuchung"),
+    (re.compile(r"\bHautkrebsuntersuchung\b", re.I), "Hautuntersuchung"),
+)
 
 
 def ohne_krebs(text: str) -> str:
-    """Hautkrebsscreening / Krebs → Kontrolle. Interner Motivname darf bleiben."""
+    """Krebswort entfernen, ohne ein konkretes Hautscreening umzubenennen."""
     roh = _s(text)
     if not roh or "krebs" not in roh.lower():
         return roh
-    out = _KREBS_TOKEN_RE.sub("Kontrolle", roh)
+    out = roh
+    for cre, ersatz in _HAUTKREBS_SPEZIFISCH:
+        out = cre.sub(ersatz, out)
+    out = _KREBS_TOKEN_RE.sub("Kontrolle", out)
     out = re.sub(r"\bzum\s+Kontrolle\b", "zur Kontrolle", out, flags=re.I)
     out = re.sub(r"\bden\s+Kontrolle\b", "die Kontrolle", out, flags=re.I)
     out = re.sub(r"\bein\s+Kontrolle\b", "eine Kontrolle", out, flags=re.I)

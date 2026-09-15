@@ -1041,15 +1041,23 @@ _ARZT_NOTIZ_NEIN_RE = re.compile(
 )
 
 
-def arzt_notiz_frage(s: dict | None = None) -> str:
+def arzt_notiz_frage(s: dict | None = None, sit: dict | None = None) -> str:
     """Letzte Frage vor dem Eintragen — Motiv und Slot stehen schon."""
+    tenant = sit.get("tenant") if isinstance((sit or {}).get("tenant"), dict) else {}
+    eigener_text = _s(tenant.get("arztNotizFrageText"))
+    if eigener_text:
+        return eigener_text
     return (
         "Soll ich für den Termin noch eine Notiz für den Doktor anlegen? "
         "Irgendeine besondere Frage, auf die er eingehen soll?"
     )
 
 
-def arzt_notiz_diktat_frage(s: dict | None = None) -> str:
+def arzt_notiz_diktat_frage(s: dict | None = None, sit: dict | None = None) -> str:
+    tenant = sit.get("tenant") if isinstance((sit or {}).get("tenant"), dict) else {}
+    eigener_text = _s(tenant.get("arztNotizDiktatText"))
+    if eigener_text:
+        return eigener_text
     return "Was soll ich dem Doktor mitgeben?"
 
 
@@ -2618,6 +2626,14 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Was soll der Doktor zum Termin wissen?",
         "Was soll ich dem Doktor auf den Termin schreiben?",
     ),
+    "termin_notiz": (
+        "Welchen Inhalt soll ich als Nachricht in den Termin schreiben?",
+        "Was möchten Sie der Praxis für den Termin noch mitteilen?",
+    ),
+    "termin_notiz_check": (
+        "Soll ich diese Nachricht genau so in den Termin schreiben?",
+        "Ist die Nachricht so richtig?",
+    ),
     "bleaching": (
         "Möchten Sie die Zähne bei der Zahnreinigung auch gleich aufhellen lassen?",
         "Soll die Zahnaufhellung mit dazu — ja oder nein?",
@@ -3852,7 +3868,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "rueckblick", "folge_kontrolle", "anrufer_check",
                 "fuer_wen_check", "arzt_check", "vorname_check", "nachname_check",
                 "frisch_absage_ok", "absage_ok",
-                "termin_anbieten", "arzt_notiz",
+                "termin_anbieten", "arzt_notiz", "termin_notiz_check",
                 # W-BESTAND-ANSAGE: "Passt der so?" / "Sonst noch etwas?" —
                 # kurze Ja/Nein-/"alles gut"-Antworten.
                 "termin_ok", "sonst_noch", "termin_aendern",
@@ -3861,7 +3877,9 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.
-_STILLE_DIKTAT = {"telefon", "buchstabieren", "nachname", "arzt_notiz_diktat"}
+_STILLE_DIKTAT = {
+    "telefon", "buchstabieren", "nachname", "arzt_notiz_diktat", "termin_notiz",
+}
 
 
 def stille_ms(s: dict) -> int:

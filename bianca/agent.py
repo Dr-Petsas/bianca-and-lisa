@@ -158,6 +158,8 @@ _FRAGE_KERN = {
     "termin_anbieten": r"termin|zahnreinigung|brauchen",
     "arzt_notiz": r"notiz|doktor|besondere\s+frage|eingehen",
     "arzt_notiz_diktat": r"doktor|mitgeben|notiz",
+    "termin_notiz": r"notiz|nachricht|mitteilen|inhalt",
+    "termin_notiz_check": r"notiz|nachricht|termin|richtig|schreiben",
     # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot + Zahnersatz-Check.
     "bleaching": r"aufhell|bleach|zahnaufhellung",
     "bleaching_check": r"krone|brücke|bruecke|veneer|implantat|zahnersatz",
@@ -225,6 +227,12 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         return f"Im Angebot sind: {angebote}. Welcher passt Ihnen?" if angebote else "Welcher der genannten Termine passt Ihnen?"
     if fid == "bestaetigung":
         return "Soll ich den Termin so fest eintragen?"
+    if fid == "arzt_notiz":
+        return gehirn.arzt_notiz_frage(sit.get("sammler") or {}, sit)
+    if fid == "arzt_notiz_diktat":
+        return gehirn.arzt_notiz_diktat_frage(sit.get("sammler") or {}, sit)
+    if fid in {"termin_notiz", "termin_notiz_check"}:
+        return (gehirn.FRAGE_VARIANTEN.get(fid) or ("",))[0]
     if fid == "pzr":
         # Weiche Zusatzfrage (30.08.2026) — naechste_frage kennt sie nicht,
         # der Anker soll sie nach einer LLM-Antwort trotzdem zurueckholen.
@@ -1738,7 +1746,14 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     sit.pop("ganzsatzHinweisGegeben", None)
 
     if gespraech.kompakt_aktiv(sit) and _KOMPAKT_GRUSS_RE.match(text_in):
-        text = gespraech.kompakt_jobfrage(sit, begruessen=True)
+        offene = _offene_frage(sit)
+        text = gespraech.kompakt_jobfrage(
+            sit,
+            offene_frage=offene,
+            # Mitten in einem Formular ist "Guten Tag" ein neues Thema und
+            # wirkt hektisch. Dort nur ruhig die offene Frage halten.
+            begruessen=not bool(offene),
+        )
         spur.merken(sit, "blessing-knapp", "gruss")
         return _maschinen_antwort(
             sit,
@@ -1798,7 +1813,16 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # gesprochener erster Satz waere dann falsch. Nur freies Geplauder streamt.
     s = sit.get("sammler") or {}
     mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"} and s.get("phase") not in {"gebucht", "fertig"}
-    darf_vorab = vorab is not None and not mitten_drin
+    # Ein Task-Auswahl-Lauf darf nie frei aus dem Modell VORsprechen. Im
+    # Blessing-Livezug 89daafaa sagte das Modell erst "Das klingt nach einer
+    # wichtigen Angelegenheit", danach kam die sichere Jobfrage — zwei
+    # Themen direkt hintereinander. Erst Auswahl auswerten, dann genau einen
+    # deterministischen Satz sprechen.
+    darf_vorab = (
+        vorab is not None
+        and not mitten_drin
+        and not (task_auswahl and gespraech.kompakt_aktiv(sit))
+    )
     # Wurde schon ein Satz gesprochen, darf W-EINGEHEN unten NICHTS mehr
     # voranstellen: llm.rest_nach_vorab findet den Rest sonst nicht mehr und
     # der Satz kaeme ein zweites Mal (dieselbe Falle wie bei der Anrede-Wache).

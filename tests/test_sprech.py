@@ -136,11 +136,12 @@ def test_ohne_krebs_wird_kontrolle():
     from kern.sprech import ohne_krebs, sanitize
 
     assert "Krebs" not in ohne_krebs("Hautkrebsscreening")
-    assert "kontrolle" in ohne_krebs("Hautkrebsscreening").lower()
+    assert ohne_krebs("Hautkrebsscreening") == "Hautscreening"
     assert "Krebs" not in ohne_krebs("Termin zur Hautkrebs-Vorsorge")
     gesprochen = sanitize("Ich buche das Hautkrebsscreening.")
     assert "Krebs" not in gesprochen and "krebs" not in gesprochen.lower()
-    assert "Kontrolle" in gesprochen
+    assert "Hautscreening" in gesprochen
+    assert ohne_krebs("Verdacht auf Krebs") == "Verdacht auf Kontrolle"
 
 
 def test_prompts_tragen_das_datum():
