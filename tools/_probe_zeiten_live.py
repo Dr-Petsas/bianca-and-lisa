@@ -97,17 +97,18 @@ def probe(mandant: str) -> list[str]:
             fehler.append(f"{mandant}/{frage}: {exc}")
             continue
         text = " ".join(str(antw.get("text") or "").split())
-        wachen = antw.get("waechter") or []
-        spur = ", ".join(e.get("w", "") for e in wachen)
+        # Die Spur haengt der DIENST an die Antwort (spur.abholen poppt sie);
+        # hier laeuft nur user_turn — also direkt aus der Sitzung lesen.
+        wachen = sit.get("_spur") or []
+        spur = ", ".join(_s(e.get("w")) for e in wachen)
         print(f"  F: {frage}")
         print(f"     Thema erkannt: {sorted(themen) or '—'}"
               f" | deterministisch: {'JA' if det else 'nein'}")
         print(f"     A: {_zeile(text)}")
         for e in wachen:
             if _s(e.get("w")).startswith("zeiten"):
-                print(f"     gestrichen: {_zeile(e.get('wert'), 200)}")
-        if spur:
-            print(f"     Waechter: {spur}")
+                print(f"     gestrichen: {_zeile(e.get('d'), 200)}")
+        print(f"     Waechter: {spur or '—'}")
         if belegt:
             # Gegenprobe: die echten Zeiten muessen weiter gesprochen werden.
             if "zeiten-wache" in spur:
