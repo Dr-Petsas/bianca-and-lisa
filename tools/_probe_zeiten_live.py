@@ -21,8 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bianca import agent as bagent
 from bianca import session as bsession
-from kern import zeiten_wache
-from kern.tenants import laden
+from kern import agentprofil, zeiten_wache
 from kern.wissen import auskunft_themen, praxis_antwort
 
 FRAGEN = [
@@ -30,6 +29,16 @@ FRAGEN = [
     "Wann habt ihr auf?",
     "Haben Sie am Freitag offen?",
 ]
+
+# Der Mandant muss ueber die DID aufgeloest werden — erst dann traegt er
+# dbPrompt und standort, also genau das, was die Wache als Beleg prueft.
+# tenants/*.json allein kennt beides nicht (kam live als "unbelegt" heraus).
+DIDS = {
+    "ruether": "+4921154244160",
+    "meddent": "+4921154244101",
+    "thaler": "+4921154244105",
+    "blessing": "+4921154244120",
+}
 
 # Mandanten, die ihre Zeiten belegt haben sollten
 MIT_ZEITEN = {"meddent", "thaler", "blessing"}
@@ -41,9 +50,11 @@ def _zeile(txt: str, breite: int = 150) -> str:
 
 def probe(mandant: str) -> list[str]:
     fehler: list[str] = []
-    t = laden(mandant)
+    t = agentprofil.fuer_did(DIDS[mandant]) or {}
     belegt = zeiten_wache.zeiten_belegt(t)
-    print(f"\n=== {mandant} — Zeiten belegt: {'JA' if belegt else 'NEIN'} "
+    quelle = t.get("_quelle", "?")
+    print(f"\n=== {mandant} ({quelle}) — Zeiten belegt: "
+          f"{'JA' if belegt else 'NEIN'} "
           f"(Wache {'aus' if belegt else 'SCHARF'}) ===")
     if mandant in MIT_ZEITEN and not belegt:
         fehler.append(f"{mandant}: Zeiten gelten als UNBELEGT — Wache wuerde "
@@ -52,6 +63,7 @@ def probe(mandant: str) -> list[str]:
         themen = auskunft_themen(frage)
         det, _ = praxis_antwort(t, frage)
         sit = bsession.neu(tenant=t)
+        bagent.start_reply(sit)          # wie im echten Anruf: erst Begruessung
         try:
             antw = bagent.user_turn(sit, frage)
         except Exception as exc:                       # LLM/Netz
@@ -78,6 +90,12 @@ def probe(mandant: str) -> list[str]:
             if zeiten_wache.ist_zeit_auskunft(text):
                 fehler.append(f"{mandant}/{frage}: ERFUNDENE Zeit noch im "
                               f"Mund: {_zeile(text, 90)}")
+            # Wurde eine Erfindung gestrichen, muss die ehrliche Auskunft auf
+            # die gestellte Frage auch im Mund ankommen — live blieb nach dem
+            # Streichen nur "Möchten Sie sich zur Kontrolle vorstellen?" übrig.
+            if "zeiten-wache" in spur and "nicht vorliegen" not in text:
+                fehler.append(f"{mandant}/{frage}: Erfindung gestrichen, aber "
+                              f"keine Antwort auf die Frage: {_zeile(text, 90)}")
     return fehler
 
 

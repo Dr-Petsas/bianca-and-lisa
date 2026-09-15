@@ -3525,9 +3525,20 @@ Termin-/Buchungs-Bezug: „Am Montag um neun Uhr hätte ich einen Termin frei"
 ist eine Kalender-Aussage und hat ihre eigene Wache (W-FAKTEN-WACHE,
 Slot-Claim).
 
+Auf eine **gestellte** Zeiten-Frage kommt die ehrliche Auskunft VORAN: nach dem
+Streichen blieb live nur der Folgesatz übrig („Möchten Sie sich zur Kontrolle
+vorstellen?") — eine Rückfrage, die an der gerade gestellten Frage vorbeigeht.
+Fing das Modell von selbst mit Zeiten an, genügt das Streichen. Der Ersatz
+kommt pro Zug **genau einmal** (`_zeitenErsatz`, Schlüssel Zug-Nummer +
+gehörter Satz): im P5-Strom läuft jeder Satz einzeln durch die Wache, zwei
+erfundene Zeit-Sätze hätten ihn sonst zweimal gesprochen. Ist er verbraucht,
+bleibt der zweite Satz LEER — kein `neu or text`, die Erfindung darf nie als
+Rückfall zurückkommen; am Zugende hängt `_nie_stumm` die offene Pflichtfrage
+an, im P5-Strom wird ein leerer Satz nicht gesprochen.
+
 - Stufen/Notaus: `ZEITEN_WACHE=off|shadow|enforce` (Default **enforce**).
   Spur: `zeiten-wache` / `zeiten-wache-shadow`.
-- Tests: `tests/test_zeiten_wache.py` (19) — die Gegenproben (belegte Praxis
+- Tests: `tests/test_zeiten_wache.py` (25) — die Gegenproben (belegte Praxis
   spricht weiter, Termin-Sätze mit Uhrzeit bleiben, Frage-Erkennung greift
   nicht bei Terminfragen) sind der größere Teil. Live-Gegenprobe im
   Container: `docker exec -w /app telefonki-bianca-test-1 python

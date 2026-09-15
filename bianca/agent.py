@@ -935,7 +935,7 @@ def _fach_wache_anwenden(sit: dict, text: str) -> str:
     return neu or text
 
 
-def _zeiten_wache_anwenden(sit: dict, text: str) -> str:
+def _zeiten_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
     """W-ZEITEN-WACHE (15.09.2026): Oeffnungszeiten nur, wenn sie belegt sind.
 
     Live-Probe gegen den echten Ruether-Prompt (Ben, leerer Praxis-Prompt +
@@ -947,14 +947,19 @@ def _zeiten_wache_anwenden(sit: dict, text: str) -> str:
     m = zeiten_wache.modus()
     if m == "off" or not _s(text):
         return text
-    neu, weg = zeiten_wache.saeubern(sit, text)
+    neu, weg = zeiten_wache.saeubern(
+        sit, text, gesagt, merken=(m != "shadow"))
     if not weg:
         return text
     if m == "shadow":
         spur.merken(sit, "zeiten-wache-shadow", " | ".join(x[:60] for x in weg))
         return text
     spur.merken(sit, "zeiten-wache", " | ".join(x[:60] for x in weg))
-    return neu or text
+    # KEIN `neu or text`: leer heisst "die ehrliche Auskunft lief in diesem
+    # Zug schon" (P5-Satz davor). Der erfundene Zeitplan darf nie als
+    # Rueckfall zurueckkommen — am Zugende haengt `_nie_stumm` die offene
+    # Pflichtfrage an, im P5-Strom wird ein leerer Satz nicht gesprochen.
+    return neu
 
 
 def _verbinden_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
@@ -1697,7 +1702,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             satz = _fach_wache_anwenden(sit, satz)
             # W-ZEITEN-WACHE: erfundene Oeffnungszeiten ebenso HIER — danach
             # steht die Patientin vor verschlossener Tuer.
-            satz = _zeiten_wache_anwenden(sit, satz)
+            satz = _zeiten_wache_anwenden(sit, satz, text_in)
             satz = _notdienst_wache_anwenden(sit, satz)
             # W-RECHNUNG: eine erfundene Rechnungs-Auskunft ebenso HIER.
             satz = _rechnung_wache_anwenden(sit, satz)
@@ -1754,7 +1759,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit, bewacht, nutzertext=text_in)
     bewacht = _anrede_wache_anwenden(sit, bewacht)
     bewacht = _fach_wache_anwenden(sit, bewacht)
-    bewacht = _zeiten_wache_anwenden(sit, bewacht)
+    bewacht = _zeiten_wache_anwenden(sit, bewacht, text_in)
     bewacht = _notdienst_wache_anwenden(sit, bewacht)
     bewacht = _rechnung_wache_anwenden(sit, bewacht)
     bewacht = _verbinden_wache_anwenden(sit, bewacht, text_in)

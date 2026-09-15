@@ -152,11 +152,23 @@ def ist_zeit_auskunft(satz: str) -> bool:
     return bool(_OEFFNUNG_RE.search(s) and _ZEIT_RE.search(s))
 
 
-def saeubern(sit: dict | None, text: str) -> tuple[str, list[str]]:
+def saeubern(sit: dict | None, text: str, gefragt: str = "",
+             merken: bool = True) -> tuple[str, list[str]]:
     """(neuer Text, gestrichene Zeit-Behauptungen).
 
-    Streicht SATZWEISE (``sprech.tts_saetze`` — nie hinter Abkürzungen);
-    bleibt nichts übrig, steht die ehrliche Auskunft da."""
+    Streicht SATZWEISE (``sprech.tts_saetze`` — nie hinter Abkürzungen).
+    Hat der Anrufer NACH den Zeiten gefragt, kommt die ehrliche Auskunft
+    VORAN: nach dem Streichen blieb live nur der Folgesatz übrig („Möchten
+    Sie sich zur Kontrolle vorstellen?") — eine Rückfrage, die an der
+    gestellten Frage vorbeigeht. Ohne Frage (das Modell fing von selbst damit
+    an) genügt der Ersatz, wenn nichts übrig bleibt.
+
+    Der Ersatz kommt pro Zug GENAU EINMAL (``_zeitenErsatz``): im P5-Strom
+    läuft jeder Satz einzeln durch die Wache, zwei erfundene Zeit-Sätze
+    hätten ihn sonst zweimal gesprochen. Ist er verbraucht, bleibt der Rest
+    leer — der Zug hat die ehrliche Auskunft dann schon gesagt, und am
+    Zugende hängt `_nie_stumm` die offene Pflichtfrage an. Der erfundene Satz
+    darf in KEINEM Fall als Rückfall zurückkommen."""
     t = _s(text)
     if not t or not aktiv(sit):
         return text, []
@@ -165,5 +177,46 @@ def saeubern(sit: dict | None, text: str) -> tuple[str, list[str]]:
     if not weg:
         return text, []
     behalten = [s for s in saetze if not ist_zeit_auskunft(s)]
-    neu = " ".join(behalten).strip() or ERSATZ
-    return neu, weg
+    if (ERSATZ not in behalten
+            and (_ist_zeitenfrage(gefragt) or not behalten)
+            and _ersatz_frei(sit, gefragt)):
+        behalten = [ERSATZ] + behalten
+        if merken:
+            _ersatz_merken(sit, gefragt)
+    return " ".join(behalten).strip(), weg
+
+
+def _ist_zeitenfrage(gefragt: str) -> bool:
+    if not _s(gefragt):
+        return False
+    try:
+        from kern import wissen as _wissen
+        return "oeffnungszeiten" in _wissen.auskunft_themen(gefragt)
+    except Exception:
+        return False
+
+
+def _riegel(sit: dict | None, gefragt: str) -> tuple[int, str]:
+    """Schlüssel des Einmal-Riegels: laufender Zug + gehörter Satz.
+
+    Die Zug-Nummer setzt der Dienst je Zug (W-QWEN-KORREKTOR); fragt der
+    Anrufer im nächsten Zug erneut, ist der Schlüssel neu und der Ersatz
+    wieder frei."""
+    zug = 0
+    if isinstance(sit, dict):
+        try:
+            zug = int(sit.get("_zugNr") or 0)
+        except Exception:
+            zug = 0
+    return zug, _s(gefragt).casefold()[:120]
+
+
+def _ersatz_frei(sit: dict | None, gefragt: str) -> bool:
+    if not isinstance(sit, dict):
+        return True
+    return sit.get("_zeitenErsatz") != list(_riegel(sit, gefragt))
+
+
+def _ersatz_merken(sit: dict | None, gefragt: str) -> None:
+    if isinstance(sit, dict):
+        sit["_zeitenErsatz"] = list(_riegel(sit, gefragt))

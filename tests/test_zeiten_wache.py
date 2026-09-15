@@ -160,6 +160,65 @@ def test_bleibt_nichts_kommt_die_ehrliche_auskunft():
     assert "nicht vorliegen" in neu
 
 
+def test_auf_die_frage_kommt_die_auskunft_zuerst():
+    """Live blieb nach dem Streichen nur „Möchten Sie sich zur Kontrolle
+    vorstellen?" übrig — eine Rückfrage, die an der gestellten Frage
+    vorbeigeht. Auf eine Zeiten-Frage steht die ehrliche Auskunft VORN."""
+    sit = _sit(_ruether())
+    neu, weg = zeiten_wache.saeubern(
+        sit,
+        "Ja, wir sind freitags von 8 bis 12 Uhr für Sie da. "
+        "Möchten Sie sich zur Kontrolle vorstellen?",
+        gefragt="Haben Sie am Freitag offen?",
+    )
+    assert len(weg) == 1
+    assert neu.startswith(zeiten_wache.ERSATZ)
+    assert "Möchten Sie sich zur Kontrolle vorstellen?" in neu
+    assert "8 bis 12" not in neu
+
+
+def test_ohne_frage_bleibt_der_rest_ohne_vorsatz():
+    """Fing das Modell von selbst mit Zeiten an, genügt das Streichen — der
+    Ersatz würde eine Auskunft aufdrängen, die niemand wollte."""
+    sit = _sit(_ruether())
+    neu, _ = zeiten_wache.saeubern(
+        sit, "Wir sind freitags von 8 bis 12 Uhr für Sie da. Wie ist Ihr Nachname?",
+        gefragt="Ich hätte gern einen Termin.")
+    assert neu == "Wie ist Ihr Nachname?"
+
+
+def test_ersatz_kommt_pro_zug_nur_einmal():
+    """P5-Strom: jeder Satz läuft einzeln durch die Wache. Zwei erfundene
+    Zeit-Sätze hätten die ehrliche Auskunft sonst zweimal gesprochen; der
+    zweite Satz fällt dann ersatzlos — nie die Erfindung als Rückfall."""
+    sit = _sit(_ruether())
+    frage = "Wann haben Sie geöffnet?"
+    erst, weg1 = zeiten_wache.saeubern(sit, LIVE[0], gefragt=frage)
+    zweit, weg2 = zeiten_wache.saeubern(sit, LIVE[2], gefragt=frage)
+    assert erst == zeiten_wache.ERSATZ and weg1 == [LIVE[0]]
+    assert zweit == "" and weg2 == [LIVE[2]]
+
+
+def test_naechster_zug_darf_wieder_antworten():
+    """Fragt der Anrufer erneut, ist der Riegel neu — sonst bliebe die
+    zweite Frage unbeantwortet."""
+    from kern import qwen_korrektor
+    sit = _sit(_ruether())
+    qwen_korrektor.naechster_zug(sit)
+    eins, _ = zeiten_wache.saeubern(sit, LIVE[0], gefragt="Wann haben Sie auf?")
+    qwen_korrektor.naechster_zug(sit)
+    zwei, _ = zeiten_wache.saeubern(sit, LIVE[2], gefragt="Und am Freitag?")
+    assert eins == zeiten_wache.ERSATZ and zwei == zeiten_wache.ERSATZ
+
+
+def test_shadow_verbraucht_den_ersatz_nicht():
+    sit = _sit(_ruether())
+    zeiten_wache.saeubern(sit, LIVE[0], gefragt="Wann haben Sie auf?",
+                          merken=False)
+    neu, _ = zeiten_wache.saeubern(sit, LIVE[0], gefragt="Wann haben Sie auf?")
+    assert neu == zeiten_wache.ERSATZ
+
+
 def test_ersatz_verspricht_nichts_und_stellt_keine_frage():
     """Der Ersatz darf die Fakten-Wache nicht neu triggern (keine Zeit, kein
     Slot) und das Frage-Gate nicht (keine Datenfrage)."""
@@ -192,6 +251,17 @@ def test_agent_shadow_aendert_nichts(monkeypatch):
     sit = _sit(_ruether())
     monkeypatch.setenv("ZEITEN_WACHE", "shadow")
     assert bagent._zeiten_wache_anwenden(sit, LIVE[0]) == LIVE[0]
+
+
+def test_agent_gibt_nie_die_erfindung_zurueck(monkeypatch):
+    """Der zweite erfundene Satz eines Zugs (P5) kommt ersatzlos — aber
+    `neu or text` haette dort die Erfindung zurueckgegeben."""
+    from bianca import agent as bagent
+    sit = _sit(_ruether())
+    monkeypatch.setenv("ZEITEN_WACHE", "enforce")
+    frage = "Wann haben Sie geöffnet?"
+    assert bagent._zeiten_wache_anwenden(sit, LIVE[0], frage) == zeiten_wache.ERSATZ
+    assert bagent._zeiten_wache_anwenden(sit, LIVE[2], frage) == ""
 
 
 # --- Die Frage selbst erkennen (deterministischer Weg statt Modell) --------
