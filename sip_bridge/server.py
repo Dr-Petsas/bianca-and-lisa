@@ -1020,7 +1020,9 @@ class Anruf:
             await asyncio.sleep(rest)
         self._spielen(d.get("audioUrl") or "")
         with contextlib.suppress(Exception):
-            q = await self.http.get("/api/quittung")
+            # W-STIMME-MANDANT: mit der sessionId kommen die Quittungen in
+            # der Stimme DIESES Mandanten (Ben maennlich, Bianca weiblich).
+            q = await self.http.get(f"/api/quittung?sessionId={self.session_id}")
             for url in (q.json().get("urls") or [])[:4]:
                 blob = (await self.http.get(url)).content
                 if blob[:4] == b"RIFF":

@@ -3366,6 +3366,83 @@ Festnetz gibt es dort nichts mehr zu fragen. Abnahme am DEPLOYTEN Stand
 (read-only, kein Kalender-Write): `docker exec -w /app telefonki-bianca-test-1
 python tools/_probe_a8fcbcb4_live.py` — 15.09.2026 grün.
 
+## Ein Prozess, mehrere Stimmen und Namen (W-STIMME-MANDANT 15.09.2026 — nicht rückbauen)
+
+Neue Praxis Fr. Dr. Denise Rüther (Gynäkologie, DID +49 211 54244160): Chef
+15.09.2026 — „ich brauche für Frau Rüthers telefonKi eine männliche Stimme und
+der Assistent soll Ben heissen." Bis dahin war beides PROZESS-weit fest: eine
+Stimme (`tts.set_voice` beim Start, `_VOICE_NAME="bianca"`) und der Name
+„Bianca" hart im Code, samt weiblicher Grammatik („Empfangsassistentin",
+„Ich bin die Neue!", „Sie sprechen mit Bianca, der Telefonassistentin").
+Ein zweiter Prozess pro Praxis war keine Option — die Sitzungen, der
+Mitschnitt und die SIP-Brücke hängen an EINEM Dienst auf 8096.
+
+Wer spricht, entscheidet jetzt der Mandant. Alles läuft über `kern/assistent.py`
+(`name`, `genus`, `maennlich`, `stimme`, `formen`) und ist so gebaut, dass
+MedDent, Thaler und Blessing **byte-identisch** bleiben:
+
+- **Name** (`assistentName` in `tenants/*.json`) gewinnt immer; sonst der
+  Agent-Name aus der Pickadoc-DB, aber NUR wenn er wie ein einzelner Vorname
+  aussieht (die DB führt dort teils den PRAXIS-Namen, `'"Med Dent" Zahnklinik
+  Duesseldorf - Robert'` — den darf sich die Assistenz nie selbst sagen);
+  sonst „Bianca".
+- **Genus** aus `assistentGenus` (m/f), sonst aus einer kleinen Namenstabelle,
+  im Zweifel weiblich. Bewusst NICHT über `kern/vornamen.py`: das ist der
+  Wächter für PATIENTEN-Namen (dort gilt „unklar ⇒ weiblich + Notiz") und
+  kennt „Ben" nicht.
+- **`formen(text, tenant)`** dreht die SELBSTbezeichnung. Bei weiblicher
+  Assistenz kommt der Text unverändert zurück — kein Zeichen bewegt sich.
+  Die Tabelle `_MAENNLICH` steht absichtlich von lang nach kurz: „Bianca, **der
+  Telefonassistentin** der Praxis" muss zu „**dem Telefonassistenten**" werden;
+  ein blindes Ersetzen von „Telefonassistentin" ließe den falschen Kasus
+  („der Telefonassistent") stehen. „Frau Doktor", „Ihre Kollegin" (die
+  ANRUFERIN!) und Behandlerinnen-Namen stehen bewusst NICHT in der Tabelle.
+  Eingehängt in `bianca/prompt.system_prompt`, `bianca/greeting.begruessung`
+  (nimmt jetzt den Mandanten) und `gehirn._hallo_wahl`.
+
+**Die Stimme ist eine Contextvar, kein Parameter** (`tts._STIMME_JETZT`,
+gesetzt über `dienst.stimme_aus_sitzung(sit)`): TTS wird aus rund 40 Stellen
+gerufen — Füller, Vorab-Sätze, Readbacks, Warm-Lauf — und die meisten kennen
+den Mandanten nicht. Drei Fallen, alle eingebaut:
+
+1. **Fäden verlieren den Kontext.** Ein frischer `threading.Thread` startet mit
+   LEEREM Contextvar-Kontext; Bens Füller und der Stream-Feeder hätten mit
+   Biancas Stimme geantwortet. Deshalb laufen alle sprechenden Fäden in
+   `kern/dienst.py` über `faden()` (`contextvars.copy_context().run`) — und
+   `test_alle_faeden_in_dienst_nehmen_den_kontext_mit` lässt genau eine
+   Ausnahme zu: `faden()` selbst.
+2. **Vorgerenderte Sätze lagen nach Text geschlüsselt.** Füller, Barge-
+   Quittungen und Notfall-Ansagen werden beim Start gerendert — jetzt je
+   Stimme (`vorab_ablegen`/`vorab_url` mit Schlüssel `"<stimme>|<text>"`,
+   `quittung_urls`/`notfall_urls` als Dict je Stimme, `stimmen_im_haus()`
+   liefert Prozess-Default + jede Mandanten-Stimme). `quittungen_fuer(sit)` /
+   `notfall_fuer(sit)` fallen auf die Prozess-Stimme zurück, wenn eine Praxis
+   noch nicht vorgerendert ist — lieber fremde Stimme als Stille. Die Brücke
+   holt die Quittungen deshalb MIT `?sessionId=`.
+3. **Der Stille-Stups spricht am `json_antwort`-Pfad vorbei**
+   (`/api/stille` → `DIENST.stimme()` direkt). Ohne `stimme_aus_sitzung(sit)`
+   dort stupst Biancas Stimme mitten in Bens Anruf; die Wache
+   `test_stups_pfad_setzt_die_anruf_stimme` prüft sogar die Reihenfolge.
+
+Auch der **Warm-Lauf** setzt die Stimme je Mandant, bevor er Begrüßung und
+`feste_saetze` wärmt — der Cache-Schlüssel trägt sie, ein Warm-Lauf in Biancas
+Stimme wäre für Ben wertlos (und er zahlte live die Synthese). `feste_saetze`
+gibt für einen männlichen Assistenten die männlichen Formen zurück, damit
+genau die Sätze im Cache liegen, die der Mund spricht.
+
+Der Stimmklon `ben` liegt als `tts_serve/stimmen/ben.wav` + `ben.txt` (Referenz
+vom Chef, ElevenLabs-Export „Mark", 4,9 s) und ist im Container über
+`TTS_STIMMEN_EXTRA` registriert — kein Rebuild, aber ein Neustart des
+TTS-Containers (der 15.09. eine laufende Blessing-Leitung 9 s gekostet hat:
+das nächste Mal in einer Anrufpause).
+
+- **Notaus:** `assistentName`/`assistentGenus`/`stimme` aus `tenants/ruether.json`
+  entfernen ⇒ Ben ist wieder Bianca, alles byte-identisch wie vor dem
+  15.09.2026. Es gibt bewusst keinen Env-Schalter: die Mandanten-Datei IST der
+  Schalter.
+- Tests: `tests/test_assistent.py` (31) — hinter jedem Ben-Fall steht die
+  Gegenprobe, dass MedDent/Bianca sich nicht rührt.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

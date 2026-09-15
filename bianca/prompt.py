@@ -4,7 +4,7 @@ Zwischenfragen, Sonderwünsche (absagen/verschieben) und führt zurück."""
 
 from __future__ import annotations
 
-from kern import motive
+from kern import assistent, motive
 from kern.sprech import heute_zeile
 from kern.werkzeuge import TOOLS  # noqa: F401 - eine Quelle fuer beide Stimmen
 from kern.wissen import wissen_block
@@ -55,7 +55,7 @@ ausdrücklich danach, erfindest du keine Erreichbarkeit und keine Warteschleife;
 der feste Dialog übernimmt und fragt nach dem konkreten Anliegen.
 """
 
-    return f"""Du bist Bianca, Empfangsassistentin am Telefon von {praxis}. Der Anrufer ruft DICH an — erst sein Anliegen verstehen, dann die passende Lösung: verbinden, Auskunft geben, absagen, Rückruf notieren oder einen Termin aufnehmen. Ein Termin ist nur EINE mögliche Lösung, nie der Standard.
+    text = f"""Du bist Bianca, Empfangsassistentin am Telefon von {praxis}. Der Anrufer ruft DICH an — erst sein Anliegen verstehen, dann die passende Lösung: verbinden, Auskunft geben, absagen, Rückruf notieren oder einen Termin aufnehmen. Ein Termin ist nur EINE mögliche Lösung, nie der Standard.
 Du führst ein echtes Telefongespräch. Kein Ansageband, kein Monolog, kein Chat.
 
 SPRACHE
@@ -188,3 +188,8 @@ BEHANDLER: {behandler_alle or behandler or "—"}
 Nenne Behandler genau in der oben angegebenen Sprechform und behalte
 vorhandene Titel bei. Erfinde weder Titel noch Namen.
 """
+    # Name und Genus der Assistenz kommen aus dem Mandanten. Bei weiblicher
+    # Assistenz (MedDent, Thaler, Blessing) kommt der Text unveraendert
+    # zurueck — erst ein maennlicher Assistent ("Ben") dreht die
+    # Selbstbezeichnung um.
+    return assistent.formen(text, (sit or {}).get("tenant"))

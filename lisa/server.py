@@ -400,14 +400,15 @@ def api_weiter(body: WeiterIn):
 @app.get("/api/quittung")
 def api_quittung():
     """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock."""
-    return {"ok": True, "urls": DIENST.quittung_urls if unterbrechung.enabled() else []}
+    # Lisa hat keine Mandanten-Stimmen — immer die Prozess-Stimme.
+    return {"ok": True, "urls": DIENST.quittungen_fuer() if unterbrechung.enabled() else []}
 
 
 @app.get("/api/notfall")
 def api_notfall():
     """W-STILLE: Warte-Ansagen, die das Dock beim Boot als Blob vorlädt und
     LOKAL spielt, wenn ~1,4 s nach dem Sprechende kein Ton lief."""
-    return {"ok": True, "urls": DIENST.notfall_urls}
+    return {"ok": True, "urls": DIENST.notfall_fuer()}
 
 
 @app.post("/api/stille")

@@ -836,7 +836,8 @@ def start_reply(sit: dict) -> dict[str, Any]:
         return _rueckkehr_reply(sit, rk)
     # W-MANDANT: CF-Mandanten ohne kuratierte Datei melden sich mit der in
     # der Pickadoc-DB gepflegten Begruessung (agent.firstMessage).
-    text = _s(tenant.get("begruessungText")) or begruessung(tenants.praxis_melde(tenant))
+    text = (_s(tenant.get("begruessungText"))
+            or begruessung(tenants.praxis_melde(tenant), tenant))
     # W-MEDDENT (04.09.2026): Live-Bug „Wem kann ich für Sie tun?“ — TTS/DB.
     text = gruss_saeubern(text)
     # Fast-Pfad: Name aus der Rufnummer ist oft schon da. Hallo waermen
@@ -1509,7 +1510,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # erlebt: "Zu welchem unserer Ärzte..." statt Durchstellen).
     job_sprach = bool(fl and (_s(fl.get("text")) or fl.get("hangup")
                               or fl.get("transfer") or fl.get("warte")))
-    if job_sprach and "Ich bin die Neue!" in _s(fl.get("text")):
+    # "Ich bin die Neue!" bzw. bei maennlichem Assistenten "der Neue" — auf
+    # den Artikel darf die Erkennung nicht hoeren, sonst merkt sich der
+    # Icebreaker bei Ben nichts und stellt sich zweimal vor.
+    if job_sprach and "Ich bin de" in _s(fl.get("text")) and "Neue!" in _s(fl.get("text")):
         gehirn.anrufer_hallo_merken(sit)
     # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am
     # Sammler/Fluss aendert sie nichts, sie entscheidet nur, wie frei das

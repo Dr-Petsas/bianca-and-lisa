@@ -8,6 +8,7 @@ nicht raten, nicht runden.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import queue
 import secrets
@@ -19,10 +20,31 @@ from typing import Any, Callable
 from fastapi.responses import StreamingResponse
 
 from kern import (
-    filler, halbsatz, llm, mitschnitt, qwen_korrektor, sprech, spur, stt_spur,
-    tempo, tenants, tts, unterbrechung,
+    assistent, filler, halbsatz, llm, mitschnitt, qwen_korrektor, sprech, spur,
+    stt_spur, tempo, tenants, tts, unterbrechung,
 )
 from kern.config import WRITE_LIVE
+
+
+def faden(ziel: Callable, *a, **kw) -> threading.Thread:
+    """Daemon-Faden, der den KONTEXT mitnimmt (W-STIMME-MANDANT 15.09.2026).
+
+    Ein frischer ``threading.Thread`` startet mit LEEREM Contextvar-Kontext —
+    die Anruf-Stimme (``tts.stimme_jetzt()``) waere dort der Prozess-Default.
+    Live hiesse das: Ben begruesst maennlich, und der erste Vorab-Satz,
+    Fueller oder Stream-Feeder antwortet mit Biancas Stimme. Deshalb laufen
+    ALLE sprechenden Faeden dieses Moduls hierdurch.
+    """
+    ctx = contextvars.copy_context()
+    return threading.Thread(target=lambda: ctx.run(ziel, *a, **kw), daemon=True)
+
+
+def stimme_aus_sitzung(sit: dict | None) -> object:
+    """Anruf-Stimme aus dem Mandanten setzen; gibt das Reset-Token.
+
+    Ohne Mandanten-Feld ``stimme`` passiert nichts Sichtbares (leerer
+    Override = Prozess-Default) — die drei Live-Praxen bleiben unberuehrt."""
+    return tts.stimme_setzen(assistent.stimme((sit or {}).get("tenant")))
 
 
 def _audio_ms_schaetzen(blob: bytes | None) -> int:
@@ -106,14 +128,18 @@ class Dienst:
         # None = Feld fehlt in den Antworten, Dock bleibt bei seinem Default.
         self.stille_fn = stille_fn
         self.audio: dict[str, bytes] = {}
+        # W-STIMME-MANDANT (15.09.2026): die vorgerenderten Saetze liegen JE
+        # STIMME (Schluessel "<stimme>|<text>"). Ein Fueller aus Biancas
+        # Stimme mitten in Bens Anruf war der peinlichste Fall — die
+        # Vorrender-Ablage kannte die Stimme nicht.
         self.filler_urls: dict[str, str] = {}
         self.feste_urls: dict[str, str] = {}
         # Barge-Quittungen (W-BARGE): vorgewärmte "Hm."/"Okay."-URLs, die das
         # Dock SOFORT beim Reinsprech-Stopp spielt (GET /api/quittung).
-        self.quittung_urls: list[str] = []
+        self.quittung_urls: dict[str, list[str]] = {}
         # Stille-Notfall (W-STILLE): Warte-Ansagen, die das Dock beim Boot
         # als Blob vorlädt und LOKAL spielt, wenn 1,4 s kein Ton lief.
-        self.notfall_urls: list[str] = []
+        self.notfall_urls: dict[str, list[str]] = {}
         # Laufende Audio-Streams (Phase 2, 29.08.2026): aid -> Slot mit
         # Chunk-Liste + done-Marke; der Feeder-Faden fuellt, /api/audio-stream
         # liest mit. Chunks bleiben liegen — ein Re-Fetch nach Abschluss
@@ -307,7 +333,7 @@ class Dienst:
                 print(f"{self.name}-stream ttfa={erster if erster is not None else -1:.2f}s "
                       f"gesamt={time.perf_counter() - t1:.2f}s saetze={len(saetze)}", flush=True)
 
-        threading.Thread(target=feeder, daemon=True).start()
+        faden(feeder).start()
         return f"/api/audio-stream/{aid}.wav", round(time.perf_counter() - t0, 2)
 
     @staticmethod
@@ -360,17 +386,51 @@ class Dienst:
     # Die Audios kommen aus dem Platten-Cache (.data/tts-cache) — nur beim
     # allerersten Start (oder nach Stimmen-/Engine-Wechsel) wird synthetisiert.
 
-    def filler_vorbereiten(self) -> None:
-        if not tts.bereit():
-            return
-        for text in filler.alle_saetze():
+    # ---- Vorgerenderte Saetze je Stimme ------------------------------------
+
+    def stimmen_im_haus(self) -> list[str]:
+        """Alle Stimmen, die dieser Prozess sprechen kann: Prozess-Default
+        (leerer Schluessel) plus jede Mandanten-Stimme aus tenants/*.json."""
+        raus = [""]
+        try:
+            for info in tenants.liste():
+                st = assistent.stimme(tenants.laden(info["id"]))
+                if st and st not in raus:
+                    raus.append(st)
+        except Exception as e:
+            print(f"{self.name}-stimmen fail {e}", flush=True)
+        return raus
+
+    def vorab_ablegen(self, text: str, url: str) -> None:
+        """Vorgerenderte URL fuer ``text`` in der GERADE gesetzten Stimme."""
+        self.filler_urls[f"{tts.stimme_jetzt()}|{text}"] = url
+
+    def vorab_url(self, text: str) -> str:
+        """Vorgerenderte URL fuer ``text`` in der GERADE gesetzten Stimme."""
+        return self.filler_urls.get(f"{tts.stimme_jetzt()}|{text}") or ""
+
+    def _vorrendern(self, texte, *, ablegen: bool = False) -> list[str]:
+        """Saetze in der GERADE gesetzten Stimme rendern und ablegen."""
+        urls: list[str] = []
+        for text in texte:
             try:
                 url = self.audio_legen(tts.speak_dauerhaft(text))
                 if url:
-                    self.filler_urls[text] = url
+                    urls.append(url)
+                    if ablegen:
+                        self.vorab_ablegen(text, url)
             except Exception as e:
-                print(f"{self.name}-filler fail {text!r} {e}", flush=True)
-        print(f"{self.name}-filler bereit: {len(self.filler_urls)} Saetze", flush=True)
+                print(f"{self.name}-vorab fail {text!r} {e}", flush=True)
+        return urls
+
+    def filler_vorbereiten(self) -> None:
+        if not tts.bereit():
+            return
+        for st in self.stimmen_im_haus():
+            with tts.stimme(st):
+                self._vorrendern(filler.alle_saetze(), ablegen=True)
+        print(f"{self.name}-filler bereit: {len(self.filler_urls)} Saetze "
+              f"(Stimmen: {len(self.stimmen_im_haus())})", flush=True)
 
     def quittungen_vorbereiten(self) -> None:
         """Barge-Quittungen ("Hm.", "Okay.") vorwaermen (W-BARGE): die Docks
@@ -378,16 +438,12 @@ class Dienst:
         beim Reinsprech-Stopp — noch vor Aufnahme und Einwand-Zug."""
         if not tts.bereit():
             return
-        urls: list[str] = []
-        for text in unterbrechung.QUITTUNGEN:
-            try:
-                url = self.audio_legen(tts.speak_dauerhaft(text))
-                if url:
-                    urls.append(url)
-            except Exception as e:
-                print(f"{self.name}-quittung fail {text!r} {e}", flush=True)
-        self.quittung_urls = urls
-        print(f"{self.name}-quittung bereit: {len(urls)} Saetze", flush=True)
+        for st in self.stimmen_im_haus():
+            with tts.stimme(st):
+                self.quittung_urls[st] = self._vorrendern(unterbrechung.QUITTUNGEN)
+        print(f"{self.name}-quittung bereit: "
+              f"{ {k or 'prozess': len(v) for k, v in self.quittung_urls.items()} }",
+              flush=True)
 
     def notfall_vorbereiten(self) -> None:
         """Stille-Notfall-Ansagen (W-STILLE, Chef 29.08.2026: nie länger als
@@ -396,16 +452,21 @@ class Dienst:
         des Anrufers ~1,4 s kein Ton lief — auch bei hängendem Server."""
         if not tts.bereit():
             return
-        urls: list[str] = []
-        for text in NOTFALL_SAETZE:
-            try:
-                url = self.audio_legen(tts.speak_dauerhaft(text))
-                if url:
-                    urls.append(url)
-            except Exception as e:
-                print(f"{self.name}-notfall fail {text!r} {e}", flush=True)
-        self.notfall_urls = urls
-        print(f"{self.name}-notfall bereit: {len(urls)} Saetze", flush=True)
+        for st in self.stimmen_im_haus():
+            with tts.stimme(st):
+                self.notfall_urls[st] = self._vorrendern(NOTFALL_SAETZE)
+        print(f"{self.name}-notfall bereit: "
+              f"{ {k or 'prozess': len(v) for k, v in self.notfall_urls.items()} }",
+              flush=True)
+
+    def quittungen_fuer(self, sit: dict | None = None) -> list[str]:
+        """Quittungs-URLs in der Stimme DIESES Anrufs (Fallback: Prozess)."""
+        st = assistent.stimme((sit or {}).get("tenant"))
+        return self.quittung_urls.get(st) or self.quittung_urls.get("") or []
+
+    def notfall_fuer(self, sit: dict | None = None) -> list[str]:
+        st = assistent.stimme((sit or {}).get("tenant"))
+        return self.notfall_urls.get(st) or self.notfall_urls.get("") or []
 
     def _fueller_merken(self, sit: dict, text: str) -> None:
         t = _s(text)
@@ -418,12 +479,12 @@ class Dienst:
     def _filler_url(self, sit: dict, gruppe: str) -> str:
         kartei = filler.kartei_satz(sit)
         if kartei:
-            url = self.filler_urls.get(kartei)
+            url = self.vorab_url(kartei)
             if not url and tts.bereit():
                 try:
                     url = self.audio_legen(tts.speak_dauerhaft(kartei))
                     if url:
-                        self.filler_urls[kartei] = url
+                        self.vorab_ablegen(kartei, url)
                 except Exception as e:
                     print(f"{self.name}-kartei-filler fail {kartei!r} {e}", flush=True)
                     url = ""
@@ -437,12 +498,12 @@ class Dienst:
         nr = int(sit.get("fillerNr") or 0)
         sit["fillerNr"] = nr + 1
         satz = filler.satz(gruppe, nr)
-        url = self.filler_urls.get(satz)
+        url = self.vorab_url(satz)
         if url:
             self._fueller_merken(sit, satz)
             return url
         fallback = filler.satz("allgemein", nr)
-        url = self.filler_urls.get(fallback) or ""
+        url = self.vorab_url(fallback)
         if url:
             self._fueller_merken(sit, fallback)
         return url
@@ -451,6 +512,11 @@ class Dienst:
 
     def json_antwort(self, sit: dict, *, art: str, text_in: str = "",
                      extra: dict | None = None, melde=None, vorab=None) -> dict[str, Any]:
+        # W-STIMME-MANDANT: ab hier spricht der Mandant mit SEINER Stimme.
+        # Kein try/finally-Reset: die Antwort verlaesst den Kontext ohnehin,
+        # und ein Reset waehrend noch laufender Satz-Faeden koennte ihnen die
+        # Stimme unter den Fuessen wegziehen.
+        stimme_aus_sitzung(sit)
         extra = extra or {}
         sit.pop("_vorabText", None)
         sit.pop("_vorabUrl", None)
@@ -608,6 +674,7 @@ class Dienst:
         Unterbrechungsstelle weitersprechen — deterministisch, ohne LLM.
         None = keine Unterbrechung offen (Aufrufer faellt auf sein
         normales Leer-Verhalten zurueck)."""
+        stimme_aus_sitzung(sit)  # W-STIMME-MANDANT
         text = unterbrechung.wiederaufnahme(sit)
         if not text:
             return None
@@ -666,6 +733,10 @@ class Dienst:
                    stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = "",
                    barge_url: str = "", barge_ms: float = 0.0, ohr: bool = False):
         """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
+        # W-STIMME-MANDANT: VOR allem anderen — Fueller, Vorab-Saetze und der
+        # Stream-Feeder laufen in eigenen Faeden (faden() nimmt den Kontext
+        # mit) und wuerden sonst den Prozess-Default sprechen.
+        stimme_aus_sitzung(sit)
         # Waechter-Spur: frisch je Zug — jeder Waechter meldet sich hinein,
         # die Antwort traegt die Liste additiv als "waechter" (W-BK-3).
         spur.neu(sit)
@@ -727,7 +798,7 @@ class Dienst:
                             q.put(("vorab", fertig_url))
                         satz_raus += 1
 
-            t = threading.Thread(target=_arbeit, daemon=True)
+            t = faden(_arbeit)
             jobs.append(t)
             t.start()
 
@@ -863,7 +934,7 @@ class Dienst:
             except Exception as e:
                 q.put(("fehler", str(e)))
 
-        threading.Thread(target=arbeit, daemon=True).start()
+        faden(arbeit).start()
 
         def frist_setzen(gehoert: str) -> tuple[float | None, str]:
             """Ein kurzer Satz gegen Totenstille, nie eine Entschuldigungs-Kette.

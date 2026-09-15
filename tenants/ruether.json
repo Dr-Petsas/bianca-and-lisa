@@ -1,0 +1,37 @@
+{
+  "clientId": "AWdFeDldR81P3jmiq869",
+  "locationId": "loc_d7gfcuss",
+  "praxisName": "Praxis Doktor Rüther",
+  "praxisNameMelde": "Praxis Doktor Rüther",
+  "praxisNameVon": "der Praxis Doktor Rüther",
+  "behandler": "Doktor Denise Rüther",
+  "dids": ["+4921154244160"],
+  "telefon": "",
+  "sprache": "de",
+  "fachgebiet": "gynaekologie",
+  "assistentName": "Ben",
+  "assistentGenus": "m",
+  "stimme": "ben",
+  "sttHotwords": [
+    "Rüther",
+    "Rörig",
+    "Krebsvorsorge",
+    "Kolposkopie",
+    "Spirale",
+    "Zyklus",
+    "Wechseljahre",
+    "Endometriose",
+    "Kinderwunsch",
+    "Verhütung",
+    "Mammographie",
+    "Abstrich"
+  ],
+  "defaultCalendarId": "6enqS7xObw02u3S1pfXM",
+  "calendars": [
+    { "id": "6enqS7xObw02u3S1pfXM", "name": "Doktor Denise Rüther" },
+    { "id": "59SyC2dhsiFqesxFvOeO", "name": "Doktor Myriam Rörig" }
+  ],
+  "begruessungText": "Praxis Doktor Rüther. Sie sprechen mit dem digitalen Telefonassistenten Ben. Wie kann ich Ihnen helfen?",
+  "weiterleitungen": [],
+  "verbindenErlaubt": []
+}

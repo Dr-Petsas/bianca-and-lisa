@@ -26,7 +26,7 @@ def _dienst(*, langsam_s: float = 0.0, schnell: bool = False) -> Dienst:
     nr = 0
     for gruppe in filler.GRUPPEN.values():
         for satz in gruppe:
-            d.filler_urls[satz] = f"/api/audio/f{nr}"
+            d.vorab_ablegen(satz, f"/api/audio/f{nr}")
             nr += 1
     return d
 
@@ -104,8 +104,7 @@ def test_schnelle_phase_bekommt_neutralen_fueller_bei_haenger():
         urls = [z["audioUrl"] for z in out if z["type"] == "filler"]
         allgemein = set(filler.GRUPPEN["allgemein"])
         for url in urls:
-            satz = next((s for s, u in d.filler_urls.items() if u == url), "")
-            assert satz in allgemein, satz
+            assert any(d.vorab_url(s) == url for s in allgemein), url
     finally:
         dienst_mod.FILLER_SPAET_S, dienst_mod.FILLER_NACHSCHUB_S = alt
 
@@ -118,7 +117,7 @@ def test_kartei_fueller_statt_allgemein_wenn_fakt_liegt():
     satz = "Letztes Mal die Kontrolle — einen Moment."
     try:
         d = _dienst(langsam_s=0.35, schnell=True)
-        d.filler_urls[satz] = "/api/audio/kartei"
+        d.vorab_ablegen(satz, "/api/audio/kartei")
         sit = {
             "karteiFillerText": satz,
             "sammler": {"modus": "buchen", "phase": ""},

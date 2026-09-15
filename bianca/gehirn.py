@@ -22,7 +22,9 @@ from zoneinfo import ZoneInfo
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
-from kern import dossier, fachprofil, motive, sprech, tenants as kern_tenants, vornamen
+from kern import (
+    assistent, dossier, fachprofil, motive, sprech, tenants as kern_tenants, vornamen,
+)
 from kern.patients import arzt_sprechname
 from kern.slots import parse_slot_wish
 
@@ -2822,7 +2824,11 @@ def _hallo_wahl(sit: dict, formen: tuple[str, ...], **felder: str) -> str:
         sit["halloVariante"] = i
         _HALLO_NR += 1
     form = formen[int(i) % len(formen)]
-    return form.format(**{k: v for k, v in felder.items() if v})
+    text = form.format(**{k: v for k, v in felder.items() if v})
+    # Die Varianten stehen weiblich im Code ("Ich bin die Neue!"). Bei einem
+    # maennlichen Assistenten dreht kern/assistent die Selbstbezeichnung —
+    # bei Bianca kommt der Text unveraendert zurueck.
+    return assistent.formen(text, sit.get("tenant"))
 
 
 def anrufer_hallo_fragt(text: str) -> bool:
@@ -3706,6 +3712,11 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         for v in varianten:
             if v not in out:
                 out.append(v)
+    # Genus/Name der Assistenz zuletzt: der Platten-Cache muss GENAU die
+    # Saetze tragen, die der Mund spricht — sonst waermt ein maennlicher
+    # Assistent die weiblichen Formen vor und zahlt live die Synthese.
+    if assistent.maennlich(tenant):
+        out = [assistent.formen(s, tenant) for s in out]
     return out
 
 

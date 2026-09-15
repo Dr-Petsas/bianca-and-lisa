@@ -17,6 +17,7 @@ from bianca.greeting import begruessung
 from kern import (
     agentprofil,
     anrufaudio,
+    assistent,
     gedaechtnis,
     halbsatz,
     llm,
@@ -39,7 +40,7 @@ from kern.config import (
     LLM_MODEL,
     WRITE_LIVE,
 )
-from kern.dienst import Dienst, ndjson
+from kern.dienst import Dienst, ndjson, stimme_aus_sitzung
 
 # tempo.py fehlt auf aelteren Images — soft, sonst Crash-Loop beim Deploy
 # (06.09.2026: Full-Copy von lokaler server.py ohne tempo-Modul).
@@ -258,17 +259,34 @@ def api_weiter(body: WeiterIn):
     return out
 
 
+def _sit_optional(session_id: str) -> dict | None:
+    """Sitzung ohne Anlegen — nur um die Stimme des Anrufs zu erfahren."""
+    sid = " ".join(str(session_id or "").split()).strip()
+    if not sid:
+        return None
+    try:
+        return session.holen(sid)
+    except Exception:
+        return None
+
+
 @app.get("/api/quittung")
-def api_quittung():
-    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock."""
-    return {"ok": True, "urls": DIENST.quittung_urls if unterbrechung.enabled() else []}
+def api_quittung(sessionId: str = ""):
+    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock.
+
+    W-STIMME-MANDANT: die Brücke holt sie PRO ANRUF und schickt ihre
+    sessionId mit — dann kommen sie in der Stimme dieses Mandanten. Ohne
+    sessionId (Dock-Boot) bleibt es die Prozess-Stimme wie bisher."""
+    if not unterbrechung.enabled():
+        return {"ok": True, "urls": []}
+    return {"ok": True, "urls": DIENST.quittungen_fuer(_sit_optional(sessionId))}
 
 
 @app.get("/api/notfall")
-def api_notfall():
+def api_notfall(sessionId: str = ""):
     """W-STILLE: Warte-Ansagen, die das Dock beim Boot als Blob vorlädt und
     LOKAL spielt, wenn ~1,4 s nach dem Sprechende kein Ton lief."""
-    return {"ok": True, "urls": DIENST.notfall_urls}
+    return {"ok": True, "urls": DIENST.notfall_fuer(_sit_optional(sessionId))}
 
 
 @app.post("/api/stille")
@@ -279,6 +297,10 @@ def api_stille(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    # W-STIMME-MANDANT: der Stups spricht ueber DIENST.stimme() direkt, also
+    # am json_antwort-Pfad vorbei — ohne diese Zeile stupst Biancas Stimme
+    # mitten in Bens Anruf.
+    stimme_aus_sitzung(sit)
     # W-HALBSATZ: haengt ein gehaltenes Satz-Fragment in der Sitzung, hat der
     # Anrufer den Satz nicht fortgesetzt — dann wird ER beantwortet, kein Stups.
     rest = halbsatz.abholen(sit)
@@ -479,7 +501,11 @@ def _warm_start():
         # W-BEHANDLER-SPERRE: gewaermt wird die Arztwahl-Frage OHNE die
         # gesperrten Behandler — genau die Form, die live gesprochen wird.
         t = behandler_sperre.anwenden(tenants.laden(DEFAULT_TENANT))
-        tts.warm(begruessung(tenants.praxis_melde(t)))
+        # W-STIMME-MANDANT: gewaermt wird in der Stimme DIESES Mandanten —
+        # der Cache-Schluessel traegt sie, ein Warm-Lauf in Biancas Stimme
+        # waere fuer Ben wertlos (und er zahlte live die Synthese).
+        tts.stimme_setzen(assistent.stimme(t))
+        tts.warm(begruessung(tenants.praxis_melde(t), t))
         # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
         # aus dem Platten-Cache fragt die Maschine in ~0,2 s statt ~1,2 s
         # lokaler Synthese. Gewarmt wird die SANITIZE-Form — genau die
@@ -507,7 +533,8 @@ def _warm_start():
                 continue
             try:
                 andere = behandler_sperre.anwenden(tenants.laden(info["id"]))
-                tts.warm(begruessung(tenants.praxis_melde(andere)))
+                tts.stimme_setzen(assistent.stimme(andere))
+                tts.warm(begruessung(tenants.praxis_melde(andere), andere))
                 for satz in gehirn.feste_saetze(andere):
                     tts.warm(sprech.sanitize(satz))
                 print(f"bianca-warm: tenant {info['id']} im Cache", flush=True)
