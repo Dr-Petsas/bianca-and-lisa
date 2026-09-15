@@ -3591,8 +3591,7 @@ Fehler zurück und startete parallel die allgemeine Unklar-Schleife.
 - Strikt mandantenscharf: nur `tenants/blessing.json` trägt
   `namensUnklarOhneEcho=true`. Ohne den Schalter läuft der bisherige Weg
   byte-identisch — Gegenproben für MedDent, Thaler und Rüther.
-- Tests: `tests/test_blessing_namen.py`. Einführung nach dem
-  Produktionsstand V2.7; noch nicht live ausgerollt.
+- Tests: `tests/test_blessing_namen.py`. Seit Produktionsstand V2.8 live.
 
 ## Blessing-Buchstabiersegmente nicht zusammenkleben (W-BLESSING-BUCHSTABIER-SEGMENTE 15.09.2026 — nicht rückbauen)
 
@@ -3621,7 +3620,7 @@ nicht live überschreiben.
   `_nachgesprochen`-Standardweg bleiben ohne den Schalter byte-identisch für
   MedDent, Thaler und Rüther.
 - Regressionen mit den wortgleichen Live-Transkripten:
-  `tests/test_blessing_namen.py`; Einführung nach V2.7, noch nicht deployt.
+  `tests/test_blessing_namen.py`; seit V2.8 live.
 
 ## Blessing-Nachnamen vor der Suche rückbestätigen (W-BLESSING-NACHNAME-READBACK 15.09.2026 — nicht rückbauen)
 
@@ -3644,7 +3643,7 @@ Akte, bevor der Anrufer die gespeicherte Schreibweise überhaupt gehört hatte.
   jeder Namensfrage gesperrt.
 - MedDent, Thaler und Rüther tragen den Schalter nicht und bleiben ohne
   zusätzlichen Gesprächszug. Regressionen und Suchsperren:
-  `tests/test_blessing_namen.py`; Einführung nach V2.7, noch nicht deployt.
+  `tests/test_blessing_namen.py`; seit V2.8 live.
 
 ## Blessing-Terminauskunft bleibt Terminauskunft (W-BLESSING-BESTANDSAUSKUNFT 15.09.2026 — nicht rückbauen)
 
@@ -3678,8 +3677,7 @@ Neubuchung mit Versicherungs- und Besuchsgrundfragen.
   mehr als allgemeines `WISSEN × REGEL` parken und ans freie LLM abgeben.
   Die Suche läuft nachweislich nie vor dem Namens-Ja; nach einem Treffer
   bleibt `modus=auskunft` und die feste `termin_ok`-Folgefrage offen.
-  Regressionen: `tests/test_blessing_abschluss.py`; Einführung nach V2.7,
-  noch nicht deployt.
+  Regressionen: `tests/test_blessing_abschluss.py`; seit V2.8 live.
 
 ## Evidenzbasierter Tages-Scorer (W-QUALITAET-40-80 15.09.2026)
 
@@ -3727,8 +3725,7 @@ Grützbeutel liefen dadurch falsch oder blieben ohne Motiv.
   zuletzt?“ entfällt; käme ein zweiter Kalender hinzu, erscheint die Frage
   wieder.
 
-Regressionen: `tests/test_blessing_motive.py`; Einführung nach V2.7, noch
-nicht deployt.
+Regressionen: `tests/test_blessing_motive.py`; seit V2.8 live.
 
 ## Blessing kurz und aufgabenbezogen (W-BLESSING-KNAPP 15.09.2026 — nicht rückbauen)
 
@@ -3790,7 +3787,8 @@ alle anderen Mandanten bleiben unverändert. Regressionen:
 
 | Stand | Tag | Anleitung |
 | --- | --- | --- |
-| **V2.7, 15.09.2026 16:16 (aktuell — Einfrierpunkt VOR den Blessing-Fixes)** | `telefonki-produktionsstand-v2.7-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.7.md` — Live-Image `cf97be2244d9` (Rüther/Ben, Handy-Akte, Buchungsbeweis, Zeiten-Wache); Git-Tag enthält zusätzlich noch nicht deploytes W-ERSATZ-MOTIV; SIP-Brücke nur als Dateisystem-Tar (`eb97b3d3e0e7`, Layer weg); `tts-stimmen.tgz` (Bianca+Ben) |
+| **V2.8, 15.09.2026 19:20 (aktuell — Blessing Namen, Aufgaben, Motive, Slots und knapper Mund)** | `telefonki-produktionsstand-v2.8-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.8.md` — Live-Image `0f2a38889c0f`; vollständiger Server-Schnappschuss, Git-Bundle und lokale Kopie; SIP/TTS/STT unverändert |
+| V2.7, 15.09.2026 16:16 (Rückrollpunkt VOR den Blessing-Fixes) | `telefonki-produktionsstand-v2.7-2026-09-15` | `docs/PRODUKTIONSSTAND-V2.7.md` — Live-Image `cf97be2244d9` (Rüther/Ben, Handy-Akte, Buchungsbeweis, Zeiten-Wache); SIP-Brücke als Dateisystem-Tar (`eb97b3d3e0e7`, Layer weg); `tts-stimmen.tgz` (Bianca+Ben) |
 | V2.6, 14.09.2026 12:10 | `telefonki-produktionsstand-v2.6-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.6.md` — App-Image `c04b16aada71`; V2.5 + W-TELEFON-ZULETZT (`f92951f`); erstmals SIP-Brücken-Image als Tar, Parakeet-Qwen-Repo (Bundle + 24 uncommittete Einträge), komplettes lokales `.data/`; Live-Asterisk 212.132.104.205 ohne Shell-Zugang → Dialplan nur als Referenzkopie |
 | V2.5, 14.09.2026 06:50 | `telefonki-produktionsstand-v2.5-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.5.md` — App-Image `00f8b9c73f87`; V2.4 + W-MOTIV-KONSISTENT (MedDent-Schmerz-Buchung 06:0x); Abnahme Live-Nachstellung 8/8, prod_smoke, Feldprobe 68/68 nach dem Deploy |
 | V2.4, 14.09.2026 02:10 | `telefonki-produktionsstand-v2.4-2026-09-14` | `docs/PRODUKTIONSSTAND-V2.4.md` — App-Image `6305bd4450a7`; neun Chef-Punkte vom 13.09. abends + Thaler-Kalender-Merge; Abnahme Suite 1606/0, prod_smoke, Feldprobe 68/68 live. Ohne Motiv-Fix: Schmerz-Buchung bei MedDent scheitert |

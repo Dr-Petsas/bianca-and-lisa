@@ -54,6 +54,12 @@ echo -n "qwen_korrektor an:       "; docker exec telefonki-bianca-1 python -c 'f
 echo -n "standort-zeiten an:      "; docker exec telefonki-bianca-1 python -c 'from kern import standort; print(standort.an())'
 echo -n "telefon_tauglich (motiv):"; docker exec telefonki-bianca-1 python -c 'from kern import motive; print(callable(getattr(motive, "telefon_tauglich", None)))'
 echo -n "_telefon_tor in flow:    "; docker exec telefonki-bianca-1 grep -c '_telefon_tor' /app/bianca/flow.py
+# V2.8: Blessing-Namen, Bestandsauskunft, Motivklärung, Slot-Ausschlüsse
+# und knapper Mund müssen im gemounteten Live-Mandanten gemeinsam scharf sein.
+echo -n "Blessing-V2.8-Schalter:  "; docker exec telefonki-bianca-1 python -c \
+  'import json; t=json.load(open("/app/tenants/blessing.json")); k=("namensUnklarOhneEcho","buchstabierSegmenteTrennen","nachnameReadbackNachBuchstabieren","bestandsauskunftErweitert","dermaMotivKlarheit","gespraechKompakt","slotPraeferenzenFesthalten","bestandsVerschiebenErweitert"); print("OK" if all(t.get(x) is True for x in k) else "FEHLT")'
+echo -n "Blessing-Slotwache:      "; docker exec telefonki-bianca-1 python -c \
+  'from kern import slots; print(callable(getattr(slots, "slot_praeferenz_aenderung", None)))'
 echo -n "auflegen in der Bruecke: "; docker exec telefonki-sipbridge-1 grep -c ausklingen_und_auflegen /app/sip_bridge/server.py
 echo -n "Dock-Cache-Buster:       "; docker exec telefonki-bianca-1 grep -o 'app.js?v=b[0-9]*' /app/bianca_web/index.html
 echo
