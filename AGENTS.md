@@ -3466,22 +3466,31 @@ einen unbekannten Namen weiblich — wer einen männlichen Assistenten will, set
   (mit `--hoeren` rendert sie Bens Begrüßung im echten TTS-Container und liest
   sie per STT gegen — 15.09. grün: „…mit dem digitalen Telefonassistenten Ben").
 
-**Noch offen bei Rüther** (nicht Code, sondern Portal/Asterisk):
+**Noch offen bei Rüther** — Befunde gebündelt in
+`docs/BEFUND-RUETHER-PORTAL.md` (15.09.2026 read-only gegen die Live-Daten
+geprüft). Kurz:
 
 1. Auf der Nummer liegen ZWEI aktive inbound-Agenten — `LtHkW6I1xSwDpWy5M3vy`
    („Ben", Buchungs-Tools an) und `jeLZftpLKZdQaDUwVml6` („Bianca", alle Tools
    aus, leere Begrüßung). Derzeit gewinnt Ben; das ist Zufall der
    Dokument-ID-Sortierung. Der Bianca-Datensatz muss weg.
-2. 22 von 32 Besuchsgründen stehen auf `allowOnlineBooking=false` — darunter
-   Krebsvorsorge, PAP/HPV, Schwangerschaftsvorsorge, Spirale. Für die findet
-   Ben telefonisch keine Zeiten (er fällt sichtbar auf ein buchbares Motiv
-   zurück, s. W-MOTIV-KONSISTENT).
-3. Die Öffnungszeiten stehen auf dem Portal-Default (alle sieben Tage
+2. Der Agent-Prompt ist LEER (nur `systemPrompt`, 462 Zeichen Datum/Zeitzone/
+   Anrede) — Text liegt fertig in `docs/prompt-ruether.md`.
+3. 21 der 31 Telefon-Besuchsgründe stehen auf `allowOnlineBooking=false`
+   (32 Motive in Firestore, eines filtert `motive.telefon_tauglich`) — darunter
+   Krebsvorsorge, PAP/HPV, Schwangerschaftsvorsorge, Spirale. Die Zuordnung
+   trifft live korrekt („Krebsvorsorge" → `GYN Krebsvorsorge`), die CF liefert
+   dafür aber 0 Zeiten. **Der Ausweich-Weg ist hier gefährlich:** Rüther führt
+   kein Kontroll-Motiv, also greift in `tenants._sicheres_default` der blinde
+   „erster Eintrag"-Rückfall und `_kontrolle_ersatz` nimmt
+   `GYN Endometriose Erstberatung` (45 min) — eine Krebsvorsorge würde als
+   Endometriose-Erstberatung eingetragen. Fix-Vorschlag im Befund-Dokument.
+4. Die Öffnungszeiten stehen auf dem Portal-Default (alle sieben Tage
    08:00–18:00). `standort.zeiten_von` verwirft genau dieses Muster absichtlich
    („nie raten") — damit hat Ben zu den Zeiten KEINE Quelle. Er verwies
    deshalb aber nicht auf die Praxis, sondern erfand sie (s. W-ZEITEN-WACHE);
    seit dem 15.09.2026 fällt die Erfindung. Die Zeiten gehören ins Portal.
-4. Der Dialplan-Eintrag für 4160 liegt als Referenzkopie in
+5. Der Dialplan-Eintrag für 4160 liegt als Referenzkopie in
    `sip_bridge/extensions_bianca.conf`; der Live-Asterisk braucht ihn noch
    (kein Shell-Zugang von hier).
 
