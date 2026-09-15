@@ -3669,6 +3669,15 @@ Neubuchung mit Versicherungs- und Besuchsgrundfragen.
   ungeschriebenen Slot-/Bestätigungsschritts keine zweite Bestandssuche.
 - Der Regex-Rückfall ohne Session-Hirn nutzt denselben mandantenscharfen
   Wächter. MedDent, Thaler und Rüther behalten ihre bisherige Deutung.
+- Die Auskunft endet nicht bei der Intent-Erkennung: ein bekannter Anrufer
+  bekommt nach dem Identitäts-Ja den gefundenen Termin samt Datum, Uhrzeit,
+  Grund und Behandler direkt angesagt. Ein unbekannter Anrufer buchstabiert
+  den Nachnamen, bestätigt zuerst den W-BLESSING-NACHNAME-READBACK und erst
+  dann startet die Suche. Das Diktat-Schlusswort „fertig“ bleibt in diesem
+  Blessing-Namensformular eine Formularantwort — es darf die Auskunft nicht
+  mehr als allgemeines `WISSEN × REGEL` parken und ans freie LLM abgeben.
+  Die Suche läuft nachweislich nie vor dem Namens-Ja; nach einem Treffer
+  bleibt `modus=auskunft` und die feste `termin_ok`-Folgefrage offen.
   Regressionen: `tests/test_blessing_abschluss.py`; Einführung nach V2.7,
   noch nicht deployt.
 

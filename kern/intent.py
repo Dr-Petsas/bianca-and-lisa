@@ -153,6 +153,17 @@ _ZAHLWORT_RE = re.compile(
 _BUCHSTABIER_RE = re.compile(
     r"^\s*(?:[A-Za-zÄÖÜäöü](?:\s+wie\s+\w+)?(?:[\s,.\-]+|$)){2,}$"
 )
+_BUCHSTABIER_FERTIG_RE = re.compile(
+    r"(?:[\s,;:.\-]+)\bfertig\b[\s.!?]*$",
+    re.I,
+)
+_NAME_VOR_FERTIG_RE = re.compile(
+    r"^[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'’\-]{1,39}$",
+)
+_FERTIG_KEIN_NAME = {
+    "ich", "wir", "bin", "sind", "jetzt", "nun", "so", "ja", "nein",
+    "okay", "ok", "danke",
+}
 _SLOTWAHL_RE = re.compile(
     r"^\s*(?:de[rn]\s+)?(?:erste\w*|zweite\w*|dritte\w*|letzte\w*|"
     r"(?:um\s+)?\d{1,2}(?::\d{2})?\s*uhr\w*|vormittag\w*|nachmittag\w*|"
@@ -198,7 +209,32 @@ _GEMISCHT_RE = re.compile(
 def _ist_formular_antwort(sit: dict, text: str) -> bool:
     """True = sicher nur Ernte fuer die laufende Maschine (kein LLM noetig)."""
     t = _s(text)
-    if not t or _WECHSEL_RE.search(t):
+    if not t:
+        return False
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    frage = _s(s.get("frage"))
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    # A2/B2 Blessing: „G-E-S-C-H-E-I-D-L-E, fertig“ ist die Antwort auf die
+    # offene Namensfrage. Das globale Wechselwort „fertig“ machte daraus
+    # bisher WISSEN × REGEL, parkte die Terminauskunft und schickte die sauber
+    # erkannte Buchstabierung ans freie LLM. Nur der Blessing-Opt-in und eine
+    # offene Namensfrage dürfen diesen Vorrang erhalten.
+    if (
+        tenant.get("buchstabierSegmenteTrennen") is True
+        and frage in {
+            "name", "nachname", "vorname", "buchstabieren", "nachname_check",
+        }
+    ):
+        ohne_fertig = _BUCHSTABIER_FERTIG_RE.sub("", t).strip()
+        if ohne_fertig != t:
+            ist_kette = bool(_BUCHSTABIER_RE.match(ohne_fertig))
+            ist_name = bool(
+                _NAME_VOR_FERTIG_RE.match(ohne_fertig)
+                and ohne_fertig.lower() not in _FERTIG_KEIN_NAME
+            )
+            if ist_kette or (frage == "buchstabieren" and ist_name):
+                return True
+    if _WECHSEL_RE.search(t):
         return False
     # B1 Blessing: „Wann ist mein Termin?“ darf auch auf eine gerade offene
     # Ja/Nein-/Katalogfrage niemals als kurze Formularantwort geschluckt
@@ -209,8 +245,6 @@ def _ist_formular_antwort(sit: dict, text: str) -> bool:
     if _JA_NEIN_RE.match(t) or _ZIFFERN_RE.match(t) or _ZAHLWORT_RE.match(t) \
             or _BUCHSTABIER_RE.match(t):
         return True
-    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    frage = _s(s.get("frage"))
     phase = _s(s.get("phase"))
     if _SLOTWAHL_RE.match(t) and (phase in {"angebot", "bestaetigen"}
                                   or frage in {"wunsch", "terminwahl", "slotwahl"}):

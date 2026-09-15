@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from bianca import agent, flow, gehirn
+from bianca import agent, flow, gehirn, verwalten
 from kern import hirn, intent
 from kern.tenants import laden
 
@@ -38,6 +38,28 @@ NEUBUCHUNG = [
     ("Ich habe nächste Woche Zeit für einen Termin.", "KEINE"),
     ("Der Termin muss noch eingetragen werden.", "KEINE"),
 ]
+
+GESCHEIDLE_TERMIN = {
+    "ok": True,
+    "patient": {
+        "id": "patient-gescheidle",
+        "firstName": "Sigrid",
+        "lastName": "Gescheidle",
+    },
+    "appointments": [{
+        "id": "termin-gescheidle",
+        "iso": "2026-09-24T09:30",
+        "date": "2026-09-24",
+        "calendarId": "8krcWh7AuXEfgWc1blzQ",
+        "doctorName": "Doktor Blessing",
+        "motivId": "UnfQ5DOaMx9FLiTC3L9b",
+        "motivName": "Kontrolle",
+        "spoken": (
+            "am Donnerstag, den vierundzwanzigsten September "
+            "um neun Uhr dreißig bei Doktor Blessing"
+        ),
+    }],
+}
 
 
 def _sit(tenant_id: str = "blessing") -> dict:
@@ -196,3 +218,150 @@ def test_b1_agent_startet_ohne_llm_den_kalenderpfad(monkeypatch):
     assert "richtig erkannt" in aus["text"]
     assert "versichert" not in aus["text"].lower()
     assert "hautkontrolle" not in aus["text"].lower()
+
+
+def test_b2_bekannter_gescheidle_anrufer_bekommt_den_termin_angesagt(monkeypatch):
+    def _kein_llm(*_args, **_kwargs):
+        raise AssertionError("Die Bestandsansage darf nie ans freie LLM")
+
+    monkeypatch.setattr(agent.llm, "chat", _kein_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(verwalten.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda _tenant, _ctx: dict(GESCHEIDLE_TERMIN),
+    )
+
+    sit = _sit()
+    sit["anrufer"] = {
+        "vorname": "Sigrid",
+        "nachname": "Gescheidle",
+        "patientId": "patient-gescheidle",
+        "geschlecht": "female",
+        "telefon": "+491701234567",
+    }
+
+    aus1 = agent.user_turn(
+        sit,
+        "Ich habe einen Termin Ende September und weiss nicht mehr wann.",
+    )
+    assert "richtig erkannt" in aus1["text"]
+
+    aus2 = agent.user_turn(sit, "Ja, richtig.")
+    s = gehirn.sammler(sit)
+
+    assert "vierundzwanzigsten September" in aus2["text"]
+    assert "neun Uhr dreißig" in aus2["text"]
+    assert "Kontrolle" in aus2["text"]
+    assert "Doktor Blessing" in aus2["text"]
+    assert "neuen Termin" not in aus2["text"]
+    assert "Hautkontrolle" not in aus2["text"]
+    assert s["modus"] == "auskunft"
+    assert s["frage"] == "termin_ok"
+
+
+def test_b2_buchstabierter_name_fuehrt_nach_readback_zur_ansage(monkeypatch):
+    def _kein_llm(*_args, **_kwargs):
+        raise AssertionError("Name und Terminauskunft bleiben deterministisch")
+
+    gesucht = []
+
+    def _finden(_tenant, ctx):
+        gesucht.append(dict(ctx))
+        return dict(GESCHEIDLE_TERMIN)
+
+    monkeypatch.setattr(agent.llm, "chat", _kein_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(verwalten.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(verwalten.kal, "find_patient_appointments", _finden)
+
+    sit = _sit()
+    aus1 = agent.user_turn(sit, "Meinen Termin nächste Woche, wann ist der?")
+    assert "Nachname" in aus1["text"]
+    assert gesucht == []
+
+    aus2 = agent.user_turn(sit, "G-E-S-C-H-E-I-D-L-E, fertig.")
+    s = gehirn.sammler(sit)
+    assert "Gescheidle" in aus2["text"]
+    assert "Ist das richtig" in aus2["text"]
+    assert s["frage"] == "nachname_check"
+    assert gesucht == [], "vor dem Namens-Readback darf keine Suche laufen"
+
+    aus3 = agent.user_turn(sit, "Ja, richtig.")
+
+    assert gesucht and gesucht[-1]["lastName"] == "Gescheidle"
+    assert "vierundzwanzigsten September" in aus3["text"]
+    assert "neun Uhr dreißig" in aus3["text"]
+    assert "neuen Termin" not in aus3["text"]
+    assert gehirn.sammler(sit)["frage"] == "termin_ok"
+
+
+def test_b2_fertig_ist_nur_im_blessing_namensdiktat_eine_formularantwort():
+    gesagt = "G-E-S-C-H-E-I-D-L-E, fertig."
+
+    blessing = _sit()
+    hirn.anliegen_hinzufuegen(
+        blessing,
+        hirn._anliegen("WISSEN", "VORGANG", spiegel="bestehender Termin"),
+        aktivieren=True,
+    )
+    gehirn.sammler(blessing).update({
+        "modus": "auskunft",
+        "frage": "nachname",
+    })
+    deutung = intent.erkennen(blessing, gesagt)
+    assert deutung["handlung"] == "KEINE"
+    assert deutung["zug"] == "verfeinern"
+    assert deutung["quelle"] == "fastpath"
+
+    # Kein Namensformular: „fertig“ behält seine bisherige allgemeine
+    # Intent-Bedeutung und darf nicht als Buchstabierung getarnt werden.
+    ohne_namensfrage = _sit()
+    deutung = intent.erkennen(ohne_namensfrage, gesagt)
+    assert deutung["handlung"] == "WISSEN"
+    assert deutung["gegenstand"] == "REGEL"
+
+    # Der Sondervorrang ist mandantenscharf; andere Praxen bewegen sich nicht.
+    for tenant_id in ("meddent", "thaler", "ruether"):
+        sit = _sit(tenant_id)
+        hirn.anliegen_hinzufuegen(
+            sit,
+            hirn._anliegen("WISSEN", "VORGANG", spiegel="bestehender Termin"),
+            aktivieren=True,
+        )
+        gehirn.sammler(sit).update({
+            "modus": "auskunft",
+            "frage": "nachname",
+        })
+        deutung = intent.erkennen(sit, gesagt)
+        assert deutung["handlung"] == "WISSEN", (tenant_id, deutung)
+        assert deutung["gegenstand"] == "REGEL", (tenant_id, deutung)
+
+
+def test_b2_gesprochener_name_mit_fertig_erreicht_den_readback(monkeypatch):
+    sit = _sit()
+    hirn.anliegen_hinzufuegen(
+        sit,
+        hirn._anliegen("WISSEN", "VORGANG", spiegel="bestehender Termin"),
+        aktivieren=True,
+    )
+    gehirn.sammler(sit).update({
+        "modus": "auskunft",
+        "frage": "buchstabieren",
+    })
+
+    def _kein_llm(*_args, **_kwargs):
+        raise AssertionError("Ein Namensabschluss darf nicht ans freie LLM")
+
+    monkeypatch.setattr(agent.llm, "chat", _kein_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
+
+    aus = agent.user_turn(sit, "Gavranides, fertig.")
+
+    assert gehirn.sammler(sit)["nachname"] == "Gavranides"
+    assert gehirn.sammler(sit)["frage"] == "nachname_check"
+    assert "G wie Gustav" in aus["text"]
+    assert "richtig" in aus["text"].lower()
