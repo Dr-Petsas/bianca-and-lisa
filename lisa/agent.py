@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kern import gedaechtnis, gespraech, hirn, intent, stille, tenants, wiederholung, zuege
+from kern import gedaechtnis, gespraech, gespraechsruhe, hirn, intent, spur, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
 from lisa import calendar, identitaet, llm, session
 from lisa.greeting import begruessung
@@ -68,26 +68,42 @@ def start_reply(session_doc: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+_STUPS_ECHO = ("sind sie noch dran", "ich bin noch da", "meine frage war")
+
+
+def _offene_lisa_frage(session_doc: dict) -> str:
+    """Lisas gerade offene Frage: Identitaetsfrage bzw. die zuletzt WIRKLICH
+    gestellte Frage aus dem Verlauf — nie der ganze Auftrag. Ein zuvor
+    angehaengter Presence-Stups ("Sind Sie noch dran?") ist KEINE offene Frage
+    und wird uebersprungen — sonst wiederholt der zweite Stups sich selbst."""
+    if _s(session_doc.get("idCheck")) in {identitaet.FRAGE, identitaet.HOLEN, identitaet.WARTEN}:
+        return _s(identitaet.frage_satz(session_doc.get("patient") or {}))
+    for m in reversed(session_doc.get("messages") or []):
+        if m.get("role") != "assistant":
+            continue
+        for satz in reversed(stille._SATZ_ENDE_RE.split(_s(m.get("content")))):
+            kern = satz.strip()
+            low = kern.casefold()
+            if kern.endswith("?") and not any(e in low for e in _STUPS_ECHO):
+                return kern
+        break
+    return ""
+
+
 def stille_zug(session_doc: dict) -> dict[str, Any]:
-    """Stille-Wächter (Chef 27.08.2026): der Angerufene sagt seit ~4 Sekunden
-    nichts — Lisa ergreift das Wort und knüpft am Stand an: Identitätsfrage
-    bzw. Auftrag plus zuletzt gestellte Frage (mit Präfix, nie wortgleich —
-    Wiederholungs-Wächter-Regel). Nach MAX_STUPSE Stupsen: Schweigen, bis
-    wieder gesprochen wird (user_turn setzt den Zähler zurück)."""
+    """Stille-Wächter (Chef 27.08.2026), W-RUHE-angeglichen (15.09.2026):
+    der ERSTE Stups ist NUR Presence ("Sind Sie noch dran?"), der ZWEITE NUR
+    die offene Frage (mit Präfix, nie wortgleich). Lisas bisherige
+    Wiederholung des GANZEN Auftrags bei jedem Stups entfällt — das wirkte
+    hektisch. Nach MAX_STUPSE Stupsen: Schweigen, bis wieder gesprochen wird
+    (user_turn setzt den Zähler zurück)."""
     n = stille.stups_zaehlen(session_doc)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
-    teile = [stille.anrede(n)]
-    if _s(session_doc.get("idCheck")) in {identitaet.FRAGE, identitaet.HOLEN, identitaet.WARTEN}:
-        teile.append(stille.frage_praefix(identitaet.frage_satz(session_doc.get("patient") or {})))
+    if n <= 1 and stille.presence_erlaubt(session_doc):
+        text = stille.anrede(n)
     else:
-        auftrag = _s(session_doc.get("auftrag"))
-        if auftrag:
-            teile.append(f"Es geht um Folgendes: {auftrag}.")
-        offene = stille.letzte_frage(session_doc.get("messages") or [])
-        if offene:
-            teile.append(stille.frage_praefix(offene))
-    text = " ".join(x for x in teile if x).strip()
+        text = stille.frage_praefix(_offene_lisa_frage(session_doc)) or stille.anrede(n)
     ent = wiederholung.pruefen(
         session_doc, text,
         frueher=wiederholung.letzte_antworten(session_doc.get("messages") or []),
@@ -178,6 +194,18 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
         text = entdoppelt
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = text
+    # W-RUHE (15.09.2026): hoechstens EINE Frage, danach kein zweites Thema —
+    # dieselbe Ausgangswache wie Bianca. Fakten hinter der Frage bleiben.
+    if gespraechsruhe.modus() != "off":
+        ruhig, weg = gespraechsruhe.saeubern(text)
+        if weg:
+            if gespraechsruhe.modus() == "shadow":
+                spur.merken(session_doc, "ruhe-wache-shadow", " | ".join(x[:40] for x in weg))
+            else:
+                spur.merken(session_doc, "ruhe-wache", " | ".join(x[:40] for x in weg))
+                text = ruhig or text
+                if msgs and msgs[-1].get("role") == "assistant":
+                    msgs[-1]["content"] = text
     session_doc["messages"] = msgs
     gespraech.nach_antwort(session_doc)
     # W-GEDAECHTNIS: Werkzeuge koennen den Patienten nachgeladen haben.

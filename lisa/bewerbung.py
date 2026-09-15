@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from kern import stille, wiederholung
+from kern import gespraechsruhe, spur, stille, wiederholung
 from lisa import llm
 
 ART = "bewerbung"
@@ -154,6 +154,13 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     )
     if ent:
         text = ent
+    # W-RUHE (15.09.2026): auch Kampagnen-Lisa — hoechstens EINE Frage, danach
+    # kein zweites Thema. Fakten hinter der Frage bleiben.
+    if gespraechsruhe.modus() == "enforce":
+        ruhig, weg = gespraechsruhe.saeubern(text)
+        if weg:
+            spur.merken(session_doc, "ruhe-wache", " | ".join(x[:40] for x in weg))
+            text = ruhig or text
     if text:
         msgs.append({"role": "assistant", "content": text})
     session_doc["messages"] = msgs

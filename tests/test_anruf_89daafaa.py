@@ -378,30 +378,40 @@ def test_task_auswahl_spricht_keinen_llm_vorsatz_vor_der_jobfrage(monkeypatch):
     assert aus["text"].count("?") == 1
 
 
-def test_task_auswahl_streamt_bei_anderen_mandanten_unveraendert(monkeypatch):
+def test_task_auswahl_spricht_auch_bei_anderen_mandanten_keinen_vorsatz(monkeypatch):
+    """W-RUHE (15.09.2026): die Vorsatz-Sperre während der semantischen
+    Task-Auswahl gilt jetzt für JEDEN Mandanten (Chef: "ein Thema nach dem
+    anderen") — nicht mehr nur Blessing. Für meddent lief früher noch ein
+    Streaming-Vorsatz; das wirkte hektisch."""
     tenant = copy.deepcopy(laden("meddent"))
     tenant["_testNoWrite"] = True
     sit = session.neu(tenant=tenant)
     agent.start_reply(sit)
     vorab = []
-    aufrufe = []
 
-    def _alt_stream(*args, **kwargs):
-        aufrufe.append(True)
-        kwargs["erster_satz"]("Altpfad-Vorsatz.")
-        return {
+    monkeypatch.setattr(
+        agent.llm,
+        "chat_stream",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("Task-Auswahl darf bei keinem Mandanten vorab sprechen")
+        ),
+    )
+    monkeypatch.setattr(
+        agent.llm,
+        "chat",
+        lambda *a, **k: {
             "ok": True,
-            "text": "Altpfad-Vorsatz. Das klingt nach einer wichtigen Angelegenheit.",
+            "text": "Das klingt nach einer wichtigen Angelegenheit.",
             "tool_calls": [],
-        }
+        },
+    )
 
-    monkeypatch.setattr(agent.llm, "chat_stream", _alt_stream)
-
+    # Kein Streaming-Vorsatz während der Task-Auswahl (chat_stream würfe);
+    # der nicht-streamende chat-Pfad wird genutzt.
     agent.user_turn(
         sit,
         "Ich mache meine Kampf eine Abfrage.",
         vorab=vorab.append,
     )
 
-    assert aufrufe == [True]
-    assert vorab == ["Altpfad-Vorsatz."]
+    assert vorab == [], "meddent streamt während der Task-Auswahl keinen Vorsatz mehr"

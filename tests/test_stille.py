@@ -226,7 +226,9 @@ def test_ohne_offenen_job_freundlich():
 # Lisa: stille_zug
 # ---------------------------------------------------------------------------
 
-def test_lisa_stups_nennt_auftrag_und_letzte_frage():
+def test_lisa_stups_erst_presence_dann_offene_frage():
+    """W-RUHE (15.09.2026): erster Stups NUR Presence, kein voller Auftrag mehr;
+    zweiter Stups NUR die offene Frage."""
     doc = {
         "tenant": {"praxisName": "Testpraxis"},
         "auftrag": "Kontrolltermin am Donnerstag bestätigen",
@@ -236,13 +238,16 @@ def test_lisa_stups_nennt_auftrag_und_letzte_frage():
             {"role": "assistant", "content": "Passt Ihnen der Donnerstag um zehn Uhr?"},
         ],
     }
-    t = lisa_agent.stille_zug(doc)["text"]
-    assert "noch dran" in t.casefold()
-    assert "Kontrolltermin" in t, "der Auftrag wird angesagt — Gehirn an"
-    assert "Meine Frage war" in t and "Donnerstag" in t, "die offene Frage kommt mit Praefix"
+    # Erster Stups = Presence, KEIN Auftrags-Sermon.
+    t1 = lisa_agent.stille_zug(doc)["text"]
+    assert "noch dran" in t1.casefold()
+    assert "Kontrolltermin" not in t1, "kein voller Auftrag mehr beim ersten Stups"
+    # Zweiter Stups = die offene Frage.
+    t2 = lisa_agent.stille_zug(doc)["text"]
+    assert "Donnerstag" in t2, "die offene Frage kommt beim zweiten Stups"
 
 
-def test_lisa_identitaetsphase_wiederholt_die_frage():
+def test_lisa_identitaetsphase_offene_frage_beim_zweiten_stups():
     doc = {
         "tenant": {"praxisName": "Testpraxis"},
         "auftrag": "Termin",
@@ -250,8 +255,10 @@ def test_lisa_identitaetsphase_wiederholt_die_frage():
         "patient": {"firstName": "Max", "lastName": "Muster"},
         "messages": [{"role": "assistant", "content": "Bin ich mit Max Muster verbunden?"}],
     }
-    t = lisa_agent.stille_zug(doc)["text"]
-    assert "Meine Frage war" in t or "Max" in t
+    t1 = lisa_agent.stille_zug(doc)["text"]
+    assert "noch dran" in t1.casefold()
+    t2 = lisa_agent.stille_zug(doc)["text"]
+    assert "Meine Frage war" in t2 or "Max" in t2
 
 
 def test_lisa_cap():

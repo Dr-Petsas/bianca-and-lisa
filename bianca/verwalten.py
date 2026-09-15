@@ -700,6 +700,105 @@ def _absagen(sit: dict, melde: Melde) -> dict:
     return {"text": res.get("spoken") or "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum."}
 
 
+def _mehrfach_auswahl(t: str, termine: list[dict]) -> list[dict]:
+    """Welche der vorgelesenen Termine meint 'beide/alle/den ersten und den
+    zweiten'? Leere Liste = kein Mehrfach-Wunsch."""
+    echte = [a for a in termine if _s(a.get("id"))]
+    if len(echte) < 2:
+        return []
+    if _ALLE_RE.search(t):
+        return echte
+    if _ERSTEN_ZWEITEN_RE.search(t):
+        return echte[:2]
+    if _BEIDE_RE.search(t):
+        # "beide" meint genau zwei — bei mehr als zweien nicht raten.
+        return echte if len(echte) == 2 else echte[:2]
+    return []
+
+
+def _mehrfach_absage_start(sit: dict, auswahl: list[dict]) -> dict:
+    """EINE gemeinsame Rueckbestaetigung fuer mehrere Termine (nie still nur
+    einen absagen)."""
+    s = gehirn.sammler(sit)
+    sit["mehrfachAbsage"] = [
+        {"id": _s(a.get("id")), "spoken": _s(a.get("spoken"))} for a in auswahl
+    ]
+    s["phase"] = "mehrfach_bestaetigen"
+    s["frage"] = "mehrfach_ok"
+    liste = _liste_sprechbar(auswahl)
+    return {"text": (
+        f"Verstanden — ich sage dann diese Termine ab: {liste}. "
+        "Soll ich das wirklich für beide tun?"
+    )}
+
+
+def _mehrfach_absagen(sit: dict, melde: Melde) -> dict:
+    """Die rueckbestaetigte Warteschlange nacheinander ueber cancel-by-id
+    absagen. Teilfehler werden EHRLICH einzeln ausgewiesen — nie 'beide
+    abgesagt', wenn nur ein Werkzeug erfolgreich war (W-FAKTEN-WACHE-Geist)."""
+    s = gehirn.sammler(sit)
+    posten = list(sit.get("mehrfachAbsage") or [])
+    if sit.get("testNoWrite"):
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["mehrfachAbsage"] = []
+        return {"text": "Der Testlauf ist beendet; es wurde nichts abgesagt."}
+    erfolg: list[str] = []
+    fehler: list[str] = []
+    letzter_termin: dict = {}
+    for p in posten:
+        aid = _s(p.get("id"))
+        if not aid:
+            continue
+        if melde:
+            melde("cancel_appointment")
+        res = kal.cancel_by_id(sit["tenant"], _ctx(sit), aid)
+        merke_tool(sit, "cancel_appointment", res)
+        wann = _s(p.get("spoken")) or "der Termin"
+        if res.get("ok"):
+            erfolg.append(wann)
+            termin = next((a for a in (sit.get("gefunden") or [])
+                           if _s(a.get("id")) == aid), {"id": aid, "spoken": wann})
+            letzter_termin = termin
+            _arzt_uebernehmen(sit, termin)
+            if _s((sit.get("booking") or {}).get("appointmentId")) == aid:
+                sit["booking"]["appointmentId"] = ""
+        else:
+            fehler.append(wann)
+    sit["mehrfachAbsage"] = []
+    sit["gefundenKey"] = ""  # Bestand hat sich geaendert
+    sit["gefunden"] = []
+    sit["verwaltenTermin"] = ""
+    _verw_reset(sit)
+    s["phase"] = "fertig"
+    s["frage"] = "neubuchung"
+    teile: list[str] = []
+    if erfolg:
+        teile.append("Erledigt — abgesagt sind: " + _fuegen(erfolg) + ".")
+    if fehler:
+        teile.append(
+            "Bei " + _fuegen(fehler) + " hat es gerade nicht geklappt — "
+            "die Praxis kümmert sich darum."
+        )
+    if not teile:
+        # Sollte nie passieren (Warteschlange war leer): ehrlich bleiben.
+        s["frage"] = ""
+        return {"text": "Da ist gerade nichts zum Absagen gewesen. "
+                        "Kann ich sonst noch etwas für Sie tun?"}
+    teile.append("Möchten Sie direkt einen neuen Termin vereinbaren?")
+    book = {"cancelled": bool(erfolg)}
+    if letzter_termin:
+        book["spoken"] = _s(letzter_termin.get("spoken"))
+    return {"text": " ".join(teile), "book": book}
+
+
+def _fuegen(teile: list[str]) -> str:
+    teile = [_s(x) for x in teile if _s(x)]
+    if len(teile) > 1:
+        return ", ".join(teile[:-1]) + " und " + teile[-1]
+    return teile[0] if teile else ""
+
+
 def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
     """Gefundenen Termin bestaetigen (mit Anrede), dann den Neu-Wunsch holen."""
     s = gehirn.sammler(sit)
@@ -1048,6 +1147,15 @@ def _ist_passt(t: str, termine: list[dict] | None = None) -> bool:
 _VERSCHIEB_WUNSCH_RE = re.compile(r"\bverschieb\w*|\bverleg\w*", re.I)
 _ABSAGE_WUNSCH_RE = re.compile(r"\babsag\w*|\bstornier\w*|\bcancel\w*", re.I)
 _ABSCHIED_TEXT = "Sehr gerne. Dann wünsche ich Ihnen einen schönen Tag — auf Wiederhören!"
+
+# "Beide/alle absagen" (W-MEHRFACH-ABSAGE 15.09.2026): der Anrufer meint MEHR
+# als einen der vorgelesenen Termine. NUR beim Absagen sinnvoll (zwei Termine
+# lassen sich nicht auf denselben neuen Slot verschieben).
+_ALLE_RE = re.compile(r"\b(?:alle|sämtliche|saemtliche)\b", re.I)
+_BEIDE_RE = re.compile(r"\bbeide[nr]?\b|\bboth\b", re.I)
+_ERSTEN_ZWEITEN_RE = re.compile(
+    r"(?:den\s+)?ersten\s+und\s+(?:den\s+)?zweiten", re.I,
+)
 
 
 def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
@@ -1405,9 +1513,29 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             return {"text": "Kein Problem. Wann passt es Ihnen denn besser?"}
         return None
 
+    # Mehrfach-Absage rueckbestaetigt? (W-MEHRFACH-ABSAGE)
+    if s["phase"] == "mehrfach_bestaetigen":
+        if gehirn.ist_ja(t):
+            return _mehrfach_absagen(sit, melde)
+        if gehirn.ist_nein(t):
+            sit["mehrfachAbsage"] = []
+            s["phase"] = "wahl"
+            s["frage"] = "terminwahl"
+            return {"text": (
+                "Alles klar, es bleibt alles bestehen. Möchten Sie doch einen "
+                f"davon absagen? Zur Auswahl: {_liste_sprechbar(sit.get('gefunden') or [])}."
+            )}
+        return None
+
     # 2) Auswahl des Bestandstermins ("den am Donnerstag"). Hier NIE ans LLM
     #    abgeben: ein frei erfundenes "dann sage ich den ab" waere fatal.
     if s["phase"] == "wahl" and sit.get("gefunden"):
+        # "Beide/alle absagen" VOR der Einzelauswahl (W-MEHRFACH-ABSAGE): der
+        # Erste-Treffer-Weg darf nie still nur EINEN Termin greifen.
+        if s["modus"] == "absagen":
+            auswahl = _mehrfach_auswahl(t, sit["gefunden"])
+            if auswahl:
+                return _mehrfach_absage_start(sit, auswahl)
         angebote = [{"iso": a.get("iso"), "spoken": a.get("spoken")} for a in sit["gefunden"] if a.get("iso")]
         iso = _slot_wahl(t, angebote)
         if not iso and len(sit["gefunden"]) == 1 and gehirn.ist_ja(t):

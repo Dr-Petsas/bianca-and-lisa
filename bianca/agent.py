@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, besuchsgrund, flow, gehirn, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import fach_wache
 from kern import qwen_korrektor
 from kern import spur
@@ -408,10 +408,14 @@ def _namens_unklar_antwort(sit: dict) -> str:
 
 
 def _kompakt_fachfrage(sit: dict, text: str) -> str:
-    """Ein echtes Blessing-Fachwort nie als allgemeinen STT-Müll behandeln."""
-    if not gespraech.kompakt_aktiv(sit):
-        return ""
+    """Ein echtes Blessing-Fachwort nie als allgemeinen STT-Müll behandeln.
+
+    Ausdruecklich an die dermatologische Motiv-Klarheit gebunden (nicht an die
+    allgemeine Ruhe-Regie): nur ein Mandant mit ``dermaMotivKlarheit`` bietet
+    auf ein erkanntes Fachwort direkt die Terminfrage an."""
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("dermaMotivKlarheit") is not True:
+        return ""
     try:
         grund, motiv = besuchsgrund.deute(
             tenant,
@@ -1028,6 +1032,27 @@ def _fach_wache_anwenden(sit: dict, text: str) -> str:
     return neu or text
 
 
+def _ruhe_wache_anwenden(sit: dict, text: str) -> str:
+    """W-RUHE (15.09.2026): hoechstens EINE Frage pro Zug, die Frage am Ende,
+    danach kein zweites Thema. Gemeinsame Regie fuer alle Mandanten (Chef:
+    "ein thema nach dem anderen abarbeiten").
+
+    Fail-safe: nur wenn eine Frage NICHT am Ende steht und HINTER ihr kein
+    Fakt (Ziffer/Datum/Uhrzeit/Notfall/SMS/Link) haengt. off: nichts.
+    shadow: nur Spur. enforce: Nachgeplauder hinter der Frage streichen."""
+    m = gespraechsruhe.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, weg = gespraechsruhe.saeubern(text)
+    if not weg:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "ruhe-wache-shadow", " | ".join(x[:40] for x in weg))
+        return text
+    spur.merken(sit, "ruhe-wache", " | ".join(x[:40] for x in weg))
+    return neu or text
+
+
 def _zeiten_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
     """W-ZEITEN-WACHE (15.09.2026): Oeffnungszeiten nur, wenn sie belegt sind.
 
@@ -1213,6 +1238,7 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
         else:
             fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
         fl["text"] = _eingehen_anwenden(sit, fl["text"], _gehoert_aus(msgs))
+        fl["text"] = _ruhe_wache_anwenden(sit, fl["text"])
         if "?" in fl["text"]:
             sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
         msgs.append({"role": "assistant", "content": fl["text"]})
@@ -1813,15 +1839,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # gesprochener erster Satz waere dann falsch. Nur freies Geplauder streamt.
     s = sit.get("sammler") or {}
     mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"} and s.get("phase") not in {"gebucht", "fertig"}
-    # Ein Task-Auswahl-Lauf darf nie frei aus dem Modell VORsprechen. Im
-    # Blessing-Livezug 89daafaa sagte das Modell erst "Das klingt nach einer
-    # wichtigen Angelegenheit", danach kam die sichere Jobfrage — zwei
-    # Themen direkt hintereinander. Erst Auswahl auswerten, dann genau einen
-    # deterministischen Satz sprechen.
+    # W-RUHE: ein Task-Auswahl-Lauf darf bei KEINEM Mandanten frei aus dem
+    # Modell VORsprechen. Im Blessing-Livezug 89daafaa sagte das Modell erst
+    # "Das klingt nach einer wichtigen Angelegenheit", danach kam die sichere
+    # Jobfrage — zwei Themen direkt hintereinander. Erst Auswahl auswerten,
+    # dann genau einen deterministischen Satz sprechen. Frueher war das an
+    # gespraech.kompakt_aktiv (nur Blessing) gebunden; die ruhige Grundregie
+    # gilt jetzt ueberall.
     darf_vorab = (
         vorab is not None
         and not mitten_drin
-        and not (task_auswahl and gespraech.kompakt_aktiv(sit))
+        and not task_auswahl
     )
     # Wurde schon ein Satz gesprochen, darf W-EINGEHEN unten NICHTS mehr
     # voranstellen: llm.rest_nach_vorab findet den Rest sonst nicht mehr und
@@ -1946,6 +1974,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if ohne_gruss != bewacht:
         spur.merken(sit, "regreeting", _s(bewacht)[:60])
         bewacht = ohne_gruss
+    bewacht = _ruhe_wache_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht

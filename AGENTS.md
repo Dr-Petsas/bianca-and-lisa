@@ -3850,6 +3850,67 @@ bekommt ausschließlich „Mitte November“. Ein alleinstehendes „enthalten�
 alle anderen Mandanten bleiben unverändert. Regressionen:
 `tests/test_blessing_abschluss.py`.
 
+## Ruhige Gesprächsführung für ALLE Stimmen (W-RUHE 15.09.2026 — nicht rückbauen)
+
+Chef: „bianca ist hektisch. es werden wieder mehrere sachen direkt
+hintereinander abgefeuert … sie soll ruhiger sein und ein thema nach dem
+anderen abarbeiten.“ Die Ruhe war bis dahin eine Blessing-Sonderwirkung
+(`gespraechKompakt`). Jetzt gilt sie mandantenübergreifend für Bianca/Ben,
+Patienten-Lisa UND Kampagnen-Lisa — MedDent/Thaler/Rüther/Blessing ändern
+inhaltlich nichts, nur das Nachgeplauder hinter einer Frage fällt.
+
+- **Eine gemeinsame Ausgangswache** `kern/gespraechsruhe.py`
+ (`saeubern(text) -> (neu, weg)`): pro gesprochenem Zug höchstens EINE Frage,
+ die Frage steht am ENDE, danach kein zweites Thema. Fail-safe wie
+ `fach_wache`/`zeiten_wache` — im Zweifel BEHALTEN: es wird NUR gestrichen,
+ wenn eine Frage NICHT am Ende steht UND hinter ihr KEIN Fakt hängt (Ziffer,
+ Datum, Wochentag, Uhrzeit, Notfall/112/116 117, SMS/Link/E-Mail, Euro).
+ Angebotene Alternativ-Slots und Sicherheits-/Terminfakten fallen so nie
+ blind weg; reine Aussage-Züge (Termin-/SMS-Bestätigung ohne Frage) bleiben
+ unangetastet. Stufen/Notaus `RUHE_WACHE=off|shadow|enforce` (Default
+ enforce).
+- **Einhängung Bianca** (`bianca/agent._ruhe_wache_anwenden`): am LLM-Ausgang
+ nach `regreeting_raus` UND im Maschinen-Pfad nach `_eingehen_anwenden`
+ (dieselbe Doppel-Stelle wie die anderen Ausgangswachen, damit
+ `rest_nach_vorab` den gekürzten Text sieht). Zusätzlich gilt die
+ Vorsatz-Sperre während der semantischen Task-Auswahl (`darf_vorab`) jetzt
+ für JEDEN Mandanten, nicht nur die kompakten — das Modell darf vor einer
+ deterministischen Jobfrage keinen Streaming-Vorsatz mehr sprechen. Die
+ dermatologische `_kompakt_fachfrage` hängt jetzt ausdrücklich an
+ `dermaMotivKlarheit`, nicht mehr an der allgemeinen Ruhe-Regie.
+- **Einhängung Lisa** (`lisa/agent.py`, `lisa/bewerbung.py`): dieselbe
+ `gespraechsruhe.saeubern`-Ausgangswache am LLM-Ausgang. Lisas Stille-Regie
+ ist an Biancas Muster angeglichen: erster Stups NUR Presence, zweiter NUR
+ die offene Frage (`_offene_lisa_frage` aus `idCheck`/letzter wirklich
+ gestellter Frage, Presence-Echo herausgefiltert) — die frühere Wiederholung
+ des GANZEN Auftrags bei jedem Stups entfällt.
+- **Prompt-Vertrag** in `bianca/prompt.py` und `lisa/prompt.py`: „Die Frage
+ steht IMMER am Ende — danach kein zweites Thema, keine zweite Frage.“
+- Tests: `tests/test_gespraechsruhe.py` (Fakt-hinter-Frage-Gegenproben sind
+ der wichtigere Teil), Stups-Block in `tests/test_stille.py`,
+ Task-Auswahl-Gegenprobe in `tests/test_anruf_89daafaa.py`.
+
+## Mehrfach-Absage (W-MEHRFACH-ABSAGE 15.09.2026 — nicht rückbauen)
+
+Chef: „wenn ich beide absagen möchte … oder am ende komme ich wieder in eine
+schleife.“ Bislang wählte die Termin-Wahl bei „beide/alle“ still nur den
+ersten Treffer.
+
+- **Erkennung + Auswahl** (`bianca/verwalten._mehrfach_auswahl`, VOR der
+ Einzelauswahl in der `wahl`-Phase): „beide“, „alle“, „den ersten und den
+ zweiten“ wählen mehrere vorgelesene Termine; ein einzelnes „den ersten“
+ bleibt der bewährte Einzelweg.
+- **Eine Sammelbestätigung** (`_mehrfach_absage_start` → Phase
+ `mehrfach_bestaetigen`): erst nach einem klaren Ja werden die konkreten
+ Termin-IDs NACHEINANDER über den vorhandenen `cancel-by-id`-Weg abgesagt
+ (`_mehrfach_absagen`). Teilfehler werden ehrlich einzeln benannt — nie
+ „beide abgesagt“, wenn nur ein Werkzeug erfolgreich war. „Nein“ lässt alle
+ Termine bestehen.
+- **Schleifenfreier Abschluss**: nach der Absage genau EIN Angebot
+ (Neubuchung), kein roher „Sonst noch?“-Loop.
+- Tests: `tests/test_mehrfach_absage.py` (Erfolg, Teilfehler, klares Nein,
+ Einzelwahl bleibt Einzelweg).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
