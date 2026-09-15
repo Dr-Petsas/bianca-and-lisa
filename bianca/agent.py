@@ -342,6 +342,46 @@ _DIKTAT_FRAGEN = {
     "telefon", "telefon_check", "telefon_alt", "buchstabieren",
     "nachname", "vorname", "geburtsdatum",
 }
+_NAMENS_UNKLAR_FRAGEN = {
+    "name", "nachname", "buchstabieren", "nachname_korr",
+    "vorname", "vorname_check",
+}
+
+
+def _namens_unklar_antwort(sit: dict) -> str:
+    """Tenant-scharfer Rückfall für eine bereits offene Namensfrage.
+
+    Blessing-Live 15.09.2026: valide oder nur leicht verhörte Namen wie
+    „Mülhausen“, „Said“, „Aqu“ und „Manuela“ wurden mit dem allgemeinen
+    Zwei-Fragen-Satz („Was meinen Sie damit? Meinen Sie vielleicht …?“)
+    beantwortet. Das hilft der Namensaufnahme nicht und verdoppelt die
+    Gesprächsschleife. Opt-in-Mandanten bleiben deshalb knapp beim offenen
+    Feld; der unsichere STT-Text wird weder wiederholt noch ans LLM gegeben.
+    """
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("namensUnklarOhneEcho") is not True:
+        return ""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    fid = _s(s.get("frage"))
+    if fid not in _NAMENS_UNKLAR_FRAGEN:
+        return ""
+    if fid == "vorname_check":
+        vor = _s(s.get("vorname"))
+        if vor:
+            return f"Ihr Vorname ist {vor}, richtig? Ein kurzes Ja oder Nein genügt."
+        return "Ist der Vorname richtig? Ein kurzes Ja oder Nein genügt."
+    if fid == "vorname":
+        return "Bitte nennen Sie den Vornamen noch einmal."
+    if fid == "name":
+        return "Bitte nennen Sie Ihren Namen noch einmal."
+    if fid == "buchstabieren" and _s(s.get("buchstabenTeil")):
+        return (
+            "Bitte mit den restlichen Buchstaben des Nachnamens weiter; "
+            "am Ende sagen Sie fertig."
+        )
+    if fid == "nachname_korr":
+        return "Bitte sagen oder buchstabieren Sie den korrigierten Nachnamen noch einmal."
+    return "Bitte sagen oder buchstabieren Sie den Nachnamen noch einmal."
 
 
 def _diktat_offen(sit: dict) -> bool:
@@ -1560,6 +1600,31 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
 
     # W-MEDDENT (04.09.2026): kurzer STT-Muell → nachfragen, kein LLM-Plaudern.
     if route.get("unklar"):
+        namens_text = _namens_unklar_antwort(sit)
+        if namens_text:
+            # A1 Blessing 15.09.2026: kein allgemeiner Unklar-Zähler und
+            # kein Zurückspiegeln eines möglicherweise echten Namens. Die
+            # Formularfrage bleibt offen; flow.frageLeer entscheidet beim
+            # nächsten Fehlversuch weiterhin über den bestehenden Ausstieg.
+            sit.pop("unklarFolge", None)
+            sit.pop("ganzsatzHinweisGegeben", None)
+            spur.merken(
+                sit,
+                "namensfrage-unklar",
+                f"{_s((sit.get('sammler') or {}).get('frage'))}:{text_in[:40]}",
+            )
+            return _maschinen_antwort(
+                sit,
+                {
+                    "text": namens_text,
+                    "book": None,
+                    # Die Formulierung gehört zum sicheren Formularpfad.
+                    # Ein schon einmal gestellter Satz darf deshalb nicht
+                    # zur Presence-Frage umgebaut werden.
+                    "_wiederholungErlaubt": True,
+                },
+                msgs,
+            )
         unklar_folge = int(sit.get("unklarFolge") or 0) + 1
         sit["unklarFolge"] = unklar_folge
         if unklar_folge >= 2:

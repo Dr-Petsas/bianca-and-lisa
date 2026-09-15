@@ -10,6 +10,7 @@
   "telefon": "",
   "sprache": "de",
   "fachgebiet": "dermatologie",
+  "namensUnklarOhneEcho": true,
   "sttHotwords": [
     "Blessing",
     "Hautkrebsscreening",

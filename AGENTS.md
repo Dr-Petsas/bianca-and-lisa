@@ -3574,6 +3574,26 @@ Zwei Löcher, die die Live-Gegenprobe danach noch zeigte:
   vier als „unbelegt"), ruft `start_reply` vor dem ersten Zug und stellt
   allen vier Mandanten dieselben drei Fragen.
 
+## Blessing-Namensfrage ohne Unklar-Doppelschleife (W-BLESSING-NAME-UNKLAR 15.09.2026 — nicht rückbauen)
+
+Blessing-Livefälle: Nach einer offenen Namensfrage bekamen leicht verhörte
+oder kurze Namen wie „Mülhausen“, „Said“, „Aqu“ und „Manuela“ den allgemeinen
+Zwei-Fragen-Satz „Was meinen Sie damit? Meinen Sie vielleicht etwas anderes?“.
+Das half der Erfassung nicht, spiegelte möglicherweise einen echten Namen als
+Fehler zurück und startete parallel die allgemeine Unklar-Schleife.
+
+- `bianca/agent._namens_unklar_antwort` hält Name, Nachname, Vorname,
+  Buchstabierung und Namenskorrektur deterministisch im Formular. Der
+  unsichere STT-Text wird nicht wiederholt und erreicht das LLM nicht.
+- Die Namensfrage bleibt offen; `flow.frageLeer` behält seinen vorhandenen
+  Ausstieg beim nächsten Fehlversuch. Der allgemeine `unklarFolge`-Zähler
+  wird auf diesem Weg nicht gesetzt.
+- Strikt mandantenscharf: nur `tenants/blessing.json` trägt
+  `namensUnklarOhneEcho=true`. Ohne den Schalter läuft der bisherige Weg
+  byte-identisch — Gegenproben für MedDent, Thaler und Rüther.
+- Tests: `tests/test_blessing_namen.py`. Einführung nach dem
+  Produktionsstand V2.7; noch nicht live ausgerollt.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
