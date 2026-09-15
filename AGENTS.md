@@ -3681,6 +3681,24 @@ Neubuchung mit Versicherungs- und Besuchsgrundfragen.
   Regressionen: `tests/test_blessing_abschluss.py`; Einführung nach V2.7,
   noch nicht deployt.
 
+## Evidenzbasierter Tages-Scorer (W-QUALITAET-40-80 15.09.2026)
+
+`tools/tages_scorer.py` bewertet die read-only `anruf.json`-Manifeste mit
+einer festen Rubrik: super, gut, durchwachsen, unvollständig, fehlerhaft.
+Aufleger sind ausschließlich Anrufe ohne substanziellen Anrufersatz; ein
+genanntes Anliegen bleibt auch bei frühem Abbruch in der Wertung. Super
+verlangt einen belegten Write/Transfer ohne Reibung. Echte Praxisnotizen
+erreichen höchstens gut. Fehlgeschriebene Writes, Erfolgsaussagen ohne
+Ledger-Beweis sowie Unklar-/Presence-/Frageschleifen sind harte Fehler.
+
+Der Bericht weist Sessions, Praxen und lokale Stunden getrennt aus und zieht
+deterministisch zehn Prozent der automatisch als super bewerteten Gespräche
+zur manuellen Gegenhör-Stichprobe. Ziel gilt erst ab 50 gewerteten Gesprächen:
+super mindestens 40 Prozent und super plus gut mindestens 80 Prozent.
+Testanrufe sind standardmäßig ausgeschlossen. Das Werkzeug verändert nie
+Manifeste oder Kalender; nur ein ausdrücklich gesetztes `--json`-Ziel wird
+geschrieben. Regression: `tests/test_tages_scorer.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
