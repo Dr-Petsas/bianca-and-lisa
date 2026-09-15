@@ -432,6 +432,15 @@ def _ctx_bauen(sit: dict) -> dict:
         if vm:
             s["motivId"] = _s(vm.get("id"))
             s["motivName"] = _s(vm.get("name"))
+            # W-ERSATZ-MOTIV (15.09.2026): die Buchbarkeit steht nur im
+            # SITZUNGS-Katalog (frisch aus masVisitMotives, bei Ruether 31
+            # Motive) — tenant["visitMotives"] fuehrt nur einen Ausschnitt.
+            # Der Slotsuche mitgeben, damit sie einen gesperrten Wunsch
+            # erkennt und der Anrufer den echten Grund hoert.
+            if vm.get("allowOnlineBooking") is False:
+                ctx["visitMotiveOnline"] = False
+            else:
+                ctx.pop("visitMotiveOnline", None)
     if s["motivId"]:
         ctx["visitMotiveId"] = s["motivId"]
         ctx["visitMotiveName"] = s["motivName"]
@@ -931,12 +940,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         sit["keinSlotFertig"] = True
         verwalten.rueckruf_notiz(sit)
         ansage = spoken_offer([], wish_matched=True)
-        gesperrt = _s(sit.pop("motivNichtTelefonisch", ""))
-        if gesperrt:
+        if _s(sit.pop("motivNichtTelefonisch", "")):
+            # Der Motivname selbst wird NICHT gesprochen: er traegt Kuerzel
+            # ("GYN ...") und bei der Vorsorge das Wort Krebs (Chef
+            # 08.09.2026: nie sagen) — und jede Beugung ("fuer ...") ginge
+            # bei fremden Namen schief. Der Wunsch steht im Wortlaut in der
+            # Rueckruf-Notiz, die eine Zeile darueber geschrieben wird.
             ansage = (
-                f"Einen Termin für {gesperrt} darf ich telefonisch nicht "
-                "vergeben. Ich habe Ihr Anliegen notiert — die Praxis meldet "
-                "sich kurzfristig bei Ihnen und stimmt den Termin mit Ihnen ab."
+                "Diese Terminart darf ich telefonisch nicht vergeben. Ich "
+                "habe Ihr Anliegen notiert — die Praxis meldet sich "
+                "kurzfristig bei Ihnen und stimmt den Termin mit Ihnen ab."
             )
         # W-RUECKRUF-NUMMER: ohne Nummer kann die Praxis nicht zurueckrufen —
         # dann ist die Nummer jetzt die offene Frage (Anrufe da746a65/5aa87268).

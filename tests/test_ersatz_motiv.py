@@ -224,14 +224,31 @@ def test_krebsvorsorge_hoert_den_echten_grund(notizen):
     ang = flow._angebot(sit)
     text = ang["text"]
     assert "telefonisch nicht vergeben" in text
-    assert "Krebsvorsorge" in text
     assert "keinen freien Termin" not in text
+    # Der Motivname wird NICHT gesprochen: Kuerzel "GYN" und das Wort Krebs
+    # (Chef 08.09.2026: nie sagen) haben am Telefon nichts zu suchen.
+    assert "Krebs" not in text and "GYN" not in text
     # Die Notiz bleibt — die Praxis weiss von dem Wunsch.
     n = notizen()
     assert len(n) == 1 and "Krebsvorsorge" in json.dumps(n[0], ensure_ascii=False)
     # und Ben bietet nie Endometriose-Zeiten an
     assert "Endometriose" not in text
     assert not sit.get("offered")
+
+
+def test_gesperrt_auch_wenn_nur_der_sitzungskatalog_das_motiv_kennt(notizen):
+    """Die Live-Ursache (Probe 15.09.2026): `tenant["visitMotives"]` fuehrt bei
+    Ruether nur 10 der 31 Motive — die Krebsvorsorge stand gar nicht drin, der
+    Marker blieb leer und der Anrufer hoerte "kein freier Termin". Die
+    Buchbarkeit kommt jetzt aus dem frischen Sitzungs-Katalog ueber den ctx."""
+    t = _ruether()
+    voll = t["visitMotives"]
+    t["visitMotives"] = [vm for vm in voll if vm["id"] != "krebs"]  # Ausschnitt
+    sit = _sit("krebs", "GYN Krebsvorsorge", tenant=t)
+    sit["motivKatalog"] = voll                                      # volle Liste
+    text = flow._angebot(sit)["text"]
+    assert "telefonisch nicht vergeben" in text
+    assert "keinen freien Termin" not in text
 
 
 def test_ausgebucht_bleibt_beim_alten_satz(notizen):

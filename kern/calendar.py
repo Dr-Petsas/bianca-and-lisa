@@ -204,6 +204,11 @@ def _nicht_telefonisch(tenant: dict, such: dict) -> str:
     mid = _s(such.get("visitMotiveId"))
     if not mid:
         return ""
+    # Der Aufrufer kennt den frischen Sitzungs-Katalog (masVisitMotives) und
+    # sagt die Buchbarkeit ausdruecklich — tenant["visitMotives"] fuehrt oft
+    # nur einen Ausschnitt (Ruether: 10 von 31).
+    if such.get("visitMotiveOnline") is False:
+        return _s(such.get("visitMotiveName")) or "diese Terminart"
     vms = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
     for vm in vms:
         if _s(vm.get("id")) != mid:
