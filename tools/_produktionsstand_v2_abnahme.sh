@@ -68,6 +68,16 @@ echo -n "Blessing-Slotwache:      "; docker exec telefonki-bianca-1 python -c \
 echo -n "W-ERSATZ-MOTIV komplett: "; docker exec telefonki-bianca-1 python -c \
   'from kern import calendar; s={"visitMotiveId":"x","visitMotiveName":"X","visitMotiveOnline":False}; assert calendar._nicht_telefonisch({}, s) == "X"; print("OK")' \
   || exit 1
+# V2.9: Blessing arbeitet pro Zug nur ein Thema ab. Die Nachricht fuer die
+# Aerztin ist ein eigener Schritt; nach der Buchung gibt es keine offene
+# Sonst-noch-Schleife. Relative Slotwahl bleibt bei reiner Ansagekorrektur.
+echo -n "Blessing-Ruhe-V2.9:      "; docker exec telefonki-bianca-1 python -c \
+  'import json; from kern import sprech; t=json.load(open("/app/tenants/blessing.json")); k=("terminNotizNachBuchung","buchungAbschlussKompakt"); assert all(t.get(x) is True for x in k); assert t.get("arztNotizFrageText"); assert "arztNotizAutomatisch" not in t; assert sprech.ohne_krebs("Hautkrebs-Screening") == "Hautscreening"; print("OK")' \
+  || exit 1
+echo -n "Blessing-Ein-Thema-Code: "; docker exec telefonki-bianca-1 grep -c \
+  'task_auswahl and gespraech.kompakt_aktiv' /app/bianca/agent.py
+echo -n "Blessing-Notiz-Mini-Flow:"; docker exec telefonki-bianca-1 grep -c \
+  'def _termin_notiz_zug' /app/bianca/flow.py
 echo -n "auflegen in der Bruecke: "; docker exec telefonki-sipbridge-1 grep -c ausklingen_und_auflegen /app/sip_bridge/server.py
 echo -n "Dock-Cache-Buster:       "; docker exec telefonki-bianca-1 grep -o 'app.js?v=b[0-9]*' /app/bianca_web/index.html
 echo
