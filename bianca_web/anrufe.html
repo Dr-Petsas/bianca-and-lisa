@@ -28,14 +28,28 @@
     @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
     .card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
-    .filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; }
-    .filter button {
+    .filter, .tag-filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; align-items: center; }
+    .filter button, .tag-filter button {
       appearance: none; cursor: pointer; font: inherit; font-size: 12px; font-weight: 650;
       padding: 5px 10px; border-radius: 999px; background: #171114; color: var(--text);
       border: 1px solid var(--line);
     }
-    .filter button.an { border-color: var(--accent); background: #2a1c26; color: #f3d4e6; }
+    .filter button.an, .tag-filter button.an { border-color: var(--accent); background: #2a1c26; color: #f3d4e6; }
     .filter button .n { color: var(--muted); font-weight: 600; }
+    .tag-filter label {
+      display: flex; align-items: center; gap: 6px;
+      color: var(--muted); font-size: 12px; font-weight: 650;
+    }
+    .tag-filter input[type="date"] {
+      appearance: none; font: inherit; font-size: 12px; font-weight: 650;
+      padding: 5px 10px; border-radius: 999px;
+      background: #171114; color: var(--text);
+      border: 1px solid var(--line);
+      color-scheme: dark;
+    }
+    .tag-filter input[type="date"]:focus {
+      outline: none; border-color: var(--accent);
+    }
     .liste { display: flex; flex-direction: column; gap: 6px; max-height: 78vh; overflow: auto; }
     .eintrag { border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; cursor: pointer; box-shadow: inset 4px 0 0 #7fbf8e; }
     .eintrag:hover { background: #2a2128; }
@@ -150,6 +164,13 @@
           <button type="button" data-art="test">Testanrufe <span class="n" id="n-test"></span></button>
           <button type="button" data-art="live">Praxis-Live <span class="n" id="n-live"></span></button>
         </div>
+        <div class="tag-filter" id="tag-zeile">
+          <label for="tag-filter">Datum
+            <input type="date" id="tag-filter" aria-label="Telefonate nach Datum filtern" />
+          </label>
+          <button type="button" id="tag-heute">Heute</button>
+          <button type="button" id="tag-alle">Alle Tage</button>
+        </div>
         <div class="liste" id="liste"><div class="leer">lade …</div></div>
       </section>
       <section class="card">
@@ -160,6 +181,6 @@
   </div>
   <audio id="spieler" hidden></audio>
   <script src="praxis.js?v=5"></script>
-  <script src="anrufe.js?v=a21"></script>
+  <script src="anrufe.js?v=a24"></script>
 </body>
 </html>

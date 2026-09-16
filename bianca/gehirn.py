@@ -2568,6 +2568,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Möchten Sie den Termin verschieben oder absagen?",
         "Verschieben oder absagen — was darf ich für Sie tun?",
     ),
+    "verw_patient_ok": (
+        "Ist das der richtige Patient und Termin?",
+        "Habe ich den richtigen Patienten mit dem richtigen Termin gefunden?",
+    ),
     "sonst_noch": (
         "Kann ich sonst noch etwas für Sie tun?",
         "Gibt es sonst noch etwas, das ich für Sie tun kann?",

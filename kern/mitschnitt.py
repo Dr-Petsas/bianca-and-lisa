@@ -456,12 +456,35 @@ def ende(sit: dict, dienst, *, warte_s: float = 10.0) -> None:
 
 # ---- Lesen (API-Routen) -----------------------------------------------------
 
-def liste(stimme: str, limit: int = 200, tenant_id: str = "") -> list[dict[str, Any]]:
-    """Kopfzeilen aller Mitschnitte, neueste zuerst — fürs Dock."""
+def erlaubt_von(tenant: str) -> list[str] | None:
+    """Mandanten-IDs inkl. clientId/locationId/Aliase — oder None = alle."""
+    tid = (tenant or "").strip()
+    if not tid:
+        return None
+    from kern import tenants
+    info = next((x for x in tenants.liste() if x.get("id") == tid), {})
+    return [
+        tid,
+        str(info.get("clientId") or ""),
+        str(info.get("locationId") or ""),
+        *(str(x) for x in (info.get("aliases") or [])),
+    ]
+
+
+def liste(stimme: str, limit: int = 2000, tenant_id: str = "",
+          erlaubt: list[str] | None = None) -> list[dict[str, Any]]:
+    """Kopfzeilen aller Mitschnitte, neueste zuerst — fürs Dock.
+
+    Mandanten-IDs (id/clientId/locationId/Aliase) werden VOR dem Limit
+    gefiltert — sonst verschwinden ältere Gespräche einer Praxis hinter
+    den neuesten 200 Anrufen der anderen Mandanten.
+    """
     basis = _wurzel() / (stimme or "").strip().lower()
     if not basis.is_dir():
         return []
-    filter_id = (tenant_id or "").strip()
+    erlaubt_ids = {str(x).strip() for x in (erlaubt or []) if str(x).strip()}
+    if (tenant_id or "").strip():
+        erlaubt_ids.add(tenant_id.strip())
     aus: list[dict[str, Any]] = []
     for d in basis.iterdir():
         if not d.is_dir():
@@ -470,7 +493,7 @@ def liste(stimme: str, limit: int = 200, tenant_id: str = "") -> list[dict[str, 
         if not m:
             continue
         tid = m.get("tenantId") or ""
-        if filter_id and tid != filter_id:
+        if erlaubt_ids and tid not in erlaubt_ids:
             continue
         zuege = m.get("zuege") or []
         aus.append({

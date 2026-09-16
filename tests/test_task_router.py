@@ -207,8 +207,8 @@ def test_einwort_terminauswahl_startet_den_sicheren_flow():
     """Auch die Antwort auf die Auswahl darf wieder nur ein Wort sein."""
     faelle = [
         ("Neu", "buchen", "schon"),
-        ("Verschieben", "verschieben", "nachname"),
-        ("Absage", "absagen", "nachname"),
+        ("Verschieben", "verschieben", "welchem tag"),
+        ("Absage", "absagen", "welchem tag"),
     ]
     hg_alt = agent.flow.hintergrund.anstossen
     chat_alt = agent.llm.chat

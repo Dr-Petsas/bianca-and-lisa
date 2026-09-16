@@ -3850,6 +3850,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # Live MedDent 09.09.: nach erfolgreicher Absage führten zwei
         # verhörte Danke-Sätze erst in „nicht verstanden“, dann in die
         # Schleifenbremse. Der abgeschlossene Job verabschiedet sich sofort.
+        s["frage"] = ""
+        sit.pop("verwAbschlussOffen", None)
         return {"text": "Sehr gerne. Auf Wiederhören.", "hangup": abschied.an(),
                 "_wiederholungErlaubt": True}
 
@@ -4138,13 +4140,40 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         s["frage"] = "anrufer_check"
         return {"text": "Schön! " + gehirn.anrufer_check_schluss()}
 
+    # Eine abgeschlossene Verwaltung lässt genau eine registrierte
+    # Abschlussfrage offen. Ihre Antwort darf nicht ans freie LLM fallen.
+    if (
+        not s.get("modus")
+        and s.get("phase") == "fertig"
+        and s.get("frage") == "sonst_noch"
+        and sit.get("verwAbschlussOffen")
+    ):
+        aus = verwalten.zug(sit, t, neu, melde)
+        if gehirn.sammler(sit).get("frage") != "sonst_noch":
+            sit.pop("verwAbschlussOffen", None)
+        if aus is not None:
+            return aus
+
     # Bestandstermin-Anliegen (absagen/verschieben/ansagen) haben ihren
     # eigenen deterministischen Fluss.
     if s["modus"] in {"absagen", "verschieben", "auskunft"}:
         if "modus" in neu:
             sit["gefundenKey"] = ""
             sit["upcoming"] = []
-        return verwalten.zug(sit, t, neu, melde)
+        aus = verwalten.zug(sit, t, neu, melde)
+        if aus is not None:
+            return aus
+        # W-VERWALTUNG-KEIN-LLM: Solange Absage/Verschieben aktiv bleibt,
+        # entscheidet die feste Maschine jeden unklaren Zug. Ein
+        # ausdrücklicher Anliegenwechsel hat den Modus bereits geändert und
+        # darf unten regulär weiterlaufen.
+        anker = verwalten.sicherer_fortsetzungsanker(sit)
+        if anker is not None:
+            return anker
+        if gehirn.sammler(sit).get("modus") in {
+            "absagen", "verschieben", "auskunft",
+        }:
+            return None
 
     # W-EINWAND (Chef 13.09.2026): "Moment, die Nummer stimmt nicht" mitten im
     # Fragenfaden — das bestrittene Feld wird SOFORT korrigiert, alle anderen

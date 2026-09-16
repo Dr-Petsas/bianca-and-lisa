@@ -47,6 +47,10 @@ def _bis_wahl(sit, monkeypatch, cancel):
     monkeypatch.setattr(verwalten.kal, "cancel_by_id", cancel)
     monkeypatch.setattr(verwalten.hintergrund, "anstossen", lambda sit: None)
     z1 = flow.zug(sit, "Guten Tag, ich möchte meine Termine absagen.")
+    if gehirn.sammler(sit)["frage"] == "wann":
+        z1 = flow.zug(sit, "Den Zeitpunkt weiß ich nicht mehr.")
+    if gehirn.sammler(sit)["frage"] == "arzt":
+        z1 = flow.zug(sit, "Den Behandler weiß ich auch nicht mehr.")
     assert z1 and "nachname" in z1["text"].lower()
     z2 = flow.zug(sit, "Berger.")
     assert z2 and "mehrere termine" in z2["text"].lower()
@@ -88,8 +92,9 @@ def test_beide_absagen_sammelbestaetigung_und_beide_weg(monkeypatch):
     assert aufrufe == ["apt-1", "apt-2"]
     low = z["text"].lower()
     assert "abgesagt" in low
-    assert "neuen termin" in low  # schleifenfreier Abschluss (neubuchung)
-    assert gehirn.sammler(sit)["frage"] == "neubuchung"
+    assert "sonst noch" in low
+    assert "neuen termin" not in low
+    assert gehirn.sammler(sit)["frage"] == "sonst_noch"
 
 
 def test_beide_absagen_teilfehler_ehrlich(monkeypatch):

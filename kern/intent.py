@@ -198,12 +198,13 @@ _SLOTWAHL_RE = re.compile(
 
 # Formular-Fragen der Maschine: Antworten darauf sind Ernte, kein Anliegen.
 _FORMULAR_FRAGEN = {
-    "name", "vorname", "nachname", "telefon", "telefon_check", "telefon_alt",
+    "name", "vorname", "nachname",
+    "telefon", "telefon_check", "telefon_alt",
     "buchstabieren", "schonmal", "versicherung", "anrufer_check",
     "fuer_wen_check", "arzt_check", "vorname_check", "nachname_check",
     "geburtstag",
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
-    "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",
+    "frisch_absage_ok", "verw_patient_ok", "behandlung", "pzr", "termin_anbieten",
     "arzt_notiz",
     # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen ("Passt der so?",
     # "Sonst noch etwas?") — "alles gut"/"nein danke" sind Ernte, kein Anliegen.
@@ -270,6 +271,14 @@ def _ist_formular_antwort(sit: dict, text: str) -> bool:
     phase = _s(s.get("phase"))
     if _SLOTWAHL_RE.match(t) and (phase in {"angebot", "bestaetigen"}
                                   or frage in {"wunsch", "terminwahl", "slotwahl"}):
+        return True
+    if (
+        frage in {"arzt", "wann"}
+        and _s(s.get("modus")) in {"absagen", "verschieben", "auskunft"}
+        and len(t.split()) <= 4
+    ):
+        # W-VERWALTUNG-TERMIN-ZUERST: diese zwei Fragen gehören nur im
+        # Bestandsweg zum Formular. Der Buchungsweg bleibt unverändert.
         return True
     if frage in _FORMULAR_FRAGEN and len(t.split()) <= 4:
         # Kurzantwort auf eine offene Formular-Frage ("Berger", "Kontrolle").

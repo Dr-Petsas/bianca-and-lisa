@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import date, datetime, timedelta
+import unicodedata
+from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -70,6 +72,12 @@ BOOK_FIX_PHONE = (os.getenv("BOOK_FIX_PHONE", "1") or "1").strip() != "0"
 # taugt nur ein echter Kontroll-/Vorsorge-Termin. 0 = Verhalten von vor dem
 # 15.09.2026 (jedes harmlos klingende Motiv durfte einspringen).
 _ERSATZ_STRENG = (os.getenv("MOTIV_ERSATZ_STRENG", "1") or "1").strip() != "0"
+# W-VERWALTUNG-TERMIN-ZUERST (16.09.2026): Absagen/Verschieben duerfen einen
+# bekannten Bestandstermin nach Datum/Uhrzeit direkt im Standortkalender
+# suchen. Der Buchungsweg und die Terminauskunft benutzen diesen Pfad nicht.
+VERWALTUNG_TERMIN_DETAILS = (
+    os.getenv("VERWALTUNG_TERMIN_DETAILS", "1") or "1"
+).strip().lower() not in {"0", "false", "off", "no"}
 
 # W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
 # endlos speichern — erste N reichen zur Diagnose, Rest als total.
@@ -1159,6 +1167,63 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
     return _mit_dispatch({"ok": False}, dispatch)
 
 
+def _name_norm(v: Any) -> str:
+    roh = unicodedata.normalize("NFKD", _s(v).casefold())
+    roh = "".join(c for c in roh if not unicodedata.combining(c))
+    return "".join(c for c in roh if c.isalnum()).replace("ß", "ss")
+
+
+def _patient_name_score(first: str, last: str, patient: dict) -> float:
+    """Gesprochenen Namen gegen eine Kartei bewerten (0..1)."""
+    gl, kl = _name_norm(last), _name_norm(patient.get("lastName"))
+    if not gl or not kl:
+        return 0.0
+    if not _s(first):
+        return SequenceMatcher(None, gl, kl).ratio()
+    gv = _name_norm(first)
+    kv = _name_norm(patient.get("firstName"))
+    if not gv or not kv:
+        return 0.0
+    return SequenceMatcher(None, gv + gl, kv + kl).ratio()
+
+
+def _patient_phone(patient: dict) -> str:
+    for key in ("mobilePhoneNumber", "mobilePhone", "phoneNumber", "phone", "telephone"):
+        wert = "".join(c for c in _s(patient.get(key)) if c.isdigit())
+        if wert:
+            return wert.removeprefix("00").removeprefix("49").lstrip("0")
+    return ""
+
+
+def _management_match_source(
+    *,
+    first: str,
+    last: str,
+    patient: dict,
+    patient_id: str,
+    phone: str,
+) -> str:
+    """Beweisstärke eines Patienten-Treffers für Absage/Verschieben.
+
+    Eine von der Cloud Function gewählte Akte wird nicht allein deshalb zum
+    exakten Treffer. Eine bestätigte ID beziehungsweise übereinstimmende
+    Rufnummer ist ein Beweis; ein nur ähnlicher Name bleibt ``name60`` und
+    muss vor jeder Auskunft oder Änderung rückbestätigt werden.
+    """
+    if patient_id and _s(patient.get("id")) == _s(patient_id):
+        return "patientId"
+    tel = "".join(c for c in _s(phone) if c.isdigit())
+    tel = tel.removeprefix("00").removeprefix("49").lstrip("0")
+    if tel and _patient_phone(patient) == tel:
+        return "telefon"
+    score = _patient_name_score(first, last, patient)
+    if score >= 0.98:
+        return "exact"
+    if score >= 0.60:
+        return "name60"
+    return ""
+
+
 def _patient_appointments_fallback(
     tenant: dict,
     *,
@@ -1166,6 +1231,9 @@ def _patient_appointments_fallback(
     last: str,
     vorname_verworfen: bool,
     primary_dispatch: dict | None,
+    patient_id: str = "",
+    phone: str = "",
+    min_similarity: float = 1.0,
 ) -> dict[str, Any] | None:
     """False-404-Rettung: Kartei-ID suchen, dann den nächsten Termin laden.
 
@@ -1185,16 +1253,56 @@ def _patient_appointments_fallback(
     if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
         return None
 
-    def gleich(a: Any, b: Any) -> bool:
-        return _s(a).casefold() == _s(b).casefold()
-
-    kandidaten = [
+    roh = [
         p for p in (data.get("patients") or [])
-        if isinstance(p, dict)
-        and _s(p.get("id"))
-        and gleich(p.get("lastName"), last)
-        and (not query_first or gleich(p.get("firstName"), query_first))
+        if isinstance(p, dict) and _s(p.get("id"))
     ]
+    pid = _s(patient_id)
+    tel = "".join(c for c in _s(phone) if c.isdigit())
+    tel = tel.removeprefix("00").removeprefix("49").lstrip("0")
+    match_source = "exact"
+    kandidaten: list[dict] = []
+    if pid:
+        kandidaten = [p for p in roh if _s(p.get("id")) == pid]
+        if not kandidaten:
+            # Eine bestätigte Akten-ID ist stärker als jeder ähnlich klingende
+            # Name und auch stärker als eine möglicherweise fremde
+            # Kontakt-Rufnummer. Nie auf eine andere Akte springen.
+            return None
+        match_source = "patientId"
+    elif tel:
+        kandidaten = [p for p in roh if _patient_phone(p) == tel]
+        if kandidaten:
+            match_source = "telefon"
+    if not kandidaten and min_similarity < 1.0:
+        bewertet = sorted(
+            ((_patient_name_score(query_first, last, p), p) for p in roh),
+            key=lambda x: (-x[0], _s(x[1].get("id"))),
+        )
+        passend = [(score, p) for score, p in bewertet if score >= min_similarity]
+        # Mit Vorname darf ein klar besserer Kandidat zur Rueckversicherung
+        # angeboten werden. Ohne Vorname bleiben gleiche Nachnamen mehrdeutig.
+        if query_first and passend and (
+                len(passend) == 1 or passend[0][0] - passend[1][0] >= 0.10):
+            kandidaten = [passend[0][1]]
+        else:
+            kandidaten = [p for _, p in passend]
+        # Ein wirklich identischer Name bleibt ein exakter Treffer. Der
+        # 60%-Rückversicherungsweg ist nur für tatsächlich unscharfe Namen
+        # gedacht (z. B. Päsla -> Päsler), nicht für Stallone -> Stallone.
+        match_source = (
+            "exact"
+            if len(kandidaten) == 1
+            and _patient_name_score(query_first, last, kandidaten[0]) >= 0.98
+            else "name60"
+        )
+    elif not kandidaten:
+        kandidaten = [
+            p for p in roh
+            if _name_norm(p.get("lastName")) == _name_norm(last)
+            and (not query_first
+                 or _name_norm(p.get("firstName")) == _name_norm(query_first))
+        ]
     if len(kandidaten) > 1:
         return _mit_dispatch({
             "ok": True,
@@ -1259,8 +1367,12 @@ def _patient_appointments_fallback(
         "ok": True,
         "patient": patient,
         "appointments": termine,
+        "notFound": bool(match_source == "name60" and not termine),
+        "nameMismatch": bool(match_source == "name60" and not termine),
         "vornameVerworfen": vorname_verworfen,
         "fallbackUsed": True,
+        "fuzzyName": min_similarity < 1.0,
+        "matchSource": match_source,
     }, termin_dispatch)
 
 
@@ -1285,11 +1397,13 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     phone = _s(ctx.get("phone"))
     if phone:
         body["callerPhone"] = phone
+    management_name_match = bool(ctx.get("managementNameMatch"))
     status, data, dispatch = _cf_call("agentFindPatientAppointments", body)
     if not isinstance(data, dict):
         data = {}
     vorname_verworfen = False
-    if status == 404 and _s(data.get("status")) != "no_upcoming" and body.get("firstName"):
+    if (status == 404 and _s(data.get("status")) != "no_upcoming"
+            and body.get("firstName") and not management_name_match):
         # W-NAMESKORREKTUR (31.08.2026): der Vorname kann selbst verhoert
         # sein ("Sannes" statt Georgios) und die Suche allein deshalb leer
         # ausgehen — einmal NUR mit dem Nachnamen nachfassen. Meldet die CF
@@ -1306,6 +1420,33 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
         "lastName": _s(pat.get("lastName")),
     }
     if status == 200 and data.get("status") == "success":
+        match_source = _management_match_source(
+            first=first,
+            last=last,
+            patient=pat,
+            patient_id=pid,
+            phone=phone,
+        ) if management_name_match else ""
+        if management_name_match and not match_source:
+            fallback = _patient_appointments_fallback(
+                tenant,
+                first=first,
+                last=last,
+                vorname_verworfen=False,
+                primary_dispatch=dispatch,
+                patient_id=pid,
+                phone=phone,
+                min_similarity=0.60,
+            )
+            if fallback is not None:
+                return fallback
+            return _mit_dispatch({
+                "ok": True,
+                "notFound": True,
+                "nameMismatch": True,
+                "patient": {},
+                "appointments": [],
+            }, dispatch)
         termine = []
         for a in data.get("appointments") or []:
             if not isinstance(a, dict):
@@ -1328,11 +1469,51 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
                 "motivName": _s(vm.get("name")),
                 "spoken": gesprochen,
             })
-        return _mit_dispatch({"ok": True, "patient": patient, "appointments": termine,
-                "vornameVerworfen": vorname_verworfen}, dispatch)
+        return _mit_dispatch({
+            "ok": True,
+            "patient": patient,
+            "appointments": termine,
+            "matchSource": match_source,
+            "vornameVerworfen": vorname_verworfen,
+        }, dispatch)
     if status == 404 and data.get("status") == "no_upcoming":
-        return _mit_dispatch({"ok": True, "patient": patient, "appointments": [],
-                "vornameVerworfen": vorname_verworfen}, dispatch)
+        match_source = _management_match_source(
+            first=first,
+            last=last,
+            patient=pat,
+            patient_id=pid,
+            phone=phone,
+        ) if management_name_match else ""
+        if management_name_match and not match_source:
+            fallback = _patient_appointments_fallback(
+                tenant,
+                first=first,
+                last=last,
+                vorname_verworfen=False,
+                primary_dispatch=dispatch,
+                patient_id=pid,
+                phone=phone,
+                min_similarity=0.60,
+            )
+            if fallback is not None:
+                return fallback
+            return _mit_dispatch({
+                "ok": True,
+                "notFound": True,
+                "nameMismatch": True,
+                "patient": {},
+                "appointments": [],
+            }, dispatch)
+        fuzzy = match_source == "name60"
+        return _mit_dispatch({
+            "ok": True,
+            "notFound": fuzzy,
+            "nameMismatch": fuzzy,
+            "patient": patient,
+            "appointments": [],
+            "matchSource": match_source,
+            "vornameVerworfen": vorname_verworfen,
+        }, dispatch)
     if status == 404:
         fallback = _patient_appointments_fallback(
             tenant,
@@ -1340,6 +1521,9 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
             last=last,
             vorname_verworfen=vorname_verworfen,
             primary_dispatch=dispatch,
+            patient_id=pid if management_name_match else "",
+            phone=phone if management_name_match else "",
+            min_similarity=0.60 if management_name_match else 1.0,
         )
         if fallback is not None:
             return fallback
@@ -1353,6 +1537,215 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
                 "vornameVerworfen": vorname_verworfen}, dispatch)
     msg = _s(data.get("message")) or f"http_{status}"
     return _mit_dispatch({"ok": False, "appointments": [], "error": msg}, dispatch)
+
+
+def _firestore_appointments_query(
+    tenant: dict,
+    von_utc: str,
+    bis_utc: str,
+) -> tuple[int, Any, dict]:
+    """Standort-Termine in einem UTC-Fenster lesen; niemals schreiben.
+
+    Der Dispatch enthaelt bewusst nur Datum und Trefferzahl, nicht die
+    Patientendaten aller Termine dieses Tages.
+    """
+    from kern import anrufaudio, standort
+    from kern.config import FIREBASE_CREDENTIALS
+
+    client_id = _s(tenant.get("clientId"))
+    location_id = _s(tenant.get("locationId"))
+    request_meta = {
+        "clientId": client_id,
+        "locationId": location_id,
+        "from": von_utc,
+        "to": bis_utc,
+    }
+    dispatch = {
+        "route": "firestoreAppointmentsByDate",
+        "method": "POST",
+        "request": request_meta,
+    }
+    if not FIREBASE_CREDENTIALS or not client_id or not location_id:
+        dispatch.update({"httpStatus": 0, "response": {"appointments": 0}})
+        return 0, {"message": "firestore_unavailable"}, dispatch
+    try:
+        token = anrufaudio._access_token(
+            "https://www.googleapis.com/auth/datastore")
+        projekt = standort._projekt()
+        url = (
+            "https://firestore.googleapis.com/v1/projects/"
+            f"{projekt}/databases/(default)/documents/clients/{client_id}/"
+            f"locations/{location_id}:runQuery"
+        )
+        body = {
+            "structuredQuery": {
+                "select": {"fields": [
+                    {"fieldPath": f} for f in (
+                        "start", "end", "status", "patientStatus",
+                        "isDeleted", "deletedAt",
+                        "patient", "calendar", "visitMotive",
+                    )
+                ]},
+                "from": [{"collectionId": "appointments"}],
+                "where": {"compositeFilter": {
+                    "op": "AND",
+                    "filters": [
+                        {"fieldFilter": {
+                            "field": {"fieldPath": "start"},
+                            "op": "GREATER_THAN_OR_EQUAL",
+                            "value": {"timestampValue": von_utc},
+                        }},
+                        {"fieldFilter": {
+                            "field": {"fieldPath": "start"},
+                            "op": "LESS_THAN",
+                            "value": {"timestampValue": bis_utc},
+                        }},
+                    ],
+                }},
+                "orderBy": [{
+                    "field": {"fieldPath": "start"},
+                    "direction": "ASCENDING",
+                }],
+                # Ein voller Praxistag liegt weit darunter. Wird der Deckel
+                # doch erreicht, gilt die Suche als unvollstaendig und darf
+                # keinen Termin automatisch bestimmen.
+                "limit": 500,
+            },
+        }
+        t0 = time.perf_counter()
+        r = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+            timeout=10.0,
+        )
+        ms = int(round((time.perf_counter() - t0) * 1000))
+        try:
+            data = r.json()
+        except ValueError:
+            data = {"message": r.text[:160]}
+        n = sum(
+            1 for row in data if isinstance(row, dict) and row.get("document")
+        ) if isinstance(data, list) else 0
+        dispatch.update({
+            "url": url,
+            "httpStatus": r.status_code,
+            "ms": ms,
+            "response": {"appointments": n},
+        })
+        return r.status_code, data, dispatch
+    except Exception as e:
+        dispatch.update({
+            "httpStatus": 0,
+            "response": {"appointments": 0, "error": type(e).__name__},
+        })
+        return 0, {"message": str(e)}, dispatch
+
+
+def find_appointments_by_date(tenant: dict, day: str) -> dict[str, Any]:
+    """Patiententermine eines Praxistags fuer sichere Verwaltung lesen.
+
+    Dieser Weg ist absichtlich unabhaengig vom Namen: Datum/Uhrzeit,
+    Behandler, Rufnummer beziehungsweise patientId und erst danach ein
+    mindestens sechzigprozentiger Namensabgleich bestimmen den Kandidaten
+    in ``bianca.verwalten``. Schreiben erfolgt weiterhin ausschliesslich
+    punktgenau per Termin-ID und erst nach ausdruecklicher Rueckfrage.
+    """
+    if not VERWALTUNG_TERMIN_DETAILS:
+        return {"ok": False, "unavailable": True, "appointments": [],
+                "error": "disabled"}
+    try:
+        d = date.fromisoformat(_s(day)[:10])
+    except ValueError:
+        return {"ok": False, "appointments": [], "error": "invalid_date"}
+    start = datetime(d.year, d.month, d.day, tzinfo=TZ)
+    ende = start + timedelta(days=1)
+
+    def utc_wert(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    status, data, dispatch = _firestore_appointments_query(
+        tenant, utc_wert(start), utc_wert(ende))
+    if status != 200 or not isinstance(data, list):
+        msg = _s(data.get("message")) if isinstance(data, dict) else f"http_{status}"
+        return _mit_dispatch({
+            "ok": False,
+            "unavailable": True,
+            "appointments": [],
+            "error": msg or f"http_{status}",
+        }, dispatch)
+
+    from kern import standort
+    termine: list[dict[str, Any]] = []
+    roh_dokumente = sum(
+        1 for row in data if isinstance(row, dict) and row.get("document"))
+    jetzt = datetime.now(TZ)
+    for row in data:
+        doc = row.get("document") if isinstance(row, dict) else None
+        if not isinstance(doc, dict):
+            continue
+        felder = doc.get("fields")
+        if not isinstance(felder, dict):
+            continue
+        f = {k: standort._decode(v) for k, v in felder.items()}
+        if f.get("isDeleted") is True or f.get("deletedAt"):
+            continue
+        if _s(f.get("status")).casefold() in {
+            "cancelled", "canceled", "deleted", "declined",
+            "needsconfirmation", "reserved",
+        }:
+            continue
+        if f.get("patientStatus") not in (None, "", 0, "0", "none"):
+            continue
+        patient = f.get("patient") if isinstance(f.get("patient"), dict) else {}
+        patient_id = _s(patient.get("id"))
+        first = _s(patient.get("firstName"))
+        last = _s(patient.get("lastName"))
+        if not patient_id and not last:
+            continue
+        cal = f.get("calendar") if isinstance(f.get("calendar"), dict) else {}
+        vm = f.get("visitMotive") if isinstance(f.get("visitMotive"), dict) else {}
+        roh_start = _s(f.get("start"))
+        try:
+            lokal = datetime.fromisoformat(roh_start.replace("Z", "+00:00")).astimezone(TZ)
+        except ValueError:
+            continue
+        if lokal.date() != d:
+            continue
+        if lokal < jetzt - timedelta(minutes=5):
+            continue
+        arzt = _s(cal.get("name")).split(",")[0].strip()
+        iso = lokal.isoformat(timespec="minutes")
+        gesprochen = spoken_slot(iso)
+        if arzt:
+            gesprochen += f" bei {arzt}"
+        phone = next((
+            _s(patient.get(k)) for k in (
+                "mobilePhoneNumber", "mobilePhone", "phoneNumber",
+                "phone", "telephone",
+            ) if _s(patient.get(k))
+        ), "")
+        termine.append({
+            "id": _s(doc.get("name")).rsplit("/", 1)[-1],
+            "iso": iso,
+            "date": iso[:10],
+            "calendarId": _s(cal.get("id")),
+            "doctorName": arzt,
+            "motivId": _s(vm.get("id")),
+            "motivName": _s(vm.get("name")),
+            "spoken": gesprochen,
+            "patientId": patient_id,
+            "patientFirstName": first,
+            "patientLastName": last,
+            "patientName": f"{first} {last}".strip(),
+            "patientPhone": phone,
+        })
+    termine.sort(key=lambda a: (_s(a.get("iso")), _s(a.get("id"))))
+    return _mit_dispatch({
+        "ok": True,
+        "appointments": termine,
+        "truncated": roh_dokumente >= 500,
+    }, dispatch)
 
 
 def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]:

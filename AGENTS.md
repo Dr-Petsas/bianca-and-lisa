@@ -3954,10 +3954,69 @@ ersten Treffer.
  (`_mehrfach_absagen`). Teilfehler werden ehrlich einzeln benannt — nie
  „beide abgesagt“, wenn nur ein Werkzeug erfolgreich war. „Nein“ lässt alle
  Termine bestehen.
-- **Schleifenfreier Abschluss**: nach der Absage genau EIN Angebot
- (Neubuchung), kein roher „Sonst noch?“-Loop.
+- **Schleifenfreier Abschluss**: nach der Absage genau EINE registrierte
+  „Sonst noch?“-Frage. Eine Neubuchung beginnt nur auf ausdrücklichen Wunsch,
+  nie automatisch aus der Absage heraus.
 - Tests: `tests/test_mehrfach_absage.py` (Erfolg, Teilfehler, klares Nein,
  Einzelwahl bleibt Einzelweg).
+
+## Verwaltung sucht den Termin, nicht nur den Namen (W-VERWALTUNG-TERMIN-ZUERST 16.09.2026 — nicht rückbauen)
+
+Chef nach den Blessing-Feldgesprächen: Absagen und Verschieben dürfen nicht
+mehr von einer nahezu perfekten Namens-STT abhängen. Patienten nennen häufig
+schon Datum, Uhrzeit und Behandler; außerdem liegt bei übermittelter
+Rufnummer oft eine bestätigte Akte vor. Gegenfall: Wer anruft, weil er den
+Termin vergessen hat, darf selbstverständlich NICHT nach dem vergessenen
+Datum gefragt werden.
+
+- **Verwaltung mit bekanntem Termin:** `bianca.verwalten` sammelt bei
+  Absage/Verschieben sowie bei einer Auskunft mit genanntem Termin
+  Datum/Uhrzeit und gegebenenfalls den Behandler zuerst.
+  `kern.calendar.find_appointments_by_date` liest den Praxistag direkt und
+  ausschließlich lesend aus Firestore. Kandidaten werden in dieser
+  Reihenfolge eingegrenzt: bestätigte `patientId`, bestätigte Rufnummer,
+  dann Name ab 60 Prozent Ähnlichkeit. Ein unscharfer Name ist nur Kandidat;
+  gesprochen werden Patient, Termin und Behandler zur Rückversicherung.
+  Ein praktisch identischer Name überspringt nur diesen zusätzlichen
+  Identitätszug, niemals die konkrete Terminbestätigung.
+  Kontakt-Rufnummern bei Drittterminen und noch nicht rückbestätigte Nummern
+  werden nie als Patientenbeweis an die Terminsuche geschickt.
+  Erst ein ausdrückliches Ja gibt die konkrete Termin-ID zum Absagen oder
+  Verschieben frei. Ohne Identitätsbeweis werden nie fremde Patientennamen
+  aus einer Tagesliste vorgelesen.
+- **Terminzeit vergessen / Terminauskunft:** `verwZeitUnbekannt` schaltet
+  strikt auf Behandler + bestätigte Akte/Rufnummer + Nachname. Die
+  Wann-Frage ist auf diesem Weg verboten. Bei nur einem Behandler wird
+  dieser automatisch gebunden; bei mehreren wird er zuerst erfragt.
+- **Namensschutz:** Monats-, Datums-, Uhrzeit- und Terminparaphrasen werden
+  aus frei gehörten Namen entfernt. Strukturierte Angaben wie
+  „Mai, Anna, der Termin …“ bleiben geschützt. Eine bestätigte Rufnummer
+  oder `patientId` gewinnt immer gegen einen verhörten Namen.
+- **Kalenderschutz:** Die Tageslese blendet vergangene, abgesagte,
+  virtuelle, reservierte und nicht bestätigte Termine aus. Geloggt werden
+  nur Tag, Trefferzahl und Filterentscheidung, nie die Patientenliste.
+  `VERWALTUNG_TERMIN_DETAILS=0` schaltet nur diesen neuen Leseweg aus.
+- **Kein Abschluss-Loop:** Nach erfolgreichem Verschieben bleibt
+  „Kann ich sonst noch etwas für Sie tun?“ als echte Formularfrage
+  registriert. „Nein/Danke“ legt freundlich auf und räumt den
+  Verwaltungsmodus; die Antwort fällt nie ans freie LLM.
+- **Kein Halluzinations-Fallthrough:** Solange Absage oder Verschieben aktiv
+  ist, beantwortet ausschließlich `verwalten.sicherer_fortsetzungsanker`
+  einen unklaren Zug. Das freie LLM darf weder Terminwahl noch Bestätigung
+  oder Erfolg übernehmen. Technische Schreibfehler erzeugen eine echte
+  Rückrufnotiz statt einer erfundenen Erledigt-Aussage.
+- **60 Prozent sind nie ein Beweis:** Ein unscharfer Name bekommt vor
+  Terminauskunft, Verschiebung oder Absage einen eigenen Ja/Nein-Abgleich.
+  Bei einer Absage folgt danach getrennt die destruktive Bestätigung.
+- **Kein Buchungs-Drift:** Erfolgreiche Einzel- und Mehrfach-Absagen sowie
+  fehlgeschlagene Terminauskünfte bieten nicht mehr von selbst eine
+  Neubuchung an. Ein neuer Termin beginnt nur auf ausdrücklichen Wunsch.
+- **Buchungsweg unverändert:** Die Tageslese wird ausschließlich aus
+  der Verwaltung aufgerufen. Neubuchung und ihre Reihenfolge benutzen
+  weiterhin die bewährte Slotsuche.
+- Tests: `tests/test_verwaltung_termin_zuerst.py` (einschließlich aller vier
+  Mandanten, 60-Prozent-Rückversicherung, Identitätsvorrang, Datenschutz,
+  Termin-vergessen ohne Wann-Frage und Buchungs-Gegenprobe).
 
 ## Rückrollpunkte (Produktionsstände)
 

@@ -7,11 +7,13 @@
 const $ = (id) => document.getElementById(id);
 const spieler = $("spieler");
 const ART_KEY = "pickadoc.anrufe.art";
+const DATUM_KEY = "pickadoc.anrufe.tag";
 let anrufe = [];
 let aktivId = "";
 let laufKnopf = null;
 let kette = [];
 let artFilter = "alle";
+let datumFilter = "";
 let tenantAliase = {};
 
 function artLesen() {
@@ -25,6 +27,52 @@ function artLesen() {
 function artSchreiben(v) {
   artFilter = v;
   try { localStorage.setItem(ART_KEY, v); } catch { /* */ }
+}
+
+function heuteTag() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Kalendertag in der gleichen lokalen Zone wie die angezeigte Uhrzeit. */
+function anrufTag(a) {
+  try {
+    const d = new Date(a && a.startedAt);
+    if (isNaN(d.getTime())) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  } catch { return ""; }
+}
+
+function tagSprechbar(isoTag) {
+  const t = String(isoTag || "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : t;
+}
+
+function datumLesen() {
+  try {
+    const v = localStorage.getItem(DATUM_KEY);
+    if (v === "") return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  } catch { /* */ }
+  return "";
+}
+
+function datumSchreiben(v) {
+  const tag = v === "" ? "" : (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : heuteTag());
+  datumFilter = tag;
+  try { localStorage.setItem(DATUM_KEY, tag); } catch { /* */ }
+}
+
+function imDatum(a) {
+  if (!datumFilter) return true;
+  return anrufTag(a) === datumFilter;
 }
 
 function istTest(a) {
@@ -645,7 +693,14 @@ async function oeffne(sid) {
   try {
     const r = await fetch(`api/anrufe/${sid}`);
     const d = await r.json();
-    if (d && d.ok) maleDetail(d.anruf);
+    if (d && d.ok) {
+      const tag = anrufTag(d.anruf);
+      if (datumFilter && tag && datumFilter !== tag) {
+        datumSchreiben(tag);
+        maleListe();
+      }
+      maleDetail(d.anruf);
+    }
   } catch {
     $("detail").innerHTML = '<div class="leer">Anruf ließ sich nicht laden</div>';
   }
@@ -653,15 +708,25 @@ async function oeffne(sid) {
 
 function sichtbare() {
   return anrufe.filter((a) => {
+    if (!imDatum(a)) return false;
     if (artFilter === "test") return istTest(a);
     if (artFilter === "live") return !istTest(a);
     return true;
   });
 }
 
+function tagEingabeSync() {
+  const el = $("tag-filter");
+  if (!el) return;
+  el.max = heuteTag();
+  const soll = datumFilter || "";
+  if (el.value !== soll) el.value = soll;
+}
+
 function filterZeichnen() {
-  const nAlle = anrufe.length;
-  const nTest = anrufe.filter(istTest).length;
+  const imTag = anrufe.filter(imDatum);
+  const nAlle = imTag.length;
+  const nTest = imTag.filter(istTest).length;
   const nLive = nAlle - nTest;
   if ($("n-alle")) $("n-alle").textContent = nAlle ? `(${nAlle})` : "";
   if ($("n-test")) $("n-test").textContent = nTest ? `(${nTest})` : "";
@@ -669,6 +734,18 @@ function filterZeichnen() {
   document.querySelectorAll("#art-filter [data-art]").forEach((b) => {
     b.classList.toggle("an", b.getAttribute("data-art") === artFilter);
   });
+  const heute = heuteTag();
+  if ($("tag-heute")) $("tag-heute").classList.toggle("an", datumFilter === heute);
+  if ($("tag-alle")) $("tag-alle").classList.toggle("an", !datumFilter);
+  tagEingabeSync();
+}
+
+function leerText() {
+  const wo = datumFilter ? ` am ${tagSprechbar(datumFilter)}` : "";
+  if (artFilter === "test") return `keine Testanrufe${wo || " in dieser Praxis"}`;
+  if (artFilter === "live") return `keine Praxis-Live-Anrufe${wo || " in dieser Praxis"}`;
+  if (wo) return `keine Mitschnitte${wo}`;
+  return "noch keine Mitschnitte — einfach bei Bianca anrufen";
 }
 
 function maleListe() {
@@ -677,12 +754,7 @@ function maleListe() {
   wurzel.innerHTML = "";
   const liste = sichtbare();
   if (!liste.length) {
-    const leer = artFilter === "test"
-      ? "keine Testanrufe in dieser Praxis"
-      : artFilter === "live"
-        ? "keine Praxis-Live-Anrufe in dieser Praxis"
-        : "noch keine Mitschnitte — einfach bei Bianca anrufen";
-    wurzel.innerHTML = `<div class="leer">${leer}</div>`;
+    wurzel.innerHTML = `<div class="leer">${leerText()}</div>`;
     return;
   }
   for (const a of liste) {
@@ -748,7 +820,8 @@ async function ladeListe() {
       } catch { /* lokale ID bleibt nutzbar */ }
     }
     const erlaubt = new Set(tenantAliase[t] || [t]);
-    const r = await fetch("api/anrufe");
+    const qs = t ? ("?tenant=" + encodeURIComponent(t)) : "";
+    const r = await fetch("api/anrufe" + qs);
     const d = await r.json();
     anrufe = ((d && d.anrufe) || []).filter((a) => {
       if (!t) return true;
@@ -768,20 +841,49 @@ function filterBinden() {
       maleListe();
     });
   });
+  const tag = $("tag-filter");
+  if (tag) {
+    tag.addEventListener("change", () => {
+      datumSchreiben(tag.value || "");
+      maleListe();
+    });
+  }
+  if ($("tag-heute")) {
+    $("tag-heute").addEventListener("click", () => {
+      datumSchreiben(heuteTag());
+      maleListe();
+    });
+  }
+  if ($("tag-alle")) {
+    $("tag-alle").addEventListener("click", () => {
+      datumSchreiben("");
+      maleListe();
+    });
+  }
 }
 
 /** Verlinktes Gespraech oeffnen (Ergebnisseite -> Anrufuebersicht). Der
     Art-Filter geht dafuer auf "alle": ein Testanruf war sonst ausgeblendet
-    und der Eintrag fehlte in der Liste, obwohl der Mitschnitt existiert. */
+    und der Eintrag fehlte in der Liste, obwohl der Mitschnitt existiert.
+    Der Datumsfilter springt auf den Tag des Gespraechs, sonst waere ein
+    aelterer Link hinter "Heute" unsichtbar. */
 function adresseFolgen() {
   const sid = sidAusAdresse();
   if (!sid || sid === aktivId) return;
   if (artFilter !== "alle") { artSchreiben("alle"); }
+  const a = anrufe.find((x) => String(x.id || "").replace(/-/g, "").toLowerCase() === sid);
+  if (a) {
+    const tag = anrufTag(a);
+    if (tag && datumFilter !== tag) datumSchreiben(tag);
+  } else if (datumFilter) {
+    datumSchreiben("");
+  }
   oeffne(sid);
 }
 
 $("neuLaden").onclick = () => { ladeListe(); if (aktivId) oeffne(aktivId); };
 artFilter = artLesen();
+datumFilter = datumLesen();
 filterBinden();
 window.addEventListener("hashchange", adresseFolgen);
 if (typeof praxisSeiteStart === "function") {

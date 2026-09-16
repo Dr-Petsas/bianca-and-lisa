@@ -790,8 +790,9 @@ _MITSCHNITT_LISA = "lisa"
 
 
 @app.get("/api/anrufe")
-def api_lisa_anrufe():
-    return {"ok": True, "anrufe": mitschnitt.liste(_MITSCHNITT_LISA)}
+def api_lisa_anrufe(tenant: str = ""):
+    return {"ok": True, "anrufe": mitschnitt.liste(
+        _MITSCHNITT_LISA, erlaubt=mitschnitt.erlaubt_von(tenant))}
 
 
 @app.get("/api/anrufe/{sid}")

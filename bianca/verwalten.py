@@ -1,27 +1,27 @@
 """Bestandstermine am Telefon: ansagen, absagen, verschieben — deterministisch.
 
-Gleiche Bauart wie flow.py: kein LLM auf dem Pflichtpfad. Die Termine kommen
-in EINEM warmen Aufruf (agentFindPatientAppointments: Patient + kommende
-Termine inkl. Behandler und Kalender-ID), der Storno trifft punktgenau die
-Termin-ID (agentCancelAppointmentById), das Verschieben laeuft ueber
-postpone mit Termin-ID. Liefert None, wenn der Satz nichts mit dem Anliegen
-zu tun hat — dann uebernimmt das LLM (Status steht im Prompt).
+Gleiche Bauart wie flow.py: kein LLM auf dem Pflichtpfad. Termine kommen
+entweder aus der lesenden Tagesabfrage oder aus agentFindPatientAppointments;
+der Storno trifft punktgenau die Termin-ID, das Verschieben läuft über
+postpone mit Termin-ID. Ein internes ``None`` wird bei aktiver Absage oder
+Verschiebung vom festen Fortsetzungsanker aufgefangen, nie vom freien LLM.
 
-Prozedur Absagen/Verschieben (W-NACHNAME 31.08.2026, phone_agent-Vorbild —
-loest die Wann-zuerst-Sammelei von W-SAMMELN ab; Chef: "der soll nur nach
-dem nachnamen fragen und dann erstmal sehen ob er einen termin findet"):
-1. NUR den NACHNAMEN erfragen — die Cloud Function
-   agentFindPatientAppointments braucht nichts weiter (lastName reicht,
-   Anrufer-Telefon geht als Bonus mit). Hinweise aus dem Einstiegssatz
-   ("Termin am Donnerstag absagen", Behandler-Name) werden weiter geerntet
-   und filtern die Treffer — es wird nur nichts mehr VORAB abgefragt.
-2. Meldet die CF MEHRERE Patienten mit gleichem Nachnamen (409/ambiguous),
-   grenzt der VORNAME ab: einmal nachfragen, mit firstName erneut suchen.
-3. Treffer BESTAETIGEN mit Anrede ("… Frau Mueller, ja?") — bei Ja loeschen
+Prozedur Absagen/Verschieben (W-VERWALTUNG-TERMIN-ZUERST 16.09.2026):
+1. Einen bekannten Termin zuerst ueber Datum/Uhrzeit, Behandler und die
+   bestätigte Rufnummer beziehungsweise patientId eingrenzen. Ein Name
+   ist dabei nur Kandidat (mindestens 60 Prozent Aehnlichkeit), nie alleiniger
+   Schreibbeweis.
+2. Fehlt die Zeit wirklich, wird ueber Rufnummer/Patient, Behandler und Name
+   gesucht. Bei einer Terminauskunft ("ich weiss nicht mehr wann") wird
+   NIEMALS nach dem vergessenen Datum gefragt.
+3. Jeden Kandidaten MIT Termin, Patient und Behandler rueckbestaetigen. Erst
+   ein ausdrueckliches Ja gibt die punktgenaue Termin-ID zum Schreiben frei.
+4. Meldet die alte Namens-CF MEHRERE Patienten, grenzt der VORNAME ab.
+5. Treffer BESTAETIGEN mit Anrede ("… Frau Mueller, ja?") — bei Ja loeschen
    bzw. die Verschiebe-Strecke starten.
-4. Mehrere TERMINE des Patienten -> hilfsweise die BEHANDLUNG erfragen,
+6. Mehrere TERMINE des Patienten -> hilfsweise die BEHANDLUNG erfragen,
    danach die Auswahl-Liste.
-5. Nicht gefunden -> ehrlich sagen + ECHTE Notiz (praxis_notizen.jsonl,
+7. Nicht gefunden -> ehrlich sagen + ECHTE Notiz (praxis_notizen.jsonl,
    Dock-Anzeige): "keine Sorge, ich schreibe eine Notiz, und die wird
    Doktor XY vorgelegt."
 """
@@ -30,13 +30,15 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any, Callable
 
 from bianca import gehirn, hintergrund, telefon
 from kern import agentprofil
 from kern import calendar as kal
-from kern import gespraech, motive, notes
+from kern import gespraech, intent, motive, notes
 from kern import patients
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
@@ -57,8 +59,10 @@ _MODI = {"absagen", "verschieben", "auskunft"}
 
 # "Keine Ahnung, weiss ich nicht mehr" auf die Wann-/Behandlungs-Frage.
 _UNKLAR_RE = re.compile(
-    r"keine\s+ahnung|wei(?:ß|ss)\s+(?:ich\s+)?(?:es\s+|das\s+)?(?:auch\s+|leider\s+|gerade\s+)*"
-    r"(?:nicht|nimmer)|nicht\s+mehr\s+genau|nicht\s+(?:so\s+)?sicher|vergessen|"
+    r"keine\s+ahnung|wei(?:ß|ss)\s+(?:ich\s+)?(?:es\s+|das\s+)?"
+    r"(?:(?:auch|leider|gerade|aber|gar|wirklich)\s+)*"
+    r"(?:nicht(?:\s+mehr)?|nimmer)|nicht\s+mehr\s+genau|"
+    r"nicht\s+(?:so\s+)?sicher|vergessen|"
     r"keinen?\s+(?:schimmer|plan)|m(?:ü|ue)sste\s+ich\s+nach(?:schauen|sehen|gucken)",
     re.I,
 )
@@ -67,6 +71,17 @@ _MONATE_RE = (
     r"januar|februar|märz|maerz|april|mai|juni|juli|august|"
     r"september|oktober|november|dezember"
 )
+_UHR_COLON_RE = re.compile(r"\b(\d{1,2})\s*:\s*(\d{2})\b")
+_UHR_PUNKT_RE = re.compile(
+    r"\b(?:(?:um|gegen)\s+)?(\d{1,2})\s*\.\s*(\d{2})\s*uhr\b", re.I)
+_UHR_WORT_RE = re.compile(
+    r"\b(\d{1,2})\s*uhr(?:\s+(\d{1,2}))?\b", re.I)
+_HALB_RE = re.compile(r"\bhalb\s+\w+\b", re.I)
+# Ein klares Nein zum automatischen Neubuchungs-Angebot darf nie wegen einer
+# zugleich genannten Zeitangabe als BUCHUNGSWUNSCH gewertet werden.
+_KEIN_NEUER_TERMIN_RE = re.compile(
+    r"\b(?:kein(?:en|em|er)?|nicht\s+(?:noch\s+)?(?:ein(?:en)?\s+)?)"
+    r"(?:neuen?\s+)?termin\b|\bkeine\s+neubuchung\b", re.I)
 # Verschieben-Einstieg: "den Termin AM Dienstag (auf Freitag) verschieben" —
 # das am/vom-Stueck meint den BESTANDSTERMIN, ein auf/zu-Stueck den Wunsch.
 # Der Punkt in "am 21. Oktober" ist KEIN Satzende. Die alte Klasse [.!?;,]
@@ -149,9 +164,28 @@ def _ctx(sit: dict) -> dict:
     else:
         ctx.pop("patientId", None)
         patients.patient_id_bindung_setzen(ctx, "", "", "")
-    tel = s["telefon"] or s["aktePhone"]
+    # Eine Rufnummer darf die Patienten-Suche nur steuern, wenn sie zu
+    # DIESEM Patienten gehört und bestätigt ist. Bei Drittterminen ist
+    # ``telefon`` regelmäßig die Kontakt-Nummer des Elternteils/Anrufers;
+    # sie darf nie auf dessen eigene Akte statt auf die genannte Person
+    # umlenken. Eine nur gehörte, noch nicht rückbestätigte Nummer ist
+    # ebenfalls kein Identitätsbeweis.
+    tel = ""
+    if not s.get("fuerWen"):
+        if s.get("telefonOk") and s.get("telefon"):
+            tel = _s(s["telefon"])
+        elif s.get("bekannt") and s.get("aktePhone"):
+            tel = _s(s["aktePhone"])
+        elif s.get("anruferCheck") == "ja":
+            an = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+            tel = _s(an.get("telefon") or sit.get("callerPhone"))
     if tel:
         ctx["phone"] = tel
+    else:
+        ctx.pop("phone", None)
+    # Nur die Verwaltungs-Lesewege aktivieren den freien 60%-Namensabgleich.
+    # Buchungs- und Read-after-write-Vertraege bleiben unveraendert.
+    ctx["managementNameMatch"] = True
     return ctx
 
 
@@ -224,9 +258,14 @@ def _finden(sit: dict, melde: Melde) -> dict:
         melde("list_appointments")
     res = kal.find_patient_appointments(sit["tenant"], _ctx(sit))
     merke_tool(sit, "agentFindPatientAppointments", res)
+    if res.get("matchSource") == "name60":
+        # Ein fuzzy gefundener Name ist nur Kandidat. Das folgende
+        # Absage-/Verschiebe-Ja bestätigt erst Termin UND Patient.
+        sit["verwDetailQuelle"] = "name60"
+    fuzzy = res.get("matchSource") == "name60"
     if res.get("ok") and not res.get("notFound") and not res.get("mehrdeutig"):
         pat = res.get("patient") or {}
-        if _s(pat.get("id")):
+        if _s(pat.get("id")) and not fuzzy:
             s["patientId"] = _s(pat.get("id"))
             s["bekannt"] = True
             s["warSchonMal"] = True
@@ -237,7 +276,18 @@ def _finden(sit: dict, melde: Melde) -> dict:
                 s["vorname"] = _s(pat.get("firstName"))
                 s["vornameQuelle"] = "akte"      # W-HIRN-GATE: einmal bestaetigen
                 s["vornameCheck"] = ""
-        sit["gefunden"] = res.get("appointments") or []
+        patient_name = f"{_s(pat.get('firstName'))} {_s(pat.get('lastName'))}".strip()
+        sit["gefunden"] = [
+            {
+                **a,
+                "patientId": _s(a.get("patientId")) or _s(pat.get("id")),
+                "patientFirstName": _s(a.get("patientFirstName")) or _s(pat.get("firstName")),
+                "patientLastName": _s(a.get("patientLastName")) or _s(pat.get("lastName")),
+                "patientName": _s(a.get("patientName")) or patient_name,
+            }
+            for a in (res.get("appointments") or [])
+            if isinstance(a, dict)
+        ]
         sit["gefundenKey"] = f"{s['vorname']}|{s['nachname']}".lower()
     return res
 
@@ -287,8 +337,29 @@ def _verw_reset(sit: dict) -> None:
     sit["verwBehandlungGefragt"] = False
     sit["verwBehandlung"] = ""
     sit["verwAktiv"] = False
+    sit.pop("verwZeitUnbekannt", None)
+    # Die ungesehene Tagesliste kann Daten fremder Patienten enthalten.
+    # Nur prozesslokal halten: Session-Sicherung verwirft "_" Felder.
+    sit.pop("_verwDetailTag", None)
+    sit.pop("_verwDetailTermine", None)
+    sit.pop("_verwDetailDispatch", None)
+    sit.pop("_verwDetailGeloggtKey", None)
+    sit.pop("_verwNameStrukturiert", None)
+    sit.pop("_verwNameGehoert", None)
+    sit.pop("_verwName60Bestaetigt", None)
+    sit.pop("_verwName60Danach", None)
+    sit.pop("_verwWannTeilGefragt", None)
+    # Altlasten aus Entwicklungsstaenden ebenfalls sicher entfernen.
+    sit.pop("verwDetailTag", None)
+    sit.pop("verwDetailTermine", None)
+    sit.pop("verwDetailGeloggtTag", None)
+    sit.pop("verwDetailQuelle", None)
+    sit.pop("verwKandidat", None)
+    sit.pop("verwAusgeschlossen", None)
+    sit.pop("verwDrittpersonGeloest", None)
     sit.pop("verwWunschAlt", None)
     sit.pop("verwWunschTextAlt", None)
+    sit.pop("verwAbschlussOffen", None)
 
 
 def _hinweis_hat(w: dict | None) -> bool:
@@ -297,8 +368,27 @@ def _hinweis_hat(w: dict | None) -> bool:
     return bool(
         w.get("date") or w.get("weekday") is not None or w.get("hour") is not None
         or w.get("hourMin") is not None or w.get("minDaysAhead")
+        or w.get("minuteOfDay") is not None
         or w.get("von") or w.get("bis")  # W-SUCHFENSTER: "mein Termin im Oktober"
     )
+
+
+def _minute_von_text(text: str, w: dict | None = None) -> int | None:
+    """Exakte Bestands-Uhrzeit lesen, ohne den Buchungsparser zu veraendern."""
+    t = _s(text)
+    m = _UHR_COLON_RE.search(t) or _UHR_PUNKT_RE.search(t) or _UHR_WORT_RE.search(t)
+    if m:
+        try:
+            h = int(m.group(1))
+            minute = int(m.group(2) or 0)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= h <= 23 and 0 <= minute <= 59:
+            return h * 60 + minute
+    if _HALB_RE.search(t) and isinstance(w, dict) and w.get("hour") is not None:
+        # parse_slot_wish legt "halb zwei" bereits auf die Praxisstunde 13.
+        return int(w["hour"]) * 60 + 30
+    return None
 
 
 def _hinweis_merken(sit: dict, text: str, *, relativ: bool = False) -> bool:
@@ -310,6 +400,9 @@ def _hinweis_merken(sit: dict, text: str, *, relativ: bool = False) -> bool:
         w = gehirn._wunsch_deuten(text) or {}
     if not _hinweis_hat(w):
         return False
+    minute = _minute_von_text(text, w)
+    if minute is not None:
+        w["minuteOfDay"] = minute
     sit["verwHinweis"] = w
     sit["verwHinweisText"] = _s(text)
     return True
@@ -328,7 +421,14 @@ def _hinweis_passt(a: dict, w: dict) -> bool:
         return False
     if w.get("weekday") is not None and _weekday_of(iso[:10]) != w["weekday"]:
         return False
-    if w.get("hour") is not None:
+    if w.get("minuteOfDay") is not None:
+        minuten = int(iso[11:13]) * 60 + int(iso[14:16])
+        # Exakt genannte Uhrzeiten liegen im Kalender meist auf 5-/10-/15-
+        # Minuten-Rastern. Zwanzig Minuten fangen STT-/Erinnerungsabweichung,
+        # aber nie einen anderen Termin eine Stunde spaeter.
+        if abs(minuten - int(w["minuteOfDay"])) > 20:
+            return False
+    elif w.get("hour") is not None:
         minuten = int(iso[11:13]) * 60 + int(iso[14:16])
         if abs(minuten - int(w["hour"]) * 60) > 60:
             return False
@@ -341,6 +441,195 @@ def _hinweis_passt(a: dict, w: dict) -> bool:
         if iso[:10] < ziel.strftime("%Y-%m-%d"):
             return False
     return True
+
+
+_VERW_NAME_STOP = {
+    "am", "an", "bei", "beim", "der", "den", "die", "einen", "einem",
+    "gegen", "im", "ist", "mein", "meine", "meinen", "termin", "termine",
+    "uhr", "um", "vom", "war", "wäre", "waere",
+    "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag",
+    "sonntag", "heute", "morgen", "übermorgen", "uebermorgen",
+    "januar", "februar", "märz", "maerz", "april", "mai", "juni", "juli",
+    "august", "september", "oktober", "november", "dezember",
+}
+
+
+def _name_norm(v: Any, *, zeitwoerter: bool = True) -> str:
+    """Namensvergleich ohne Zeit-/Termin-Paraphrasen und Umlaut-Schreibweisen."""
+    roh = unicodedata.normalize("NFKD", _s(v).casefold())
+    roh = "".join(c for c in roh if not unicodedata.combining(c))
+    toks = [
+        t for t in re.sub(r"[^a-z0-9ß]+", " ", roh).split()
+        if (not zeitwoerter or t not in _VERW_NAME_STOP) and not t.isdigit()
+    ]
+    return "".join(toks).replace("ß", "ss")
+
+
+def _name_aehnlichkeit(s: dict, termin: dict) -> float:
+    """Patientenname gegen Termin-Snapshot; mindestens 0,60 ist Kandidat."""
+    gesagt_nach = _name_norm(s.get("nachname"))
+    kandidat_nach = _name_norm(termin.get("patientLastName"), zeitwoerter=False)
+    if not gesagt_nach or not kandidat_nach:
+        return 0.0
+    nach = SequenceMatcher(None, gesagt_nach, kandidat_nach).ratio()
+    gesagt_vor = _name_norm(s.get("vorname"))
+    kandidat_vor = _name_norm(termin.get("patientFirstName"), zeitwoerter=False)
+    if not gesagt_vor or not kandidat_vor:
+        return nach
+    # Sobald beide Teile genannt wurden, zählt der ganze Name. Ein exakt
+    # gleicher Nachname darf keinen völlig anderen Vornamen überstimmen
+    # (Live: „Larissa Hauck“ wurde als „Meryem Hauck“ übernommen).
+    return SequenceMatcher(
+        None,
+        gesagt_vor + gesagt_nach,
+        kandidat_vor + kandidat_nach,
+    ).ratio()
+
+
+def _patienten_identitaet(sit: dict) -> tuple[str, str]:
+    """Nur die Identitaet des Patienten, nie die Kontaktperson eines Dritten."""
+    s = gehirn.sammler(sit)
+    if s.get("fuerWen") or s.get("anruferCheck") == "nein":
+        return "", ""
+    if s.get("anruferCheck") != "ja" and not s.get("bekannt"):
+        # Eine bloß übermittelte Rufnummer ist noch kein Identitätsbeweis.
+        # Erst die ausgesprochene Rückversicherung oder eine erfolgreiche
+        # Patientensuche darf sie zur Eingrenzung eines Tageskalenders nutzen.
+        return "", ""
+    an = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    pid = _s(s.get("patientId") or an.get("patientId"))
+    phone = (
+        telefon.normaliert(s.get("aktePhone") or "")
+        or telefon.normaliert(s.get("telefonBekannt") or "")
+        or telefon.normaliert(an.get("telefon") or "")
+        or telefon.normaliert(sit.get("callerPhone") or "")
+    )
+    return pid, phone
+
+
+def _detail_tag(sit: dict) -> str:
+    w = sit.get("verwHinweis") if isinstance(sit.get("verwHinweis"), dict) else {}
+    return _s(w.get("date"))[:10]
+
+
+def _detail_kandidaten(sit: dict, melde: Melde) -> dict | None:
+    """Termin-zuerst-Kandidaten fuer Verwaltung, niemals Neubuchung."""
+    s = gehirn.sammler(sit)
+    if s["modus"] not in _MODI or (
+            s["modus"] == "auskunft" and sit.get("verwZeitUnbekannt")):
+        return None
+    tag = _detail_tag(sit)
+    if not tag:
+        return None
+    if sit.get("_verwDetailTag") == tag and isinstance(sit.get("_verwDetailTermine"), list):
+        res = {
+            "ok": True,
+            "appointments": list(sit["_verwDetailTermine"]),
+            "truncated": False,
+            "dispatch": sit.get("_verwDetailDispatch"),
+        }
+    else:
+        if melde:
+            melde("list_appointments")
+        res = kal.find_appointments_by_date(sit["tenant"], tag)
+        if not res.get("ok") or res.get("truncated"):
+            return None
+        sit["_verwDetailTag"] = tag
+        sit["_verwDetailTermine"] = list(res.get("appointments") or [])
+        sit["_verwDetailDispatch"] = res.get("dispatch")
+    w = sit.get("verwHinweis") or {}
+    alle = [
+        dict(a) for a in (res.get("appointments") or [])
+        if isinstance(a, dict) and _hinweis_passt(a, w)
+        and _s(a.get("id")) not in set(sit.get("verwAusgeschlossen") or [])
+    ]
+    cal = _s((s.get("arzt") or {}).get("calendarId"))
+    if cal:
+        alle = [a for a in alle if _s(a.get("calendarId")) == cal]
+    elif _s((s.get("arzt") or {}).get("name")):
+        arzt = _name_norm((s.get("arzt") or {}).get("name"))
+        alle = [a for a in alle if arzt and (
+            arzt in _name_norm(a.get("doctorName"))
+            or _name_norm(a.get("doctorName")) in arzt
+        )]
+
+    pid, phone = _patienten_identitaet(sit)
+    hat_name = bool(_name_norm(s.get("nachname")))
+    for a in alle:
+        a["_nameScore"] = round(_name_aehnlichkeit(s, a), 3)
+    # Ein ausgesprochener Patientenname widerspricht einer bloss per Leitung
+    # erkannten Kontaktperson, bis mindestens 60 Prozent Namensnaehe bestehen.
+    name_ok = [a for a in alle if float(a.get("_nameScore") or 0) >= 0.60]
+    pid_ok = [a for a in alle if pid and _s(a.get("patientId")) == pid]
+    phone_ok = [
+        a for a in alle
+        if phone and telefon.normaliert(a.get("patientPhone") or "") == phone
+    ]
+    hat_terminkandidaten = bool(alle)
+    # Ohne Patientenbezug grenzen die Termindaten nur die Kandidaten ein.
+    # Ein einzelner Termin darf seinen Patientennamen nicht an einen Anrufer
+    # verraten, der lediglich Datum und Uhrzeit kennt.
+    quelle = "name_required"
+    if pid_ok:
+        alle = pid_ok
+        quelle = "patientId"
+    elif phone_ok:
+        alle = phone_ok
+        quelle = "telefon"
+    elif pid or phone:
+        # Eine bestätigte Patienten-ID beziehungsweise Rufnummer ist stärker
+        # als ein möglicherweise verhörter Name. Passt sie nicht zum
+        # Termin-Snapshot, nie per Namensähnlichkeit auf eine andere Akte
+        # springen.
+        alle = []
+        quelle = "identitaet_widerspruch" if hat_terminkandidaten else "no_detail"
+    elif hat_name:
+        if name_ok:
+            alle = name_ok
+            # Nur ein tatsächlich unscharfer Name braucht die zusätzliche
+            # Patienten-Rückversicherung. Ein praktisch identischer Name
+            # geht direkt in die ohnehin folgende Terminbestätigung.
+            quelle = (
+                "nameExact"
+                if all(
+                    float(a.get("_nameScore") or 0) >= 0.98
+                    for a in alle
+                )
+                else "name60"
+            )
+        else:
+            alle = []
+            # Ein leerer Tag beziehungsweise eine abweichend erinnerte Uhrzeit
+            # beweist NICHT, dass der Name falsch ist. Dann mit dem Namen in
+            # der Patienten-Terminliste suchen; nur vorhandene fremde
+            # Tageskandidaten belegen eine Namensabweichung.
+            quelle = "name_unter60" if hat_terminkandidaten else "no_detail"
+
+    alle.sort(key=lambda a: (
+        -float(a.get("_nameScore") or 0),
+        _s(a.get("iso")),
+        _s(a.get("id")),
+    ))
+    dispatch = res.get("dispatch")
+    log_key = f"{tag}|{quelle}|{len(alle)}"
+    if dispatch and sit.get("_verwDetailGeloggtKey") != log_key:
+        werkzeug = {
+            "ok": True,
+            "source": quelle,
+            "candidateCount": len(alle),
+            # merke_tool uebernimmt nur die Anzahl; keine Tagesliste und keine
+            # fremden Patientendaten gelangen ins Gespraechsmanifest.
+            "appointments": [{} for _ in alle],
+            "dispatch": dispatch,
+        }
+        merke_tool(sit, "find_appointment_by_details", werkzeug)
+        sit["_verwDetailGeloggtKey"] = log_key
+    return {
+        "appointments": alle,
+        "source": quelle,
+        "dayCount": len(res.get("appointments") or []),
+        "exactTime": w.get("minuteOfDay") is not None,
+    }
 
 
 _BEHANDLUNG_STOP = {"einen", "eine", "einem", "termin", "glaube", "irgendwas",
@@ -469,10 +758,10 @@ def _kein_termin(sit: dict, modus: str) -> dict:
     s = gehirn.sammler(sit)
     wer = f"{s['vorname']} {s['nachname']}".strip()
     s["phase"] = "fertig"
-    s["frage"] = "neubuchung"
+    s["frage"] = "sonst_noch"
     return {"text": _s(
         f"Ich sehe unter {wer or 'Ihrem Namen'} aktuell keinen kommenden Termin. "
-        "Soll ich Ihnen direkt einen neuen Termin anbieten?"
+        "Kann ich sonst noch etwas für Sie tun?"
     )}
 
 
@@ -640,7 +929,9 @@ def _nicht_gefunden(sit: dict) -> dict:
     ) or "dem Praxisteam"
     _notiz_schreiben(sit)
     s["phase"] = "fertig"
-    s["frage"] = "neubuchung"
+    # Ein gescheiterter Verwaltungsweg darf nicht automatisch in BUCHEN
+    # kippen. Ein neuer Termin beginnt nur auf ausdruecklichen Wunsch.
+    s["frage"] = "sonst_noch"
     sit["verwAktiv"] = False
     # Marker fuer einen NEUEN Anlauf: die Suche scheiterte — haeufigste
     # Ursache ist ein verhoerter Name (live 29.08.: "Peter Möbel" statt
@@ -649,8 +940,29 @@ def _nicht_gefunden(sit: dict) -> dict:
     return {"text": (
         f"Da bin ich ehrlich: Ich finde unter {wer} gerade keinen passenden Termin. "
         f"Aber keine Sorge — ich schreibe eine Notiz, und die wird {behandler} vorgelegt. "
-        "Möchten Sie stattdessen direkt einen neuen Termin vereinbaren?"
+        "Kann ich sonst noch etwas für Sie tun?"
     )}
+
+
+def _termin_patient(termin: dict) -> str:
+    name = _s(termin.get("patientName"))
+    return f" für {name}" if name else ""
+
+
+def _kandidat_patient_uebernehmen(sit: dict, termin: dict) -> None:
+    """Erst NACH Rueckbestaetigung Termin-Snapshot an den Patienten binden."""
+    s = gehirn.sammler(sit)
+    if _s(termin.get("patientId")):
+        s["patientId"] = _s(termin.get("patientId"))
+        s["bekannt"] = True
+        s["warSchonMal"] = True
+    if _s(termin.get("patientLastName")):
+        s["nachname"] = _s(termin.get("patientLastName"))
+    if _s(termin.get("patientFirstName")):
+        s["vorname"] = _s(termin.get("patientFirstName"))
+        s["vornameQuelle"] = "akte"
+    if _s(termin.get("patientPhone")) and not s.get("fuerWen"):
+        s["aktePhone"] = _s(termin.get("patientPhone"))
 
 
 def _absage_frage(sit: dict, termin: dict) -> dict:
@@ -662,9 +974,18 @@ def _absage_frage(sit: dict, termin: dict) -> dict:
     wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
-        f"Gefunden — {termin.get('spoken')}. "
+        f"Gefunden — {termin.get('spoken')}{_termin_patient(termin)}. "
         f"Soll ich den Termin wirklich absagen{zusatz}?"
     )}
+
+
+def _verwaltung_mit_abschlussfrage_schliessen(sit: dict) -> None:
+    """Fachmodus schließen, eine einzige deterministische Abschlussfrage halten."""
+    s = gehirn.sammler(sit)
+    s["modus"] = ""
+    s["phase"] = "fertig"
+    s["frage"] = "sonst_noch"
+    sit["verwAbschlussOffen"] = True
 
 
 def _absagen(sit: dict, melde: Melde) -> dict:
@@ -675,6 +996,7 @@ def _absagen(sit: dict, melde: Melde) -> dict:
         return {"text": "Der Testlauf ist beendet; der Termin wurde nicht abgesagt."}
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
+    _kandidat_patient_uebernehmen(sit, termin)
     if melde:
         melde("cancel_appointment")
     res = kal.cancel_by_id(sit["tenant"], _ctx(sit), _s(termin.get("id")))
@@ -687,17 +1009,25 @@ def _absagen(sit: dict, melde: Melde) -> dict:
         _verw_reset(sit)
         if _s((sit.get("booking") or {}).get("appointmentId")) == _s(termin.get("id")):
             sit["booking"]["appointmentId"] = ""  # der frisch gebuchte ist weg
-        s["phase"] = "fertig"
-        s["frage"] = "neubuchung"
+        _verwaltung_mit_abschlussfrage_schliessen(sit)
         wann = _s(termin.get("spoken")) or "wie besprochen"
         return {
             "text": f"Erledigt — der Termin {wann} ist abgesagt. "
-                    "Möchten Sie direkt einen neuen Termin vereinbaren?",
+                    "Kann ich sonst noch etwas für Sie tun?",
             "book": {"cancelled": True, "spoken": res.get("spoken") or ""},
         }
-    s["phase"] = "fertig"
-    s["frage"] = ""
-    return {"text": res.get("spoken") or "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum."}
+    _notiz_schreiben(
+        sit,
+        anliegen="absagen",
+        status="Absage technisch fehlgeschlagen — bitte prüfen und zurückrufen",
+        dock_text="Absage technisch fehlgeschlagen. Bitte prüfen und zurückrufen.",
+    )
+    _verwaltung_mit_abschlussfrage_schliessen(sit)
+    return {"text": (
+        (res.get("spoken") or
+         "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum.")
+        + " Kann ich sonst noch etwas für Sie tun?"
+    )}
 
 
 def _mehrfach_auswahl(t: str, termine: list[dict]) -> list[dict]:
@@ -770,8 +1100,7 @@ def _mehrfach_absagen(sit: dict, melde: Melde) -> dict:
     sit["gefunden"] = []
     sit["verwaltenTermin"] = ""
     _verw_reset(sit)
-    s["phase"] = "fertig"
-    s["frage"] = "neubuchung"
+    _verwaltung_mit_abschlussfrage_schliessen(sit)
     teile: list[str] = []
     if erfolg:
         teile.append("Erledigt — abgesagt sind: " + _fuegen(erfolg) + ".")
@@ -782,10 +1111,9 @@ def _mehrfach_absagen(sit: dict, melde: Melde) -> dict:
         )
     if not teile:
         # Sollte nie passieren (Warteschlange war leer): ehrlich bleiben.
-        s["frage"] = ""
         return {"text": "Da ist gerade nichts zum Absagen gewesen. "
                         "Kann ich sonst noch etwas für Sie tun?"}
-    teile.append("Möchten Sie direkt einen neuen Termin vereinbaren?")
+    teile.append("Kann ich sonst noch etwas für Sie tun?")
     book = {"cancelled": bool(erfolg)}
     if letzter_termin:
         book["spoken"] = _s(letzter_termin.get("spoken"))
@@ -808,7 +1136,8 @@ def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
     wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
-        f"Gefunden — es geht um den Termin {termin.get('spoken')}{zusatz}. "
+        f"Gefunden — es geht um den Termin {termin.get('spoken')}"
+        f"{_termin_patient(termin)}{zusatz}. "
         "Wann passt es Ihnen denn besser: eher vormittags oder nachmittags?"
     )}
 
@@ -842,12 +1171,18 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     )
     merke_tool(sit, "getFreeTimeSlots", found)
     if not found.get("ok"):
-        s["phase"] = "fertig"
-        s["frage"] = ""
         sit["offered"] = []
+        _notiz_schreiben(
+            sit,
+            anliegen="verschieben",
+            status="Terminkalender nicht erreichbar — bitte zum Verschieben zurückrufen",
+            dock_text="Terminkalender beim Verschieben nicht erreichbar. Bitte zurückrufen.",
+        )
+        _verwaltung_mit_abschlussfrage_schliessen(sit)
         return {"text": (
             "Der Terminkalender antwortet gerade nicht. "
-            "Die Praxis ruft Sie zum Verschieben kurzfristig zurück."
+            "Ich habe der Praxis dazu eine Rückrufnotiz hinterlassen. "
+            "Kann ich sonst noch etwas für Sie tun?"
         )}
     termin_iso = _s(termin.get("iso"))
     gesperrt = {str(x)[:16] for x in (sit.get("slotGesperrt") or []) if x}
@@ -909,7 +1244,8 @@ def _verschieb_readback(sit: dict, neu_iso: str) -> dict:
     s["phase"] = "verschieb_bestaetigen"
     s["frage"] = "verschieb_ok"
     return {"text": (
-        f"Dann verschiebe ich den Termin {termin.get('spoken')} "
+        f"Dann verschiebe ich den Termin {termin.get('spoken')}"
+        f"{_termin_patient(termin)} "
         f"auf {spoken_slot(neu_iso)}. Passt das so?"
     )}
 
@@ -922,6 +1258,7 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
         return {"text": "Der Testlauf ist beendet; der Termin wurde nicht verschoben."}
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
+    _kandidat_patient_uebernehmen(sit, termin)
     ctx = _ctx(sit)
     ctx["appointmentId"] = _s(termin.get("id"))
     # Der Alternativpfad in calendar.move_appointment braucht denselben
@@ -944,9 +1281,7 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
         # Anliegen ERLEDIGT: Modus schliessen und Angebote verwerfen — sonst
         # bot der Fluss nach "Das war's, danke" WIEDER Zeiten an (live 27.08.
         # 15:22: Re-Dispatch ueber den geleerten Termin-Cache).
-        s["modus"] = ""
-        s["phase"] = "fertig"
-        s["frage"] = ""
+        _verwaltung_mit_abschlussfrage_schliessen(sit)
         sit["offered"] = []
         sit["verschiebRichtung"] = ""
         return {
@@ -966,9 +1301,19 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
         s["frage"] = "slotwahl"
         s["slotIso"] = ""
         return {"text": res.get("spoken") or "Der Platz ist gerade weg — ich habe Alternativen."}
-    s["phase"] = "fertig"
-    s["frage"] = ""
-    return {"text": res.get("spoken") or "Das Verschieben hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück."}
+    _notiz_schreiben(
+        sit,
+        anliegen="verschieben",
+        status="Verschieben technisch fehlgeschlagen — bitte prüfen und zurückrufen",
+        dock_text="Verschieben technisch fehlgeschlagen. Bitte prüfen und zurückrufen.",
+    )
+    _verwaltung_mit_abschlussfrage_schliessen(sit)
+    return {"text": (
+        (res.get("spoken") or
+         "Das Verschieben hat gerade nicht geklappt. "
+         "Ich habe der Praxis dazu eine Rückrufnotiz hinterlassen.")
+        + " Kann ich sonst noch etwas für Sie tun?"
+    )}
 
 
 _WOCHENTAG_WORT = ["Sonntag", "Montag", "Dienstag", "Mittwoch",
@@ -1169,9 +1514,25 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
     frage = s["frage"]
     if frage not in _ANSAGE_FRAGEN:
         return None
+    verwaltung_abgeschlossen = (
+        frage == "sonst_noch"
+        and s.get("phase") == "fertig"
+        and (
+            s.get("modus") in _MODI
+            or bool(sit.get("verwAbschlussOffen"))
+        )
+    )
+
+    def verwaltung_schliessen() -> None:
+        if verwaltung_abgeschlossen:
+            s["modus"] = ""
+            sit.pop("verwAbschlussOffen", None)
+
     # Ein Modus-Wechsel (Hirn/einsammeln: "dann verschieben Sie ihn bitte")
     # laeuft in die bestehende Absage-/Verschiebe-Strecke — Frage schliessen.
-    if s["modus"] != "auskunft" or "modus" in neu:
+    if ((s["modus"] != "auskunft"
+         and not (frage == "sonst_noch" and s.get("phase") == "fertig"))
+            or "modus" in neu):
         s["frage"] = ""
         return None
     kurz = len(t.split()) <= 4
@@ -1211,16 +1572,25 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
         if aendern:
             _umschalten()
             return None
+        if verwaltung_abgeschlossen and {"name", "nachname", "vorname"} & neu:
+            # Namenskorrektur nach einer fehlgeschlagenen Suche ist ein neuer
+            # Suchbeleg, keine Antwort auf "sonst noch?". Den Absage-Modus
+            # deshalb für den bewährten Korrekturpfad offen lassen.
+            s["frage"] = ""
+            return None
         if _ABSCHIED_RE.search(t) or passt or (nein and kurz):
             s["frage"] = ""
+            verwaltung_schliessen()
             return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
         if ja and kurz:
             s["frage"] = ""
+            verwaltung_schliessen()
             return {"text": "Gerne — was kann ich noch für Sie tun?"}
         aus = _nachfrage_zeitraum()
         if aus is not None:
             return aus
         s["frage"] = ""
+        verwaltung_schliessen()
         return None
 
     if frage == "termin_aendern":
@@ -1274,6 +1644,30 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
 def _bestaetigen(sit: dict, termin: dict, melde: Melde) -> dict:
     """DER Termin steht fest: Absage rueckfragen bzw. Verschieben starten."""
     s = gehirn.sammler(sit)
+    if sit.get("verwDetailQuelle"):
+        sit["verwKandidat"] = _s(termin.get("id"))
+    if (
+        sit.get("verwDetailQuelle") == "name60"
+        and not sit.pop("_verwName60Bestaetigt", False)
+    ):
+        # 60 Prozent sind bewusst nur ein Kandidat, nie Identitätsbeweis.
+        # Vor Ansage, Verschiebesuche oder Absage zuerst Patient UND Termin
+        # ausdrücklich rückversichern.
+        sit["verwaltenTermin"] = _s(termin.get("id"))
+        sit["_verwName60Danach"] = "termin"
+        s["phase"] = "verw_patient_bestaetigen"
+        s["frage"] = "verw_patient_ok"
+        patient = _s(termin.get("patientName")) or _s(
+            f"{_s(termin.get('patientFirstName'))} "
+            f"{_s(termin.get('patientLastName'))}"
+        )
+        patient_text = f" für {patient}" if patient else ""
+        return {"text": (
+            "Der Name passt ähnlich, aber ich möchte nichts verwechseln. "
+            f"Ist es der Termin {termin.get('spoken')}{patient_text}?"
+        )}
+    if s["modus"] == "auskunft":
+        return _ansagen(sit)
     if s["modus"] == "absagen":
         return _absage_frage(sit, termin)
     sit["verwaltenTermin"] = _s(termin.get("id"))
@@ -1282,6 +1676,243 @@ def _bestaetigen(sit: dict, termin: dict, melde: Melde) -> dict:
         _verschieb_datum_auf_bestand_beziehen(sit, termin)
         return _verschieb_angebot(sit, melde)
     return _verschieb_wunsch_frage(sit, termin)
+
+
+def _kandidat_verwerfen(sit: dict, melde: Melde) -> dict:
+    """Nein zu einem Detail-Kandidaten: Termin-ID sperren und weiter eingrenzen."""
+    s = gehirn.sammler(sit)
+    war_name60 = sit.get("verwDetailQuelle") == "name60"
+    aid = _s(sit.pop("verwKandidat", ""))
+    if aid:
+        ausgeschlossen = list(sit.get("verwAusgeschlossen") or [])
+        if aid not in ausgeschlossen:
+            ausgeschlossen.append(aid)
+        sit["verwAusgeschlossen"] = ausgeschlossen
+    sit["gefunden"] = []
+    sit["gefundenKey"] = ""
+    sit["verwaltenTermin"] = ""
+    s["phase"] = ""
+    s["frage"] = ""
+    behandelt, aus = _detail_dispatch(sit, melde)
+    if behandelt and aus:
+        aus["text"] = _s(f"Okay, dieser Termin ist es nicht. {aus.get('text')}")
+        return aus
+    if war_name60:
+        # Gibt es keinen zweiten Detail-Kandidaten, darf die alte Namenssuche
+        # nicht denselben abgelehnten Fuzzy-Treffer erneut anbieten.
+        gehoert = f"{s['vorname']} {s['nachname']}".strip()
+        if gehoert:
+            sit["_verwNameGehoert"] = gehoert
+        s["vorname"] = ""
+        s["nachname"] = ""
+        s["patientId"] = ""
+        s["bekannt"] = False
+        s["warSchonMal"] = None
+        s["vornameQuelle"] = ""
+        s["vornameCheck"] = ""
+        sit["patient"] = {}
+        sit["verwDetailQuelle"] = ""
+        return _nachname_frage(
+            sit,
+            "Okay, dieser Patient ist es nicht. Bitte nennen oder "
+            "buchstabieren Sie den Nachnamen noch einmal.",
+        )
+    if not s["nachname"]:
+        return _nachname_frage(
+            sit,
+            "Okay, dieser Termin ist es nicht. Dann gleiche ich den Patienten ab:",
+        )
+    aus = _dispatch(sit, melde)
+    if aus:
+        aus["text"] = _s(f"Okay, dieser Termin ist es nicht. {aus.get('text')}")
+        return aus
+    return _nachname_frage(sit, "Okay, dieser Termin ist es nicht.")
+
+
+def _nachname_frage(sit: dict, vorsatz: str = "") -> dict:
+    s = gehirn.sammler(sit)
+    s["frage"] = "nachname"
+    _, frage = gehirn._nachname_start_frage(sit, "")
+    return {"text": _s(f"{vorsatz} {frage}")}
+
+
+def _mehrere_behandler(tenant: dict) -> bool:
+    ids = {
+        _s(c.get("id")) or _s(c.get("calendarId"))
+        for c in (tenant.get("calendars") or [])
+        if isinstance(c, dict) and (_s(c.get("id")) or _s(c.get("calendarId")))
+    }
+    return len(ids) > 1
+
+
+def _ohne_zeit_eingrenzen(sit: dict) -> dict:
+    """Terminzeit unbekannt: Behandler und Patient statt Datum erfragen."""
+    s = gehirn.sammler(sit)
+    if _mehrere_behandler(sit.get("tenant") or {}) and not _s(
+            (s.get("arzt") or {}).get("calendarId")) and not sit.get("verwArztGefragt"):
+        sit["verwArztGefragt"] = True
+        s["frage"] = "arzt"
+        return {"text": (
+            "Den Zeitpunkt müssen Sie nicht wissen. "
+            "Bei welchem Behandler ist der Termin eingetragen?"
+        )}
+    if not s["nachname"]:
+        return _nachname_frage(
+            sit,
+            "Den Zeitpunkt müssen Sie nicht wissen — ich grenze den Termin über "
+            "den Patienten ein.",
+        )
+    return {}
+
+
+def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
+    """Datum/Uhrzeit-Kandidaten aufloesen; (False, None) = alte Namenssuche."""
+    s = gehirn.sammler(sit)
+    info = _detail_kandidaten(sit, melde)
+    if info is None:
+        return False, None
+    kandidaten = list(info.get("appointments") or [])
+    quelle = _s(info.get("source"))
+    w = sit.get("verwHinweis") or {}
+
+    belegt = quelle in {"patientId", "telefon", "nameExact", "name60"}
+    if s["modus"] == "auskunft" and kandidaten and belegt:
+        patienten = {
+            _s(a.get("patientId")) or _name_norm(
+                a.get("patientName"), zeitwoerter=False)
+            for a in kandidaten
+        }
+        patienten.discard("")
+        if len(patienten) == 1:
+            sit["gefunden"] = kandidaten
+            sit["gefundenKey"] = f"detail|{_detail_tag(sit)}|{quelle}"
+            sit["verwDetailQuelle"] = quelle
+            sit["verwKandidat"] = _s(kandidaten[0].get("id"))
+            sit["verwaltenTermin"] = _s(kandidaten[0].get("id"))
+            if quelle == "name60":
+                return True, _bestaetigen(sit, kandidaten[0], melde)
+            return True, _ansagen(sit)
+
+    if len(kandidaten) == 1 and belegt:
+        termin = kandidaten[0]
+        sit["gefunden"] = [termin]
+        sit["gefundenKey"] = f"detail|{_s(termin.get('id'))}"
+        sit["verwDetailQuelle"] = quelle
+        sit["verwKandidat"] = _s(termin.get("id"))
+        return True, _bestaetigen(sit, termin, melde)
+
+    if kandidaten:
+        if len(kandidaten) == 1:
+            return True, _nachname_frage(
+                sit,
+                "Die Termindaten habe ich. Zum sicheren Patientenabgleich:",
+            )
+        patienten = {
+            _s(a.get("patientId")) or _name_norm(
+                a.get("patientName"), zeitwoerter=False)
+            for a in kandidaten
+        }
+        patienten.discard("")
+        # Mehrere Termine derselben belegten Person duerfen als Termine
+        # vorgelesen werden; fremde Patientennamen werden nie aufgezählt.
+        if len(patienten) == 1 and quelle in {
+            "patientId", "telefon", "nameExact", "name60",
+        }:
+            sit["gefunden"] = kandidaten
+            sit["gefundenKey"] = f"detail|{_detail_tag(sit)}|{quelle}"
+            sit["verwDetailQuelle"] = quelle
+            if quelle == "name60":
+                sit["verwKandidat"] = _s(kandidaten[0].get("id"))
+                sit["verwaltenTermin"] = _s(kandidaten[0].get("id"))
+                sit["_verwName60Danach"] = "wahl"
+                s["phase"] = "verw_patient_bestaetigen"
+                s["frage"] = "verw_patient_ok"
+                patient = _s(kandidaten[0].get("patientName"))
+                patient_frage = (
+                    f"Geht es um {patient}?"
+                    if patient else "Habe ich den richtigen Patienten?"
+                )
+                return True, {"text": (
+                    "Der Name passt ähnlich, aber ich möchte nichts verwechseln. "
+                    f"{patient_frage}"
+                )}
+            s["phase"] = "wahl"
+            s["frage"] = "terminwahl"
+            verb = "absagen" if s["modus"] == "absagen" else "verschieben"
+            return True, {"text": (
+                f"Ich sehe mehrere passende Termine: {_liste_sprechbar(kandidaten)}. "
+                f"Welchen möchten Sie {verb}?"
+            )}
+        if w.get("minuteOfDay") is None and w.get("hour") is None:
+            s["frage"] = "wann"
+            return True, {"text": (
+                "Den Tag habe ich. Um welche Uhrzeit ist der Termin ungefähr?"
+            )}
+        kalender = {
+            _s(a.get("calendarId")) or _name_norm(a.get("doctorName"))
+            for a in kandidaten
+            if _s(a.get("calendarId")) or _s(a.get("doctorName"))
+        }
+        if len(kalender) > 1 and not _s((s.get("arzt") or {}).get("calendarId")):
+            # Erst nicht-personenbezogene Termindaten ausschöpfen. Bei
+            # mehreren parallelen Kalendern grenzt der Behandler sicherer
+            # ein als ein früh verhörter Name.
+            s["frage"] = "arzt"
+            return True, {"text": (
+                "Zu dieser Zeit laufen mehrere Termine. "
+                "Bei welchem Behandler ist der Termin eingetragen?"
+            )}
+        if not s["nachname"]:
+            return True, _nachname_frage(
+                sit,
+                "Zu dieser Zeit sehe ich mehrere Termine. Zum sicheren Abgleich:",
+            )
+        # Mehrere verschiedene Patienten trotz 60-Prozent-Namensnaehe:
+        # Schreibweise klaeren, nie den Bestwert still erraten.
+        sit["_verwNameGehoert"] = s["nachname"]
+        s["nachname"] = ""
+        s["vorname"] = ""
+        return True, _nachname_frage(
+            sit,
+            "Der Name passt zu mehreren Einträgen. Bitte nennen oder "
+            "buchstabieren Sie den Nachnamen noch einmal.",
+        )
+
+    if quelle == "identitaet_widerspruch":
+        # Datum/Uhrzeit zeigen auf einen anderen Patienten als die bereits
+        # bestätigte Akte/Rufnummer. Die Identität gewinnt: mit ihrer
+        # Patienten-Terminliste weitersuchen, nie erneut nach dem Datum oder
+        # Namen fragen und nie zum fremden Tageskandidaten springen.
+        return False, None
+    if quelle == "name_unter60":
+        gehoert = f"{s['vorname']} {s['nachname']}".strip()
+        vorher = _s(sit.get("_verwNameGehoert"))
+        if s.get("buchstabiert") or (
+                vorher and _name_norm(vorher) == _name_norm(gehoert)):
+            # Der Name wurde bereits wiederholt/ausbuchstabiert. Dann waren
+            # wahrscheinlich die erinnerten Termindaten ungenau; die
+            # Namenssuche darf übernehmen, statt dieselbe Schreibfrage in
+            # einer Schleife zu stellen.
+            sit["verwDetailQuelle"] = ""
+            return False, None
+        if gehoert:
+            sit["_verwNameGehoert"] = gehoert
+        s["vorname"] = ""
+        s["nachname"] = ""
+        return True, _nachname_frage(
+            sit,
+            "Die Termindaten habe ich, aber der Patientenname passt noch nicht "
+            "sicher genug.",
+        )
+    # Kein Termin exakt zu den erinnerten Daten: mit dem Namen die
+    # Patienten-Terminliste holen und den echten Termin rueckfragen.
+    if s["nachname"]:
+        return False, None
+    return True, _nachname_frage(
+        sit,
+        "Zu den erinnerten Termindaten sehe ich keinen eindeutigen Eintrag. "
+        "Ich prüfe deshalb über den Patienten:",
+    )
 
 
 def _dispatch(sit: dict, melde: Melde) -> dict | None:
@@ -1307,6 +1938,8 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
     if not termine:
         return _kein_termin(sit, s["modus"])
     if s["modus"] == "auskunft":
+        if sit.get("verwDetailQuelle") == "name60":
+            return _bestaetigen(sit, termine[0], melde)
         return _ansagen(sit)
     treffer = _filtern(sit, termine)
     if not treffer:
@@ -1333,11 +1966,211 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
     return {"text": f"Sie haben mehrere Termine: {_liste_sprechbar(treffer)}. Welchen möchten Sie {verb}?"}
 
 
+_VERW_DRITTE_RE = re.compile(
+    r"\b(?:mein|meine|meinen|meinem|meiner|unser|unsere|unseren)\s+"
+    r"(mutter|vater|sohn|tochter|kind|bruder|schwester|ehemann|ehefrau|"
+    r"mann|frau|partner|partnerin|freund|freundin|nachbar|nachbarin|"
+    r"kollege|kollegin|oma|opa|grossmutter|großmutter|grossvater|großvater)\b",
+    re.I,
+)
+_VERW_NAME_ENDE_RE = re.compile(
+    rf"\b(?:der\s+termin|termin\s+(?:ist|war|am|vom)|am\s+\d|vom\s+\d|"
+    rf"um\s+\d|gegen\s+\d|hat\b|möchte\b|moechte\b|will\b|braucht\b|"
+    rf"(?:{_MONATE_RE})\b)", re.I)
+_VERW_NAME_WORT_RE = re.compile(
+    r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'’-]{1,}")
+_VERW_NAME_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:mein|der)\s+name\s+ist|ich\s+hei(?:ß|ss)e|"
+    r"(?:der\s+)?familienname\s+ist|patient(?:in)?\s+(?:ist|heißt))\s+",
+    re.I,
+)
+_VERW_NAME_FUELLER = {
+    "bitte", "der", "die", "familienname", "frau", "herr", "heisse",
+    "heiße", "ist", "lautet", "mein", "meine", "name", "patient",
+    "patientin", "von",
+}
+
+
+def _verw_namewerte(segment: str) -> tuple[str, str]:
+    """Strukturierten Namen lesen; Komma erlaubt ``Nachname, Vorname``."""
+    roh = _VERW_NAME_PREFIX_RE.sub("", _s(segment)).strip(" ,.;:!?")
+    if not roh:
+        return "", ""
+    # Buchstabierketten bleiben vollständig beim bewährten Parser.
+    if len(re.findall(r"\b[A-Za-zÄÖÜ]\b", roh)) >= 2 or re.search(
+            r"(?:[A-Za-zÄÖÜ]-){2,}", roh):
+        return "", ""
+
+    gruppen = [g.strip() for g in roh.split(",") if g.strip()]
+
+    def woerter(v: str, *, zeitwoerter: bool = True) -> list[str]:
+        return [
+            w for w in _VERW_NAME_WORT_RE.findall(v)
+            if (not zeitwoerter or w.casefold() not in _VERW_NAME_STOP)
+            and w.casefold() not in _VERW_NAME_FUELLER
+        ]
+
+    if len(gruppen) >= 2:
+        # Die Kommas belegen die Namensstruktur. Hier dürfen echte
+        # Familiennamen wie „Mai“ nicht als Zeitwort verschwinden.
+        links = woerter(gruppen[0], zeitwoerter=False)
+        rechts = woerter(gruppen[1], zeitwoerter=False)
+        if links and rechts:
+            # „Hauck, Larissa Hauck“ bzw. „Brucklacher, Siegfried“.
+            if len(rechts) >= 2 and _name_norm(links[-1]) == _name_norm(rechts[-1]):
+                return rechts[0], rechts[-1]
+            return rechts[0], links[-1]
+    alle = woerter(roh)
+    if len(alle) >= 2:
+        return alle[0], alle[-1]
+    if len(alle) == 1:
+        return "", alle[0]
+    return "", ""
+
+
+def _verw_detailname_aufnehmen(sit: dict, text: str, neu: set[str]) -> None:
+    """Patientennamen aus demselben Satz wie die Bestandstermindaten ernten.
+
+    Der allgemeine Formularparser machte live aus
+    „Brucklacher, Siegfried, der Termin ist am 13. Oktober“ den Patienten
+    „Brucklacher Oktober“. Hier endet der Name vor der Terminklausel.
+    """
+    s = gehirn.sammler(sit)
+    if s.get("buchstabiert") or sit.get("verwDrittpersonGeloest"):
+        return
+    kandidat = ""
+    # Strukturierte Schreibweise am Satzanfang: „Nachname, Vorname, der
+    # Termin …“. Zwei Kommas sind Pflicht. Ein freier Anliegen-Satz wie
+    # „Guten Tag, ich möchte meinen Termin absagen“ ist KEIN Name.
+    m = re.match(
+        r"^\s*(?:(?:guten\s+tag|hallo|hi|grü(?:ß|ss)\s+gott)\s*,\s*)?"
+        r"([^,]{2,40})\s*,\s*([^,]{2,40})\s*,\s*"
+        r"(?=(?:der\s+)?termin\b|(?:am|um|gegen)\s+\d)",
+        text,
+        re.I,
+    )
+    if m:
+        kandidat = f"{m.group(1)}, {m.group(2)}"
+    if not kandidat:
+        # „Mein Name ist …, der Termin …“
+        m = re.search(
+            r"\b(?:(?:mein|der)\s+name\s+ist|ich\s+hei(?:ß|ss)e|"
+            r"(?:der\s+)?familienname\s+ist)\s+(.{2,80})",
+            text,
+            re.I,
+        )
+        if m:
+            kandidat = re.split(_VERW_NAME_ENDE_RE, m.group(1), maxsplit=1)[0]
+    if not kandidat:
+        # „Der Termin von/für Elisabeth Päsler am …“
+        m = re.search(
+            r"\btermin\b.{0,45}?\b(?:für|fuer|von)\s+"
+            r"(.{2,60}?)(?=\s+(?:am|um|gegen|bei)\b|[,.!?;]|$)",
+            text,
+            re.I,
+        )
+        if m:
+            kandidat = m.group(1)
+    vor, nach = _verw_namewerte(kandidat)
+    if not nach:
+        return
+    alt = _name_norm(f"{s.get('vorname') or ''} {s.get('nachname') or ''}")
+    neu_name = _name_norm(f"{vor} {nach}")
+    if s.get("patientId") and alt and neu_name and alt != neu_name:
+        # Ein ausdrücklich anderer Patientenname schlägt den bloßen Treffer
+        # der Anrufernummer. Sonst würde die Akte des Anrufers gewinnen.
+        s["patientId"] = ""
+        s["bekannt"] = False
+        s["anruferCheck"] = "nein"
+        sit["gefunden"] = []
+        sit["gefundenKey"] = ""
+    s["vorname"] = vor
+    s["nachname"] = nach
+    s["name"] = f"{vor} {nach}".strip()
+    s["buchstabiert"] = False
+    sit["_verwNameStrukturiert"] = True
+    neu.add("nachname")
+    if vor:
+        neu.update({"name", "vorname"})
+
+
+def _verw_drittperson_aufnehmen(sit: dict, text: str, neu: set[str]) -> None:
+    """Kontaktperson vom Patienten trennen und einen direkt genannten Namen ernten."""
+    s = gehirn.sammler(sit)
+    m = _VERW_DRITTE_RE.search(text)
+    wen = gehirn.fuer_wen_signal(text)
+    if not wen and m:
+        wen = gehirn.fuer_wen_signal(f"für meine {m.group(1)}") or "andere"
+    if not wen:
+        return
+    s["fuerWen"] = wen
+    if not sit.get("verwDrittpersonGeloest"):
+        gehirn.patient_von_kontakt_loesen(sit)
+        sit["verwDrittpersonGeloest"] = True
+    # "Meine Mutter Elisabeth Päsler, Termin am …": der Name hinter der
+    # Rolle gehoert dem Patienten; Datum/Uhrzeit enden das Namenssegment.
+    rest = text[m.end():] if m else ""
+    rest = re.split(_VERW_NAME_ENDE_RE, rest, maxsplit=1)[0]
+    toks = [
+        x for x in re.findall(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'’-]{1,}", rest)
+        if x.casefold() not in _VERW_NAME_STOP
+    ]
+    if len(toks) >= 2:
+        s["vorname"], s["nachname"] = toks[0], toks[-1]
+        s["buchstabiert"] = False
+        sit["_verwNameStrukturiert"] = True
+        neu.update({"name", "vorname", "nachname"})
+    elif len(toks) == 1:
+        s["nachname"] = toks[0]
+        s["buchstabiert"] = False
+        sit["_verwNameStrukturiert"] = True
+        neu.add("nachname")
+
+
+def _verw_name_zeitmuell_entfernen(sit: dict, text: str, neu: set[str]) -> None:
+    """Nur im Verwaltungsweg angehaengte Monate/Uhr-Paraphrasen entfernen."""
+    s = gehirn.sammler(sit)
+    if sit.pop("_verwNameStrukturiert", False):
+        # Ein explizit strukturiert erkannter Name („Nachname, Vorname, der
+        # Termin …“ / Drittperson) gewinnt. Auch echte Familiennamen wie
+        # Mai dürfen nicht als Monatswort entfernt werden.
+        s["name"] = f"{s['vorname']} {s['nachname']}".strip()
+        return
+    if ("," in text and s.get("vorname") and s.get("nachname")
+            and _name_norm(s["vorname"]) == _name_norm(s["nachname"])):
+        vor, nach = _verw_namewerte(text)
+        if nach:
+            s["vorname"], s["nachname"] = vor, nach
+            neu.add("nachname")
+            if vor:
+                neu.update({"name", "vorname"})
+    zeitkontext = bool(
+        re.search(rf"\b(?:{_MONATE_RE})\b", text, re.I)
+        and (re.search(r"\d", text) or re.search(r"\btermin\b|\buhr\b", text, re.I))
+    )
+    for feld in ("vorname", "nachname"):
+        alt = _s(s.get(feld))
+        if not alt:
+            continue
+        teile = re.findall(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'’-]*", alt)
+        sauber = [
+            x for x in teile
+            if x.casefold() not in _VERW_NAME_STOP
+            or (len(teile) == 1 and not zeitkontext)
+        ]
+        neu_wert = " ".join(sauber)
+        if neu_wert != alt:
+            s[feld] = neu_wert
+            if neu_wert:
+                neu.add(feld)
+            else:
+                neu.discard(feld)
+    if s["vorname"] or s["nachname"]:
+        s["name"] = f"{s['vorname']} {s['nachname']}".strip()
+
+
 def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
-    """Absagen/Verschieben (W-NACHNAME 31.08.2026, phone_agent-Vorbild):
-    NUR den NACHNAMEN erfragen, dann SUCHEN — die CF braucht nichts weiter.
-    Hinweise aus dem Einstiegssatz filtern die Treffer; mehrere Patienten
-    mit gleichem Nachnamen (CF ambiguous) grenzt der Vorname ab."""
+    """Absagen/Verschieben: Terminmerkmale vor Name, Auskunft nie nach Datum."""
     s = gehirn.sammler(sit)
 
     if "modus" in neu and not sit.get("verwAktiv"):
@@ -1363,8 +2196,9 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
             # "Ich muss meinen Termin am Dienstag absagen": die Zeitangabe
             # beschreibt den BESTANDSTERMIN — nie ein Neubuchungs-Wunsch.
             if s["wunsch"] and _hinweis_hat(s["wunsch"]):
-                sit["verwHinweis"] = dict(s["wunsch"])
-                sit["verwHinweisText"] = s["wunschText"] or t
+                if not _hinweis_merken(sit, s["wunschText"] or t, relativ=True):
+                    sit["verwHinweis"] = dict(s["wunsch"])
+                    sit["verwHinweisText"] = s["wunschText"] or t
             s["wunsch"] = None
             s["wunschText"] = ""
         else:
@@ -1376,17 +2210,71 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
                 w = parse_slot_wish(rest)
                 s["wunsch"] = w if _hinweis_hat(w) else None
                 s["wunschText"] = rest if s["wunsch"] else ""
+            elif not re.search(r"\b(?:auf|zu|zum|zur)\b", t, re.I):
+                # "Den Termin am 13. Oktober verschieben" nennt nur den
+                # Bestandstermin. "Auf den 13. Oktober" ist dagegen der
+                # NEUE Wunsch und darf nicht als Suchdatum missbraucht werden.
+                _hinweis_merken(sit, t, relativ=True)
+                s["wunsch"] = None
+                s["wunschText"] = ""
     sit["verwAktiv"] = True
+    _verw_drittperson_aufnehmen(sit, t, neu)
+    _verw_detailname_aufnehmen(sit, t, neu)
+    _verw_name_zeitmuell_entfernen(sit, t, neu)
+    if (s["modus"] in _MODI and not _detail_tag(sit)
+            and _UNKLAR_RE.search(t)
+            and re.search(r"\b(?:wann|zeit|datum|termin)\b", t, re.I)):
+        sit["verwZeitUnbekannt"] = True
 
     # Antworten auf offene Fragen auswerten.
-    if s["frage"] == "vorname":
+    if s["frage"] == "wann":
+        if _UNKLAR_RE.search(t):
+            sit["verwZeitUnbekannt"] = True
+            s["frage"] = ""
+        elif _hinweis_merken(sit, t, relativ=True):
+            s["frage"] = ""
+            # Diese Antwort beschreibt den BESTANDSTERMIN. Beim Verschieben
+            # darf sie nie zugleich als neuer Wunschzeitpunkt weiterleben.
+            s["wunsch"] = None
+            s["wunschText"] = ""
+        elif {"name", "nachname", "vorname"} & neu:
+            # Der Anrufer kennt die Zeit nicht oder ueberspringt sie und
+            # nennt direkt den Patienten — das ist ein gueltiger Suchweg.
+            sit["verwZeitUnbekannt"] = True
+            s["frage"] = ""
+        else:
+            # Der Anrufer darf die neue Prioritaetsfrage ueberspringen und
+            # direkt den Namen nennen/buchstabieren. Dazu denselben bewaehrten
+            # Namensparser einmal mit Namenskontext laufen lassen.
+            s["frage"] = "nachname"
+            extra = gehirn.einsammeln(sit, t)
+            _verw_name_zeitmuell_entfernen(sit, t, neu)
+            if s["nachname"]:
+                neu.update(extra or {"nachname"})
+                sit["verwZeitUnbekannt"] = True
+                s["frage"] = ""
+            else:
+                s["frage"] = "wann"
+                return {"text": (
+                    "Wenn Sie den Zeitpunkt wissen: Welcher Tag und ungefähr "
+                    "welche Uhrzeit? Wenn nicht, nennen Sie mir bitte den "
+                    "Behandler und den Nachnamen des Patienten."
+                )}
+    elif s["frage"] == "arzt":
+        # Arzt/Behandler wurde von gehirn.einsammeln bereits in s["arzt"]
+        # abgelegt. Auch "weiß ich nicht" darf weiter zum Patientennamen.
+        if s.get("arzt") or _UNKLAR_RE.search(t):
+            s["frage"] = ""
+        else:
+            return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
+    elif s["frage"] == "vorname":
         if not neu:
-            return None  # Zwischenfrage/Erzaehlung: LLM, die Frage bleibt offen
+            return None  # Äußerer Flow hält Absage/Verschieben deterministisch offen.
         s["frage"] = ""
     elif s["frage"] == "nachname" and sit.get("verwKorrektur"):
         if not neu:
             if gehirn.ist_zwischenfrage(t) or gespraech.traegt_thema(sit, t):
-                return None  # Zwischenfrage: LLM, die Korrektur-Frage bleibt offen
+                return None  # Äußerer Flow hält die Korrektur-Frage offen.
             # "Der stimmt aber" o. ae.: gleicher Name, die Suche unten laeuft
             # erneut und geht danach den ehrlichen Notiz-Weg.
         else:
@@ -1412,9 +2300,22 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     if termin:
         return _bestaetigen(sit, termin, melde)
 
-    # NUR der NACHNAME — dann direkt suchen (Chef 31.08.2026: "erstmal sehen
-    # ob er einen termin findet"; die Wann-/Behandler-Vorabfrage von
-    # W-SAMMELN ist ausgebaut, freiwillig genannte Hinweise filtern weiter).
+    # Die bekannte Rufnummer zuerst vom Anrufer bestaetigen lassen. Ein
+    # Datumstreffer darf die bestehende Identitaetswache nicht umgehen.
+    if not s["nachname"] and not s["anruferCheck"] and not s["fuerWen"]:
+        agentprofil.anrufer_warten(sit)
+        if gehirn.anrufer_bekannt(sit):
+            s["frage"] = "anrufer_check"
+            return {"text": gehirn.anrufer_check_frage(sit)}
+
+    # Termin-zuerst: ein konkreter Tag wird direkt im Standortkalender nach
+    # Uhrzeit, Behandler und Patient/Rufnummer eingegrenzt. Die alte Namens-CF
+    # bleibt sicherer Rueckfall, falls die Erinnerungsdaten abweichen.
+    if s["modus"] in {"absagen", "verschieben"} and _detail_tag(sit):
+        behandelt, aus = _detail_dispatch(sit, melde)
+        if behandelt:
+            return aus
+
     if not s["nachname"]:
         if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
             # Live 06.09.2026: return None liess das LLM Name fragen und
@@ -1430,10 +2331,7 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
                 "absagen": "Damit ich den richtigen Termin absage",
                 "verschieben": "Damit ich den richtigen Termin finde",
             }.get(s["modus"], "Damit ich den richtigen Termin finde")
-            return {"text": (
-                f"{was}: Wie ist Ihr Nachname? "
-                "Buchstabieren Sie ihn am besten gleich einmal."
-            )}
+            return _nachname_frage(sit, f"{was}:")
         # W-ANRUFER-CHECK: die Rufnummer hat einen Kartei-Patienten getroffen
         # — Name + Nummer vorlesen statt den Nachnamen zu erfragen. Ein Ja
         # (einsammeln) fuellt Name/patientId/Telefon, die Suche laeuft dann
@@ -1442,17 +2340,37 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
             s["frage"] = "anrufer_check"
             return {"text": gehirn.anrufer_check_frage(sit)}
-        s["frage"] = "nachname"
+        if s["modus"] == "auskunft" and sit.get("verwZeitUnbekannt"):
+            return _ohne_zeit_eingrenzen(sit)
+        if s["modus"] in {"absagen", "verschieben"} and not _detail_tag(sit):
+            if sit.get("verwZeitUnbekannt"):
+                return _ohne_zeit_eingrenzen(sit)
+            if _hinweis_hat(sit.get("verwHinweis")):
+                if sit.get("_verwWannTeilGefragt"):
+                    # Ein zweiter nur teilweiser Zeit-Hinweis darf keine
+                    # Wann-Schleife eröffnen. Behandler/Patient übernehmen.
+                    sit["verwZeitUnbekannt"] = True
+                    return _ohne_zeit_eingrenzen(sit)
+                sit["_verwWannTeilGefragt"] = True
+                s["frage"] = "wann"
+                return {"text": (
+                    "Die ungefähre Angabe habe ich. Welches genaue Datum war "
+                    "es? Wenn Sie das nicht mehr wissen, grenze ich den Termin "
+                    "über Behandler und Nachname des Patienten ein."
+                )}
+            s["frage"] = "wann"
+            return {"text": (
+                "An welchem Tag und ungefähr um wie viel Uhr ist der Termin? "
+                "Wenn Sie das nicht mehr wissen, grenze ich ihn über Behandler "
+                "und Nachname des Patienten ein."
+            )}
         was = {
             "absagen": "Damit ich den richtigen Termin absage",
             "verschieben": "Damit ich den richtigen Termin finde",
         }.get(s["modus"], "Damit ich den richtigen Termin finde")
         # Chef 31.08.2026: direkt zum Buchstabieren einladen — der verhoerte
         # Nachname ist die haeufigste Ursache fuer die Fehlsuche (Zannes).
-        return {"text": (
-            f"{was}: Wie ist Ihr Nachname? "
-            "Buchstabieren Sie ihn am besten gleich einmal."
-        )}
+        return _nachname_frage(sit, f"{was}:")
 
     quittung = ""
     if (("name" in neu or "nachname" in neu)
@@ -1465,13 +2383,95 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     return aus
 
 
+def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
+    """Aktive Absage/Verschiebung darf nie in das freie LLM fallen.
+
+    Der Nutzer kann per Intent-Schicht weiterhin ausdrücklich das Anliegen
+    wechseln. Solange der Verwaltungsmodus aber aktiv bleibt, wiederholt
+    ausschließlich die deterministische Maschine den offenen sicheren
+    Schritt und behauptet weder Treffer noch Erfolg.
+    """
+    s = gehirn.sammler(sit)
+    if s.get("modus") not in {"absagen", "verschieben"}:
+        return None
+
+    termin = _gewaehlt(sit)
+    phase = _s(s.get("phase"))
+    frage = _s(s.get("frage"))
+
+    if phase == "verw_patient_bestaetigen" and termin:
+        patient = _s(termin.get("patientName"))
+        patient_text = f" für {patient}" if patient else ""
+        return {"text": (
+            "Damit ich nichts verwechsle: "
+            f"Ist es der Termin {termin.get('spoken')}{patient_text}?"
+        )}
+    if phase == "absage_bestaetigen" and termin:
+        return _absage_frage(sit, termin)
+    if phase == "verschieb_bestaetigen" and termin and s.get("slotIso"):
+        return _verschieb_readback(sit, _s(s.get("slotIso")))
+    if phase == "mehrfach_bestaetigen":
+        posten = list(sit.get("mehrfachAbsage") or [])
+        liste = _fuegen([_s(p.get("spoken")) for p in posten])
+        return {"text": (
+            f"Es geht um diese Termine: {liste}. "
+            "Soll ich sie wirklich alle absagen?"
+        )}
+    if phase == "wahl" and sit.get("gefunden"):
+        return {"text": (
+            f"Zur Auswahl: {_liste_sprechbar(sit['gefunden'])}. "
+            "Welchen Termin meinen Sie?"
+        )}
+    if phase == "verschieb_angebot" and sit.get("offered"):
+        liste = _fuegen([_s(a.get("spoken")) for a in sit["offered"]])
+        return {"text": f"Frei wären {liste}. Welcher Termin passt Ihnen?"}
+    if phase == "verschieb_wunsch" or frage == "wunsch":
+        return {"text": "Wann passt es Ihnen für den neuen Termin besser?"}
+
+    if frage == "anrufer_check" and gehirn.anrufer_bekannt(sit):
+        return {"text": gehirn.anrufer_check_frage(sit)}
+    if frage in {"name", "nachname", "buchstabieren"}:
+        was = ("Damit ich den richtigen Termin absage:"
+               if s["modus"] == "absagen"
+               else "Damit ich den richtigen Termin verschiebe:")
+        return _nachname_frage(sit, was)
+    if frage == "vorname":
+        return {"text": "Wie lautet der Vorname des Patienten?"}
+    if frage == "arzt":
+        return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
+    if frage == "wann":
+        return {"text": (
+            "Welches Datum oder welche ungefähre Uhrzeit hat der Termin? "
+            "Wenn Sie das nicht wissen, sagen Sie mir bitte den Behandler."
+        )}
+    if frage == "behandlung":
+        return _behandlung_frage(sit, sit.get("gefunden") or [])
+
+    if sit.get("verwZeitUnbekannt"):
+        return _ohne_zeit_eingrenzen(sit)
+    s["frage"] = "wann"
+    aktion = "Absage" if s["modus"] == "absagen" else "Verschiebung"
+    return {"text": (
+        f"Ich bleibe bei der {aktion}. "
+        "Welches Datum oder welche ungefähre Uhrzeit hat der Termin?"
+    )}
+
+
 def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | None:
-    """Ein Anrufer-Satz durch die Termin-Verwaltung. None => LLM uebernimmt."""
+    """Ein Anrufer-Satz durch die Termin-Verwaltung.
+
+    ``None`` bedeutet nur: dieser Teilzustand hat keine Antwort erzeugt.
+    Bei aktiver Absage/Verschiebung fängt ``flow.zug`` das anschließend mit
+    ``sicherer_fortsetzungsanker`` ab; das freie LLM übernimmt dort nie.
+    """
     from bianca.flow import _slot_wahl  # kein Kreis-Import auf Modulebene
 
     s = gehirn.sammler(sit)
     t = _s(gesagt)
-    if s["modus"] not in _MODI:
+    if (s["modus"] not in _MODI
+            and not (sit.get("verwAbschlussOffen")
+                     and s["phase"] == "fertig"
+                     and s["frage"] == "sonst_noch")):
         return None
     _richtung_merken(sit, t)
 
@@ -1484,13 +2484,69 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         if aus is not None:
             return aus
 
+    # Ein nur zu mindestens 60 Prozent passender Name ist noch kein
+    # Patientenbeweis. Erst dieses Ja darf die feste Verwaltungsstrecke
+    # fortsetzen; Nein startet die Namensaufnahme neu.
+    if s["phase"] == "verw_patient_bestaetigen":
+        if gehirn.ist_ja(t):
+            termin = _gewaehlt(sit)
+            if not termin:
+                s["phase"] = ""
+                s["frage"] = ""
+                return _nachname_frage(
+                    sit, "Der Kandidat ist nicht mehr eindeutig. Bitte noch einmal:")
+            danach = _s(sit.pop("_verwName60Danach", "termin"))
+            if danach == "wahl":
+                _kandidat_patient_uebernehmen(sit, termin)
+                sit["verwDetailQuelle"] = "nameBestaetigt"
+                s["phase"] = "wahl"
+                s["frage"] = "terminwahl"
+                verb = "absagen" if s["modus"] == "absagen" else "verschieben"
+                return {"text": (
+                    f"Danke. Ich sehe mehrere Termine: "
+                    f"{_liste_sprechbar(sit.get('gefunden') or [])}. "
+                    f"Welchen möchten Sie {verb}?"
+                )}
+            sit["_verwName60Bestaetigt"] = True
+            _kandidat_patient_uebernehmen(sit, termin)
+            s["phase"] = ""
+            s["frage"] = ""
+            return _bestaetigen(sit, termin, melde)
+        if gehirn.ist_nein(t):
+            sit.pop("_verwName60Danach", None)
+            if s["modus"] == "auskunft":
+                sit["gefunden"] = []
+                sit["gefundenKey"] = ""
+                sit["verwaltenTermin"] = ""
+                sit["verwDetailQuelle"] = ""
+                s["patientId"] = ""
+                s["vorname"] = ""
+                s["nachname"] = ""
+                s["bekannt"] = False
+                s["warSchonMal"] = None
+                s["vornameQuelle"] = ""
+                s["vornameCheck"] = ""
+                sit["patient"] = {}
+                s["phase"] = ""
+                s["frage"] = ""
+                return _nachname_frage(
+                    sit,
+                    "Danke für die Korrektur. Bitte nennen oder "
+                    "buchstabieren Sie den Nachnamen noch einmal.",
+                )
+            return _kandidat_verwerfen(sit, melde)
+        return None
+
     # 1) Offene Bestaetigungen zuerst — ein "ja" traegt sonst nichts Neues.
     if s["phase"] == "absage_bestaetigen":
         if gehirn.ist_ja(t):
             return _absagen(sit, melde)
         if gehirn.ist_nein(t):
-            s["phase"] = "fertig"
-            s["frage"] = ""
+            if sit.get("verwKandidat"):
+                return _kandidat_verwerfen(sit, melde)
+            sit["verwaltenTermin"] = ""
+            _verw_reset(sit)
+            _verwaltung_mit_abschlussfrage_schliessen(sit)
             return {"text": "Alles klar, der Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
         if "modus" in neu and s["modus"] == "verschieben":
             # "Nicht absagen — verschieben!" mitten in der Rueckfrage.
@@ -1549,9 +2605,8 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             # Keiner der gezeigten Termine ist gemeint: ehrlich + Notiz.
             return _nicht_gefunden(sit)
         if gehirn.ist_zwischenfrage(t) or gespraech.traegt_thema(sit, t):
-            # Abschweifung/Nebenthema: LLM antwortet (Talk-Schicht); Erledigt-
-            # Wache + Stand im Prompt verhindern erfundene Absagen und
-            # fuehren zur Wahl zurueck.
+            # Der äußere Flow antwortet mit dem festen Fortsetzungsanker.
+            # Das freie LLM darf in einer Terminwahl nichts erfinden.
             return None
         return {"text": (
             f"Da will ich nichts Falsches erwischen. Zur Auswahl: {_liste_sprechbar(sit['gefunden'])}. "
@@ -1572,13 +2627,19 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         return None
 
     if s["phase"] == "verschieb_wunsch":
+        if gehirn.ist_nein(t) and sit.get("verwKandidat"):
+            return _kandidat_verwerfen(sit, melde)
         if "wunsch" in neu:
             return _verschieb_angebot(sit, melde)
         if not neu:
             return None
 
-    # 4) Nach erledigter Absage: direkt neu buchen?
+    # 4) Kompatibilität für beim Deploy bereits laufende Altsitzungen, die
+    # noch die frühere Neubuchungsfrage nach einer Absage offen haben.
     if s["frage"] == "neubuchung":
+        if _KEIN_NEUER_TERMIN_RE.search(t):
+            s["frage"] = "sonst_noch"
+            return {"text": "Alles klar, kein neuer Termin. Kann ich sonst noch etwas für Sie tun?"}
         if ("name" in neu or "nachname" in neu) and s["modus"] in {"absagen", "verschieben"} \
                 and s["nachname"] and not gehirn.ist_ja(t):
             # "Nein, mein Nachname ist Zannes." nach der Fehlsuche ist eine
@@ -1590,6 +2651,9 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             s["phase"] = ""
             s["frage"] = ""
             return _dispatch(sit, melde)
+        if gehirn.ist_nein(t):
+            s["frage"] = "sonst_noch"
+            return {"text": "Alles klar, kein neuer Termin. Kann ich sonst noch etwas für Sie tun?"}
         if gehirn.ist_ja(t) or "grund" in neu or "wunsch" in neu:
             s["modus"] = "buchen"
             s["phase"] = ""
@@ -1600,9 +2664,6 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             fid, frage = gehirn.naechste_frage(sit)
             s["frage"] = fid
             return {"text": frage or "Worum geht es denn — eine Kontrolle, Schmerzen, oder etwas anderes?"}
-        if gehirn.ist_nein(t):
-            s["frage"] = ""
-            return {"text": "Alles klar. Kann ich sonst noch etwas für Sie tun?"}
         return None
 
     # 5) Absagen/Verschieben: Nachname erfragen und SUCHEN (W-NACHNAME).
@@ -1630,6 +2691,25 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         if _hinweis_merken(sit, t, relativ=True) and "wunsch" in neu:
             s["wunsch"] = None
             s["wunschText"] = ""
+        if (
+            not _hinweis_hat(sit.get("verwHinweis"))
+            and (
+                intent.ist_bestandsfrage(sit, t)
+                or (
+                    _UNKLAR_RE.search(t)
+                    and re.search(r"\b(?:wann|zeit|datum|termin)\b", t, re.I)
+                )
+            )
+        ):
+            # „Wann ist mein Termin?“ trägt naturgemäß gerade KEIN Datum.
+            # Nie nach dem vergessenen Wert fragen; Patient/Telefon und bei
+            # mehreren Kalendern der Behandler grenzen die Suche ein.
+            sit["verwZeitUnbekannt"] = True
+    if s["frage"] == "arzt":
+        if s.get("arzt") or _UNKLAR_RE.search(t):
+            s["frage"] = ""
+        else:
+            return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
     if not s["nachname"]:
         if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
             # Live 06.09.2026 Petsas: LLM fragte "Wie lautet Ihr Name?" und
@@ -1648,8 +2728,19 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
             s["frage"] = "anrufer_check"
             return {"text": gehirn.anrufer_check_frage(sit)}
+        if sit.get("verwZeitUnbekannt"):
+            return _ohne_zeit_eingrenzen(sit)
+        if _detail_tag(sit):
+            behandelt, aus = _detail_dispatch(sit, melde)
+            if behandelt:
+                return aus
         s["frage"] = "nachname"
         return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?"}
+
+    if _detail_tag(sit) and not sit.get("verwZeitUnbekannt"):
+        behandelt, aus = _detail_dispatch(sit, melde)
+        if behandelt:
+            return aus
 
     if s["frage"] == "vorname" and not neu:
         return {"text": "Wie ist Ihr Vorname?"}

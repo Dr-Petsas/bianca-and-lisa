@@ -396,17 +396,8 @@ _MITSCHNITT_STIMME = "bianca"
 
 @app.get("/api/anrufe")
 def api_anrufe(tenant: str = ""):
-    items = mitschnitt.liste(_MITSCHNITT_STIMME)
-    if tenant:
-        info = next((x for x in tenants.liste() if x.get("id") == tenant), {})
-        erlaubt = {
-            tenant,
-            str(info.get("clientId") or ""),
-            str(info.get("locationId") or ""),
-            *(str(x) for x in (info.get("aliases") or [])),
-        }
-        items = [x for x in items if str(x.get("tenantId") or "") in erlaubt]
-    return {"ok": True, "anrufe": items}
+    return {"ok": True, "anrufe": mitschnitt.liste(
+        _MITSCHNITT_STIMME, erlaubt=mitschnitt.erlaubt_von(tenant))}
 
 
 @app.get("/api/anrufe/{sid}")

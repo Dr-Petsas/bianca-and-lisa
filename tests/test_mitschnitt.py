@@ -157,6 +157,35 @@ def test_liste_laden_loeschen(monkeypatch, tmp_path):
     assert mit.loeschen("bianca", a["id"]) is False
 
 
+def test_liste_behaelt_mandant_trotz_neuerer_fremder(monkeypatch, tmp_path):
+    """Aeltere Gespräche einer Praxis duerfen nicht hinter dem Limit der
+    anderen Mandanten verschwinden — Filter vor dem Schnitt."""
+    _umleiten(monkeypatch, tmp_path)
+    basis = tmp_path / "anrufe" / "bianca"
+    for i in range(5):
+        sid = f"{i:032x}"
+        d = basis / sid
+        d.mkdir(parents=True)
+        (d / "anruf.json").write_text(json.dumps({
+            "id": sid,
+            "tenantId": "blessing",
+            "startedAt": f"2026-09-15T1{i}:00:00+00:00",
+            "zuege": [],
+        }), encoding="utf-8")
+    alt = "a" * 32
+    (basis / alt).mkdir(parents=True)
+    (basis / alt / "anruf.json").write_text(json.dumps({
+        "id": alt,
+        "tenantId": "meddent",
+        "startedAt": "2026-08-01T08:00:00+00:00",
+        "zuege": [{"nr": 1}],
+    }), encoding="utf-8")
+    ohne = mit.liste("bianca", limit=3)
+    assert [e["tenantId"] for e in ohne] == ["blessing", "blessing", "blessing"]
+    mit_filter = mit.liste("bianca", limit=3, erlaubt=["meddent"])
+    assert [e["id"] for e in mit_filter] == [alt]
+
+
 def test_studio_anruf_traegt_testmarke_statt_unbekannt(monkeypatch, tmp_path):
     _umleiten(monkeypatch, tmp_path)
     d = _dienst()

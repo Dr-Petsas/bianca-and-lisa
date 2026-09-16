@@ -170,6 +170,7 @@ _FRAGE_KERN = {
     # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen des Bestandstermins.
     "termin_ok": r"passt|bleibt|verschieben|absagen",
     "termin_aendern": r"verschieben|absagen",
+    "verw_patient_ok": r"richtig|patient|termin|gefunden",
     "sonst_noch": r"sonst\s+noch|noch\s+etwas",
     # W-RECHNUNG (14.09.2026): "Soll ich Ihnen dafuer einen Rueckruf einrichten?"
     "rechnung_rueckruf": r"rückruf|rueckruf|zurückrufen|zurueckrufen",

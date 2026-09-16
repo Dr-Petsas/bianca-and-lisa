@@ -76,6 +76,14 @@ def test_globale_navigation_und_anruf_unterseiten_existieren():
     assert "Praxis-Live" in html_anrufe
     assert "function istTest" in js_anrufe
     assert "art-filter" in html_anrufe
+    assert 'id="tag-filter"' in html_anrufe
+    assert 'id="tag-heute"' in html_anrufe
+    assert "Alle Tage" in html_anrufe
+    assert "function anrufTag" in js_anrufe
+    assert "function datumSchreiben" in js_anrufe
+    assert "imDatum" in js_anrufe
+    assert 'DATUM_KEY = "pickadoc.anrufe.tag"' in js_anrufe
+    assert '"?tenant=" + encodeURIComponent(t)' in js_anrufe
     assert 'raus.setdefault("cache-control", "no-store")' in inspect.getsource(
         server.bianca_durchreichen
     )
@@ -112,3 +120,8 @@ def test_ergebnisseite_verlinkt_gespraech_in_die_anrufuebersicht():
     assert "adresseFolgen" in anrufe_js
     # Ein Testanruf darf nicht am Art-Filter haengen bleiben.
     assert 'artSchreiben("alle")' in anrufe_js
+    # Ein aelterer Link darf nicht hinter dem Tagesfilter verschwinden.
+    assert "anrufTag(a)" in anrufe_js
+    assert "datumSchreiben(tag)" in anrufe_js
+    # Mandant geht an die API, sonst schneidet das globale Limit die Historie.
+    assert '"?tenant=" + encodeURIComponent(t)' in anrufe_js

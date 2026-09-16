@@ -15,6 +15,22 @@ def _sit() -> dict:
     return {"tenant": laden("meddent"), "messages": [{"role": "system", "content": "x"}]}
 
 
+def _verwaltung_start(sit: dict, text: str) -> dict | None:
+    """Legacy-Faelle ohne Termindaten nehmen bewusst den neuen Ersatzweg.
+
+    Produktion fragt zuerst Datum/Uhrzeit, bei "weiss nicht" Behandler und
+    erst dann den Namen. Die nachfolgenden Tests pruefen gezielt weiterhin
+    Namenssuche, Mehrdeutigkeit und Schreibwege.
+    """
+    aus = flow.zug(sit, text)
+    s = gehirn.sammler(sit)
+    if s["frage"] == "wann":
+        aus = flow.zug(sit, "Den Zeitpunkt weiß ich nicht mehr.")
+    if s["frage"] == "arzt":
+        aus = flow.zug(sit, "Den Behandler weiß ich auch nicht mehr.")
+    return aus
+
+
 # --- Buchstabieren --------------------------------------------------------
 
 def test_buchstabieren_anfangsalphabet():
@@ -466,9 +482,8 @@ def test_absage_im_angebot_bleibt_buchung():
 
 
 def test_absage_fluss_komplett():
-    """W-NACHNAME 31.08.2026 (phone_agent-Vorbild): NUR der Nachname wird
-    erfragt, dann wird SOFORT gesucht -> Treffer bestaetigen MIT Anrede ->
-    bei Ja loeschen. Keine Wann-/Behandler-Vorabfrage mehr."""
+    """Ohne bekannte Termindaten: nach Datum/Behandler-Unwissen Name suchen,
+    Treffer MIT Anrede bestaetigen und erst bei Ja loeschen."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_cancel = verwalten.kal.cancel_by_id
     echt_anstossen = verwalten.hintergrund.anstossen
@@ -481,8 +496,8 @@ def test_absage_fluss_komplett():
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
         assert "buchstabieren" in z1["text"].lower()  # direkt einladen (31.08.)
         assert "vor- und nachname" not in z1["text"].lower()
         assert gehirn.sammler(sit)["frage"] == "nachname"
@@ -495,10 +510,11 @@ def test_absage_fluss_komplett():
         z3 = flow.zug(sit, "Ja, bitte.")
         assert z3 and "abgesagt" in z3["text"].lower()
         assert aufrufe["aid"] == "apt-1"
-        assert "neuen termin" in z3["text"].lower()
+        assert "sonst noch" in z3["text"].lower()
+        assert "neuen termin" not in z3["text"].lower()
 
         z4 = flow.zug(sit, "Nein, danke.")
-        assert z4 and "sonst noch" in z4["text"].lower()
+        assert z4 and z4.get("hangup")
     finally:
         verwalten.kal.find_patient_appointments = echt_find
         verwalten.kal.cancel_by_id = echt_cancel
@@ -516,7 +532,7 @@ def test_absage_nachname_buchstabiert_geht_direkt_in_suche():
     verwalten.kal.find_patient_appointments = _find
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        z1 = _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
         assert z1 and "buchstabieren" in z1["text"].lower()
         z2 = flow.zug(sit, "B E R G E R.")
         assert z2 and "wirklich absagen" in z2["text"].lower(), z2
@@ -527,9 +543,10 @@ def test_absage_nachname_buchstabiert_geht_direkt_in_suche():
 
 def test_absage_stallone_fallback_trotz_fremder_anrufernummer():
     """Live 10.09.2026: „Stallone, S-T-A-L-L-O-N-E“ war korrekt erkannt,
-    agentFindPatientAppointments lieferte wegen der Nummer des ANRUFERS aber
-    404. Kartei-ID + masPatientLastDoctor müssen den echten 12-Uhr-Termin
-    finden und punktgenau an agentCancelAppointmentById geben."""
+    agentFindPatientAppointments lieferte damals wegen der Nummer des
+    ANRUFERS 404. Die fremde Kontakt-Nummer geht heute gar nicht mehr in die
+    Patientensuche; Kartei-ID + masPatientLastDoctor bleiben der sichere
+    Rückfall und müssen den echten Termin punktgenau finden."""
     echt_cf = verwalten.kal._cf_call
     echt_cancel = verwalten.kal.cancel_by_id
     echt_anstossen = verwalten.hintergrund.anstossen
@@ -545,7 +562,7 @@ def test_absage_stallone_fallback_trotz_fremder_anrufernummer():
         dispatch = {"route": route, "request": dict(body), "httpStatus": 200}
         if route == "agentFindPatientAppointments":
             assert body.get("lastName") == "Stallone"
-            assert body.get("callerPhone") == "01776004600"
+            assert "callerPhone" not in body
             dispatch["httpStatus"] = 404
             return 404, {"status": "not_found", "message": "Patient not found"}, dispatch
         if route == "masSearchPatients":
@@ -655,8 +672,8 @@ def test_absage_mehrere_patienten_gleicher_nachname():
     verwalten.kal.find_patient_appointments = _find
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich möchte meinen Termin absagen.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
 
         z2 = flow.zug(sit, "Berger.")
         assert z2 and "mehrere patienten" in z2["text"].lower()
@@ -680,8 +697,8 @@ def test_absage_hinweis_im_einstiegssatz_filtert():
     verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich muss meinen Termin am Donnerstag absagen.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Ich muss meinen Termin am Donnerstag absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
         assert (sit.get("verwHinweis") or {}).get("weekday") == 4  # Donnerstag
         s = gehirn.sammler(sit)
         assert not s["wunsch"]  # die Zeitangabe ist KEIN Neubuchungs-Wunsch
@@ -705,7 +722,8 @@ def test_absage_name_im_einstiegssatz_sucht_sofort():
         verwalten.kal.find_patient_appointments = echt_find
 
 
-def test_absage_dann_neubuchung():
+def test_absage_startet_neubuchung_nur_auf_ausdruecklichen_wunsch():
+    """Nach dem Storno kein automatisches Buchen; ein klar neuer Wunsch geht."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_cancel = verwalten.kal.cancel_by_id
     echt_anstossen = verwalten.hintergrund.anstossen
@@ -714,10 +732,10 @@ def test_absage_dann_neubuchung():
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
-        flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
         flow.zug(sit, "Martin Berger.")
         flow.zug(sit, "Ja.")
-        z = flow.zug(sit, "Ja, gerne einen neuen.")
+        z = flow.zug(sit, "Ich möchte einen neuen Termin buchen.")
         s = gehirn.sammler(sit)
         assert s["modus"] == "buchen"
         assert z and _s_frage(z)
@@ -758,22 +776,24 @@ def test_auskunft_und_folgeabsage():
     try:
         sit = _sit()
         z1 = flow.zug(sit, "Wann ist mein Termin nochmal?")
-        assert z1 and "name" in z1["text"].lower()
+        assert z1 and "behandler" in z1["text"].lower()
 
-        z2 = flow.zug(sit, "Martin Berger.")
-        assert z2 and "nächster termin" in z2["text"].lower()
-        assert "Petsas" in z2["text"]
+        z2 = flow.zug(sit, "Bei Doktor Petsas.")
+        assert z2 and "nachname" in z2["text"].lower()
 
-        z3 = flow.zug(sit, "Ach, den können Sie absagen bitte.")
-        assert z3 and "wirklich absagen" in z3["text"].lower()
+        z3 = flow.zug(sit, "Martin Berger.")
+        assert z3 and "nächster termin" in z3["text"].lower()
+        assert "Petsas" in z3["text"]
+
+        z4 = flow.zug(sit, "Ach, den können Sie absagen bitte.")
+        assert z4 and "wirklich absagen" in z4["text"].lower()
         assert gehirn.sammler(sit)["modus"] == "absagen"
     finally:
         verwalten.kal.find_patient_appointments = echt_find
 
 
 def test_verschieben_fluss_komplett():
-    """Verschieben: GLEICHE Prozedur (W-NACHNAME: Nachname -> suchen),
-    dann Bestaetigung des Fundes und die Neu-Wunsch-Strecke."""
+    """Verschieben: unbekannte Bestandszeit -> Behandler/Name, dann Neu-Wunsch."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_slots = verwalten.kal.find_slots_behandler
     echt_move = verwalten.kal.move_appointment
@@ -799,8 +819,8 @@ def test_verschieben_fluss_komplett():
     verwalten.kal.move_appointment = _move
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich würde meinen Termin gern verschieben.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Ich würde meinen Termin gern verschieben.")
+        assert z1 and "nachname" in z1["text"].lower()
 
         z2 = flow.zug(sit, "Martin Berger.")
         assert z2 and "gefunden" in z2["text"].lower() and "besser" in z2["text"].lower()
@@ -818,6 +838,10 @@ def test_verschieben_fluss_komplett():
         assert z5 and "sonst noch" in z5["text"].lower()
         assert aufrufe["aid"] == "apt-1"
         assert aufrufe["iso"] and aufrufe["iso"] != "2026-09-03T10:00"
+        assert gehirn.sammler(sit)["frage"] == "sonst_noch"
+        z6 = flow.zug(sit, "Nein, danke.")
+        assert z6 and z6.get("hangup")
+        assert gehirn.sammler(sit)["modus"] == ""
     finally:
         verwalten.kal.find_patient_appointments = echt_find
         verwalten.kal.find_slots_behandler = echt_slots
@@ -844,8 +868,8 @@ def test_verschieben_alt_neu_trennung():
     }
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich möchte meinen Termin am Donnerstag auf Freitag verschieben.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Ich möchte meinen Termin am Donnerstag auf Freitag verschieben.")
+        assert z1 and "nachname" in z1["text"].lower()
         assert (sit.get("verwHinweis") or {}).get("weekday") == 4   # alt: Donnerstag
         s = gehirn.sammler(sit)
         assert (s["wunsch"] or {}).get("weekday") == 5              # neu: Freitag
@@ -868,8 +892,8 @@ def test_verwaltung_kein_termin_gefunden():
     verwalten.kal.find_patient_appointments = lambda t, c: {"ok": True, "notFound": True, "patient": {}, "appointments": []}
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich möchte meinen Termin bei Doktor Petsas absagen.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Ich möchte meinen Termin bei Doktor Petsas absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
         assert "Petsas" in ((gehirn.sammler(sit)["arzt"] or {}).get("calendarName") or "")
 
         z2 = flow.zug(sit, "Martin Berger.")
@@ -884,7 +908,7 @@ def test_verwaltung_kein_termin_gefunden():
         tl = z3["text"].lower()  # ZWEITER Fehlschlag: jetzt ehrlich + Notiz
         assert "ehrlich" in tl and "notiz" in tl and "vorgelegt" in tl
         assert "Doktor Petsas" in z3["text"]  # dem Behandler XY wird das vorgelegt
-        assert "neuen termin" in tl  # Ausweg bleibt offen
+        assert "sonst noch" in tl  # kein automatisches Abrutschen ins Buchen
         # Die Notiz ist ECHT (Sitzung + praxis_notizen.jsonl), kein Versprechen:
         assert "Berger" in (sit.get("praxisNotiz") or "")
         assert "nicht gefunden" in (sit.get("praxisNotiz") or "")
@@ -910,14 +934,14 @@ def test_absage_varianten_erkannt():
         "Können Sie ihn wieder stornieren?",
     ]:
         sit = _sit()
-        z = flow.zug(sit, satz)
+        z = _verwaltung_start(sit, satz)
         assert gehirn.sammler(sit)["modus"] == "absagen", satz
-        assert z and "wie ist ihr nachname" in z["text"].lower(), f"{satz}: {z}"
+        assert z and "nachname" in z["text"].lower(), f"{satz}: {z}"
     # Auch mit Zeitangabe im Einstiegssatz bleibt es bei der Nachnamen-Frage:
     sit = _sit()
-    z = flow.zug(sit, "Der Termin morgen fällt leider aus.")
+    z = _verwaltung_start(sit, "Der Termin morgen fällt leider aus.")
     assert gehirn.sammler(sit)["modus"] == "absagen"
-    assert z and "wie ist ihr nachname" in z["text"].lower(), z
+    assert z and "nachname" in z["text"].lower(), z
 
 
 def test_absage_verben_ohne_termin_bezug_zuenden_nicht():
@@ -946,8 +970,8 @@ def test_absage_neustart_nach_notfound_mit_namenskorrektur():
     verwalten.kal.find_patient_appointments = _find
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Ich würde gerne meinen Termin absagen.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Ich würde gerne meinen Termin absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
         z2 = flow.zug(sit, "Peter Möbel.")
         # Erster Fehlschlag: Korrektur-Chance statt Notiz (W-NAMESKORREKTUR).
         assert z2 and "falsch verstanden" in z2["text"].lower()
@@ -960,7 +984,7 @@ def test_absage_neustart_nach_notfound_mit_namenskorrektur():
         z4 = flow.zug(sit, "Nein, ich möchte meinen Termin absagen, Peter Müller.")
         assert z4, "Zug darf nicht ans LLM fallen"
         assert "sonst noch etwas" not in z4["text"].lower()
-        assert "wie ist ihr nachname" in z4["text"].lower()
+        assert "nachname" in z4["text"].lower()
         s = gehirn.sammler(sit)
         assert not s["nachname"], "verhoerter Name muss raus sein"
         # Frischer Anlauf: der neue Name wird direkt gesucht.
@@ -987,8 +1011,8 @@ def test_absage_korrektur_chance_nach_erstem_fehlschlag():
     verwalten.kal.find_patient_appointments = _find
     try:
         sit = _sit()
-        z1 = flow.zug(sit, "Hallo, ich muss meinen Termin leider absagen.")
-        assert z1 and "wie ist ihr nachname" in z1["text"].lower()
+        z1 = _verwaltung_start(sit, "Hallo, ich muss meinen Termin leider absagen.")
+        assert z1 and "nachname" in z1["text"].lower()
 
         z2 = flow.zug(sit, "Sannes Czannis.")
         assert z2 and "falsch verstanden" in z2["text"].lower(), z2
@@ -1020,11 +1044,11 @@ def test_absage_korrektur_am_nein_zweig_vorbei():
     verwalten.kal.find_patient_appointments = _find
     try:
         sit = _sit()
-        flow.zug(sit, "Ich muss meinen Termin absagen.")
+        _verwaltung_start(sit, "Ich muss meinen Termin absagen.")
         flow.zug(sit, "Sannes Czannis.")       # 1. Fehlschlag -> Korrektur-Frage
         z = flow.zug(sit, "Tschannis.")        # 2. Fehlschlag -> Notiz + Neubuchung?
         assert z and "notiz" in z["text"].lower()
-        assert gehirn.sammler(sit)["frage"] == "neubuchung"
+        assert gehirn.sammler(sit)["frage"] == "sonst_noch"
 
         z2 = flow.zug(sit, "Nein, mein Nachname ist Zannes.")
         assert z2, "Korrektur darf nicht ans LLM fallen"
@@ -1130,10 +1154,10 @@ def test_absage_wiederholt_nach_abschluss_startet_neu():
         z2 = flow.zug(sit, "Probefall.")
         assert z2 and "notiz" in z2["text"].lower()  # zweiter Fehlschlag
         z3 = flow.zug(sit, "Nein.")
-        assert z3 and "sonst noch etwas" in z3["text"].lower()
-        z4 = flow.zug(sit, "Ich möchte meinen Termin absagen.")
+        assert z3 and "wiederhören" in z3["text"].lower()
+        z4 = _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
         assert z4, "Neustart fehlt (fiel frueher ans LLM)"
-        assert "wie ist ihr nachname" in z4["text"].lower()
+        assert "nachname" in z4["text"].lower()
     finally:
         verwalten.kal.find_patient_appointments = echt_find
 
@@ -1218,8 +1242,8 @@ def test_verwaltung_behandler_filtert_kalender():
     verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN_ZWEI)
     try:
         sit = _sit()
-        z = flow.zug(sit, "Ich möchte meinen Termin bei Doktor Petsas absagen.")
-        assert z and "wie ist ihr nachname" in z["text"].lower()
+        z = _verwaltung_start(sit, "Ich möchte meinen Termin bei Doktor Petsas absagen.")
+        assert z and "nachname" in z["text"].lower()
         z2 = flow.zug(sit, "Martin Berger.")
         assert z2 and "wirklich absagen" in z2["text"].lower()
         assert sit.get("verwaltenTermin") == "apt-1"  # nur der Petsas-Termin
@@ -2080,8 +2104,11 @@ def test_kein_angebot_nach_verschieben():
         z = verwalten.zug(sit, "Ja", set())
         assert z is not None and "verschoben" in (z.get("text") or "").lower() or "liegt jetzt" in (z.get("text") or "")
         assert s["modus"] == "" and s["phase"] == "fertig" and not sit.get("offered")
-        # Verabschiedung danach: kein deterministisches Angebot mehr.
-        assert verwalten.zug(sit, "Das war's, danke schön.", set()) is None
+        # Verabschiedung danach: kein frisches Angebot und kein freies LLM,
+        # sondern genau ein sauberer Gesprächsabschluss.
+        ende = verwalten.zug(sit, "Das war's, danke schön.", set())
+        assert ende and ende.get("hangup")
+        assert "termin" not in ende["text"].lower()
     finally:
         verwalten.kal.move_appointment = echt
 
@@ -3720,17 +3747,16 @@ def test_verhoertes_danke_nach_absage_beendet_sofort_ohne_schleife():
 
 
 def test_absage_anrufer_check_nein_fragt_nachnamen():
-    """Nein auf den vorgelesenen Treffer: die bewaehrte Nachnamen-Frage
-    (mit Buchstabier-Einladung) kommt wie vor W-ANRUFER-CHECK."""
+    """Nein auf den Rufnummerntreffer: danach greifen Termindaten als Prioritaet."""
     echt_anstossen = verwalten.hintergrund.anstossen
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit_mit_anrufer()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
         z2 = flow.zug(sit, "Nein.")
-        assert z2 and "wie ist ihr nachname" in z2["text"].lower()
+        assert z2 and "welchem tag" in z2["text"].lower()
         s = gehirn.sammler(sit)
-        assert s["frage"] == "nachname" and s["anruferCheck"] == "nein"
+        assert s["frage"] == "wann" and s["anruferCheck"] == "nein"
     finally:
         verwalten.hintergrund.anstossen = echt_anstossen
 
