@@ -248,6 +248,39 @@ def _verschieb_datum_auf_bestand_beziehen(sit: dict, termin: dict) -> None:
     s["wunsch"] = w
 
 
+def _verwaltungs_lesespur(res: dict) -> dict:
+    """Tool-Ledger ohne Namen, Rufnummern oder fremde Patienten-IDs."""
+    dispatch = res.get("dispatch") if isinstance(res.get("dispatch"), dict) else {}
+    request = dispatch.get("request") if isinstance(dispatch.get("request"), dict) else {}
+    response = dispatch.get("response") if isinstance(dispatch.get("response"), dict) else {}
+    sichere_anfrage = {
+        key: request.get(key)
+        for key in ("clientId", "locationId", "source")
+        if request.get(key) not in (None, "")
+    }
+    sichere_antwort = {
+        "status": response.get("status")
+    } if response.get("status") not in (None, "") else {}
+    sichere_antwort["appointments"] = len(res.get("appointments") or [])
+    if res.get("matchSource"):
+        sichere_antwort["matchSource"] = _s(res.get("matchSource"))
+    return {
+        "ok": bool(res.get("ok")),
+        "notFound": bool(res.get("notFound")),
+        "mehrdeutig": bool(res.get("mehrdeutig")),
+        "appointments": [{} for _ in (res.get("appointments") or [])],
+        "dispatch": {
+            "route": dispatch.get("route") or "",
+            "url": dispatch.get("url") or "",
+            "method": dispatch.get("method") or "POST",
+            "request": sichere_anfrage,
+            "httpStatus": dispatch.get("httpStatus"),
+            "ms": dispatch.get("ms"),
+            "response": sichere_antwort,
+        },
+    }
+
+
 def _finden(sit: dict, melde: Melde) -> dict:
     """Kommende Termine zum Namen holen — einmal pro Name, dann aus dem Cache."""
     s = gehirn.sammler(sit)
@@ -256,8 +289,39 @@ def _finden(sit: dict, melde: Melde) -> dict:
         return {"ok": True, "appointments": sit["gefunden"]}
     if melde:
         melde("list_appointments")
-    res = kal.find_patient_appointments(sit["tenant"], _ctx(sit))
-    merke_tool(sit, "agentFindPatientAppointments", res)
+    res = dict(kal.find_patient_appointments(sit["tenant"], _ctx(sit)))
+    ausgeschlossene_termine = set(
+        sit.get("_verwAusgeschlosseneTermine")
+        or sit.get("verwAusgeschlossen")
+        or []
+    )
+    ausgeschlossene_patienten = set(
+        sit.get("_verwAusgeschlossenePatienten") or []
+    )
+    patient = res.get("patient") if isinstance(res.get("patient"), dict) else {}
+    patient_id = _s(patient.get("id"))
+    if patient_id and patient_id in ausgeschlossene_patienten:
+        # Ein ausdrücklich verworfener fuzzy Patient darf über denselben
+        # Cloud-Function-Namensweg nicht unmittelbar wieder auftauchen.
+        res.update({
+            "patient": {},
+            "appointments": [],
+            "notFound": True,
+            "nameMismatch": True,
+            "rejectedCandidate": True,
+        })
+    elif isinstance(res.get("appointments"), list):
+        res["appointments"] = [
+            a for a in res["appointments"]
+            if isinstance(a, dict)
+            and _s(a.get("id")) not in ausgeschlossene_termine
+            and _s(a.get("patientId")) not in ausgeschlossene_patienten
+        ]
+    merke_tool(
+        sit,
+        "agentFindPatientAppointments",
+        _verwaltungs_lesespur(res),
+    )
     if res.get("matchSource") == "name60":
         # Ein fuzzy gefundener Name ist nur Kandidat. Das folgende
         # Absage-/Verschiebe-Ja bestätigt erst Termin UND Patient.
@@ -348,6 +412,8 @@ def _verw_reset(sit: dict) -> None:
     sit.pop("_verwNameGehoert", None)
     sit.pop("_verwName60Bestaetigt", None)
     sit.pop("_verwName60Danach", None)
+    sit.pop("_verwAusgeschlosseneTermine", None)
+    sit.pop("_verwAusgeschlossenePatienten", None)
     sit.pop("_verwWannTeilGefragt", None)
     # Altlasten aus Entwicklungsstaenden ebenfalls sicher entfernen.
     sit.pop("verwDetailTag", None)
@@ -541,7 +607,14 @@ def _detail_kandidaten(sit: dict, melde: Melde) -> dict | None:
     alle = [
         dict(a) for a in (res.get("appointments") or [])
         if isinstance(a, dict) and _hinweis_passt(a, w)
-        and _s(a.get("id")) not in set(sit.get("verwAusgeschlossen") or [])
+        and _s(a.get("id")) not in set(
+            sit.get("_verwAusgeschlosseneTermine")
+            or sit.get("verwAusgeschlossen")
+            or []
+        )
+        and _s(a.get("patientId")) not in set(
+            sit.get("_verwAusgeschlossenePatienten") or []
+        )
     ]
     cal = _s((s.get("arzt") or {}).get("calendarId"))
     if cal:
@@ -1050,12 +1123,42 @@ def _mehrfach_absage_start(sit: dict, auswahl: list[dict]) -> dict:
     """EINE gemeinsame Rueckbestaetigung fuer mehrere Termine (nie still nur
     einen absagen)."""
     s = gehirn.sammler(sit)
+    patienten = {
+        _s(a.get("patientId"))
+        or _name_norm(a.get("patientName"), zeitwoerter=False)
+        for a in auswahl
+    }
+    patienten.discard("")
+    if len(patienten) > 1:
+        # Eine Sammelaktion über verschiedene Patienten wäre selbst nach
+        # „alle“ zu riskant. Erst die Patientenidentität klären.
+        sit["mehrfachAbsage"] = []
+        s["phase"] = ""
+        return _nachname_frage(
+            sit,
+            "Die Termine gehören zu verschiedenen Patienten. "
+            "Für welchen Patienten soll ich absagen?",
+        )
     sit["mehrfachAbsage"] = [
-        {"id": _s(a.get("id")), "spoken": _s(a.get("spoken"))} for a in auswahl
+        {
+            "id": _s(a.get("id")),
+            "spoken": _s(a.get("spoken")),
+            "patientId": _s(a.get("patientId")),
+            "patientName": _s(a.get("patientName")),
+        }
+        for a in auswahl
     ]
     s["phase"] = "mehrfach_bestaetigen"
     s["frage"] = "mehrfach_ok"
-    liste = _liste_sprechbar(auswahl)
+    liste = _liste_sprechbar([
+        {
+            **a,
+            "spoken": (
+                f"{_s(a.get('spoken'))}{_termin_patient(a)}"
+            ).strip(),
+        }
+        for a in auswahl
+    ])
     return {"text": (
         f"Verstanden — ich sage dann diese Termine ab: {liste}. "
         "Soll ich das wirklich für beide tun?"
@@ -1501,6 +1604,33 @@ _BEIDE_RE = re.compile(r"\bbeide[nr]?\b|\bboth\b", re.I)
 _ERSTEN_ZWEITEN_RE = re.compile(
     r"(?:den\s+)?ersten\s+und\s+(?:den\s+)?zweiten", re.I,
 )
+_BESTAETIGUNG_WIDERSPRUCH_RE = re.compile(
+    r"\b(?:aber|allerdings|doch\s+nicht|nicht|kein\w*|falsch|"
+    r"stimmt\s+nicht|ander\w*|korrig\w*|stattdessen|sondern)\b",
+    re.I,
+)
+
+
+def _bestaetigung_eindeutig(text: str) -> bool:
+    """Nur ein uneingeschränktes Ja darf einen Kalender-Write auslösen.
+
+    ``ist_ja`` erkennt absichtlich auch natürliche Satzanfänge. Bei
+    destruktiven Aktionen reicht das nicht: „Ja, aber nicht mein Termin“
+    ist ein Widerspruch und muss ohne Write in der Rückfrage bleiben.
+    """
+    t = _s(text)
+    return bool(
+        gehirn.ist_ja(t)
+        and not gehirn.ist_nein(t)
+        and not _BESTAETIGUNG_WIDERSPRUCH_RE.search(t)
+    )
+
+
+def _bestaetigung_unklar_text(aktion: str) -> dict:
+    return {"text": (
+        "Dann ändere ich noch nichts. "
+        f"Soll ich genau {aktion}? Bitte antworten Sie eindeutig mit Ja oder Nein."
+    )}
 
 
 def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
@@ -1682,12 +1812,23 @@ def _kandidat_verwerfen(sit: dict, melde: Melde) -> dict:
     """Nein zu einem Detail-Kandidaten: Termin-ID sperren und weiter eingrenzen."""
     s = gehirn.sammler(sit)
     war_name60 = sit.get("verwDetailQuelle") == "name60"
+    termin = _gewaehlt(sit)
     aid = _s(sit.pop("verwKandidat", ""))
     if aid:
-        ausgeschlossen = list(sit.get("verwAusgeschlossen") or [])
+        ausgeschlossen = list(
+            sit.get("_verwAusgeschlosseneTermine")
+            or sit.get("verwAusgeschlossen")
+            or []
+        )
         if aid not in ausgeschlossen:
             ausgeschlossen.append(aid)
-        sit["verwAusgeschlossen"] = ausgeschlossen
+        sit["_verwAusgeschlosseneTermine"] = ausgeschlossen
+        sit.pop("verwAusgeschlossen", None)
+    if war_name60 and _s(termin.get("patientId")):
+        patienten = list(sit.get("_verwAusgeschlossenePatienten") or [])
+        if _s(termin.get("patientId")) not in patienten:
+            patienten.append(_s(termin.get("patientId")))
+        sit["_verwAusgeschlossenePatienten"] = patienten
     sit["gefunden"] = []
     sit["gefundenKey"] = ""
     sit["verwaltenTermin"] = ""
@@ -2384,7 +2525,7 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
 
 
 def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
-    """Aktive Absage/Verschiebung darf nie in das freie LLM fallen.
+    """Aktive Termin-Verwaltung darf nie in das freie LLM fallen.
 
     Der Nutzer kann per Intent-Schicht weiterhin ausdrücklich das Anliegen
     wechseln. Solange der Verwaltungsmodus aber aktiv bleibt, wiederholt
@@ -2392,7 +2533,7 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
     Schritt und behauptet weder Treffer noch Erfolg.
     """
     s = gehirn.sammler(sit)
-    if s.get("modus") not in {"absagen", "verschieben"}:
+    if s.get("modus") not in _MODI:
         return None
 
     termin = _gewaehlt(sit)
@@ -2412,7 +2553,13 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
         return _verschieb_readback(sit, _s(s.get("slotIso")))
     if phase == "mehrfach_bestaetigen":
         posten = list(sit.get("mehrfachAbsage") or [])
-        liste = _fuegen([_s(p.get("spoken")) for p in posten])
+        liste = _fuegen([
+            _s(
+                f"{_s(p.get('spoken'))}"
+                f"{' für ' + _s(p.get('patientName')) if _s(p.get('patientName')) else ''}"
+            )
+            for p in posten
+        ])
         return {"text": (
             f"Es geht um diese Termine: {liste}. "
             "Soll ich sie wirklich alle absagen?"
@@ -2440,6 +2587,19 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
     if frage == "arzt":
         return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
     if frage == "wann":
+        if s["modus"] == "auskunft":
+            aus = _ohne_zeit_eingrenzen(sit)
+            if aus:
+                return aus
+            if s["nachname"]:
+                aus = _dispatch(sit, None)
+                if aus:
+                    return aus
+            return _nachname_frage(
+                sit,
+                "Den Zeitpunkt müssen Sie nicht wissen. "
+                "Ich suche über den Patienten:",
+            )
         return {"text": (
             "Welches Datum oder welche ungefähre Uhrzeit hat der Termin? "
             "Wenn Sie das nicht wissen, sagen Sie mir bitte den Behandler."
@@ -2448,7 +2608,22 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
         return _behandlung_frage(sit, sit.get("gefunden") or [])
 
     if sit.get("verwZeitUnbekannt"):
-        return _ohne_zeit_eingrenzen(sit)
+        aus = _ohne_zeit_eingrenzen(sit)
+        if aus:
+            return aus
+        if s["nachname"]:
+            aus = _dispatch(sit, None)
+            if aus:
+                return aus
+    if s["modus"] == "auskunft":
+        if s["nachname"]:
+            aus = _dispatch(sit, None)
+            if aus:
+                return aus
+        return _nachname_frage(
+            sit,
+            "Damit ich Ihren bestehenden Termin sicher im Kalender finde:",
+        )
     s["frage"] = "wann"
     aktion = "Absage" if s["modus"] == "absagen" else "Verschiebung"
     return {"text": (
@@ -2461,8 +2636,9 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     """Ein Anrufer-Satz durch die Termin-Verwaltung.
 
     ``None`` bedeutet nur: dieser Teilzustand hat keine Antwort erzeugt.
-    Bei aktiver Absage/Verschiebung fängt ``flow.zug`` das anschließend mit
-    ``sicherer_fortsetzungsanker`` ab; das freie LLM übernimmt dort nie.
+    Bei aktiver Absage, Verschiebung oder Terminauskunft fängt ``flow.zug``
+    das anschließend mit ``sicherer_fortsetzungsanker`` ab; das freie LLM
+    übernimmt dort nie.
     """
     from bianca.flow import _slot_wahl  # kein Kreis-Import auf Modulebene
 
@@ -2488,7 +2664,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     # Patientenbeweis. Erst dieses Ja darf die feste Verwaltungsstrecke
     # fortsetzen; Nein startet die Namensaufnahme neu.
     if s["phase"] == "verw_patient_bestaetigen":
-        if gehirn.ist_ja(t):
+        if _bestaetigung_eindeutig(t):
             termin = _gewaehlt(sit)
             if not termin:
                 s["phase"] = ""
@@ -2512,42 +2688,17 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             s["phase"] = ""
             s["frage"] = ""
             return _bestaetigen(sit, termin, melde)
-        if gehirn.ist_nein(t):
+        if gehirn.ist_nein(t) or (
+                gehirn.ist_ja(t)
+                and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t)):
             sit.pop("_verwName60Danach", None)
             if s["modus"] == "auskunft":
-                sit["gefunden"] = []
-                sit["gefundenKey"] = ""
-                sit["verwaltenTermin"] = ""
-                sit["verwDetailQuelle"] = ""
-                s["patientId"] = ""
-                s["vorname"] = ""
-                s["nachname"] = ""
-                s["bekannt"] = False
-                s["warSchonMal"] = None
-                s["vornameQuelle"] = ""
-                s["vornameCheck"] = ""
-                sit["patient"] = {}
-                s["phase"] = ""
-                s["frage"] = ""
-                return _nachname_frage(
-                    sit,
-                    "Danke für die Korrektur. Bitte nennen oder "
-                    "buchstabieren Sie den Nachnamen noch einmal.",
-                )
+                return _kandidat_verwerfen(sit, melde)
             return _kandidat_verwerfen(sit, melde)
         return None
 
     # 1) Offene Bestaetigungen zuerst — ein "ja" traegt sonst nichts Neues.
     if s["phase"] == "absage_bestaetigen":
-        if gehirn.ist_ja(t):
-            return _absagen(sit, melde)
-        if gehirn.ist_nein(t):
-            if sit.get("verwKandidat"):
-                return _kandidat_verwerfen(sit, melde)
-            sit["verwaltenTermin"] = ""
-            _verw_reset(sit)
-            _verwaltung_mit_abschlussfrage_schliessen(sit)
-            return {"text": "Alles klar, der Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
         if "modus" in neu and s["modus"] == "verschieben":
             # "Nicht absagen — verschieben!" mitten in der Rueckfrage.
             termin = _gewaehlt(sit)
@@ -2555,23 +2706,40 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 if s["wunsch"]:
                     return _verschieb_angebot(sit, melde)
                 return _verschieb_wunsch_frage(sit, termin)
+        if _bestaetigung_eindeutig(t):
+            return _absagen(sit, melde)
+        if gehirn.ist_nein(t):
+            sit["verwaltenTermin"] = ""
+            _verw_reset(sit)
+            _verwaltung_mit_abschlussfrage_schliessen(sit)
+            return {"text": "Alles klar, der Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
+        if gehirn.ist_ja(t) and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t):
+            return _bestaetigung_unklar_text("diesen Termin absagen")
         return None
 
     if s["phase"] == "verschieb_bestaetigen":
-        if gehirn.ist_ja(t):
-            return _verschieben(sit, melde)
-        if gehirn.ist_nein(t) or "wunsch" in neu:
+        if "modus" in neu and s["modus"] == "absagen":
+            termin = _gewaehlt(sit)
+            if termin:
+                return _absage_frage(sit, termin)
+        if "wunsch" in neu:
             s["slotIso"] = ""
-            if "wunsch" in neu:
-                return _verschieb_angebot(sit, melde)
+            return _verschieb_angebot(sit, melde)
+        if _bestaetigung_eindeutig(t):
+            return _verschieben(sit, melde)
+        if gehirn.ist_nein(t):
+            s["slotIso"] = ""
             s["phase"] = "verschieb_wunsch"
             s["frage"] = "wunsch"
             return {"text": "Kein Problem. Wann passt es Ihnen denn besser?"}
+        if gehirn.ist_ja(t) and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t):
+            return _bestaetigung_unklar_text(
+                "den Termin auf die vorgelesene Zeit verschieben")
         return None
 
     # Mehrfach-Absage rueckbestaetigt? (W-MEHRFACH-ABSAGE)
     if s["phase"] == "mehrfach_bestaetigen":
-        if gehirn.ist_ja(t):
+        if _bestaetigung_eindeutig(t):
             return _mehrfach_absagen(sit, melde)
         if gehirn.ist_nein(t):
             sit["mehrfachAbsage"] = []
@@ -2581,6 +2749,8 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 "Alles klar, es bleibt alles bestehen. Möchten Sie doch einen "
                 f"davon absagen? Zur Auswahl: {_liste_sprechbar(sit.get('gefunden') or [])}."
             )}
+        if gehirn.ist_ja(t) and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t):
+            return _bestaetigung_unklar_text("alle vorgelesenen Termine absagen")
         return None
 
     # 2) Auswahl des Bestandstermins ("den am Donnerstag"). Hier NIE ans LLM

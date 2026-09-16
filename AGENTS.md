@@ -3952,8 +3952,9 @@ ersten Treffer.
  `mehrfach_bestaetigen`): erst nach einem klaren Ja werden die konkreten
  Termin-IDs NACHEINANDER über den vorhandenen `cancel-by-id`-Weg abgesagt
  (`_mehrfach_absagen`). Teilfehler werden ehrlich einzeln benannt — nie
- „beide abgesagt“, wenn nur ein Werkzeug erfolgreich war. „Nein“ lässt alle
- Termine bestehen.
+ „beide abgesagt“, wenn nur ein Werkzeug erfolgreich war. Die Rückfrage
+ nennt den konkreten Patienten; Termine verschiedener Patienten werden nie
+ gesammelt abgesagt. „Nein“ lässt alle Termine bestehen.
 - **Schleifenfreier Abschluss**: nach der Absage genau EINE registrierte
   „Sonst noch?“-Frage. Eine Neubuchung beginnt nur auf ausdrücklichen Wunsch,
   nie automatisch aus der Absage heraus.
@@ -3981,9 +3982,11 @@ Datum gefragt werden.
   Identitätszug, niemals die konkrete Terminbestätigung.
   Kontakt-Rufnummern bei Drittterminen und noch nicht rückbestätigte Nummern
   werden nie als Patientenbeweis an die Terminsuche geschickt.
-  Erst ein ausdrückliches Ja gibt die konkrete Termin-ID zum Absagen oder
-  Verschieben frei. Ohne Identitätsbeweis werden nie fremde Patientennamen
-  aus einer Tagesliste vorgelesen.
+  Bestätigte Akten-ID oder Rufnummer sind harte Grenzen: eine namensgleiche
+  andere Akte darf sie nie ersetzen. Erst ein uneingeschränktes Ja gibt die
+  konkrete Termin-ID zum Absagen oder Verschieben frei; „Ja, aber nicht …“
+  schreibt nichts. Ohne Identitätsbeweis werden nie fremde Patientennamen aus
+  einer Tagesliste vorgelesen.
 - **Terminzeit vergessen / Terminauskunft:** `verwZeitUnbekannt` schaltet
   strikt auf Behandler + bestätigte Akte/Rufnummer + Nachname. Die
   Wann-Frage ist auf diesem Weg verboten. Bei nur einem Behandler wird
@@ -3995,19 +3998,27 @@ Datum gefragt werden.
 - **Kalenderschutz:** Die Tageslese blendet vergangene, abgesagte,
   virtuelle, reservierte und nicht bestätigte Termine aus. Geloggt werden
   nur Tag, Trefferzahl und Filterentscheidung, nie die Patientenliste.
+  Dasselbe Status-Gate schützt den Cloud-Function-Namensweg. Erreicht eine
+  Tagesabfrage ihren 500er-Deckel, gilt sie als unvollständig und darf keinen
+  Termin automatisch bestimmen. Auch die Namenssuche schreibt weder Namen,
+  Rufnummern noch Patienten-IDs in das Tool-Ledger.
   `VERWALTUNG_TERMIN_DETAILS=0` schaltet nur diesen neuen Leseweg aus.
 - **Kein Abschluss-Loop:** Nach erfolgreichem Verschieben bleibt
   „Kann ich sonst noch etwas für Sie tun?“ als echte Formularfrage
   registriert. „Nein/Danke“ legt freundlich auf und räumt den
   Verwaltungsmodus; die Antwort fällt nie ans freie LLM.
-- **Kein Halluzinations-Fallthrough:** Solange Absage oder Verschieben aktiv
-  ist, beantwortet ausschließlich `verwalten.sicherer_fortsetzungsanker`
-  einen unklaren Zug. Das freie LLM darf weder Terminwahl noch Bestätigung
-  oder Erfolg übernehmen. Technische Schreibfehler erzeugen eine echte
-  Rückrufnotiz statt einer erfundenen Erledigt-Aussage.
+- **Kein Halluzinations-Fallthrough:** Solange Absage, Verschiebung oder
+  Terminauskunft aktiv ist, beantwortet ausschließlich
+  `verwalten.sicherer_fortsetzungsanker` einen unklaren Zug; eine zweite
+  Fail-safe-Linie in `flow.zug` hält auch unbekannte Alt-Zustände fest. Das
+  freie LLM darf weder Terminwahl noch Bestätigung oder Erfolg übernehmen.
+  Technische Schreibfehler erzeugen eine echte Rückrufnotiz statt einer
+  erfundenen Erledigt-Aussage.
 - **60 Prozent sind nie ein Beweis:** Ein unscharfer Name bekommt vor
   Terminauskunft, Verschiebung oder Absage einen eigenen Ja/Nein-Abgleich.
-  Bei einer Absage folgt danach getrennt die destruktive Bestätigung.
+  Bei einer Absage folgt danach getrennt die destruktive Bestätigung. Ein
+  verworfener Fuzzy-Patient wird im selben Verwaltungsvorgang weder über die
+  Tagesliste noch über den Namens-Rückfall erneut angeboten.
 - **Kein Buchungs-Drift:** Erfolgreiche Einzel- und Mehrfach-Absagen sowie
   fehlgeschlagene Terminauskünfte bieten nicht mehr von selbst eine
   Neubuchung an. Ein neuer Termin beginnt nur auf ausdrücklichen Wunsch.

@@ -84,6 +84,7 @@ def test_beide_absagen_sammelbestaetigung_und_beide_weg(monkeypatch):
     # "Beide." -> EINE gemeinsame Rueckbestaetigung, noch nichts abgesagt.
     z = flow.zug(sit, "Beide bitte.")
     assert z and "wirklich" in z["text"].lower()
+    assert "Martin Berger" in z["text"]
     assert gehirn.sammler(sit)["phase"] == "mehrfach_bestaetigen"
     assert aufrufe == [], "vor dem Ja darf nichts abgesagt sein"
 
@@ -141,3 +142,26 @@ def test_einzelwahl_bleibt_einzelweg(monkeypatch):
     # Einzelbestaetigung (kein Mehrfach): "wirklich absagen … ?"
     assert gehirn.sammler(sit)["phase"] == "absage_bestaetigen"
     assert "absagen" in z["text"].lower()
+
+
+def test_mehrfach_absage_ueber_verschiedene_patienten_wird_gesperrt():
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "absagen"
+    termine = [
+        {
+            **ZWEI["appointments"][0],
+            "patientId": "pat-1",
+            "patientName": "Martin Berger",
+        },
+        {
+            **ZWEI["appointments"][1],
+            "patientId": "pat-2",
+            "patientName": "Petra Müller",
+        },
+    ]
+
+    antwort = verwalten._mehrfach_absage_start(sit, termine)
+    assert antwort and "verschiedenen patienten" in antwort["text"].lower()
+    assert s["frage"] == "nachname"
+    assert not sit.get("mehrfachAbsage")

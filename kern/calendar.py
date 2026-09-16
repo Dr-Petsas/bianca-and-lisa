@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
@@ -1210,18 +1211,55 @@ def _management_match_source(
     Rufnummer ist ein Beweis; ein nur ähnlicher Name bleibt ``name60`` und
     muss vor jeder Auskunft oder Änderung rückbestätigt werden.
     """
-    if patient_id and _s(patient.get("id")) == _s(patient_id):
-        return "patientId"
+    if patient_id:
+        # Eine bereits bestätigte Akten-ID ist eine harte Grenze. Liefert die
+        # Namens-CF eine andere Akte, darf selbst ein identischer Name diese
+        # Bindung nie ersetzen.
+        return (
+            "patientId"
+            if _s(patient.get("id")) == _s(patient_id)
+            else ""
+        )
     tel = "".join(c for c in _s(phone) if c.isdigit())
     tel = tel.removeprefix("00").removeprefix("49").lstrip("0")
-    if tel and _patient_phone(patient) == tel:
-        return "telefon"
+    if tel:
+        # Dasselbe gilt für eine rückbestätigte Patienten-Rufnummer.
+        return "telefon" if _patient_phone(patient) == tel else ""
     score = _patient_name_score(first, last, patient)
     if score >= 0.98:
         return "exact"
     if score >= 0.60:
         return "name60"
     return ""
+
+
+def _management_appointment_active(appointment: dict) -> bool:
+    """Defensive Statuswache für Verwaltungs-Treffer aus Cloud Functions."""
+    if appointment.get("isDeleted") is True or appointment.get("deletedAt"):
+        return False
+    status = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        _s(
+            appointment.get("status")
+            or appointment.get("appointmentStatus")
+        ).casefold(),
+    )
+    if status in {
+        "cancelled", "canceled", "deleted", "declined",
+        "needsconfirmation", "reserved",
+    }:
+        return False
+    patient_status = appointment.get("patientStatus")
+    if isinstance(patient_status, (int, float)) and patient_status != 0:
+        return False
+    if isinstance(patient_status, str):
+        ps = re.sub(r"[^a-z0-9]+", "", patient_status.casefold())
+        if (ps.isdigit() and int(ps) != 0) or ps in {
+            "cancelled", "canceled", "deleted", "declined",
+        }:
+            return False
+    return True
 
 
 def _patient_appointments_fallback(
@@ -1272,8 +1310,11 @@ def _patient_appointments_fallback(
         match_source = "patientId"
     elif tel:
         kandidaten = [p for p in roh if _patient_phone(p) == tel]
-        if kandidaten:
-            match_source = "telefon"
+        if not kandidaten:
+            # Die bestätigte Patienten-Nummer ist ebenfalls eine harte
+            # Bindung; ein ähnlich klingender Name darf sie nicht ersetzen.
+            return None
+        match_source = "telefon"
     if not kandidaten and min_similarity < 1.0:
         bewertet = sorted(
             ((_patient_name_score(query_first, last, p), p) for p in roh),
@@ -1340,7 +1381,8 @@ def _patient_appointments_fallback(
 
     nxt = data.get("nextAppointment") or {}
     termine: list[dict[str, str]] = []
-    if isinstance(nxt, dict) and _s(nxt.get("appointmentId")):
+    if (isinstance(nxt, dict) and _s(nxt.get("appointmentId"))
+            and _management_appointment_active(nxt)):
         iso = _s(nxt.get("startIso")).replace(" ", "T")[:16]
         arzt = _s(nxt.get("calendarName") or nxt.get("doctorName")).split(",")[0].strip()
         motiv_name = _s(nxt.get("visitMotiveName"))
@@ -1358,11 +1400,6 @@ def _patient_appointments_fallback(
             "motivName": motiv_name,
             "spoken": gesprochen,
         })
-    print(
-        f"find_patient_appointments fallback patientId={patient['id']} "
-        f"appointments={len(termine)}",
-        flush=True,
-    )
     return _mit_dispatch({
         "ok": True,
         "patient": patient,
@@ -1449,7 +1486,7 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
             }, dispatch)
         termine = []
         for a in data.get("appointments") or []:
-            if not isinstance(a, dict):
+            if not isinstance(a, dict) or not _management_appointment_active(a):
                 continue
             iso = _s(a.get("start")).replace(" ", "T")[:16]
             if len(iso) < 16:

@@ -4163,7 +4163,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         aus = verwalten.zug(sit, t, neu, melde)
         if aus is not None:
             return aus
-        # W-VERWALTUNG-KEIN-LLM: Solange Absage/Verschieben aktiv bleibt,
+        # W-VERWALTUNG-KEIN-LLM: Solange die Termin-Verwaltung aktiv bleibt,
         # entscheidet die feste Maschine jeden unklaren Zug. Ein
         # ausdrücklicher Anliegenwechsel hat den Modus bereits geändert und
         # darf unten regulär weiterlaufen.
@@ -4173,7 +4173,18 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if gehirn.sammler(sit).get("modus") in {
             "absagen", "verschieben", "auskunft",
         }:
-            return None
+            # Zweite Verteidigungslinie: selbst bei einem unbekannten
+            # Alt-Sitzungszustand niemals ins freie LLM fallen.
+            s = gehirn.sammler(sit)
+            s["frage"] = "nachname" if s["modus"] == "auskunft" else "wann"
+            return {"text": (
+                "Damit ich den bestehenden Termin sicher finde: "
+                "Wie lautet der Nachname des Patienten?"
+                if s["modus"] == "auskunft"
+                else
+                "Damit ich den richtigen Termin ändere: "
+                "Welches Datum oder welche ungefähre Uhrzeit hat er?"
+            )}
 
     # W-EINWAND (Chef 13.09.2026): "Moment, die Nummer stimmt nicht" mitten im
     # Fragenfaden — das bestrittene Feld wird SOFORT korrigiert, alle anderen

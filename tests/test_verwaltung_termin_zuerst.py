@@ -8,6 +8,7 @@ Der Buchungsweg bleibt unberuehrt.
 """
 
 import copy
+import json
 
 import pytest
 
@@ -149,6 +150,96 @@ def test_firestore_tageslese_blendet_virtuelle_und_abgesagte_aus(monkeypatch):
     res = calendar.find_appointments_by_date(
         {"clientId": "c", "locationId": "l"}, "2026-10-13")
     assert [a["id"] for a in res["appointments"]] == ["ok"]
+
+
+def test_firestore_tageslese_markiert_den_500er_deckel_als_unvollstaendig(
+        monkeypatch):
+    basis = {
+        "document": {
+            "name": "projects/x/databases/(default)/documents/clients/c/"
+                    "locations/l/appointments/apt-0",
+            "fields": {
+                "start": {"timestampValue": "2026-10-13T07:45:00Z"},
+                "status": {"stringValue": "confirmed"},
+                "patient": {"mapValue": {"fields": {
+                    "id": {"stringValue": "p1"},
+                    "firstName": {"stringValue": "Eva"},
+                    "lastName": {"stringValue": "Echt"},
+                }}},
+                "calendar": {"mapValue": {"fields": {
+                    "id": {"stringValue": "c1"},
+                    "name": {"stringValue": "Doktor Blessing"},
+                }}},
+            },
+        },
+    }
+    rows = []
+    for i in range(500):
+        row = copy.deepcopy(basis)
+        row["document"]["name"] = row["document"]["name"].replace(
+            "apt-0", f"apt-{i}")
+        rows.append(row)
+    monkeypatch.setattr(
+        calendar,
+        "_firestore_appointments_query",
+        lambda *_a, **_k: (
+            200,
+            rows,
+            {"route": "firestoreAppointmentsByDate", "httpStatus": 200},
+        ),
+    )
+
+    res = calendar.find_appointments_by_date(
+        {"clientId": "c", "locationId": "l"}, "2026-10-13")
+    assert res["ok"] and res["truncated"]
+    assert len(res["appointments"]) == 500
+
+
+def test_cf_termintreffer_blendet_inaktive_status_aus(monkeypatch):
+    def cf(route, body, timeout=None):
+        assert route == "agentFindPatientAppointments"
+        appointments = [
+            {
+                "appointmentId": "aktiv",
+                "start": "2026-10-13T09:45:00+02:00",
+                "status": "confirmed",
+            },
+            {
+                "appointmentId": "abgesagt",
+                "start": "2026-10-14T09:45:00+02:00",
+                "status": "cancelled",
+            },
+            {
+                "appointmentId": "virtuell",
+                "start": "2026-10-15T09:45:00+02:00",
+                "status": "needsConfirmation",
+            },
+            {
+                "appointmentId": "patient-abgesagt",
+                "start": "2026-10-16T09:45:00+02:00",
+                "patientStatus": 5,
+            },
+        ]
+        return 200, {
+            "status": "success",
+            "patient": {
+                "id": "p1",
+                "firstName": "Eva",
+                "lastName": "Echt",
+            },
+            "appointments": appointments,
+        }, {"route": route, "request": body, "httpStatus": 200}
+
+    monkeypatch.setattr(calendar, "_cf_call", cf)
+    res = calendar.find_patient_appointments(
+        {"clientId": "c", "locationId": "l"},
+        {
+            "firstName": "Eva",
+            "lastName": "Echt",
+            "managementNameMatch": True,
+        },
+    )
+    assert [a["id"] for a in res["appointments"]] == ["aktiv"]
 
 
 def test_absage_termindaten_grenzen_ein_aber_verraten_keinen_patienten(monkeypatch):
@@ -503,6 +594,72 @@ def test_agent_ruft_im_aktiven_verschiebeschritt_keine_llm_auf(monkeypatch):
     assert s["phase"] == "verschieb_bestaetigen"
 
 
+def test_agent_ruft_in_aktiver_terminauskunft_keine_llm_auf(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "auskunft",
+        "phase": "wartet_auf_sichere_suche",
+        "frage": "",
+        "vorname": "Elisabeth",
+        "nachname": "Päsler",
+    })
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda *_a, **_k: {
+            "ok": True,
+            "matchSource": "exact",
+            "patient": {
+                "id": "patient-paesler",
+                "firstName": "Elisabeth",
+                "lastName": "Päsler",
+            },
+            "appointments": [dict(TERMIN)],
+        },
+    )
+
+    def llm_verboten(*_args, **_kwargs):
+        raise AssertionError("Aktive Terminauskunft darf das freie LLM nie aufrufen")
+
+    monkeypatch.setattr(agent.llm, "chat", llm_verboten)
+    monkeypatch.setattr(agent.llm, "chat_stream", llm_verboten)
+    antwort = agent.user_turn(sit, "Das sollten Sie doch wissen.")
+    assert antwort and "ihr nächster termin" in antwort["text"].lower()
+
+
+def test_unbekannte_zeit_mit_name_liefert_nie_leeren_anker(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "phase": "wartet_auf_sichere_suche",
+        "frage": "",
+        "vorname": "Elisabeth",
+        "nachname": "Päsler",
+    })
+    sit["verwZeitUnbekannt"] = True
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda *_a, **_k: {
+            "ok": True,
+            "matchSource": "exact",
+            "patient": {
+                "id": "patient-paesler",
+                "firstName": "Elisabeth",
+                "lastName": "Päsler",
+            },
+            "appointments": [dict(TERMIN)],
+        },
+    )
+
+    antwort = flow.zug(sit, "Den Zeitpunkt kenne ich wirklich nicht.", set())
+    assert antwort
+    assert "wirklich absagen" in antwort["text"].lower()
+    assert s["phase"] == "absage_bestaetigen"
+
+
 def test_unklare_verschiebebestaetigung_bleibt_in_fester_maschine():
     sit = _sit("blessing")
     s = gehirn.sammler(sit)
@@ -644,6 +801,206 @@ def test_fehlgeschlagenes_verschieben_erfindet_keinen_erfolg(monkeypatch):
     assert antwort and "nicht geklappt" in antwort["text"].lower()
     assert "verschoben." not in antwort["text"].lower()
     assert notizen and s["frage"] == "sonst_noch"
+
+
+def test_widerspruechliches_ja_loest_keine_absage_aus(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "phase": "absage_bestaetigen",
+        "frage": "absage_ok",
+    })
+    sit["verwaltenTermin"] = TERMIN["id"]
+    sit["gefunden"] = [dict(TERMIN)]
+    monkeypatch.setattr(
+        verwalten.kal,
+        "cancel_by_id",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("widersprüchliches Ja darf nicht absagen")),
+    )
+
+    antwort = verwalten.zug(
+        sit, "Ja, aber das ist nicht mein Termin.", set())
+    assert antwort and "ändere ich noch nichts" in antwort["text"].lower()
+    assert s["phase"] == "absage_bestaetigen"
+
+
+def test_widerspruechliches_ja_loest_keine_verschiebung_aus(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "verschieben",
+        "phase": "verschieb_bestaetigen",
+        "frage": "verschieb_ok",
+        "slotIso": "2026-10-20T11:00+02:00",
+    })
+    sit["verwaltenTermin"] = TERMIN["id"]
+    sit["gefunden"] = [dict(TERMIN)]
+    monkeypatch.setattr(
+        verwalten.kal,
+        "move_appointment",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("widersprüchliches Ja darf nicht verschieben")),
+    )
+
+    antwort = verwalten.zug(
+        sit, "Ja, aber diese Uhrzeit ist falsch.", set())
+    assert antwort and "ändere ich noch nichts" in antwort["text"].lower()
+    assert s["phase"] == "verschieb_bestaetigen"
+
+
+def test_widerspruechliches_ja_loest_keine_mehrfach_absage_aus(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "phase": "mehrfach_bestaetigen",
+        "frage": "mehrfach_ok",
+    })
+    sit["mehrfachAbsage"] = [
+        {"id": "apt-1", "spoken": "am Montag um neun Uhr"},
+        {"id": "apt-2", "spoken": "am Dienstag um zehn Uhr"},
+    ]
+    monkeypatch.setattr(
+        verwalten.kal,
+        "cancel_by_id",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("widersprüchliches Ja darf nichts absagen")),
+    )
+
+    antwort = verwalten.zug(sit, "Ja, aber nicht beide.", set())
+    assert antwort and "ändere ich noch nichts" in antwort["text"].lower()
+    assert s["phase"] == "mehrfach_bestaetigen"
+
+
+def test_widerspruechliches_ja_bestaetigt_keinen_fuzzy_patienten():
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "phase": "verw_patient_bestaetigen",
+        "frage": "verw_patient_ok",
+    })
+    sit["verwaltenTermin"] = TERMIN["id"]
+    sit["verwKandidat"] = TERMIN["id"]
+    sit["verwDetailQuelle"] = "name60"
+    sit["gefunden"] = [dict(TERMIN)]
+
+    antwort = verwalten.zug(
+        sit, "Ja, aber das ist nicht mein Termin.", set())
+    assert antwort and s["frage"] == "nachname"
+    assert not s["patientId"] and not s["bekannt"]
+
+
+def test_nein_zur_absage_ist_keine_suche_nach_dem_naechsten_kandidaten():
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "phase": "absage_bestaetigen",
+        "frage": "absage_ok",
+    })
+    sit["verwaltenTermin"] = TERMIN["id"]
+    sit["verwKandidat"] = TERMIN["id"]
+    sit["verwDetailQuelle"] = "nameExact"
+    sit["gefunden"] = [dict(TERMIN)]
+
+    antwort = verwalten.zug(sit, "Nein, bitte nicht absagen.", set())
+    assert antwort and "bleibt bestehen" in antwort["text"].lower()
+    assert s["frage"] == "sonst_noch"
+    assert not sit.get("_verwAusgeschlosseneTermine")
+
+
+def test_verworfener_fuzzy_patient_wird_nicht_erneut_angeboten(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "phase": "verw_patient_bestaetigen",
+        "frage": "verw_patient_ok",
+        "vorname": "Elisabet",
+        "nachname": "Päsla",
+    })
+    sit["verwaltenTermin"] = TERMIN["id"]
+    sit["verwKandidat"] = TERMIN["id"]
+    sit["verwDetailQuelle"] = "name60"
+    sit["gefunden"] = [dict(TERMIN)]
+
+    verworfen = verwalten.zug(sit, "Nein, das ist nicht mein Termin.", set())
+    assert verworfen and s["frage"] == "nachname"
+    assert "patient-paesler" in sit["_verwAusgeschlossenePatienten"]
+
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda *_a, **_k: {
+            "ok": True,
+            "matchSource": "name60",
+            "patient": {
+                "id": "patient-paesler",
+                "firstName": "Elisabeth",
+                "lastName": "Päsler",
+            },
+            "appointments": [dict(TERMIN)],
+        },
+    )
+    s["vorname"] = "Elisabet"
+    s["nachname"] = "Päsla"
+    ergebnis = verwalten._finden(sit, None)
+    assert ergebnis.get("rejectedCandidate")
+    assert ergebnis["appointments"] == []
+    assert sit.get("gefunden") == []
+
+
+def test_namenssuche_schreibt_keine_patientendaten_ins_tool_ledger(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "absagen",
+        "vorname": "Elisabeth",
+        "nachname": "Päsler",
+    })
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda *_a, **_k: {
+            "ok": True,
+            "matchSource": "exact",
+            "patient": {
+                "id": "patient-paesler",
+                "firstName": "Elisabeth",
+                "lastName": "Päsler",
+            },
+            "appointments": [dict(TERMIN)],
+            "dispatch": {
+                "route": "agentFindPatientAppointments",
+                "request": {
+                    "clientId": "client",
+                    "locationId": "location",
+                    "lastName": "Päsler",
+                    "callerPhone": "+491701234567",
+                },
+                "response": {
+                    "patient": {
+                        "id": "patient-paesler",
+                        "firstName": "Elisabeth",
+                        "lastName": "Päsler",
+                    },
+                    "appointments": [dict(TERMIN)],
+                },
+                "httpStatus": 200,
+            },
+        },
+    )
+
+    verwalten._finden(sit, None)
+    spur = json.dumps(sit["_toolsZug"][-1], ensure_ascii=False)
+    assert "Päsler" not in spur
+    assert "Elisabeth" not in spur
+    assert "+491701234567" not in spur
+    assert "patient-paesler" not in spur
+    assert '"appointments": 1' in spur
 
 
 def test_erinnerter_tag_ohne_treffer_wechselt_zum_namen_statt_tagesschleife(
@@ -807,6 +1164,94 @@ def test_patientid_springt_im_namensfallback_nie_auf_andere_akte(monkeypatch):
     )
     assert result is None
     assert rufe == ["masSearchPatients"]
+
+
+def test_cf_namenstreffer_ersetzt_bestaetigte_patientid_nie(monkeypatch):
+    rufe: list[str] = []
+
+    def cf(route, body, timeout=None):
+        rufe.append(route)
+        if route == "agentFindPatientAppointments":
+            return 200, {
+                "status": "success",
+                "patient": {
+                    "id": "andere-akte",
+                    "firstName": "Peter",
+                    "lastName": "Berger",
+                },
+                "appointments": [{
+                    "appointmentId": "apt-fremd",
+                    "start": "2026-10-13T09:45:00+02:00",
+                }],
+            }, {"route": route, "request": body, "httpStatus": 200}
+        assert route == "masSearchPatients"
+        return 200, {
+            "status": "success",
+            "patients": [{
+                "id": "andere-akte",
+                "firstName": "Peter",
+                "lastName": "Berger",
+            }],
+        }, {"route": route, "request": body, "httpStatus": 200}
+
+    monkeypatch.setattr(calendar, "_cf_call", cf)
+    result = calendar.find_patient_appointments(
+        _sit("blessing")["tenant"],
+        {
+            "firstName": "Peter",
+            "lastName": "Berger",
+            "patientId": "bestaetigte-akte",
+            "managementNameMatch": True,
+        },
+    )
+    assert result["ok"] and result["notFound"] and result["nameMismatch"]
+    assert result["appointments"] == []
+    assert rufe == ["agentFindPatientAppointments", "masSearchPatients"]
+
+
+def test_cf_namenstreffer_ersetzt_bestaetigte_rufnummer_nie(monkeypatch):
+    rufe: list[str] = []
+
+    def cf(route, body, timeout=None):
+        rufe.append(route)
+        if route == "agentFindPatientAppointments":
+            return 200, {
+                "status": "success",
+                "patient": {
+                    "id": "andere-akte",
+                    "firstName": "Peter",
+                    "lastName": "Berger",
+                    "mobilePhoneNumber": "+491709999999",
+                },
+                "appointments": [{
+                    "appointmentId": "apt-fremd",
+                    "start": "2026-10-13T09:45:00+02:00",
+                }],
+            }, {"route": route, "request": body, "httpStatus": 200}
+        assert route == "masSearchPatients"
+        return 200, {
+            "status": "success",
+            "patients": [{
+                "id": "andere-akte",
+                "firstName": "Peter",
+                "lastName": "Berger",
+                "mobilePhoneNumber": "+491709999999",
+            }],
+        }, {"route": route, "request": body, "httpStatus": 200}
+
+    monkeypatch.setattr(calendar, "_cf_call", cf)
+    result = calendar.find_patient_appointments(
+        _sit("blessing")["tenant"],
+        {
+            "firstName": "Peter",
+            "lastName": "Berger",
+            "phone": "+491701234567",
+            "managementNameMatch": True,
+        },
+    )
+    assert result["ok"] and result["notFound"] and result["nameMismatch"]
+    assert result["appointments"] == []
+    assert rufe == ["agentFindPatientAppointments", "masSearchPatients"]
 
 
 def test_no_upcoming_der_bestaetigten_akte_wird_nicht_fuzzy_umgebogen(
