@@ -36,7 +36,7 @@ from typing import Any, Callable
 from bianca import gehirn, hintergrund, telefon
 from kern import agentprofil
 from kern import calendar as kal
-from kern import gespraech, motive
+from kern import gespraech, motive, notes
 from kern import patients
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
@@ -514,7 +514,7 @@ def rueckruf_nummer_nachtragen(sit: dict) -> str:
     if not sit.get("testNoWrite"):
         eintrag = {
             "zeit": datetime.now(gehirn.TZ).isoformat(timespec="seconds"),
-            "stimme": _s(sit.get("stimme")) or "Bianca",
+            "stimme": notes.stimme_von(sit),
             "anliegen": "rueckrufnummer",
             "name": name,
             "telefon": nummer,
@@ -544,7 +544,7 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     eintrag = {
         "zeit": datetime.now(gehirn.TZ).isoformat(timespec="seconds"),
-        "stimme": _s(sit.get("stimme")) or "Bianca",
+        "stimme": notes.stimme_von(sit),
         "anliegen": anliegen or s["modus"],
         "name": name,
         # W-RUECKRUF-NUMMER: Kontakt-/Anrufer-Nummer als Rueckfall — die

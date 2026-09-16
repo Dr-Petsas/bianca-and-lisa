@@ -1566,7 +1566,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             if _s(sit.get("telefonUpdateAlt")):
                 hinweise.append(
                     f"Alte Nummer {telefon.normaliert(sit['telefonUpdateAlt'])} "
-                    "aktualisiert //Bianca"
+                    "aktualisiert"
                 )
             if s["pzr"] == "ja":
                 from kern import zimmer_map

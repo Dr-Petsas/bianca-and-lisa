@@ -1797,7 +1797,7 @@ def test_telefon_alt_loeschen_ruft_update_und_traegt_neue_nummer_ein():
     assert res and res["text"].startswith("Erledigt")
 
 
-def test_telefon_update_schreibt_geforderten_bianca_vermerk_an_termin():
+def test_telefon_update_uebergibt_notiz_ohne_hartkodierte_stimme():
     sit = _konflikt_sit()
     s = gehirn.sammler(sit)
     s.update({
@@ -1821,7 +1821,8 @@ def test_telefon_update_schreibt_geforderten_bianca_vermerk_an_termin():
     finally:
         flow.kal.book_slot, flow.kal.note_appointment = echt_book, echt_note
     assert notizen
-    assert "Alte Nummer 01701234567 aktualisiert //Bianca" in notizen[-1]
+    assert "Alte Nummer 01701234567 aktualisiert" in notizen[-1]
+    assert "//" not in notizen[-1]  # Herkunft setzt zentral kal.note_appointment.
 
 
 def test_telefon_alt_sms_an_die_alte_nummer_ohne_update():

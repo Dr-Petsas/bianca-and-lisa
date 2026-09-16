@@ -3440,6 +3440,22 @@ Stimme wäre für Ben wertlos (und er zahlte live die Synthese). `feste_saetze`
 gibt für einen männlichen Assistenten die männlichen Formen zurück, damit
 genau die Sätze im Cache liegen, die der Mund spricht.
 
+**Statische Audio-Altlaster (16.09.2026):** Ist ein Füller trotz richtigem
+Mandantenkontext einmal mit der falschen Referenz im Platten-Cache gelandet,
+reicht ein normaler Warm-Lauf nicht — Dauer-Audios werden absichtlich
+wiederverwendet. `tools/rerender_statische_stimme.py --tenant ruether
+--schreiben` löscht und rendert ausschließlich die 19 kurzen Füller-,
+Barge- und Notfall-Audios unter dem Stimmenschlüssel `ben`; danach lädt ein
+Bianca-Neustart sie neu in die URL-Ablage. Der Lauf vom 16.09. hat alle
+19 Dateien nachweislich neu mit `voice=ben` geschrieben.
+
+**Herkunft in Notizen und Berichten:** `sit["stimme"]` bleibt intern
+absichtlich `"Bianca"` — Prozess-Gates und Mitschnitt-Ordner hängen daran.
+`kern.notes.stimme_von(sit)` löst für sichtbare Herkunftsstempel dagegen
+`assistent.name(tenant)` auf. Deshalb schreibt Rüther `// Ben` und
+„Laut Anruf (Ben)“, während MedDent, Thaler und Blessing weiterhin
+`// Bianca` schreiben. Praxisnotiz-JSONL nutzt dieselbe Quelle.
+
 Der Stimmklon `ben` liegt als `tts_serve/stimmen/ben.wav` + `ben.txt` (Referenz
 vom Chef, ElevenLabs-Export „Mark", 4,9 s) und ist im Container über
 `TTS_STIMMEN_EXTRA` registriert — kein Rebuild, aber ein Neustart des
@@ -3460,7 +3476,7 @@ einen unbekannten Namen weiblich — wer einen männlichen Assistenten will, set
   entfernen ⇒ Ben ist wieder Bianca, alles byte-identisch wie vor dem
   15.09.2026. Es gibt bewusst keinen Env-Schalter: die Mandanten-Datei IST der
   Schalter.
-- Tests: `tests/test_assistent.py` (32) — hinter jedem Ben-Fall steht die
+- Tests: `tests/test_assistent.py` (35) — hinter jedem Ben-Fall steht die
   Gegenprobe, dass MedDent/Bianca sich nicht rührt. Live-Probe im Container:
   `docker exec -w /app telefonki-bianca-1 python tools/_probe_stimme_mandant_live.py`
   (mit `--hoeren` rendert sie Bens Begrüßung im echten TTS-Container und liest
@@ -3476,7 +3492,7 @@ geprüft). Kurz:
    Dokument-ID-Sortierung. Der Bianca-Datensatz muss weg.
 2. Der Agent-Prompt ist LEER (nur `systemPrompt`, 462 Zeichen Datum/Zeitzone/
    Anrede) — Text liegt fertig in `docs/prompt-ruether.md`.
-3. 21 der 31 Telefon-Besuchsgründe stehen auf `allowOnlineBooking=false`
+3. 20 der 31 Telefon-Besuchsgründe stehen auf `allowOnlineBooking=false`
    (32 Motive in Firestore, eines filtert `motive.telefon_tauglich`) — darunter
    Krebsvorsorge, PAP/HPV, Schwangerschaftsvorsorge, Spirale. Die Zuordnung
    trifft live korrekt („Krebsvorsorge" → `GYN Krebsvorsorge`), die CF liefert
@@ -3484,7 +3500,12 @@ geprüft). Kurz:
    eine Endometriose-Erstberatung angeboten: Ben sagt ehrlich, dass diese
    Terminart telefonisch nicht vergeben werden darf, und schreibt eine
    Rückruf-Notiz. Für echte Telefonbuchungen muss die Praxis die gewünschten
-   Motive im Portal trotzdem freischalten.
+   Motive im Portal trotzdem freischalten. `GYN Schwangerschaft Ersttermin`
+   wurde am 16.09. online freigeschaltet; die echte Slotsuche lieferte danach
+   bei beiden Ärztinnen weiter 0 Zeiten, bis die zugehörigen Sprechzeiten
+   eingerichtet sind. Bewusste Entscheidung des Chefs: echte Motive und
+   Sprechzeiten einzeln freigeben, keinen medizinisch falschen allgemeinen
+   Kontroll-Fallback erfinden.
 4. Die Öffnungszeiten stehen auf dem Portal-Default (alle sieben Tage
    08:00–18:00). `standort.zeiten_von` verwirft genau dieses Muster absichtlich
    („nie raten") — damit hat Ben zu den Zeiten KEINE Quelle. Er verwies

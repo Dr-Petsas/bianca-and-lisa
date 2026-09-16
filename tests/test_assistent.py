@@ -12,7 +12,8 @@ import inspect
 from bianca import gehirn
 from bianca.greeting import begruessung
 from bianca.prompt import system_prompt
-from kern import assistent, dienst as dienst_mod, tenants, tts
+from kern import assistent, dienst as dienst_mod, notes, tenants, tts
+from tools import rerender_statische_stimme
 
 BEN = {"assistentName": "Ben", "assistentGenus": "m", "stimme": "ben"}
 MEDDENT = tenants.laden("meddent")
@@ -42,6 +43,48 @@ def test_ruether_ist_ben_und_maennlich():
     assert assistent.name(t) == "Ben"
     assert assistent.maennlich(t)
     assert assistent.stimme(t) == "ben"
+
+
+def test_ruether_notizen_werden_mit_ben_signiert():
+    """Das interne Prozesslabel bleibt Bianca; nach aussen schreibt Ben."""
+    ruether = {"stimme": "Bianca", "tenant": tenants.laden("ruether")}
+    assert notes.stimme_von(ruether) == "Ben"
+    assert notes.notiz_anhaengen(
+        "", "Patientin möchte Schwangerschaft besprechen",
+        herkunft=notes.stimme_von(ruether),
+    ).endswith("// Ben")
+
+    # Gegenproben: die drei Bianca-Praxen und Lisa bleiben unverändert.
+    for mid in ("meddent", "thaler", "blessing"):
+        assert notes.stimme_von(
+            {"stimme": "Bianca", "tenant": tenants.laden(mid)}
+        ) == "Bianca"
+    assert notes.stimme_von({"stimme": "Lisa"}) == "Lisa"
+
+
+def test_ruether_statische_audios_werden_explizit_mit_ben_neu_gerendert(
+    monkeypatch, tmp_path
+):
+    gesehen = []
+    dateien = {}
+
+    monkeypatch.setattr(
+        rerender_statische_stimme, "_stimme_im_container", lambda voice: None
+    )
+    monkeypatch.setattr(tts, "_vergessen", lambda text: None)
+
+    def warm(text):
+        gesehen.append(tts.stimme_jetzt())
+        datei = tmp_path / f"{len(dateien):02d}.wav"
+        datei.write_bytes(b"RIFF" + b"\0" * 64)
+        dateien[text] = datei
+
+    monkeypatch.setattr(tts, "warm", warm)
+    monkeypatch.setattr(tts, "_dauerhaft_datei", lambda text: dateien[text])
+
+    assert rerender_statische_stimme.rendern("ruether", schreiben=True) == 0
+    assert len(gesehen) == len(rerender_statische_stimme.statische_saetze()) == 19
+    assert set(gesehen) == {"ben"}
 
 
 def test_did_4160_fuehrt_zu_ben():
