@@ -3541,6 +3541,33 @@ bis auf eine Rückruf-Notiz im temporären Verzeichnis:
 `docker exec -w /app telefonki-bianca-1 python
 tools/_probe_ersatz_motiv_live.py`.
 
+## Rüther: Motivkorrektur + Nachnamensschreibweise (W-RUETHER-KORREKTUR 16.09.2026 — nicht rückbauen)
+
+Live-Anruf `008a9f2cd375432e8b18fc41d31ef3aa`: „Vorsorge“ kam als
+„Forsabe“ und wurde auf Hormonstatus gemappt. Der klare Einwand „keine
+Hormonstatus-Besprechung, einfach eine Vorsorge“ wurde nicht angewendet;
+„Besuchsgrund“ bestätigte danach zweimal den alten Grund. Außerdem schnitt
+die Ruhe-Wache den Buchstabierhinweis hinter „Wie lautet der Nachname?“ ab,
+und „Tannis“ galt fälschlich sofort als gesicherte Schreibweise.
+
+- `flow._grund_korrektur_text` löst den neuen Grund nach „sondern“,
+  „stattdessen“ oder „einfach“ aus dem Einwand. Eine reine Feldwahl
+  („Besuchsgrund“) leert den alten Grund und fragt konkret neu; sie darf nie
+  als Motivwert gemappt werden. Ein echter Motivwechsel verwirft Slot und
+  Vorrat, dieselbe Motiv-ID behält weiter die relative Slotwahl.
+- Der marker-gated STT-Fix `Forsabe` → `Vorsorge` greift nur, wenn der
+  Mandant „Vorsorge“ als Hotword führt. Rüther führt zusätzlich
+  `Hormonstatus` und `Schwangerschaft`.
+- Nur Rüther trägt `nachnameDirektBuchstabieren=true`: Die Aufforderung steht
+  vor der einzigen Frage und überlebt dadurch W-RUHE. Ein nur gesprochener
+  Nachname führt noch nicht zum Vornamen; erst Buchstabierung plus
+  `nachnameReadbackNachBuchstabieren` sichern die Schreibweise. Bekannte,
+  per Rufnummer identifizierte und bestätigte Patienten werden nicht erneut
+  verhört.
+
+Regressionen mit den wortgleichen Live-Sätzen und Gegenproben für MedDent,
+Thaler und Blessing: `tests/test_ruether_korrekturen.py`.
+
 ## Keine erfundenen Öffnungszeiten (W-ZEITEN-WACHE 15.09.2026 — nicht rückbauen)
 
 Live-Probe gegen den ECHTEN Prompt der neuen Praxis Rüther (Ben, DID …4160).

@@ -215,8 +215,8 @@ _REISEORT_RE = re.compile(
 # Änderungszweig kannte nur Zeitpunkt/Name/Nummer und blieb in Presence hängen.
 _AENDERUNG_GRUND_RE = re.compile(
     r"besuchsgrund|anliegen|\bgrund\b|"
-    r"zahnersatz|zahnarztbesprech|besprechung|beratung|"
-    r"kontroll|zahnreinigung|prophylaxe|"
+    r"zahnersatz|zahnarztbesprech|besprech\w*|beratung|"
+    r"kontroll|vorsorg|hormon\w*|zahnreinigung|prophylaxe|"
     r"keine?\s+akut|nicht\s+akut|kein\s+notfall|keine?\s+notfall",
     re.I,
 )
@@ -3021,6 +3021,37 @@ def _aenderung_feld(t: str) -> str:
     return ""
 
 
+_GRUND_KORREKTUR_TRENNER_RE = re.compile(
+    r"\b(?:sondern|stattdessen|einfach)\b",
+    re.I,
+)
+_GRUND_FELD_ONLY_RE = re.compile(
+    r"\b(?:nein|bitte|nur|den|der|die|das|mein(?:en|e)?|"
+    r"besuchsgrund|anliegen|grund|"
+    r"änder\w*|aender\w*|korrigier\w*)\b",
+    re.I,
+)
+
+
+def _grund_korrektur_text(t: str) -> str:
+    """Den NEUEN Grund aus einem Einwand lösen; reine Feldwahl liefert leer.
+
+    Live Rüther 16.09.: „keine Hormonstatus-Besprechung, einfach eine
+    Vorsorge“ enthält alten und neuen Grund. Der Teil nach „einfach“ ist die
+    Korrektur. Ein Folgesatz „Besuchsgrund“ benennt dagegen nur das Feld und
+    darf niemals wieder auf das alte Motiv gemappt werden.
+    """
+    wert = _s(t)
+    trenner = list(_GRUND_KORREKTUR_TRENNER_RE.finditer(wert))
+    if trenner:
+        wert = wert[trenner[-1].end():].strip(" \t,;:-")
+    probe = re.sub(r"[^\wäöüß]+", " ", wert, flags=re.I)
+    probe = _GRUND_FELD_ONLY_RE.sub(" ", probe)
+    if not re.sub(r"\s+", "", probe):
+        return ""
+    return wert
+
+
 def _nachname_korr_zug(sit: dict, t: str, melde: Melde = None) -> dict:
     """Nach der Buchung den Nachnamen korrigieren — nie neu slotsuchen."""
     s = gehirn.sammler(sit)
@@ -3313,7 +3344,8 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
         s["phase"] = ""
         s["frage"] = "grund"
         _vorrat_leeren(sit)
-        neu = gehirn.einsammeln(sit, t)
+        grund_text = _grund_korrektur_text(t)
+        neu = gehirn.einsammeln(sit, grund_text) if grund_text else set()
         sit["ernteZuletzt"] = sorted(neu)
         if streng and _s(s["grund"]) == alt:
             # Der Widerspruch nennt nur den ALTEN Grund ("Kontrolle stimmt
@@ -3574,7 +3606,7 @@ _NACHNAME_CHECK_NEIN_MIT_NAME_RE = re.compile(
 
 
 def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
-    """A3: Antwort auf den Blessing-Nachnamen-Readback deterministisch deuten.
+    """A3: Antwort auf den mandantenscharfen Nachnamen-Readback deuten.
 
     Rueckgabe ``(modus, antwort)``:
     - ``bestaetigt``: intern ohne den Ja-Text zur naechsten Flussstufe;

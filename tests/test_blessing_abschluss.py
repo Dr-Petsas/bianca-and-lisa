@@ -300,7 +300,7 @@ def test_b2_buchstabierter_name_fuehrt_nach_readback_zur_ansage(monkeypatch):
     assert gehirn.sammler(sit)["frage"] == "termin_ok"
 
 
-def test_b2_fertig_ist_nur_im_blessing_namensdiktat_eine_formularantwort():
+def test_b2_fertig_ist_nur_im_abgesicherten_namensdiktat_eine_formularantwort():
     gesagt = "G-E-S-C-H-E-I-D-L-E, fertig."
 
     blessing = _sit()
@@ -325,8 +325,25 @@ def test_b2_fertig_ist_nur_im_blessing_namensdiktat_eine_formularantwort():
     assert deutung["handlung"] == "WISSEN"
     assert deutung["gegenstand"] == "REGEL"
 
-    # Der Sondervorrang ist mandantenscharf; andere Praxen bewegen sich nicht.
-    for tenant_id in ("meddent", "thaler", "ruether"):
+    # Rüther verlangt seit 16.09. ebenfalls die ausdrückliche Buchstabierung.
+    # Dort muss „fertig“ deshalb genauso im Namensformular bleiben.
+    ruether = _sit("ruether")
+    hirn.anliegen_hinzufuegen(
+        ruether,
+        hirn._anliegen("WISSEN", "VORGANG", spiegel="bestehender Termin"),
+        aktivieren=True,
+    )
+    gehirn.sammler(ruether).update({
+        "modus": "auskunft",
+        "frage": "nachname",
+    })
+    deutung = intent.erkennen(ruether, gesagt)
+    assert deutung["handlung"] == "KEINE"
+    assert deutung["zug"] == "verfeinern"
+
+    # Der Sondervorrang bleibt mandantenscharf; MedDent und Thaler bewegen
+    # sich nicht.
+    for tenant_id in ("meddent", "thaler"):
         sit = _sit(tenant_id)
         hirn.anliegen_hinzufuegen(
             sit,

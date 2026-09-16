@@ -72,8 +72,11 @@ def test_blessing_namensschutz_ist_explizit_und_mandantenscharf():
     assert "buchstabierSegmenteTrennen" not in laden("thaler")
     assert "nachnameReadbackNachBuchstabieren" not in laden("thaler")
     assert "namensUnklarOhneEcho" not in laden("ruether")
-    assert "buchstabierSegmenteTrennen" not in laden("ruether")
-    assert "nachnameReadbackNachBuchstabieren" not in laden("ruether")
+    # Rüther verlangt seit dem Live-Anruf 008a9f2c dieselbe sichere
+    # Buchstabier-Auswertung samt Readback, aber nicht Blessings besonderen
+    # Unklar-Dialog.
+    assert laden("ruether")["buchstabierSegmenteTrennen"] is True
+    assert laden("ruether")["nachnameReadbackNachBuchstabieren"] is True
     # Live kommt Blessing aus der Cloud Function und wird auf die lokale
     # Fachbasis gemerged. Der Opt-in muss auch auf genau diesem Weg ankommen.
     live_tenant = agentprofil.tenant_von_pre({

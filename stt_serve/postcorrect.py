@@ -87,6 +87,13 @@ _KONS_PHRASE_MARKERS = {"kons"}
 # nicht. Eine Ersetzung wird deshalb NUR aktiviert, wenn der Mandant das
 # jeweilige Zielwort ausdrücklich als Hotword mitsendet.
 _TENANT_PHRASE_FIXES: dict[str, list[tuple[re.Pattern, str]]] = {
+    "vorsorge": [
+        # Rüther 16.09.: Die klare Einwort-Antwort "Vorsorge" kam als
+        # "Forsabe" an und wurde dadurch auf Hormonstatus gemappt. Nur
+        # Praxen, die "Vorsorge" ausdrücklich als Hotword führen, bekommen
+        # diese eng belegte Korrektur.
+        (re.compile(r"\bforsabe\b", re.IGNORECASE), "Vorsorge"),
+    ],
     "thaler": [
         # Reale Telefonclips 10.09.: "Otala", "Hotala" und "Oh, Tala".
         # Nur mit dem Tenant-Hotword "Thaler" aktiv; "Tala" bleibt bei

@@ -771,7 +771,7 @@ FELDER_START = {
     # Antwort auf die Bestaetigung.
     "vornameQuelle": "",
     "vornameCheck": "",
-    # Blessing A3 (15.09.2026): Eine vom Anrufer buchstabierte Schreibweise
+    # A3 (Blessing 15.09., Rüther 16.09.): Eine vom Anrufer buchstabierte Schreibweise
     # wird genau einmal vorgelesen und mit Ja/Nein bestätigt, BEVOR eine
     # Patienten-/Termin-Suche startet. Andere Mandanten aktivieren den
     # Zustand nicht (Tenant-Opt-in ``nachnameReadbackNachBuchstabieren``).
@@ -2472,11 +2472,12 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             and _s(s.get("vornameQuelle")) != "check"):
         s["vornameQuelle"] = "gesagt" if _s(s.get("vorname")) else ""
         s["vornameCheck"] = ""
-    # W-BLESSING-NACHNAME-READBACK (A3): Eine echte Buchstabierkette darf
+    # W-NACHNAME-READBACK (A3): Eine echte Buchstabierkette darf
     # nicht unmittelbar eine Suche auslösen. Live gingen Pusch/Busch-artige
     # Verhörer sonst als vermeintlich sicherer Nachname an die Patienten-
-    # suche. Nur der Blessing-Opt-in erzeugt den zusätzlichen Ja/Nein-Zug;
-    # MedDent, Thaler und Rüther bleiben ohne ein einziges Extra-Wort.
+    # suche. Blessing und seit dem Rüther-Anruf 008a9f2c auch Rüther
+    # aktivieren den zusätzlichen Ja/Nein-Zug; MedDent und Thaler bleiben
+    # ohne ein einziges Extra-Wort.
     buchstabiert_jetzt = bool(
         buch
         or buchstaben_teil_start
@@ -3938,6 +3939,47 @@ def nachname_check_frage(s: dict) -> str:
     return "Ist die Schreibweise des Nachnamens richtig?"
 
 
+def _nachname_start_frage(sit: dict, einstieg: str) -> tuple[str, str]:
+    """Mandantenscharfer Einstieg in die Nachnamenaufnahme.
+
+    Rüther verlangt den Nachnamen direkt Buchstabe für Buchstabe. Die
+    Anweisung steht VOR der einzigen Frage; so kann die Ruhe-Wache sie nicht
+    mehr als Nachsatz hinter einem Fragezeichen abschneiden.
+    """
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("nachnameDirektBuchstabieren") is True:
+        return (
+            "nachname",
+            f"{einstieg}Bitte nennen Sie den Nachnamen Buchstabe für Buchstabe. "
+            "Wie lautet die genaue Schreibweise?",
+        )
+    return (
+        "buchstabieren",
+        f"{einstieg}Wie lautet der Nachname? "
+        "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
+        "sagen Sie am Ende einfach fertig.",
+    )
+
+
+def _nachname_vor_vorname_absichern(
+    sit: dict, s: dict
+) -> tuple[str, str] | None:
+    """Bei Opt-in erst die Schreibweise sichern, dann nach dem Vornamen fragen."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if (
+        tenant.get("nachnameDirektBuchstabieren") is True
+        and _s(s.get("nachname"))
+        and not s.get("buchstabiert")
+        and not s.get("bekannt")
+    ):
+        return _buchstabier_frage(
+            s,
+            f"Danke. Bitte jetzt Buchstabe für Buchstabe: "
+            f"Wie lautet die genaue Schreibweise von {s['nachname']}?",
+        )
+    return None
+
+
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)
@@ -4068,12 +4110,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 f"Damit ich {wen} in der Kartei finde: "
                 if wen else "Damit ich Sie in der Kartei finde: "
             )
-            return (
-                "buchstabieren",
-                f"{einstieg}Wie lautet der Nachname? "
-                "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
-                "sagen Sie am Ende einfach fertig.",
-            )
+            return _nachname_start_frage(sit, einstieg)
         # W-NAME-EINWAND: Ein frisch korrigierter Nachname wird SOFORT
         # gesichert — nicht erst nach Grund und Wunschzeit (live e5c25e25
         # fragte Bianca nach dem Widerspruch einfach den Vornamen ab und
@@ -4086,6 +4123,9 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 f"Damit ich nichts Falsches in die Kartei schreibe: "
                 f"Buchstabieren Sie mir {s['nachname']} bitte einmal?",
             )
+        schreibweise = _nachname_vor_vorname_absichern(sit, s)
+        if schreibweise:
+            return schreibweise
         # W-HIRN-GATE (Chef 13.09.2026): Steht der Vorname in der KARTEI,
         # wird er nicht gefragt und auch nicht still verwendet — eine kurze
         # Bestaetigung ("Ihr Vorname ist Maximilian, richtig?"). Ein falscher
@@ -4150,12 +4190,10 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             f"Dann nehme ich die Daten für {wen} einmal auf. "
             if wen else "Dann nehme ich die Daten einmal auf. "
         )
-        return (
-            "buchstabieren",
-            f"{einstieg}Wie lautet der Nachname? "
-            "Bitte sprechen Sie ihn einmal langsam aus. Wenn Sie buchstabieren, "
-            "sagen Sie am Ende einfach fertig.",
-        )
+        return _nachname_start_frage(sit, einstieg)
+    schreibweise = _nachname_vor_vorname_absichern(sit, s)
+    if schreibweise:
+        return schreibweise
     if not s["vorname"]:
         return "vorname", "Und der Vorname?"
     if not s["buchstabiert"] and not s["bekannt"]:
