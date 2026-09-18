@@ -114,6 +114,34 @@
     .kern-zeile .kern-div { color: #f0c46d; font-weight: 600; }
     .kern-zeile .kern-warn { color: #f08d6d; font-weight: 600; }
     .kern-summary { border-left: 3px solid #4b7bd1; padding-left: 10px; }
+    /* DIALOG_CONTROLLER: Zwei-Spalten-Vergleich Live vs. neuer Kern. */
+    .vergleich {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+      align-items: start; margin-top: 12px; max-height: 64vh; overflow: auto;
+    }
+    .vkopf {
+      position: sticky; top: 0; z-index: 2; font-weight: 700; font-size: 12px;
+      letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+      background: var(--bg); border-bottom: 1px solid var(--line); padding: 4px 2px 6px;
+    }
+    .vzelle {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 8px; border-radius: 10px; border: 1px solid transparent; background: #17121600;
+    }
+    .vzelle .bubble { max-width: 100%; }
+    .vzelle.live.warn { border-color: #6b5a34; background: #221a0c; }
+    .vzelle.kern.diff { border-color: #7a3350; background: #241019; }
+    .vmark { font-size: 12px; margin: 2px 0; padding: 3px 8px; border-radius: 8px; align-self: flex-start; }
+    .vmark.warn { background: #2c2410; color: var(--warn); border: 1px solid #6b5a34; }
+    .vmark.diff-note { background: #2a0f18; color: #ffb0c2; border: 1px solid #7a3350; }
+    .kern-bubble {
+      background: #10233a; border: 1px solid #22456e; color: #cfe0f5;
+      padding: 8px 11px; border-radius: 12px; font-size: 14px; line-height: 1.4; align-self: flex-start;
+    }
+    .kern-bubble.gleich { background: #12241a; border-color: #3c5a46; color: #bfe6c7; }
+    .kern-bubble.diff { background: #2a0f18; border-color: #c23b6b; color: #ffc2d3; font-weight: 600; }
+    .kern-bubble.muted { background: none; border: 1px dashed var(--line); color: var(--muted); font-style: italic; }
+    .bubble.kopie { opacity: .72; }
     .play {
       appearance: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
       background: #171114; color: var(--text); font: inherit; font-size: 11px; padding: 1px 9px;
@@ -192,6 +220,6 @@
   </div>
   <audio id="spieler" hidden></audio>
   <script src="praxis.js?v=5"></script>
-  <script src="anrufe.js?v=a25"></script>
+  <script src="anrufe.js?v=a26"></script>
 </body>
 </html>

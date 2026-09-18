@@ -396,6 +396,94 @@ function kernSummaryBox(a) {
   return d;
 }
 
+// DIALOG_CONTROLLER: linke Spalte = echtes Gespraech (Live), inkl. Audio,
+// STT-Details, Werkzeuge und farbige Live-Warnsignale (I1 / Schleife).
+function fuelleLinks(cell, z, sid) {
+  const { rein, raus } = zugAudios(sid, z);
+  if (z.textIn) {
+    const b = bubble("user", z.textIn);
+    const m = document.createElement("div");
+    m.className = "b-meta";
+    m.appendChild(chip(`${mmss(z.offsetMs)}`));
+    if (rein.length) m.appendChild(playKnopf(rein, "Anrufer"));
+    for (const c of sttChips(z.timings)) m.appendChild(c);
+    for (const c of ohrChips(z.stt)) m.appendChild(c);
+    b.appendChild(m);
+    cell.appendChild(b);
+    const det = ohrDetail(z.stt);
+    if (det) cell.appendChild(det);
+  }
+  if (z.text) {
+    const b = bubble("ki", z.text);
+    const m = document.createElement("div");
+    m.className = "b-meta";
+    m.appendChild(chip(`${mmss(z.offsetMs)}`));
+    if (z.art && z.art !== "turn" && z.art !== "listen") m.appendChild(chip(z.art));
+    for (const c of kiTimingChips(z.timings)) m.appendChild(c);
+    if (raus.length) m.appendChild(playKnopf(raus, "Bianca"));
+    b.appendChild(m);
+    cell.appendChild(b);
+  }
+  const ls = z.liveSignal;
+  if (ls && ls.i1) {
+    const w = document.createElement("div");
+    w.className = "vmark warn";
+    w.textContent = `\u26A0 fragt bereits erfasstes Feld (${ls.i1.frage})`;
+    cell.appendChild(w);
+  }
+  if (ls && ls.schleife) {
+    const w = document.createElement("div");
+    w.className = "vmark warn";
+    w.textContent = `\u26A0 Schleife: „${ls.schleife.frage}“ ${ls.schleife.n}\u00D7`;
+    cell.appendChild(w);
+  }
+  if (z.book && (z.book.ok || z.book.booked)) {
+    cell.appendChild(bubble("sys", `Buchung: ${z.book.spoken || z.book.slotIso || "ok"}`));
+  }
+  for (const t of z.tools || []) cell.appendChild(toolKarte(t));
+  if (z.art === "hangup") {
+    cell.appendChild(bubble("sys", `Aufgelegt${z.note ? " — Notiz: " + z.note : ""}`));
+  }
+}
+
+// DIALOG_CONTROLLER: rechte Spalte = Kopie des Gespraechs + Entscheidung des
+// neuen Kerns an derselben Stelle. Der entscheidende Unterschied (Divergenz)
+// wird farblich markiert.
+function fuelleRechts(cell, z) {
+  const kr = z.kernReplay;
+  if (z.textIn) {
+    const b = bubble("user", z.textIn);
+    b.classList.add("kopie");
+    cell.appendChild(b);
+  }
+  if (kr && kr.in) {
+    const b = document.createElement("div");
+    b.className = "kern-bubble";
+    let s = kernBeschreibung(kr.in);
+    for (const nw of kr.nach_werkzeug || []) {
+      s += " \u2192 " + kernBeschreibung(nw) +
+        (nw.outcome ? ` [${nw.outcome}${nw.synth ? ", synth" : ""}]` : "");
+    }
+    b.textContent = "Kern: " + s;
+    if (kr.divergenz) {
+      b.classList.add("diff");
+      cell.appendChild(b);
+      const d = document.createElement("div");
+      d.className = "vmark diff-note";
+      d.textContent = `\u21AF Live fragte „${kr.divergenz.live}“ — Kern „${kr.divergenz.kern}“`;
+      cell.appendChild(d);
+    } else {
+      b.classList.add("gleich");
+      cell.appendChild(b);
+    }
+  } else if (z.text) {
+    const b = document.createElement("div");
+    b.className = "kern-bubble muted";
+    b.textContent = "(keine Kern-Entscheidung an dieser Stelle)";
+    cell.appendChild(b);
+  }
+}
+
 function kiTimingChips(t) {
   if (!t) return [];
   const aus = [];
@@ -700,55 +788,51 @@ function maleDetail(a) {
   const kernBox = kernSummaryBox(a);
   if (kernBox) wurzel.appendChild(kernBox);
 
-  const fluss = document.createElement("div");
-  fluss.className = "zuege";
+  // Zwei Spalten: links das echte Gespraech, rechts die Kopie mit den
+  // Entscheidungen des neuen Kerns; der entscheidende Unterschied farbig.
+  const hatKern = (a.zuege || []).some((z) => z.kernReplay || z.liveSignal);
+  const verg = document.createElement("div");
+  verg.className = "vergleich";
+  const hL = document.createElement("div");
+  hL.className = "vkopf";
+  hL.textContent = "Echtes Gespräch (Live)";
+  const hR = document.createElement("div");
+  hR.className = "vkopf";
+  hR.textContent = hatKern ? "Neuer Dialogkern (Schatten)" : "Neuer Dialogkern (kein Replay vorhanden)";
+  verg.appendChild(hL);
+  verg.appendChild(hR);
   for (const z of a.zuege || []) {
-    const { rein, raus } = zugAudios(sid, z);
-    if (z.textIn) {
-      const b = bubble("user", z.textIn);
-      const m = document.createElement("div");
-      m.className = "b-meta";
-      m.appendChild(chip(`${mmss(z.offsetMs)}`));
-      if (rein.length) m.appendChild(playKnopf(rein, "Anrufer"));
-      for (const c of sttChips(z.timings)) m.appendChild(c);
-      for (const c of ohrChips(z.stt)) m.appendChild(c);
-      b.appendChild(m);
-      fluss.appendChild(b);
-      const det = ohrDetail(z.stt);
-      if (det) fluss.appendChild(det);
-      const kz = kernReplayZeile(z);
-      if (kz) fluss.appendChild(kz);
-    }
-    if (z.text) {
-      const b = bubble("ki", z.text);
-      const m = document.createElement("div");
-      m.className = "b-meta";
-      m.appendChild(chip(`${mmss(z.offsetMs)}`));
-      if (z.art && z.art !== "turn" && z.art !== "listen") m.appendChild(chip(z.art));
-      for (const c of kiTimingChips(z.timings)) m.appendChild(c);
-      if (raus.length) m.appendChild(playKnopf(raus, "Bianca"));
-      b.appendChild(m);
-      fluss.appendChild(b);
-    }
-    if (z.book && (z.book.ok || z.book.booked)) {
-      fluss.appendChild(bubble("sys", `Buchung: ${z.book.spoken || z.book.slotIso || "ok"}`));
-    }
-    for (const t of z.tools || []) {
-      fluss.appendChild(toolKarte(t));
-    }
-    if (z.art === "hangup") {
-      fluss.appendChild(bubble("sys", `Aufgelegt${z.note ? " — Notiz: " + z.note : ""}`));
-    }
+    const li = document.createElement("div");
+    li.className = "vzelle live";
+    const re = document.createElement("div");
+    re.className = "vzelle kern";
+    fuelleLinks(li, z, sid);
+    fuelleRechts(re, z);
+    if (z.kernReplay && z.kernReplay.divergenz) re.classList.add("diff");
+    const ls = z.liveSignal;
+    if (ls && (ls.i1 || ls.schleife)) li.classList.add("warn");
+    verg.appendChild(li);
+    verg.appendChild(re);
   }
   // Ältere Mitschnitte: Tools nur am Manifest-Kopf, nicht je Zug.
   const hatZugTools = (a.zuege || []).some((z) => (z.tools || []).length);
   if (!hatZugTools) {
-    for (const t of a.tools || []) fluss.appendChild(toolKarte(t));
+    for (const t of a.tools || []) {
+      const li = document.createElement("div");
+      li.className = "vzelle live";
+      li.appendChild(toolKarte(t));
+      verg.appendChild(li);
+      verg.appendChild(document.createElement("div"));
+    }
   }
   if (!(a.zuege || []).length && !(a.tools || []).length) {
-    fluss.appendChild(bubble("sys", "keine Züge aufgezeichnet"));
+    const li = document.createElement("div");
+    li.className = "vzelle live";
+    li.appendChild(bubble("sys", "keine Züge aufgezeichnet"));
+    verg.appendChild(li);
+    verg.appendChild(document.createElement("div"));
   }
-  wurzel.appendChild(fluss);
+  wurzel.appendChild(verg);
 }
 
 /** Anruf-UID aus dem Fragment (#<uid>) — der Link der Ergebnisseite.
