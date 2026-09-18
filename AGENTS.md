@@ -1854,6 +1854,9 @@ dieselbe Rückrufmeldung bei jedem Folgesatz erneut gesprochen.
 - Akut/Notfall während der aus dem DB-Prompt gelesenen Sprechzeit: kein
   normaler Termin, jetzt kommen, keine feste Uhrzeit, Wartezeit, garantiert
   schnellstmöglich gesehen/versorgt. Außerhalb ohne Lebensgefahr: 116 117.
+  Sind die Öffnungszeiten wegen eines Standort-/Firestore-Ausfalls unbekannt,
+  gilt die Praxis NIE still als geöffnet: Bianca sagt ehrlich, dass sie den
+  Status nicht sicher feststellen kann, und verweist konservativ auf 116 117.
   Atemnot/Zungen-/Mund-/Halsschwellung, Kollaps/Bewusstlosigkeit oder schwere
   Arzneimittelreaktion: 112, nicht in die Praxis schicken.
 - Rezepte/Überweisungen/Krankmeldungen werden telefonisch nicht bestellt oder
@@ -1886,6 +1889,10 @@ Kontroll-Default, sobald nur der Behandler feststand.
   `flow._angebot` nutzt einen Vorrat NUR bei passendem Stempel — sonst
   synchron nachladen mit dem richtigen Motiv. Schließt das Rennen „Anrufer
   nennt den Grund, alter Blind-Vorrat liegt noch in der Sitzung".
+- **Reload verwirft zuerst den Altbestand (18.09.2026):** Sobald synchron
+  nachgeladen wird, leert `_laden` Vorrat und Herkunft VOR dem Netzaufruf.
+  Ein Kalender-500er oder eine erfolgreiche leere Antwort darf nie alte Slots
+  aus einem anderen Kalender-/Motivrahmen als frisches Angebot maskieren.
 - Der Hintergrund-Lauf löst das Motiv ebenfalls per `motiv_fuer_kalender`
   auf, statt roh `s["motivId"]` zu senden.
 - Verschieben war schon sauber: `_verschieb_angebot` sucht mit dem Motiv
@@ -3955,6 +3962,10 @@ ersten Treffer.
  „beide abgesagt“, wenn nur ein Werkzeug erfolgreich war. Die Rückfrage
  nennt den konkreten Patienten; Termine verschiedener Patienten werden nie
  gesammelt abgesagt. „Nein“ lässt alle Termine bestehen.
+- Schlägt nur ein Teil fehl, schreibt Bianca eine echte Rückrufnotiz mit den
+  betroffenen Terminen. Erst ein erfolgreicher persistenter JSONL-Write gilt
+  im Tool-Ledger als `ok`; bei Schreibfehler sagt Bianca das ehrlich und
+  behauptet weder Notiz noch Rückruf.
 - **Schleifenfreier Abschluss**: nach der Absage genau EINE registrierte
   „Sonst noch?“-Frage. Eine Neubuchung beginnt nur auf ausdrücklichen Wunsch,
   nie automatisch aus der Absage heraus.

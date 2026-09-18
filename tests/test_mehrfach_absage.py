@@ -98,7 +98,7 @@ def test_beide_absagen_sammelbestaetigung_und_beide_weg(monkeypatch):
     assert gehirn.sammler(sit)["frage"] == "sonst_noch"
 
 
-def test_beide_absagen_teilfehler_ehrlich(monkeypatch):
+def test_beide_absagen_teilfehler_ehrlich(monkeypatch, tmp_path):
     """Nur der erste klappt — nie 'beide abgesagt' behaupten."""
     def _cancel(t, c, aid):
         if aid == "apt-1":
@@ -106,13 +106,40 @@ def test_beide_absagen_teilfehler_ehrlich(monkeypatch):
         return {"ok": False, "spoken": "Das hat nicht geklappt."}
 
     sit = _sit()
+    monkeypatch.setattr(verwalten, "DATA_DIR", tmp_path)
     _bis_wahl(sit, monkeypatch, _cancel)
     flow.zug(sit, "Beide.")
     z = flow.zug(sit, "Ja.")
     low = z["text"].lower()
     assert "abgesagt sind" in low  # der erfolgreiche Teil
     assert "nicht geklappt" in low  # der Fehler ehrlich benannt
-    assert "kümmert sich" in low
+    assert "rückrufnotiz" in low
+    assert (tmp_path / "praxis_notizen.jsonl").exists()
+    assert any(t.get("name") == "praxis_notiz" and t.get("ok")
+               for t in sit.get("tools") or [])
+
+
+def test_teilfehler_mit_notiz_schreibfehler_bleibt_ehrlich(monkeypatch):
+    class _NichtSchreibbar:
+        def mkdir(self, **kwargs):
+            raise OSError("Datenträger nicht verfügbar")
+
+    def _cancel(t, c, aid):
+        if aid == "apt-1":
+            return {"ok": True, "cancelled": True, "appointmentId": aid}
+        return {"ok": False, "spoken": "Das hat nicht geklappt."}
+
+    sit = _sit()
+    monkeypatch.setattr(verwalten, "DATA_DIR", _NichtSchreibbar())
+    _bis_wahl(sit, monkeypatch, _cancel)
+    flow.zug(sit, "Beide.")
+    z = flow.zug(sit, "Ja.")
+
+    low = z["text"].lower()
+    assert "nicht speichern" in low
+    assert "rückrufnotiz hinterlassen" not in low
+    assert any(t.get("name") == "praxis_notiz" and not t.get("ok")
+               for t in sit.get("tools") or [])
 
 
 def test_beide_absagen_nein_behaelt_termine(monkeypatch):

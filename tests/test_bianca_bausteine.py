@@ -3941,7 +3941,7 @@ def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
     echt_find = flow.kal.find_slots
     flow.kal.book_slot = _fail_book
     flow.verwalten._notiz_schreiben = (
-        lambda sit, **kw: notizen.append(kw) or None
+        lambda sit, **kw: notizen.append(kw) or True
     )
     # _angebot soll aus dem lokalen Vorrat schöpfen, nicht die CF anrufen.
     flow.kal.find_slots = lambda *a, **k: {"ok": False}

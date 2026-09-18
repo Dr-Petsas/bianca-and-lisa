@@ -103,12 +103,13 @@ def test_lebender_kalender_bleibt_byte_identisch(monkeypatch):
     assert info["kalenderTot"] is False
 
 
-def test_ohne_kalenderliste_gilt_die_plattform_antwort(monkeypatch):
-    """Dock-Tests/alte Sitzungen ohne Kalenderliste: nichts verwerfen."""
+def test_ohne_kalenderliste_wird_historische_id_nicht_verwendet(monkeypatch):
+    """Ohne heutige Kalenderliste ist die alte Id nicht verifizierbar.
+    Lieber Behandler neu klären als einen gelöschten Kalender aufrufen."""
     _cf(monkeypatch, _kartei(TOT, "Dr. Irgendwer"))
     info = arztmod.letzter_behandler({"clientId": "x", "locationId": "y"}, "p1")
-    assert info["calendarId"] == TOT
-    assert info["kalenderTot"] is False
+    assert info["calendarId"] == ""
+    assert info["kalenderTot"] is True
 
 
 def test_kalender_tot_helfer():
@@ -116,7 +117,7 @@ def test_kalender_tot_helfer():
     assert arztmod._kalender_tot(t, TOT) is True
     assert arztmod._kalender_tot(t, PETSAS) is False
     assert arztmod._kalender_tot(t, "") is False
-    assert arztmod._kalender_tot({}, TOT) is False
+    assert arztmod._kalender_tot({}, TOT) is True
 
 
 # --- Hintergrund: Kartei zur Rufnummer -------------------------------------------

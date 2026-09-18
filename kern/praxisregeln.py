@@ -287,6 +287,18 @@ def notfall_antwort(
             "ärztlichen Bereitschaftsdienst unter 116 117. Bei Atemnot oder "
             "Kreislaufproblemen wählen Sie sofort die 112."
         )
+    if offen is None:
+        # W-NOTFALL-ZEITEN-SICHER (18.09.2026): Fehlende Standortzeiten
+        # duerfen nie als "geoeffnet" gelten. Sonst schickt ein kurzzeitiger
+        # Firestore-/Standortausfall Akutpatienten vor eine geschlossene
+        # Praxis. Keine falsche Schliessungsbehauptung, aber konservativ zum
+        # Bereitschaftsdienst.
+        return (
+            "Ich kann gerade nicht sicher feststellen, ob die Praxis geöffnet "
+            "ist. Wenden Sie sich bitte an den ärztlichen Bereitschaftsdienst "
+            "unter 116 117. Bei Atemnot oder Kreislaufproblemen wählen Sie "
+            "sofort die 112."
+        )
     return (
         "Das klingt akut. Kommen Sie bitte jetzt direkt in die Praxis. "
         "Dafür gibt es keine feste Uhrzeit; bringen Sie bitte Wartezeit mit. "

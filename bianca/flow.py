@@ -1102,6 +1102,17 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
     such_wunsch = None if dringend else (dict(wish) if isinstance(wish, dict) else None)
 
     def _laden() -> dict:
+        # W-SLOT-RELOAD-SICHER (18.09.2026): Sobald ein synchroner Reload
+        # noetig ist, ist der alte Vorrat fuer diesen Kalender-/Motivrahmen
+        # ungueltig. Er muss VOR dem Netzaufruf verschwinden; sonst maskiert
+        # ein 500er oder eine leere Antwort den Fehler und Bianca bietet
+        # alte Slots aus einem anderen Kalender oder Besuchsgrund an.
+        sit["slotVorrat"] = []
+        ctx["slotVorrat"] = []
+        sit.pop("vorratFuer", None)
+        sit.pop("vorratDispatch", None)
+        sit.pop("slotKalender", None)
+        sit.pop("angebotArzt", None)
         if melde:
             melde("offer_slots")
         from kern import zimmer_map
@@ -1199,10 +1210,18 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             s["phase"] = "fertig"
             s["frage"] = ""
             sit["keinSlotFertig"] = True
-            verwalten.kalender_fehler_notiz(sit)
-            spur.merken(sit, "kalender-fehler", "notiz")
-            ansage = ("Der Terminkalender antwortet gerade nicht. Ich habe der "
-                      "Praxis eine Rückrufnotiz mit Ihrem Terminwunsch hinterlassen.")
+            notiz_ok = verwalten.kalender_fehler_notiz(sit)
+            spur.merken(sit, "kalender-fehler", "notiz" if notiz_ok else "notiz-fehler")
+            if notiz_ok:
+                ansage = ("Der Terminkalender antwortet gerade nicht. Ich habe der "
+                          "Praxis eine Rückrufnotiz mit Ihrem Terminwunsch hinterlassen.")
+            else:
+                ansage = (
+                    "Der Terminkalender antwortet gerade nicht, und die Rückrufnotiz "
+                    "konnte ich technisch nicht speichern. Bitte rufen Sie die Praxis "
+                    "noch einmal an."
+                )
+                return _notiz_abschluss(sit, ansage)
             nummer_frage = _rueckruf_nummer_start(sit)
             if nummer_frage:
                 return {"text": ansage + " " + nummer_frage}
@@ -1262,7 +1281,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         s["phase"] = "fertig"
         s["frage"] = ""
         sit["keinSlotFertig"] = True
-        verwalten.rueckruf_notiz(sit)
+        notiz_ok = verwalten.rueckruf_notiz(sit)
         ansage = spoken_offer([], wish_matched=True)
         if _s(sit.pop("motivNichtTelefonisch", "")):
             # Der Motivname selbst wird NICHT gesprochen: er traegt Kuerzel
@@ -1275,6 +1294,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 "habe Ihr Anliegen notiert — die Praxis meldet sich "
                 "kurzfristig bei Ihnen und stimmt den Termin mit Ihnen ab."
             )
+        if not notiz_ok:
+            ansage = (
+                "Dafür ist gerade kein Termin verfügbar, und die Rückrufnotiz "
+                "konnte ich technisch nicht speichern. Bitte rufen Sie die Praxis "
+                "noch einmal an."
+            )
+            return _notiz_abschluss(sit, ansage)
         # W-RUECKRUF-NUMMER: ohne Nummer kann die Praxis nicht zurueckrufen —
         # dann ist die Nummer jetzt die offene Frage (Anrufe da746a65/5aa87268).
         nummer_frage = _rueckruf_nummer_start(sit)
@@ -2028,7 +2054,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             s["frage"] = ""
             sit["offered"] = []
             sit["keinSlotFertig"] = True
-            verwalten.rueckruf_notiz(sit)
+            notiz_ok = verwalten.rueckruf_notiz(sit)
             # W-RUECKRUF-NUMMER: "Meine Nummer haben Sie" (telefonAkte) wurde
             # geglaubt — steht wirklich keine Nummer, jetzt nachfragen.
             nummer_frage = _rueckruf_nummer_start(sit)
@@ -2037,6 +2063,13 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
                 "und die Praxis meldet sich gleich bei Ihnen mit einem Termin."
             )
+            if not notiz_ok:
+                text = (
+                    "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
+                    "klappen auch nicht zuverlässig. Die Rückrufnotiz konnte ich technisch "
+                    "nicht speichern; bitte rufen Sie die Praxis noch einmal an."
+                )
+                return _notiz_abschluss(sit, text, book=book)
             if nummer_frage:
                 return {"text": text + " " + nummer_frage, "book": book}
             return _notiz_abschluss(sit, text, book=book)

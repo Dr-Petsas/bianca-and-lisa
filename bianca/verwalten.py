@@ -903,11 +903,15 @@ def rueckruf_nummer_nachtragen(sit: dict) -> str:
 
 
 def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
-                     dock_text: str = "", was: str = "") -> None:
-    """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock."""
+                     dock_text: str = "", was: str = "") -> bool:
+    """ECHTE Notiz statt leerem Versprechen: JSONL fuer die Praxis + Dock.
+
+    ``True`` bedeutet, dass die Zeile wirklich persistent geschrieben wurde.
+    Ein In-Memory-Docktext allein ist keine Evidenz fuer eine Rueckrufnotiz.
+    """
     if sit.get("testNoWrite"):
         sit["testNotizUnterdrueckt"] = True
-        return
+        return False
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     eintrag = {
@@ -928,12 +932,15 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
         # die Praxis — "Rueckruf erbeten" allein sagt nicht, dass es eine
         # Rechnungsreklamation ist.
         eintrag["was"] = _s(was)
+    geschrieben = False
+    fehler = ""
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with (DATA_DIR / "praxis_notizen.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
+        geschrieben = True
+    except OSError as exc:
+        fehler = type(exc).__name__
     hinweise = "; ".join(x for x in (
         f"wann: {eintrag['wann']}" if eintrag["wann"] else "",
         f"Behandler: {eintrag['behandler']}" if eintrag["behandler"] else "",
@@ -950,23 +957,30 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
     ))
     if dock_text and hinweise:
         sit["praxisNotiz"] = _s(f"{dock_text} ({hinweise})")
-    merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True, "notiz": sit["praxisNotiz"]})
+    sit["praxisNotizPersistiert"] = geschrieben
+    merke_tool(sit, "praxis_notiz", {
+        "ok": geschrieben,
+        "notiert": geschrieben,
+        "notiz": sit["praxisNotiz"],
+        **({"error": fehler} if fehler else {}),
+    })
+    return geschrieben
 
 
-def rueckruf_notiz(sit: dict) -> None:
+def rueckruf_notiz(sit: dict) -> bool:
     """Kein freier Slot im Buchungs-Angebot: 'die Praxis meldet sich' MUSS
     eine echte Spur hinterlassen (Batch s09 29.08.2026 — leeres Versprechen,
     frage klebte auf slotwahl)."""
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
-    _notiz_schreiben(
+    return _notiz_schreiben(
         sit, anliegen="neubuchung",
         status="Kein freier Termin im Angebot — bitte zurueckrufen",
         dock_text=f"{name} wollte neu buchen — kein freier Termin im Angebot. Bitte zurueckrufen.",
     )
 
 
-def kalender_fehler_notiz(sit: dict) -> None:
+def kalender_fehler_notiz(sit: dict) -> bool:
     """Slotsuche technisch gescheitert (CF-Fehler/Timeout, auch nach dem
     zweiten Wurf): das gesprochene "die Praxis ruft zurueck" MUSS eine Notiz
     mit Wunsch und Nummer hinterlassen (W-KALENDER-FEHLER 17.09.2026 —
@@ -974,7 +988,7 @@ def kalender_fehler_notiz(sit: dict) -> None:
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     grund = _s(s.get("grundWortlaut") or s.get("grund")) or "Termin"
-    _notiz_schreiben(
+    return _notiz_schreiben(
         sit, anliegen="neubuchung",
         status="Terminkalender nicht erreichbar — Termin bitte telefonisch vergeben, zurueckrufen",
         dock_text=(f"{name} wollte einen Termin ({grund}) — der Terminkalender "
@@ -1254,10 +1268,27 @@ def _mehrfach_absagen(sit: dict, melde: Melde) -> dict:
     if erfolg:
         teile.append("Erledigt — abgesagt sind: " + _fuegen(erfolg) + ".")
     if fehler:
-        teile.append(
-            "Bei " + _fuegen(fehler) + " hat es gerade nicht geklappt — "
-            "die Praxis kümmert sich darum."
+        fehl_text = _fuegen(fehler)
+        notiz_ok = _notiz_schreiben(
+            sit,
+            anliegen="mehrfach_absagen",
+            status="Mindestens eine Absage technisch fehlgeschlagen — bitte prüfen und zurückrufen",
+            dock_text=(
+                f"Mehrfach-Absage teilweise fehlgeschlagen: {fehl_text}. "
+                "Bitte Termine prüfen und zurückrufen."
+            ),
         )
+        if notiz_ok:
+            teile.append(
+                f"Bei {fehl_text} hat es gerade nicht geklappt — "
+                "ich habe der Praxis dazu eine Rückrufnotiz hinterlassen."
+            )
+        else:
+            teile.append(
+                f"Bei {fehl_text} hat es gerade nicht geklappt. "
+                "Die Rückrufnotiz konnte ich technisch nicht speichern; "
+                "bitte rufen Sie die Praxis noch einmal an."
+            )
     if not teile:
         # Sollte nie passieren (Warteschlange war leer): ehrlich bleiben.
         return {"text": "Da ist gerade nichts zum Absagen gewesen. "

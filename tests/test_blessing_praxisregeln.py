@@ -91,6 +91,22 @@ def test_akutfall_ausserhalb_sprechstunde_nennt_116117():
     assert "Praxis ist gerade geschlossen" in text
 
 
+def test_akutfall_ohne_verlaessliche_zeiten_gilt_nicht_als_geoeffnet():
+    tenant = {
+        "praxisName": "Hautarztpraxis Doktor Blessing",
+        "dbPrompt": praxisregeln.NOTFALL_MARKER,
+    }
+    text = praxisregeln.notfall_antwort(
+        tenant,
+        "Ich brauche einen Notfalltermin, die Stelle blutet stark.",
+        jetzt=datetime(2026, 9, 7, 9, 0, tzinfo=TZ),
+    )
+    assert "nicht sicher feststellen" in text
+    assert "116 117" in text
+    assert "jetzt direkt" not in text
+    assert "geschlossen" not in text
+
+
 def test_lebensgefahr_hat_112_vorrang():
     text = praxisregeln.notfall_antwort(
         _tenant(),
@@ -163,6 +179,27 @@ def test_notfall_gewinnt_vor_identitaets_hallo_und_llm(monkeypatch):
     assert "jetzt direkt" in res["text"]
     assert "keine feste Uhrzeit" in res["text"]
     assert "richtig erkannt" not in res["text"].lower()
+    assert not sit.get("tools")
+    assert flow.gehirn.sammler(sit)["phase"] == "fertig"
+
+
+def test_geschlossener_notfall_gewinnt_ende_zu_ende_und_legt_auf(monkeypatch):
+    sit = session.neu(tenant=_tenant())
+    agent.start_reply(sit)
+
+    def _darf_nicht(*args, **kwargs):
+        raise AssertionError("Geschlossener Notfall darf weder LLM noch Kalender erreichen")
+
+    monkeypatch.setattr(praxisregeln, "praxis_offen", lambda *args, **kwargs: False)
+    monkeypatch.setattr(agent.llm, "chat", _darf_nicht)
+    monkeypatch.setattr(agent.llm, "chat_stream", _darf_nicht)
+    monkeypatch.setattr(flow, "_angebot", _darf_nicht)
+
+    res = agent.user_turn(sit, "Ich brauche einen Notfalltermin.")
+
+    assert res.get("hangup") is True
+    assert "116 117" in res["text"]
+    assert "jetzt direkt" not in res["text"]
     assert not sit.get("tools")
     assert flow.gehirn.sammler(sit)["phase"] == "fertig"
 

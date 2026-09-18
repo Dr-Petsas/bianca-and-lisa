@@ -150,3 +150,73 @@ def test_dauerfehler_folgezug_ist_deterministisch(notizen, monkeypatch):
     assert antwort is not None
     assert "Stimmt das so" in antwort["text"] or "wiederhole" in antwort["text"].lower()
     assert cf.aufrufe == vorher, "keine erneute Slotsuche auf dem Nummern-Pfad"
+
+
+def test_dauerfehler_kann_alten_slotvorrat_nicht_maskieren(notizen, monkeypatch):
+    """Ein fremder Hintergrund-Vorrat darf einen 500er nie in ein Angebot
+    verwandeln. Vor dem Fix blieb er stehen und übersprang den zweiten Wurf."""
+    cf = _CF(fehler=99)
+    monkeypatch.setattr(flow.kal, "_find_slots_seite", cf)
+    sit = _sit()
+    alt = "2026-09-21T08:00:00+02:00"
+    sit["slotVorrat"] = [alt]
+    sit["vorratFuer"] = "anderer-kalender|anderes-motiv"
+
+    ang = flow._angebot(sit)
+
+    assert cf.aufrufe == 2
+    assert alt not in str(ang)
+    assert not sit.get("slotVorrat")
+    assert not sit.get("offered")
+    assert len(notizen()) == 1
+
+
+def test_leere_reload_antwort_verwirft_alten_slotvorrat(notizen, monkeypatch):
+    cf = _CF(fehler=0, danach=[])
+    monkeypatch.setattr(flow.kal, "_find_slots_seite", cf)
+    sit = _sit()
+    alt = "2026-09-21T08:00:00+02:00"
+    sit["slotVorrat"] = [alt]
+    sit["vorratFuer"] = "anderer-kalender|anderes-motiv"
+
+    ang = flow._angebot(sit)
+
+    assert cf.aufrufe >= 1
+    assert alt not in str(ang)
+    assert not sit.get("slotVorrat")
+    assert not sit.get("offered")
+
+
+def test_notiz_schreibfehler_wird_nicht_als_erfolg_verbucht(monkeypatch):
+    class _NichtSchreibbar:
+        def mkdir(self, **kwargs):
+            raise OSError("Datenträger nicht verfügbar")
+
+    sit = _sit(anrufer_nummer="+491771234567")
+    monkeypatch.setattr(verwalten, "DATA_DIR", _NichtSchreibbar())
+
+    assert verwalten.kalender_fehler_notiz(sit) is False
+    notiz_tools = [t for t in sit.get("tools") or [] if t.get("name") == "praxis_notiz"]
+    assert len(notiz_tools) == 1
+    assert notiz_tools[0].get("ok") is False
+    assert sit.get("praxisNotizPersistiert") is False
+
+
+def test_kalenderfehler_verspricht_bei_notiz_schreibfehler_nichts(monkeypatch):
+    class _NichtSchreibbar:
+        def mkdir(self, **kwargs):
+            raise OSError("Datenträger nicht verfügbar")
+
+    monkeypatch.setattr(verwalten, "DATA_DIR", _NichtSchreibbar())
+    monkeypatch.setattr(flow.kal, "_find_slots_seite", _CF(fehler=99))
+    monkeypatch.setattr(flow.hintergrund, "anstossen", lambda sit: None)
+    sit = _sit()
+
+    ang = flow._angebot(sit)
+
+    text = ang["text"].lower()
+    assert "nicht speichern" in text
+    assert "hinterlassen" not in text
+    assert flow._RUECKRUF_NUMMER_FRAGE.lower() not in text
+    assert any(t.get("name") == "praxis_notiz" and not t.get("ok")
+               for t in sit.get("tools") or [])

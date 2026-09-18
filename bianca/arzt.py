@@ -279,21 +279,21 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
 def _kalender_tot(tenant: dict, calendar_id: str) -> bool:
     """True, wenn die Id NICHT zu den heutigen Kalendern des Mandanten gehoert.
 
-    Ohne Kalenderliste (Dock-Tests, alte Sitzungen) wird nichts verworfen —
-    im Zweifel gilt die Antwort der Plattform wie bisher."""
+    Ohne heutige Kalenderliste kann eine historische Id nicht verifiziert
+    werden und wird deshalb ebenfalls verworfen. Eine leere Behandlerfrage
+    ist sicherer als ein ``getFreeTimeSlots`` gegen einen geloeschten
+    Kalender."""
     cid = _s(calendar_id)
     cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
     ids = {_s(c.get("id")) for c in cals if isinstance(c, dict) and _s(c.get("id"))}
-    if not cid or not ids:
-        return False
-    if cid in ids:
+    if not cid:
         return False
     # Gesperrte Behandler fuehrt behandler_sperre getrennt — die sind nicht
     # tot, sondern bewusst ausgeblendet (oben schon behandelt).
     gesperrt = tenant.get("_gesperrteKalender") if isinstance(tenant.get("_gesperrteKalender"), list) else []
     if any(_s(g.get("id")) == cid for g in gesperrt if isinstance(g, dict)):
         return False
-    return True
+    return not ids or cid not in ids
 
 
 def _kalender_nur_name(tenant: dict, name: str) -> dict[str, Any] | None:

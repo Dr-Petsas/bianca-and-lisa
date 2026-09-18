@@ -193,7 +193,18 @@ def test_opt_out_altpfad_waehlt_einen_konkret_genannten_slot():
 
 def test_meddent_merkt_abgelehnten_donnerstag_wie_blessing():
     sit = _sit()
-    sit["tenant"] = laden("meddent")
+    tenant = laden("meddent")
+    sit["tenant"] = tenant
+    s = gehirn.sammler(sit)
+    kalender = next(c for c in tenant["calendars"]
+                    if c.get("id") == tenant.get("defaultCalendarId"))
+    s["arzt"] = {
+        "typ": "genannt",
+        "calendarId": kalender["id"],
+        "calendarName": kalender["name"],
+    }
+    gehirn.kalender_zu_grund(sit)
+    sit["vorratFuer"] = hintergrund.vorrat_schluessel(sit)
 
     aus = flow._slot_praeferenz_zug(sit, "Nicht Donnerstag.")
 
