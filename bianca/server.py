@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from bianca import agent, gehirn, rueckkehr, session, weiterleiten
+from bianca.controller import shadow as _ctrl_shadow
 from bianca.greeting import begruessung
 from kern import (
     agentprofil,
@@ -67,7 +68,11 @@ def _stille_ms(sit: dict) -> int:
 DIENST = Dienst(
     name="bianca",
     start_fn=agent.start_reply,
-    turn_fn=agent.user_turn,
+    # DIALOG_CONTROLLER: der Shadow-Beobachter laeuft NUR bei
+    # CONTROLLER_SHADOW=1 mit (Kern still parallel + Protokoll). Ohne den
+    # Schalter gibt `umhuellen` agent.user_turn UNVERAENDERT zurueck — der
+    # Live-Pfad ist dann byte-identisch.
+    turn_fn=_ctrl_shadow.umhuellen(agent.user_turn),
     # Neutraler Haenger-Füller nur, wenn Slot/Buchung/Ziffern wirklich
     # haengen können — NICHT den ganzen Anruf (Live 08.09.: bei jedem
     # Satz „Einen Moment bitte.", weil phase bis gebucht immer „schnell" war).
