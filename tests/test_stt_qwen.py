@@ -52,6 +52,7 @@ def _umgebung(
     lokal_text="Ich möchte zu Doktor Petsas.",
     stt_base="http://parakeet:8212",
     grace=0.03,
+    live_ohr=False,
 ):
     fake_lokal = _FakeLokal(lokal_text)
     alt = (
@@ -59,6 +60,7 @@ def _umgebung(
         stt.STT_QWEN_FINAL_BASE,
         stt.STT_QWEN_KEY,
         stt.STT_QWEN_GRACE_S,
+        stt.QWEN_LIVE_OHR,
         stt.STT_WHISPER_BASE,
         stt.STT_BASE,
         stt.ELEVENLABS_API_KEY,
@@ -73,6 +75,7 @@ def _umgebung(
     stt.STT_QWEN_FINAL_BASE = ""
     stt.STT_QWEN_KEY = "qwen-test-token"
     stt.STT_QWEN_GRACE_S = grace
+    stt.QWEN_LIVE_OHR = live_ohr
     stt.STT_WHISPER_BASE = "ws://whisper-darf-nicht-laufen:8092"
     stt.STT_BASE = stt_base
     stt.ELEVENLABS_API_KEY = "eleven-darf-nicht-laufen"
@@ -100,6 +103,7 @@ def _umgebung(
             stt.STT_QWEN_FINAL_BASE,
             stt.STT_QWEN_KEY,
             stt.STT_QWEN_GRACE_S,
+            stt.QWEN_LIVE_OHR,
             stt.STT_WHISPER_BASE,
             stt.STT_BASE,
             stt.ELEVENLABS_API_KEY,
@@ -132,6 +136,9 @@ def test_plausibles_parakeet_wartet_nicht_auf_qwen():
 
 
 def test_auffaelliges_parakeet_uebernimmt_rechtzeitiges_qwen():
+    """Live-Ohr-Pfad (QWEN_LIVE_OHR=1): auffaelliges Parakeet uebernimmt ein
+    rechtzeitiges Qwen. Default ist AUS (siehe
+    test_korrektor_default_uebernimmt_nie_live)."""
     def lauf(fake_lokal):
         text = stt.transcribe(BLOB, keywords="Röntgenbild")
         assert text == "Ein Röntgenbild."
@@ -141,6 +148,7 @@ def test_auffaelliges_parakeet_uebernimmt_rechtzeitiges_qwen():
         lauf,
         lokal_text="Ein Rhön Biepfeld.",
         qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."),
+        live_ohr=True,
     )
 
 
@@ -161,6 +169,7 @@ def test_auffaelliges_parakeet_hat_harten_zusatzdeckel():
         lokal_text="Bröntgempelt.",
         qwen_candidate=slow_qwen,
         grace=0.02,
+        live_ohr=True,
     )
 
 
@@ -354,7 +363,8 @@ def test_live_sperre_laesst_rechtzeitiges_qwen_nicht_gewinnen():
         assert n["spaet"] is False
         assert n["reason"] == "live_gesperrt:namensfrage:nachname"
 
-    _umgebung(lauf, lokal_text="Ein Rhön Biepfeld.", qwen_candidate=qwen)
+    _umgebung(lauf, lokal_text="Ein Rhön Biepfeld.", qwen_candidate=qwen,
+              live_ohr=True)
 
 
 def test_live_sperre_wartet_nicht_auf_langsames_qwen():
@@ -385,7 +395,8 @@ def test_live_sperre_wartet_nicht_auf_langsames_qwen():
         assert nachtraege[0]["spaet"] is True
         assert nachtraege[0]["text"] == "Ein Röntgenbild."
 
-    _umgebung(lauf, lokal_text="Bröntgempelt.", qwen_candidate=slow_qwen, grace=0.25)
+    _umgebung(lauf, lokal_text="Bröntgempelt.", qwen_candidate=slow_qwen, grace=0.25,
+              live_ohr=True)
 
 
 def test_sperre_ohne_grund_aendert_nichts():
@@ -397,7 +408,8 @@ def test_sperre_ohne_grund_aendert_nichts():
                               qwen_sperre=lambda lokal: "") == "Ein Röntgenbild."
 
     _umgebung(lauf, lokal_text="Ein Rhön Biepfeld.",
-              qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."))
+              qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."),
+              live_ohr=True)
 
     def kaputt(lokal: str) -> str:
         raise ValueError("sperre kaputt")
@@ -406,7 +418,8 @@ def test_sperre_ohne_grund_aendert_nichts():
         assert stt.transcribe(BLOB, keywords="Röntgenbild", qwen_sperre=kaputt) == "Ein Röntgenbild."
 
     _umgebung(lauf2, lokal_text="Ein Rhön Biepfeld.",
-              qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."))
+              qwen_candidate=lambda _pcm, _keywords="": _kandidat("Ein Röntgenbild."),
+              live_ohr=True)
 
 
 def test_qwen_only_ohne_parakeet_bleibt_moeglich():
@@ -451,10 +464,76 @@ def test_direkter_qwen_final_endpoint_traegt_nur_vocabular():
     assert result["source"] == "qwen"
 
 
+def test_korrektor_default_uebernimmt_nie_live_speist_aber_nachtrag():
+    """Neuer Default (QWEN_LIVE_OHR=0, Chef 18.09.2026): auch ein
+    rechtzeitiges, auffaelliges Qwen uebernimmt NIE live — Parakeet ist der
+    gesprochene Zug. Der Qwen-Lauf geht trotzdem an den Korrektor (nachtrag)."""
+    nachtraege: list[dict] = []
+    angekommen = threading.Event()
+    qwen_fertig = threading.Event()
+
+    def qwen(_pcm, _keywords=""):
+        qwen_fertig.set()
+        return _kandidat("Ein Röntgenbild.")
+
+    def nachtrag(info: dict) -> None:
+        nachtraege.append(info)
+        angekommen.set()
+
+    def lauf(fake_lokal):
+        echt = fake_lokal.post
+
+        def langsam(url, files=None, data=None, **kwargs):
+            qwen_fertig.wait(timeout=0.5)
+            time.sleep(0.02)
+            return echt(url, files=files, data=data, **kwargs)
+
+        fake_lokal.post = langsam
+        started = time.perf_counter()
+        # auffaellig + rechtzeitiges Qwen — im Live-Ohr-Modus wuerde es
+        # uebernehmen; als Korrektor bleibt Parakeet stehen.
+        text = stt.transcribe(BLOB, keywords="Röntgenbild", nachtrag=nachtrag)
+        assert time.perf_counter() - started < 0.2
+        assert text == "Ein Rhön Biepfeld."  # Parakeet, NICHT Qwen
+        assert angekommen.wait(timeout=1.0)
+        assert nachtraege[0]["text"] == "Ein Röntgenbild."
+        assert nachtraege[0]["parakeet"] == "Ein Rhön Biepfeld."
+
+    _umgebung(lauf, lokal_text="Ein Rhön Biepfeld.", qwen_candidate=qwen)
+
+
+def test_korrektor_default_wartet_nie_auf_qwen():
+    """Als Korrektor gibt es kein Grace-Warten — auch nicht bei auffaelligem
+    Parakeet und langsamem Qwen. Das spaete Qwen landet im Nachtrag."""
+    release = threading.Event()
+    angekommen = threading.Event()
+    nachtraege: list[dict] = []
+
+    def slow_qwen(_pcm, _keywords=""):
+        release.wait(timeout=0.5)
+        return _kandidat("Ein Röntgenbild.")
+
+    def nachtrag(info: dict) -> None:
+        nachtraege.append(info)
+        angekommen.set()
+
+    def lauf(_fake_lokal):
+        started = time.perf_counter()
+        text = stt.transcribe(BLOB, keywords="Röntgenbild", nachtrag=nachtrag)
+        assert time.perf_counter() - started < 0.1  # trotz grace=0.25 kein Warten
+        assert text == "Bröntgempelt."
+        release.set()
+        assert angekommen.wait(timeout=1.0)
+        assert nachtraege[0]["spaet"] is True
+
+    _umgebung(lauf, lokal_text="Bröntgempelt.", qwen_candidate=slow_qwen, grace=0.25)
+
+
 def test_qwen_url_und_health_anzeige():
     alt = (
         stt.STT_QWEN_BASE,
         stt.STT_QWEN_FINAL_BASE,
+        stt.QWEN_LIVE_OHR,
         stt.STT_WHISPER_BASE,
         stt.STT_BASE,
         stt._qwen_pause_bis,
@@ -469,6 +548,13 @@ def test_qwen_url_und_health_anzeige():
             "wss://paraqwenstt.pickadoc-tunnel.com/stream"
         )
         assert stt.bereit()
+        # Default: Qwen ist Korrektor (offline), nicht Live-Ohr.
+        stt.QWEN_LIVE_OHR = False
+        assert stt.engine_anzeige() == (
+            "Parakeet (lokal) + Qwen3-ASR Korrektor (3060, offline)"
+        )
+        # Alt-Verhalten mit QWEN_LIVE_OHR=1.
+        stt.QWEN_LIVE_OHR = True
         assert stt.engine_anzeige() == (
             "Parakeet (lokal) + Qwen3-ASR parallel (3060)"
         )
@@ -478,6 +564,7 @@ def test_qwen_url_und_health_anzeige():
         (
             stt.STT_QWEN_BASE,
             stt.STT_QWEN_FINAL_BASE,
+            stt.QWEN_LIVE_OHR,
             stt.STT_WHISPER_BASE,
             stt.STT_BASE,
             stt._qwen_pause_bis,

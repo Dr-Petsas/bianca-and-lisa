@@ -1,11 +1,18 @@
 """Spracheingabe.
 
 STT_BASE-Parakeet auf der 5090 ist das schnelle lokale Haupt-Ohr. Ist Qwen
-konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel: plausible
-Parakeet-Texte warten exakt null Sekunden; nur auffaellige Texte duerfen
-kurz auf ein rechtzeitig fertiges Qwen-Final warten. Partials steuern Bianca
-nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der schnellere direkte
-Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide unterstuetzt.
+konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel.
+
+Rollen (Chef 18.09.2026): standardmaessig ist Qwen NUR noch Korrektor
+(QWEN_LIVE_OHR=0). Parakeet ist IMMER der gesprochene Zug — kein Grace-Warten,
+kein Live-Override; jeder Qwen-Lauf geht asynchron an den Korrektor
+(`kern/qwen_korrektor.py`, verbessert Woerterbuch/Hotwords/Verlauf der
+Folgezuege). Mit QWEN_LIVE_OHR=1 gilt wieder das alte Zweit-Ohr-Verhalten:
+plausible Parakeet-Texte warten null Sekunden, nur auffaellige Texte duerfen
+kurz auf ein rechtzeitig fertiges Qwen-Final warten und es ggf. uebernehmen.
+Partials steuern Bianca nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der
+schnellere direkte Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide
+unterstuetzt.
 
 Ohne Qwen-Konfiguration bleibt der fruehere STT_WHISPER_BASE-Pfad
 abwaertskompatibel. ``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen)
@@ -34,6 +41,7 @@ from kern.config import (
     STT_QWEN_GRACE_S,
     STT_QWEN_KEY,
     STT_QWEN_PARALLEL,
+    QWEN_LIVE_OHR,
     STT_WHISPER_BASE,
     STT_WHISPER_BUDGET_S,
     STT_WHISPER_KEY,
@@ -645,6 +653,17 @@ def _parallel_transcribe(
     if qwen is None:
         return lokal
 
+    # Qwen NUR noch Korrektor (Chef 18.09.2026, QWEN_LIVE_OHR=0): Parakeet ist
+    # IMMER der gesprochene Zug — kein Grace-Warten, kein Live-Override. Der
+    # Qwen-Lauf wird dem asynchronen Korrektor nachgereicht (Woerterbuch/
+    # Hotwords/Verlauf der Folgezuege). Ist Qwen schon fertig, geht sein
+    # Ergebnis sofort mit; sonst haengt der done-Callback dran (kein Warten).
+    if not QWEN_LIVE_OHR:
+        if nachtrag is not None:
+            kandidat = qwen.result() if qwen.done() else None
+            _nachtrag_anmelden(qwen, lokal, kandidat, nachtrag, t0)
+        return lokal
+
     auffaellig = _parakeet_braucht_qwen(lokal, keywords)
     # W-QWEN-SICHER (14.09.2026): der Aufrufer weiss, worauf der Anrufer
     # gerade antwortet. Bei Namensfrage/Diktat oder wenn Parakeet die
@@ -774,6 +793,8 @@ def engine_anzeige() -> str:
         if not _qwen_aktiv() and STT_BASE:
             return "Parakeet (lokal, Qwen pausiert)"
         if STT_BASE:
+            if not QWEN_LIVE_OHR:
+                return "Parakeet (lokal) + Qwen3-ASR Korrektor (3060, offline)"
             return "Parakeet (lokal) + Qwen3-ASR parallel (3060)"
         return "Qwen3-ASR 1.7B (3060)"
     if STT_WHISPER_BASE:
