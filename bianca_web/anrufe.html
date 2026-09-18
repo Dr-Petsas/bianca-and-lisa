@@ -103,6 +103,17 @@
     }
     .ohr-detail b { color: #6fd39c; font-weight: 600; }
     .ohr-detail .alt { color: #b8adb3; text-decoration: line-through; }
+    /* DIALOG_CONTROLLER: Schattenlauf des neuen Kerns (nur Anzeige). */
+    .kern-zeile {
+      align-self: flex-start; max-width: 92%; font-size: 12px; color: var(--muted);
+      background: #10151c; border: 1px dashed #4b7bd155; border-radius: 10px;
+      padding: 6px 10px; line-height: 1.55;
+    }
+    .kern-zeile b { color: #8fb3f0; font-weight: 600; }
+    .kern-zeile .alt { color: #8a8f98; }
+    .kern-zeile .kern-div { color: #f0c46d; font-weight: 600; }
+    .kern-zeile .kern-warn { color: #f08d6d; font-weight: 600; }
+    .kern-summary { border-left: 3px solid #4b7bd1; padding-left: 10px; }
     .play {
       appearance: none; border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
       background: #171114; color: var(--text); font: inherit; font-size: 11px; padding: 1px 9px;
@@ -181,6 +192,6 @@
   </div>
   <audio id="spieler" hidden></audio>
   <script src="praxis.js?v=5"></script>
-  <script src="anrufe.js?v=a24"></script>
+  <script src="anrufe.js?v=a25"></script>
 </body>
 </html>

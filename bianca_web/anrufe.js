@@ -321,6 +321,81 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// --------------------------------------------------------------------------- //
+// DIALOG_CONTROLLER: Schattenlauf des neuen Kerns je Zug (nur Anzeige).
+// Die Felder kommen additiv aus tools/kern_replay.py und beruehren den
+// Anruf-Pfad NICHT. Fehlen sie, wird nichts gezeigt.
+// --------------------------------------------------------------------------- //
+const _KERN_FRAGE = {
+  besuchsgrund: "Besuchsgrund", wunschzeit: "Wunschzeit", behandler: "Behandler",
+  nachname: "Nachname", vorname: "Vorname", versicherung: "Versicherung",
+  terminwahl: "Terminwahl", telefon: "Telefonnummer",
+};
+
+function kernBeschreibung(d) {
+  if (!d || typeof d !== "object") return "";
+  if (d.frage_id) return "fragt " + (_KERN_FRAGE[d.frage_id] || d.frage_id);
+  if (d.tool) return "Werkzeug " + d.tool;
+  if (d.hangup) return "legt auf" + (d.grund ? " (" + d.grund + ")" : "");
+  if (d.akt) {
+    const a = String(d.akt).toLowerCase();
+    if (a.includes("ruecklese") || a.includes("rücklese")) return "liest zur Kontrolle zurück";
+    if (a.includes("bestaet") || a.includes("bestät")) return "bestätigt";
+    if (a.includes("abschluss") || a.includes("terminal")) return "schließt ab";
+    return d.akt;
+  }
+  if (d.naechste) return String(d.naechste);
+  return "";
+}
+
+function kernReplayZeile(z) {
+  const kr = z && z.kernReplay;
+  const ls = z && z.liveSignal;
+  if (!kr && !ls) return null;
+  const box = document.createElement("div");
+  box.className = "kern-zeile";
+  const teile = [];
+  if (kr && kr.in) {
+    let s = "<b>Neuer Kern:</b> " + escapeHtml(kernBeschreibung(kr.in));
+    for (const nw of kr.nach_werkzeug || []) {
+      s += " → " + escapeHtml(kernBeschreibung(nw)) +
+        (nw.outcome ? ` <span class="alt">[${escapeHtml(nw.outcome)}${nw.synth ? ", synth" : ""}]</span>` : "");
+    }
+    teile.push(s);
+  }
+  if (kr && kr.divergenz) {
+    teile.push(
+      `<span class="kern-div">↯ abweichend:</span> Live fragte „${escapeHtml(kr.divergenz.live)}“, ` +
+      `Kern „${escapeHtml(kr.divergenz.kern)}“`
+    );
+  }
+  if (ls && ls.i1) {
+    teile.push(`<span class="kern-warn">⚠ Live fragt bereits erfasstes Feld</span> (${escapeHtml(ls.i1.frage)})`);
+  }
+  if (ls && ls.schleife) {
+    teile.push(`<span class="kern-warn">⚠ Live-Schleife</span> (${escapeHtml(ls.schleife.frage)} ${ls.schleife.n}×)`);
+  }
+  if (!teile.length) return null;
+  box.innerHTML = teile.join("<br>");
+  return box;
+}
+
+function kernSummaryBox(a) {
+  const s = a && a.kernReplaySummary;
+  if (!s) return null;
+  const d = document.createElement("div");
+  d.className = "zeiten kern-summary";
+  d.style.marginTop = "8px";
+  const probleme = (Number(s.i1) || 0) + (Number(s.schleifen) || 0);
+  d.innerHTML =
+    `<b>Schattenlauf neuer Dialogkern</b> · Anliegen erkannt: <b>${escapeHtml(s.intent || "?")}</b>` +
+    ` (${escapeHtml(s.intent_quelle || "?")}) · ${s.anrufer_zuege || 0} Anrufer-Züge<br>` +
+    `Live-Probleme: <b>${probleme}</b> (Frage zu erfasstem Feld: ${s.i1 || 0}, Schleifen: ${s.schleifen || 0})` +
+    ` · Abweichungen Frageführung: <b>${s.divergenzen || 0}</b>` +
+    ` · Kern läuft bis Abschluss: <b>${s.kern_terminal ? "ja" : "nein"}</b>`;
+  return d;
+}
+
 function kiTimingChips(t) {
   if (!t) return [];
   const aus = [];
@@ -622,6 +697,8 @@ function maleDetail(a) {
       : `Ansage der Praxis-Telefonanlage gehört (${a.warteschleife.n}x, nicht als Anrufer gewertet). ${texte}`;
     wurzel.appendChild(w);
   }
+  const kernBox = kernSummaryBox(a);
+  if (kernBox) wurzel.appendChild(kernBox);
 
   const fluss = document.createElement("div");
   fluss.className = "zuege";
@@ -639,6 +716,8 @@ function maleDetail(a) {
       fluss.appendChild(b);
       const det = ohrDetail(z.stt);
       if (det) fluss.appendChild(det);
+      const kz = kernReplayZeile(z);
+      if (kz) fluss.appendChild(kz);
     }
     if (z.text) {
       const b = bubble("ki", z.text);

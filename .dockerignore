@@ -28,6 +28,9 @@ tools/*
 # (read-only), muss aber im Image liegen, damit `docker exec … python
 # tools/shadow_bericht.py` ohne docker cp laeuft.
 !tools/shadow_bericht.py
+# DIALOG_CONTROLLER: Kern-Replay der echten Anrufe (read-only fuer Live) muss
+# im Image liegen, damit `docker exec … python tools/kern_replay.py` laeuft.
+!tools/kern_replay.py
 # Live-Proben laufen laut AGENTS.md IM Container ("docker exec … python
 # tools/_probe_…") — ohne diese Ausnahme muesste jede Session sie erst per
 # docker cp hineinschieben (13.09.2026 genau so passiert).
