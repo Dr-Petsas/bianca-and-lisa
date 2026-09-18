@@ -26,7 +26,13 @@ from kern import (
     assistent, dossier, fachprofil, motive, sprech, tenants as kern_tenants, vornamen,
 )
 from kern.patients import arzt_sprechname
-from kern.slots import parse_slot_wish
+from kern.slots import (
+    parse_slot_wish,
+    slot_praeferenz_aenderung,
+    wunsch_ausschluesse,
+    wunsch_hat_richtung,
+    wunsch_mit_slot_praeferenz,
+)
 
 TZ = ZoneInfo("Europe/Berlin")
 
@@ -277,6 +283,26 @@ def _grund_unglaubwuerdig(text: str) -> bool:
     if not (_GRUND_RUECKBLICK_RE.search(text) or _KEIN_GRUND_RE.search(text)):
         return False
     return not _GRUND_WUNSCH_RE.search(text)
+
+
+# B2 (17.09.2026): eine FRAGE des Anrufers auf die Grund-Frage ("Was kostet
+# das?", "Kann ich auch vormittags kommen?") ist nie ein Besuchsgrund-Wortlaut
+# — frueher wurde sie als freier Grund geerntet (MedDent: Kontroll-Fallback,
+# Blessing: "Diese Leistung wird nicht angeboten"). Bewusst enger als
+# ist_zwischenfrage: ein blosses Fragezeichen der STT hinter einem zoegernden
+# Grund ("Dornwarzen?") bleibt ein Grund.
+_GRUND_FRAGE_KERN_RE = re.compile(
+    r"\b(?:kostet|kosten|preis\w*|geb(?:ü|ue)hr\w*|kann\s+ich|k(?:ö|oe)nnte\s+ich|"
+    r"darf\s+ich|muss\s+ich|m(?:ü|ue)sste\s+ich|sollte?\s+ich|wie\s+lange|dauert)\b",
+    re.I,
+)
+
+
+def _grund_ist_frage(text: str) -> bool:
+    k = _ohne_anlauf(text)
+    if _KURZANTWORT_RE.match(k):
+        return False
+    return bool(_ZWISCHENFRAGE_START_RE.match(k) or _GRUND_FRAGE_KERN_RE.search(k))
 # Woerter, die im "ich habe ... Termin"-Fenster einen WUNSCH verraten
 # (dann ist es eine Neubuchung, keine Bestands-Auskunft).
 _KEIN_WUNSCH_TOKEN = (
@@ -577,6 +603,104 @@ _NAME_LEADIN_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß' -]{2,60})",
     re.I,
 )
+# W-NAME-VORGESTELLT (17.09.2026, Anruf 53986f42 Blessing): "Hallo, Busch,
+# guten Morgen!" und spaeter "Busch, mein Name." wurden NICHT als Nachname
+# geerntet — nur "mein Name ist X"/"ich heisse X" kannte der Lead-in, und ein
+# einzelnes Namens-Token ohne offene Namensfrage lief ins Leere (auch "Mein
+# Name ist Busch." blieb unprompted liegen). Bianca fragte drei Zuege spaeter
+# "Wie lautet der Nachname?" — wer sich gerade vorgestellt hat, hoert das als
+# Nicht-Zuhoeren. Zwei Formen, beide nur mit einem ausgesprochenen Signal:
+#  - UMGEKEHRT: "<Name>, mein Name" / "<Name> am Apparat" / "<Name> hier."
+#    (deutsche Telefon-Konvention; das Namenssignal steht HINTER dem Namen).
+#  - GRUSS: "Hallo, <Name>, guten Morgen" (Name zwischen zwei Gruessen) und
+#    "Guten Tag, <Name>." (Gruss + hoechstens zwei Woerter, sonst nichts).
+#    Schwaches Signal — greift nur ohne offene Namensfrage, nie mit
+#    Fragezeichen, nie fuer Behandler-/Praxisnamen des Mandanten
+#    ("Guten Tag, Blessing?" fragt nach der Praxis) und nie fuer Woerter der
+#    Stoppliste (Entschuldigung, Rezeption, Termin ...).
+# Die Buchstabier-Frage kommt fuer einen nur GESPROCHENEN Nachnamen weiterhin
+# (buchstabiert=False) — ein Verhoerer faellt dort auf, wie bisher.
+_GRUSS_WORT = r"(?:hallo|hi|moin|servus|gr(?:ü|ue)(?:ß|ss)\s+gott|guten\s+(?:tag|morgen|abend))"
+_NAME_UMGEKEHRT_RE = re.compile(
+    r"^\s*(?:(?:ja|" + _GRUSS_WORT + r"|äh|ähm)[,!.\s]+)*"
+    r"([A-Za-zÄÖÜäöüß'-]{2,}(?:\s+[A-Za-zÄÖÜäöüß'-]{2,})?)\s*,?\s+"
+    r"(?:mein\s+name\b|ist\s+mein\s+name\b|am\s+apparat\b|am\s+telefon\b|hier\s*[.!,]?\s*$)",
+    re.I,
+)
+_NAME_GRUSS_RE = re.compile(
+    r"^\s*" + _GRUSS_WORT + r"[,!.\s]+"
+    r"([A-Za-zÄÖÜäöüß'-]{2,}(?:\s+[A-Za-zÄÖÜäöüß'-]{2,})?)"
+    r"(?:[,!.\s]+" + _GRUSS_WORT + r"\b[,!.\s]*|\s*[.!]?\s*)$",
+    re.I,
+)
+_NAME_LEADIN_SCHWACH_RE = re.compile(r"^\s*ich\s+bin\b", re.I)
+_KEIN_PATIENTENNAME_RE = re.compile(r"praxis|klinik|zentrum|arzt|ärzt|aerzt", re.I)
+# Rueckfragen auf die Namensfrage ("Können Sie das wiederholen?", "Wie bitte?",
+# "Was meinen Sie?", "Wie war die Frage?") — nie ein Name (C3, 17.09.2026).
+_RUECKFRAGE_NAME_RE = re.compile(
+    r"^\s*(?:wie|was|wer|welche[rsn]?|warum|wieso)\b|"
+    r"^\s*(?:soll|kann|darf|muss|k(?:ö|oe)nnen|d(?:ü|ue)rfen|m(?:ü|ue)ssen)\s+ich\b|"
+    r"\b(?:wiederholen|wiederhol|nochmal\s+sagen|noch\s+einmal\s+sagen|"
+    r"nicht\s+verstanden|nicht\s+verstehen|verstehe\s+(?:sie\s+)?nicht|"
+    r"was\s+meinen\s+sie|wie\s+bitte|bitte\s+was|h(?:ä|ae)\b|"
+    r"k(?:ö|oe)nnen\s+sie|k(?:ö|oe)nnten\s+sie|w(?:ü|ue)rden\s+sie|"
+    r"sprechen\s+sie|sagen\s+sie|meinen\s+sie|welchen\s+namen|welcher\s+name|"
+    r"wozu\s+brauchen|warum\s+brauchen|wof(?:ü|ue)r\s+brauchen)\b",
+    re.I,
+)
+
+
+def ist_namens_rueckfrage(text: str) -> bool:
+    """Ist der Satz eine RUECKFRAGE auf die Namensfrage (kein Name)?
+
+    Frage-Woerter/-Verben zaehlen immer. Ein blosses Fragezeichen zaehlt NUR,
+    wenn der Satz keinen plausiblen Namens-Token traegt: Parakeet haengt an
+    einen mit steigender Stimme gesagten Namen gern ein "?" ("Paul?",
+    "Meier?") — das ist ein Name, keine Rueckfrage (Chef 27.08.2026: "Paul?"
+    ist ein VORNAME). "Meinen?" / "Den Vornamen?" dagegen tragen nur
+    Stopp-/Etikett-Woerter und bleiben Rueckfrage.
+    """
+    t = _s(text)
+    if not t:
+        return False
+    if _RUECKFRAGE_NAME_RE.search(t):
+        return True
+    if "?" not in t:
+        return False
+    kern = _FELD_ETIKETT_RE.sub(" ", t)
+    return not _name_tokens(kern)
+
+
+def _name_leadin(text: str) -> "re.Match[str] | None":
+    """Ausdrueckliches Namenssignal: klassischer Lead-in ODER umgekehrte Form."""
+    return _NAME_LEADIN_RE.search(text) or _NAME_UMGEKEHRT_RE.search(text)
+
+
+def _gruss_name(text: str, tenant: dict | None) -> "re.Match[str] | None":
+    """'Hallo, Busch, guten Morgen' / 'Guten Tag, Busch.' — nur wenn das
+    Wort zwischen den Gruessen plausibel ein Patientenname ist."""
+    if "?" in text:
+        return None
+    m = _NAME_GRUSS_RE.search(text)
+    if not m:
+        return None
+    toks = _name_tokens(m.group(1))
+    if not toks or len(toks) > 2:
+        return None
+    if any(_KEIN_PATIENTENNAME_RE.search(t) for t in toks):
+        return None
+    fremd = {"bianca", "ben", "lisa"}
+    if isinstance(tenant, dict):
+        try:
+            fremd |= {_s(k).lower() for k in kern_tenants.stt_keywords(tenant)}
+            fremd.add(_s(assistent.name(tenant)).lower())
+        except Exception:
+            pass
+    if any(t.lower() in fremd for t in toks):
+        return None
+    return m
+
+
 _NAME_STOP = {
     "und", "der", "die", "das", "ein", "eine", "herr", "frau", "doktor", "dr",
     "uh", "ähm", "ahm", "öhm", "ohm",
@@ -612,6 +736,42 @@ _NAME_STOP = {
     "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag",
     "woche", "wochenende", "kontrolle", "zahnreinigung", "schmerzen",
     "beratung", "besprechung", "egal",
+    # Zoegern, Rueckfragen und Ausrufe sind nie ein Name (Anruf 53986f42:
+    # "Schon." auf die Vornamen-Frage wurde als Vorname "Schon" gefuehrt,
+    # "Ja, mein Nachname, warte." haette "Warte" geliefert). Bewusst NICHT
+    # dabei: Kurz, Lang, Weiß, Klar, Gut, Lauter — das sind echte Nachnamen.
+    "schon", "warte", "warten", "was", "hä", "hm", "hmm", "mhm", "ah", "aha",
+    "ach", "achso", "oh", "oha", "ups", "hoppla", "huch", "na", "naja", "nun",
+    # Replay 53986f42 z11: "Da." auf die Vornamen-Frage wurde Vorname "Da"
+    # ("Danke, Da Busch"). Satzanlaeufe/Partikel sind nie ein Name.
+    "da", "dann", "denn", "so", "tja", "joa", "jep", "yep", "yo", "mal",
+    # z13: "Vormittag oder Nachmittag, eigentlich egal" auf die Vornamen-
+    # Frage wurde Vorname "Oder". Konjunktionen/Abtoenungen sind nie ein Name.
+    "oder", "eigentlich", "lieber", "eher", "vielleicht", "beides", "beide",
+    "irgendwann", "irgendwie", "jederzeit", "immer",
+    "noch", "nichts", "nix", "danke", "dankeschön", "tschüss", "wiederholen",
+    "wiederhören", "wiedersehen", "langsam", "langsamer", "verstehe",
+    "verstanden", "warum", "wieso", "wozu", "können", "koennen",
+    "könnten", "koennten", "kann", "sagen", "sagten", "meinen", "meinten",
+    "entschuldigung", "entschuldigen", "verzeihung", "sorry", "pardon",
+    "rezeption", "anmeldung", "empfang", "buchhaltung", "sprechstunde",
+    "frage", "anliegen", "problem",
+    # C3 (17.09.2026): Diktat-Schlussworte und Feld-Etiketten sind nie ein
+    # Name — "Busch, fertig, Nachname" lieferte sonst "Busch Fertig".
+    "fertig", "ende", "stopp", "stop", "punkt", "zuname", "rufname",
+    "buchstabiere", "buchstabiert", "buchstabieren", "buchstabierung",
+    # Replay 53986f42 z16: "Ja, das würde passen." — Hilfs-/Modalverben sind
+    # nie ein Name, auch nicht als einzelnes (grossgeschriebenes) Satzwort.
+    "würde", "wuerde", "würden", "wuerden", "wurde", "wurden", "hätte",
+    "haette", "hätten", "haetten", "wäre", "waere", "wären", "waeren",
+    "könnte", "koennte", "möchte", "moechte", "möchten", "moechten",
+    "sollte", "sollten", "müsste", "muesste", "haben", "habe", "hatte",
+    "werden", "werde", "wird", "sein", "sind", "war", "waren",
+    # Modalverben im Praesens ("Soll ich buchstabieren?", "Muss ich das?",
+    # "Darf ich fragen") — sonst wuerde "Soll" ein Vorname.
+    "soll", "sollen", "sollst", "muss", "müssen", "muessen", "musst",
+    "darf", "dürfen", "duerfen", "darfst", "will", "wollen", "willst",
+    "mag", "mögen", "moegen", "brauche", "brauchen", "braucht",
 }
 # Gängige Vornamen (nur zur Zuordnung "ein einzelnes Wort = eher Vorname?").
 # Live 27.08.2026: die Antwort "Paul?" auf die Namensfrage wurde als NACHNAME
@@ -651,6 +811,28 @@ _TEIL_VOR_UMGEKEHRT_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß'-]{2,})\s+(?:ist|wäre|waere)\s+(?:der\s+|mein\s+)?vorname", re.I)
 _TEIL_NACH_UMGEKEHRT_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß'-]{2,})\s+(?:ist|wäre|waere)\s+(?:der\s+|mein\s+)?(?:nachname|familienname|zuname)", re.I)
+# Feld-ETIKETT ohne Zuweisungsverb: "B, U, S, C, H, Busch, fertig, Nachname"
+# / "Vorname: Jelto, J-E-L-T-O" (live 53986f42, 17.09.2026). Der Anrufer
+# sagt, WELCHES Feld er gerade diktiert — das schlaegt die offene Frage.
+# Bewusst eng: Fragen ("Welchen Nachnamen?") und Saetze mit BEIDEN
+# Etiketten liefern "" (nie raten).
+_FELD_ETIKETT_RE = re.compile(
+    r"(?<![A-Za-zÄÖÜäöüß])(?:(?:mein|meinen|meiner|meine|der|den|als|und|dann)\s+)?"
+    r"(nachname|familienname|zuname|vorname|rufname)(?:n|ns|s)?"
+    r"(?![A-Za-zÄÖÜäöüß])(?!\s*(?:ist|lautet|wäre|waere|war|heißt|heisst)\b)",
+    re.I,
+)
+
+
+def _feld_etikett(text: str) -> str:
+    t = _s(text)
+    if not t or "?" in t or _RUECKFRAGE_NAME_RE.search(t):
+        return ""
+    felder = set()
+    for m in _FELD_ETIKETT_RE.finditer(t):
+        wort = m.group(1).casefold()
+        felder.add("vorname" if wort in {"vorname", "rufname"} else "nachname")
+    return next(iter(felder)) if len(felder) == 1 else ""
 # Korrekturen ÜBERSCHREIBEN sofort (Chef 27.08.2026: "das war falsch, ich
 # heiße Meier nicht Müller" -> Gedächtnis augenblicklich aktualisieren,
 # NIE noch einmal fragen). Neu = das Bejahte, Alt = das Verneinte.
@@ -760,6 +942,10 @@ FELDER_START = {
     # die Buchstaben korrigieren ihn und liefern zugleich die Enderkennung.
     "vornameTeil": "",
     "vornameGehoert": "",
+    # W-NAME-STUFEN (17.09.2026, Replay 53986f42): wie oft die Vornamen-Frage
+    # schon eskaliert wurde (0 kurz, 1 buchstabieren, 2 langsam am Stueck,
+    # 3 noch einmal buchstabieren, 4 Ausstieg mit Rueckruf-Notiz).
+    "vornameStufe": 0,
     # W-HIRN-GATE (Chef 13.09.2026 zum Anruf 1fbda5db): "wenn der
     # patientendatensatz existiert kurze bestaetigung […] oder vorname ist
     # Maximilian, richtig?" Bisher uebernahm Bianca einen Vornamen aus der
@@ -1092,11 +1278,25 @@ def ist_nichts_notiz(text: str) -> bool:
     return bool(ist_nein(t) or _ARZT_NOTIZ_NEIN_RE.match(t))
 
 
+# "Guten Morgen!" ist ein Gruss, kein Terminwunsch fuer morgen (Anruf
+# 53986f42: "Hallo, Busch, guten Morgen!" setzte date=morgen — die Slotsuche
+# lief auf den falschen Tag, und "Genau dann ist leider nichts frei"). Ebenso
+# "am Morgen"/"in den Morgenstunden" (Tageszeit, nicht Datum) und das nackte
+# "Morgen!" am Satzanfang.
+_MORGEN_GRUSS_RE = re.compile(
+    r"\b(?:sch(?:ö|oe)nen\s+|wunder\w+\s+)?guten\s+morgen\b|"
+    r"^\s*morgen\s*(?:[,!.]|zusammen\b|frau\b|herr\b|$)|"
+    r"\b(?:am|den|im|jeden|frühen|fruehen)\s+morgen\b|\bmorgenstunden?\b",
+    re.I,
+)
+
+
 def _relatives_datum(t: str) -> str:
     heute = datetime.now(TZ).date()
     if re.search(r"\bübermorgen|uebermorgen\b", t):
         return (heute + timedelta(days=2)).isoformat()
-    if re.search(r"\bmorgen\b", t):
+    t_ohne_gruss = _MORGEN_GRUSS_RE.sub(" ", t)
+    if re.search(r"\bmorgen\b", t_ohne_gruss):
         return (heute + timedelta(days=1)).isoformat()
     if re.search(r"\bheute\b", t):
         return heute.isoformat()
@@ -1112,7 +1312,20 @@ _WUNSCH_EGAL_RE = re.compile(
     r"\b(?:ist|is|wär\w*|waer\w*)\s+mir\s+(?:gleich|wurst|wurscht|latte)\b|"
     r"\bwann\s+(?:auch\s+)?immer\b|\bspielt\s+keine\s+rolle\b|"
     r"\bkeine\s+pr(?:ä|ae)ferenz\b|\bhauptsache\b|"
-    r"\bwie\s+(?:sie|es)\s+(?:wollen|meinen|passt)\b|\bwei(?:ß|ss)\s+(?:ich\s+)?nicht\b",
+    r"\bwie\s+(?:sie|es)\s+(?:wollen|meinen|passt)\b|\bwei(?:ß|ss)\s+(?:ich\s+)?nicht\b|"
+    # Replay 53986f42 z14: "Nein, den frühesten Termin, bitte." ging ans
+    # Modell — der naechste freie Termin IST die Antwort "keine Praeferenz".
+    r"\b(?:den|der|einen|ein)?\s*(?:fr(?:ü|ue)hest(?:en|e|er|m(?:ö|oe)glichen)?|"
+    r"n(?:ä|ae)chst(?:en|e|er|m(?:ö|oe)glichen)?|erst(?:en|e|er)|schnellst(?:en|e|er)|"
+    r"erstbeste[nr]?|n(?:ä|ae)chstbeste[nr]?)\s+(?:freien?\s+)?"
+    r"(?:termin|zeitpunkt|m(?:ö|oe)glichkeit|slot)\b",
+    re.I,
+)
+# "Vormittag oder Nachmittag" als ALTERNATIVE (mit "egal" = keine Grenze).
+_TAGESZEIT_ODER_RE = re.compile(
+    r"\b(?:vormittag|nachmittag|morgens|mittags|abends|fr(?:ü|ue)h|sp(?:ä|ae)t)\w*"
+    r"\s*,?\s*(?:oder|und|beziehungsweise|bzw\.?)\s+(?:auch\s+)?"
+    r"(?:vormittag|nachmittag|morgens|mittags|abends|fr(?:ü|ue)h|sp(?:ä|ae)t)\w*",
     re.I,
 )
 # "Am liebsten gleich" / "heute noch" / "sofort" auf die Wunschzeit-Frage
@@ -1126,6 +1339,26 @@ _WUNSCH_SOBALD_RE = re.compile(
     r"\bso\s+(?:fr(?:ü|ue)h|schnell|bald)\s+wie\s+m(?:ö|oe)glich\b",
     re.I,
 )
+
+
+def _ist_zeitantwort(text: str) -> bool:
+    """Antwortet der Satz auf die WUNSCHZEIT-Frage (Tageszeit, Uhrzeit, egal)?
+
+    Bewusst eng: Monats- und Wochentagswoerter allein zaehlen NICHT — "Mai",
+    "Freitag", "August" sind auch Namen. Genutzt als Wache der Namens-Ernte.
+    """
+    t = _s(text)
+    if not t:
+        return False
+    if _TAGESZEIT_ODER_RE.search(t) or _WUNSCH_EGAL_RE.search(_ohne_anlauf(t)):
+        return True
+    if re.search(r"\b(?:vormittag|nachmittag)s?\b|\bmorgens\b|\bmittags\b|\babends\b", t, re.I):
+        return True
+    try:
+        w = parse_slot_wish(t) or {}
+    except Exception:
+        return False
+    return any(w.get(k) is not None for k in ("hour", "hourMin", "hourMax"))
 
 
 def _wunsch_deuten(text: str) -> dict | None:
@@ -1148,6 +1381,31 @@ def _wunsch_deuten(text: str) -> dict | None:
         wish.get("von"), wish.get("bis"),  # W-SUCHFENSTER: "im Oktober"
     ])
     return wish if gehaltvoll else None
+
+
+_ABLEHNUNG_KEYS = (
+    "excludeWeekdays", "excludeDates", "excludeSpans",
+    "excludeHourRanges", "excludeHours",
+)
+
+
+def _wunsch_ablehnung(text: str) -> dict | None:
+    """Abgelehnte Tage/Zeiten aus einem Wunsch-Satz (A6, ohne laufendes Angebot).
+
+    Nimmt aus slot_praeferenz_aenderung NUR die Ausschluesse und — bei zwei
+    oder mehr genannten Tagen ("Montag oder Dienstag") — die Tages-Liste;
+    Angebots-Signale (rejectAll, waehle, andererTag) haben hier keinen Bezug.
+    """
+    try:
+        a = slot_praeferenz_aenderung(text)
+    except Exception:
+        return None
+    if not a:
+        return None
+    out = {k: a[k] for k in _ABLEHNUNG_KEYS if a.get(k)}
+    if len(a.get("weekdays") or []) >= 2:
+        out["weekdays"] = a["weekdays"]
+    return out or None
 
 
 def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
@@ -1174,6 +1432,32 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
         # Oktober" -> "dann der 3. Oktober"); ein Zeitraum ausserhalb des
         # Tages waere sonst ein Widerspruch, den apply() leer filtert.
         out["von"], out["bis"] = None, None
+    # A6: eine NEUE positive Tagesangabe ("lieber Mittwoch", "am dritten")
+    # ersetzt eine fruehere Tages-Liste ("Montag oder Dienstag") — die
+    # Ausschluesse (excludeWeekdays usw.) bleiben unberuehrt.
+    if out.get("weekdays") and (
+        neu.get("weekday") is not None or neu.get("date") or neu.get("tage")
+    ):
+        out["weekdays"] = None
+    # A6: der Anrufer darf es sich anders ueberlegen — eine NEUE, positive
+    # Angabe hebt den frueheren Ausschluss GENAU dieses Tages/dieser Zeit
+    # wieder auf ("Donnerstag nicht" ... "dann doch Donnerstag"). Sonst
+    # filtert apply() Wunsch und Ausschluss gegeneinander leer.
+    if neu.get("weekday") is not None and out.get("excludeWeekdays"):
+        out["excludeWeekdays"] = [d for d in out["excludeWeekdays"] if d != neu["weekday"]]
+    if neu.get("weekdays") and out.get("excludeWeekdays"):
+        out["excludeWeekdays"] = [d for d in out["excludeWeekdays"] if d not in neu["weekdays"]]
+    if neu.get("date") and out.get("excludeDates"):
+        out["excludeDates"] = [d for d in out["excludeDates"] if d != neu["date"]]
+    if neu.get("hour") is not None and out.get("excludeHours"):
+        out["excludeHours"] = [h for h in out["excludeHours"] if h != neu["hour"]]
+    if (neu.get("hourMin") is not None or neu.get("hourMax") is not None) and out.get("excludeHourRanges"):
+        lo = neu.get("hourMin") if neu.get("hourMin") is not None else 0
+        hi = neu.get("hourMax") if neu.get("hourMax") is not None else 24
+        out["excludeHourRanges"] = [
+            r for r in out["excludeHourRanges"]
+            if not (isinstance(r, (list, tuple)) and len(r) == 2 and r[0] < hi and r[1] > lo)
+        ]
     return out
 
 
@@ -1202,6 +1486,16 @@ def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) ->
 def _name_tokens(text: str) -> list[str]:
     raw = re.sub(r"[^\wäöüßÄÖÜ' -]+", " ", _s(text))
     return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
+
+
+def _einzeltoken_plausibel(tok: str) -> bool:
+    """Darf EIN alleinstehendes Wort als Name gelten? Zwei Buchstaben sind
+    fast immer ein STT-Fragment oder Partikel ("Da", "Eh") — echte Kurznamen
+    ("Bo", "Jo", "Ed") stehen in den kuratierten Vornamen-Listen."""
+    t = _s(tok)
+    if len(t) >= 3:
+        return True
+    return t.lower() in _VORNAMEN or bool(vornamen.aus_liste(t))
 
 
 def _anrufer_nummer(sit: dict) -> str:
@@ -1428,7 +1722,8 @@ def _name_korrektur(s: dict, text: str) -> bool:
     return True
 
 
-def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
+def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool,
+                    tenant: dict | None = None) -> bool:
     """Vor-/Nachname aus dem Satz ziehen. erzwungen=True: die Frage war der Name."""
     text = _s(_KEIN_NAME_RE.sub(" ", text))
     if not text:
@@ -1437,11 +1732,23 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     # darf NICHT als Patienten-Nachname "Udrpetter" landen — das war die
     # Live-Schleife (nochmal Behandler, dann falscher Name, dann 4×
     # "Soll ich eintragen?"). Explizites "ich heiße …" bleibt erlaubt.
-    if not erzwungen and s.get("frage") == "arzt" and not _NAME_LEADIN_RE.search(text):
+    if not erzwungen and s.get("frage") == "arzt" and not _name_leadin(text):
         return False
     if (not erzwungen and re.search(r"\b(?:dr\.?|doktor)\b", text, re.I)
             and not _NAME_LEADIN_RE.search(text)):
         return False
+    if erzwungen and ist_namens_rueckfrage(text) and not _name_leadin(text):
+        # W-RUECKFRAGE-KEIN-NAME (17.09.2026): "Können Sie das wiederholen?",
+        # "Wie bitte?", "Was meinen Sie?" auf die Namensfrage sind eine
+        # Rueckfrage, kein Name — vorher wurden die Rest-Token als Vor-/Nachname
+        # geerntet ("Können Wiederholen"). Ein Teilsatz OHNE Frage bleibt
+        # ("Meier. Brauchen Sie auch den Vornamen?" -> "Meier"); ein
+        # ausgesprochenes Namenssignal ("Wie bitte? Ich heisse Busch") zaehlt.
+        rest = [c for c in re.split(r"(?<=[.!?;])\s+", text)
+                if _s(c) and not ist_namens_rueckfrage(c)]
+        text = _s(" ".join(rest))
+        if not text:
+            return False
 
     # Explizite Zuweisung gewinnt IMMER und darf Falsches überschreiben:
     # "Nee, der Vorname ist Paul und der Nachname ist Panzer" (live 27.08.2026
@@ -1468,7 +1775,23 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
     if getroffen:
         return True
 
-    m = _NAME_LEADIN_RE.search(text)
+    m = _name_leadin(text)
+    if m is None and erzwungen and _ist_zeitantwort(text):
+        # Replay 53986f42 z13: "Vormittag oder Nachmittag, eigentlich egal"
+        # auf die Vornamen-Frage ist eine ZEIT-Antwort (der Anrufer beantwortet
+        # die Frage, die er im Kopf hat), kein Name — die Rest-Token ("Oder")
+        # wurden sonst zum Vornamen. Monats-/Wochentags-NAMEN (Mai, Freitag)
+        # bleiben moeglich: nur Uhrzeit/Tageszeit/"egal" zaehlen als Zeitantwort.
+        return False
+    # W-NAME-VORGESTELLT: ohne offene Namensfrage zaehlt auch die Gruss-Form
+    # ("Hallo, Busch, guten Morgen!") — mit Behandler-/Praxis-Filter.
+    if m is None and not erzwungen:
+        m = _gruss_name(text, tenant)
+    # Ein einzelnes Namens-Token reicht, wenn der Satz ein Namenssignal traegt
+    # ("Mein Name ist Busch", "Busch, mein Name") — "ich bin X" ist zu schwach
+    # dafuer ("ich bin dran/fertig/krank" sind keine Namen) und braucht wie
+    # bisher die offene Namensfrage oder zwei Token.
+    signal = bool(m) and not _NAME_LEADIN_SCHWACH_RE.match(m.group(0))
     kandidat = m.group(1) if m else (text if erzwungen else "")
     if not m and not erzwungen and s["nachname"] and not s["vorname"]:
         # Nachname steht, Vorname fehlt, und der Anrufer sagt EIN Wort, das
@@ -1499,6 +1822,24 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         # Tochter heiratet naemlich!"), nennt keinen Namen — das gehoert der
         # Talk-Schicht, nicht der Kartei (Talk-Probe 27.08.2026).
         return False
+    if m is None and erzwungen:
+        # Replay 53986f42 z16: "Ja, das würde passen." auf die Vornamen-Frage
+        # wurde Vorname "Würde". Die STT schreibt Namen gross — ein klein
+        # geschriebenes Wort MITTEN im Satz ist ein Verb/Adjektiv/Partikel,
+        # kein Name (kuratierte Vornamen bleiben, auch klein geschrieben).
+        # Das erste Wort des Satzes ist immer gross und wird nicht bewertet;
+        # bleibt nichts uebrig, fragt die Maschine erneut (safe failure —
+        # ein falscher Name in der Kartei waere der teurere Fehler).
+        erstes = (_s(text).split() or [""])[0].strip(",.!?;:").lower()
+        toks = [t for t in toks
+                if t != t.lower() or t.lower() == erstes
+                or t.lower() in _VORNAMEN or vornamen.aus_liste(t)]
+        if not toks:
+            return False
+    if len(toks) == 1 and not _einzeltoken_plausibel(toks[0]):
+        # Ein einzelnes Zwei-Buchstaben-Fragment ("Da", "Eh", "Öh") ist kein
+        # Name — ausser es steht in den kuratierten Vornamen-Listen ("Bo").
+        return False
     if s["frage"] == "vorname" and erzwungen:
         neu_vor = toks[0].capitalize()
         _kartei_vor_namensaenderung(s, first=neu_vor)
@@ -1525,10 +1866,13 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool) -> bool:
         s["vorname"] = neu_vor
         s["nachname"] = neu_nach
         return True
-    if erzwungen:
+    if erzwungen or signal:
         # Nur EIN Wort auf die Namensfrage: gängige Vornamen (Paul, Anna …)
         # sind der VORNAME — alles andere führen wir als Nachnamen. Live
         # 27.08.2026 wurde "Paul?" als Nachname geführt ("Herr Paul").
+        # Mit Namenssignal ("Busch, mein Name", "Hallo, Busch, guten Morgen")
+        # gilt dasselbe auch ohne offene Namensfrage (Anruf 53986f42: der
+        # Name fiel in Zug 1 und 3 und wurde beide Male ueberhoert).
         if (
             (toks[0].lower() in _VORNAMEN or vornamen.aus_liste(toks[0]))
             and not s["vorname"]
@@ -1909,44 +2253,85 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         if kern_name:
             s["grund"] = kern_name
             s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
+            s["grundGenerisch"] = False
+            sit.pop("grundKlaerungen", None)
             if vm:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
             neu.add("grund")
         elif (s["frage"] == "grund" and len(t) >= 3 and not ist_ja(t)
               and not ist_nein(t) and not _KEIN_GRUND_RE.search(t)
-              and not _grund_unglaubwuerdig(t)
+              and not _grund_unglaubwuerdig(t) and not _grund_ist_frage(t)
               and (len(t.split()) <= 5 or _ANLIEGEN_SIGNAL_RE.search(t))):
             # Nicht-zahnärztliche Praxen buchen unbekannte/fachfremde Wünsche
             # nie als Kontrolle. Zahnmandanten behalten den bewährten
             # Besprechungs-/Kontrollfallback samt O-Ton-Notiz.
             if katalog and not motive.ist_zahn(katalog):
-                s["grund"] = ""
-                s["grundWortlaut"] = ""
-                s["motivId"] = ""
-                s["motivName"] = ""
-                s["frage"] = "grund"
-                sit["grundNichtBuchbarArt"] = "nicht_im_katalog"
-                neu.add("grundNichtBuchbar")
-                return neu
-            s["grund"] = t if len(t) <= 90 else t[:87] + "…"
-            s["grundWortlaut"] = s["grund"]
-            kat = _zimmer_map.buchbarer_katalog(tenant, motive.katalog(sit))
-            vm = besuchsgrund.fallback_motiv(tenant, katalog=kat)
-            if vm:
-                s["motivId"] = _s(vm.get("id"))
-                s["motivName"] = _s(vm.get("name"))
-            neu.add("grund")
+                # B2 (17.09.2026, Blessing-Anrufe 66913eb8/a467367e): "Diese
+                # Leistung wird nicht angeboten" kam SOFORT auf jeden Grund,
+                # den der Katalog nicht kannte — auch auf echte Hautbeschwerden
+                # und auf blosse Verhoerer. Die Absage bleibt NUR fuer klar
+                # Fachfremdes (Zahnwunsch beim Hautarzt, oben). Sonst in drei
+                # Stufen: (1) einmal nachfragen, (2) erkennbare Beschwerde oder
+                # zweiter unklarer Anlauf -> allgemeine Sprechstunde/Kontrolle
+                # mit O-Ton in der Terminnotiz (flow._buchen), (3) ohne solches
+                # Motiv ehrlich absagen + Notiz an die Praxis (flow).
+                kat_b = _zimmer_map.buchbarer_katalog(tenant, katalog)
+                generisch = besuchsgrund.generisches_motiv(tenant, katalog=kat_b)
+                beschwerde = besuchsgrund.ist_derma_beschwerde(tenant, t)
+                klaerungen = int(sit.get("grundKlaerungen") or 0)
+                kurz = t if len(t) <= 90 else t[:87] + "…"
+                if generisch and (beschwerde or klaerungen >= 1):
+                    s["grund"] = kurz
+                    s["grundWortlaut"] = kurz
+                    s["motivId"] = _s(generisch.get("id"))
+                    s["motivName"] = _s(generisch.get("name"))
+                    s["grundGenerisch"] = True
+                    sit.pop("grundKlaerungen", None)
+                    neu.add("grund")
+                else:
+                    s["grund"] = ""
+                    s["grundWortlaut"] = ""
+                    s["motivId"] = ""
+                    s["motivName"] = ""
+                    s["frage"] = "grund"
+                    if klaerungen < 1:
+                        sit["grundKlaerungen"] = klaerungen + 1
+                        sit["grundKlaerungText"] = kurz
+                        neu.add("grundKlaerung")
+                    else:
+                        sit.pop("grundKlaerungen", None)
+                        sit["grundNichtBuchbarArt"] = "nicht_im_katalog"
+                        sit["grundNichtBuchbarText"] = kurz
+                        neu.add("grundNichtBuchbar")
+            else:
+                s["grund"] = t if len(t) <= 90 else t[:87] + "…"
+                s["grundWortlaut"] = s["grund"]
+                kat = _zimmer_map.buchbarer_katalog(tenant, motive.katalog(sit))
+                vm = besuchsgrund.fallback_motiv(tenant, katalog=kat)
+                if vm:
+                    s["motivId"] = _s(vm.get("id"))
+                    s["motivName"] = _s(vm.get("name"))
+                neu.add("grund")
 
     # W-DOSSIER: Talk darf den Job-Grund nachziehen (Kontrolle genannt,
     # dann „ich brauche noch ein Implantat") — nie nach dem Buchen.
-    if s["grund"] and s.get("phase") not in {"gebucht", "fertig"} and dossier.spur_signal(t):
+    # B2 (17.09.2026): steht nur das Auffang-Motiv (Sprechstunde/Kontrolle
+    # fuer einen unbekannten Grund), gewinnt JEDER spaetere klare Katalog-
+    # Treffer ("Also, es ist eigentlich Nagelpilz.") — auch ohne Spur-Signal.
+    if (s["grund"] and s.get("phase") not in {"gebucht", "fertig"}
+            and (dossier.spur_signal(t) or s.get("grundGenerisch"))):
         kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
         if kern_name and _grund_unglaubwuerdig(t):
             kern_name, vm = "", None
+        if kern_name and s.get("grundGenerisch") and not vm:
+            # Ohne echtes Motiv ist ein Konzept-Name kein Fortschritt gegenueber
+            # der Sprechstunde mit O-Ton.
+            kern_name = ""
         if kern_name and kern_name != s["grund"]:
             s["grund"] = kern_name
             s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
+            s["grundGenerisch"] = False
             if vm:
                 s["motivId"] = _s(vm.get("id"))
                 s["motivName"] = _s(vm.get("name"))
@@ -1966,15 +2351,42 @@ def einsammeln(sit: dict, text: str) -> set[str]:
 
     # Wunschzeit (mehrturnig gemischt)
     wish = _wunsch_deuten(t)
-    if wish:
-        s["wunsch"] = _wunsch_mischen(s["wunsch"], wish)
+    # C3 (17.09.2026, Anruf 53986f42): "Vormittag oder Nachmittag, eigentlich
+    # egal" — der Parser nahm die ERSTE Tageszeit als Wunsch (7-12 Uhr) und
+    # die Nachmittagsslots fielen weg. Ein "egal" neben einer Oder-
+    # Alternative streicht die Tageszeit-Grenzen wieder.
+    tageszeit_egal = False
+    if (wish and _TAGESZEIT_ODER_RE.search(t)
+            and _WUNSCH_EGAL_RE.search(_ohne_anlauf(t))):
+        for k in ("hour", "hourMin", "hourMax", "minutenMin", "minutenMax"):
+            wish.pop(k, None)
+        if not wunsch_hat_richtung(wish) and not wunsch_ausschluesse(wish):
+            wish = None
+            # Der Satz IST eine Zeitantwort ("egal") — auch wenn die Kette
+            # gerade etwas anderes fragt (Replay 53986f42 z13: Vornamen-Frage
+            # offen, Anrufer beantwortet die Zeit; ohne diese Zeile fragte
+            # Bianca die Wunschzeit danach noch einmal).
+            tageszeit_egal = True
+    # A6 (17.09.2026): parse_slot_wish kennt keine Verneinung — "Donnerstag
+    # kann ich nicht" wurde als Donnerstags-WUNSCH gelesen und genau dieser
+    # Tag angeboten. Die abgelehnten Tage/Zeiten wandern als harte
+    # Ausschluesse in den Wunsch (gelten fuer alle folgenden Angebote), die
+    # positive Lesart desselben Wortes faellt weg.
+    ablehnung = _wunsch_ablehnung(t) if (wish or s["frage"] == "wunsch") else None
+    if wish or ablehnung:
+        if wish:
+            s["wunsch"] = _wunsch_mischen(s["wunsch"], wish)
+        if ablehnung:
+            s["wunsch"] = wunsch_mit_slot_praeferenz(s["wunsch"], ablehnung)
         s["wunschText"] = _s(f"{s['wunschText']} {t}") if s["wunschText"] else t
         neu.add("wunsch")
-    elif (s["frage"] == "wunsch" and s["wunsch"] is None
+    elif ((s["frage"] == "wunsch" or tageszeit_egal)
+          and not wunsch_hat_richtung(s["wunsch"])
           and _WUNSCH_EGAL_RE.search(_ohne_anlauf(t))
           and not _ARZT_KONTEXT_RE.search(t)):
         # "Egal" auf die Zeitfrage: keine Präferenz — nächste freie Termine.
-        s["wunsch"] = {}
+        # Schon abgelehnte Tage/Zeiten (A6) bleiben dabei gesperrt.
+        s["wunsch"] = wunsch_ausschluesse(s["wunsch"])
         s["wunschText"] = t
         neu.add("wunsch")
 
@@ -1999,13 +2411,48 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     explizit = bool(_TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
                     or _TEIL_NACH_RE.search(t) or _TEIL_NACH_UMGEKEHRT_RE.search(t))
 
+    # C3 (17.09.2026, Anruf 53986f42): Der Anrufer BENENNT das Feld, das er
+    # gerade buchstabiert ("B, U, S, C, H, Busch, fertig, Nachname" auf die
+    # VORNAMEN-Frage) — das Etikett gewinnt ueber die offene Frage. Vorher
+    # landete die Nachnamen-Kette als Vorname ("Busch Busch"), die
+    # Buchstabier-Frage kam fuenf Zuege spaeter trotzdem noch einmal, und
+    # das Diktat-Schlusswort "Fertig" war ein Namens-Kandidat.
+    etikett_erledigt = False
+    etikett = "" if explizit else _feld_etikett(t)
+    if etikett and s["frage"] in {"vorname", "name", "nachname", "buchstabieren"}:
+        einzeln = _einzelbuchstaben(t)
+        kette = einzeln or re.sub(
+            r"[^a-zäöüß]", "", _s((buch or {}).get("name")).casefold()
+        )
+        if len(kette) >= 2 and (einzeln or (buch or {}).get("sicher")
+                                or _DIKTAT_FERTIG_RE.search(t)):
+            if etikett == "nachname":
+                neu_nach = kette[0].upper() + kette[1:]
+                alt = _s(s["nachname"])
+                if (alt and len(alt) >= len(kette)
+                        and SequenceMatcher(None, kette, alt.casefold()).ratio() >= 0.8):
+                    neu_nach = alt  # Buchstabierung BESTAETIGT den gehoerten Namen
+                if neu_nach != alt:
+                    s["bekannt"] = False if not s["patientId"] else s["bekannt"]
+                s["nachname"] = neu_nach
+                s["buchstabiert"] = True
+                s["buchstabenTeil"] = ""
+                s["buchstabierHilfe"] = False
+                neu.add("nachname")
+            else:
+                s["vorname"] = kette[0].upper() + kette[1:]
+                s["vornameTeil"] = ""
+                s["vornameGehoert"] = ""
+                neu.add("vorname")
+            etikett_erledigt = True
+
     # Live 08.09.2026: „Srinivasa, S, R, I …“ — Bianca nahm schon den
     # verhörten Wortanfang als fertigen Vornamen und stellte mitten in der
     # anschließenden Buchstabierung die Telefonnummernfrage. Sobald mindestens
     # zwei explizite Buchstaben folgen, bleibt der Mund still. Stimmen Länge
     # und Ähnlichkeit der zusammengesetzten Buchstaben mit dem gesprochenen
     # Kandidaten überein, ist das Ende auch OHNE „fertig“ sicher erkennbar.
-    if s["frage"] == "vorname" and not explizit:
+    if s["frage"] == "vorname" and not explizit and not etikett_erledigt:
         einzeln = _einzelbuchstaben(t)
         if s["vornameTeil"] or len(einzeln) >= 2:
             if not s["vornameTeil"] and name_toks:
@@ -2042,7 +2489,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 neu.add("vornameTeil")
             vorname_fragment = True
 
-    if (s["frage"] == "buchstabieren" and explizit
+    if etikett_erledigt:
+        pass  # Feld-Etikett hat die Kette schon zugeordnet.
+    elif (s["frage"] == "buchstabieren" and explizit
             and _name_aufnehmen(s, t, erzwungen=True)):
         # Ausdrueckliche Zuweisung auf die Buchstabier-Frage: uebernehmen und
         # eine offene Buchstaben-Kette verwerfen — sie gehoerte zum alten,
@@ -2109,7 +2558,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["buchstabenTeil"] = ""
         s["buchstabierHilfe"] = False
         pass  # Korrektur hat Vorrang — nichts erneut ernten.
-    elif buch_fragment or vorname_fragment:
+    elif buch_fragment or vorname_fragment or etikett_erledigt:
         pass  # Teilfolge bleibt offen, bis der Anrufer „fertig“ sagt.
     elif (s["frage"] == "arzt" or (
             s["frage"] != "buchstabieren"
@@ -2178,7 +2627,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     elif s["frage"] in {"name", "vorname", "nachname"}:
         if _name_aufnehmen(s, t, erzwungen=True):
             neu.add("name")
-    elif (not s["nachname"] or not s["vorname"]) and _name_aufnehmen(s, t, erzwungen=False):
+    elif ((not s["nachname"] or not s["vorname"])
+          and _name_aufnehmen(s, t, erzwungen=False, tenant=tenant)):
         # Auch mit stehendem Nachnamen: ein fehlender Vorname darf aus einem
         # einzelnen gaengigen Vornamen geerntet werden (s. _name_aufnehmen).
         neu.add("name")
@@ -2240,11 +2690,17 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         # Stückweise diktierte Nummer ("null eins sieben sieben" … Pause …
         # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
         stueck = telefon.ziffern(t).replace("+", "")
+        # Diktat-Ende ohne weitere Ziffer: "fertig" — oder ein blankes Ja
+        # ("Ja.", "Stimmt.", "So."), nachdem Bianca still weitergehoert hat
+        # (Replay 53986f42 z21: neun Ziffern im Fragment, "Ja." -> Nummer
+        # verworfen). Das Fragment geht ins Readback, der Anrufer bestaetigt
+        # oder korrigiert — nie still gespeichert, nie still verworfen.
+        kurz_ja = len(_ohne_anlauf(t).split()) <= 3 and ist_ja(t)
         if (
             not stueck
             and s["telefonTeil"]
-            and _DIKTAT_FERTIG_RE.search(t)
-            and telefon.plausibel(s["telefonTeil"])
+            and (_DIKTAT_FERTIG_RE.search(t) or kurz_ja)
+            and telefon.plausibel_kurz(s["telefonTeil"])
         ):
             s["telefonOffen"] = telefon.normaliert(s["telefonTeil"])
             s["telefonTeil"] = ""
@@ -2261,11 +2717,16 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             # Ziffern abschließen: viele haben elf, und bei Einzelziffern-
             # Pausen wäre der letzte Laut sonst weg. Kürzere Sonderfälle
             # können mit „fertig“ ausdrücklich abgeschlossen werden.
+            ausdruecklich = bool(_DIKTAT_FERTIG_RE.search(t))
             fragment_fertig = bool(
-                _DIKTAT_FERTIG_RE.search(t)
+                ausdruecklich
                 or (norm.startswith("01") and len(norm) >= 11)
             )
-            if telefon.plausibel(zusammen) and fragment_fertig:
+            # Ausdruecklich beendet ("…, fertig") darf auch eine neunstellige
+            # Festnetznummer ins Readback — der Anrufer bestaetigt sie dort.
+            vollstaendig = (telefon.plausibel_kurz(zusammen) if ausdruecklich
+                            else telefon.plausibel(zusammen))
+            if vollstaendig and fragment_fertig:
                 if _telefon_gesperrt(s, zusammen):
                     s["telefonTeil"] = ""
                     neu.add("telefonKorrektur")
@@ -2602,6 +3063,8 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "aenderung": (
         "Was darf ich ändern — der Zeitpunkt, der Name, die Nummer oder der Besuchsgrund?",
         "Was soll ich korrigieren — Zeitpunkt, Name, Nummer oder Besuchsgrund?",
+        # W-BUCHUNG-ABBRUCH (17.09.2026): der Ausgang wird mitgenannt.
+        "Was darf ich ändern — Zeitpunkt, Name, Nummer, Besuchsgrund — oder lieber gar keinen Termin?",
     ),
     "versicherung": (
         "Sind Sie privat oder gesetzlich versichert?",
@@ -3624,6 +4087,7 @@ def name_fuer_aenderung_leeren(sit: dict, teil: str = "") -> None:
         s["vorname"] = ""
         s["vornameTeil"] = ""
         s["vornameGehoert"] = ""
+        s["vornameStufe"] = 0
     if teil != "vorname":
         s["nachname"] = ""
         s["buchstabiert"] = False
@@ -3670,6 +4134,14 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Damit ich Sie in der Kartei finde: Wie ist Ihr Vor- und Nachname?",
         "Dann nehme ich Sie einmal auf: Wie ist Ihr Vor- und Nachname?",
         "Und der Vorname?",
+        # W-NAME-STUFEN (17.09.2026): gestaffelte Vornamen-Fragen + Vorsaetze.
+        "Buchstabieren Sie mir den Vornamen bitte einmal, Buchstabe für Buchstabe.",
+        "Sagen Sie mir den Vornamen bitte noch einmal langsam am Stück.",
+        "Versuchen wir es noch einmal Buchstabe für Buchstabe: Wie schreibt sich der Vorname?",
+        "Den Vornamen habe ich leider nicht verstanden.",
+        "Den Nachnamen habe ich leider nicht verstanden.",
+        "Das ist leider wieder nicht bei mir angekommen.",
+        "Entschuldigung, es klappt leider noch nicht.",
         grund_frage,
         "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?",
         "Ich will nichts falsch schreiben: Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
@@ -3965,6 +4437,28 @@ def _nachname_start_frage(sit: dict, einstieg: str) -> tuple[str, str]:
     )
 
 
+def vorname_frage(s: dict) -> tuple[str, str]:
+    """Vornamen-Frage nach Eskalationsstufe (W-NAME-STUFEN 17.09.2026).
+
+    Replay 53986f42: "Und der Vorname?" kam fuenfmal wortgleich — auf "Da.",
+    "Ja, bitte.", "Ja." wusste der Anrufer nicht, was fehlt und WIE er es
+    sagen soll. Jede Stufe traegt das Kernwort "Vorname" (Wiederholungs-
+    Waechter, Frage-Anker) und sagt konkret, was zu tun ist. Stufe 4 ist
+    die letzte Hilfe mit Beispiel (im Live-Anruf kam der Name beim vierten
+    Anlauf: "Jelto, J-E-L-T-O") — der Ausstieg (Stufe 5, Rueckruf-Notiz)
+    liegt in flow._eskalieren."""
+    stufe = int(s.get("vornameStufe") or 0)
+    if stufe == 1:
+        return "vorname", "Buchstabieren Sie mir den Vornamen bitte einmal, Buchstabe für Buchstabe."
+    if stufe == 2:
+        return "vorname", "Sagen Sie mir den Vornamen bitte noch einmal langsam am Stück."
+    if stufe == 3:
+        return "vorname", "Wie schreibt sich der Vorname, Buchstabe für Buchstabe?"
+    if stufe >= 4:
+        return "vorname", "Nur den Vornamen bitte, Buchstabe für Buchstabe — zum Beispiel A wie Anton, N wie Nordpol."
+    return "vorname", "Und der Vorname?"
+
+
 def _nachname_vor_vorname_absichern(
     sit: dict, s: dict
 ) -> tuple[str, str] | None:
@@ -4138,11 +4632,12 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 and not _s(s.get("vornameCheck"))):
             return "vorname_check", vorname_check_frage(s)
         if not s["vorname"]:
-            if _s(s.get("vornameCheck")) == "nein":
+            if (_s(s.get("vornameCheck")) == "nein"
+                    and not int(s.get("vornameStufe") or 0)):
                 # Der Kartei-Vorname war falsch: die Frage nimmt den Einwand
                 # auf, statt ihn mit "Und der Vorname?" zu uebergehen.
                 return "vorname", "Wie lautet Ihr Vorname denn richtig?"
-            return "vorname", "Und der Vorname?"
+            return vorname_frage(s)
         if not s["grund"]:
             from kern import zimmer_map
             if zimmer_map.aktiv(sit.get("tenant") or {}):
@@ -4199,7 +4694,7 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if schreibweise:
         return schreibweise
     if not s["vorname"]:
-        return "vorname", "Und der Vorname?"
+        return vorname_frage(s)
     if not s["buchstabiert"] and not s["bekannt"]:
         return _buchstabier_frage(
             s,
@@ -4729,6 +5224,17 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     kat = zimmer_map.buchbarer_katalog(tenant, kat)
     if not kat:
         return None
+    if s.get("grundGenerisch") and s["motivId"]:
+        # B2 (17.09.2026): der Grund stand NICHT im Katalog, gebucht wird
+        # bewusst die allgemeine Sprechstunde/Kontrolle. Den O-Ton hier noch
+        # einmal unscharf gegen den Katalog zu reiben, brachte live genau den
+        # Fehltreffer ("Matzenbehandlung" -> Botox/Filler) — das generische
+        # Motiv bleibt, notfalls das des Ziel-Kalenders.
+        aktuell = next((v for v in kat if _s(v.get("id")) == s["motivId"]), None)
+        if aktuell and motive.erlaubt(aktuell, calendar_id):
+            return aktuell
+        return besuchsgrund.generisches_motiv(
+            tenant, katalog=kat, calendar_id=calendar_id)
     wortlaut = zimmer_map.mapping_text(
         tenant, f"{s['grundWortlaut']} {s['grund']}")
     muster = besuchsgrund.konzept_muster(wortlaut)
@@ -4736,6 +5242,15 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     def _aufloesen(pool: list[dict]) -> dict | None:
         vm = besuchsgrund.katalog_exakt(
             wortlaut, katalog=pool, calendar_id=calendar_id)
+        if not vm:
+            # B2 (17.09.2026): der Dermatologie-Weg (Blessing-Opt-in) lief
+            # nur in `deute`, nicht hier — die behandlerscharfe Aufloesung
+            # fiel fuer "Dornwarzen am Fuss" in den Fuzzy-Katalog. Gleiche
+            # Reihenfolge wie `deute`: exakt -> Derma -> Konzept -> Fuzzy.
+            derma = besuchsgrund.derma_motiv(
+                tenant, wortlaut, katalog=pool, calendar_id=calendar_id)
+            if derma:
+                vm = derma
         if not vm and muster:
             vm = besuchsgrund.motiv_suchen(tenant, muster, katalog=pool, calendar_id=calendar_id)
         if not vm and wortlaut:

@@ -260,3 +260,142 @@ def test_enforce_entfernt_den_ganzen_erfundenen_slot_satz(monkeypatch):
     assert "montag" not in aus.lower()
     assert "sms kommt" not in aus.lower()
     assert "kalendersuche" in aus.lower()
+
+
+# --- C1 (17.09.2026, Anruf 53986f42): Termin-/Abschieds-/Gefunden-Claims ---
+# Live: kein einziges Werkzeug lief — trotzdem "Ich habe Sie gefunden",
+# ein voll ausformulierter Terminvorschlag, "Ich trage für Sie ein",
+# "Ich habe alles notiert" und der Abschied "Wir sehen uns morgen — bis dann!".
+
+
+def test_c1_gegenwarts_und_zukunftsform_der_buchung_ist_behauptung():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich trage für Sie ein.") == "buchen"
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich buche das jetzt fest.") == "buchen"
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich reserviere Ihnen den Platz.") == "buchen"
+    # Frage bleibt Frage.
+    assert fakten_wache.unbelegte_behauptung(sit, "Soll ich das fest eintragen?") == ""
+
+
+def test_c1_notiert_und_weitergeben_ohne_notiz_wort_ist_behauptung():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe alles notiert.") == "notiz"
+    assert fakten_wache.unbelegte_behauptung(sit, "Das habe ich mir vermerkt.") == "notiz"
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich gebe das an die Praxis weiter.") == "notiz"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich leite Ihr Anliegen an das Team weiter.") == "notiz"
+    merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True})
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe alles notiert.") == ""
+
+
+def test_c1_datenaufnahme_quittung_ist_keine_notiz_behauptung():
+    # "Ihre Nummer vermerkt" ist Gespraechsquittung, kein Aktenvermerk (alter Vertrag).
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe Ihre Nummer vermerkt.") == ""
+    assert fakten_wache.unbelegte_behauptung(sit, "Ihren Namen habe ich notiert.") == ""
+
+
+def test_c1_ausformulierter_terminvorschlag_ohne_suche_ist_unbelegt():
+    sit = _sit()
+    live = ("Ich habe für morgen, Mittwoch, den sechzehnten September, "
+            "einen Termin um neun Uhr dreißig.")
+    assert fakten_wache.unbelegte_behauptung(sit, live) == "slots"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich kann Ihnen morgen um neun Uhr anbieten.") == "slots"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich schlage Ihnen Donnerstag um halb zehn vor.") == "slots"
+
+
+def test_c1_wunsch_echo_ist_kein_slot_claim():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Verstanden: ein Termin am Montag, ich schaue nach.") == ""
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Sie möchten also morgen um neun Uhr einen Termin, ich prüfe das.") == ""
+    # Mit Frei-Wort ist es wieder eine Kalender-Aussage.
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Verstanden, morgen um neun Uhr ist frei.") == "slots"
+
+
+def test_c1_geglueckte_buchung_belegt_den_genannten_termin():
+    sit = _sit()
+    sit["lastBook"] = {"ok": True, "booked": True, "appointmentId": "a1"}
+    # offered ist nach der Buchung bewusst leer (flow._buchen).
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Ich habe Ihnen morgen um neun Uhr den Termin eingetragen.") == ""
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Sie haben jetzt einen Termin am Montag um neun Uhr.") == ""
+
+
+def test_c1_abschied_mit_termin_ohne_buchung_ist_unbelegt():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Wir sehen uns morgen — bis dann!") == "wiedersehen"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Bis Montag um neun Uhr!") == "wiedersehen"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Dann sehen wir uns am Donnerstag um zehn Uhr.") == "wiedersehen"
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Wir erwarten Sie dann morgen.") == "wiedersehen"
+
+
+def test_c1_abschied_ohne_termin_bezug_bleibt():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(sit, "Auf Wiederhören!") == ""
+    assert fakten_wache.unbelegte_behauptung(sit, "Bis dann, tschüss!") == ""
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Kommen Sie einfach heute vorbei.") == ""
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Schönen Tag noch und bis bald.") == ""
+
+
+def test_c1_abschied_mit_termin_nach_buchung_oder_fund_ist_belegt():
+    sit = _sit()
+    sit["lastBook"] = {"ok": True, "booked": True}
+    assert fakten_wache.unbelegte_behauptung(sit, "Bis morgen um neun Uhr!") == ""
+    sit2 = _sit()
+    sit2["lastMove"] = {"ok": True}
+    assert fakten_wache.unbelegte_behauptung(sit2, "Wir sehen uns dann am Montag.") == ""
+    sit3 = _sit()
+    sit3["gefunden"] = [{"iso": "2026-09-21T09:00", "id": "t1"}]
+    assert fakten_wache.unbelegte_behauptung(sit3, "Dann bis Montag um neun Uhr.") == ""
+
+
+def test_c1_ich_habe_sie_gefunden_braucht_einen_echten_treffer():
+    sit = _sit()
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe Sie gefunden, Frau Müller.") == "gefunden"
+    assert fakten_wache.unbelegte_behauptung(sit, "Sie sind bei uns im System hinterlegt.") == "gefunden"
+    assert fakten_wache.unbelegte_behauptung(sit, "Ihre Akte habe ich hier vorliegen.") == "gefunden"
+    # Ehrliches Nicht-Finden ist keine Behauptung.
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe Sie leider nicht gefunden.") == ""
+
+
+def test_c1_gefunden_belegt_durch_kartei_anrufer_oder_patient():
+    sit = _sit()
+    sit["sammler"]["patientId"] = "p1"
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe Sie gefunden.") == ""
+    sit2 = _sit()
+    sit2["anrufer"] = {"patientId": "p1", "nachname": "Müller", "vorname": "Anna"}
+    assert fakten_wache.unbelegte_behauptung(sit2, "Da habe ich Sie.") == ""
+    sit3 = _sit()
+    sit3["patient"] = {"id": "p9", "lastName": "Berger"}
+    assert fakten_wache.unbelegte_behauptung(sit3, "Sie sind bei uns bekannt.") == ""
+
+
+def test_c1_verneinte_identitaet_macht_den_anrufer_treffer_wertlos():
+    sit = _sit()
+    sit["anrufer"] = {"patientId": "p1", "nachname": "Müller"}
+    sit["sammler"]["anruferCheck"] = "nein"
+    assert fakten_wache.unbelegte_behauptung(sit, "Ich habe Sie gefunden.") == "gefunden"
+
+
+def test_c1_enforce_hedges_fuer_gefunden_und_wiedersehen(monkeypatch):
+    monkeypatch.setenv("FAKTEN_WACHE", "enforce")
+    sit = _sit()
+    aus = agent._fakten_wache_anwenden(sit, "Ich habe Sie gefunden, Frau Müller.")
+    assert "gefunden" not in aus.lower()
+    assert "kartei" in aus.lower()
+    sit2 = _sit()
+    aus2 = agent._fakten_wache_anwenden(sit2, "Wir sehen uns morgen — bis dann!")
+    assert "sehen uns" not in aus2.lower()
+    assert "noch nicht eingetragen" in aus2.lower()

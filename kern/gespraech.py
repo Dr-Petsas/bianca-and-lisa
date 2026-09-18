@@ -154,6 +154,7 @@ _STOP = frozenset((
     "natuerlich", "irgendwie", "jedenfalls", "übrigens", "uebrigens",
     "sowieso", "genau", "richtig", "stimmt", "danke", "gerne", "bitte",
     "hallo", "super", "prima", "klasse", "perfekt", "wunderbar", "passt",
+    "passen", "gepasst", "passend",
     "alles", "nichts", "etwas", "okay", "wiederhören", "wiederhoeren",
     "tschüss", "tschuess", "entschuldigung", "verzeihung", "moment",
     "sekunde", "augenblick", "sonst", "trotzdem", "sicher", "bisschen",
@@ -216,21 +217,48 @@ def kompakt_unklar(sit: dict, *, offene_frage: str = "") -> str:
     return _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
 
 
+def gruss_passend(text: str) -> str:
+    """Der Gruss, den der Anrufer selbst gewaehlt hat, kommt zurueck —
+    "Guten Morgen!" auf "guten Morgen" (Replay 53986f42 z01: Bianca sagte
+    um acht Uhr frueh "Guten Tag."); sonst "Guten Tag."."""
+    low = _s(text).lower()
+    if "morgen" in low:
+        return "Guten Morgen."
+    if "abend" in low:
+        return "Guten Abend."
+    return "Guten Tag."
+
+
 def kompakt_jobfrage(
     sit: dict,
     *,
     offene_frage: str = "",
     begruessen: bool = False,
+    gesagt: str = "",
 ) -> str:
     """Talk ist für diesen Mandanten aus; der Auftrag bekommt sofort den Floor."""
     frage = _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
-    return f"Guten Tag. {frage}" if begruessen else frage
+    return f"{gruss_passend(gesagt)} {frage}" if begruessen else frage
+
+
+# Zahlwoerter sind nie Gespraechsstoff: "Fünf, drei, eins, sechs." ist ein
+# Nummern-Diktat (Replay 53986f42 z20 — "sechs" galt als Inhaltswort, der Zug
+# lief als Talk-Thema ans Modell statt in den Nummern-Schritt).
+_ZAHLWORT_RE = re.compile(
+    r"^(?:"
+    r"(?:ein|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun)?(?:und)?"
+    r"(?:zwanzig|drei(?:ß|ss)ig|vierzig|f(?:ü|ue)nfzig|sechzig|siebzig|achtzig|neunzig)"
+    r"|elf|zw(?:ö|oe)lf|dreizehn|vierzehn|f(?:ü|ue)nfzehn|sechzehn|siebzehn|achtzehn|neunzehn"
+    r"|null|eins|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun|zehn|hundert|tausend"
+    r")$"
+)
 
 
 def _inhaltsworte(low: str) -> set[str]:
-    """Inhaltswoerter (>= 5 Zeichen) ohne Fuell- und Job-Vokabular."""
+    """Inhaltswoerter (>= 5 Zeichen) ohne Fuell-, Zahl- und Job-Vokabular."""
     worte = re.findall(r"[a-zäöüß]{5,}", low)
-    return {w for w in worte if w not in _STOP and not _JOB_RE.fullmatch(w)}
+    return {w for w in worte
+            if w not in _STOP and not _JOB_RE.fullmatch(w) and not _ZAHLWORT_RE.match(w)}
 
 
 def ist_user_pull(text: str) -> bool:

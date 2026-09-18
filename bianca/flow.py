@@ -9,9 +9,11 @@ Buchung zu tun hat — dann übernimmt das LLM (mit status_zeile im Prompt).
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Callable
 
 from bianca import buchstaben, besuchsgrund, gehirn, hintergrund, telefon, verwalten, weiterleiten
+from kern import abbruch
 from kern import abschied
 from kern import anliegen_art
 from kern import dossier
@@ -37,6 +39,8 @@ from kern.slots import (
     slot_praeferenz_bestaetigung,
     spoken_offer,
     spoken_slot,
+    wunsch_ausschluesse,
+    wunsch_hat_richtung,
     wunsch_mit_slot_praeferenz,
 )
 from kern import pzr_kassen
@@ -297,6 +301,12 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
     if not offered:
         return ""
     t = f" {_s(text).lower()} "
+    # Eine diktierte Ziffernkette ("0, 7, 1, 2, 9.") ist NIE eine Slot-Wahl —
+    # der Tag-/Datums-Abgleich unten faende sonst im "9." einen Termin am
+    # Neunten (Replay 53986f42 z19).
+    if (len(telefon.ziffern(text).replace("+", "")) >= 5
+            and not _NUMMER_ZEITWORT_RE.search(text)):
+        return ""
 
     wd = next((idx for idx, cre in WEEKDAYS if cre.search(t)), None)
     hour, minute = _zeit_von(t)
@@ -398,17 +408,182 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
     return ""
 
 
+def _slot_ja_blank(sit: dict, t: str) -> str | None:
+    """Blankes Ja auf ein MEHRFACH-Angebot (Replay 53986f42 z21).
+
+    "Ja." / "Ja, gerne." auf "Frei ist Montag neun Uhr oder Dienstag elf —
+    welcher passt?" ist keine Wahl. Rueckgabe: None = kein blankes Ja (der
+    normale Weg entscheidet), "" = nachfragen, sonst die ISO des Slots, der
+    beim ZWEITEN blanken Ja genommen wird (der erste — er wird im Readback
+    ohnehin noch bestaetigt, geschrieben wird nie ohne ausdrueckliches Ja).
+    """
+    offered = sit.get("offered") or []
+    if len(offered) < 2:
+        return None
+    k = gehirn._ohne_anlauf(t)
+    if len(k.split()) > 3 or not gehirn.ist_ja(k) or gehirn.ist_nein(k):
+        return None
+    if re.search(r"\d|\b(?:uhr|erste|zweite|dritte|letzte|frueh|früh|spaet|spät)", k.lower()):
+        return None
+    n = int(sit.get("slotJaBlank") or 0) + 1
+    sit["slotJaBlank"] = n
+    spur.merken(sit, "slot-ja-blank", str(n))
+    if n >= 2:
+        return offered[0]["iso"]
+    return ""
+
+
+_NUMMER_ZEITWORT_RE = re.compile(r"\b(?:uhr|um|halb|viertel|termin|montag|dienstag|mittwoch|donnerstag|freitag|samstag)\b", re.I)
+
+
+def _nummer_waehrend_slotwahl(sit: dict, s: dict, t: str) -> str:
+    """Anrufer diktiert seine Rufnummer, waehrend die Slot-Frage offen ist
+    (Replay 53986f42 z19/z20: "Null, sieben, eins, zwei, neun." lief ans
+    Modell, die Ziffern gingen verloren, der Slot blieb ungewaehlt).
+
+    Ziffernketten ab fuenf Stellen ohne Zeitwort sind keine Slot-Wahl. Die
+    Ziffern werden fuer den Nummern-Schritt aufbewahrt (telefonTeil bzw.
+    telefonOffen — dort liest Bianca sie vor), gesprochen wird die offene
+    Slot-Frage. Leerer String = keine Nummer, normaler Weg.
+    """
+    if _NUMMER_ZEITWORT_RE.search(t):
+        return ""
+    stueck = telefon.ziffern(t).replace("+", "")
+    if not stueck.isdigit():
+        return ""
+    # Ab fuenf Ziffern eindeutig ein Diktat; kuerzere Stuecke ("Fünf, drei,
+    # eins, sechs.") nur als FORTSETZUNG eines schon begonnenen Fragments —
+    # ein blankes "zwei" bleibt sonst die Wahl des zweiten Termins.
+    if len(stueck) < 5 and not (s.get("telefonTeil") and len(stueck) >= 2):
+        return ""
+    if s.get("telefonOk"):
+        return ""
+    zusammen = (s.get("telefonTeil") or "") + stueck
+    if telefon.plausibel(zusammen):
+        s["telefonOffen"] = telefon.normaliert(zusammen)
+        s["telefonTeil"] = ""
+        s["telefonOk"] = False
+    else:
+        s["telefonTeil"] = zusammen[:13]
+    n = int(sit.get("slotNummerVorab") or 0) + 1
+    sit["slotNummerVorab"] = n
+    spur.merken(sit, "slot-nummer-vorab", stueck)
+    if n == 1:
+        return ("Die Nummer nehme ich gleich danach auf. Zuerst der Termin: "
+                + _slot_welcher_frage(sit, praefix=""))
+    return "Die Ziffern habe ich mir gemerkt. " + _slot_welcher_frage(sit)
+
+
+def _slot_welcher_frage(sit: dict, praefix: str = "Gern — ") -> str:
+    offered = sit.get("offered") or []
+    if not offered:
+        return f"{praefix}welcher Termin passt Ihnen?"
+    if len(offered) == 1:
+        return f"{praefix}passt Ihnen {spoken_slot(offered[0]['iso'])}?"
+    if len(offered) == 2:
+        return (f"{praefix}welcher von beiden: {spoken_slot(offered[0]['iso'])} "
+                f"oder {spoken_slot(offered[1]['iso'])}?")
+    liste = ", ".join(spoken_slot(o["iso"]) for o in offered[:-1])
+    return f"{praefix}welcher soll es sein: {liste} oder {spoken_slot(offered[-1]['iso'])}?"
+
+
+# A6: Schluessel, die eine INHALTLICHE Angabe tragen (Tag/Zeit) — im
+# Gegensatz zur blossen Ablehnung des Angebots ("Nein.", "keiner davon").
+_PRAEF_INHALT_KEYS = (
+    "weekdays", "excludeWeekdays", "excludeHours", "excludeHourRanges",
+    "excludeDates", "excludeSpans", "date", "hourMin", "hourMax",
+)
+# A6: Schluessel, die eine ABLEHNUNG tragen — ohne einen davon ist der Satz
+# eine blosse Nennung von Tagen (Auswahl oder Alternativen), keine Korrektur.
+_PRAEF_NEG_KEYS = (
+    "excludeWeekdays", "excludeHours", "excludeHourRanges", "excludeDates",
+    "excludeSpans", "excludeIsos", "rejectAll", "andererTag",
+)
+# Fragen, auf die ein "Nein" NIE eine Slot-Ablehnung ist: Diktat/Identitaet
+# (Nummer, Buchstabieren) — dort gehoert jedes Wort dem Formular.
+_PRAEF_DIKTAT_FRAGEN = frozenset({
+    "telefon", "telefon_check", "telefon_alt", "sms_empfaenger", "buchstabieren",
+    "nachname", "nachname_check", "nachname_korr", "vorname", "vorname_check", "name",
+})
+# Nach so vielen inhaltslosen Ablehnungen ("Nein." x2) wird nicht blind die
+# naechste Dreierliste vorgelesen, sondern nach der Richtung gefragt.
+_PRAEF_BLIND_MAX = 2
+
+
+def _praef_kandidat(offered: list, aenderung: dict) -> str:
+    """Genau EIN angebotener Slot, der die Ablehnung ueberlebt UND zum
+    Gegenvorschlag passt -> dessen ISO; sonst "" (dann Neusuche wie bisher).
+
+    Ohne positiven Teil (nur "nicht Donnerstag") wird nichts gewaehlt: der
+    Anrufer hat nichts ausgesucht, nur abgelehnt."""
+    pos_tage = {int(w) for w in (aenderung.get("weekdays") or [])}
+    pos_datum = _s(aenderung.get("date"))
+    pos_daten = {pos_datum} if pos_datum else set()
+    pos_stunde = aenderung.get("hour")
+    lo, hi = aenderung.get("hourMin"), aenderung.get("hourMax")
+    if not (pos_tage or pos_daten or pos_stunde is not None or lo is not None):
+        return ""
+    ex_tage = {int(w) for w in (aenderung.get("excludeWeekdays") or [])}
+    ex_std = {int(h) for h in (aenderung.get("excludeHours") or [])}
+    ex_daten = set(aenderung.get("excludeDates") or [])
+    ex_isos = set(aenderung.get("excludeIsos") or [])
+    treffer: list[str] = []
+    for iso in offered:
+        try:
+            dt = datetime.fromisoformat(str(iso))
+        except (TypeError, ValueError):
+            continue
+        tag = dt.date().isoformat()
+        if iso in ex_isos or tag in ex_daten or dt.isoweekday() in ex_tage or dt.hour in ex_std:
+            continue
+        if pos_tage and dt.isoweekday() not in pos_tage:
+            continue
+        if pos_daten and tag not in pos_daten:
+            continue
+        if pos_stunde is not None and dt.hour != int(pos_stunde):
+            continue
+        if lo is not None and not (int(lo) <= dt.hour < int(hi)):
+            continue
+        treffer.append(str(iso))
+    return treffer[0] if len(treffer) == 1 else ""
+
+
 def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
-    """Harte Korrektur eines laufenden Angebots sofort anwenden und neu suchen."""
+    """Harte Korrektur eines laufenden Angebots sofort anwenden und neu suchen.
+
+    A6 (17.09.2026): gilt fuer ALLE Mandanten (Befund 17.09.: abgelehnte
+    Slots wurden bei MedDent/Thaler erneut angeboten, weil der Merker nur bei
+    Blessing scharf war). Opt-out je Mandant: ``slotPraeferenzenFesthalten:
+    false``. Die Ablehnung wird als harte Grenze im Wunsch gehalten und
+    ueberlebt Eskalation, "egal" und die Zeit-Aenderung.
+
+    Reine Auswahl ("Montag", "der zweite") bleibt `_slot_wahl`; eine Ablehnung
+    OHNE Tag/Zeit ("Nein.", "keiner davon") zaehlt nur, wenn die offene Frage
+    die Slotwahl selbst ist — auf dem Readback ("Soll ich so eintragen?")
+    und auf Nebenfragen (PZR, SMS, Versicherung) behalten die bestehenden
+    Nein-Wege ihr Recht.
+    """
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-    if tenant.get("slotPraeferenzenFesthalten") is not True:
+    if tenant.get("slotPraeferenzenFesthalten") is False:
         return None
     s = gehirn.sammler(sit)
     if s.get("phase") not in {"angebot", "bestaetigen"} or not sit.get("offered"):
         return None
-    aenderung = slot_praeferenz_aenderung(text)
+    if s.get("frage") in _PRAEF_DIKTAT_FRAGEN or s.get("buchstabenTeil") or s.get("telefonTeil"):
+        return None
+    offered_isos = [_s(o.get("iso")) for o in sit.get("offered") or [] if _s(o.get("iso"))]
+    aenderung = slot_praeferenz_aenderung(text, offered_isos=offered_isos)
     if not aenderung:
         return None
+    # Nur POSITIVE Nennungen ("Dienstag oder Mittwoch", "Montag, der 22.")
+    # ohne eine einzige Ablehnung: trifft das einen angebotenen Termin, ist
+    # es eine Auswahl — die gehoert `_slot_wahl`, nicht der Neusuche.
+    nur_positiv = not any(
+        aenderung.get(k) for k in _PRAEF_NEG_KEYS
+    ) and aenderung.get("hourMin") is None
+    if nur_positiv and _slot_wahl(text, sit.get("offered") or []):
+        return None
+    inhalt = any(aenderung.get(k) for k in _PRAEF_INHALT_KEYS)
     if aenderung.get("andererTag") and not aenderung.get("excludeWeekdays"):
         tage = {
             _weekday_of(_s(o.get("iso"))[:10])
@@ -417,6 +592,50 @@ def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | No
         }
         if tage:
             aenderung["excludeWeekdays"] = sorted(tage)
+            inhalt = True
+
+    waehle = _s(aenderung.get("waehle"))
+    if not waehle and not aenderung.get("rejectAll"):
+        # "Nicht Donnerstag, lieber Montag" / "nicht um elf, lieber um zwei":
+        # bleibt nach der Ablehnung GENAU EIN angebotener Termin, der zum
+        # Gegenvorschlag passt, ist das die Wahl — keine Neusuche, kein
+        # zweites Vorlesen (Befund 17.09.: jede Ehrenrunde kostet einen Zug).
+        waehle = _praef_kandidat(offered_isos, aenderung)
+    if waehle and not aenderung.get("rejectAll"):
+        # "Der erste nicht, der zweite." — Auswahl steht, die Ablehnung des
+        # anderen bleibt trotzdem gemerkt (falls der Slot spaeter wegfaellt).
+        s["wunsch"] = wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung)
+        s["slotIso"] = waehle
+        spur.merken(sit, "slot-praeferenz", f"waehle={waehle};ohne={aenderung.get('excludeIsos') or []}")
+        if sit.get("buchIntent"):
+            return _buchen(sit, melde)
+        return _readback(sit)
+
+    if not inhalt:
+        if s.get("frage") != "slotwahl":
+            # Readback-/Nebenfragen-Nein: die bestehenden Wege ("Was darf
+            # ich aendern?", PZR-Nein ...) entscheiden — nie hier kapern.
+            return None
+        if s.get("frage") == "slotwahl" and s.get("phase") == "angebot":
+            blind = int(sit.get("slotAblehnungBlind") or 0) + 1
+            sit["slotAblehnungBlind"] = blind
+            if blind >= _PRAEF_BLIND_MAX:
+                # Zweimal "Nein" ohne Richtung: nicht die naechste Liste
+                # herunterbeten, sondern fragen, WANN es passt. Die
+                # abgelehnten Slots bleiben gesperrt.
+                s["wunsch"] = wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung)
+                s["phase"] = ""
+                s["frage"] = "wunsch"
+                s["slotIso"] = ""
+                sit["offered"] = []
+                sit.pop("angebotKalender", None)
+                sit.pop("buchIntent", None)
+                sit["slotAblehnungBlind"] = 0
+                spur.merken(sit, "slot-praeferenz", "blind-ablehnung -> wunschfrage")
+                return {"text": ("Verstanden, diese Zeiten passen nicht. Wann würde es Ihnen denn "
+                                 "grundsätzlich passen — welcher Tag, und eher vormittags oder nachmittags?")}
+    else:
+        sit["slotAblehnungBlind"] = 0
 
     s["wunsch"] = wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung)
     s["wunschText"] = _s(f"{_s(s.get('wunschText'))} {text}")
@@ -433,6 +652,8 @@ def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | No
         (
             f"tage={aenderung.get('weekdays') or []};"
             f"ohne={aenderung.get('excludeWeekdays') or []};"
+            f"daten={aenderung.get('excludeDates') or []};"
+            f"isos={len(aenderung.get('excludeIsos') or [])};"
             f"zeit={aenderung.get('hourMin')}-{aenderung.get('hourMax')}"
         ),
     )
@@ -696,6 +917,13 @@ def _quittung(s: dict, neu: set[str]) -> str:
         # „Ich bin die Neue! Alles klar. Der Termin ist…“).
         if s.get("frage") == "anrufer_check":
             return ""
+        if s.get("grundGenerisch"):
+            # B2 (17.09.2026): kein Katalog-Treffer, gebucht wird die
+            # allgemeine Sprechstunde/Kontrolle — das gehoert gesagt, sonst
+            # wundert sich der Anrufer spaeter ueber die SMS.
+            if re.search(r"sprechstunde", _s(s.get("motivName")), re.I):
+                return "Alles klar — das schauen wir uns in der Sprechstunde an. "
+            return "Alles klar — das schauen wir uns beim Termin an. "
         return "Alles klar. "
     if "wunsch" in neu:
         return "Gut. "
@@ -953,11 +1181,33 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             keys = {str(g)[:16] for g in gesperrt}
             vorrat = [v for v in vorrat if str(v)[:16] not in keys]
         if not found.get("ok") and not vorrat:
-            s["phase"] = ""
-            return {"text": (
-                "Der Terminkalender antwortet gerade nicht. "
-                "Die Praxis ruft Sie kurzfristig zurück — Ihre Nummer habe ich ja."
-            )}
+            # W-KALENDER-FEHLER (17.09.2026): ein zweiter Wurf faengt den
+            # transienten Plattform-Fehler (Timeout, Kaltstart) — Blessing
+            # 15.09.: 61 Kalender-500er in 10 Anrufen endeten alle in
+            # "Die Praxis ruft Sie zurueck" OHNE Notiz und ohne Nummer.
+            spur.merken(sit, "kalender-fehler", "zweiter-wurf")
+            found = _laden()
+            vorrat = list(sit.get("slotVorrat") or [])
+            if gesperrt:
+                keys = {str(g)[:16] for g in gesperrt}
+                vorrat = [v for v in vorrat if str(v)[:16] not in keys]
+        if not found.get("ok") and not vorrat:
+            # Bleibt der Kalender stumm, wird das Versprechen zur ECHTEN Notiz
+            # (JSONL + Dock + Report) — und ohne bekannte Nummer ist die Nummer
+            # jetzt die offene Frage (W-RUECKRUF-NUMMER). Nie mehr "Ihre Nummer
+            # habe ich ja", wenn die Leitung keine zeigt.
+            s["phase"] = "fertig"
+            s["frage"] = ""
+            sit["keinSlotFertig"] = True
+            verwalten.kalender_fehler_notiz(sit)
+            spur.merken(sit, "kalender-fehler", "notiz")
+            ansage = ("Der Terminkalender antwortet gerade nicht. Ich habe der "
+                      "Praxis eine Rückrufnotiz mit Ihrem Terminwunsch hinterlassen.")
+            nummer_frage = _rueckruf_nummer_start(sit)
+            if nummer_frage:
+                return {"text": ansage + " " + nummer_frage}
+            return _notiz_abschluss(
+                sit, ansage + " Die Praxis ruft Sie unter Ihrer Nummer zurück.")
     elif vorrat and not sit.get("vorratGemerkt"):
         # Hintergrund-Vorrat verbraucht: CF lief schon (bianca-vorrat), die
         # Tool-Karte fehlt sonst am Angebots-Zug (live 02.09. Tzannis).
@@ -1033,6 +1283,8 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         return _notiz_abschluss(sit, ansage)
     s["phase"] = "angebot"
     s["frage"] = "slotwahl"
+    sit.pop("slotJaBlank", None)
+    sit.pop("slotNummerVorab", None)
     vor = ""
     hinweis = _s(sit.get("arztHinweis"))
     if hinweis and not sit.get("arztHinweisGesagt"):
@@ -1671,6 +1923,15 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     f"buchbar, eingetragen als {s['motivName']}. "
                     "Bitte Besuchsgrund und Dauer prüfen."
                 )
+            elif o_ton and s["motivName"] and s.get("grundGenerisch"):
+                # B2 (17.09.2026): der Grund stand nicht im Katalog, gebucht ist
+                # die allgemeine Sprechstunde/Kontrolle — die Praxis braucht den
+                # O-Ton IMMER (deckt_ab saehe ihn im eigenen Grund-Wortlaut als
+                # "gedeckt" und schwiege).
+                hinweise.append(
+                    f"Anrufer wörtlich: „{o_ton}“ — im Katalog nicht zuordenbar, "
+                    f"gebucht als {s['motivName']}. Bitte Besuchsgrund prüfen."
+                )
             elif (o_ton and s["motivName"]
                     and not besuchsgrund.deckt_ab(f"{s['motivName']} {s['grund']}", o_ton)):
                 hinweise.append(
@@ -1802,7 +2063,44 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         # Ihnen?" doppelt, nachdem 12:45 laengst gewaehlt war).
         if s.get("slotIso"):
             sit["buchIntent"] = True
-    return {"text": gesagt or "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.", "book": book}
+        return {"text": gesagt, "book": book}
+    # W-BUCHUNG-TECHNIK (17.09.2026): technischer Fehlschlag (4xx/5xx, Netz
+    # ohne Landung). Vorher: "Die Praxis ruft Sie dazu zurück" OHNE Notiz, und
+    # weil slotIso + buchIntent stehen blieben, lief JEDER folgende Zug erneut
+    # in _buchen — dieselbe Fehlermeldung in Schleife, kein Ausgang (Replay
+    # 53986f42, Fortsetzung). Jetzt: echte Notiz mit dem bestaetigten
+    # Wunschtermin, Rueckrufnummer sichern, Vorgang zu.
+    fail_iso = _s(s.get("slotIso")) or _s(res.get("slotIso"))
+    regie = _s(res.get("regie"))
+    netz = "netzfehler" in regie.lower() or "antwortet gerade nicht" in gesagt.lower()
+    if netz:
+        # Die Buchung KANN gelandet sein — pruefen, nie doppelt eintragen.
+        verwalten.buchung_pruefen_notiz(sit, slot_iso=fail_iso)
+    else:
+        verwalten.buchung_fehler_notiz(sit, slot_iso=fail_iso, grund_technisch=regie[:80])
+    s["phase"] = "fertig"
+    s["frage"] = ""
+    sit.pop("buchIntent", None)
+    sit["offered"] = []
+    sit["keinSlotFertig"] = True
+    sit["flussFrage"] = ""
+    spur.merken(sit, "buchung-technik", "notiz" + (":netz" if netz else ""))
+    if netz:
+        text = (
+            "Der Kalender antwortet gerade nicht — ich möchte nichts doppelt "
+            "eintragen. Ich habe Ihren Wunschtermin notiert; die Praxis bestätigt "
+            "Ihnen den Termin kurzfristig."
+        )
+    else:
+        text = (
+            "Das Eintragen hat gerade technisch nicht geklappt. Keine Sorge — "
+            "ich habe Ihren Wunschtermin notiert, und die Praxis trägt ihn ein "
+            "und meldet sich bei Ihnen."
+        )
+    nummer_frage = _rueckruf_nummer_start(sit)
+    if nummer_frage:
+        return {"text": text + " " + nummer_frage, "book": book}
+    return _notiz_abschluss(sit, text, book=book)
 
 
 def _folge_weiter(sit: dict, vorsatz: str = "", melde: Melde = None) -> dict:
@@ -1949,10 +2247,198 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
     return None
 
 
-def _eskalieren(sit: dict, fid: str) -> str:
+def _grund_generisch(sit: dict) -> dict | None:
+    """Sprechstunde/Kontrolle einer Nicht-Zahn-Praxis als Auffang-Motiv (B2) —
+    None, wenn die Praxis so etwas telefonisch nicht fuehrt."""
+    from kern import zimmer_map
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    kat = zimmer_map.buchbarer_katalog(tenant, motive.katalog(sit))
+    return besuchsgrund.generisches_motiv(tenant, katalog=kat)
+
+
+def _grund_eskalation_abgeben(sit: dict, t: str) -> dict | None:
+    """B2 Stufe 3 aus der Eskalation: zweimal keine verwertbare Antwort auf die
+    Grund-Frage in einer Nicht-Zahn-Praxis OHNE Sprechstunde/Kontrolle im
+    Katalog. _eskalieren koennte hier nur dieselbe Frage wiederholen (die
+    Schleife der Blessing-Anrufe) — stattdessen ehrlich absagen und den
+    Wunsch als Rueckruf-Notiz aufnehmen. None = Zahnpraxis, leerer Katalog
+    (alter Weg) oder ein Auffang-Motiv existiert (dann Stufe 2 in
+    _eskalieren)."""
+    kat = motive.katalog(sit)
+    if not kat or motive.ist_zahn(kat) or _grund_generisch(sit):
+        return None
+    wortlaut = _s(sit.pop("grundKlaerungText", "")) or _s(t)[:90]
+    sit.pop("grundKlaerungen", None)
+    return _grund_unbekannt_abgeben(sit, wortlaut)
+
+
+def _vorname_eskalation(sit: dict, s: dict, t: str = "") -> str:
+    """W-NAME-STUFEN (17.09.2026, Replay 53986f42 z10-z15): "Und der Vorname?"
+    kam fuenfmal wortgleich — der Anrufer antwortete "Da.", "Ja, bitte.",
+    "Ja." und wusste offenbar nicht, WIE er den Namen liefern soll. Ein
+    Vorname ist Pflicht (akte_anlegen braucht first UND last), einfach
+    weitergehen geht also nicht. Statt derselben Frage: konkrete Hilfe je
+    Stufe (buchstabieren -> langsam am Stueck -> noch einmal buchstabieren),
+    zuletzt der ehrliche Ausstieg mit Rueckruf-Notiz. Die Frage selbst
+    liefert gehirn.vorname_frage anhand der Stufe; hier nur der Vorsatz.
+
+    Eine Stufe weiter geht es nur nach einem FEHLGESCHLAGENEN Namensversuch
+    (kurze Antwort, Buchstabenkette, einzelnes Wort). Erzaehlt der Anrufer
+    stattdessen etwas anderes (Replay z10: Symptome, Hausarzt — ein ganzer
+    Satz), ist das kein Buchstabier-Fehlschlag: die aktuelle Stufe bleibt,
+    die Frage kommt (variiert) noch einmal. Damit ein Erzaehler nicht
+    endlos dieselbe Stufe hoert, steigt der Zug ab dem sechsten Leerlauf
+    ehrlich aus."""
+    leer = int((sit.get("frageLeer") or {}).get("vorname") or 0)
+    if leer >= 8:
+        return _name_ausstieg(sit, s, "Vorname")
+    if not _name_versuch(t):
+        spur.merken(sit, "vorname-stufe-halten", _s(t)[:60])
+        return "Alles klar. "
+    stufe = int(s.get("vornameStufe") or 0) + 1
+    s["vornameStufe"] = stufe
+    spur.merken(sit, "vorname-stufe", str(stufe))
+    if stufe == 1:
+        return "Den Vornamen habe ich leider nicht verstanden. "
+    if stufe == 2:
+        return "Das ist leider wieder nicht bei mir angekommen. "
+    if stufe == 3:
+        return "Entschuldigung, es klappt leider noch nicht. "
+    if stufe == 4:
+        return "Ich möchte den Namen richtig schreiben. "
+    return _name_ausstieg(sit, s, "Vorname")
+
+
+def _name_versuch(t: str) -> bool:
+    """Sah der Zug wie ein (fehlgeschlagener) Versuch aus, den Namen zu
+    liefern? Kurz (bis drei Woerter: "Da.", "Ja, bitte.", "Schon."), eine
+    Buchstabenkette ("P, E, T, E, R") oder ueberwiegend Einzelbuchstaben.
+    Ein ganzer Erzaehlsatz ist es nicht."""
+    toks = re.findall(r"[A-Za-zÄÖÜäöüß]+", _s(t))
+    if len(toks) <= 3:
+        return True
+    einzel = sum(1 for x in toks if len(x) == 1)
+    return einzel >= max(2, int(0.6 * len(toks)))
+
+
+def _name_ausstieg(sit: dict, s: dict, feld: str) -> str:
+    """W-NAME-STUFEN Ausstieg: der Name kommt auch nach Buchstabieren und
+    langsamem Nachsprechen nicht an. Nichts Falsches eintragen, den Wunsch
+    als ECHTE Rueckruf-Notiz sichern (mit allem, was steht: Nachname, Grund,
+    Wunschzeit, gewaehlter Slot) und die Nummer erfragen, wenn keine
+    vorliegt (W-RUECKRUF-NUMMER) — die Praxis muss zurueckrufen koennen.
+    Setzt phase=fertig; der Aufrufer (zug) laesst die Nummernfrage offen."""
+    wann = spoken_slot(s["slotIso"]) if _s(s.get("slotIso")) else ""
+    wunsch = _s(s.get("wunschText"))
+    grund = _s(s.get("grundWortlaut")) or _s(s.get("grund"))
+    teile = ["Terminwunsch"]
+    if grund:
+        teile.append(f"({grund})")
+    if wann:
+        teile.append(wann)
+    elif wunsch:
+        teile.append(f"Wunsch: „{wunsch}“")
+    beim = arzt_sprechname(
+        _s((s.get("arzt") or {}).get("calendarName")),
+        sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
+    )
+    if beim:
+        teile.append(f"bei {beim}")
+    was = (" ".join(teile) + f" — {feld} am Telefon auch nach Buchstabieren nicht "
+           "verständlich, Termin NICHT eingetragen")
+    verwalten.abgeben_notiz(sit, was=was)
+    spur.merken(sit, "name-ausstieg", feld.lower())
+    s["phase"] = "fertig"
+    s["frage"] = ""
+    sit.pop("buchIntent", None)
+    sit["offered"] = []
+    sit["keinSlotFertig"] = True
+    text = (
+        "Ich möchte nichts Falsches eintragen — den Namen habe ich leider "
+        "nicht sicher verstanden. Ich habe Ihren Terminwunsch für die Praxis "
+        "notiert, man ruft Sie zurück. "
+    )
+    nummer = _rueckruf_nummer_start(sit)
+    if nummer:
+        return text + nummer
+    tel = _s(verwalten.rueckruf_nummer(sit))
+    if tel:
+        return text + f"Die Praxis meldet sich unter der {telefon.sprechbar(tel)}. "
+    return text
+
+
+_NAMENS_RUECKFRAGE_FIDS = {"name", "nachname", "vorname", "buchstabieren", "nachname_korr"}
+# "Wozu brauchen Sie den?" / "Welchen Namen — meinen?" / "Was soll ich
+# sagen?" — Rueckfragen auf die Namensfrage nach Art getrennt (C3).
+_RUECKFRAGE_WOZU_RE = re.compile(
+    r"\b(?:wozu|warum|wieso|wof(?:ü|ue)r)\b|\bbrauchen\s+sie\b", re.I)
+_RUECKFRAGE_WESSEN_RE = re.compile(
+    r"\bwelche[rsn]?\s+(?:namen?|nachnamen?|vornamen?)\b|\bwessen\b|"
+    r"\bmeinen\s+(?:namen?|nachnamen?|vornamen?)\b[^?.!]{0,20}\boder\b|"
+    r"\b(?:meinen|meiner|meine)\s+oder\b", re.I)
+
+
+def _namens_rueckfrage_zug(sit: dict, t: str) -> dict | None:
+    """C3 (17.09.2026, Anruf a467367e): „Was soll ich aussprechen?" auf die
+    Nachnamen-Frage wurde als Nachname „Was Aussprechen" gespeichert; nach dem
+    Sammler-Fix fiel dieselbe Rueckfrage ans freie Modell. Eine Rueckfrage auf
+    eine Namensfrage ist nie ein Name UND gehoert dem Formular: Bianca erklaert
+    kurz (wozu / wessen Name / einfach wiederholen) und stellt die offene Frage
+    im selben Zug erneut. Kein Fehlversuch — `frageLeer` bleibt unberuehrt.
+
+    Gegenproben, die NICHT hier landen: ein Name mit Lead-in („Ich heisse
+    Meier"), eine Buchstabier-Kette, die Buchstabier-Meta-Frage (eigener Zweig
+    davor) und alles ausserhalb der Buchungs-Namensfragen."""
+    s = gehirn.sammler(sit)
+    fid_offen = _s(s.get("frage"))
+    if s.get("modus") != "buchen" or fid_offen not in _NAMENS_RUECKFRAGE_FIDS:
+        return None
+    text = _s(t)
+    if not text or not gehirn.ist_namens_rueckfrage(text):
+        return None
+    if gehirn._name_leadin(text) or _BUCHSTABIER_META_RE.search(text):
+        return None
+    if buchstaben.deute(text) or _s(buchstaben.teil(text)):
+        return None
+    # Eine Rueckfrage, die zugleich ein anderes Anliegen traegt (Termin
+    # absagen, verbinden), gehoert den Anliegen-Wachen — nicht hier.
+    if re.search(r"\b(?:absag|verschieb|verbind|durchstell|rezept|rechnung)\w*", text, re.I):
+        return None
+
+    fid, frage = gehirn.naechste_frage(sit)
+    if fid not in _NAMENS_RUECKFRAGE_FIDS or not frage:
+        return None
+    s["frage"] = fid
+    wen = gehirn.fuer_wen_phrase(s, fall="wen")  # 'Ihren Sohn' / '' (selbst)
+    feld = "Vorname" if fid == "vorname" else "Nachname"
+    if fid == "vorname":
+        # Die gestufte Vornamen-Frage traegt ihre Anweisung schon selbst.
+        kern_frage = frage
+    else:
+        # Kurzform statt der langen Einstiegsfrage ("Dann nehme ich die
+        # Daten einmal auf ...") — der Anrufer kennt die Situation schon.
+        kern_frage = (f"Wie lautet der {feld}? Sagen Sie ihn einmal — "
+                      "gern auch gleich buchstabiert, am Ende dann fertig.")
+    if _RUECKFRAGE_WOZU_RE.search(text):
+        erkl = ("Damit ich den Termin richtig in die Kartei eintragen kann "
+                "und die Bestätigung bei der richtigen Person landet. ")
+    elif _RUECKFRAGE_WESSEN_RE.search(text):
+        if wen:
+            erkl = f"Den {feld}n der Person, für die der Termin ist — also für {wen}. "
+        else:
+            erkl = f"Ihren eigenen {feld}n, bitte. "
+    else:
+        erkl = "Gern noch einmal: "
+    spur.merken(sit, "namens-rueckfrage", f"{fid}:{text[:40]}")
+    return {"text": f"{erkl}{kern_frage}".strip(), "_wiederholungErlaubt": True}
+
+
+def _eskalieren(sit: dict, fid: str, t: str = "") -> str:
     """Zweimal keine verwertbare Antwort auf dieselbe Pflichtfrage: Standard
     setzen und weitergehen statt im Kreis zu fragen (Chef 27.08.2026:
-    'bianca hängt in Schleifen fest')."""
+    'bianca hängt in Schleifen fest'). `t` = der gehoerte Satz (W-NAME-
+    STUFEN: entscheidet, ob ein Namensversuch fehlschlug oder der Anrufer
+    etwas anderes erzaehlt hat)."""
     s = gehirn.sammler(sit)
     if fid == "schonmal":
         s["warSchonMal"] = False
@@ -1974,6 +2460,29 @@ def _eskalieren(sit: dict, fid: str) -> str:
         return "Machen wir es einfach: Ich schaue, wo es am schnellsten geht. "
     if fid == "grund":
         if not motive.ist_zahn(sit):
+            # B2 (17.09.2026): frueher stellte die Eskalation NUR dieselbe
+            # Grund-Frage noch einmal ("Das konnte ich nicht sicher ...
+            # zuordnen. Worum geht es?") — bei jeder weiteren unklaren Antwort
+            # erneut, wortgleich, bis der Wiederholungs-Waechter strich und die
+            # Presence-Schleife lief. Jetzt konvergiert sie wie einsammeln
+            # Stufe 2: allgemeine Sprechstunde/Kontrolle mit dem Gehoerten als
+            # O-Ton in der Terminnotiz. Ohne solches Motiv uebernimmt zug()
+            # VOR diesem Aufruf die Stufe 3 (_grund_unbekannt_abgeben).
+            generisch = _grund_generisch(sit)
+            if generisch:
+                o_ton = _s(sit.pop("grundKlaerungText", ""))
+                sit.pop("grundKlaerungen", None)
+                s["grund"] = o_ton or "Sprechstunde"
+                s["grundWortlaut"] = o_ton
+                s["motivId"] = _s(generisch.get("id"))
+                s["motivName"] = _s(generisch.get("name"))
+                s["grundGenerisch"] = True
+                spur.merken(sit, "grund-eskalation-generisch", o_ton)
+                if re.search(r"sprechstunde", _s(s["motivName"]), re.I):
+                    return ("Dann trage ich Sie erst einmal für die allgemeine "
+                            "Sprechstunde ein — dort schaut man sich das an. ")
+                return ("Dann trage ich es erst einmal als Kontrolle ein — "
+                        "die Praxis passt das bei Bedarf an. ")
             s["grund"] = ""
             s["grundWortlaut"] = ""
             s["motivId"] = ""
@@ -1996,11 +2505,23 @@ def _eskalieren(sit: dict, fid: str) -> str:
             s["motivName"] = ""
         return "Ich trage es erst einmal als Kontrolle ein — die Praxis passt das bei Bedarf an. "
     if fid == "wunsch":
-        s["wunsch"] = {}
+        # A6: "naechster freier Termin" — aber ausgesprochene Ausschluesse
+        # ("Donnerstag kann ich nie") bleiben harte Grenzen der Suche.
+        s["wunsch"] = wunsch_ausschluesse(s.get("wunsch"))
         return "Dann schaue ich einfach nach den nächsten freien Terminen. "
     if fid == "buchstabieren":
         s["buchstabiert"] = True
         return ""
+    if fid == "vorname":
+        return _vorname_eskalation(sit, s, t)
+    if fid in {"name", "nachname"}:
+        # W-NAME-STUFEN: der Nachname kommt auch beim wiederholten Fragen
+        # nicht an — ab dem fuenften Leerlauf ehrlich aussteigen (Rueckruf-
+        # Notiz + Nummer) statt derselben Frage im Kreis. Davor variiert der
+        # Wiederholungs-Waechter die Frage; hier nur der Vorsatz.
+        if int((sit.get("frageLeer") or {}).get(fid) or 0) >= 5:
+            return _name_ausstieg(sit, s, "Nachname")
+        return "Den Nachnamen habe ich leider nicht verstanden. "
     if fid == "rueckblick" and gehirn.nicht_zahn(sit):
         s["rueckblick"] = "fertig"
         s["folge"] = "ja"
@@ -2345,6 +2866,74 @@ def _rechnung_nummer_zug(sit: dict, s: dict, ab: dict, t: str, neu: set) -> dict
     return {"text": rechnung.NUMMER_FRAGE}
 
 
+def _grund_unbekannt_abgeben(sit: dict, wortlaut: str) -> dict:
+    """B2 Stufe 3 (17.09.2026): der Grund passt ins Fach, aber die Praxis fuehrt
+    dafuer telefonisch weder ein Motiv noch eine Sprechstunde/Kontrolle.
+
+    Frueher: "Diese Leistung wird nicht angeboten" + dieselbe Grund-Frage —
+    der Anrufer drehte sich im Kreis. Jetzt: ehrlich sagen, dass am Telefon
+    kein Termin geht, und den Wunsch als ECHTE Rueckruf-Notiz aufnehmen. Die
+    Buchung ist damit vom Tisch (kein Termin-Angebot, keine erneute Grund-
+    Frage); das aktive ANLEGEN-Anliegen wird zum ABGEBEN-Anliegen, der Rest
+    laeuft ueber den bewaehrten _abgeben_zug (Name -> Nummer -> Notiz)."""
+    from kern import hirn as kern_hirn
+
+    s = gehirn.sammler(sit)
+    was = (f"Terminwunsch am Telefon nicht zuordenbar: „{wortlaut}“" if wortlaut
+           else "Terminwunsch am Telefon nicht zuordenbar")
+    s["grund"] = ""
+    s["grundWortlaut"] = ""
+    s["motivId"] = ""
+    s["motivName"] = ""
+    sit["offered"] = []
+    _vorrat_leeren(sit)
+    spur.merken(sit, "grund-unbekannt-abgeben", wortlaut)
+    intro = fachprofil.grund_unbekannt_absage(sit)
+
+    # Erkannter Anrufer (Name + Nummer stehen): Notiz sofort, Abschluss wie
+    # nach einer leeren Slotsuche (keinSlotFertig: Nein/Danke -> auflegen,
+    # "noch ein Termin" -> neuer Wunsch; sync_nach_zug erledigt das ANLEGEN).
+    _abgeben_kontakt(sit, sofort=True)
+    tel = s.get("telefon") or s.get("aktePhone")
+    if s.get("nachname") and tel:
+        verwalten.abgeben_notiz(sit, was=was)
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["keinSlotFertig"] = True
+        return _notiz_abschluss(sit, (
+            f"{intro} Ich habe es notiert — man meldet sich bei Ihnen unter der "
+            f"{telefon.sprechbar(tel)}."
+        ))
+
+    # Sonst der bewaehrte ABGEBEN-Weg (_abgeben_zug): Name -> Nummer -> Notiz.
+    # Die Buchung ist vom Tisch: das ANLEGEN-Anliegen WIRD das ABGEBEN-Anliegen
+    # (kein Parken, kein Ruecksprung in eine Grund-Frage ohne Antwort).
+    s["modus"] = ""
+    s["phase"] = ""
+    if "hirn" in sit:
+        a = kern_hirn.aktiv(sit)
+        if a is not None and _s(a.get("handlung")) in {"ANLEGEN", "KEINE"}:
+            a["handlung"] = "ABGEBEN"
+            a["gegenstand"] = "VORGANG"
+            a["spiegel"] = (wortlaut or _s(a.get("spiegel")))[:160]
+        elif a is None:
+            kern_hirn.anliegen_hinzufuegen(
+                sit, kern_hirn.anliegen_neu("ABGEBEN", "VORGANG", spiegel=wortlaut[:160]),
+                aktivieren=True)
+    ab = sit.get("hirnAbgeben") if isinstance(sit.get("hirnAbgeben"), dict) else {}
+    ab["offen"] = True
+    ab["was"] = was
+    sit["hirnAbgeben"] = ab
+    if not s.get("nachname"):
+        s["frage"] = "name"
+        frage = "Für den Rückruf: Wie ist Ihr Name?"
+    else:
+        s["frage"] = "telefon"
+        frage = "Unter welcher Nummer erreichen wir Sie am besten?"
+    sit["flussFrage"] = frage
+    return {"text": f"{intro} {frage}"}
+
+
 def _abgeben_zug(sit: dict, t: str) -> dict | None:
     """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf/Nachricht deterministisch.
 
@@ -2472,10 +3061,45 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
             sit["flussFrage"] = rechnung.SONST_NOCH
             return {"text": f"{text} {rechnung.SONST_NOCH}"}
         return {"text": text}
-    return {"text": (
-        f"Alles notiert — die Praxis meldet sich bei Ihnen unter der "
-        f"{telefon.sprechbar(tel)}.{sonst}"
-    )}
+    text = (f"Alles notiert — die Praxis meldet sich bei Ihnen unter der "
+            f"{telefon.sprechbar(tel)}.")
+    if not ruecksprung and not s.get("modus"):
+        # B2 (17.09.2026): die Abschluss-Frage REGISTRIEREN (frage=sonst_noch),
+        # sonst faellt "Nein." / "Danke, das war's" ans Modell und niemand legt
+        # auf (die Schleife vom 15.09. — s. _sonst_noch_frage). Antwort:
+        # _abgeben_sonst_noch in zug(). Blessing (sonstNochNurNachErfolg)
+        # schliesst ueber _notiz_abschluss kurz ab und legt auf.
+        aus = _notiz_abschluss(sit, text)
+        if not aus.get("hangup") and s.get("frage") == "sonst_noch":
+            sit["flussFrage"] = _SONST_NOCH
+            sit["abgebenSonstNoch"] = True
+        return aus
+    return {"text": f"{text}{sonst}"}
+
+
+def _abgeben_sonst_noch(sit: dict, t: str) -> dict | None:
+    """Antwort auf die Abschluss-Frage nach einer allgemeinen Rueckruf-Notiz
+    (_abgeben_zug, B2): Nein/Danke/Abschied -> auflegen, kurzes Ja ->
+    Einladung, alles andere (Terminwunsch — dann hat die Intent-Schicht den
+    Modus laengst geschaltet und wir kommen nicht her —, Verbinde-Wunsch,
+    neues Thema) mit geraeumter Frage weiter an den Rest von zug()."""
+    s = gehirn.sammler(sit)
+    if not sit.pop("abgebenSonstNoch", False):
+        return None
+    if s.get("frage") != "sonst_noch" or s.get("modus"):
+        return None
+    if weiterleiten.erkannt(t) or weiterleiten.arzt_verlangt(t, sit.get("tenant") or {}):
+        s["frage"] = ""
+        sit["flussFrage"] = ""
+        return None
+    aus = _sonst_noch_antwort(
+        sit, t,
+        ja_text="Gerne — was kann ich noch für Sie tun?",
+        nein_text="Sehr gerne. Auf Wiederhören.",
+    )
+    marke = "offen" if aus is None else ("nein" if aus.get("hangup") else "ja")
+    spur.merken(sit, "abgeben", "sonst-noch:" + marke)
+    return aus
 
 
 def _anliegen_abschliessen(sit: dict) -> bool:
@@ -3106,6 +3730,118 @@ def _vorrat_leeren(sit: dict) -> None:
     sit.pop("buchIntent", None)
 
 
+# Nebenfragen der Buchung (Ja/Nein zu einem TEIL, nicht zum Termin): ein
+# "Nein, danke" / "kein Interesse" / "lieber nicht" / "ich ueberlege es mir"
+# meint dort die Nebenfrage. Abbruch nur mit hartem Termin-Bezug ("dann doch
+# keinen Termin", "Telefon beenden").
+_ABBRUCH_NEBENFRAGEN = frozenset({
+    "pzr", "pzr_kasse", "bleaching", "bleaching_check", "rueckblick", "folge_kontrolle",
+    "arzt_notiz", "arzt_notiz_diktat", "termin_notiz", "termin_notiz_check",
+    "telefon", "telefon_check", "sms_empfaenger", "telefon_alt",
+    "versicherung", "versicherung_check", "arzt_check", "arzt_nachfrage",
+    "vorname_check", "nachname_check", "anrufer_check", "fuer_wen_check", "schonmal",
+})
+
+
+def _buchung_abbrechen(sit: dict, art: str, t: str) -> dict:
+    """W-BUCHUNG-ABBRUCH (17.09.2026): der Anrufer will den Termin NICHT (mehr).
+
+    Befund `docs/BEFUND-BIANCA-ALLE-ANRUFE-2026-09-17.md` A4: 23 Readbacks ohne
+    Buchung — "Ich mache den Termin online aus. Danke." (05a5dd55), "Nein." /
+    "Oh ne." (31b8842d), "Nein, danke." (4dfc81be) und mitten im Slot-Angebot
+    "Ich moechte das Telefon beenden, Termin nicht buchen." (66913eb8).
+    `_aenderung_zug` kannte nur die vier Felder, also fragte Bianca bis zu
+    dreimal "Was darf ich aendern?" oder las erneut das Angebot vor.
+
+    Hier wird der Vorgang EHRLICH beendet: Slot, Angebot und Vorrat geraeumt,
+    Phase fertig (das Session-Hirn erledigt das Anliegen und holt ein
+    geparktes zurueck), EIN Schlusssatz. Klares Ende (Telefon beenden oder
+    Schlussfloskel im Satz) -> Abschied + auflegen; sonst genau eine
+    registrierte Abschlussfrage — ausser ein geparktes Anliegen springt
+    gleich zurueck (dann haengt der Ruecksprung seine Frage an; zwei Fragen
+    waeren wieder der Monolog). Der Anrufer kann im naechsten Zug DOCH
+    buchen (`_nach_abbruch_zug`): der gewaehlte Termin wird dafuer gemerkt.
+    """
+    s = gehirn.sammler(sit)
+    sit["buchungAbgebrochen"] = {
+        "art": art,
+        "aktiv": True,
+        "slotIso": _s(s.get("slotIso")),
+        "kalender": sit.get("angebotKalender") or None,
+    }
+    s["slotIso"] = ""
+    s["phase"] = "fertig"
+    s["frage"] = ""
+    sit["flussFrage"] = ""
+    sit.pop("bestaetigenUnklar", None)
+    sit.pop("frageLeer", None)
+    sit.pop("buchIntent", None)
+    _vorrat_leeren(sit)
+    spur.merken(sit, "buchung-abbruch", art)
+    text = abbruch.schlusssatz(art)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if (art == "beenden" or abbruch.ist_ende_wort(t)
+            or tenant.get("sonstNochNurNachErfolg") is True):
+        # Klares Ende — oder ein Mandant, der nach einem Nicht-Erfolg kurz
+        # abschliesst (Blessing, W-BLESSING-KNAPP): kein "Sonst noch etwas?".
+        return {"text": text + " Auf Wiederhören.", "hangup": abschied.an(),
+                "_wiederholungErlaubt": True}
+    from kern import hirn as kern_hirn
+    if kern_hirn.hat_geparktes(sit):
+        # Auto-Resume bringt das geparkte Anliegen samt Frage zurueck.
+        return {"text": text}
+    return {"text": text + " " + _sonst_noch_frage(sit)}
+
+
+def _nach_abbruch_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
+    """Zug NACH einem Buchungs-Abbruch (phase fertig, Vorgang beendet).
+
+    Nie wieder das Angebot vorlesen. Drei Wege: DOCH buchen (Zustand zurueck,
+    derselbe Termin wenn moeglich), Antwort auf die Abschlussfrage
+    (Nein/Danke -> auflegen), Abschied -> auflegen. Alles andere gehoert der
+    Talk-Schicht — `status_zeile` sagt dem Modell, dass kein Termin mehr
+    angeboten werden soll.
+    """
+    s = gehirn.sammler(sit)
+    ab = sit.get("buchungAbgebrochen") or {}
+    doch = abbruch.doch_buchen(t)
+    if doch or _NOCH_EIN_TERMIN_RE.search(t) or gehirn.ist_terminwunsch(t):
+        ab["aktiv"] = False
+        sit.pop("sonstNochGefragt", None)
+        s["phase"] = ""
+        s["frage"] = ""
+        spur.merken(sit, "buchung-abbruch", "doch-buchen")
+        iso = _s(ab.get("slotIso"))
+        if doch and iso and not _NOCH_EIN_TERMIN_RE.search(t):
+            s["slotIso"] = iso
+            if isinstance(ab.get("kalender"), dict):
+                sit["angebotKalender"] = ab["kalender"]
+            rb = _readback(sit)
+            rb["text"] = "Gerne. " + rb["text"]
+            return rb
+        hintergrund.anstossen(sit)
+        fid, frage = gehirn.naechste_frage(sit)
+        s["frage"] = fid
+        if fid:
+            return {"text": "Gerne. " + frage}
+        return _angebot(sit, melde)
+    if s["frage"] == "sonst_noch":
+        aus = _sonst_noch_antwort(
+            sit, t,
+            ja_text="Gerne — was kann ich noch für Sie tun?",
+            nein_text="Sehr gerne. Auf Wiederhören.",
+        )
+        if aus is not None:
+            return aus
+        return None
+    if _ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t) or (
+        len(t.split()) <= 4 and (_DANK_RE.search(t) or gehirn.ist_nein(t))
+    ):
+        return {"text": "Sehr gerne. Auf Wiederhören.", "hangup": abschied.an(),
+                "_wiederholungErlaubt": True}
+    return None
+
+
 # W-EINWAND: welche offene Frage gehoert dem Feld SELBST? Dort urteilen die
 # bestehenden Ja/Nein-Zweige (telefon_check, versicherung_check, arzt_check,
 # vorname_check) — der Einwand-Zweig haelt sich da heraus.
@@ -3309,7 +4045,9 @@ def _aenderung_zug(sit: dict, t: str, melde: Melde = None, *,
         return {"text": gehirn.arztwahl_frage(sit.get("tenant"))}
     if feld == "zeit":
         s["slotIso"] = ""
-        s["wunsch"] = None
+        # A6: die Richtung ("vormittags", "Montag") wird neu erfragt, die
+        # harten Ausschluesse aus dem bisherigen Gespraech bleiben stehen.
+        s["wunsch"] = wunsch_ausschluesse(s.get("wunsch")) or None
         sit["offered"] = []
         sit.pop("angebotKalender", None)
         sit.pop("buchIntent", None)
@@ -3504,6 +4242,15 @@ def _rueckruf_nummer_zug(sit: dict, t: str) -> dict:
         return _rueckruf_abschluss(sit, mit_nummer=False, abschied_satz=True)
     if gehirn.ist_nein(t) or _RUECKRUF_ABLEHNUNG_RE.search(t):
         return _rueckruf_abschluss(sit, mit_nummer=False)
+    # 6b. Ein Fragment liegt schon da, der Zug brachte keine Ziffer und kein
+    #     Ende: das Stueck nie still verwerfen (Replay 53986f42: neun Ziffern
+    #     weg nach "Ja."), sondern vorlesen und die Fortsetzung erfragen —
+    #     genau EINMAL, damit keine Schleife entsteht.
+    if s["telefonTeil"] and not rn.get("teilGefragt"):
+        rn["teilGefragt"] = True
+        s["frage"] = "telefon"
+        gruppen = telefon.sprechbar(telefon.mit_fuehrender_null(s["telefonTeil"]))
+        return {"text": f"Bis hierhin habe ich {gruppen}. Wie geht die Nummer weiter?"}
     # 7. Unklar / Zwischenfrage — deterministisch (kein LLM: es wuesste auch
     # nicht, WANN die Praxis anruft, und der kein-Slot-Block darunter wuerde
     # die Zwischenfrage ohnehin mit "bereits notiert" abfangen).
@@ -3524,7 +4271,12 @@ def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
 
     Chef: erledigt in der Sekunde, in der der Angerufene zurückruft und nach
     dem Grund fragt (erledigt weil mitgeteilt). Narval: Name, Nummer, Grund
-    und letzter Behandler stehen — nur vormittags/nachmittags fehlt."""
+    und letzter Behandler stehen — nur vormittags/nachmittags fehlt.
+
+    Ist dagegen KEIN Rückrufgrund gespeichert, wird das einmal ehrlich gesagt
+    und der Anruf beendet. Ohne diesen Abschluss fiel der Zug abwechselnd in
+    den allgemeinen Termin-Router und wieder hierher; der Entdoppler strich
+    dabei alles bis auf die falsche Anrede (Live a8536585, 17.09.2026)."""
     if sit.get("rueckrufMitgeteilt"):
         return None
     if not gehirn.fragt_anrufgrund(t, sit):
@@ -3532,27 +4284,21 @@ def _rueckruf_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     if sit.get("gedaechtnis") is None:
         gedaechtnis.kontext_abwarten(sit, 1.5)
     if not gehirn.rueckruf_hat_offen(sit):
-        # Herbst 08.09.: erkannt, aber Notiz status=none / MAS weg —
-        # nie ans LLM (die erfand "keine Akte" / "Akte angelegt").
-        a = gehirn.anrufer_bekannt(sit)
-        if not a:
-            return None
-        nach = _s(a.get("nachname"))
-        g = _s(a.get("geschlecht")).lower()
-        wer = ""
-        if nach:
-            if g in {"m", "male", "herr"}:
-                wer = "Herr " + nach
-            elif g in {"f", "female", "frau"}:
-                wer = "Frau " + nach
-            else:
-                wer = nach
-        kopf = f"{wer}, ich habe Sie erkannt. " if wer else "Ich habe Sie erkannt. "
-        # Nie Abholung/Narval raten — nur wenn die Notiz das hergibt.
-        return {"text": (
-            f"{kopf}Den genauen Grund des Anrufs habe ich gerade nicht "
-            "in der Notiz. Worum geht es denn?"
-        )}
+        # Ohne belegte Notiz weder einen Grund noch eine Anrede raten. Der
+        # Abschluss ist absichtlich fraglos: kein Termin-Menü, kein Praxis-
+        # rückruf und kein offener Zustand, der denselben Zug wiederholt.
+        gehirn.sammler(sit)["frage"] = ""
+        sit["flussFrage"] = ""
+        sit["rueckrufOhneGrundBeendet"] = True
+        spur.merken(sit, "rueckruf-ohne-grund", "ehrlich-beendet")
+        return {
+            "text": (
+                "Den Grund dieses Anrufs kann ich hier leider nicht sehen. "
+                "Auf Wiederhören."
+            ),
+            "hangup": abschied.an(),
+            "_wiederholungErlaubt": True,
+        }
     if sit.get("anruferKartei") is None:
         hintergrund.anrufer_kartei_abwarten(sit, 1.0)
     gehirn.rueckruf_starten(sit)
@@ -3746,14 +4492,23 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # gesetzt hat.
         sit["akutSofort"] = True
         sit["offered"] = []
+        sit["slotVorrat"] = []
         sit.pop("angebotKalender", None)
+        sit.pop("vorratFuer", None)
+        sit.pop("vorratDispatch", None)
+        sit.pop("anruferHalloFrageOffen", None)
+        sit.pop("anruferHalloOffenerText", None)
+        sit.pop("anruferHalloEinwortFrage", None)
         s["slotIso"] = ""
+        s["buchIntent"] = False
         s["frage"] = ""
         s["phase"] = "fertig"
         s["modus"] = ""
         from kern import hirn as kern_hirn
-        kern_hirn.erledigt(sit)
-        return {"text": akut_text}
+        kern_hirn.erledigt(sit, naechstes=False)
+        # Die Notfallauskunft ist der komplette Vorgang: keine Identitäts-
+        # frage, keine Slotsuche und kein „Sonst noch?“ im nächsten Zug.
+        return {"text": akut_text, "hangup": True}
 
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     if tenant.get("terminNotizNachBuchung") is True and _schon_gebucht(sit) and (
@@ -3798,6 +4553,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # haben (Checkpoint = neuer Sammler): nie mit dem alten weiterarbeiten.
     s = gehirn.sammler(sit)
 
+    # B2 (17.09.2026): Abschluss-Frage nach einer allgemeinen Rueckruf-Notiz.
+    asn = _abgeben_sonst_noch(sit, t)
+    if asn is not None:
+        return asn
+
     # Weiterleitungs-Wunsch ("Ich möchte einen Menschen sprechen"): eigener
     # deterministischer Zweig VOR allem anderen — Platzhalter fuer Kirris
     # Zaluma-/SIP-Weiterleitung (bianca/weiterleiten.py).
@@ -3838,6 +4598,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             "Ja, bitte. Buchstabieren Sie zuerst Ihren Nachnamen langsam. "
             "Am Ende sagen Sie einfach fertig."
         )}
+
+    rueckfrage_name = _namens_rueckfrage_zug(sit, t)
+    if rueckfrage_name is not None:
+        return rueckfrage_name
 
     # W-HIRN (03.09.2026): die Intent-Schicht hat den Modus evtl. schon vor
     # diesem Zug geschaltet — das Signal wandert in die Ernte-Menge, damit
@@ -3992,6 +4756,35 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 return _frisch_verschieben(sit, t, melde)
             return None
 
+    # W-BUCHUNG-ABBRUCH (17.09.2026): der Anrufer will den Termin NICHT (mehr)
+    # — "online", "keinen Termin", "ich melde mich", "Telefon beenden", auf
+    # "Was darf ich aendern?" ein blosses "Nein". Vorher war das kein Ausgang
+    # (A4 im Befund 17.09.: 23 Readbacks ohne Buchung, dreimal dieselbe
+    # Aenderungsfrage). Nie waehrend eines Diktats (Nummer/Buchstabieren) und
+    # nie nach einer echten Buchung — dort gilt die Termin-Verwaltung.
+    ab = sit.get("buchungAbgebrochen") or {}
+    if ab.get("aktiv") and s["modus"] == "buchen" and s["phase"] == "fertig":
+        # None => Talk-Schicht (status_zeile sagt dem Modell: kein Termin mehr
+        # anbieten). Der Rest des Flusses wuerde mit phase=fertig nur raten.
+        return _nach_abbruch_zug(sit, t, melde)
+    if ab.get("aktiv"):
+        # Ein anderes Anliegen (Absage, Auskunft) oder eine NEUE Buchung laeuft
+        # — der Abbruch ist Geschichte, sonst faengt er spaeter deren Ende ab.
+        ab["aktiv"] = False
+    if (s["modus"] == "buchen" and s["phase"] != "fertig" and not _schon_gebucht(sit)
+            and not s.get("buchstabenTeil") and not s.get("vornameTeil")
+            and not s.get("telefonTeil") and s["frage"] != "buchstabieren"):
+        # "Nein, danke." / "Doch nicht." zaehlen NUR auf die Readback- bzw.
+        # Aenderungsfrage — auf die PZR-/SMS-/Versicherungs-Nebenfrage heisst
+        # dasselbe "nein zur Nebenfrage" (dort nur harte Formen mit Termin-Bezug).
+        best = s["frage"] in ("bestaetigung", "aenderung")
+        art = abbruch.erkannt(t, auf_bestaetigung=best,
+                              nebenfrage=s["frage"] in _ABBRUCH_NEBENFRAGEN)
+        if not art and s["frage"] == "aenderung" and abbruch.ist_ablehnung(t):
+            art = "kein_termin"
+        if art:
+            return _buchung_abbrechen(sit, art, t)
+
     praef = _slot_praeferenz_zug(sit, t, melde)
     if praef is not None:
         return praef
@@ -4037,7 +4830,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             s["frage"] = "aenderung"
             if _aenderung_feld(t):
                 return _aenderung_zug(sit, t, melde)
-            return {"text": "Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name, die Nummer oder der Besuchsgrund?"}
+            # W-BUCHUNG-ABBRUCH: der Ausgang wird MITGENANNT — wer den Termin
+            # gar nicht will, muss das nicht erraten (live: dreimal dieselbe
+            # Frage, bis der Anrufer auflegte). EINE Frage, am Ende.
+            return {"text": ("Kein Problem. Was darf ich ändern — der Zeitpunkt, der Name, "
+                             "die Nummer, der Besuchsgrund — oder lieber gar keinen Termin?")}
         if _aenderung_feld(t):
             sit.pop("bestaetigenUnklar", None)
             sit.pop("buchIntent", None)
@@ -4052,7 +4849,20 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         return _aenderung_zug(sit, t, melde)
 
     if s["phase"] in {"angebot", "bestaetigen"} and sit.get("offered"):
+        if s["phase"] == "angebot" and s.get("frage") == "slotwahl":
+            nummer_antwort = _nummer_waehrend_slotwahl(sit, s, t)
+            if nummer_antwort:
+                return {"text": nummer_antwort}
         iso = _slot_wahl(t, sit["offered"])
+        if not iso and s["phase"] == "angebot" and s.get("frage") == "slotwahl":
+            iso = _slot_ja_blank(sit, t)
+            if iso == "":
+                # Blankes Ja auf MEHRERE Angebote: nachfragen, welcher —
+                # deterministisch, kein LLM (Replay 53986f42 z21: "Ja." auf
+                # zwei Slots lief ans Modell und der Anrufer haengte).
+                return {"text": _slot_welcher_frage(sit)}
+            if iso is None:
+                iso = ""
         if iso:
             s["slotIso"] = iso
             # Nach Ja + slotTaken: Intent steht — Alternativ-Slot direkt buchen
@@ -4103,6 +4913,18 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         neu.add("modus")
     sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
 
+    if "grundKlaerung" in neu:
+        # B2 Stufe 1 (17.09.2026): unbekannter Grund in einer Nicht-Zahn-Praxis
+        # — EINMAL fachsicher nachfragen statt "nicht angeboten". Der zweite
+        # Anlauf landet in einsammeln bei Sprechstunde/Kontrolle (Stufe 2)
+        # oder hier unten bei der ehrlichen Absage (Stufe 3).
+        s["phase"] = ""
+        s["frage"] = "grund"
+        frage = fachprofil.grund_klaerungsfrage(sit)
+        sit["flussFrage"] = frage
+        spur.merken(sit, "grund-klaerung", _s(sit.get("grundKlaerungText")))
+        return {"text": frage}
+
     if "grundNichtBuchbar" in neu:
         # Fachfremde/unbekannte Leistungen nie als Kontrolle tarnen.
         # Thaler nennt seine sechs freigegebenen Gruppen; alle anderen
@@ -4113,6 +4935,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         art = str(sit.pop("grundNichtBuchbarArt", "") or "")
         if zimmer_map.aktiv(sit.get("tenant") or {}) and art == "mandantengrenze":
             return {"text": zimmer_map.buchbare_ansage()}
+        if art == "nicht_im_katalog":
+            # B2 Stufe 3: passt ins Fach, aber kein Motiv und keine
+            # Sprechstunde/Kontrolle buchbar -> ehrlich + Rueckruf-Notiz.
+            return _grund_unbekannt_abgeben(
+                sit, _s(sit.pop("grundNichtBuchbarText", "")))
         return {"text": fachprofil.nicht_buchbar_antwort(sit)}
 
     # Live 08.09.2026: bei langsamer Buchstabierung/Nummerndiktat beendete
@@ -4429,7 +5256,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # Dieselbe Frage ist schon offen und der Satz brachte nichts Neues.
             zaehler = sit.setdefault("frageLeer", {})
             zaehler[fid] = int(zaehler.get(fid) or 0) + 1
-            if zaehler[fid] <= 1:
+            # W-NAME-STUFEN: ein KURZER Leerlauf auf eine Namensfrage ("Ja.",
+            # "Ja, bitte.", "Da.", "Hm." — Replay 53986f42) ist nie ein
+            # Gespraechsbeitrag, den das Modell deuten muesste; sofort die
+            # gestaffelte Hilfe statt eines LLM-Zugs. Laengere Saetze
+            # (Erzaehlung, Einwand) behalten den ersten freien Zug.
+            name_kurz = (fid in {"vorname", "nachname", "name"}
+                         and len(_s(t).split()) <= 3)
+            if zaehler[fid] <= 1 and not name_kurz:
                 if fid == "telefon_check":
                     # Rückbestätigung bleibt deterministisch: das LLM erfand
                     # hier "die Nummer habe ich notiert" UND der Anker fragte
@@ -4448,12 +5282,25 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 return None
             # Zweiter Leerlauf: Standard setzen und WEITERGEHEN — nie wieder
             # dieselbe Frage im Kreis (Live-Schleife 27.08.2026).
-            uebergang = _eskalieren(sit, fid)
+            if fid == "grund":
+                # B2 Stufe 3: Nicht-Zahn-Praxis ohne Auffang-Motiv — ehrlich
+                # absagen + Rueckruf-Notiz statt derselben Grund-Frage.
+                abg = _grund_eskalation_abgeben(sit, t)
+                if abg is not None:
+                    return abg
+                if not sit.get("grundKlaerungText") and _s(t):
+                    # O-Ton fuer die Terminnotiz der Stufe 2 (Sprechstunde).
+                    sit["grundKlaerungText"] = _s(t)[:90]
+            uebergang = _eskalieren(sit, fid, t)
             if s["phase"] == "fertig":
                 # Die Eskalation hat den Vorgang abgeschlossen (Pflicht-Nummer
                 # zweimal nicht genannt -> Notiz): nichts mehr fragen, nichts
-                # mehr anbieten.
-                s["frage"] = ""
+                # mehr anbieten. AUSNAHME W-NAME-STUFEN: der Ausstieg hat die
+                # Rueckruf-Nummer als offene Frage gesetzt (telefon/
+                # telefon_check) — die bleibt stehen, sonst kann die Praxis
+                # nicht zurueckrufen.
+                if not (sit.get("rueckrufNummer") or {}).get("offen"):
+                    s["frage"] = ""
                 return {"text": uebergang.strip()}
             fid2, frage2 = gehirn.naechste_frage(sit)
             if not fid2:
@@ -4495,6 +5342,14 @@ def status_zeile(sit: dict) -> str:
         return verwalten.status_zeile(sit)
     if not s or s.get("modus") != "buchen":
         return ""
+    ab = sit.get("buchungAbgebrochen") or {}
+    if ab.get("aktiv") and s.get("phase") == "fertig":
+        # W-BUCHUNG-ABBRUCH: der Anrufer hat die Buchung selbst beendet — das
+        # Modell darf weder den Termin noch das Angebot wieder aufbringen.
+        return ("Der Anrufer hat die Terminbuchung ABGEBROCHEN (" + _s(ab.get("art"))
+                + "). Biete keinen Termin und keine Zeiten mehr an, führe nicht zur "
+                  "Buchung zurück; antworte kurz auf das Gesagte. Nur wenn der Anrufer "
+                  "von sich aus DOCH einen Termin möchte, sagt das der Fluss selbst.")
     a = s.get("arzt") or {}
     teile = [
         f"Name={_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip(),

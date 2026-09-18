@@ -243,10 +243,26 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
             "nextAppointment": data.get("nextAppointment") or {},
             "grund": _s(vergangen.get("visitMotiveName")),
         }
-    cal = kalender_von(tenant, name_roh)
+    # W-KALENDER-TOT (17.09.2026): die CF liefert die calendarId des ALTEN
+    # Termins — bei Blessing zeigte sie auf einen geloeschten Kalender
+    # (TphQRh53…), und jede Slotsuche damit lief auf 500 „Could not load
+    # doctor" (61 Fehler in 10 Anrufen, immer „Terminkalender antwortet
+    # nicht" + Rueckruf-Notiz). Eine Kalender-Id zaehlt nur, wenn der Mandant
+    # sie heute fuehrt; sonst wird der Behandler ueber den NAMEN aufgeloest
+    # (einziger Behandler-Kalender zaehlt auch) — und ohne Treffer bleibt sie
+    # leer, damit der Fluss ehrlich nach dem Behandler fragt.
+    cf_cid = _s(termin.get("calendarId"))
+    kal_tot = _kalender_tot(tenant, cf_cid)
+    if kal_tot:
+        cal = _kalender_nur_name(tenant, name_roh)
+        cid = _s((cal or {}).get("id"))
+        print(f"kartei-kalender-tot cf={cf_cid} name={name_roh!r} -> {cid or '-'}", flush=True)
+    else:
+        cal = kalender_von(tenant, name_roh)
+        cid = cf_cid or _s((cal or {}).get("id"))
     return {
         "ok": True,
-        "calendarId": _s(termin.get("calendarId")) or _s((cal or {}).get("id")),
+        "calendarId": cid,
         "calendarName": _s((cal or {}).get("name")) or _s(termin.get("calendarName")),
         "doctorName": _s(termin.get("doctorName")),
         "lastIso": _s(termin.get("startIso")),
@@ -256,4 +272,52 @@ def letzter_behandler(tenant: dict, patient_id: str) -> dict[str, Any]:
         # Besuchsgrund des VERGANGENEN Termins (Rueckblick-Ansprache, Chef
         # 30.08.2026) — bewusst nie vom Zukunfts-Termin.
         "grund": _s(vergangen.get("visitMotiveName")),
+        "kalenderTot": kal_tot,
     }
+
+
+def _kalender_tot(tenant: dict, calendar_id: str) -> bool:
+    """True, wenn die Id NICHT zu den heutigen Kalendern des Mandanten gehoert.
+
+    Ohne Kalenderliste (Dock-Tests, alte Sitzungen) wird nichts verworfen —
+    im Zweifel gilt die Antwort der Plattform wie bisher."""
+    cid = _s(calendar_id)
+    cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
+    ids = {_s(c.get("id")) for c in cals if isinstance(c, dict) and _s(c.get("id"))}
+    if not cid or not ids:
+        return False
+    if cid in ids:
+        return False
+    # Gesperrte Behandler fuehrt behandler_sperre getrennt — die sind nicht
+    # tot, sondern bewusst ausgeblendet (oben schon behandelt).
+    gesperrt = tenant.get("_gesperrteKalender") if isinstance(tenant.get("_gesperrteKalender"), list) else []
+    if any(_s(g.get("id")) == cid for g in gesperrt if isinstance(g, dict)):
+        return False
+    return True
+
+
+def _kalender_nur_name(tenant: dict, name: str) -> dict[str, Any] | None:
+    """Kalender ueber den Namen — OHNE den Default-Rueckfall von kalender_von.
+
+    Trifft der Name keinen Kalender, zaehlt nur noch ein EINZIGER
+    Behandler-Kalender (Blessing) als eindeutig; sonst None."""
+    from kern import tenants as kern_tenants
+    cals = tenant.get("calendars") if isinstance(tenant.get("calendars"), list) else []
+    q = _s(name).lower()
+    if q and cals:
+        for c in cals:
+            if _s(c.get("name")).lower() == q:
+                return c
+        tokens = [t for t in q.replace(".", " ").split() if t not in {"dr", "doktor", "med", "frau", "herr"}]
+        best, score = None, 0
+        for c in cals:
+            n = _s(c.get("name")).lower()
+            s = sum(1 for t in tokens if len(t) >= 3 and t in n)
+            if s > score:
+                best, score = c, s
+        if best:
+            return best
+    personen = kern_tenants.behandler_kalender(tenant)
+    if len(personen) == 1:
+        return personen[0]
+    return None

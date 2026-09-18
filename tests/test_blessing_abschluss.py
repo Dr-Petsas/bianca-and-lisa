@@ -341,8 +341,11 @@ def test_b2_fertig_ist_nur_im_abgesicherten_namensdiktat_eine_formularantwort():
     assert deutung["handlung"] == "KEINE"
     assert deutung["zug"] == "verfeinern"
 
-    # Der Sondervorrang bleibt mandantenscharf; MedDent und Thaler bewegen
-    # sich nicht.
+    # W-FERTIG-DIKTAT (17.09.2026): das Schlusswort "fertig" im OFFENEN
+    # Namensdiktat ist bei JEDEM Mandanten die Formularantwort — Bianca sagt
+    # es dem Anrufer selbst so vor. Bis dahin las MedDent/Thaler daraus
+    # WISSEN x REGEL ("Ist mein Befund fertig?"), das Hirn parkte das Anliegen
+    # und leerte den Modus (Anruf 53986f42: 15 Zuege freies Modell).
     for tenant_id in ("meddent", "thaler"):
         sit = _sit(tenant_id)
         hirn.anliegen_hinzufuegen(
@@ -355,8 +358,13 @@ def test_b2_fertig_ist_nur_im_abgesicherten_namensdiktat_eine_formularantwort():
             "frage": "nachname",
         })
         deutung = intent.erkennen(sit, gesagt)
-        assert deutung["handlung"] == "WISSEN", (tenant_id, deutung)
-        assert deutung["gegenstand"] == "REGEL", (tenant_id, deutung)
+        assert deutung["handlung"] == "KEINE", (tenant_id, deutung)
+        assert deutung["zug"] == "verfeinern", (tenant_id, deutung)
+        # Ohne offene Namensfrage bleibt "fertig" auch dort das alte
+        # Auskunftswort.
+        frei = _sit(tenant_id)
+        deutung_frei = intent.erkennen(frei, gesagt)
+        assert deutung_frei["handlung"] == "WISSEN", (tenant_id, deutung_frei)
 
 
 def test_b2_gesprochener_name_mit_fertig_erreicht_den_readback(monkeypatch):

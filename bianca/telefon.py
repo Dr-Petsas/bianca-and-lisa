@@ -168,6 +168,16 @@ def plausibel(nummer: str) -> bool:
     return d.startswith("0") and 10 <= len(d) <= 13
 
 
+def plausibel_kurz(nummer: str) -> bool:
+    """Wie `plausibel`, laesst aber auch neunstellige Festnetznummern zu
+    (kleine Ortsnetze: 07129 5316). Nur fuer ein AUSDRUECKLICH beendetes
+    Diktat ("fertig", "ja, das war's") — Replay 53986f42 z19-z21: neun
+    Ziffern lagen im Fragment, der Anrufer sagte "Ja.", die Nummer fiel weg
+    und die Praxis konnte nicht zurueckrufen."""
+    d = mit_fuehrender_null(nummer)
+    return d.startswith("0") and 9 <= len(d) <= 13
+
+
 def ist_handy(nummer: str) -> bool:
     """Deutsche Mobilfunknummer? (015x/016x/017x, auch als +49…)
 

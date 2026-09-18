@@ -1,6 +1,6 @@
 """Rückrufer fragt nach dem Anrufgrund: mitteilen, erledigt, nur noch die Zeit."""
 
-from bianca import flow, gehirn
+from bianca import agent, flow, gehirn, session
 from kern import gedaechtnis as ged
 from kern.tenants import laden
 
@@ -100,14 +100,26 @@ def test_rueckruf_fragt_grund_mitgeteilt_dann_wunschzeit():
         flow.hintergrund.anstossen = echt_an
 
 
-def test_rueckruf_ohne_offene_notiz_laesst_llm():
+def test_rueckruf_ohne_offene_notiz_antwortet_ehrlich_und_beendet():
     echt_an = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
         sit["gedaechtnis"] = ""
         sit["gedaechtnisOffen"] = []
-        assert flow.zug(sit, "Warum habt ihr angerufen?") is None
+        z = flow.zug(sit, "Warum habt ihr angerufen?")
+        assert z
+        assert z["text"] == (
+            "Den Grund dieses Anrufs kann ich hier leider nicht sehen. "
+            "Auf Wiederhören."
+        )
+        assert z["hangup"]
+        assert "Rückruf" not in z["text"]
+        assert "Termin" not in z["text"]
+        assert "?" not in z["text"]
+        assert sit["rueckrufOhneGrundBeendet"] is True
+        assert gehirn.sammler(sit)["frage"] == ""
+        assert sit["flussFrage"] == ""
     finally:
         flow.hintergrund.anstossen = echt_an
 
@@ -151,7 +163,7 @@ def test_rueckruf_herbst_frontdesk_notiz_status_none():
         flow.hintergrund.anstossen = echt_an
 
 
-def test_rueckruf_erkannt_ohne_notiz_fragt_nicht_nochmal_identitaet():
+def test_rueckruf_erkannt_ohne_notiz_verwendet_keine_unsichere_anrede():
     echt_an = flow.hintergrund.anstossen
     flow.hintergrund.anstossen = lambda sit: None
     try:
@@ -163,13 +175,67 @@ def test_rueckruf_erkannt_ohne_notiz_fragt_nicht_nochmal_identitaet():
         sit["gedaechtnis"] = ""
         sit["gedaechtnisOffen"] = []
         z = flow.zug(sit, "Ich wollte wissen, warum ich angerufen wurde von Ihnen.")
-        assert z and "erkannt" in z["text"].lower()
-        assert "Akte" not in z["text"]
-        assert "Herr Herbst" in z["text"]
+        assert z and z["hangup"]
+        assert "erkannt" not in z["text"].lower()
+        assert "Herr Herbst" not in z["text"]
         assert "Abholung" not in z["text"]
         assert "Narval" not in z["text"]
     finally:
         flow.hintergrund.anstossen = echt_an
+
+
+def test_live_a8536585_kein_menue_und_keine_endschleife(monkeypatch):
+    """Blessing 17.09.: Annegret Rauscher fragte wiederholt nach dem Anrufgrund.
+
+    Die Akte lieferte faelschlich gender=male. Trotzdem darf weder „Herr
+    Rauscher“ noch das allgemeine Termin-Menue gesprochen werden. Der eine
+    klare Satz beendet den Weg; ein Begruessungs-Vorab darf ihm nicht mit der
+    falschen Anrede zuvorkommen.
+    """
+    sit = session.neu(tenant=laden("blessing"))
+    agent.start_reply(sit)
+    sit["anrufer"] = {
+        "vorname": "Annegret", "nachname": "Rauscher",
+        "patientId": "Zu2NG004p284Nbs0XQki",
+        "geschlecht": "m", "telefon": "+491781685831",
+    }
+    sit["gedaechtnis"] = ""
+    sit["gedaechtnisOffen"] = []
+    monkeypatch.setattr(agent.gedaechtnis, "kontext_anstossen", lambda sit: None)
+    monkeypatch.setattr(flow.gedaechtnis, "kontext_abwarten", lambda sit, max_s=1.5: None)
+    monkeypatch.setattr(
+        agent.llm,
+        "chat",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("Der klare Rückrufgrund-Zug darf nicht ans LLM")
+        ),
+    )
+    monkeypatch.setattr(
+        agent.llm,
+        "chat_stream",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("Der klare Rückrufgrund-Zug darf nicht ans LLM")
+        ),
+    )
+    live = (
+        "Ich habe einen Anruf auf meinem Handy von euch und möchte, "
+        "ich habe aber erst nächste Woche am 25. September um zehn Uhr "
+        "einen Termin."
+    )
+    vorab = []
+    z = agent.user_turn(sit, live, vorab=vorab.append)
+
+    assert z and z["hangup"]
+    assert z["text"] == (
+        "Den Grund dieses Anrufs kann ich hier leider nicht sehen. "
+        "Auf Wiederhören."
+    )
+    assert vorab == []
+    assert "Herr Rauscher" not in z["text"]
+    assert "Frau Rauscher" not in z["text"]
+    assert "Termin, eine Absage" not in z["text"]
+    assert "Rückruf" not in z["text"]
+    assert "?" not in z["text"]
 
 
 def test_fragt_anrufgrund_folge_nach_anruf_satz():

@@ -70,10 +70,12 @@ def _sit() -> dict:
     return sit
 
 
-def test_schalter_ist_nur_bei_blessing_aktiv():
+def test_schalter_gilt_seit_a6_fuer_alle_mandanten():
+    # A6 (17.09.2026): der Merker ist Standard; ein Mandant kann ihn nur noch
+    # AUSDRUECKLICH abschalten (False). Blessing traegt weiter True.
     assert laden("blessing").get("slotPraeferenzenFesthalten") is True
     for tenant_id in ("meddent", "thaler", "ruether"):
-        assert not laden(tenant_id).get("slotPraeferenzenFesthalten")
+        assert laden(tenant_id).get("slotPraeferenzenFesthalten") is not False
 
 
 def test_live_saetze_sperren_donnerstag():
@@ -179,12 +181,26 @@ def test_anderer_tag_sperrt_die_tage_des_bisherigen_angebots():
     assert all(x["iso"][:10] != "2026-12-03" for x in sit["offered"])
 
 
-def test_meddent_altpfad_waehlt_einen_konkret_genannten_slot():
+def test_opt_out_altpfad_waehlt_einen_konkret_genannten_slot():
+    # Nur ein AUSDRUECKLICHES Opt-out (False) schaltet den Merker ab — dann
+    # gilt der alte Weg: Auswahl per _slot_wahl, Ablehnung ohne Merker.
     sit = _sit()
-    sit["tenant"] = laden("meddent")
+    sit["tenant"] = dict(laden("meddent"), slotPraeferenzenFesthalten=False)
 
     assert flow._slot_praeferenz_zug(sit, "Nicht Donnerstag.") is None
     assert flow._slot_wahl("Montag um elf Uhr fünfzehn.", sit["offered"]) == MONTAG_11
+
+
+def test_meddent_merkt_abgelehnten_donnerstag_wie_blessing():
+    sit = _sit()
+    sit["tenant"] = laden("meddent")
+
+    aus = flow._slot_praeferenz_zug(sit, "Nicht Donnerstag.")
+
+    assert aus is not None
+    assert 4 in gehirn.sammler(sit)["wunsch"]["excludeWeekdays"]
+    assert sit["offered"]
+    assert all(x["iso"][:10] != "2026-12-03" for x in sit["offered"])
 
 
 def test_verschieben_faellt_nie_auf_abgelehnten_donnerstag_zurueck(monkeypatch):

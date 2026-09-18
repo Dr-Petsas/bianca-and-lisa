@@ -21,6 +21,9 @@ Ausnahmen (werden NIE angefasst):
   Sicherheitsschleife bleibt deterministisch — nach einer Korrektur DARF
   "Stimmt das so?" erneut kommen.
 - Sätze mit Ziffern oder Ziffern-Wort-Gruppen (Nummern-/Zeiten-Readback).
+- Termin-FAKTEN (Wochentag, Monat, "Uhr", "halb neun"): Slot-Angebote und
+  Termin-Readbacks (W-ANGEBOT-BLEIBT 17.09.2026 — live wurde die Slot-Liste
+  gestrichen und es blieb "Welcher davon passt Ihnen?" ohne Optionen).
 - Kurze Sätze ohne Fragezeichen ("Alles klar."): natürliche Quittungen
   dürfen sich wiederholen.
 
@@ -38,6 +41,23 @@ _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 # Ziffern ODER drei und mehr Ziffern-Wörter am Stück ("null eins sieben ...").
 _ZIFFER_RE = re.compile(
     r"\d|(?:\b(?:null|eins|zwei|drei|vier|f[üu]nf|sechs|sieben|acht|neun|zwo)\b[\s,]*){3,}",
+    re.I,
+)
+# W-ANGEBOT-BLEIBT (A5, 17.09.2026): Termin-FAKTEN werden nie gestrichen.
+# Live 66913eb8 Zug 19: die Slot-Liste „Frei ist am Montag, den siebten
+# Dezember um zwölf Uhr; …" war wortgleich mit dem vorigen Angebot (gleiche
+# Slots nach Motivwechsel) — der Wächter strich sie, gesprochen wurde nur
+# „Alles klar. Welcher davon passt Ihnen?" (ohne Optionen). Die Ziffern-
+# Ausnahme greift bei AUSGESCHRIEBENEN Datums-/Uhrzeitwörtern nicht. Ein
+# Satz mit Wochentag, Monat, „Uhr" oder „halb <Stunde>" ist ein Angebot/
+# Readback: einmal gehört reicht dort NICHT — der Anrufer muss wählen können.
+_TERMIN_FAKT_RE = re.compile(
+    r"\b(?:montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)s?\b|"
+    r"\b(?:januar|februar|m[äa]rz|april|mai|juni|juli|august|september|oktober|"
+    r"november|dezember)\b|"
+    r"\buhr\b|"
+    r"\bhalb\s+(?:eins|zwei|drei|vier|f[üu]nf|sechs|sieben|acht|neun|zehn|elf|zw[öo]lf)\b|"
+    r"\b(?:heute|morgen|[üu]bermorgen)\s+um\b",
     re.I,
 )
 LANGSATZ_AB = 60      # Aussagesätze ab dieser Länge gelten als Wiederholungs-Kandidat
@@ -151,13 +171,21 @@ def pruefen(sit: dict, text: str, *, frueher: list[str], frage_id: str = "",
 
     behalten: list[str] = []
     getauscht = False
+    fakt_davor = False
     for satz in _saetze(t):
         n = _norm(satz)
         frage_satz = satz.rstrip().endswith("?")
         kandidat = frage_satz or len(satz) >= LANGSATZ_AB or auch_kurz
-        if not n or not kandidat or _ZIFFER_RE.search(satz) or n not in gehoert:
+        fakt = bool(_ZIFFER_RE.search(satz) or _TERMIN_FAKT_RE.search(satz))
+        # Die Wahlfrage DIREKT hinter einem Angebot gehoert zum Angebot
+        # („… um vierzehn Uhr. Welcher davon passt Ihnen?") — ohne sie staende
+        # die Liste im Raum, ohne dass der Anrufer weiss, dass er waehlen soll.
+        wahlfrage = frage_satz and fakt_davor
+        if not n or not kandidat or fakt or wahlfrage or n not in gehoert:
             behalten.append(satz)
+            fakt_davor = fakt
             continue
+        fakt_davor = False
         # Wortgleiche Wiederholung erkannt.
         if (frage_satz and not getauscht and frage_id and frage_kern
                 and re.search(frage_kern, satz, re.I)):

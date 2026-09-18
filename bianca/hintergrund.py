@@ -56,8 +56,13 @@ def kartei_von_anrufer(sit: dict) -> None:
             # gesperrten Behandler kommt OHNE calendarId (nie binden, nie
             # buchen) — Besuch/Grund bleiben fuer Rueckblick und die
             # ehrliche Behandler-Frage (gehirn._arzt_gesperrt_frage).
+            # W-KALENDER-TOT: zeigte der letzte Termin auf einen geloeschten
+            # Kalender, bleibt die Kartei (Besuch/Grund fuer den Rueckblick)
+            # — nur ohne calendarId, damit der Fluss den Behandler erfragt
+            # statt in den toten Kalender zu suchen.
             if info.get("ok") and info.get("war") and (
-                    _s(info.get("calendarId")) or info.get("gesperrt")):
+                    _s(info.get("calendarId")) or info.get("gesperrt")
+                    or info.get("kalenderTot")):
                 sit["anruferKartei"] = {
                     "letzterBesuch": _s(info.get("lastIso")),
                     "letzterGrund": _s(info.get("grund")),

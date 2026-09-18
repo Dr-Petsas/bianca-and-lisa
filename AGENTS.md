@@ -4029,6 +4029,29 @@ Datum gefragt werden.
   Mandanten, 60-Prozent-Rückversicherung, Identitätsvorrang, Datenschutz,
   Termin-vergessen ohne Wann-Frage und Buchungs-Gegenprobe).
 
+## Fehlender Rückrufgrund endet ohne Schleife (W-RUECKRUFGRUND-ENDE 17.09.2026 — nicht rückbauen)
+
+Blessing-Anruf `a8536585f9724cddabf97849024ca43c`: Die Anruferin fragte,
+warum die Praxis angerufen hatte. Es gab weder einen offenen Vorgang noch
+einen gespeicherten Grund. Der Rückrufpfad fragte trotzdem „Worum geht es
+denn?“, fiel danach ins allgemeine Termin-Menü und wieder zurück; der
+Wiederholungswächter strich schließlich alles bis auf die zudem falsche
+Akten-Anrede „Herr Rauscher“.
+
+- `flow._rueckruf_zug` beantwortet die klar erkannte Frage ohne belegte Notiz
+  jetzt genau einmal: „Den Grund dieses Anrufs kann ich hier leider nicht
+  sehen. Auf Wiederhören.“ Der Satz ist fraglos und trägt `hangup`; es gibt
+  weder Praxisrückruf, Termin-Menü noch einen offenen Fragezustand.
+- Auf diesem Pfad wird keine Anrede aus der Akte verwendet. `agent.user_turn`
+  unterdrückt außerdem die schnelle Anrufer-Begrüßung vor dem Flow, damit ein
+  falsches Akten-Geschlecht nicht schon als Vorab-Satz hörbar wird.
+- Ein vorhandener echter Rückrufvorgang bleibt unverändert: Bianca nennt
+  weiterhin den belegten Grund, erledigt den Vorgang und führt dessen
+  Terminpfad fort.
+- Regression: `tests/test_rueckruf.py` enthält den wortgleichen Live-Satz,
+  das falsche `gender=m`, einen LLM-Testbruch sowie die Wachen gegen Vorab,
+  Menü, Rückrufangebot und fehlendes Auflegen.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

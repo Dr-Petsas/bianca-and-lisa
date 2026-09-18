@@ -574,3 +574,56 @@ def test_hinweis_passt_filtert_nach_zeitraum():
     assert verwalten._hinweis_passt(im_oktober, w) is True
     assert verwalten._hinweis_passt(im_dezember, w) is False
     assert heute  # ruhig halten: Datum nur fuer Lesbarkeit
+
+
+# --- 9. W-FENSTERENDE (17.09.2026, Befund A7): startDate IMMER senden ---------------
+#
+# Ohne startDate rechnet die Plattform das Fensterende als "jetzt + 30 Tage"
+# MIT Uhrzeit; der Kalkulator erzeugt fuer Tag 30 den ganzen Tag, geladen sind
+# die Termine aber nur bis zur Anruf-Uhrzeit -> Phantom-Slots, die beim Buchen
+# mit "The slot is not available." scheitern (6 von 8 Buchungsfehlern lagen
+# exakt auf Tag 30). Mit startDate = heute rechnet die Plattform ab
+# Berlin-Mitternacht und Tag 30 faellt komplett heraus.
+
+def _cf_fang(protokoll: list[dict], slots: list[str] | None = None):
+    def fake(route, body, *, timeout=None):
+        protokoll.append({"route": route, "body": dict(body)})
+        return 200, {"status": "success", "data": {"free_time_slots": list(slots or [])}}, \
+            {"name": route, "route": route}
+    return fake
+
+
+def test_seite_ohne_startdatum_sendet_heute(monkeypatch):
+    protokoll: list[dict] = []
+    monkeypatch.setattr(kal, "_cf_call", _cf_fang(protokoll))
+    found = kal._find_slots_seite({"clientId": "c", "locationId": "l"}, {"calendarId": "k"})
+    assert found["ok"]
+    assert len(protokoll) == 1 and protokoll[0]["route"] == "getFreeTimeSlots"
+    heute = datetime.now(TZ).date().isoformat()
+    assert protokoll[0]["body"]["startDate"] == heute, protokoll[0]["body"]
+    # Datum ohne Uhrzeit: die Plattform parst es als Mitternacht und rechnet
+    # tagesgenau — genau das nimmt Tag 30 aus dem Fenster.
+    assert "T" not in protokoll[0]["body"]["startDate"]
+
+
+def test_seite_mit_startdatum_reicht_es_unveraendert_durch(monkeypatch):
+    protokoll: list[dict] = []
+    monkeypatch.setattr(kal, "_cf_call", _cf_fang(protokoll))
+    kal._find_slots_seite({"clientId": "c", "locationId": "l"}, {"calendarId": "k"},
+                          start_date="2026-10-01")
+    assert protokoll[0]["body"]["startDate"] == "2026-10-01"
+
+
+def test_behandler_und_zimmer_weg_senden_startdatum(monkeypatch):
+    """Alle Suchwege laufen ueber _find_slots_seite — kein Weg ohne startDate."""
+    protokoll: list[dict] = []
+    heute = _heute()
+    monkeypatch.setattr(kal, "_cf_call", _cf_fang(protokoll, [_iso(heute + timedelta(days=2), 9)]))
+    tenant = {"clientId": "c", "locationId": "l", "calendars": [{"id": "k", "name": "Dr. Petsas"}]}
+    kal.find_slots_behandler(tenant, {"calendarId": "k"})
+    kal.find_slots_raeume(tenant, {"calendarId": "k"}, [{"id": "k", "name": "Zimmer 1"}])
+    assert protokoll, "kein CF-Aufruf"
+    heute_iso = datetime.now(TZ).date().isoformat()
+    for eintrag in protokoll:
+        assert eintrag["route"] == "getFreeTimeSlots"
+        assert eintrag["body"].get("startDate") == heute_iso, eintrag["body"]

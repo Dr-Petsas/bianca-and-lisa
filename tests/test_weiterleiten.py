@@ -359,13 +359,49 @@ def test_mensch_ohne_arzt_fragt_nach_dem_anliegen():
     assert "Ärzte" not in z["text"]
 
 
-def test_allgemeine_personal_stichworte_bekommen_ueberlastungs_erklaerung():
+def test_allgemeine_personal_stichworte_bekommen_kurze_erklaerung():
+    """C2 (17.09.2026): der Personal-Sermon ist fuer ALLE Mandanten kurz —
+    ein Satz plus die Anliegen-Frage, kein Vortrag ueber KI und Versorgung."""
     for text in ("Rezeption", "Mitarbeiter", "Anmeldung", "Mensch", "Person"):
         z = flow.zug(_sit(), text)
-        assert z and "medizinische Versorgung" in z["text"], text
-        assert "KI-Assistenz" in z["text"]
-        assert "jedem Anruf" in z["text"]
+        assert z and z["text"] == weiterleiten.ENTLASTUNG, text
+        assert "Worum geht es" in z["text"]
+        assert "KI-Assistenz" not in z["text"]
         assert not z.get("transfer")
+
+
+def test_ausfuehrliche_erklaerung_nur_per_opt_in():
+    sit = _sit()
+    sit["tenant"]["anmeldungAusfuehrlich"] = True
+    z = flow.zug(sit, "Rezeption")
+    assert z and z["text"] == weiterleiten.ENTLASTUNG_AUSFUEHRLICH
+    assert "medizinische Versorgung" in z["text"]
+
+
+def test_abteilungswort_im_nebensatz_ist_kein_verbinde_wunsch():
+    """W-VERBINDEN-ZIEL (17.09.2026): live liefen "Termin fuer eine andere
+    Person", "Die Anmeldung hat mir gesagt, ich soll anrufen" und "Ich bin die
+    Kollegin von Frau X" in die Personal-Erklaerung — das Abteilungs-Wort
+    allein ist kein Wunsch nach einem Menschen."""
+    for text in (
+        "Ich brauche einen Termin für eine andere Person.",
+        "Die Anmeldung hat mir gesagt, ich soll anrufen.",
+        "Ich bin die Kollegin von Frau Müller und rufe für sie an.",
+        "Sind Sie ein echter Mensch?",
+        "Spreche ich gerade mit einer Person?",
+        "Anmeldung, ich möchte meinen Termin absagen.",
+    ):
+        assert not weiterleiten.mensch_gewuenscht(text), text
+    for text in (
+        "Anmeldung.",
+        "Mitarbeiter, bitte.",
+        "Ich hätte gern die Anmeldung.",
+        "Kann ich mit jemandem sprechen?",
+        "Ich möchte mit dem Praxisteam sprechen.",
+        "Verbinden Sie mich mit der Rezeption.",
+        "Nein, ich bestehe auf dem Empfang.",
+    ):
+        assert weiterleiten.mensch_gewuenscht(text), text
 
 
 def test_rezeption_ist_kein_rezept():
@@ -377,7 +413,7 @@ def test_rezeption_ist_kein_rezept():
                  "Verbinden Sie mich mit der Rezeption, bitte."):
         z = flow.zug(_sit(), text)
         assert z and "Rezept" not in z["text"], text
-        assert "Anmeldung" in z["text"], text
+        assert z["text"] == weiterleiten.ENTLASTUNG, text
     # Gegenprobe auf dem ECHTEN Weg (Fix 1, 13.09.2026): MedDent traegt
     # keinen Vorsprache-Marker, das Rezept laeuft ueber Intent -> ABGEBEN
     # -> _abgeben_zug (Notiz-Weg, „nicht ausstellen"). Der feste
@@ -815,6 +851,73 @@ def test_ansage_ueberlebt_sprech_filter():
     assert "Verbindung" in raus and "möglich" in raus
     assert "Kirri" not in raus and "Lappen" not in raus
     wahr = sprech.sanitize(weiterleiten.WAHRHEIT)
-    assert "Telefonassistentin" in wahr and "Anmeldung" in wahr
+    assert "direkt" in wahr and "Verbindung" in wahr
     assert "Worum geht es" in wahr and "niemand" not in wahr
     assert "personalfrei" not in wahr and "KI-geführt" not in wahr
+    lang = sprech.sanitize(weiterleiten.ENTLASTUNG_AUSFUEHRLICH)
+    assert "Telefonassistentin" in lang and "Anmeldung" in lang
+
+
+# --- W-VERBINDEN-ZIEL (17.09.2026) -------------------------------------------
+
+def _sit_ohne_ziel(mandant: str) -> dict:
+    """Praxis OHNE Verbinde-Whitelist (Thaler, Blessing) — dort gibt es kein
+    Durchstellen, also darf auch nie "zu welchem unserer Ärzte?" kommen."""
+    t = laden(mandant)
+    assert not weiterleiten.kann_verbinden(t), mandant
+    return {"tenant": t, "messages": [{"role": "system", "content": "x"}]}
+
+
+def test_kann_verbinden_nur_mit_whitelist():
+    assert weiterleiten.kann_verbinden(laden("meddent"))
+    assert not weiterleiten.kann_verbinden({})
+    assert not weiterleiten.kann_verbinden({"verbindenErlaubt": []})
+    assert weiterleiten.kann_verbinden({"verbindenErlaubt": ["Petsas"]})
+
+
+def test_verbinde_wunsch_ohne_ziel_fragt_nie_nach_dem_arzt():
+    """Live 15./16.09.2026 (Thaler/Blessing, 8 Anrufe): "Können Sie mich
+    weiterleiten?" -> "Zu welchem unserer Ärzte darf ich Sie verbinden?" ->
+    Name -> Platzhalter. Zwei verschenkte Zuege fuer eine Frage, deren
+    Antwort nie etwas aendern konnte."""
+    for mandant in ("thaler", "blessing"):
+        for satz in ("Können Sie mich bitte weiterleiten?",
+                     "Ich möchte verbunden werden.",
+                     "Verbinden Sie mich bitte."):
+            sit = _sit_ohne_ziel(mandant)
+            events: list[str] = []
+            z = flow.zug(sit, satz, events.append)
+            assert z is not None, (mandant, satz)
+            assert "welchem unserer" not in z["text"].lower(), (mandant, z["text"])
+            assert "Ärzt" not in z["text"], (mandant, z["text"])
+            assert "Worum geht es" in z["text"], (mandant, z["text"])
+            assert "transfer" not in z and not z.get("hangup")
+            assert weiterleiten.JINGLE_EVENT not in events
+            assert sit["weiterleiten"]["frage"] == "anliegen"
+
+
+def test_ohne_ziel_laeuft_das_anliegen_danach_normal_weiter():
+    sit = _sit_ohne_ziel("thaler")
+    flow.zug(sit, "Können Sie mich weiterleiten?")
+    # Anliegen genannt -> Weiterleitungs-Stand geraeumt, der Fluss uebernimmt.
+    z = flow.zug(sit, "Ich möchte einen Termin absagen.")
+    assert sit.get("weiterleiten") in (None, {})
+    assert z is None or "welchem unserer" not in (z.get("text") or "").lower()
+
+
+def test_ohne_ziel_zweites_bestehen_bietet_rueckruf_an():
+    """Wer trotz Erklaerung auf dem Menschen besteht, bekommt den echten
+    Rueckruf-Weg — auch mit einem blossen "Verbinden Sie mich trotzdem"."""
+    sit = _sit_ohne_ziel("blessing")
+    flow.zug(sit, "Können Sie mich weiterleiten?")
+    z = flow.zug(sit, "Verbinden Sie mich trotzdem bitte.")
+    assert z and "Rückruf" in z["text"]
+    assert sit["weiterleiten"]["frage"] == "rueckruf"
+
+
+def test_meddent_mit_ziel_fragt_weiter_nach_dem_arzt():
+    """Gegenprobe: MedDent HAT eine Whitelist — der bewaehrte Weg bleibt."""
+    sit = _sit_mit_weiterleitung()
+    z = flow.zug(sit, "Können Sie mich bitte weiterleiten?")
+    assert z is not None
+    assert "welchem unserer" in z["text"].lower() or "Petsas" in z["text"]

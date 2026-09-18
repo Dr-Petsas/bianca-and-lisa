@@ -42,6 +42,31 @@ _DENK_RE = re.compile(
     re.I,
 )
 _DENK_PAUSE_S = 7.0
+# Denk-Cue am SATZENDE ("Ja, mein Nachname, warte." — Replay 53986f42 z07:
+# der Zug ging ans Modell). Zaehlt nur, wenn der Vorspann keine Namens-/
+# Inhalts-Token traegt ("Busch, warte" bleibt eine Namensnennung).
+_DENK_ENDE_RE = re.compile(
+    r"^(?P<vor>.{0,40}?)[\s,;:-]*"
+    r"(?:warte(?:n)?(?:\s+(?:sie|mal|kurz|bitte))*|(?:einen?\s+)?moment(?:\s+bitte)?|"
+    r"(?:einen?\s+)?augenblick(?:\s+bitte)?|(?:eine\s+)?sekunde(?:\s+bitte)?)"
+    r"[\s.,!?…]*$",
+    re.I,
+)
+
+
+def _ist_denk_cue(text: str) -> bool:
+    if _DENK_RE.match(text):
+        return True
+    m = _DENK_ENDE_RE.match(text or "")
+    if not m:
+        return False
+    vor = m.group("vor") or ""
+    if re.search(r"\d", vor):
+        return False
+    try:
+        return not gehirn._name_tokens(vor)
+    except Exception:
+        return False
 
 # --- Wachen für den LLM-Pfad -------------------------------------------------
 # Live 27.08.2026: Das Modell ERFAND Terminangebote ("Mittwoch, den 24. Juli,
@@ -318,6 +343,21 @@ _FEHLT_WORT = {
 }
 
 
+def _frage_gestrichen(fid: str, vorher: str, nachher: str) -> bool:
+    """Hat der Wiederholungs-Wächter die offene Pflichtfrage aus dem Zug
+    entfernt? Erkannt am KERNWORT der Frage (`_FRAGE_KERN`), nicht am
+    Fragezeichen: die gestaffelten Namensfragen (W-NAME-STUFEN,
+    "Buchstabieren Sie mir den Vornamen bitte einmal …") sind Imperative
+    ohne "?" und fielen als Langsatz weg — Replay 53986f42 z09: gesprochen
+    blieb nur "Alles klar." Ohne Kernwort im Rest ist die Frage weg."""
+    kern = _FRAGE_KERN.get(fid, "")
+    if kern:
+        if not re.search(kern, _s(vorher), re.I):
+            return False
+        return not re.search(kern, _s(nachher), re.I)
+    return "?" in _s(vorher) and "?" not in _s(nachher)
+
+
 def _wiederholung_oder_presence(sit: dict, text: str) -> str:
     """Wiederholungs-Wächter ohne wortgleiches Restore (W-REPEAT 01.09.2026).
 
@@ -326,7 +366,23 @@ def _wiederholung_oder_presence(sit: dict, text: str) -> str:
     """
     raus = _wiederholungs_wache(sit, text)
     if raus:
-        return antwort_wache.saeubern(sit, raus)
+        raus = antwort_wache.saeubern(sit, raus)
+        # W-FRAGE-BLEIBT (17.09.2026, Replay 53986f42 z10): der Wächter
+        # strich die verbrannte Pflichtfrage ("Wie ist Ihr Vorname?" — alle
+        # Varianten schon gehört), liess aber den Übergang stehen — gesprochen
+        # wurde nur "Entschuldigung, das habe ich nicht mitbekommen." Ohne
+        # Frage weiss der Anrufer nicht, was er sagen soll: Sackgasse. Ist
+        # eine Pflichtfrage offen und der Zug trug sie als Fragesatz, kommt
+        # sie mit Präfix zurück (nie wortgleich, W-REPEAT bleibt gewahrt).
+        fid = _s((sit.get("sammler") or {}).get("frage"))
+        if raus and fid and _frage_gestrichen(fid, text, raus):
+            # Die kanonische Pflichtfrage der Maschine, nicht irgendeine
+            # gestrichene Modell-Frage — die war zu Recht weg.
+            offen = _kanonische_frage(sit, fid) or stille.nur_fragesaetze(text)
+            if offen:
+                spur.merken(sit, "wiederholung-frage-bleibt", fid)
+                raus = (raus + " " + stille.frage_praefix(offen, sit)).strip()
+        return raus
     if not _s(text):
         return ""
     # Alles war Wiederholung und keine Variante frei. Presence ("Sind Sie
@@ -338,7 +394,7 @@ def _wiederholung_oder_presence(sit: dict, text: str) -> str:
     # Presence als letzter Notnagel.
     offen = stille.nur_fragesaetze(text) or _s(sit.get("flussFrage"))
     if offen:
-        praefix = stille.frage_praefix(offen)
+        praefix = stille.frage_praefix(offen, sit)
         # Die Re-Greeting-Wache darf den Rueckfall nicht leeren — stumm zu
         # bleiben waere schlimmer als die Schleife. `praefix` ist NICHT der
         # wortgleiche Originalsatz, W-REPEAT bleibt also gewahrt.
@@ -435,6 +491,50 @@ _KOMPAKT_GRUSS_RE = re.compile(
     r"gruess\s+gott)[\s.,!?…]*$",
     re.I,
 )
+# Gruss + Namensnennung ohne Anliegen ("Hallo, Busch, guten Morgen!",
+# "Guten Tag, hier ist Frau Meier") — Replay 53986f42 z01: der Zug ging ans
+# Modell, obwohl nichts zu deuten war. Zaehlt fuer ALLE Mandanten; die
+# Antwort ist ein Gruss plus die offene bzw. die Auftrags-Frage.
+_GRUSS_TOKEN = frozenset({
+    "hallo", "hi", "hey", "guten", "tag", "morgen", "abend", "grüß", "gruess",
+    "gott", "servus", "moin", "schönen", "schoenen", "ja", "äh", "ähm", "ehm",
+    "hier", "ist", "spricht", "mein", "name", "frau", "herr", "und", "also",
+    "praxis", "bin", "ich", "der", "die", "das",
+})
+_GRUSS_KERN_RE = re.compile(
+    r"\b(?:hallo|hi|hey|guten\s+(?:tag|morgen|abend)|gr(?:ü|ue)(?:ß|ss)\s+gott|"
+    r"servus|moin)\b", re.I,
+)
+
+
+def _ist_gruss_mit_name(sit: dict, text: str) -> bool:
+    t = _s(text)
+    if not t or "?" in t or any(ch.isdigit() for ch in t):
+        return False
+    if not _GRUSS_KERN_RE.search(t):
+        return False
+    s = sit.get("sammler") or {}
+    namen: set[str] = set()
+    for k in ("nachname", "vorname", "name", "kontaktName"):
+        for teil in _s(s.get(k)).lower().replace("-", " ").split():
+            namen.add(teil)
+    toks = re.findall(r"[a-zäöüß]+", t.lower())
+    rest = [x for x in toks if x not in _GRUSS_TOKEN and x not in namen]
+    return not rest
+
+
+def _gruss_antwort(text: str, frage: str) -> str:
+    low = _s(text).lower()
+    if "morgen" in low:
+        gruss = "Guten Morgen!"
+    elif "abend" in low:
+        gruss = "Guten Abend!"
+    else:
+        gruss = "Guten Tag!"
+    f = _s(frage)
+    if f and "?" in f:
+        f = f.split("?", 1)[0].rstrip() + "?"
+    return f"{gruss} {f or 'Wie kann ich Ihnen helfen?'}"
 
 
 def _diktat_offen(sit: dict) -> bool:
@@ -595,7 +695,7 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         text = antwort_wache.saeubern(sit, ent) or ent
     else:
         # Frage war schon wortgleich da — mit Präfix, nie Original-Restore.
-        praefix = stille.frage_praefix(frage)
+        praefix = stille.frage_praefix(frage, sit)
         text = " ".join(x for x in (vorsatz, praefix) if x)
     if not _s(text):
         # Alle Wächter haben gestrichen. Ein stummer Stups ist für den
@@ -1162,6 +1262,8 @@ def _fakten_wache_anwenden(
         "rueckruf": "Einen Rückruf habe ich noch nicht angelegt.",
         "transfer": "Eine Weiterleitung habe ich noch nicht gestartet.",
         "nummer": "Ihre Nummer steht noch nicht in der Akte.",
+        "gefunden": "In der Kartei habe ich noch nicht nachgesehen.",
+        "wiedersehen": "Einen Termin habe ich noch nicht eingetragen.",
     }.get(
         unbelegt,
         "Da will ich nichts falsch machen — das ist noch nicht erledigt.",
@@ -1348,10 +1450,16 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return stille_zug(sit)
     sit.pop("kurzlautSerie", None)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
-    if _DENK_RE.match(text_in):
+    if _ist_denk_cue(text_in):
         # phone_agent skip_turn: nachdenkende Anrufer nicht anstupsen.
+        # Als WARTE-Zug (17.09.2026, Replay 53986f42 z07): ein nacktes
+        # Leer-Reply liess Bruecke und Dock im Unklaren — der Dock-Watchdog
+        # (1,4 s ohne Ton) haette in die Denkpause hineingesprochen. `warte`
+        # ist der eine stille Vertrag (W-DATEN-FLOOR/W-KURZLAUT): Watchdog
+        # aus, Stups gehalten, laengere Ruhe-Schwelle fuer den Nachdenker.
         sit["denkPauseBis"] = time.time() + _DENK_PAUSE_S
-        return {"text": "", "book": None}
+        spur.merken(sit, "denk-cue-warte", text_in[:40])
+        return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
     sit.pop("denkPauseBis", None)
     # W-GEDAECHTNIS: falls inzwischen Name/Nummer bekannt sind, parallel im
     # Praxisgedaechtnis nachsehen (key-gesichert, no-op ohne neue Fakten).
@@ -1394,6 +1502,25 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             {"text": fachprofil.fallback_antwort(sit), "book": None},
             msgs,
         )
+
+    # W-NOTFALL-VORRANG (18.09.2026): Ein Blessing-Notfall muss VOR
+    # Wohlseins-, Identitaets-, Intent- und Buchungsfragen in den festen
+    # Praxisweg. Im Live-Anruf e14366c6 wurde „Notfalltermin“ zuerst mit
+    # „Habe ich Sie richtig erkannt?“ beantwortet; danach suchte der Flow
+    # mehrfach Slots in einem alten Kalender. Der feste Flow raeumt den
+    # Buchungsstand und beendet den Anruf nach der Notfallansage.
+    from kern import praxisregeln
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if praxisregeln.notfall_sofort_aktiv(tenant) and praxisregeln.akut(text_in):
+        akut_reply = tasks.zug(sit, text_in, melde)
+        if akut_reply is None:  # Fail-safe: ein Notfall darf nie ans LLM.
+            akut_reply = {
+                "text": praxisregeln.notfall_antwort(tenant, text_in),
+                "book": None,
+                "hangup": True,
+            }
+        spur.merken(sit, "notfall-vorrang", text_in[:80])
+        return _maschinen_antwort(sit, akut_reply, msgs)
 
     # W-HALLO-PAUSE (10.09.2026): Hat Bianca wirklich „Wie geht es Ihnen?“
     # gefragt, war der vorherige Zug absichtlich NUR diese Frage. Jetzt erst
@@ -1568,7 +1695,12 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # sprechen, während flow + Ziffern-TTS im Hintergrund laufen.
     # Seriell (Hallo, Stille, Nummer) war der hörbare Hänger.
     hallo_fragt = False
-    if vorab:
+    # Ein klarer Rückrufer fragt nach EINER Sache: warum die Praxis angerufen
+    # hat. Davor keine erkannte-Anrufer-Begrüßung ausspielen — sie verdoppelte
+    # live die Anrede und sprach bei a8536585 wegen eines falschen Akten-
+    # Geschlechts sogar „Herr Rauscher“, bevor der sichere Rückrufpfad
+    # antworten konnte.
+    if vorab and not gehirn.fragt_anrufgrund(arbeits_text, sit):
         hallo = gehirn.anrufer_hallo_jetzt(sit, text_in)
         if hallo:
             # Vorab ging am Wächter vorbei (Live 08.09.: Hallo jeden Zug).
@@ -1780,8 +1912,30 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # Mitten in einem Formular ist "Guten Tag" ein neues Thema und
             # wirkt hektisch. Dort nur ruhig die offene Frage halten.
             begruessen=not bool(offene),
+            gesagt=text_in,
         )
         spur.merken(sit, "blessing-knapp", "gruss")
+        return _maschinen_antwort(
+            sit,
+            {"text": text, "book": None, "_wiederholungErlaubt": True},
+            msgs,
+        )
+    if _ist_gruss_mit_name(sit, text_in):
+        # Gruss (+ Name) ohne Anliegen — deterministisch fuer alle Mandanten:
+        # kein Modell, keine geratene Anrede (W-ANREDE), sofort die offene
+        # bzw. die Auftrags-Frage. Mitten in einem Formular nur die Frage.
+        offene = _offene_frage(sit)
+        if gespraech.kompakt_aktiv(sit):
+            text = gespraech.kompakt_jobfrage(
+                sit, offene_frage=offene, begruessen=not bool(offene),
+                gesagt=text_in)
+        elif offene:
+            text = _kanonische_frage(sit, _s((sit.get("sammler") or {}).get("frage"))) or offene
+            if "?" in text:
+                text = text.split("?", 1)[0].rstrip() + "?"
+        else:
+            text = _gruss_antwort(text_in, "Wie kann ich Ihnen helfen?")
+        spur.merken(sit, "gruss-deterministisch", text_in[:40])
         return _maschinen_antwort(
             sit,
             {"text": text, "book": None, "_wiederholungErlaubt": True},

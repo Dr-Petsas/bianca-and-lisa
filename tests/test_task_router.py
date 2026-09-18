@@ -3,7 +3,7 @@
 import json
 import os
 
-from bianca import agent, flow, gehirn
+from bianca import agent, flow, gehirn, weiterleiten
 from kern import gespraech, hirn, task_router
 from kern.tenants import laden
 
@@ -250,7 +250,7 @@ def test_mitarbeiter_einwort_bleibt_deterministisch():
         agent.llm.chat = chat_alt
         agent.llm.chat_stream = stream_alt
 
-    assert "Telefonassistentin" in antwort["text"]
+    assert antwort["text"] == weiterleiten.ENTLASTUNG
     assert "Worum geht es" in antwort["text"]
     assert sit["weiterleiten"]["frage"] == "anliegen"
 
@@ -259,7 +259,7 @@ def test_mitarbeiter_darf_offene_termin_klaerung_ueberstimmen():
     sit = _sit()
     agent.user_turn(sit, "Termin")
     antwort = agent.user_turn(sit, "Mitarbeiter")
-    assert "Telefonassistentin" in antwort["text"]
+    assert antwort["text"] == weiterleiten.ENTLASTUNG
     assert sit["weiterleiten"]["frage"] == "anliegen"
     assert "einwortTerminOffen" not in sit
 

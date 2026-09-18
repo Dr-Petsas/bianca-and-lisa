@@ -122,6 +122,79 @@ def _bestands_verschieben_verhoerer(sit: dict | None, text: str) -> bool:
     )
 
 
+# --- Diktat-Schlusswort "fertig" (W-FERTIG-DIKTAT 17.09.2026) -----------------
+#
+# Anruf 53986f42 (Blessing): auf die Buchstabier-Frage kam "B, U, S, C, H,
+# Busch, Fertig, Nachname." — das Schlusswort "fertig" steht in _WECHSEL_RE
+# (Wechsel-Verdacht) UND in _FB_AUSKUNFT_RE ("Ist mein Befund fertig?" =
+# WISSEN). Die Heuristik machte daraus WISSEN x REGEL, das Hirn parkte die
+# Buchung und leerte sammler["modus"] — ab da sprach 15 Zuege lang nur das
+# freie Modell (erfundene Termine, erfundene Buchung, Abschied "bis morgen").
+# Der Blessing-Opt-in (buchstabierSegmenteTrennen) fing nur die Form mit
+# "fertig" am SATZENDE. Jetzt gilt fuer JEDEN Mandanten: solange eine
+# Namens-/Nummernfrage offen ist oder ein Fragment gesammelt wird, ist
+# "fertig" das Schlusswort des Diktats (Bianca sagt es dem Anrufer selbst so
+# vor) und NIE ein Anliegen-Wechsel. Bewusst eng: nur ohne ein ZWEITES
+# Wechselwort im Satz, und der Rest muss wie Diktat aussehen (Buchstaben,
+# Ziffern, ein Name, Feldwoerter wie "Nachname").
+_DIKTAT_FRAGEN = {
+    "name", "nachname", "vorname", "buchstabieren", "nachname_check",
+    "vorname_check", "nachname_korr", "aenderung",
+    "telefon", "telefon_check", "telefon_alt", "geburtstag",
+}
+_DIKTAT_FERTIG_RE = re.compile(r"\bfertig\b", re.I)
+_DIKTAT_FELDWORT_RE = re.compile(
+    r"\b(?:mein|meine|meiner|meinen|der|die|das|ist|war|lautet|hei(?:ß|ss)e|"
+    r"nachname|vorname|name|familienname|nummer|telefonnummer|handynummer|"
+    r"buchstabiere|buchstabiert|ich|so|und|dann|jetzt|okay|ok|ja|also|"
+    r"war\W?s|das\s+war\W?s|ende|punkt|bitte|danke)\b",
+    re.I,
+)
+
+
+def _diktat_offen(sit: dict | None) -> bool:
+    """Namens-/Nummernfrage offen oder ein Fragment in Arbeit?"""
+    if not isinstance(sit, dict):
+        return False
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("frage")) in _DIKTAT_FRAGEN:
+        return True
+    return bool(s.get("buchstabenTeil") or s.get("telefonTeil") or s.get("vornameTeil"))
+
+
+def _ohne_diktat_fertig(sit: dict | None, t: str) -> str:
+    """Im offenen Diktat das Schlusswort 'fertig' aus dem Text nehmen, damit
+    Wechsel-/Auskunfts-Lexika es nicht als Anliegen lesen."""
+    if _diktat_offen(sit) and _DIKTAT_FERTIG_RE.search(t):
+        return _s(_DIKTAT_FERTIG_RE.sub(" ", t))
+    return t
+
+
+def _ist_diktat_fertig_zug(sit: dict | None, t: str) -> bool:
+    """'B, U, S, C, H, Busch, fertig, Nachname.' / 'Busch, fertig' /
+    'Null sieben eins, fertig' waehrend einer offenen Diktat-Frage: Ernte
+    fuer die Maschine, kein Wechsel. Gilt NUR mit 'fertig' im Satz und OHNE
+    weiteres Wechselwort; der Rest muss diktat-artig sein."""
+    if not _diktat_offen(sit) or not _DIKTAT_FERTIG_RE.search(t):
+        return False
+    rest = _DIKTAT_FERTIG_RE.sub(" ", t)
+    if _WECHSEL_RE.search(rest) or _ABBRUCH_RE.search(rest):
+        return False
+    kern = _DIKTAT_FELDWORT_RE.sub(" ", rest)
+    kern = _s(re.sub(r"[,.;:!?\-–—]+", " ", kern))
+    if not kern:
+        return True
+    if (_BUCHSTABIER_RE.match(kern) or _ZIFFERN_RE.match(kern)
+            or _ZAHLWORT_RE.match(kern)):
+        return True
+    # Buchstabenkette plus ausgesprochener Name ("B U S C H Busch"),
+    # Name plus Buchstabierung ("Jelto J E L T O") — Einzelbuchstaben und
+    # Zahlwoerter raus, uebrig bleiben hoechstens drei Namens-Token.
+    tokens = [w for w in kern.split()
+              if len(w) > 1 and not _ZAHLWORT_RE.match(w) and not w.isdigit()]
+    return len(tokens) <= 3
+
+
 def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> bool:
     """Koennte dieser Satz das Anliegen wechseln? Nur dann lohnt das LLM.
 
@@ -130,6 +203,8 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     KEINEN LLM-Aufschlag mehr. Das Lexikon deckt die Wechsel-Faelle aus der
     Meddent-/Blessing-Auswertung; was es faengt, entscheidet weiter das LLM.
     """
+    # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" das Schlusswort.
+    t = _ohne_diktat_fertig(sit, t)
     if (_WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t)
             or _bestands_verschieben_verhoerer(sit, t)):
         return True
@@ -257,6 +332,10 @@ def _ist_formular_antwort(sit: dict, text: str) -> bool:
             )
             if ist_kette or (frage == "buchstabieren" and ist_name):
                 return True
+    # W-FERTIG-DIKTAT (17.09.2026, alle Mandanten): "…, fertig, Nachname."
+    # im offenen Diktat ist die Antwort auf die Namens-/Nummernfrage.
+    if _ist_diktat_fertig_zug(sit, t):
+        return True
     if _WECHSEL_RE.search(t):
         return False
     # B1 Blessing: „Wann ist mein Termin?“ darf auch auf eine gerade offene
@@ -631,7 +710,8 @@ def _motivkatalog_da(sit: dict) -> bool:
 def _fallback(sit: dict, text: str) -> dict[str, Any]:
     """Deterministische Not-Deutung. Buchen NUR bei ausdruecklichem
     Terminwunsch — nie als Default (Chef 03.09.2026)."""
-    t = _s(text)
+    # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" kein Auskunftswort.
+    t = _ohne_diktat_fertig(sit, _s(text))
     aus = {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
            "ersatz": None, "spiegel": t[:80], "quelle": "fallback"}
     if not t:
@@ -720,6 +800,8 @@ _NEGATION_RE = re.compile(r"\bnicht\b|\bkein\w*|\bniemals\b|\bnie\b", re.I)
 def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
     """Genau EIN Kategorie-Treffer, keine Verneinung, kein Roman ->
     Deutung sofort (0 ms). Mehrdeutiges geht weiter ans LLM."""
+    # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" kein Auskunftswort.
+    t = _ohne_diktat_fertig(sit, t)
     if len(t.split()) > 18:
         return None
     # W-RECHNUNG: VOR der Verneinungs-Sperre — "Die Rechnung stimmt nicht"

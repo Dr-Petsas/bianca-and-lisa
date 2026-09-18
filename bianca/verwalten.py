@@ -857,6 +857,12 @@ def rueckruf_nummer(sit: dict) -> str:
         d = telefon.mit_fuehrender_null(roh)
         if telefon.plausibel(d):
             return d
+        # Eine Ziffer fuer Ziffer RUECKBESTAETIGTE neunstellige Festnetznummer
+        # (kleines Ortsnetz, Replay 53986f42: 07129 5316) ist eine echte
+        # Rueckrufnummer — sonst fragt Bianca sie direkt nach dem "Ja, richtig"
+        # ein zweites Mal ab.
+        if roh == s["telefon"] and s.get("telefonOk") and telefon.plausibel_kurz(d):
+            return d
     return ""
 
 
@@ -960,6 +966,22 @@ def rueckruf_notiz(sit: dict) -> None:
     )
 
 
+def kalender_fehler_notiz(sit: dict) -> None:
+    """Slotsuche technisch gescheitert (CF-Fehler/Timeout, auch nach dem
+    zweiten Wurf): das gesprochene "die Praxis ruft zurueck" MUSS eine Notiz
+    mit Wunsch und Nummer hinterlassen (W-KALENDER-FEHLER 17.09.2026 —
+    Blessing 15.09.: zehn Anrufe, kein Eintrag, kein Rueckruf moeglich)."""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    grund = _s(s.get("grundWortlaut") or s.get("grund")) or "Termin"
+    _notiz_schreiben(
+        sit, anliegen="neubuchung",
+        status="Terminkalender nicht erreichbar — Termin bitte telefonisch vergeben, zurueckrufen",
+        dock_text=(f"{name} wollte einen Termin ({grund}) — der Terminkalender "
+                   "antwortete nicht. Bitte zurueckrufen und Termin vergeben."),
+    )
+
+
 def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> None:
     """HTTP-200 ohne belastbaren Read-back wird zum echten Prüf-/Rückrufvorgang."""
     s = gehirn.sammler(sit)
@@ -972,6 +994,30 @@ def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> None:
         dock_text=(
             f"{name}: Buchung für {wann or 'den gewünschten Zeitpunkt'} war nach dem "
             "Schreiben nicht eindeutig rücklesbar. Termin und SMS prüfen, bitte zurückrufen."
+        ),
+    )
+
+
+def buchung_fehler_notiz(sit: dict, *, slot_iso: str = "", grund_technisch: str = "") -> None:
+    """Eintragen technisch gescheitert (4xx/5xx, kein slotTaken, kein
+    needs_phone): das gesprochene "die Praxis ruft Sie dazu zurück" MUSS eine
+    Notiz mit dem bestaetigten Wunschtermin hinterlassen (W-BUCHUNG-TECHNIK
+    17.09.2026 — Replay 53986f42: Versprechen ohne Zeile, und der naechste Zug
+    lief ueber buchIntent+slotIso erneut in dieselbe Fehlermeldung)."""
+    s = gehirn.sammler(sit)
+    name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    wann = spoken_slot(slot_iso) if len(_s(slot_iso)) >= 16 else _s(slot_iso)
+    grund = _s(s.get("grundWortlaut") or s.get("grund")) or "Termin"
+    technik = f" ({_s(grund_technisch)})" if _s(grund_technisch) else ""
+    _notiz_schreiben(
+        sit,
+        anliegen="buchung_fehler",
+        status=("Eintragen technisch gescheitert — Termin bitte manuell eintragen "
+                f"und zurueckrufen{technik}"),
+        dock_text=(
+            f"{name} hat den Termin {wann or 'zum gewünschten Zeitpunkt'} ({grund}) "
+            "am Telefon bestätigt — das Eintragen ist technisch gescheitert. "
+            "Bitte manuell eintragen und zurückrufen."
         ),
     )
 

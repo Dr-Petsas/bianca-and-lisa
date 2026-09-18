@@ -33,7 +33,7 @@ _REINE_FRAGE = re.compile(
 )
 
 _CLAIM_BUCHEN = re.compile(
-    r"\b(gebucht|eingebucht|reserviert|fest\s+(?:ein)?getragen|"
+    r"\b(?:gebucht|eingebucht|reserviert|fest\s+(?:ein)?getragen|"
     r"ist\s+(?:jetzt\s+)?(?:im|in\s+dem)\s+kalender|"
     r"hab(?:e)?\s+(?:ihn(?:en)?\s+|den\s+termin\s+)?(?:jetzt\s+|so\s+)?eingetragen|"
     # "Dann ist alles fuer Sie eingetragen." (Blessing 15.09., Anruf a8fcbcb4 —
@@ -41,7 +41,18 @@ _CLAIM_BUCHEN = re.compile(
     # ehrliche VERNEINUNG ("ist noch nicht eingetragen") nie als Behauptung gilt.
     r"ist\s+(?:jetzt\s+|alles\s+|damit\s+|somit\s+|dann\s+)*"
     r"(?:f(?:ü|ue)r\s+sie\s+)?(?:alles\s+)?eingetragen|"
-    r"termin\s+steht)\b",
+    r"termin\s+steht)\b|"
+    # C1 (17.09.2026, Blessing-Anruf 53986f42): das Modell "buchte" im PRAESENS
+    # — "Ich trage für Sie morgen, Mittwoch, den sechzehnten September, um neun
+    # Uhr dreißig bei Frau Doktor Blessing ein.", "Ich buche Ihnen den Termin",
+    # "Dann reserviere ich das" — book_slot lief nie; der Anrufer glaubte, er
+    # habe einen Termin. Die alten Formen kannten nur das Perfekt. Erlaubt
+    # bleiben Fragen ("Soll ich Sie eintragen?" — _REINE_FRAGE) und Verneinungen
+    # ("kann ich nicht eintragen" — kein "ich trage/buche" davor).
+    r"\b(?:ich\s+(?:trage|buche|reserviere|blocke|blockiere)|"
+    r"(?:trage|buche|reserviere|blocke|blockiere)\s+ich)\b"
+    r"(?:[^.!?]*?\b(?:ein|fest)\b(?=\s*(?:[,;—–-]|[.!?…]*\s*$))|"
+    r"[^.!?]{0,40}\b(?:termin|platz|slot)\b)",
     re.I,
 )
 # Eine Nummer/Akten-Aenderung ist ein SCHREIBVORGANG — im selben Atemzug wie
@@ -70,7 +81,23 @@ _CLAIM_NOTIZ = re.compile(
     r"\b(?:notiz|vermerk)\w*\b[^.!?]{0,60}\b"
     r"(?:gemacht|hinterlegt|geschrieben|erstellt|angelegt|notiert|vermerkt|"
     r"ausgerichtet|weitergeleitet|weitergegeben)\b|"
-    r"\bdem\s+(?:team|doktor|arzt)\b[^.!?]{0,30}\b(?:vorleg\w*|weitergeb\w*|ausricht\w*)",
+    r"\bde[mr]\s+(?:team|doktor|arzt|ärztin|aerztin|praxis)\b[^.!?]{0,30}"
+    r"\b(?:vorleg\w*|weitergeb\w*|ausricht\w*)|"
+    # C1 (17.09.2026, Blessing-Anruf 53986f42): "Ich habe alles notiert." /
+    # "Das habe ich mir notiert." / "Ihren Wunsch habe ich festgehalten." /
+    # "Ich gebe das an die Praxis weiter." — ohne Notiz-Werkzeug; der Anrufer
+    # legte auf und wartete auf einen Termin, den niemand kannte. Bewusst NUR
+    # das Anliegen als Objekt (alles/das/es/Wunsch/Anliegen): "Ich habe Ihre
+    # Nummer vermerkt" ist Datenaufnahme (test_kurzes_notiert_…) und bleibt.
+    r"\bhab(?:e)?\s+(?:ich\s+)?(?:mir\s+)?(?:das|es|alles|"
+    r"ihren?\s+(?:wunsch|anliegen|termin\w*)|den\s+(?:termin)?wunsch|das\s+anliegen)"
+    r"\s+(?:so\s+|jetzt\s+)?(?:notiert|vermerkt|festgehalten|aufgeschrieben)\b|"
+    r"\b(?:das|es|alles|ihren?\s+(?:wunsch|anliegen)|den\s+(?:termin)?wunsch)\s+hab(?:e)?\s+ich\s+"
+    r"(?:mir\s+)?(?:so\s+|jetzt\s+)?(?:notiert|vermerkt|festgehalten|aufgeschrieben)\b|"
+    r"\b(?:gebe|leite|reiche|richte)\s+(?:ich\s+)?(?:das|es|ihr\w*\s+\w+|alles|den\s+wunsch)"
+    r"[^.!?]{0,30}\b(?:an\s+die\s+praxis|ans\s+team|an\s+das\s+team|"
+    r"an\s+(?:den|die)\s+(?:doktor|arzt|ärztin|aerztin)|dem\s+team|der\s+praxis)"
+    r"[^.!?]{0,15}\b(?:weiter|aus)\b",
     re.I,
 )
 _CLAIM_ANLEGEN = re.compile(
@@ -81,20 +108,88 @@ _CLAIM_ANLEGEN = re.compile(
     re.I,
 )
 
+_STUNDEN_WORT = (
+    r"(?:ein|eins|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun|zehn|elf|"
+    r"zwölf|zwoelf|dreizehn|vierzehn|fünfzehn|fuenfzehn|sechzehn|siebzehn|"
+    r"achtzehn|neunzehn|zwanzig)"
+)
 _ZEIT_MARK = re.compile(
     r"\b(?:heute|morgen|übermorgen|uebermorgen|montag|dienstag|mittwoch|"
     r"donnerstag|freitag|samstag|sonntag|januar|februar|märz|maerz|april|"
     r"mai|juni|juli|august|september|oktober|november|dezember)\b|"
-    r"\b\d{1,2}(?::\d{2})?\s*uhr\b|\b\d{1,2}\.\d{1,2}\.|\b\d{4}-\d{2}-\d{2}\b",
+    r"\b\d{1,2}(?::\d{2})?\s*uhr\b|\b\d{1,2}\.\d{1,2}\.|\b\d{4}-\d{2}-\d{2}\b|"
+    # Gesprochene Uhrzeit ("um neun Uhr dreißig", "halb zehn") — das Modell
+    # schreibt Zahlwoerter, nicht nur Ziffern (C1, Anruf 53986f42).
+    r"\b(?:halb\s+)?" + _STUNDEN_WORT + r"\s+uhr\b|"
+    r"\b(?:um|gegen)\s+(?:halb\s+|viertel\s+(?:vor|nach)\s+)?" + _STUNDEN_WORT + r"\b",
     re.I,
 )
 _CLAIM_SLOT_POSITIV = re.compile(
     r"\b(?:frei|verfügbar|verfuegbar|möglich|moeglich|offen)\b|"
-    r"\b(?:habe|hätte|haette|sehe|finde|biete|schlage)\b[^.!?]{0,50}"
+    # C1 (17.09.2026, Blessing-Anruf 53986f42): "Ich habe für morgen,
+    # Mittwoch, den sechzehnten September, einen Termin um neun Uhr dreißig."
+    # — getFreeTimeSlots lief nie. Die volle Datumsphrase (Wochentag +
+    # Ordinalzahl + Monat) liegt jenseits der alten 50 Zeichen; 90 reichen.
+    r"\b(?:habe|hätte|haette|sehe|finde|biete|schlage)\b[^.!?]{0,90}"
     r"\b(?:termin|slot|platz|zeit)\b|"
-    r"\b(?:termin|slot|platz)\b[^.!?]{0,35}\b(?:anbieten|vorschlagen)\b",
+    r"\b(?:termin|slot|platz)\b[^.!?]{0,35}\b(?:anbieten|vorschlagen)\b|"
+    # "Ich kann Ihnen morgen um neun Uhr dreißig anbieten." — Uhrzeit +
+    # Angebotsverb, ohne dass das Wort Termin faellt.
+    r"\buhr\b[^.!?]{0,30}\b(?:anbieten|vorschlagen|freihalten|reservieren)\b|"
+    r"\b(?:anbieten|anbiete|vorschlagen)\b[^.!?]{0,30}\buhr\b|"
+    # getrennte Partikel: "Ich schlage Ihnen Donnerstag um halb zehn vor."
+    r"\bschlage\b[^.!?]{0,60}\bvor\b|\bbiete\b[^.!?]{0,60}\ban\b",
     re.I,
 )
+# Echo statt Behauptung: das Modell spiegelt den WUNSCH des Anrufers ("Sie
+# möchten morgen um neun — ich schaue nach", "Verstanden: Termin am Montag").
+# Das ist eine Aussage ueber das Gehoerte, nicht ueber den Kalender. Gilt nur
+# ohne Frei-Wort im Satz: "Ich schaue nach: morgen um neun ist frei" bleibt
+# eine Behauptung — und ein nacktes "Ich habe morgen um neun einen Termin fuer
+# Sie" ebenso, auch wenn der Anrufer genau das gewuenscht hatte.
+_SLOT_ECHO = re.compile(
+    r"\b(?:verstanden|verstehe|gewünscht|gewuenscht|wünschen|wuenschen|"
+    r"möchten|moechten|hätten\s+sie\s+gern|haetten\s+sie\s+gern|wollen\s+sie|"
+    r"schau(?:e|en|t)?|prüf(?:e|en)?|pruef(?:e|en)?|such(?:e|en)?|guck(?:e|en)?|"
+    r"sie\s+(?:sagten|meinten|hatten|nannten))\b",
+    re.I,
+)
+_FREI_WORT = re.compile(
+    r"\b(?:frei|verfügbar|verfuegbar|buchbar|möglich|moeglich|offen)\b", re.I)
+# C1 (53986f42): "Wir sehen uns morgen — bis dann!" / "Bis morgen um neun!" /
+# "Dann bis Mittwoch." — der Abschied setzt einen Termin voraus, den es ohne
+# Buchung nicht gibt. Der Anrufer legt auf und kommt. Ein nacktes "Bis dann!"
+# oder "Auf Wiederhören" traegt keinen Zeitanker und bleibt Abschied.
+_CLAIM_WIEDERSEHEN = re.compile(
+    r"\b(?:(?:wir\s+)?sehen\s+(?:wir\s+)?(?:uns|sie)\s+(?:dann\s+|also\s+|ja\s+)?(?:am\s+|um\s+)?|"
+    r"(?:dann\s+|also\s+|und\s+|na\s+)?bis\s+(?:dann\s+)?(?:am\s+|zum\s+)?|"
+    r"(?:wir\s+)?erwarten\s+sie\s+(?:dann\s+)?(?:am\s+|um\s+)?|"
+    r"freuen\s+uns\s+auf\s+(?:sie\s+)?(?:am\s+|um\s+)?)"
+    r"(?:morgen|übermorgen|uebermorgen|montag|dienstag|mittwoch|donnerstag|freitag|"
+    r"samstag|sonnabend|sonntag|nächste\s+woche|naechste\s+woche|"
+    r"\d{1,2}(?::\d{2})?\s*uhr|(?:halb\s+)?" + _STUNDEN_WORT + r"\s+uhr)\b",
+    re.I,
+)
+# C1 (53986f42): "Ich habe Sie gefunden." / "Sie sind bei uns hinterlegt." /
+# "Ich habe Ihre Akte hier." — ohne Patientensuche, ohne erkannten Anrufer.
+# Die Kartei-FRAGEN ("Waren Sie schon einmal bei uns?", "Habe ich Sie richtig
+# erkannt?") bleiben Fragen; Verneinungen faengt _GEFUNDEN_NEIN.
+_CLAIM_GEFUNDEN = re.compile(
+    r"\bhab(?:e)?\s+(?:ich\s+)?(?:sie|ihre\s+(?:akte|kartei|daten|karteikarte)|ihren\s+datensatz)\s+"
+    r"(?:jetzt\s+|hier\s+|schon\s+|bereits\s+|auch\s+|im\s+system\s+|in\s+der\s+kartei\s+)*"
+    r"(?:gefunden|vorliegen|da|hier)\b|"
+    r"\b(?:sie|ihre\s+(?:akte|daten))\s+(?:sind|ist)\s+(?:bei\s+uns\s+)?"
+    r"(?:im\s+system\s+|in\s+der\s+kartei\s+|als\s+patient\w*\s+)?"
+    r"(?:hinterlegt|gespeichert|angelegt|erfasst|bekannt|vorhanden)\b|"
+    r"\bich\s+sehe\s+(?:sie|ihre\s+akte|ihre\s+daten)\s+(?:hier|im\s+system|in\s+der\s+kartei)\b|"
+    r"\bda\s+hab(?:e)?\s+ich\s+sie\b|"
+    # Inversion: "Ihre Akte habe ich hier vorliegen."
+    r"\b(?:ihre\s+(?:akte|kartei|karteikarte|daten)|ihren\s+datensatz)\s+hab(?:e)?\s+ich\s+"
+    r"(?:hier\s+|jetzt\s+|schon\s+|bereits\s+|auch\s+)*(?:gefunden|vorliegen|da|hier|offen)\b",
+    re.I,
+)
+_GEFUNDEN_NEIN = re.compile(
+    r"\b(?:nicht|leider|nirgends|kein\w*|noch\s+nicht)\b", re.I)
 _CLAIM_SLOT_NEGATIV = re.compile(
     r"\b(?:kein(?:e[rmn]?|en)?|nicht\s+ein)\s+(?:weiterer?\s+|freie[rmn]?\s+)?"
     r"(?:termin|slot|platz)\b|"
@@ -230,8 +325,47 @@ def _letztes_tool(sit: dict, namen: set[str]) -> dict:
 
 
 def _ev_slot_positiv(sit: dict) -> bool:
+    # Eine geglueckte Buchung/Verschiebung belegt den genannten Termin ebenso:
+    # danach ist `offered` bewusst geleert (flow._buchen), und "Ich habe Ihnen
+    # morgen um neun den Termin eingetragen" waere sonst ein Phantom-Slot.
+    if _ev_buchen(sit) or _ev_verschieben(sit):
+        return True
     tool = _letztes_tool(sit, {"getFreeTimeSlots", "offer_slots"})
     return bool(_ok(tool) and int(tool.get("resultCount") or 0) > 0 and sit.get("offered"))
+
+
+def _ev_gefunden(sit: dict) -> bool:
+    """Ein 'Ich habe Sie gefunden' ist belegt, wenn irgendein ECHTER Weg den
+    Patienten geliefert hat: Kartei-Treffer im Sammler (patientId/bekannt aus
+    Suche, Anrufer-Check oder Terminliste), der per Rufnummer erkannte Anrufer
+    (CF-pre, solange die Identitaet nicht verneint wurde), die im Hintergrund
+    geladene Anruferkartei, ein Patienten-Objekt oder gefundene Termine."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("patientId")) or s.get("bekannt"):
+        return True
+    if s.get("anruferCheck") != "nein":
+        anr = sit.get("anrufer")
+        if isinstance(anr, dict) and (_s(anr.get("patientId")) or _s(anr.get("nachname"))):
+            return True
+        kartei = sit.get("anruferKartei")
+        if isinstance(kartei, dict) and kartei:
+            return True
+    pat = sit.get("patient")
+    if isinstance(pat, dict) and (_s(pat.get("id")) or _s(pat.get("patientId")) or _s(pat.get("lastName"))):
+        return True
+    if sit.get("gefunden"):
+        return True
+    return False
+
+
+def _ev_wiedersehen(sit: dict) -> bool:
+    """'Bis morgen um neun!' setzt einen Termin voraus: geglueckte Buchung/
+    Verschiebung oder ein wirklich gefundener Bestandstermin (Auskunft)."""
+    if _ev_buchen(sit) or _ev_verschieben(sit):
+        return True
+    # sit['gefunden'] / 'upcoming' fuellen nur echte Kalender-Lesewege
+    # (agentFindPatientAppointments, Tagesabfrage, Anruferkartei).
+    return bool(_termin_isos(sit))
 
 
 def _ev_slot_negativ(sit: dict) -> bool:
@@ -328,6 +462,7 @@ AKTIONEN: list[tuple[str, re.Pattern, Callable[[dict], bool]]] = [
     ("notiz", _CLAIM_NOTIZ, _ev_notiz),
     ("anlegen", _CLAIM_ANLEGEN, _ev_anlegen),
     ("nummer", _CLAIM_NUMMER, _ev_nummer),
+    ("gefunden", _CLAIM_GEFUNDEN, _ev_gefunden),
 ]
 
 
@@ -365,17 +500,29 @@ def unbelegte_behauptung(
             # Slot-Wache ohne Slotsuche zu (Anruf 9dd61a59, W-BESTAND-ANSAGE).
             st_slot = _CLAIM_BESTAND_NEGATIV.sub(" ", st)
         if (_CLAIM_BESTAND_POSITIV.search(st)
-                and not _ev_bestand(sit, leer=False)):
+                and not _ev_bestand(sit, leer=False)
+                and not _ev_buchen(sit) and not _ev_verschieben(sit)):
+            # Eine eben geglueckte Buchung/Verschiebung IST der Bestandstermin.
             return "bestand"
         if (_CLAIM_SLOT_NEGATIV.search(st_slot) and not _ev_slot_negativ(sit)):
             return "slots"
-        if (_ZEIT_MARK.search(st_slot) and _CLAIM_SLOT_POSITIV.search(st_slot)
+        # Echo des Wunsches ("Verstanden: Termin am Montag — ich schaue nach")
+        # ist keine Kalender-Aussage, solange kein Frei-Wort dabeisteht.
+        echo = bool(_SLOT_ECHO.search(st_slot)) and not _FREI_WORT.search(st_slot)
+        if (not echo and _ZEIT_MARK.search(st_slot)
+                and _CLAIM_SLOT_POSITIV.search(st_slot)
                 and not _ev_slot_positiv(sit)):
             return "slots"
         if _CLAIM_SMS.search(st) and not _ev_sms(sit):
             return "sms"
         if _CLAIM_RUECKRUF.search(st) and not _ev_notiz(sit):
             return "rueckruf"
+        # "Bis morgen um neun!" / "Wir sehen uns Montag" setzt einen Termin
+        # voraus — ohne Buchung/Verschiebung/gefundenen Bestandstermin ist der
+        # Abschied selbst die Erfindung (Anruf 53986f42: verabschiedet mit
+        # Termin, nie gesucht, nie gebucht).
+        if _CLAIM_WIEDERSEHEN.search(st) and not _ev_wiedersehen(sit):
+            return "wiedersehen"
         if _REINE_FRAGE.search(st):
             continue
         for name, cre, ev in AKTIONEN:
@@ -384,6 +531,9 @@ def unbelegte_behauptung(
             if name == "transfer" and nutzertext is not None:
                 if not _TRANSFER_WUNSCH.search(_s(nutzertext)):
                     return "transfer"
+            if name == "gefunden" and _GEFUNDEN_NEIN.search(st):
+                # "Ich habe Sie leider nicht gefunden" ist ehrlich — keine Behauptung.
+                continue
             if not ev(sit):
                 return name
     return ""

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from kern.sprech import slot_wort
+from kern.sprech import slot_wort, tag_wort
 
 TZ = ZoneInfo("Europe/Berlin")
 WEEKDAYS = [
@@ -176,27 +176,152 @@ _WOCHENTAG_NAME = {
     1: "Montag", 2: "Dienstag", 3: "Mittwoch", 4: "Donnerstag",
     5: "Freitag", 6: "Samstag", 0: "Sonntag",
 }
+# W-SLOT-ABLEHNUNG (17.09.2026, A6 aus BEFUND-BIANCA-ALLE-ANRUFE): die Wache
+# gilt jetzt fuer ALLE Mandanten (vorher nur Blessing). Die Negation darf
+# Fuellwoerter ueberspringen ("nicht am Donnerstag", "geht's leider nicht"),
+# aber KEINE beliebigen Woerter: "Donnerstag passt mir gut aber Freitag nicht"
+# darf Donnerstag nicht negieren — deshalb Whitelists statt Wildcards.
+_NEG_FUELLER = (
+    r"(?:am|an|der|den|dem|die|das|diesen|diese|dieser|so|ein|eine|einen|einem|"
+    r"um|gegen|auf|zu|zum|zur|bitte|gern|gerne|halt|eben|leider|wirklich|"
+    r"unbedingt|den\s+ganzen|die\s+ganze|ganze[nr]?|jeden|jede|immer|generell)"
+)
 _NEG_VOR_RE = re.compile(
-    r"(?:\bnicht|\bkein\w*|\bnie|\bohne|\bau(?:ß|ss)er)\s*$",
+    # "nicht (am) Donnerstag", "kein Donnerstag", "statt Donnerstag", "weder Donnerstag"
+    r"(?:\bnicht|\bkein\w*|\bnie|\bohne|\bau(?:ß|ss)er|\bstatt|\banstatt|\bweder)"
+    r"(?:\s+" + _NEG_FUELLER + r")*\s*$|"
+    # "habe ich keine Zeit am Donnerstag", "bin ich nicht da am Donnerstag",
+    # "kann ich nicht am Donnerstag", "geht nicht am Donnerstag"
+    r"\b(?:hab\w*|haben)\s+(?:ich\s+|wir\s+)?(?:leider\s+)?keine\s+zeit\s+(?:am\s+|an\s+)?$|"
+    r"\b(?:bin|sind)\s+(?:ich|wir)\s+(?:leider\s+)?(?:nicht\s+da|nicht|verhindert|unterwegs|"
+    r"im\s+urlaub|weg)\s+(?:am\s+|an\s+)?$|"
+    r"\b(?:kann|k(?:ö|oe)nnen|k(?:ö|oe)nnte)\s+(?:ich|wir)\s+(?:leider\s+)?nicht\s+(?:am\s+|an\s+)?$|"
+    r"\b(?:geht|passt|klappt)(?:'?s)?\s+(?:mir\s+|leider\s+|bei\s+mir\s+)*nicht\s+(?:am\s+|an\s+)?$",
     re.I,
 )
+# Positives Signal direkt HINTER dem Tag hebt eine Vor-Negation auf, die
+# eigentlich zum vorigen Tag gehoerte: "Donnerstag nicht, Freitag schon".
+# Eine Tages-/Zeit-/Ordnungs-Nennung, wie sie einem "nicht" oder "lieber"
+# folgen kann ("nicht um elf", "lieber der zweite", "aber nicht Donnerstag").
+_NENNUNG_DANACH = (
+    r"(?:am\s+|an\s+|um\s+|gegen\s+|der\s+|den\s+|die\s+|das\s+|ein\s+|eine\s+|einen\s+|so\s+)?"
+    r"(?:montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|heute|morgen\b|"
+    r"(?:ü|ue)bermorgen|erste[rns]?\b|zweite[rns]?\b|dritte[rns]?\b|letzte[rns]?\b|"
+    r"\d|halb\b|viertel\b|vormittag|nachmittag|abend|fr(?:ü|ue)h\b|sp(?:ä|ae)t\b|"
+    r"n(?:ä|ae)chste|"
+    # Zahlwoerter ("lieber um zwei", "besser elf Uhr") zaehlen wie Ziffern.
+    r"(?:" + "|".join(sorted(_STUNDEN_WORT, key=len, reverse=True)) + r")\b)"
+)
+_POS_NACH_RE = re.compile(
+    r"^[\s,]*(?:schon|gern(?:e)?|passt|geht|klappt|super|prima|perfekt|ja|okay|ok|gut|"
+    # "lieber/besser <andere Nennung>" gehoert zur NAECHSTEN Nennung
+    # ("nicht um elf, lieber um zwei" — die elf bleibt negiert).
+    r"(?:lieber|besser|am\s+besten)(?!\s+" + _NENNUNG_DANACH + r")|"
+    r"w(?:ä|ae)re\s+(?:gut|super|prima|perfekt|ok|okay|besser|toll|sch(?:ö|oe)n)|"
+    r"ist\s+(?:gut|super|prima|perfekt|ok|okay|besser|toll|sch(?:ö|oe)n))\b(?!\s+(?:mir\s+|leider\s+|bei\s+mir\s+)*(?:gar\s+)?nicht\b)",
+    re.I,
+)
+# Was hinter einem "nicht" den Tag NICHT ausschliesst: "Donnerstag nicht vor
+# zwoelf" / "nicht so frueh" / "nicht nachmittags" meint den Tag sehr wohl —
+# nur eine Tageszeit/Uhrzeit daran ist unerwuenscht.
+_NICHT_TEIL = (
+    r"nicht\b(?!\s+(?:vor|nach|um|ab|bis|erst|so\s+(?:fr(?:ü|ue)h|sp(?:ä|ae)t)|"
+    r"zu\s+(?:fr(?:ü|ue)h|sp(?:ä|ae)t)|sp(?:ä|ae)ter|fr(?:ü|ue)her|"
+    r"(?:vor|nach)mittags?|morgens|abends|mehr\s+(?:vor|nach|um|ab))\b)"
+)
+_NACH_FUELLER = (
+    r"(?:mir|uns|ich|wir|es|das|da|dann|leider|bei\s+mir|bei\s+uns|eigentlich|"
+    r"wirklich|auch|so|halt|eben|irgendwie|(?:ü|ue)berhaupt|ganz|gar|jetzt|noch|"
+    r"wohl|eher|generell|grunds(?:ä|ae)tzlich|meistens|immer|ehrlich\s+gesagt|"
+    r"wahrscheinlich|vermutlich|definitiv|auf\s+keinen\s+fall|auf\s+gar\s+keinen\s+fall)"
+)
 _NEG_NACH_RE = re.compile(
-    r"^\s*(?:geht|passt|klappt|funktioniert|kommt|kann\w*)"
-    r"(?:\s+\w+){0,5}\s+(?:gar\s+)?nicht\b|"
-    r"^\s*(?:ist|w(?:ä|ae)re)\s+(?:ganz\s+)?(?:falsch|schlecht)\b|"
-    r"^\s*(?:scheidet|f(?:ä|ae)llt)\s+aus\b|"
+    # "geht nicht", "geht's leider nicht", "passt mir überhaupt nicht", "kann ich nicht"
+    r"^[\s,?!.]*(?:geht|passt|klappt|funktioniert|kommt|kann\w*|k(?:ö|oe)nnte\w*|"
+    r"schaff\w*|w(?:ü|ue)rde|m(?:ö|oe)chte|will|mag)(?:'?s)?"
+    r"(?:\s+" + _NACH_FUELLER + r")*\s+(?:gar\s+|leider\s+)*" + _NICHT_TEIL + r"|"
+    # "ist schlecht/ungünstig/blöd/schwierig/unmöglich", "wäre ganz falsch"
+    r"^[\s,?!.]*(?:ist|w(?:ä|ae)re|geht)(?:\s+(?:ganz|sehr|leider|eher|total|echt|wirklich))*"
+    r"\s+(?:falsch|schlecht|ung(?:ü|ue)nstig|bl(?:ö|oe)d|schwierig|unm(?:ö|oe)glich|"
+    r"ausgeschlossen|doof|schlimm|ungut|unpassend)\b|"
+    # "scheidet aus", "fällt aus/weg/flach"
+    r"^[\s,?!.]*(?:scheidet|f(?:ä|ae)llt)(?:\s+leider)?\s+(?:aus|weg|flach)\b|"
+    # "bin ich nicht da", "habe ich keine Zeit", "bin ich verhindert/unterwegs/im Urlaub"
+    r"^[\s,?!.]*(?:bin|sind|hab\w*|haben)(?:\s+(?:ich|wir|da|dann|leider|noch))*"
+    r"\s+(?:nicht\s+da|nicht\b|keine\s+zeit|verhindert|unterwegs|im\s+urlaub|weg|arbeiten|"
+    r"beim\s+arzt|in\s+der\s+arbeit|auf\s+der\s+arbeit|nicht\s+in\s+der\s+stadt|"
+    r"nicht\s+zu\s+hause|nicht\s+im\s+land)\b|"
+    # "Donnerstag nicht", "Donnerstag lieber nicht", "Donnerstag auf keinen
+    # Fall", "Donnerstag ungern/schlecht" — OHNE Komma/„aber“ bindet das
+    # "nicht" nach hinten ("Donnerstag nicht Freitag" = Donnerstag weg).
+    r"^[\s?!.]*(?:(?:leider|bitte|lieber|eher|gar|dann|halt|eben|wirklich|auch)\s+)*"
+    r"(?:" + _NICHT_TEIL + r"|auf\s+(?:gar\s+)?keinen\s+fall\b|ungern\b|schlecht\b|"
+    r"ung(?:ü|ue)nstig\b|bl(?:ö|oe)d\b|schwierig\b|unm(?:ö|oe)glich\b)|"
+    # "Donnerstag, nicht" / "Donnerstag aber nicht" — MIT Komma oder „aber“
+    # beginnt ein neuer Teilsatz: folgt dort ein Tag/eine Zeit/eine
+    # Ordnungszahl, gehoert das "nicht" ZU DIESER Nennung ("Freitag, aber
+    # nicht Donnerstag" sperrt den Donnerstag, nicht den Freitag).
+    r"^[\s,?!.]*(?:(?:aber|leider|bitte|lieber|eher|gar|dann|halt|eben|wirklich|auch)\s+)*"
+    r"(?:" + _NICHT_TEIL + r"(?!\s+" + _NENNUNG_DANACH + r")"
+    r"|auf\s+(?:gar\s+)?keinen\s+fall\b|ungern\b|schlecht\b|"
+    r"ung(?:ü|ue)nstig\b|bl(?:ö|oe)d\b|schwierig\b|unm(?:ö|oe)glich\b)|"
+    r"^[\s,?!.]*(?:nein|nee|n(?:ö|oe))\b|"
     r"^.{0,42}\b(?:ganztagsschule|ganztagschule|doppelschule|lange\s+schule)\b",
+    re.I,
+)
+# Alles Angebotene abgelehnt: "keiner davon", "passt alles nicht", "die drei
+# gehen alle nicht", "weder noch", "nichts davon", "gar keiner".
+_ALLE_ABGELEHNT_RE = re.compile(
+    r"\b(?:kein(?:er|e|s|en)?|nichts|nix)\s+(?:davon|der\s+(?:drei|zwei|termine|zeiten|"
+    r"vorschl(?:ä|ae)ge)|von\s+(?:den|denen|beiden|allen|diesen))\b|"
+    r"\b(?:gar\s+|leider\s+|ehrlich\s+gesagt\s+)?kein(?:er|e|s)\s+(?:passt|geht|klappt)\b|"
+    r"\b(?:die|alle|beide|die\s+drei|die\s+zwei|alle\s+drei|alle\s+zwei|alles)\s+"
+    r"(?:passen|passt|gehen|geht|klappen|klappt)\s+(?:mir\s+|bei\s+mir\s+|leider\s+)*"
+    r"(?:alle\s+|beide\s+|alles\s+)?nicht\b|"
+    r"\bweder\s+noch\b|\bnichts\s+passt\b|\bpasst\s+(?:mir\s+)?(?:alles|beides)\s+nicht\b|"
+    r"\b(?:alle|beide|alle\s+drei)\s+(?:sind\s+)?(?:schlecht|ung(?:ü|ue)nstig|unm(?:ö|oe)glich)\b|"
+    r"\b(?:ganz\s+)?andere\s+(?:zeiten|termine|vorschl(?:ä|ae)ge)\b|\b(?:was|etwas)\s+anderes\b",
+    re.I,
+)
+# Das Angebot abgelehnt ("Nein.", "Das passt nicht.", "Geht nicht.") — ohne
+# Gegenvorschlag im selben Satz (kein Tag, keine Uhrzeit, keine Ordnungszahl,
+# kein "lieber ..."). Bei mehreren Slots heisst das: keiner davon.
+_EINZEL_ABGELEHNT_RE = re.compile(
+    r"^[\s,]*(?:nein|nee|n(?:ö|oe))\b(?![\s,]*(?:lieber|eher|am|um|der|den|die|das\s+w(?:ä|ae)re|"
+    r"ich\s+(?:m(?:ö|oe)chte|h(?:ä|ae)tte|w(?:ü|ue)rde|nehme|will)|dann|doch|\d|halb|viertel|"
+    r"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|morgen|heute|"
+    r"(?:ü|ue)bermorgen|vormittag|nachmittag|abend|fr(?:ü|ue)h|sp(?:ä|ae)t))|"
+    r"^[\s,]*(?:nein[\s,]+|nee[\s,]+)?(?:das|der|die|dieser|diese|den|er|sie|es)?\s*"
+    r"(?:passt|geht|klappt|ist)(?:'?s)?\s+(?:mir\s+|leider\s+|bei\s+mir\s+|eigentlich\s+)*"
+    r"(?:gar\s+|(?:ü|ue)berhaupt\s+)?(?:nicht|schlecht|ung(?:ü|ue)nstig|bl(?:ö|oe)d|"
+    r"unm(?:ö|oe)glich|zu\s+(?:fr(?:ü|ue)h|sp(?:ä|ae)t))\b",
     re.I,
 )
 _ANDERER_TAG_RE = re.compile(
     r"\b(?:ein(?:en)?\s+)?ander(?:er|en|e)\s+(?:tag|wochentag)\b|"
-    r"\bnicht\s+diese[rmn]?\s+tag\b",
+    r"\bnicht\s+diese[rmn]?\s+tag\b|"
+    r"\b(?:ein(?:en)?\s+)?ander(?:er|en|e)\s+woche\b",
     re.I,
 )
+# "morgens" ist eine Tageszeit, "morgen" (ohne "am") ist der TAG danach —
+# "morgen geht nicht" darf nie alle Vormittage sperren (A6, 17.09.2026).
 _TAGESZEIT_RE = re.compile(
-    r"\b(vormittag\w*|morgens?|fr(?:ü|ue)h|nachmittag\w*|abends?|sp(?:ä|ae)t)\b",
+    r"(?:\b|(?<=tag))((?:vormittag\w*|morgens|fr(?:ü|ue)h|nachmittag\w*|abends?|sp(?:ä|ae)t)\b"
+    r"|(?<=\bam\s)morgen\b)",
     re.I,
 )
+# Relativer Tag ("morgen geht nicht", "heute nicht", "übermorgen passt nicht")
+# — nicht "am Morgen" (Tageszeit), nicht "Guten Morgen" (Gruss).
+_REL_TAG_RE = re.compile(
+    r"(?<!am\s)(?<!guten\s)(?<!am\snächsten\s)(?<!am\snaechsten\s)"
+    r"\b(heute|(?:ü|ue)bermorgen|morgen)\b(?!s\b)",
+    re.I,
+)
+_ORDINAL_RE = re.compile(
+    r"\b(erste[rns]?|ersteren|zweite[rns]?|dritte[rns]?|letzte[rns]?)\b(?:\s+(?:termin|zeit|vorschlag|uhrzeit|option|m(?:ö|oe)glichkeit))?",
+    re.I,
+)
+_ORDINAL_INDEX = {"erst": 0, "zweit": 1, "dritt": 2, "letzt": -1}
 
 
 def _tageszeit_bereich(wort: str) -> tuple[int, int]:
@@ -208,58 +333,253 @@ def _tageszeit_bereich(wort: str) -> tuple[int, int]:
     return 7, 12
 
 
-def _negiert(t: str, start: int, end: int) -> bool:
-    davor = t[max(0, start - 28):start]
+def _negiert(t: str, start: int, end: int, verbraucht: list | None = None) -> bool:
+    """Ist die Nennung t[start:end] negiert?
+
+    Reihenfolge: Nach-Negation ("Donnerstag geht nicht") schlaegt alles; ein
+    positives Signal dahinter ("Freitag schon") hebt eine Vor-Negation auf;
+    sonst zaehlt die Vor-Negation ("nicht am Donnerstag"). Ein "nicht", das
+    schon als Nach-Negation des VORIGEN Tags verbraucht wurde, negiert den
+    naechsten Tag nicht mehr ("Donnerstag nicht Freitag" = Freitag positiv).
+    ``verbraucht`` sammelt diese Spannen ueber alle Nennungen eines Satzes.
+    """
     danach = t[end:end + 60]
-    return bool(_NEG_VOR_RE.search(davor) or _NEG_NACH_RE.search(danach))
+    m = _NEG_NACH_RE.search(danach)
+    if m:
+        if verbraucht is not None:
+            verbraucht.append((end + m.start(), end + m.end()))
+        return True
+    if _POS_NACH_RE.match(danach):
+        return False
+    davor_ab = max(0, start - 44)
+    davor = t[davor_ab:start]
+    m = _NEG_VOR_RE.search(davor)
+    if not m:
+        return False
+    pos = davor_ab + m.start()
+    if verbraucht and any(a <= pos < b for a, b in verbraucht):
+        return False
+    return True
 
 
-def slot_praeferenz_aenderung(text: str) -> dict[str, Any] | None:
+_VERBUND_ZWISCHEN_RE = re.compile(
+    r"^(?:[\s,\-]|nicht|am|nur|so|dann|auch|eher|aber|und|der|den|dem|die|das|"
+    r"lieber|bitte|leider|jeweils|immer|meist(?:ens)?|ist|w(?:ä|ae)re|schon)*$",
+    re.I,
+)
+
+
+def _im_verbund(t: str, tag_ende: int, zeit_start: int) -> bool:
+    """„Donnerstag Nachmittag“ / „morgen früh“: Tag + Tageszeit gehoeren zusammen,
+    wenn dazwischen nur Fuellwoerter stehen."""
+    if zeit_start < tag_ende or zeit_start - tag_ende > 24:
+        return False
+    return bool(_VERBUND_ZWISCHEN_RE.match(t[tag_ende:zeit_start]))
+
+
+def _relativer_tag(wort: str, heute: date | None = None) -> str:
+    h = heute or datetime.now(TZ).date()
+    low = wort.casefold()
+    if low.startswith(("über", "ueber")):
+        return (h + timedelta(days=2)).isoformat()
+    if low == "morgen":
+        return (h + timedelta(days=1)).isoformat()
+    return h.isoformat()
+
+
+def slot_praeferenz_aenderung(
+    text: str,
+    offered_isos: list[str] | None = None,
+    heute: date | None = None,
+) -> dict[str, Any] | None:
     """Harte Ablehnung/Präferenz aus einem laufenden Slotangebot lesen.
 
-    Reine Auswahl („Montag“) bleibt dem vorhandenen Slot-Wähler. Diese
-    Funktion greift erst bei Ablehnung, mehreren Alternativtagen oder einer
-    ausdrücklichen Tageszeit-Korrektur.
+    Reine Auswahl („Montag“, „der zweite“) bleibt dem vorhandenen Slot-Wähler
+    (Rueckgabe None). Diese Funktion greift erst bei Ablehnung, mehreren
+    Alternativtagen oder einer ausdrücklichen Tageszeit-Korrektur.
+
+    A6 (17.09.2026, alle Mandanten): versteht zusaetzlich
+    - relative Tage: „morgen geht nicht“ -> ``excludeDates`` (nie „morgens“),
+    - Tag+Tageszeit im Verbund: „Donnerstag Nachmittag nicht“, „morgen frueh
+      geht nicht“ -> ``excludeSpans`` (der Tag selbst bleibt erlaubt),
+    - Ordnungszahlen auf das Angebot: „der erste nicht“ -> ``excludeIsos``,
+      „der erste nicht, der zweite“ -> zusaetzlich ``waehle`` (ISO),
+    - Alles-Ablehnung: „keiner davon“, „passt alles nicht“, „andere Zeiten“
+      und — solange ein Angebot offen ist — ein Nein OHNE Gegenvorschlag
+      („Nein.“, „Das passt nicht.“, „Geht nicht.“) -> ``rejectAll`` plus
+      alle angebotenen ISOs in ``excludeIsos``. „Nein, lieber Donnerstag“
+      und „Nein, der zweite“ sind KEINE Alles-Ablehnung.
     """
     raw = _s(text)
     if not raw:
         return None
     t = raw.casefold()
-    positiv: list[int] = []
-    negativ: list[int] = []
-    vorkommen = 0
+    offered = [str(x) for x in (offered_isos or []) if x]
+    verbraucht: list[tuple[int, int]] = []
+
+    # Nennungen in Textreihenfolge, damit ein verbrauchtes "nicht" den
+    # naechsten Tag nicht mitnegiert ("Donnerstag nicht Freitag").
+    tage_nennungen: list[tuple[int, int, str, Any]] = []  # (start, end, art, wert)
     for idx, cre in WEEKDAYS:
         for m in cre.finditer(t):
-            vorkommen += 1
-            if _negiert(t, m.start(), m.end()):
-                negativ.append(idx)
-            else:
-                positiv.append(idx)
+            tage_nennungen.append((m.start(), m.end(), "wd", idx))
+    for m in _REL_TAG_RE.finditer(t):
+        tage_nennungen.append((m.start(), m.end(), "date", _relativer_tag(m.group(1), heute)))
+    # Absolute Tage ("nicht am 3. Oktober", "der 10. geht nicht", "am 15.09
+    # nicht") laufen durch dieselbe Negations-Logik wie Wochentage.
+    for start, end, iso in _datum_nennungen(t, heute):
+        if not any(s <= start < e for s, e, _a, _w in tage_nennungen):
+            tage_nennungen.append((start, end, "date", iso))
+    tage_nennungen.sort(key=lambda x: x[0])
 
-    tageszeiten: list[tuple[int, int, int, bool]] = []
+    tage_neg: dict[int, bool] = {}
+    for start, end, _art, _wert in tage_nennungen:
+        tage_neg[start] = _negiert(t, start, end, verbraucht)
+
+    tageszeiten: list[tuple[int, int, int, int, bool]] = []  # (start, end, lo, hi, neg)
     for m in _TAGESZEIT_RE.finditer(t):
         lo, hi = _tageszeit_bereich(m.group(1))
-        tageszeiten.append((m.start(), lo, hi, _negiert(t, m.start(), m.end())))
-    neg_bereiche = [(lo, hi) for _pos, lo, hi, neg in tageszeiten if neg]
-    pos_bereiche = [(pos, lo, hi) for pos, lo, hi, neg in tageszeiten if not neg]
+        tageszeiten.append((m.start(), m.end(), lo, hi, _negiert(t, m.start(), m.end(), verbraucht)))
+
+    # Verbund Tag + Tageszeit: "Donnerstag Nachmittag nicht" sperrt NUR den
+    # Donnerstagnachmittag; der Tag zaehlt dann weder positiv noch negativ.
+    verbund_tage: set[int] = set()
+    verbund_zeiten: set[int] = set()
+    spans: list[dict[str, Any]] = []
+    for zs, _ze, lo, hi, zneg in tageszeiten:
+        partner = None
+        for start, end, art, wert in tage_nennungen:
+            if end <= zs and _im_verbund(t, end, zs):
+                partner = (start, art, wert)
+        if partner is None or not zneg:
+            continue
+        pstart, art, wert = partner
+        if tage_neg.get(pstart):
+            continue  # "nicht Donnerstag nachmittags" — der ganze Tag ist schon weg
+        verbund_tage.add(pstart)
+        verbund_zeiten.add(zs)
+        spans.append({"weekday" if art == "wd" else "date": wert, "lo": lo, "hi": hi})
+
+    positiv: list[int] = []
+    negativ: list[int] = []
+    pos_daten: list[str] = []
+    neg_daten: list[str] = []
+    genannte_wd = {int(w) for _s0, _e0, a, w in tage_nennungen if a == "wd"}
+    vorkommen = 0
+    for start, _end, art, wert in tage_nennungen:
+        if start in verbund_tage:
+            continue
+        neg = tage_neg.get(start, False)
+        if art == "wd":
+            vorkommen += 1
+            (negativ if neg else positiv).append(int(wert))
+        else:
+            # "Donnerstag, der 10." ist EIN Tag, nicht zwei Alternativen —
+            # sonst wuerde die reine Auswahl eines Angebots als Neusuche gelesen.
+            try:
+                wd_des_datums = date.fromisoformat(str(wert)).isoweekday()
+            except ValueError:
+                wd_des_datums = None
+            if wd_des_datums not in genannte_wd:
+                vorkommen += 1
+            (neg_daten if neg else pos_daten).append(str(wert))
+
+    neg_bereiche = [(lo, hi) for zs, _ze, lo, hi, neg in tageszeiten if neg and zs not in verbund_zeiten]
+    pos_bereiche = [(zs, lo, hi) for zs, _ze, lo, hi, neg in tageszeiten if not neg]
 
     ausgeschlossen_stunden: list[int] = []
+    # Positive Stunden ("nicht um elf, lieber um zwei" -> 14) wandern als
+    # Wunsch-Stunde mit, sonst ginge der Gegenvorschlag in der Neusuche verloren.
+    pos_stunden: list[tuple[int, int, int | None]] = []  # (start, stunde, minute)
+    uhr_spannen: list[tuple[int, int]] = []
     for m in _UHR_RE.finditer(t):
         h = _stunde_von(m.group(1))
-        if h is not None and _negiert(t, m.start(), m.end()):
+        uhr_spannen.append((m.start(), m.end()))
+        if h is None:
+            continue
+        if _negiert(t, m.start(), m.end(), verbraucht):
             ausgeschlossen_stunden.append(_praxis_stunde(h))
+        else:
+            pos_stunden.append((m.start(), _praxis_stunde(h), int(m.group(2)) if m.group(2) else None))
     for m in _UHR_ZIFFER_RE.finditer(t):
         h = _stunde_von(m.group(1))
-        if h is not None and _negiert(t, m.start(), m.end()):
+        uhr_spannen.append((m.start(), m.end()))
+        if h is None:
+            continue
+        if _negiert(t, m.start(), m.end(), verbraucht):
             ausgeschlossen_stunden.append(_praxis_stunde(h))
+        else:
+            pos_stunden.append((m.start(), _praxis_stunde(h), int(m.group(2))))
+    # Uhrzeiten OHNE "Uhr" wie im Wunsch-Parser (W-SUCHFENSTER): "aber nicht
+    # um elf", "halb zwei geht nicht". Treffer, die schon als "elf Uhr" gezaehlt
+    # wurden, nicht doppelt.
+    def _schon(a: int, b: int) -> bool:
+        return any(a < e and b > s for s, e in uhr_spannen)
+
+    for m in _HALB_RE.finditer(t):
+        if _schon(m.start(), m.end()):
+            continue
+        h = _stunde_von(m.group(1))
+        if h is None:
+            continue
+        if _negiert(t, m.start(), m.end(), verbraucht):
+            ausgeschlossen_stunden.append(_praxis_stunde((h - 1) % 24))
+        else:
+            pos_stunden.append((m.start(), _praxis_stunde((h - 1) % 24), 30))
+    for m in _UM_RE.finditer(t):
+        if _schon(m.start(), m.end()):
+            continue
+        if _MONAT_WORT_RE.match(t[m.end():].lstrip(". ")):
+            continue  # "um 3. Oktober" ist ein Datum
+        h = _stunde_von(m.group(1))
+        if h is None or not 0 < h <= 23:
+            continue
+        if _negiert(t, m.start(), m.end(), verbraucht):
+            ausgeschlossen_stunden.append(_praxis_stunde(h))
+        else:
+            pos_stunden.append((m.start(), _praxis_stunde(h), None))
+    pos_stunden = [x for x in pos_stunden if x[1] not in ausgeschlossen_stunden]
+
+    exclude_isos: list[str] = []
+    waehle = ""
+    if offered:
+        for m in _ORDINAL_RE.finditer(t):
+            wort = m.group(1).casefold()
+            idx = next((i for stamm, i in _ORDINAL_INDEX.items() if wort.startswith(stamm)), None)
+            if idx is None:
+                continue
+            if idx == -1:
+                idx = len(offered) - 1
+            if idx >= len(offered):
+                continue
+            if _negiert(t, m.start(), m.end(), verbraucht):
+                exclude_isos.append(offered[idx])
+            else:
+                waehle = offered[idx]
+
+    # Ein Nein OHNE jede Richtung ("Nein.", "Passt nicht.") lehnt die ganze
+    # Liste ab. Sobald der Satz etwas Konkretes traegt ("Nein, nicht
+    # Donnerstag", "Nein, lieber Freitag", "der erste nicht"), gilt NUR das
+    # Konkrete — sonst flöge der Montag-Slot mit, den der Anrufer gar nicht
+    # abgelehnt hat.
+    spezifisch = bool(
+        negativ or neg_daten or neg_bereiche or ausgeschlossen_stunden or spans
+        or exclude_isos or positiv or pos_daten or pos_bereiche or waehle
+    )
+    reject_all = bool(_ALLE_ABGELEHNT_RE.search(t)) or (
+        bool(offered) and not spezifisch and bool(_EINZEL_ABGELEHNT_RE.search(t))
+    )
+    if reject_all and offered:
+        exclude_isos.extend(x for x in offered if x not in exclude_isos)
 
     anderer_tag = bool(_ANDERER_TAG_RE.search(t))
     # „11.15 ist Vormittag, bitte Nachmittag“: kein grammatisches „nicht“,
     # aber die letzte Tageszeit ist die ausdrückliche Korrektur.
-    tageszeit_korrektur = len({(lo, hi) for _p, lo, hi, _n in tageszeiten}) > 1
+    tageszeit_korrektur = len({(lo, hi) for _zs, _ze, lo, hi, _n in tageszeiten}) > 1
     aenderung = bool(
         negativ or neg_bereiche or ausgeschlossen_stunden or anderer_tag
-        or vorkommen > 1 or tageszeit_korrektur
+        or vorkommen > 1 or tageszeit_korrektur or neg_daten or spans
+        or exclude_isos or reject_all
     )
     if not aenderung:
         return None
@@ -270,13 +590,30 @@ def slot_praeferenz_aenderung(text: str) -> dict[str, Any] | None:
     erlaubt = sorted(set(positiv) - set(negativ))
     if erlaubt:
         out["weekdays"] = erlaubt
+    if pos_daten:
+        out["date"] = pos_daten[-1]
+    if neg_daten:
+        out["excludeDates"] = sorted(set(neg_daten))
+    if spans:
+        out["excludeSpans"] = spans
     if neg_bereiche:
         out["excludeHourRanges"] = sorted(set(neg_bereiche))
     if ausgeschlossen_stunden:
         out["excludeHours"] = sorted(set(ausgeschlossen_stunden))
     if pos_bereiche:
-        _pos, lo, hi = max(pos_bereiche, key=lambda x: x[0])
+        _zs, lo, hi = max(pos_bereiche, key=lambda x: x[0])
         out["hourMin"], out["hourMax"] = lo, hi
+    if pos_stunden and not pos_bereiche:
+        _ps, h, minute = max(pos_stunden, key=lambda x: x[0])
+        out["hour"] = h
+        if minute is not None:
+            out["minute"] = minute
+    if exclude_isos:
+        out["excludeIsos"] = sorted(set(exclude_isos))
+    if waehle and waehle not in exclude_isos:
+        out["waehle"] = waehle
+    if reject_all:
+        out["rejectAll"] = True
     return out
 
 
@@ -318,11 +655,62 @@ def wunsch_mit_slot_praeferenz(
     ex_stunden = set(int(x) for x in (out.get("excludeHours") or []))
     ex_stunden.update(int(x) for x in (aenderung.get("excludeHours") or []))
     out["excludeHours"] = sorted(ex_stunden)
+    # parse_slot_wish kennt keine Verneinung: "nicht um neun" liegt dort als
+    # hour=9, "nicht vormittags" als hourMax=12 — die Ablehnung gewinnt.
+    if out.get("hour") is not None and int(out["hour"]) in ex_stunden:
+        out["hour"] = None
+        out.pop("minutenMin", None)
+        out.pop("minutenMax", None)
+    if (out.get("hourMin") is not None and out.get("hourMax") is not None
+            and (int(out["hourMin"]), int(out["hourMax"])) in ex_bereiche
+            and aenderung.get("hourMin") is None):
+        out["hourMin"], out["hourMax"] = None, None
+
+    # A6: ganze Tage ("morgen geht nicht"), einzelne Angebote ("der erste
+    # nicht", "keiner davon") und Tag+Tageszeit-Verbunde ("Donnerstag
+    # Nachmittag nicht") bleiben ueber alle Zuege hart gesperrt.
+    ex_daten = set(str(x) for x in (out.get("excludeDates") or []) if x)
+    ex_daten.update(str(x) for x in (aenderung.get("excludeDates") or []) if x)
+    out["excludeDates"] = sorted(ex_daten)
+    if aenderung.get("date"):
+        if str(aenderung["date"]) not in ex_daten:
+            out["date"] = str(aenderung["date"])
+            out["weekday"] = None
+            out["weekdays"] = None
+            out["tage"] = None
+            out["von"], out["bis"] = None, None
+    elif out.get("date") in ex_daten:
+        out["date"] = None
+
+    ex_isos = set(str(x) for x in (out.get("excludeIsos") or []) if x)
+    ex_isos.update(str(x) for x in (aenderung.get("excludeIsos") or []) if x)
+    out["excludeIsos"] = sorted(ex_isos)
+
+    spans: list[dict[str, Any]] = []
+    gesehen: set[tuple] = set()
+    for sp in list(out.get("excludeSpans") or []) + list(aenderung.get("excludeSpans") or []):
+        if not isinstance(sp, dict):
+            continue
+        key = (sp.get("weekday"), sp.get("date"), sp.get("lo"), sp.get("hi"))
+        if key in gesehen or (sp.get("weekday") is None and not sp.get("date")):
+            continue
+        gesehen.add(key)
+        spans.append({
+            k: v for k, v in sp.items() if k in ("weekday", "date", "lo", "hi") and v is not None
+        })
+    out["excludeSpans"] = spans
 
     if aenderung.get("hourMin") is not None:
         out["hourMin"] = int(aenderung["hourMin"])
         out["hourMax"] = int(aenderung["hourMax"])
         out["hour"] = None
+        out.pop("minutenMin", None)
+        out.pop("minutenMax", None)
+    elif aenderung.get("hour") is not None and int(aenderung["hour"]) not in ex_stunden:
+        # Gegenvorschlag "lieber um zwei": die Stunde wird der neue Wunsch,
+        # eine alte Tageszeit-Grenze weicht ihr (14 Uhr passt nicht zu "vormittags").
+        out["hour"] = int(aenderung["hour"])
+        out["hourMin"], out["hourMax"] = None, None
         out.pop("minutenMin", None)
         out.pop("minutenMax", None)
     return out
@@ -335,7 +723,26 @@ def slot_praeferenz_bestaetigung(aenderung: dict[str, Any]) -> str:
     ex = [x for x in ex if x]
     if ex:
         teile.append(f"{' und '.join(ex)} scheidet aus")
-    if aenderung.get("andererTag") and not ex:
+    ex_daten = [tag_wort(str(x)) for x in aenderung.get("excludeDates") or [] if x]
+    ex_daten = [x for x in ex_daten if x]
+    if ex_daten:
+        teile.append(f"{' und '.join(ex_daten)} scheidet aus")
+    for sp in aenderung.get("excludeSpans") or []:
+        if not isinstance(sp, dict):
+            continue
+        tag = ""
+        if sp.get("weekday") is not None:
+            tag = _WOCHENTAG_NAME.get(int(sp["weekday"]), "")
+        elif sp.get("date"):
+            tag = tag_wort(str(sp["date"]))
+        zeit = "nachmittags" if int(sp.get("lo") or 0) >= 12 else "vormittags"
+        if tag:
+            teile.append(f"{tag} {zeit} scheidet aus")
+    if aenderung.get("rejectAll") and not teile:
+        teile.append("diese Zeiten passen nicht")
+    elif aenderung.get("excludeIsos") and not teile and not aenderung.get("rejectAll"):
+        teile.append("der genannte Termin scheidet aus")
+    if aenderung.get("andererTag") and not ex and not ex_daten:
         teile.append("der bisherige Wochentag scheidet aus")
     if aenderung.get("hourMin") == 12:
         teile.append("es soll nachmittags sein")
@@ -582,6 +989,61 @@ def _tag_im_monat(tag: int, heute: date | None = None):
     return _kalendertag(basis.year, basis.month + 1, tag)
 
 
+def _datum_nennungen(t: str, heute: date | None = None) -> list[tuple[int, int, str]]:
+    """Absolute Tages-Nennungen mit Textposition: (start, end, ISO).
+
+    '3. Oktober' / '15.09.' / 'am 10.' — fuer die Ablehnungs-Logik in
+    ``slot_praeferenz_aenderung`` (A6). Uhrzeiten ('9.15 Uhr', 'um 9.15')
+    zaehlen nicht.
+    """
+    basis = heute or datetime.now(TZ).date()
+    out: list[tuple[int, int, str]] = []
+    belegt: list[tuple[int, int]] = []
+
+    def _frei(a: int, b: int) -> bool:
+        return not any(a < e and b > s for s, e in belegt)
+
+    for m in _MONAT_RE.finditer(t):
+        tag, monat = int(m.group(1)), _MONAT_NAME.get(m.group(2).lower())
+        if not monat:
+            continue
+        jahr = int(m.group(3)) if m.group(3) else basis.year
+        d = _kalendertag(jahr, monat, tag)
+        if not d:
+            continue
+        if not m.group(3) and d < basis:
+            d = _kalendertag(jahr + 1, monat, tag) or d
+        belegt.append((m.start(), m.end()))
+        out.append((m.start(), m.end(), d.isoformat()))
+    for m in _DATUM_ZAHL_RE.finditer(t):
+        if not _frei(m.start(), m.end()):
+            continue
+        davor = t[max(0, m.start() - 8):m.start()]
+        danach = t[m.end():m.end() + 8]
+        if re.search(r"uhr", danach) or re.search(r"\b(?:um|gegen)\s+$", davor):
+            continue
+        tag, monat = int(m.group(1)), int(m.group(2))
+        if not (1 <= monat <= 12 and 1 <= tag <= 31):
+            continue
+        jahr = int(m.group(3)) if m.group(3) else basis.year
+        d = _kalendertag(jahr, monat, tag)
+        if not d:
+            continue
+        if not m.group(3) and d < basis:
+            d = _kalendertag(jahr + 1, monat, tag) or d
+        belegt.append((m.start(), m.end()))
+        out.append((m.start(), m.end(), d.isoformat()))
+    for m in _TAG_ORD_RE.finditer(t):
+        if not _frei(m.start(), m.end()):
+            continue
+        d = _tag_im_monat(int(m.group(1)), basis)
+        if not d:
+            continue
+        belegt.append((m.start(), m.end()))
+        out.append((m.start(), m.end(), d.isoformat()))
+    return sorted(out, key=lambda x: x[0])
+
+
 def tage_aus_text(text: str) -> list[str]:
     """Alle 'der 10.' / 'dem 21.' im Satz → ISO-Tage, aufsteigend, ohne Duplikat."""
     raw = _s(text)
@@ -696,16 +1158,116 @@ def _schub_dicht(pool: list[dict], max_n: int) -> list[dict]:
     return out
 
 
+# Felder, die ein Anrufer AUSDRUECKLICH abgelehnt hat — die duerfen nie
+# durch Ausweich-/Streu-/Naechstbestes-Auswahl zurueckkommen (A6).
+_HART_KEYS = (
+    "weekdays", "excludeWeekdays", "excludeHours", "excludeHourRanges",
+    "excludeDates", "excludeIsos", "excludeSpans",
+)
+# Weiche Praeferenzen, die bei leerem Pool STUFENWEISE fallen duerfen —
+# harte Ausschluesse bleiben dabei immer bestehen.
+_WEICH_STUFEN: tuple[tuple[str, ...], ...] = (
+    ("weekdays", "weekday"),
+    ("hour", "hourMin", "hourMax", "minutenMin", "minutenMax"),
+    ("date", "tage"),
+    ("von", "bis", "minDaysAhead"),
+)
+
+
+_AUSSCHLUSS_KEYS = (
+    "excludeWeekdays", "excludeHours", "excludeHourRanges",
+    "excludeDates", "excludeIsos", "excludeSpans",
+)
+
+
+def wunsch_ausschluesse(wish: dict | None) -> dict[str, Any]:
+    """Nur die harten AUSSCHLUESSE eines Wunsches (A6).
+
+    Wer die Richtung eines Wunsches verwirft ("Egal", Eskalation der
+    Wunschfrage, "Ändere den Zeitpunkt"), behaelt damit trotzdem, was der
+    Anrufer schon ABGELEHNT hat — ein "kein Donnerstag" darf nie durch ein
+    spaeteres "egal" wieder im Angebot landen.
+    """
+    if not isinstance(wish, dict):
+        return {}
+    return {k: wish[k] for k in _AUSSCHLUSS_KEYS if wish.get(k)}
+
+
+def hat_ausschluesse(wish: dict | None) -> bool:
+    return bool(wunsch_ausschluesse(wish))
+
+
+_RICHTUNG_KEYS = (
+    "date", "tage", "weekday", "weekdays", "hour", "hourMin", "hourMax",
+    "minDaysAhead", "von", "bis",
+)
+
+
+def wunsch_hat_richtung(wish: dict | None) -> bool:
+    """Traegt der Wunsch eine POSITIVE Angabe (Tag, Zeit, Zeitraum)?
+
+    Ein Wunsch, der nur aus Ausschluessen besteht ("kein Donnerstag"), ist
+    fuer die Wunschfrage weiterhin unbeantwortet — "egal" darauf heisst:
+    naechste freie Termine, aber ohne die abgelehnten.
+    """
+    if not isinstance(wish, dict):
+        return False
+    return any(wish.get(k) not in (None, 0, "", [], {}) for k in _RICHTUNG_KEYS)
+
+
 def _harte_slotgrenzen(wish: dict | None) -> bool:
     """Ausschlüsse/Mehrfach-Tage dürfen nie durch Ausweichslots verletzt werden."""
     if not wish:
         return False
-    return bool(
-        wish.get("weekdays")
-        or wish.get("excludeWeekdays")
-        or wish.get("excludeHours")
-        or wish.get("excludeHourRanges")
-    )
+    return any(wish.get(k) for k in _HART_KEYS)
+
+
+def _hart_ausweich_stufen(wish: dict) -> list[dict]:
+    """Ausweich-Wuensche bei leerem Pool trotz harter Grenzen.
+
+    Erst faellt die Wochentags-PRAEFERENZ ("lieber Freitag"), dann die
+    Uhrzeit, dann der konkrete Tag, zuletzt der Zeitraum — die AUSSCHLUESSE
+    (kein Donnerstag, nicht der erste, morgen nicht) bleiben in jeder Stufe.
+    Nicht-kumulativ zuerst (nur eine Gruppe weg), dann kumulativ, damit
+    "Freitag nachmittags" ohne Treffer erst "Freitag" bzw. "nachmittags"
+    probiert, bevor alles faellt.
+    """
+    stufen: list[dict] = []
+    gesetzt = [
+        keys for keys in _WEICH_STUFEN
+        if any(wish.get(k) not in (None, "", [], 0) for k in keys)
+    ]
+    if not gesetzt:
+        return stufen
+    for keys in gesetzt:
+        w = dict(wish)
+        for k in keys:
+            w[k] = None
+        stufen.append(w)
+    if len(gesetzt) > 1:
+        w = dict(wish)
+        for keys in gesetzt:
+            for k in keys:
+                w[k] = None
+        stufen.append(w)
+    return stufen
+
+
+def _span_gesperrt(p: dict, spans: list) -> bool:
+    for sp in spans or []:
+        if not isinstance(sp, dict):
+            continue
+        try:
+            lo, hi = int(sp.get("lo", 0)), int(sp.get("hi", 24))
+        except (TypeError, ValueError):
+            continue
+        if not lo <= p["hour"] < hi:
+            continue
+        if sp.get("date") and str(sp["date"]) == p["date"]:
+            return True
+        if sp.get("weekday") is not None and _weekday_of(p["date"]) == int(sp["weekday"]):
+            return True
+    return False
 
 
 def slot_wunsch_hart(wish: dict | None) -> bool:
@@ -789,6 +1351,15 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             if isinstance(grenze, (list, tuple)) and len(grenze) == 2:
                 lo, hi = int(grenze[0]), int(grenze[1])
                 out = [p for p in out if not lo <= p["hour"] < hi]
+        # A6: abgelehnte Tage, Angebote und Tag+Tageszeit-Verbunde.
+        if w.get("excludeDates"):
+            gesperrte_daten = {str(x)[:10] for x in w["excludeDates"] if x}
+            out = [p for p in out if p["date"] not in gesperrte_daten]
+        if w.get("excludeIsos"):
+            gesperrte_isos = {str(x)[:16] for x in w["excludeIsos"] if x}
+            out = [p for p in out if p["iso"][:16] not in gesperrte_isos]
+        if w.get("excludeSpans"):
+            out = [p for p in out if not _span_gesperrt(p, w["excludeSpans"])]
         return out
 
     pool = apply(parsed)
@@ -810,16 +1381,30 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
 
             pool = sorted(pool, key=_nahe)
     naechstbestes = False
+    hart_ausweich = False
     if not pool:
         if hart:
-            # „Nicht Donnerstag“ ist keine weiche Präferenz. Lieber gezielt
-            # nachladen/keinen Slot melden als Donnerstag erneut anbieten.
-            return {"slots": [], "wishMatched": False}
-        if schieben or (wish and wish.get("minutenMin") is not None):
+            # „Nicht Donnerstag“ ist keine weiche Präferenz: Donnerstag kommt
+            # NIE zurueck. Aber ein leerer Pool heisst nicht "kein Termin" —
+            # A6 (17.09.2026): erst fallen die weichen Praeferenzen stufenweise
+            # (lieber Freitag / nachmittags / der Tag / der Zeitraum), die
+            # Ausschluesse gelten in jeder Stufe. Das Ergebnis zaehlt als
+            # "nicht getroffen" (Ansage "Genau dann ist leider nichts frei",
+            # find_slots blaettert weiter). Schub/Uhrzeit-Untergrenze bleiben
+            # streng (kein Rueckfall auf dieselben Zeiten).
+            if not schieben and wish.get("minutenMin") is None:
+                for w2 in _hart_ausweich_stufen(wish):
+                    pool = apply(parsed, w2)
+                    if pool:
+                        hart_ausweich = True
+                        break
+            if not pool:
+                return {"slots": [], "wishMatched": False}
+        elif schieben or (wish and wish.get("minutenMin") is not None):
             # Schub ohne Treffer: NICHT auf die drei Vormittagsslots
             # zurückfallen (live 30.08.2026: „keine weiteren“ + dieselben 09:45er).
             return {"slots": [], "wishMatched": False}
-        if wish and _zeitanker(wish):
+        elif wish and _zeitanker(wish):
             # W-SUCHFENSTER (14.09.2026, Anruf 5aa87268): "heute um halb zwei"
             # ohne Treffer hiess frueher "kein freier Termin" — bei 20 freien
             # Slots im Vorrat. Jetzt: das NAECHSTBESTE ab dem Wunschzeitpunkt,
@@ -830,6 +1415,10 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             pool = parsed
     if dringend:
         auswahl = pool[:max_n]
+    elif hart_ausweich:
+        # Ausweich innerhalb der harten Grenzen: gestreut, aber NIE ausserhalb
+        # des gefilterten Pools (kein Rueckgriff auf `parsed`).
+        auswahl = _streuen(pool, pool, wish, max_n)
     elif schieben or naechstbestes or (wish and wish.get("date") and not matched):
         # Region um ein leeres Wunschdatum: nur die Nachbartage, kein
         # Streu-Fallback auf Vormittage in drei Wochen.

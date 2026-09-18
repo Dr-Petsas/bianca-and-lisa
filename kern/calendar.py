@@ -472,8 +472,15 @@ def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bo
         body["visitMotiveName"] = _s(ctx.get("visitMotiveName"))
     elif vm and vm.get("name"):
         body["visitMotiveName"] = vm["name"]
-    if start_date:
-        body["startDate"] = start_date
+    # W-FENSTERENDE (17.09.2026, Befund A7): startDate IMMER senden. Ohne
+    # startDate rechnet die Plattform (appointmentsService.getFreeTimeSlots)
+    # das Fensterende als "jetzt + 30 Tage" MIT Uhrzeit: der Kalkulator
+    # erzeugt fuer Tag 30 den GANZEN Tag, geladen sind die Termine aber nur
+    # bis zur Anruf-Uhrzeit — alles danach ist ein Phantom, das
+    # isSlotAvailable beim Buchen verwirft ("The slot is not available.",
+    # 6 von 8 Buchungsfehlern lagen exakt auf Tag 30). Mit startDate rechnet
+    # die Plattform ab Berlin-Mitternacht, Tag 30 faellt komplett heraus.
+    body["startDate"] = start_date or datetime.now(TZ).date().isoformat()
     status, data, dispatch = _cf_call("getFreeTimeSlots", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         nutz = data.get("data") or {}

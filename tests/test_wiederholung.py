@@ -112,6 +112,42 @@ def test_ziffern_readback_bleibt():
     assert raus == satz, "Nummern-Readbacks werden nie gestrichen"
 
 
+def test_slot_angebot_wird_nie_gestrichen():
+    """W-ANGEBOT-BLEIBT (A5, 17.09.2026), live 66913eb8 Zug 19: die wortgleiche
+    Slot-Liste flog, gesprochen wurde nur 'Welcher davon passt Ihnen?'."""
+    angebot = ("Frei ist am Montag, den siebten Dezember um zwölf Uhr; "
+               "am Dienstag, den achten Dezember um halb neun; "
+               "oder am Mittwoch, den neunten Dezember um vierzehn Uhr.")
+    sit = _sit()
+    raus = wiederholung.pruefen(
+        sit, f"Alles klar. {angebot} Welcher davon passt Ihnen?",
+        frueher=[f"{angebot} Welcher davon passt Ihnen?"],
+    )
+    assert angebot in raus, "Angebots-Saetze sind Fakten — der Anrufer muss waehlen koennen"
+    assert "Welcher davon passt Ihnen?" in raus, "die Wahlfrage bleibt beim Angebot"
+
+
+def test_termin_readback_wird_nie_gestrichen():
+    for satz in [
+        "Dann halte ich fest: Donnerstag um halb zehn bei Doktor Petsas zur Kontrolle.",
+        "Ihr nächster Termin ist am dritten Oktober um neun Uhr.",
+        "Genau dann ist leider nichts frei. Frei wäre morgen um dreizehn Uhr dreißig.",
+    ]:
+        sit = _sit()
+        raus = wiederholung.pruefen(sit, satz, frueher=[satz])
+        assert raus == satz, satz
+
+
+def test_sermon_ohne_terminfakt_fliegt_weiterhin():
+    """Gegenprobe: 'Stunde'/'Euro' sind keine Termin-Fakten — der Langsatz
+    ohne Wochentag/Monat/Uhr wird weiterhin entdoppelt."""
+    sermon = ("Die Aufhellung dauert bei uns ungefähr eine Stunde länger und "
+              "wird vom Doktor vorher in Ruhe angeschaut und besprochen.")
+    sit = _sit()
+    raus = wiederholung.pruefen(sit, f"{sermon} Möchten Sie das?", frueher=[sermon])
+    assert sermon not in raus
+
+
 def test_kurzquittung_darf_sich_wiederholen():
     sit = _sit()
     raus = wiederholung.pruefen(

@@ -113,10 +113,30 @@ def anrede(n: int) -> str:
     return "Sind Sie noch dran?" if n <= 1 else "Ich bin noch da."
 
 
-def frage_praefix(satz: str) -> str:
-    """Eine offene Frage wiederholen, ohne wortgleich zu werden."""
+_PRAEFIXE = (
+    "Meine Frage war: {satz}",
+    "Noch einmal die Frage: {satz}",
+    "Ich frage noch einmal: {satz}",
+    "Kurz zurück zur Frage: {satz}",
+    "Damit ich weiterkomme: {satz}",
+)
+
+
+def frage_praefix(satz: str, sit: dict | None = None) -> str:
+    """Eine offene Frage wiederholen, ohne wortgleich zu werden.
+
+    Mit `sit` rotiert der Vorsatz je Aufruf (Replay 53986f42 z10-z15: fuenfmal
+    wortgleich "Meine Frage war: Und der Vorname?" — der Wiederholungs-
+    Waechter sah den Praefix-Satz als neu, der Anrufer hoerte eine Schleife).
+    Ohne `sit` bleibt der feste erste Vorsatz (Lisa, Korpus, Alt-Aufrufer)."""
     satz = _s(satz)
-    return f"Meine Frage war: {satz}" if satz else ""
+    if not satz:
+        return ""
+    if not isinstance(sit, dict):
+        return _PRAEFIXE[0].format(satz=satz)
+    n = int(sit.get("fragePraefixN") or 0)
+    sit["fragePraefixN"] = n + 1
+    return _PRAEFIXE[n % len(_PRAEFIXE)].format(satz=satz)
 
 
 def nur_fragesaetze(text: str) -> str:

@@ -3,7 +3,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from bianca import flow
+from bianca import agent, flow, session
 from kern import praxisregeln
 
 
@@ -65,6 +65,22 @@ def test_akutfall_waehrend_sprechstunde_kommt_sofort():
     assert "auf jeden Fall" in text and "versorgt" in text
 
 
+def test_notfalltermin_und_starke_entzuendung_sind_akut():
+    """Die beiden Live-Formen dürfen nie in die normale Buchung fallen."""
+    for satz in (
+        "Ich brauche einen Notfalltermin.",
+        "Die Stelle ist stark entzündet, schmerzt und blutet.",
+    ):
+        assert praxisregeln.akut(satz), satz
+        text = praxisregeln.notfall_antwort(
+            _tenant(),
+            satz,
+            jetzt=datetime(2026, 9, 7, 9, 0, tzinfo=TZ),
+        )
+        assert "jetzt direkt" in text, satz
+        assert "keine feste Uhrzeit" in text, satz
+
+
 def test_akutfall_ausserhalb_sprechstunde_nennt_116117():
     text = praxisregeln.notfall_antwort(
         _tenant(),
@@ -105,11 +121,50 @@ def test_flow_bietet_bei_notfall_keinen_normalen_termin():
     )
     s = flow.gehirn.sammler(sit)
     s.update({"modus": "buchen", "frage": "grund"})
+    sit["slotVorrat"] = ["2026-09-08T09:00:00+02:00"]
     res = flow.zug(sit, "Ich habe eine akute Schwellung im Gesicht.")
     assert res and "jetzt direkt" in res["text"]
     assert "Termin" not in res["text"]
+    assert res.get("hangup") is True
     assert not sit.get("offered")
+    assert not sit.get("slotVorrat")
     assert s["phase"] == "fertig" and s["modus"] == ""
+
+
+def test_notfall_gewinnt_vor_identitaets_hallo_und_llm(monkeypatch):
+    """Anruf e14366c6: nie erst „Habe ich Sie richtig erkannt?“, nie Slots."""
+    sit = session.neu(tenant=_tenant())
+    agent.start_reply(sit)
+    sit["anrufer"] = {
+        "patientId": "p1",
+        "vorname": "Anna",
+        "nachname": "Muster",
+        "telefon": "+491771234567",
+    }
+    sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
+    vorab: list[str] = []
+
+    def _darf_nicht(*args, **kwargs):
+        raise AssertionError("Notfall darf weder LLM noch Kalender erreichen")
+
+    monkeypatch.setattr(praxisregeln, "praxis_offen", lambda *args, **kwargs: True)
+    monkeypatch.setattr(agent.llm, "chat", _darf_nicht)
+    monkeypatch.setattr(agent.llm, "chat_stream", _darf_nicht)
+    monkeypatch.setattr(flow, "_angebot", _darf_nicht)
+
+    res = agent.user_turn(
+        sit,
+        "Ich brauche einen Notfalltermin, die Stelle blutet stark.",
+        vorab=vorab.append,
+    )
+
+    assert vorab == []
+    assert res.get("hangup") is True
+    assert "jetzt direkt" in res["text"]
+    assert "keine feste Uhrzeit" in res["text"]
+    assert "richtig erkannt" not in res["text"].lower()
+    assert not sit.get("tools")
+    assert flow.gehirn.sammler(sit)["phase"] == "fertig"
 
 
 def test_dringlichkeit_ohne_beschwerde_ist_kein_notfall():
