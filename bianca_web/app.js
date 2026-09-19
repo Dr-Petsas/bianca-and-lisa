@@ -98,22 +98,26 @@ function wachtNot() {
   try { new Audio(notfall[notfall.length - 1]).play().catch(() => {}); } catch { /* */ }
 }
 
-function bubble(role, text) {
+function bubble(role, text, ziel) {
   if (!text) return;
+  // ziel: Anruf-Overlay (Default) oder die Chat-Karte im Dock.
+  const box = ziel || $("live");
+  if (!box) return;
   const el = document.createElement("div");
   el.className = `bubble ${role}`;
   el.textContent = text;
-  $("live").appendChild(el);
-  $("live").scrollTop = $("live").scrollHeight;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
 }
 
 function jsonText(v) {
   try { return JSON.stringify(v, null, 2); } catch { return String(v ?? ""); }
 }
 
-function zeigeTools(tools) {
+function zeigeTools(tools, ziel) {
   if (!tools || !tools.length) return;
-  const live = $("live");
+  const live = ziel || $("live");
+  if (!live) return;
   for (const t of tools) {
     const d = t.dispatch || {};
     const name = d.route || t.cf || t.name || "tool";
@@ -987,13 +991,13 @@ $("start").onclick = () => starteAnruf();
 
 $("hang").onclick = auflegen;
 
-function zeigeBuch(book, writeLive) {
+function zeigeBuch(book, writeLive, ziel) {
   if (!book) return;
   if (book.dryRun || !book.booked) {
-    bubble("sys", writeLive ? "Buchung nicht fest." : "Test: nicht in den Kalender geschrieben, keine SMS.");
+    bubble("sys", writeLive ? "Buchung nicht fest." : "Test: nicht in den Kalender geschrieben, keine SMS.", ziel);
     return;
   }
-  bubble("sys", "Fest im Kalender: " + (book.slotIso || "Termin"));
+  bubble("sys", "Fest im Kalender: " + (book.slotIso || "Termin"), ziel);
 }
 
 function zeigeStand(call) {
@@ -1343,5 +1347,147 @@ $("koennenZu").onclick = () => { $("koennen").hidden = true; };
 for (const b of document.querySelectorAll(".k-tab")) {
   b.onclick = () => { kTab = b.dataset.tab; kRender(); };
 }
+
+// ---------------------------------------------------------------------------
+// Dock-Chat (19.09.2026): derselbe Weg wie der Anruf — api/start + api/turn —
+// nur getippt. Kein Mikrofon, kein Ton (ausser man will es hoeren), kein
+// Barge-in, kein Stille-Stups. Eigene Sitzung, eigenes Fenster: der Anruf
+// oben bleibt davon unberuehrt.
+// ---------------------------------------------------------------------------
+let chatSid = "";
+let chatBusy = false;
+
+function chatStand(text) {
+  const el = $("chatStand");
+  if (el) el.textContent = text;
+}
+
+async function chatHoeren(url) {
+  // Eigener Abspielweg: playUrl haengt an callOn/Barge/Mikro-Wache und wuerde
+  // im Chat sofort aussteigen. Hier reicht abspielen und zuhoeren.
+  if (!url || !($("chatTon") && $("chatTon").checked)) return;
+  try {
+    await unlockAudio();
+    const a = lautsprecher();
+    try { a.pause(); } catch { /* */ }
+    a.volume = 1;
+    a.src = apiUrl(url);
+    await new Promise((done) => {
+      const fertig = () => { a.onended = null; a.onerror = null; done(); };
+      a.onended = fertig;
+      a.onerror = fertig;
+      a.play().catch(fertig);
+      setTimeout(fertig, 30000);
+    });
+  } catch { /* */ }
+}
+
+async function chatStart() {
+  const echt = $("chatEcht") && $("chatEcht").checked;
+  chatStand(echt ? "Sitzung startet — ECHTE Buchung …" : "Sitzung startet …");
+  const r = await fetch("api/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tenant: $("tenant").value,
+      test: true,
+      testName: "Dock-Chat",
+      // Standard: nichts schreiben. Erst der Haken schaltet echte
+      // Kalender-/SMS-Wege frei — sonst legt jeder Tippversuch Termine an.
+      testNoWrite: !echt,
+    }),
+  });
+  if (!r.ok) {
+    let msg = "start fehlgeschlagen";
+    try { const err = await r.json(); if (typeof err.detail === "string") msg = err.detail; } catch { /* */ }
+    throw new Error(msg);
+  }
+  const d = await leseZug(r);
+  chatSid = d.sessionId || "";
+  if (!chatSid) throw new Error("keine Sitzung");
+  if (d.text) bubble("ki", d.text, $("chatLive"));
+  await chatHoeren(d.audioUrl);
+  chatStand((echt ? "ECHTE Buchung · " : "Testmodus (kein Kalender-Schreiben) · ") + "Sitzung " + chatSid.slice(0, 8));
+  $("chatEnd").hidden = false;
+  if ($("chatEcht")) $("chatEcht").disabled = true;
+}
+
+async function chatSenden() {
+  if (chatBusy) return;
+  const feld = $("chatIn");
+  const text = (feld.value || "").trim();
+  if (!text) return;
+  if (callOn) {
+    // Zwei Sitzungen gleichzeitig wuerden sich im Mitschnitt ueberlagern.
+    bubble("sys", "Erst auflegen — waehrend des Anrufs laeuft der Chat nicht.", $("chatLive"));
+    return;
+  }
+  chatBusy = true;
+  feld.disabled = true;
+  $("chatSend").disabled = true;
+  try {
+    if (!chatSid) await chatStart();
+    bubble("user", text, $("chatLive"));
+    feld.value = "";
+    const r = await fetch("api/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: chatSid, text }),
+    });
+    const d = await leseZug(r);
+    if (d.warte) {
+      // Halbsatz-Wache: der Satz klingt unfertig — Bianca schweigt und
+      // wartet auf den Rest. Im Chat heisst das: einfach weitertippen.
+      bubble("ki", "… (hört weiter zu — Satz klingt unfertig)", $("chatLive"));
+    } else {
+      if (d.text) bubble("ki", d.text, $("chatLive"));
+      if (d.tools) zeigeTools(d.tools, $("chatLive"));
+      // writeLive nur melden, wenn der Haken echtes Schreiben freigegeben hat —
+      // sonst behauptet der Testmodus "Buchung nicht fest" statt "Trockenlauf".
+      const echt = !!($("chatEcht") && $("chatEcht").checked);
+      if (d.book) zeigeBuch(d.book, d.writeLive && echt, $("chatLive"));
+      await chatHoeren(d.audioUrl);
+    }
+    if (d.hangup) {
+      bubble("ki", "— aufgelegt —", $("chatLive"));
+      await chatBeenden(true);
+    }
+  } catch (e) {
+    bubble("ki", "Fehler: " + String(e.message || e), $("chatLive"));
+  } finally {
+    chatBusy = false;
+    feld.disabled = false;
+    $("chatSend").disabled = false;
+    if (!callOn) feld.focus();
+  }
+}
+
+async function chatBeenden(schonAufgelegt) {
+  const sid = chatSid;
+  chatSid = "";
+  $("chatEnd").hidden = true;
+  if ($("chatEcht")) $("chatEcht").disabled = false;
+  if (!sid) return;
+  if (!schonAufgelegt) {
+    // Wie im Anruf: Nacharbeit (Mitschnitt, Gedaechtnis-Report) laeuft ueber
+    // api/hangup — ohne den Aufruf fehlt das Gespraech in /anrufe.
+    try {
+      const d = await (await fetch("api/hangup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: sid }),
+      })).json();
+      zeigeLetzten(d.call);
+      zeigeStand(d.call);
+    } catch { /* */ }
+  }
+  chatStand("Chat beendet. Nächste Zeile startet eine neue Sitzung.");
+}
+
+$("chatSend").onclick = () => chatSenden();
+$("chatEnd").onclick = () => chatBeenden(false);
+$("chatIn").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSenden(); }
+});
 
 boot();

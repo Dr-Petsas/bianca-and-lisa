@@ -616,9 +616,19 @@ def studio_uebergabe(request: Request):
     return _studio_seite("uebergabe.html", request)
 
 
+@app.get("/studio/dialogkern")
+@app.get("/studio/dialogkern/")
+def studio_dialogkern(request: Request):
+    """Chat gegen den reinen Dialogkern (W-KERN-STUDIO). Ohne diese Route
+    zeigte der Link im Studio-Kopf hinter der Durchreiche auf 404 — die
+    Seite lag da, war aber nur auf Port 8097 direkt erreichbar."""
+    return _studio_seite("dialogkern.html", request)
+
+
 @app.get("/studio/web/{name}")
 def studio_web(name: str):
-    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js"}
+    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js",
+               "dialogkern.js"}
     if name not in erlaubt:
         raise HTTPException(404)
     return _studio_seite(name)
