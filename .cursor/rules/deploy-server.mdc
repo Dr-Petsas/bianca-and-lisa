@@ -17,7 +17,7 @@ Bei „deploy“, „auf den Server“, „rollout“: **diese Regel ausführen*
 | SIP-Brücke | `telefonki-sipbridge-1` → `127.0.0.1:40101` |
 | Studio | hinter Bianca `/studio` (`studio` + `bianca-test`, kein Host-Port) |
 | TTS / STT | eigene Stacks `tts_serve` (**8213** Qwen3), `stt_serve` (**8212**) — nur anfassen wenn der Change dort liegt |
-| Live-URL | Tailscale `http://100.82.122.62:8096` (Dock), `:8095` Lisa |
+| Live-URL | Tailscale `http://pickadoc1.tail22c4dd.ts.net:8096` (Dock/Studio/Anrufe), `:8095` Lisa — **Namen statt IP**, die Tailnet-IPs haben am 19.09.2026 gewechselt |
 
 **Nie anfassen:** Clara 8091/8093/8094, MAS-2, Lena-Voice, pickadoc-live-base, vLLM (`pickadoc-vllm-1`). `WRITE_LIVE` bleibt **1**, außer der Chef stoppt Schreiben ausdrücklich. Server-`.env` nie pauschal überschreiben.
 

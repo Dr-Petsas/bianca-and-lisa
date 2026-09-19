@@ -4,11 +4,16 @@ Eigenständiger Dienst. **Rührt Clara, Clara-dev, DemoClara, Lena-Voice und MAS
 
 | Dienst | Port | Live (pickadoc1) |
 |--------|------|------------------|
-| Lisa | **8095** | `http://100.82.122.62:8095` |
-| Bianca | **8096** | `http://100.82.122.62:8096` |
+| Lisa | **8095** | `http://pickadoc1.tail22c4dd.ts.net:8095` |
+| Bianca | **8096** | `http://pickadoc1.tail22c4dd.ts.net:8096` (Dock, `/studio`, `/anrufe`) |
 | SIP-Brücke Inbound (Bianca) | 40101 | Asterisk → Tunnel |
 | SIP-Brücke Outbound (Lisa) | 40102 | Asterisk → Tunnel |
 
+- **Tailscale-Namen statt IPs.** Die Tailnet-IPs sind am 19.09.2026 gewechselt
+  (pickadoc1 `100.82.122.62` → `100.77.30.98`, Dev `100.81.214.94` →
+  `100.111.107.2`); jede hart notierte IP wirkte danach „nicht erreichbar".
+  Der MagicDNS-Name überlebt den Wechsel — kurzes `pickadoc1` reicht nur mit
+  aktivem MagicDNS-Suffix, der FQDN immer.
 - LLM/STT/TTS: lokal auf der 5090 (`LLM_BASE`, `STT_BASE`, `TTS_BASE`)
 - Schreiben am echten Kalender: **an** (`WRITE_LIVE=1` — nicht zurücksetzen, außer Chef stoppt es)
 - Dev lokal: `powershell -File .\start.ps1` → [http://127.0.0.1:8095](http://127.0.0.1:8095)

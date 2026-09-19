@@ -1509,9 +1509,14 @@ darum eigener Weg, Ende-zu-Ende:
 ## Test-Studio auf der 5090 (W-STUDIO-5090 30.08.2026 — nicht rückbauen)
 
 Chef: „das muss auch auf den server." Das Baukasten-Studio läuft jetzt auch
-auf pickadoc1 — Aufruf: `http://100.82.122.62:8096/studio` (durch die
-Live-Bianca, KEIN eigener öffentlicher Port; die 8015 aus dem alten
+auf pickadoc1 — Aufruf: `http://pickadoc1.tail22c4dd.ts.net:8096/studio`
+(durch die Live-Bianca, KEIN eigener öffentlicher Port; die 8015 aus dem alten
 Browser-Tab war nie ein Port dieses Projekts).
+
+**Immer den Tailscale-NAMEN nehmen, nie die IP** (19.09.2026): die Tailnet-IPs
+haben sich geändert (pickadoc1 `100.82.122.62` → `100.77.30.98`, Dev-Rechner
+`100.81.214.94` → `100.111.107.2`) — jede hart notierte IP war danach „nicht
+erreichbar", obwohl der Dienst lief. Der MagicDNS-Name überlebt den Wechsel.
 
 - **Image trägt `tests/`** (Dockerfile + .dockerignore: nur Code und
   `editor_web`, die Render-Caches `audio/`/`berichte/` bleiben draußen).
@@ -4180,8 +4185,9 @@ Tests: `tests/test_befehlsliste.py`.
 Chef 19.09.2026: „ausserdem hast du mir nicht gesagt wo ich die praxis layer
 einstelle.“ Hier ist der Weg — **Studio → Dialogkern**:
 
-1. `http://100.82.122.62:8096/studio/dialogkern.html` (durch die Live-Bianca
-   gereicht, kein eigener Port). Mandant oben wählen.
+1. `http://pickadoc1.tail22c4dd.ts.net:8096/studio/dialogkern` (durch die
+   Live-Bianca gereicht, kein eigener Port; **ohne** `.html` — die Seite hängt
+   an `_studio_seite`, nicht am statischen Ordner). Mandant oben wählen.
 2. Die Maske zeigt jedes Feld des Vertrags `DialogPolicyV1` mit dem heutigen
    Wert; „Probieren“ spielt ein Gespräch dagegen, ohne etwas zu speichern.
 3. **„Veröffentlichen“** schreibt den Vertrag nach
@@ -4206,6 +4212,32 @@ Mandant schon eine Policy an der Datei oder aus der DB, wird sie NICHT
 
 Notaus: `DIALOG_POLICY_ABLAGE=0` => keine Datei wird gelesen. Tests:
 `tests/test_policy_ablage.py`.
+
+## „Ich bin mir nicht sicher" ist kein Name (W-PHANTOMNAME 19.09.2026 — nicht rückbauen)
+
+MedDent-Anruf `d6611fca` (19.09.2026 21:42): Der Anrufer war über die Rufnummer
+längst als Herr Petsas erkannt und sagte „Ich bin mir nicht sicher, ob ich einen
+Termin bei Ihnen habe." Die Namens-Ernte las daraus Vorname **Mir** + Nachname
+**Sicher** (Geschlecht geraten: weiblich). Damit lief
+`agentFindPatientAppointments` zweimal ins Leere, Bianca sagte „Danke, Mir
+Sicher. Unter Mir Sicher finde ich gerade keinen Termin.", fragte den Nachnamen
+ab und quittierte den echten Namen dann als „Danke, Mir Petsas." — der Anrufer
+legte auf. **Der Dialogkern war daran unschuldig:** er lief in diesem Anruf im
+Schatten (`CONTROLLER_SHADOW=1`), gesprochen hat der alte Pfad.
+
+`gehirn._KEIN_NAME_RE` kannte nur Zustands- und Neu-Formen („ich bin neu",
+„ich bin aufgeregt"). Ergänzt sind jetzt:
+
+- **Reflexiv** „(ich) bin mir …" / „(wir) sind uns …" — nach `mir`/`uns` muss
+  Leerraum folgen, damit „Mirko" unberührt bleibt.
+- **Verneinte Gewissheit** „bin (gar/ganz/noch) nicht (so) sicher/schlau/im
+  Bilde" — bewusst NUR mit Verneinung: ein echter Nachname „Sicher" („Michael
+  Sicher" auf die Namensfrage) wird weiter geerntet. Das nackte „Sicher" war
+  ohnehin nie ein Name, es ist seit langem ein Ja-Wort (`_JA_RE`).
+
+Die Gegenproben sind der teurere Teil — eine zu breite Sperre kostet echte
+Namen und damit jede Patientensuche. Tests: `tests/test_anruf_d6611fca.py`
+(Live-Wortlaute plus vier Gegenproben).
 
 ## Rückrollpunkte (Produktionsstände)
 

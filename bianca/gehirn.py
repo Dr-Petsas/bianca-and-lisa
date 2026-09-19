@@ -877,6 +877,19 @@ _BUCHSTABIER_HILFE_RE = re.compile(
 _KEIN_NAME_RE = re.compile(
     r"(?:ich\s+)?bin\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
     r"(?:wir\s+)?sind\s+(?:auch\s+|doch\s+|wirklich\s+)*nicht\s+neu\b|"
+    # Reflexives "bin mir" fuehrt NIE einen Namen ein (Live MedDent 19.09.2026,
+    # Anruf d6611fca): "Ich bin mir nicht sicher, ob ich einen Termin habe."
+    # wurde als Vorname "Mir" + Nachname "Sicher" geerntet, damit lief die
+    # Terminsuche zweimal ins Leere und Bianca fragte den Nachnamen ab, obwohl
+    # der Anrufer ueber die Rufnummer schon erkannt war. "Mirko" bleibt
+    # unberuehrt (nach "mir" muss Leerraum folgen).
+    r"(?:ich\s+)?bin\s+mir\b\s*[^,.!?]*|"
+    r"(?:wir\s+)?sind\s+uns\b\s*[^,.!?]*|"
+    # Ohne "mir": nur MIT Verneinung, damit ein echter Nachname "Sicher" auf
+    # die Namensfrage ("Ich bin Sicher") erhalten bleibt.
+    r"(?:ich\s+|wir\s+)?(?:bin|sind)\s+"
+    r"(?:gar\s+|ganz\s+|noch\s+|so\s+|ehrlich\s+|leider\s+)*nicht\s+(?:so\s+)?"
+    r"(?:sicher|schlau|im\s+bilde)\b[^,.!?]*|"
     r"(?:ich\s+|wir\s+)?(?:bin|war(?:en)?)\s+"
     r"(?:auch\s+|übrigens\s+|uebrigens\s+|leider\s+|ja\s+|gerade\s+|heute\s+)*"
     r"(?:ganz\s+|völlig\s+|voellig\s+|hier\s+|noch\s+|sehr\s+|so\s+|total\s+|"
