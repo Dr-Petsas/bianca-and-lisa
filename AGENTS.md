@@ -4107,6 +4107,106 @@ Tests: `tests/test_controller_meta.py` (38). Hörproben:
 `python tools\_probe_meta_live.py` (vier Gespräche) und
 `python tools\_probe_meta_formeln.py` (Formel-Sweep mit Gegenbeispielen).
 
+## Meta-Bitten am Telefon (W-META-LIVE 19.09.2026 — nicht rückbauen)
+
+Die vier CALM-Lücken von W-META waren im Dialogkern fertig, am Telefon liefen
+drei davon ins Leere: „Wie bitte?“ ging ans Modell (live wurde daraus einmal
+ein Besuchsgrund), „Vergessen Sie's“ blieb unbeantwortet. Stille ist seit dem
+29.08.2026 live (`kern/stille.py`) — die drei anderen sitzen jetzt in
+`bianca/metazug.py`, aufgerufen in `bianca/agent.user_turn` VOR Intent, Fluss
+und Modell.
+
+- **Erkennung wird NICHT verdoppelt:** sie kommt aus
+  `bianca/controller/meta.deute` — dieselbe Funktion wie im Kern, mit allen
+  Gegenproben. In `metazug.py` steht nur die WIRKUNG im Live-Zustand
+  (Sammler, Session-Hirn, Sitzung). Die Wortlaute sind wortgleich mit
+  `controller/renderer`, damit Studio-Probe und Telefon gleich klingen.
+- **Wiederholen:** die letzte WIEDERHOLBARE Ansage mit wechselnder Einleitung
+  („Natürlich, gerne noch einmal:“ → „Ich sage es noch einmal:“ → „Gerne — in
+  anderen Worten:“), Deckel 3, danach ehrlich („die Leitung ist gerade
+  schlecht“) plus offene Pflichtfrage. Presence-Stupse sind keine Vorlage,
+  und die **Begrüßung** auch nicht: ein zweites Hallo streicht die
+  Regreeting-Wache hinterher, der Zug bliebe stumm (Blessing-Gegenprobe „Wie
+  bitte?“ direkt nach dem Hallo — der Satz gehört dem normalen Unklar-Weg).
+- **Abbrechen:** räumt das Anliegen (Grund, Motiv, Wunsch, Slot, Behandler),
+  BEHÄLT aber Identität und Rufnummer — wer seinen Namen schon buchstabiert
+  hat, tut es nach „vergessen Sie's“ nicht erneut. Danach steht
+  `frage=sonst_noch` REGISTRIERT, also beantwortet der bewährte
+  Abschluss-Zweig den nächsten Satz deterministisch. **Kein Schreibweg, keine
+  Rückrufnotiz** — ein Zurückziehen ist keine Bitte um Rückruf. Ist schon
+  gebucht, sagt Bianca ehrlich, was steht, und nennt den Weg (absagen) —
+  es gibt kein Werkzeug „Buchung ungeschehen machen“.
+- **Auslassen:** am Telefon ist jedes Buchungsfeld Pflicht (die Standard-Policy
+  führt kein optionales Feld), also kommt die ehrliche Begründung plus die
+  offene Frage — nie ein stilles Überspringen.
+
+**Die Gegenproben sind der teurere Teil.** Im Diktat (Nummer, Buchstabieren)
+greift nichts davon: „nochmal die Sieben“ ist eine Korrektur
+(`agent._diktat_offen`). Und auf einer **Rücklese, einer Slot-Auswahl oder
+einer destruktiven Bestätigung** (`metazug.streng`) bleibt der Zug beim Fluss —
+dort eskaliert er seit Monaten selbst (Nummer/Namen erneut buchstabiert
+vorlesen, beim zweiten Mal die Schreibweise frisch aufnehmen). Eine Kopie
+davon hier hieße, diese Eskalation zu verlieren; der Anrufer hörte dieselbe
+Rücklese endlos.
+
+Notaus: `META_LIVE=0` => byte-identisch wie vor dem 19.09.2026. Tests:
+`tests/test_metazug.py`.
+
+## Ein Satz, mehrere Aufträge (W-BEFEHLSLISTE 19.09.2026 — nicht rückbauen)
+
+„Ich möchte meinen Termin absagen und einen neuen ausmachen“ ist EIN Satz mit
+ZWEI Aufträgen. Der Dialogkern nimmt jetzt beide auf: der erste läuft sofort,
+die weiteren warten geparkt und kommen über den bestehenden Auto-Resume
+zurück.
+
+- **`verstehen.nachtraege(text, …)`** liefert die weiteren Anliegen als
+  eigene `SemanticEvent`s; `reducer.nachtragen` legt sie auf den Stapel.
+  `deuten` selbst bleibt beim Vertrag „ein Satz → ein SemanticEvent“ — jeder
+  bestehende Aufrufer verhält sich unverändert, deshalb ist die Liste ein
+  zweiter Aufruf und kein neuer Rückgabetyp.
+- **Nur die drei Termin-Familien** (`ordnen.FAMILIE_INTENT`: absagen,
+  verschieben, buchen) und höchstens zwei Nachträge. Ein Nachtrag darf nie
+  eine Auskunft, ein Dokument oder einen Rückruf erfinden.
+- **Kein Nachtrag auf einer offenen Ja/Nein- oder Wahlfrage** und nicht bei
+  Meta-/Formular-/Stille-Zügen: dort gehört der Satz der Frage („ja, den
+  früheren“), ein geparkter Auftrag daraus wäre geraten. Ebenso nichts, was
+  schon aktiv oder geparkt ist.
+- Aufsicht und Beleg-Pflicht bleiben unberührt — sie arbeiten pro Aufgabe.
+
+Tests: `tests/test_befehlsliste.py`.
+
+## Praxis-Layer einstellen und veröffentlichen (W-POLICY-ABLAGE 19.09.2026 — nicht rückbauen)
+
+Chef 19.09.2026: „ausserdem hast du mir nicht gesagt wo ich die praxis layer
+einstelle.“ Hier ist der Weg — **Studio → Dialogkern**:
+
+1. `http://100.82.122.62:8096/studio/dialogkern.html` (durch die Live-Bianca
+   gereicht, kein eigener Port). Mandant oben wählen.
+2. Die Maske zeigt jedes Feld des Vertrags `DialogPolicyV1` mit dem heutigen
+   Wert; „Probieren“ spielt ein Gespräch dagegen, ohne etwas zu speichern.
+3. **„Veröffentlichen“** schreibt den Vertrag nach
+   `.data/dialogpolicy/<mandant>.json` (`kern/policy_ablage.schreiben`,
+   atomar). `kern/tenants.laden` und `kern/agentprofil` legen ihn beim
+   nächsten Anruf als `tenant["dialogPolicy"]` an — genau die Quelle, aus der
+   `controller/policy.aus_tenant` liest.
+4. **„Zurücknehmen“** löscht die Datei: der Mandant verhält sich wieder
+   byte-identisch wie vorher (Legacy-Projektion aus den bekannten Flags).
+
+Warum eine eigene Datei und nicht `tenants/<mandant>.json`: der Ordner ist auf
+pickadoc1 **read-only** gemountet (`./tenants:ro`), `.data` ist ein Volume, das
+Studio und Bianca teilen. Und die kuratierten Mandanten-Dateien bleiben
+Handarbeit — Sprechformen, DIDs, Stimmen und Hotwords gehören dem Menschen,
+ein Formular soll sie nicht umschreiben können.
+
+Ein gelesener Vertrag läuft ERNEUT durch `dialog_policy.parse`: eine von Hand
+verbogene Datei kann den Kern nie in einen unmöglichen Zustand bringen — im
+Zweifel gilt der sichere Default, die Warnungen stehen in der Maske. Trägt ein
+Mandant schon eine Policy an der Datei oder aus der DB, wird sie NICHT
+überschrieben; die Ablage ist der Weg für Praxen, die keine tragen.
+
+Notaus: `DIALOG_POLICY_ABLAGE=0` => keine Datei wird gelesen. Tests:
+`tests/test_policy_ablage.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
