@@ -120,10 +120,40 @@ def test_nochmal_im_diktat_bleibt_daten():
         assert meta.deute(satz) == "", satz
 
 
+def test_du_imperativ_ist_wiederholen():
+    """Dock-Probe 19.09.2026: "Sag das nochmal" fiel durch und das Modell
+    machte daraus eine SMS-Auskunft. Am Telefon duzt kaum jemand Bianca, im
+    getippten Chat tippt es fast jeder so.
+    """
+    for satz in (
+        "Sag das nochmal",
+        "sag das noch mal",
+        "Sag mir das noch einmal.",
+        "Wiederhol das bitte",
+        "Wiederhole das",
+        "Wiederhol mal",
+    ):
+        assert meta.deute(satz) == meta.WIEDERHOLEN, satz
+
+
+def test_du_imperativ_greift_nicht_in_normale_saetze():
+    """Gegenprobe: "sagen" kommt in echten Anliegen vor — nie Meta daraus."""
+    for satz in (
+        "Sagen Sie mir bitte einen Termin am Montag",
+        "Was sagen die Zeiten am Montag",
+        "Koennen Sie mir sagen, was die Kontrolle kostet",
+        "Ich wollte nur sagen, dass ich spaeter komme",
+    ):
+        assert meta.deute(satz) == "", satz
+
+
 def test_wer_selbst_wiederholt_bittet_nicht():
     """Diktat-Falle: "Ich wiederhole: …" ist eine Angabe, keine Bitte."""
     assert meta.deute("Ich wiederhole: null eins sieben sieben") == ""
     assert meta.deute("Ich wiederhole meinen Nachnamen") == ""
+    # Seit der Du-Imperativ zaehlt, ist "Ich sage …" die haeufigste Falle.
+    assert meta.deute("Ich sage es nochmal: Mueller") == ""
+    assert meta.deute("Ich sag Ihnen die Nummer noch einmal") == ""
 
 
 def test_ziffern_und_tafel_schlagen_jede_formel():

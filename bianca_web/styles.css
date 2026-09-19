@@ -126,6 +126,12 @@ select {
 .dock-chat input:disabled { opacity: .45; }
 .chat-opt { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; font-size: 13px; }
 .chat-opt input { width: 18px; height: 18px; accent-color: var(--accent); }
+.chat-regie { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.chat-opt select {
+  background: #171114; color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; padding: 6px 8px; font: inherit; font-size: 13px;
+}
+.chat-opt select:disabled { opacity: .45; }
 .dock .btn { flex: 1; min-height: 46px; }
 .dock .btn.neben { flex: 0 0 auto; background: #211a20; border: 1px solid var(--line); color: var(--text); font-weight: 600; }
 /* "Das kann ich" (Chef 29.08.2026): Schaufenster-Overlay mit zwei Reitern —

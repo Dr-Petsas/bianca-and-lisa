@@ -78,8 +78,12 @@ _WIEDERHOLEN_BITTE_RE = re.compile(
     r"(?:"
     r"(?:k(?:oe|ö)nn(?:en|ten)\s+sie|w(?:ue|ü)rden\s+sie)"
     rf".{{0,32}}(?:{_NOCHMAL}|wiederhol)"
-    r"|wiederhol(?:en\s+sie|e\s+das|en\s+bitte)\b"
+    r"|wiederhol(?:en\s+sie|e?\s+(?:das|es|mal|bitte)|en\s+bitte)\b"
     rf"|sagen\s+sie\s+(?:das\s+|es\s+)?(?:bitte\s+)?{_NOCHMAL}"
+    # Du-Imperativ ohne Anrede: "Sag das nochmal", "Sag mir das noch einmal".
+    # Am Telefon duzt kaum jemand Bianca, im Dock-Chat tippt es aber jeder so.
+    # Die Selbst-Wache unten haelt "Ich sage es nochmal: Mueller" davon fern.
+    rf"|sag(?:e|en)?\s+(?:mir\s+)?(?:das\s+|es\s+)?(?:bitte\s+)?{_NOCHMAL}"
     r"|was\s+haben\s+sie\s+(?:gerade\s+|eben\s+)?gesagt"
     r"|ich\s+habe\s+sie\s+(?:akustisch\s+)?nicht\s+(?:geh(?:oe|ö)rt|verstanden)"
     r"|das\s+habe\s+ich\s+(?:akustisch\s+)?nicht\s+(?:mitbekommen|geh(?:oe|ö)rt)"
@@ -88,8 +92,9 @@ _WIEDERHOLEN_BITTE_RE = re.compile(
     r")",
     re.I,
 )
-# Wer selbst wiederholt, bittet nicht (Diktat-Falle).
-_SELBST_RE = re.compile(r"\bich\s+wiederhol", re.I)
+# Wer selbst wiederholt, bittet nicht (Diktat-Falle). "Ich sage es nochmal" ist
+# die haeufigste Form davon, seit der Du-Imperativ oben mitzaehlt.
+_SELBST_RE = re.compile(r"\bich\s+(?:wiederhol|sag)", re.I)
 
 # --------------------------------------------------------------------------- #
 # Abbrechen.

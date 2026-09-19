@@ -1349,17 +1349,129 @@ for (const b of document.querySelectorAll(".k-tab")) {
 }
 
 // ---------------------------------------------------------------------------
-// Dock-Chat (19.09.2026): derselbe Weg wie der Anruf — api/start + api/turn —
-// nur getippt. Kein Mikrofon, kein Ton (ausser man will es hoeren), kein
-// Barge-in, kein Stille-Stups. Eigene Sitzung, eigenes Fenster: der Anruf
-// oben bleibt davon unberuehrt.
+// Dock-Chat (19.09.2026): tippen statt sprechen. ZWEI Ziele, ein Fenster —
+// der Anruf oben bleibt von beiden unberuehrt:
+//
+//   "kern"  DEFAULT. Der neue Dialogkern, mandantenscharf ueber die
+//           Studio-Strecke (studio/api/kern/*). Werkzeuge sind SIMULIERT
+//           (gateway_sim): kein Kalender, keine SMS, kein Mitschnitt. Dafuer
+//           zeigt jeder Zug seine Entscheidung (Grund, naechster Schritt,
+//           Werkzeug, Uebergabe) — das ist der Sinn der Probe.
+//   "live"  Der bisherige Weg (api/start + api/turn): echte Waechter, echte
+//           Nacharbeit, Gespraech landet in /anrufe. Schreibt nur mit Haken.
 // ---------------------------------------------------------------------------
 let chatSid = "";
 let chatBusy = false;
+let chatKopf = null;
+// Zu welchem Ziel die LAUFENDE Sitzung gehoert: das Auswahlfeld darf nach dem
+// Start nicht mehr entscheiden, sonst endet eine Kern-Probe auf api/hangup.
+let chatSidKern = false;
 
 function chatStand(text) {
   const el = $("chatStand");
   if (el) el.textContent = text;
+}
+
+function chatIstKern() {
+  const s = $("chatZiel");
+  return !s || s.value === "kern";
+}
+
+// Ton und echtes Schreiben gibt es nur im Live-Pfad — der Kern rendert Text
+// und simuliert Werkzeuge. Die Haken werden darum sichtbar stillgelegt,
+// statt etwas zu versprechen, das der Kern nicht tut.
+function chatRegie() {
+  const kern = chatIstKern();
+  const lage = $("chatLageBox");
+  if (lage) lage.hidden = !kern || !($("chatSzenario") && $("chatSzenario").options.length);
+  for (const id of ["chatTon", "chatEcht"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.disabled = kern || (id === "chatEcht" && !!chatSid);
+    if (kern) el.checked = false;
+    const lbl = el.closest(".chat-opt");
+    if (lbl) lbl.style.opacity = kern ? "0.45" : "1";
+  }
+  if (chatSid) return;
+  chatStand(kern
+    ? "Dialogkern — Werkzeuge simuliert, kein Kalender, kein Mitschnitt."
+    : "Live-Bianca — echte Wächter und Nacharbeit, ohne Haken kein Kalender-Schreiben.");
+}
+
+async function chatSzenarienLaden() {
+  const s = $("chatSzenario");
+  if (!s) return;
+  try {
+    const d = await (await fetch("studio/api/kern/maske")).json();
+    for (const sz of d.szenarien || []) {
+      const o = document.createElement("option");
+      o.value = sz.id;
+      o.textContent = sz.text;
+      s.appendChild(o);
+    }
+  } catch { /* Studio nicht erreichbar — Kern startet mit Standard-Lage */ }
+  chatRegie();
+}
+
+// Eine Zeile je Kern-Zug: warum er so entschieden hat. Ohne die Zeile ist die
+// Probe nur ein Chat; mit ihr sieht man Schleifen-Aufsicht und Uebergaben.
+function chatMeta(z) {
+  const teile = [];
+  if (z.grund) teile.push(z.grund);
+  if (z.naechste) teile.push("→ " + z.naechste);
+  if (z.tool) teile.push("Werkzeug " + z.tool);
+  const zu = z.zustand || {};
+  if (zu.task) teile.push("Anliegen " + zu.task + (zu.phase ? "/" + zu.phase : ""));
+  if (zu.stockZahl) teile.push("Frage " + zu.stockZahl + "×/" + (zu.stockBudget || "?"));
+  if (z.uebergeben) teile.push("ÜBERGABE an den alten Pfad");
+  if (teile.length) bubble("sys", teile.join(" · "), $("chatLive"));
+}
+
+async function chatStartKern() {
+  const sz = $("chatSzenario");
+  const r = await fetch("studio/api/kern/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tenant: $("tenant").value, szenario: (sz && sz.value) || "" }),
+  });
+  const d = await r.json();
+  if (!d.ok) throw new Error(d.fehler || "Kern-Start fehlgeschlagen");
+  chatKopf = d.kopf || null;
+  chatSid = (d.zug && d.zug.sid) || (chatKopf && chatKopf.sid) || "";
+  if (!chatSid) throw new Error("keine Kern-Probe");
+  chatSidKern = true;
+  if ($("chatZiel")) $("chatZiel").disabled = true;
+  if (d.zug && d.zug.antwort) bubble("ki", d.zug.antwort, $("chatLive"));
+  const k = chatKopf || {};
+  chatStand([
+    "Dialogkern · " + (k.praxis || $("tenant").value),
+    "Policy " + (k.quelle || "?") + " r" + (k.revision || "?"),
+    k.hirn ? "Verstehen: Modell" : "Verstehen: Regeln (LLM nicht erreichbar)",
+    "Werkzeuge simuliert",
+  ].join(" · "));
+  $("chatEnd").hidden = false;
+}
+
+async function chatZugKern(text) {
+  const r = await fetch("studio/api/kern/zug", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sid: chatSid, text }),
+  });
+  const d = await r.json();
+  if (!d.ok) {
+    // Abgelaufene Probe (TTL/Neustart) ist kein Fehler des Anrufers:
+    // nächste Zeile startet einfach eine neue.
+    chatSid = "";
+    throw new Error(d.fehler || "Kern-Zug fehlgeschlagen");
+  }
+  const z = d.zug || {};
+  if (z.antwort) bubble("ki", z.antwort, $("chatLive"));
+  chatMeta(z);
+  if (z.hangup) {
+    bubble("ki", "— aufgelegt —", $("chatLive"));
+    await chatBeenden(true);
+  }
 }
 
 async function chatHoeren(url) {
@@ -1383,6 +1495,11 @@ async function chatHoeren(url) {
 }
 
 async function chatStart() {
+  if (chatIstKern()) return chatStartKern();
+  return chatStartLive();
+}
+
+async function chatStartLive() {
   const echt = $("chatEcht") && $("chatEcht").checked;
   chatStand(echt ? "Sitzung startet — ECHTE Buchung …" : "Sitzung startet …");
   const r = await fetch("api/start", {
@@ -1405,6 +1522,8 @@ async function chatStart() {
   const d = await leseZug(r);
   chatSid = d.sessionId || "";
   if (!chatSid) throw new Error("keine Sitzung");
+  chatSidKern = false;
+  if ($("chatZiel")) $("chatZiel").disabled = true;
   if (d.text) bubble("ki", d.text, $("chatLive"));
   await chatHoeren(d.audioUrl);
   chatStand((echt ? "ECHTE Buchung · " : "Testmodus (kein Kalender-Schreiben) · ") + "Sitzung " + chatSid.slice(0, 8));
@@ -1429,6 +1548,10 @@ async function chatSenden() {
     if (!chatSid) await chatStart();
     bubble("user", text, $("chatLive"));
     feld.value = "";
+    if (chatIstKern()) {
+      await chatZugKern(text);
+      return;
+    }
     const r = await fetch("api/turn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1464,10 +1587,20 @@ async function chatSenden() {
 
 async function chatBeenden(schonAufgelegt) {
   const sid = chatSid;
+  const warKern = chatSidKern;
   chatSid = "";
+  chatKopf = null;
   $("chatEnd").hidden = true;
+  if ($("chatZiel")) $("chatZiel").disabled = false;
   if ($("chatEcht")) $("chatEcht").disabled = false;
+  chatRegie();
   if (!sid) return;
+  if (warKern) {
+    // Kern-Probe: keine Nacharbeit, kein Mitschnitt — die Probe verfaellt
+    // im Studio von selbst (TTL).
+    chatStand("Kern-Probe beendet. Nächste Zeile startet eine neue.");
+    return;
+  }
   if (!schonAufgelegt) {
     // Wie im Anruf: Nacharbeit (Mitschnitt, Gedaechtnis-Report) laeuft ueber
     // api/hangup — ohne den Aufruf fehlt das Gespraech in /anrufe.
@@ -1489,5 +1622,7 @@ $("chatEnd").onclick = () => chatBeenden(false);
 $("chatIn").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSenden(); }
 });
+if ($("chatZiel")) $("chatZiel").onchange = () => chatRegie();
+chatSzenarienLaden();
 
 boot();
