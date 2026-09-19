@@ -92,7 +92,21 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
             return fach_fallback("allgemein")
     raw = json.loads(pfad.read_text(encoding="utf-8"))
     raw["_id"] = pfad.stem
-    return raw
+    return _mit_ablage(raw)
+
+
+def _mit_ablage(tenant: dict[str, Any]) -> dict[str, Any]:
+    """Veroeffentlichten Praxis-Layer dazulegen (``.data/dialogpolicy``).
+
+    Der Import liegt absichtlich in der Funktion: ``kern.tenants`` wird von
+    sehr vielen Stellen sehr frueh geladen, und die Ablage ist optional.
+    """
+    try:
+        from kern import policy_ablage
+
+        return policy_ablage.anreichern(tenant)
+    except Exception:
+        return tenant
 
 
 def nummer_norm(roh: Any) -> str:

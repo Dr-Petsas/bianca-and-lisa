@@ -370,6 +370,8 @@ def policy_bauen(tenant_id: str, roh: Any = None) -> dict[str, Any]:
     warn: list[str] = []
     veroeffentlicht = t.get("dialogPolicy")
     quelle = "vertrag" if isinstance(veroeffentlicht, dict) and veroeffentlicht else "legacy"
+    if quelle == "vertrag" and t.get("_dialogPolicyQuelle") == "ablage":
+        quelle = "veroeffentlicht"
 
     if isinstance(roh, dict) and roh:
         erg = _dp.parse(roh)
@@ -377,7 +379,7 @@ def policy_bauen(tenant_id: str, roh: Any = None) -> dict[str, Any]:
         if erg.ok:
             t["dialogPolicy"] = erg.policy.as_dict()
             quelle = "uebersteuert"
-    elif quelle == "vertrag":
+    elif quelle in ("vertrag", "veroeffentlicht"):
         warn.extend(_dp.parse(veroeffentlicht).warnungen)
 
     p = _pol.aus_tenant(t)

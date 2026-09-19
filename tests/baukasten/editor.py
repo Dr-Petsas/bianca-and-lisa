@@ -31,7 +31,8 @@ from pydantic import BaseModel  # noqa: E402
 
 from kern.config import DEFAULT_TENANT  # noqa: E402
 from kern.patients import arzt_sprechname  # noqa: E402
-from kern import tenants, zimmer_map  # noqa: E402
+from kern import policy_ablage, tenants, zimmer_map  # noqa: E402
+from bianca.controller import dialog_policy  # noqa: E402
 from tests.baukasten import (  # noqa: E402
     aufraeumen, deutlichkeit, geschichten, kernprobe, klang, lasttest, runner,
     saetze, statistik,
@@ -612,6 +613,13 @@ class KernZugWunsch(BaseModel):
     text: str = ""
 
 
+class KernVeroeffentlichenWunsch(BaseModel):
+    tenant: str = ""
+    policy: dict[str, Any] | None = None
+    wer: str = "superuser"
+    notiz: str = ""
+
+
 @app.get("/api/kern/maske")
 def kern_maske() -> dict[str, Any]:
     """Maskenschema + unveraenderliche Grenzen + Szenarienliste."""
@@ -627,6 +635,42 @@ def kern_policy(w: KernPolicyWunsch) -> dict[str, Any]:
         return {"ok": False, "fehler": f"{type(exc).__name__}: {exc}"}
     g.pop("_reducer", None)
     return {"ok": True, **g}
+
+
+@app.post("/api/kern/veroeffentlichen")
+def kern_veroeffentlichen(w: KernVeroeffentlichenWunsch) -> dict[str, Any]:
+    """Praxis-Layer scharf stellen: Vertrag pruefen, dann ablegen.
+
+    Erst wenn ``dialog_policy.parse`` den Vertrag annimmt, wird geschrieben —
+    eine unvollstaendige Maske kann den Live-Kern nie erreichen. Die Warnungen
+    gehen mit zurueck, damit der Superuser sieht, was gerundet/verworfen wurde.
+    """
+    tenant = (w.tenant or DEFAULT_TENANT).strip()
+    if not isinstance(w.policy, dict) or not w.policy:
+        return {"ok": False, "fehler": "Kein Vertrag mitgeschickt."}
+    erg = dialog_policy.parse(w.policy)
+    if not erg.ok:
+        return {"ok": False, "fehler": "Vertrag ungueltig — nichts veroeffentlicht.",
+                "warnungen": erg.warnungen}
+    aus = policy_ablage.schreiben(
+        tenant, erg.policy.as_dict(), wer=w.wer, notiz=w.notiz,
+    )
+    if not aus.get("ok"):
+        return {"ok": False, **aus, "warnungen": erg.warnungen}
+    return {"ok": True, "tenant": tenant, "warnungen": erg.warnungen,
+            "revision": aus.get("revision"), "zeit": aus.get("zeit")}
+
+
+@app.post("/api/kern/zuruecknehmen")
+def kern_zuruecknehmen(w: KernPolicyWunsch) -> dict[str, Any]:
+    """Veroeffentlichung entfernen — der Mandant laeuft wieder auf Legacy."""
+    return policy_ablage.loeschen((w.tenant or DEFAULT_TENANT).strip())
+
+
+@app.get("/api/kern/veroeffentlicht")
+def kern_veroeffentlicht() -> dict[str, Any]:
+    """Uebersicht: welche Praxis laeuft auf welchem veroeffentlichten Vertrag."""
+    return {"ok": True, "stand": policy_ablage.alle()}
 
 
 @app.post("/api/kern/start")

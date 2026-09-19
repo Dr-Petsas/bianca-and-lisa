@@ -498,14 +498,18 @@ def fuer_did(did: Any, caller: str = "") -> dict[str, Any] | None:
     # (tenants/<id>.json "telefonGesperrteBehandler") fliegen an DIESER einen
     # Stelle aus den Kalendern — CF-Pfad, Cache-Treffer und Datei-Rueckfall
     # gleich. Ohne Eintrag byte-identisch.
-    from kern import behandler_sperre, standort
+    from kern import behandler_sperre, policy_ablage, standort
     if t:
-        return standort.anreichern(behandler_sperre.anwenden(t))
+        return policy_ablage.anreichern(
+            standort.anreichern(behandler_sperre.anwenden(t))
+        )
 
     lokal = tenants.von_did(norm)
     if lokal:
         print(f"agentprofil did={norm} -> lokale Datei {lokal.get('_id')} (Rueckfall)", flush=True)
-        return standort.anreichern(behandler_sperre.anwenden(lokal))
+        return policy_ablage.anreichern(
+            standort.anreichern(behandler_sperre.anwenden(lokal))
+        )
     sicher = tenants.fallback_fuer_did(norm)
     print(
         f"agentprofil did={norm} -> neutraler Fachfallback {sicher.get('_id')}",
@@ -527,9 +531,14 @@ def fuer_tenant(tenant_id: Any) -> dict[str, Any]:
             continue
         dynamisch = fuer_did(did)
         if dynamisch:
-            return dynamisch
-    from kern import behandler_sperre, standort
-    return standort.anreichern(behandler_sperre.anwenden(lokal))
+            # Die CF-Antwort kann eine andere Kennung tragen als die Auswahl —
+            # der veroeffentlichte Praxis-Layer haengt an DIESER Kennung.
+            from kern import policy_ablage
+            return policy_ablage.anreichern(dynamisch, _s(tenant_id))
+    from kern import behandler_sperre, policy_ablage, standort
+    return policy_ablage.anreichern(
+        standort.anreichern(behandler_sperre.anwenden(lokal)), _s(tenant_id)
+    )
 
 
 def cache_leeren() -> None:

@@ -180,6 +180,7 @@ function feldZeichnen(feld, stand) {
 function quelleZeichnen(kopf) {
   const text = {
     uebersteuert: 'Maske übersteuert den Praxisstand (nur dieser Testlauf)',
+    veroeffentlicht: 'Veröffentlicht — am Telefon wirksam (DialogPolicyV1)',
     vertrag: 'Veröffentlichte Praxis-Einstellungen (DialogPolicyV1)',
     legacy: 'Noch keine veröffentlichten Einstellungen — abgeleitet aus den Mandanten-Flags',
   }[kopf.quelle] || kopf.quelle;
@@ -336,6 +337,38 @@ async function policyLaden() {
   }
 }
 
+/** Praxis-Layer scharf stellen: der Server prueft den Vertrag vor dem Ablegen. */
+async function veroeffentlichen() {
+  const tenant = $('tenant').value;
+  const vertrag = UEBER || WIRKUNG;
+  if (!vertrag) return;
+  if (!confirm('Diese Einstellungen für "' + tenant + '" am Telefon wirksam machen?')) return;
+  status('veröffentlicht …');
+  try {
+    const j = await hole('api/kern/veroeffentlichen', { tenant, policy: vertrag });
+    warnungenZeichnen(j.warnungen);
+    UEBER = null;
+    await policyLaden();
+    status('Veröffentlicht für ' + tenant + ' (Revision ' + (j.revision ?? 0) + ')', 'gruen');
+  } catch (e) {
+    status('Nicht veröffentlicht: ' + e.message, 'rot');
+    fehler(e.message);
+  }
+}
+
+async function zuruecknehmen() {
+  const tenant = $('tenant').value;
+  if (!confirm('Veröffentlichung für "' + tenant + '" entfernen? Die Praxis läuft dann wieder auf ihren bisherigen Einstellungen.')) return;
+  try {
+    await hole('api/kern/zuruecknehmen', { tenant });
+    UEBER = null;
+    await policyLaden();
+    status('Veröffentlichung entfernt.', 'gruen');
+  } catch (e) {
+    status('Fehler: ' + e.message, 'rot');
+  }
+}
+
 async function starten() {
   if (BUSY) return;
   BUSY = true;
@@ -424,6 +457,8 @@ async function init() {
   $('szenario').addEventListener('change', () => { $('knopf-start').classList.add('an'); });
   $('knopf-start').addEventListener('click', starten);
   $('knopf-zuruecksetzen').addEventListener('click', () => { UEBER = null; policyLaden(); });
+  $('knopf-veroeffentlichen').addEventListener('click', veroeffentlichen);
+  $('knopf-zuruecknehmen').addEventListener('click', zuruecknehmen);
   $('knopf-senden').addEventListener('click', senden);
   $('eingabe').addEventListener('keydown', (e) => { if (e.key === 'Enter') senden(); });
 
