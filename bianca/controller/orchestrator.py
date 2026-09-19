@@ -106,11 +106,17 @@ class TestGespraech:
         policy: Policy,
         szenario: Szenario | None = None,
         llm: Any = None,
+        gateway: Any = None,
     ) -> None:
         self.policy = policy
         self.llm = llm
         self.state = State()
-        self.gateway = ToolGatewaySim(szenario)
+        # ``gateway`` ist der EINE Unterschied zwischen Dock und Telefon:
+        # der Live-Adapter (bianca/controller/live.py) haengt hier das echte
+        # ``tool_gateway.ToolGateway`` ein. Verstehen, Werkzeug-Schleife,
+        # Wahl-Aufloesung und Erwartung bleiben derselbe Code — es gibt
+        # keinen zweiten, nur fuer Live gepflegten Ablauf.
+        self.gateway = gateway if gateway is not None else ToolGatewaySim(szenario)
         self._erw = _Erwartung()
         self._slots_angebot: list[str] = []
         self._appt_angebot: list[dict[str, Any]] = []

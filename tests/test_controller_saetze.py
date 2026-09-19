@@ -394,7 +394,9 @@ def test_glueck_terminauskunft_zu_meinem_termin():
     a = g.eingabe("ja")
     assert "bestehend" in a.antwort.lower() or "neuen" in a.antwort.lower()
     a = g.eingabe("zu meinem termin")
-    assert "13:00" in a.antwort or "gefunden" in a.antwort.lower()
+    # Die Uhrzeit wird GESPROCHEN, nie als ISO-Zeitstempel (Live-Probe 19.09.2026).
+    assert "dreizehn uhr" in a.antwort.lower() or "gefunden" in a.antwort.lower()
+    assert "13:00" not in a.antwort
     assert "passen" not in a.antwort.lower()
 
 

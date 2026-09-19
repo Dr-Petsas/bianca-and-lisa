@@ -9,8 +9,7 @@ erfunden: die Read-after-write-Beweise, WRITE_LIVE-/Testmodus-Gates und
 Patient-Bindungswachen leben schon in ``kern.calendar`` und bleiben die
 einzige Wahrheit.
 
-DREI Sicherheiten, bewusst konservativ (der Dialogkern laeuft noch NICHT im
-Enforce-Modus live — er ist Shadow):
+DREI Sicherheiten, bewusst konservativ:
 
 1. **Schreibsperre per Default** (``nur_lesen=True``). Solange die Praxis
    nicht ausdruecklich auf Enforce steht, fuehrt dieses Gateway KEINE
@@ -30,9 +29,11 @@ Der ``ctx`` (Buchungskontext) wird ueber die Zuege HINWEG gehalten: Bindungen
 sich an wie im Live-``booking``-Dict. Args des einzelnen Befehls werden
 oben drauf gemappt.
 
-Dieses Gateway ist derzeit NICHT in den Live-Zug (``user_turn``) verdrahtet.
-Es ist der fertige Baustein fuer den spaeteren, mandantenscharfen
-Enforce-Cutover (eigene To-do ``shadow-cutover``).
+Seit dem 19.09.2026 haengt dieses Gateway im Live-Zug: ``bianca/controller/
+live.py`` legt es mit ``nur_lesen=False`` an, sobald ``CONTROLLER_ENFORCE`` den
+Kern fuer diesen Anruf scharf stellt. Die harten Gates darunter (WRITE_LIVE,
+``_testNoWrite``, Read-after-write-Beweis, Patienten-Bindung) bleiben die
+einzige Wahrheit.
 """
 
 from __future__ import annotations
@@ -96,6 +97,7 @@ class ToolGateway:
         nur_lesen: bool = True,
         sit: dict | None = None,
         kalender: Any | None = None,
+        protokoll: Callable[[str, dict, dict], None] | None = None,
     ) -> None:
         self.tenant = tenant or {}
         self.nur_lesen = bool(nur_lesen)
@@ -103,6 +105,20 @@ class ToolGateway:
         self._cal = kalender
         # Buchungskontext, ueber die Zuege hinweg gehalten (wie booking-Dict).
         self.ctx: dict[str, Any] = {}
+        # Rohergebnis je Aufruf melden. Der Live-Adapter haengt hier
+        # ``sitzung.merke_tool`` ein: die Tool-Spur ist die Evidenz, aus der
+        # CallR die Kategorie, ``/anrufe`` die Karte und der Gedaechtnis-Report
+        # seine Zeile bauen. Nie werfend.
+        self._protokoll = protokoll
+
+    def _merke(self, name: str, res: Any, args: dict | None = None) -> Any:
+        """Rohergebnis an die Tool-Spur melden. Fehler hier sind nie fatal."""
+        if self._protokoll is not None and isinstance(res, dict):
+            try:
+                self._protokoll(name, res, args or {})
+            except Exception:
+                pass
+        return res
 
     # ------------------------------------------------------------------ #
     def _kal(self) -> Any:
@@ -171,7 +187,11 @@ class ToolGateway:
     def _offer(self, cmd: ToolCommand) -> ToolOutcome:
         ctx = self._ctx_fuer(cmd)
         wish = _s((cmd.args or {}).get("wish"))
-        res = self._kal().offer_slots(self.tenant, ctx, wish_text=wish)
+        res = self._merke(
+            "offer_slots",
+            self._kal().offer_slots(self.tenant, ctx, wish_text=wish),
+            {"wish": wish},
+        )
         if not isinstance(res, dict):
             return ToolOutcome(name="offer_slots", status=OutcomeStatus.CALENDAR_ERROR)
         roh = res.get("slots") or []
@@ -195,7 +215,11 @@ class ToolGateway:
 
     def _list(self, cmd: ToolCommand) -> ToolOutcome:
         ctx = self._ctx_fuer(cmd)
-        res = self._kal().find_patient_appointments(self.tenant, ctx)
+        res = self._merke(
+            "find_patient_appointments",
+            self._kal().find_patient_appointments(self.tenant, ctx),
+            {"lastName": _s(ctx.get("lastName"))},
+        )
         if not isinstance(res, dict):
             return ToolOutcome(
                 name="list_appointments", status=OutcomeStatus.CALENDAR_ERROR
@@ -241,7 +265,11 @@ class ToolGateway:
         iso = _s((cmd.args or {}).get("slot_iso"))
         if iso:
             ctx["slotIso"] = iso
-        res = self._kal().book_slot(self.tenant, ctx, slot_iso=iso)
+        res = self._merke(
+            "book_slot",
+            self._kal().book_slot(self.tenant, ctx, slot_iso=iso),
+            {"slotIso": iso},
+        )
         if not isinstance(res, dict):
             return ToolOutcome(name="book_slot", status=OutcomeStatus.CALENDAR_ERROR)
         if res.get("booked"):
@@ -272,7 +300,11 @@ class ToolGateway:
     def _cancel(self, cmd: ToolCommand) -> ToolOutcome:
         ctx = self._ctx_fuer(cmd)
         aid = _s((cmd.args or {}).get("appointmentId"))
-        res = self._kal().cancel_by_id(self.tenant, ctx, aid)
+        res = self._merke(
+            "cancel_appointment",
+            self._kal().cancel_by_id(self.tenant, ctx, aid),
+            {"appointmentId": aid},
+        )
         if not isinstance(res, dict):
             return ToolOutcome(
                 name="cancel_appointment", status=OutcomeStatus.CALENDAR_ERROR
@@ -298,7 +330,11 @@ class ToolGateway:
         if aid:
             ctx["appointmentId"] = aid
         iso = _s(a.get("slot_iso"))
-        res = self._kal().move_appointment(self.tenant, ctx, slot_iso=iso)
+        res = self._merke(
+            "move_appointment",
+            self._kal().move_appointment(self.tenant, ctx, slot_iso=iso),
+            {"appointmentId": aid, "slotIso": iso},
+        )
         if not isinstance(res, dict):
             return ToolOutcome(
                 name="move_appointment", status=OutcomeStatus.CALENDAR_ERROR
@@ -329,7 +365,12 @@ class ToolGateway:
         if aid:
             ctx["appointmentId"] = aid
         note = _s(a.get("was")) or _s(a.get("note"))
-        res = self._kal().note_appointment(self.tenant, ctx, self.sit, note=note)
+        res = self._merke(
+            # Die Spur fuehrt den Namen, den der Fakten-Waechter kennt.
+            "note_appointment" if aid else "praxis_notiz",
+            self._kal().note_appointment(self.tenant, ctx, self.sit, note=note),
+            {"appointmentId": aid, "was": note[:120]},
+        )
         if not isinstance(res, dict):
             return ToolOutcome(name="praxis_notiz", status=OutcomeStatus.CALENDAR_ERROR)
         if res.get("noted"):

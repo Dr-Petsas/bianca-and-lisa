@@ -241,6 +241,30 @@ def _schon_gesagt(t: str) -> bool:
     return bool(_SCHON_GESAGT_RE.search(t))
 
 
+# Was auf die Namensfrage fallen kann, ohne ein Name zu sein (Live-Probe
+# 19.09.2026: "Am Mittwoch vormittags." landete als Nachname "Am Mittwoch
+# Vormittags." im Sammler und damit in der Patientensuche). Hier ist Strenge
+# der billigere Fehler: ein verworfener Name kostet eine Rueckfrage, ein
+# erfundener Name trifft eine fremde Akte.
+_KEIN_NAME_RE = re.compile(
+    r"^\s*(?:am|um|ab|gegen|im|zur|zum|wegen|f(?:ue|ü)r|bei|mit)\b"
+    r"|\bkeine\s+ahnung\b|\bwei(?:ss|ß)\s+(?:ich\s+)?nicht\b"
+    r"|\b(?:vormittags?|nachmittags?|morgens|abends|mittags|nachts)\b"
+    r"|\buhr\b",
+    re.I,
+)
+
+
+def _kein_name(t: str) -> bool:
+    if not str(t or "").strip():
+        return True
+    if _KEIN_NAME_RE.search(t):
+        return True
+    # Mehrwortige Zeitangabe ("mittwoch vormittag"). Ein NACKTES "Mai" oder
+    # "Montag" bleibt bewusst moeglich — Herr Mai und Frau Montag gibt es.
+    return len(t.split()) > 1 and bool(_wunschzeit(t))
+
+
 def _behandler(t: str) -> str:
     # Honorativ-/Praeposition-Kette ueberspringen: 'bei doktor petsas' -> Petsas.
     # Sprech-Verben sind KEINE Namen ('arzt sprechen' != Behandler 'Sprechen').
@@ -439,6 +463,13 @@ def _schonmal(t: str) -> str:
     return ""
 
 
+# Felder mit geschlossener Auswahl bzw. eigenem Leser weiter unten. Rohtext
+# darf dort NIE hinein - er wuerde die Frage als beantwortet gelten lassen.
+_EIGENER_LESER = frozenset(
+    {"behandler", "versicherung", "schonmal", "fuer_wen", "terminwahl"}
+)
+
+
 def _freie_slots(t: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for name, fn in (
@@ -630,12 +661,24 @@ def deuten(
                 pass
             elif _schon_gesagt(t) and offene_frage in ("nachname", "vorname", "telefon"):
                 pass
-            elif offene_frage in ("nachname", "vorname", "ziel"):
+            elif offene_frage in ("nachname", "vorname"):
+                if not _kein_name(t):
+                    # Satzzeichen gehoeren nicht in die Akte ("Meier." -> Meier).
+                    name = rest.strip().split(",")[0].strip(" .!?;:").title()
+                    if name:
+                        slots[offene_frage] = name
+            elif offene_frage == "ziel":
                 slots[offene_frage] = rest.strip().split(",")[0].title()
             elif offene_frage == "telefon":
                 tel = _telefon(t)
                 if tel:
                     slots[offene_frage] = tel
+            elif offene_frage in _EIGENER_LESER:
+                # Geschlossene Auswahl: was die eigenen Leser oben nicht
+                # erkannt haben, ist KEINE Antwort. Live-Probe 19.09.2026:
+                # "Meier." landete als Versicherung, danach fragte der Kern
+                # den Nachnamen ein zweites Mal.
+                pass
             elif offene_frage not in slots:
                 slots.setdefault(offene_frage, rest.strip())
 

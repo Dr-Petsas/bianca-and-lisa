@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from bianca import anstand, besuchsgrund, flow, gehirn, metazug, rueckkehr, session, tasks, telefon, weiterleiten
+from bianca.controller import live
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
@@ -627,6 +628,16 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         # haengen, wird jetzt geschwiegen — nie denselben Schlusssatz
         # noch einmal (live 12.09.2026 kam er zweimal).
         return {"text": "", "book": None}
+
+    # DIALOGKERN: Stille ist dort ein eigenes Ereignis (Presence -> offene
+    # Frage -> ehrlicher Abschluss, mit eigenem Deckel). Nur wenn der Kern in
+    # diesem Anruf auch spricht — sonst zaehlten zwei Stups-Zaehler parallel.
+    if live.an(sit) and live.uebernimmt(sit):
+        kern = live.zug(sit, "", stille=True)
+        if kern is not None:
+            msgs = list(sit.get("messages") or [])
+            spur.merken(sit, "kern-stille", _s(kern.get("text"))[:60])
+            return _kern_antwort(sit, kern, msgs)
 
     n = stille.stups_zaehlen(sit)
     if stille.kompakt_fertig(sit):
@@ -1329,6 +1340,39 @@ def _eingehen_anwenden(sit: dict, text: str, gehoert: str) -> str:
     return neu
 
 
+def _kern_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
+    """Abschluss für einen Zug, den der Dialogkern gesprochen hat.
+
+    BEWUSST nicht ``_maschinen_antwort``: der Kern führt seinen Zustand selbst
+    (Aufsicht gegen Schleifen, eigene Parkbank, eigenes Wiederholen auf Zuruf).
+    Der Legacy-Entdoppler würde eine absichtlich wiederholte Zeile streichen
+    und der Auto-Resume eine zweite Brücke anhängen. Geblieben sind die zwei
+    Wachen, die reine Form prüfen: EINE Frage am Ende (W-RUHE) und die
+    allgemeinen Antwort-Gates (kein Re-Greeting, eine Identitätsfrage).
+    """
+    text = _s(fl.get("text"))
+    if text:
+        text = antwort_wache.saeubern(sit, text)
+        text = _ruhe_wache_anwenden(sit, text)
+        fl = dict(fl)
+        fl["text"] = text
+        if "?" in text:
+            sit["flussFrage"] = text.rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
+        msgs.append({"role": "assistant", "content": text})
+        wiederholung.gesagt_merken(sit, text)
+    sit["messages"] = msgs
+    gedaechtnis.kontext_anstossen(sit)
+    aus: dict[str, Any] = {"text": text, "book": None}
+    if fl.get("warte"):
+        aus["warte"] = True
+        aus["stilleMs"] = int(fl.get("stilleMs") or 1500)
+    elif fl.get("stilleMs"):
+        aus["stilleMs"] = int(fl["stilleMs"])
+    if fl.get("hangup"):
+        aus["hangup"] = True
+    return aus
+
+
 def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
     fl = _auto_resume_anhaengen(sit, fl)
@@ -1637,6 +1681,22 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         spur.merken(sit, "fach-wache-eingang", ",".join(fach_wache.zahn_anliegen(text_in)))
         sit.pop("unklarFolge", None)
         return _maschinen_antwort(sit, {"text": fremd_text, "book": None}, msgs)
+
+    # DIALOGKERN (enforce, 19.09.2026). Ab hier ist der Kern die Wahrheit,
+    # wenn ``CONTROLLER_ENFORCE`` ihn fuer diesen Anruf scharf stellt: er
+    # versteht, entscheidet, ruft die ECHTEN Kalenderwerkzeuge und formuliert.
+    # Er sitzt HINTER den Sicherheitswachen oben (Warteschleife, Abschied,
+    # unbekannte DID, Blessing-Notfall, Praxisauskunft, Fach-Wache) — die
+    # gelten fuer jeden Weg — und VOR der Legacy-Maschinerie (Intent-Schicht,
+    # Mischzug, Fluss, Talk-LLM). Fuehrt der Kern die Aufgabe nicht, gibt
+    # ``live.zug`` ``None`` zurueck und der bewaehrte Weg uebernimmt im
+    # SELBEN Zug (die geernteten Angaben sind dann schon gespiegelt).
+    if live.an(sit):
+        kern = live.zug(sit, text_in)
+        if kern is not None:
+            spur.merken(sit, "kern-live", _s(kern.get("text"))[:60])
+            return _kern_antwort(sit, kern, msgs)
+        spur.merken(sit, "kern-uebergabe", text_in[:60])
 
     # Gemischter Zug: „Ja, aber …“ enthält ZWEI Handlungen. Bei wenigen
     # ausdrücklich sicheren Fragen erntet der bisherige Flow zuerst das

@@ -731,10 +731,24 @@ def _set_gefunden(task: TaskState, appt: Mapping[str, Any]) -> None:
 
 
 def _appt_kurz(appt: Mapping[str, Any]) -> str:
+    """Ein Termin fuer die Auswahlliste — GESPROCHEN, nie als ISO-Zeitstempel.
+
+    Live-Probe 19.09.2026: hier stand der rohe Zeitstempel in der Aufzaehlung
+    ("1. 2026-10-21T13:00:00+02:00 …"). Eine mitgelieferte Sprechform hat
+    Vorrang, sonst wird die ISO-Zeit umgeschrieben.
+    """
     iso = appt.get("iso") or appt.get("start") or appt.get("startIso") or ""
+    wann = str(appt.get("spoken") or "").strip()
+    if not wann and iso:
+        try:
+            from kern.slots import spoken_slot
+
+            wann = spoken_slot(str(iso)) or str(iso)
+        except Exception:  # noqa: BLE001 — lieber unschoen als leer
+            wann = str(iso)
     arzt = appt.get("arzt") or appt.get("calendarName") or ""
     grund = appt.get("grund") or appt.get("motivName") or ""
-    return " ".join(str(x) for x in (iso, arzt, grund) if x).strip() or str(appt.get("id") or "")
+    return " ".join(str(x) for x in (wann, arzt, grund) if x).strip() or str(appt.get("id") or "")
 
 
 def _merke_termine(ns: State, appts: list[Any]) -> None:

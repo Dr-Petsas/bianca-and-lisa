@@ -397,7 +397,9 @@ def test_glueck_drei_termine_alle_absagen_mit_bezug():
     a = g.eingabe("hallo ich habe vergessewann mein termin ist")
     assert "meier" in a.antwort.lower()
     a = g.eingabe("ja")
-    assert "2026-10-02" in a.antwort
+    # Termine werden GESPROCHEN vorgelesen, nie als ISO-Zeitstempel.
+    assert "zweiten oktober" in a.antwort.lower()
+    assert "2026-10-02" not in a.antwort
     a = g.eingabe("ich habe 3 termine?")
     t = a.antwort.lower()
     assert "drei" in t or "3" in t
@@ -461,7 +463,9 @@ def test_verstanden_wird_nicht_gesprochen_absage_und_mann():
     assert "mann" in t
     assert "absag" in t or " ab" in t
     a = g.eingabe("ja")
-    assert "2026-10-02" in a.antwort
+    # Auswahlliste GESPROCHEN, nie als ISO-Zeitstempel.
+    assert "zweiten oktober" in a.antwort.lower()
+    assert "2026-10-02" not in a.antwort
     a = g.eingabe("welcher ist denn von meinem mann")
     t = a.antwort.lower()
     assert "möchte wissen" not in t

@@ -15,6 +15,7 @@ bleiben unberuehrt.
 
 from __future__ import annotations
 
+import re as _re
 from typing import Mapping
 
 from bianca.controller import fuer_wen as _fuer_wen
@@ -72,12 +73,36 @@ def _fakt_liste(spec: SpeakSpec, schluessel: str) -> list[str]:
     return [v for k, v in spec.fakten if k == schluessel]
 
 
+_ISO_RE = _re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+
+
+def _sprechbar(wert: str) -> str:
+    """Rohe ISO-Zeitstempel nie vorlesen (Live-Probe 19.09.2026).
+
+    ``gefunden_iso`` traegt bewusst den technischen Zeitstempel — daran haengen
+    Merker und Werkzeug-Aufrufe. Gesprochen wird die deutsche Form; scheitert
+    die Umschrift, bleibt der Rohwert stehen (ein unschoener Satz ist besser
+    als ein leerer).
+    """
+    text = str(wert or "").strip()
+    if not _ISO_RE.match(text):
+        return text
+    try:
+        from kern.slots import spoken_slot
+    except Exception:  # noqa: BLE001 — Renderer laeuft auch ohne kern
+        return text
+    try:
+        return spoken_slot(text) or text
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def _lesbar(fakten: Mapping[str, str], *keys: str) -> str:
     teile = []
     for k in keys:
         v = fakten.get(k)
         if v and str(v).strip().lower() != "egal":
-            teile.append(f"{_LABEL.get(k, k)}: {v}")
+            teile.append(f"{_LABEL.get(k, k)}: {_sprechbar(v)}")
     return ", ".join(teile)
 
 
@@ -354,17 +379,23 @@ def _rueckruf(spec: SpeakSpec) -> str:
     f = _fakt_map(spec)
     wer = f.get("nachname") or f.get("name") or ""
     zusatz = f" ({wer})" if wer else ""
+    key = "notiz_stocken" if spec.detail == "stocken" else "notiz"
+    satz = _var.waehle(key, _var.zug_von(f), wer=zusatz)
+    if satz:
+        return satz
     if spec.detail == "stocken":
         return ("Das bekommen wir hier am Telefon gerade nicht rund. Ich habe eine "
-                f"Notiz fuer die Praxis gemacht{zusatz} — man meldet sich bei Ihnen "
-                "zurueck.")
-    return (f"Ich habe eine Notiz fuer die Praxis gemacht{zusatz} — "
-            "man meldet sich bei Ihnen zurueck.")
+                f"Notiz für die Praxis gemacht{zusatz} — man meldet sich bei Ihnen "
+                "zurück.")
+    return (f"Ich habe eine Notiz für die Praxis gemacht{zusatz} — "
+            "man meldet sich bei Ihnen zurück.")
 
 
 def _uebergeben(spec: SpeakSpec) -> str:
-    ziel = spec.detail or _fakt_map(spec).get("ziel") or "die Praxis"
-    return f"Einen Moment, ich verbinde Sie mit {ziel}."
+    f = _fakt_map(spec)
+    ziel = spec.detail or f.get("ziel") or "die Praxis"
+    return (_var.waehle("verbinden", _var.zug_von(f), ziel=ziel)
+            or f"Einen Moment, ich verbinde Sie mit {ziel}.")
 
 
 def _notfall(_spec: SpeakSpec) -> str:
@@ -377,7 +408,7 @@ def _info(spec: SpeakSpec) -> str:
     if spec.detail == "anmeldung":
         return _var.waehle("anmeldung", n)
     if spec.detail == "anmeldung_besteht":
-        return _FRAGE["anmeldung_rueckruf"]
+        return _var.waehle("anmeldung_rueckruf", n) or _FRAGE["anmeldung_rueckruf"]
     if spec.detail == "unklar":
         return _var.waehle("unklar", n)
     if spec.detail == "unklar_neustart":
@@ -389,9 +420,10 @@ def _info(spec: SpeakSpec) -> str:
     if spec.detail == "presence":
         # Stille: erst nur nachfassen, ob jemand dran ist — die offene Frage
         # kommt im naechsten Stups (controller/reducer._meta_stille).
-        return "Sind Sie noch dran?"
+        return _var.waehle("presence", n) or "Sind Sie noch dran?"
     if spec.detail == "abbruch":
-        return "Alles klar, dann lassen wir das. Kann ich sonst etwas für Sie tun?"
+        return (_var.waehle("abbruch", n)
+                or "Alles klar, dann lassen wir das. Kann ich sonst etwas für Sie tun?")
     if spec.detail == "abbruch_leer":
         return "Kein Problem. Sagen Sie einfach, wenn ich etwas für Sie tun kann."
     if spec.detail == "abbruch_zu_spaet":
