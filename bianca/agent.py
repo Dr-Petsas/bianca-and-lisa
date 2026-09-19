@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any
 
-from bianca import anstand, besuchsgrund, flow, gehirn, rueckkehr, session, tasks, telefon, weiterleiten
+from bianca import anstand, besuchsgrund, flow, gehirn, metazug, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
@@ -1737,6 +1737,16 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return _maschinen_antwort(
             sit, {"text": einwort_frage, "book": None}, msgs,
         )
+
+    # W-META-LIVE (19.09.2026): "Wie bitte?", "Vergessen Sie's", "Muss das
+    # sein?" sind Bitten ans GESPRAECH, nicht an eine Aufgabe — im Dialogkern
+    # laengst gebaut, am Telefon liefen sie ins Modell (live wurde daraus ein
+    # Besuchsgrund). Deterministisch, ohne Werkzeug, ohne Schreibweg. Im
+    # Diktat nie: dort ist "nochmal die Sieben" eine Korrektur.
+    if not _diktat_offen(sit):
+        mz = metazug.zug(sit, arbeits_text, msgs, offene=_offene_frage(sit))
+        if mz is not None:
+            return _maschinen_antwort(sit, mz, msgs)
 
     # W-ABSCHWEIFEN (Chef 13.09.2026 zum Anruf 48673eca): „zähl mal von 1 bis
     # 4" / „buchstabiere meinen Namen Abdullah" ist der Talk-Floor — eine
