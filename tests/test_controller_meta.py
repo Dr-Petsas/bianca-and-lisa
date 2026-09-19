@@ -67,7 +67,16 @@ _BUCHUNG_ANGEFANGEN = [
 # 1. Erkennung (controller/meta.py) — Formeln ja, Anliegen nein.
 # =========================================================================== #
 def test_nackte_formeln_sind_wiederholen():
-    for satz in ("Wie bitte?", "Was?", "Hae?", "Noch mal bitte", "Entschuldigung"):
+    for satz in (
+        "Wie bitte?",
+        "Was?",
+        "Wie?",
+        "Hae?",
+        "Noch mal bitte",
+        "Entschuldigung",
+        # Fuellwort davor — der Kern bleibt die ganze Aeusserung.
+        "Entschuldigung, was?",
+    ):
         assert meta.deute(satz) == meta.WIEDERHOLEN, satz
 
 
@@ -80,6 +89,35 @@ def test_bitte_an_bianca_ist_wiederholen():
         "Die Zeiten noch mal bitte",
     ):
         assert meta.deute(satz) == meta.WIEDERHOLEN, satz
+
+
+def test_alle_drei_schreibweisen_von_nochmal():
+    """"nochmal", "noch mal" und "noch einmal" sind dieselbe Bitte.
+
+    Das eingeschobene "ein" ist am Telefon die haeufigste Form; sie fiel in der
+    Hoerprobe vom 19.09.2026 durch und landete als Slotwert in der Akte.
+    """
+    for satz in (
+        "Koennen Sie das nochmal sagen?",
+        "Koennen Sie das noch mal sagen?",
+        "Koennen Sie das noch einmal sagen?",
+        "Sagen Sie das noch einmal",
+        "Noch einmal bitte",
+        "Die Zeiten noch einmal bitte",
+    ):
+        assert meta.deute(satz) == meta.WIEDERHOLEN, satz
+
+
+def test_nochmal_im_diktat_bleibt_daten():
+    """Gegenprobe zur "noch einmal"-Klammer: im Diktat zuendet sie nie."""
+    for satz in (
+        "Null eins sieben sieben noch einmal drei vier",
+        "A wie Anton, noch einmal",
+        "Ich buchstabiere noch einmal",
+        "Ich sage es noch einmal: Meier",
+        "Ich moechte noch einmal einen Termin am Montag",
+    ):
+        assert meta.deute(satz) == "", satz
 
 
 def test_wer_selbst_wiederholt_bittet_nicht():
@@ -133,8 +171,23 @@ def test_auslassen_formeln():
         "Muss das sein?",
         "Ueberspringen Sie das",
         "Lassen wir das offen",
+        "Ist das noetig?",
+        "Ist das wirklich notwendig?",
     ):
         assert meta.deute(satz) == meta.AUSLASSEN, satz
+
+
+def test_noetig_frage_mit_bezug_ist_eine_sachfrage():
+    """"Ist das noetig?" laesst aus. "Ist das noetig FUER die Behandlung?" fragt.
+
+    Ein Wort Unterschied, zwei Wuensche — ein Fehltreffer wuerde hier ein Feld
+    ueberspringen, statt die Frage des Anrufers zu beantworten.
+    """
+    for satz in (
+        "Ist das noetig fuer die Behandlung?",
+        "Ist das notwendig, wenn ich privat versichert bin?",
+    ):
+        assert meta.deute(satz) == "", satz
 
 
 def test_nicht_wissen_ist_kein_auslassen():

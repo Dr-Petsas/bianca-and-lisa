@@ -4063,6 +4063,50 @@ Akten-Anrede „Herr Rauscher“.
   das falsche `gender=m`, einen LLM-Testbruch sowie die Wachen gegen Vorab,
   Menü, Rückrufangebot und fehlendes Auflegen.
 
+## Meta-Bitten im Dialogkern (W-META 19.09.2026 — nicht rückbauen)
+
+Der Vergleich mit Rasa CALM zeigte vier fehlende Kommandos, die NICHT zu einer
+Aufgabe gehören, sondern zum Gespräch selbst: „sag das nochmal“, „lass das“,
+„überspring die Frage“ und Stille. Sie werden VOR jeder Aufgabenlogik und
+OHNE LLM erkannt (`bianca/controller/meta.py` → `verstehen.deuten`), weil sie
+Formeln sind — ein Modell darf daraus nie einen Slotwert machen (live passiert:
+„Können Sie das noch einmal sagen?“ landete als Besuchsgrund).
+
+- **Wiederholen** (`Intent.WIEDERHOLEN`): der Kern merkt die letzte Äußerung
+  (`State.letzte_speak`) und spricht sie mit wechselnder Einleitung erneut
+  („Natürlich, gerne noch einmal:“ → „Ich sage es noch einmal:“ → „Gerne — in
+  anderen Worten:“). Deckel `_WIEDERHOL_DECKEL` (3), danach Übergabe. Der Zuruf
+  zählt NICHT gegen die Schleifen-Aufsicht (`aufsicht._AUF_ZURUF`): wer selbst
+  um Wiederholung bittet, erzeugt keine Schleife — sonst eskaliert der Kern
+  gegen den ausdrücklichen Wunsch des Anrufers.
+- **Abbrechen** (`Intent.ABBRECHEN`): räumt die aktive Aufgabe, holt ein
+  geparktes Anliegen zurück, schreibt KEINE Rückrufnotiz (niemand hat um
+  Rückruf gebeten). Die weiche Formel („möchte ich doch nicht“) gilt NUR
+  außerhalb der Schreibphase; unmittelbar vor einem destruktiven Write
+  entscheidet weiter die deterministische Ja/Nein-Frage.
+- **Auslassen** (`Intent.AUSLASSEN`): das Feld landet in `TaskState.ausgelassen`
+  und fällt aus `_erste_luecke` — es wird nie wieder gefragt. Ein PFLICHT-Feld
+  wird stattdessen ehrlich benannt („Das brauche ich leider, sonst kann ich den
+  Termin nicht eintragen“). In der Standard-Policy sind alle Buchungsfelder
+  Pflicht (`test_jedes_buchungsfeld_der_standard_policy_ist_pflicht`) — echtes
+  Überspringen gibt es erst, wenn eine Praxis Felder optional stellt.
+- **Stille** (`Intent.STILLE`): Presence → offene Frage („Meine Frage war: …“,
+  BEWUSST nicht „gerne noch einmal“ — niemand hat gefragt) → ehrlicher
+  Abschluss bei `_STILLE_GESAMT`. Stille nach dem Abschied setzt das Gespräch
+  NICHT zurück (sonst begrüßt der Kern das Freizeichen).
+
+**Die Gegenproben sind der teurere Teil:** im Diktat (Nummer, Buchstabieren)
+und im Ziffern-Readback greift keine Meta-Formel — „noch einmal die Sieben“ ist
+eine Korrektur, keine Bitte um Wiederholung. Sachfragen mit Bezug („Ist das
+nötig für die Behandlung?“) sind kein Auslassen, „Lassen wir das offen“ kein
+Abbruch. Die Meta-Fakten (`wiederholt`, `still`) sind flüchtig
+(`reducer._META_FLUECHTIG`, `aufsicht._FLUECHTIGE_FAKTEN`) — sie färben nur die
+Einleitung und dürfen den Inhalts-Fingerprint der Aufsicht nicht verschieben.
+
+Tests: `tests/test_controller_meta.py` (38). Hörproben:
+`python tools\_probe_meta_live.py` (vier Gespräche) und
+`python tools\_probe_meta_formeln.py` (Formel-Sweep mit Gegenbeispielen).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

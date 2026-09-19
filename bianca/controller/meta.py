@@ -53,16 +53,23 @@ _BUCHSTABEN_RE = re.compile(r"(?:\b[a-zäöüß]\b[\s.,-]+){2,}\b[a-zäöüß]\b
 # --------------------------------------------------------------------------- #
 # Wiederholen.
 # --------------------------------------------------------------------------- #
+# "nochmal", "noch mal" UND "noch einmal" — die drei Schreibweisen derselben
+# Bitte. Das eingeschobene "ein" ist am Telefon die haeufigste Form; ohne diese
+# Klammer fiel "Koennen Sie das noch einmal sagen?" durch (Hoerprobe 19.09.).
+_NOCHMAL = r"noch\s*(?:ein)?mal"
+
 # Die nackte Formel: sie ist der haeufigste Fall und braucht keine Anrede.
+# Fuellwoerter davor ("Entschuldigung, was?") gehoeren dazu — der Kern muss
+# trotzdem die GANZE Aeusserung sein, sonst wird jedes "was" zur Bitte.
 _WIEDERHOLEN_NACKT_RE = re.compile(
-    r"^\s*(?:"
+    r"^\s*(?:(?:entschuldigung|verzeihung|sorry)[,\s]+)?(?:"
     r"wie\s+bitte"
     r"|bitte"
     r"|was"
+    r"|wie"
     r"|h(?:ae|ä)\?*"
-    r"|(?:und\s+)?noch\s*mal(?:\s+bitte)?"
-    r"|nochmal(?:\s+bitte)?"
-    r"|entschuldigung"
+    rf"|(?:und\s+)?{_NOCHMAL}(?:\s+bitte)?"
+    r"|entschuldigung|verzeihung|sorry"
     r")\s*[.!?]*\s*$",
     re.I,
 )
@@ -70,14 +77,14 @@ _WIEDERHOLEN_NACKT_RE = re.compile(
 _WIEDERHOLEN_BITTE_RE = re.compile(
     r"(?:"
     r"(?:k(?:oe|ö)nn(?:en|ten)\s+sie|w(?:ue|ü)rden\s+sie)"
-    r".{0,32}(?:noch\s*mal|nochmal|wiederhol)"
+    rf".{{0,32}}(?:{_NOCHMAL}|wiederhol)"
     r"|wiederhol(?:en\s+sie|e\s+das|en\s+bitte)\b"
-    r"|sagen\s+sie\s+das\s+(?:bitte\s+)?noch\s*mal"
+    rf"|sagen\s+sie\s+(?:das\s+|es\s+)?(?:bitte\s+)?{_NOCHMAL}"
     r"|was\s+haben\s+sie\s+(?:gerade\s+|eben\s+)?gesagt"
     r"|ich\s+habe\s+sie\s+(?:akustisch\s+)?nicht\s+(?:geh(?:oe|ö)rt|verstanden)"
     r"|das\s+habe\s+ich\s+(?:akustisch\s+)?nicht\s+(?:mitbekommen|geh(?:oe|ö)rt)"
-    r"|noch\s*mal\s+(?:bitte|die\s+(?:zeiten|termine|uhrzeit|nummer))"
-    r"|die\s+(?:zeiten|termine)\s+noch\s*mal"
+    rf"|{_NOCHMAL}\s+(?:bitte|die\s+(?:zeiten|termine|uhrzeit|nummer))"
+    rf"|die\s+(?:zeiten|termine)\s+{_NOCHMAL}"
     r")",
     re.I,
 )
@@ -127,6 +134,10 @@ _AUSLASSEN_RE = re.compile(
     r"|(?:das\s+)?(?:gebe|geb)\s+ich\s+nicht\s+(?:an|raus|bekannt)"
     r"|keine\s+angabe"
     r"|muss\s+das\s+(?:wirklich\s+|denn\s+)?sein"
+    # "Ist das noetig?" NUR als ganze Aeusserung: "Ist das noetig fuer die
+    # Behandlung?" ist eine echte Sachfrage und darf kein Feld ueberspringen.
+    r"|^(?:und\s+)?ist\s+(?:das|es)\s+(?:wirklich\s+|denn\s+)?"
+    r"(?:n(?:oe|ö)tig|notwendig|erforderlich|pflicht)\s*[.!?]*$"
     r"|brauchen\s+sie\s+das\s+(?:wirklich|denn|ueberhaupt|überhaupt)"
     r"|(?:das\s+)?lassen\s+(?:wir|sie)\s+(?:das\s+)?(?:offen|weg|aus)"
     r"|(?:das\s+)?(?:ueber|über)springen"
