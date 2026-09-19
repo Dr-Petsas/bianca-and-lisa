@@ -68,6 +68,17 @@ def test_schalter_nur_eine_testnummer(monkeypatch):
     assert live.an(_sit()) is False
 
 
+def test_schalter_nimmt_die_echte_anrufernummer_der_sitzung(monkeypatch):
+    """``callerPhone`` ist der Schluessel, den ``call_erfassen`` wirklich setzt.
+
+    Ohne ihn waere die Nummern-Marke am Telefon wertlos: ``sit["caller"]``
+    gibt es nur in Tests und Proben.
+    """
+    monkeypatch.setenv("CONTROLLER_ENFORCE", "01776004600")
+    assert live.an(_sit(callerPhone="+491776004600")) is True
+    assert live.an(_sit(callerPhone="+4921154244101")) is False
+
+
 def test_schalter_mandant(monkeypatch):
     monkeypatch.setenv("CONTROLLER_ENFORCE", "meddent")
     assert live.an(_sit()) is True

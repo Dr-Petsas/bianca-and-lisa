@@ -63,7 +63,10 @@ def _marken(sit: dict) -> set[str]:
     roh = [
         _s(t.get("clientId")), _s(t.get("id")), _s(t.get("_id")),
         _s(t.get("mandant")), _s(t.get("name")), _s(sit.get("mandant")),
-        _s(sit.get("did")), _s(sit.get("caller")),
+        # Angerufene Nummer und Anrufer. ``callerPhone`` ist der Schluessel,
+        # den ``agentprofil.call_erfassen`` wirklich setzt (+E164) — ohne ihn
+        # koennte eine einzelne TESTNUMMER den Kern nicht scharf stellen.
+        _s(sit.get("did")), _s(sit.get("caller")), _s(sit.get("callerPhone")),
     ]
     marken = {m.lower() for m in roh if m}
     # Nummern zusaetzlich nackt (0177… == +49177…): die letzten 9 Ziffern
