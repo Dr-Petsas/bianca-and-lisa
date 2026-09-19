@@ -489,9 +489,9 @@ function kernSummaryBox(a) {
   return d;
 }
 
-// DIALOG_CONTROLLER: linke Spalte = echtes Gespraech (Live), inkl. Audio,
-// STT-Details, Werkzeuge und farbige Live-Warnsignale (I1 / Schleife).
-function fuelleLinks(cell, z, sid) {
+// Ein Zug des Gespraechs: Audio, STT-Details, Werkzeuge und farbige
+// Warnsignale (I1 / Schleife) — seit dem 19.09.2026 in der einen Spalte.
+function fuelleZug(cell, z, sid) {
   const { rein, raus } = zugAudios(sid, z);
   if (z.textIn) {
     const b = bubble("user", z.textIn);
@@ -534,8 +534,8 @@ function fuelleLinks(cell, z, sid) {
     const w = document.createElement("div");
     w.className = "vmark gut";
     w.textContent = ls.gerettet.grund === "aufsicht"
-      ? "\u2713 der neue Kern hätte hier eingegriffen (siehe rechts)"
-      : "\u2713 der neue Kern hätte hier etwas anderes gefragt";
+      ? "\u2713 der Dialogkern greift hier ein (siehe darunter)"
+      : "\u2713 der Dialogkern fragt hier etwas anderes";
     cell.appendChild(w);
   }
   if (z.book && (z.book.ok || z.book.booked)) {
@@ -547,16 +547,13 @@ function fuelleLinks(cell, z, sid) {
   }
 }
 
-// DIALOG_CONTROLLER: rechte Spalte = Kopie des Gespraechs + Entscheidung des
-// neuen Kerns an derselben Stelle. Der entscheidende Unterschied (Divergenz)
-// wird farblich markiert.
-function fuelleRechts(cell, z) {
+// DIALOG_CONTROLLER: Entscheidung des Kerns an derselben Stelle im Verlauf.
+// Seit dem 19.09.2026 EINE breite Spalte (der Kern ist die alleinige Wahrheit),
+// die Kern-Zeilen haengen also direkt unter dem jeweiligen Zug. Kommt der Zug
+// aus einem Schattenlauf, markiert `divergenz` weiter den Unterschied zum
+// damals gesprochenen Satz — nur dort ist ein Vergleich ueberhaupt sinnvoll.
+function fuelleKern(cell, z) {
   const kr = z.kernReplay;
-  if (z.textIn) {
-    const b = bubble("user", z.textIn);
-    b.classList.add("kopie");
-    cell.appendChild(b);
-  }
   if (kr && kr.in) {
     const b = document.createElement("div");
     b.className = "kern-bubble";
@@ -572,7 +569,7 @@ function fuelleRechts(cell, z) {
       cell.appendChild(b);
       const d = document.createElement("div");
       d.className = "vmark diff-note";
-      d.textContent = `\u21AF Live fragte „${kernFrageName(kr.divergenz.live)}“ — Kern „${kernFrageName(kr.divergenz.kern)}“`;
+      d.textContent = `\u21AF gesprochen wurde „${kernFrageName(kr.divergenz.live)}“ — der Kern hätte „${kernFrageName(kr.divergenz.kern)}“ gefragt`;
       cell.appendChild(d);
     } else {
       b.classList.add(auf ? "diff" : "gleich");
@@ -604,11 +601,6 @@ function fuelleRechts(cell, z) {
       d.textContent = "\u2192 dieser Zug bleibt beim bisherigen Pfad";
       cell.appendChild(d);
     }
-  } else if (z.text) {
-    const b = document.createElement("div");
-    b.className = "kern-bubble muted";
-    b.textContent = "(keine Kern-Entscheidung an dieser Stelle)";
-    cell.appendChild(b);
   }
 }
 
@@ -916,38 +908,32 @@ function maleDetail(a) {
   const kernBox = kernSummaryBox(a);
   if (kernBox) wurzel.appendChild(kernBox);
 
-  // Zwei Spalten: links das echte Gespraech, rechts die Kopie mit den
-  // Entscheidungen des neuen Kerns; der entscheidende Unterschied farbig.
+  // EINE breite Spalte (Chef 19.09.2026): der neue Dialogkern ist die
+  // alleinige Wahrheit, eine Vergleichsspalte mit dem alten Verhalten hat
+  // damit keinen Zweck mehr. Die Kern-Zeilen (Aufsicht, Zaehler, Uebergabe)
+  // haengen jetzt direkt unter dem Zug, zu dem sie gehoeren.
   const hatKern = (a.zuege || []).some((z) => z.kernReplay || z.liveSignal);
   const verg = document.createElement("div");
-  verg.className = "vergleich";
-  const hL = document.createElement("div");
-  hL.className = "vkopf";
-  hL.textContent = "Echtes Gespräch (Live)";
-  const hR = document.createElement("div");
-  hR.className = "vkopf";
+  verg.className = "verlauf";
+  const kopf2 = document.createElement("div");
+  kopf2.className = "vkopf";
   const sum = a.kernReplaySummary || {};
   const pol = sum.policy || {};
-  hR.textContent = !hatKern
-    ? "Neuer Dialogkern (kein Replay vorhanden)"
-    : "Neuer Dialogkern (Schatten)" + (sum.v >= 2
-        ? ` — ${pol.quelle === "vertrag" ? "DialogPolicyV1" : "Alt-Einstellungen"}`
-          + `${pol.revision ? " Rev. " + pol.revision : ""}, max. ${pol.max_rueckfragen} Rückfragen`
-        : " — älterer Stand, bitte neu einlesen");
-  verg.appendChild(hL);
-  verg.appendChild(hR);
+  kopf2.textContent = "Gesprächsverlauf" + (hatKern
+    ? " — Dialogkern" + (sum.v >= 2
+        ? ` (${pol.quelle === "vertrag" ? "DialogPolicyV1" : "Alt-Einstellungen"}`
+          + `${pol.revision ? " Rev. " + pol.revision : ""}, max. ${pol.max_rueckfragen} Rückfragen)`
+        : " (älterer Stand, bitte neu einlesen)")
+    : "");
+  verg.appendChild(kopf2);
   for (const z of a.zuege || []) {
     const li = document.createElement("div");
     li.className = "vzelle live";
-    const re = document.createElement("div");
-    re.className = "vzelle kern";
-    fuelleLinks(li, z, sid);
-    fuelleRechts(re, z);
-    if (z.kernReplay && z.kernReplay.divergenz) re.classList.add("diff");
+    fuelleZug(li, z, sid);
+    fuelleKern(li, z);
     const ls = z.liveSignal;
     if (ls && (ls.i1 || ls.schleife)) li.classList.add("warn");
     verg.appendChild(li);
-    verg.appendChild(re);
   }
   // Ältere Mitschnitte: Tools nur am Manifest-Kopf, nicht je Zug.
   const hatZugTools = (a.zuege || []).some((z) => (z.tools || []).length);
@@ -957,7 +943,6 @@ function maleDetail(a) {
       li.className = "vzelle live";
       li.appendChild(toolKarte(t));
       verg.appendChild(li);
-      verg.appendChild(document.createElement("div"));
     }
   }
   if (!(a.zuege || []).length && !(a.tools || []).length) {
@@ -965,7 +950,6 @@ function maleDetail(a) {
     li.className = "vzelle live";
     li.appendChild(bubble("sys", "keine Züge aufgezeichnet"));
     verg.appendChild(li);
-    verg.appendChild(document.createElement("div"));
   }
   wurzel.appendChild(verg);
 }
