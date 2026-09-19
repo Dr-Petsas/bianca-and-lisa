@@ -73,6 +73,7 @@ class Intent(str, Enum):
     VERBINDEN = "verbinden"
     RUECKRUF = "rueckruf"
     DOKUMENT = "dokument"
+    ANMELDUNG = "anmeldung"
     PRAXISINFO = "praxisinfo"
     KORREKTUR = "korrektur"
     BESTAETIGEN = "bestaetigen"
@@ -98,6 +99,9 @@ class SemanticEvent:
     bestaetigung: bool | None = None
     korrektur_feld: str = ""
     roh: str = ""
+    deutung: str = ""  # hirn | formular | nlu — wer das Event gebaut hat
+    llm: str = ""  # Rohtext des Modells (Dock-Anzeige); nie als Fakt lesen
+    verstanden: str = ""  # freier Verstehensvorlauf; Vorbezug, keine Schublade
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +111,38 @@ class SemanticEvent:
             "bestaetigung": self.bestaetigung,
             "korrektur_feld": self.korrektur_feld,
             "roh": self.roh,
+            "deutung": self.deutung,
+            "llm": self.llm,
+            "verstanden": self.verstanden,
+        }
+
+
+@dataclass(frozen=True)
+class Verstand:
+    """Freier Verstehensvorlauf — noch keine Schublade.
+
+    Das Modell sagt in eigenen Worten, was der Anrufer will, plus konkret
+    Genanntes. ``ordnen`` macht daraus erst das SemanticEvent.
+    """
+
+    verstanden: str = ""
+    janein: bool | None = None
+    genannt: Mapping[str, str] = field(default_factory=dict)
+    korrektur_feld: str = ""
+    hint: str = ""
+    roh: str = ""
+    llm: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "art": "verstand",
+            "verstanden": self.verstanden,
+            "janein": self.janein,
+            "genannt": dict(self.genannt),
+            "korrektur_feld": self.korrektur_feld,
+            "hint": self.hint,
+            "roh": self.roh,
+            "llm": self.llm,
         }
 
 
@@ -180,6 +216,17 @@ class SprechAkt(str, Enum):
     INFO = "info"              # Praxis-Auskunft aus belegten Fakten
     WARTEN = "warten"          # stiller Halte-Zug (Halbsatz/Ansage)
     ABSCHIED = "abschied"      # freundlicher Abschluss
+
+
+# Steuer-/Ablauffragen: sie treiben den Dialog, sind aber keine inhaltlichen
+# Pflicht-Slots. Sie werden NICHT in ``State.gefragt`` verbucht und von der
+# Loop-Aufsicht (controller/aufsicht.py) NICHT als "stockende" Frage gezaehlt —
+# ihre Wiederholung regelt der Reducer selbst (Angebot/Auswahl/Anrufer-Check).
+STEUER_FRAGEN: frozenset[str] = frozenset({
+    "aenderung", "auswahl", "ziel", "rueckruf_ja", "anmeldung_rueckruf",
+    "anrufer_check", "auskunft_klar", "fach_weiter",
+    "arzt_notiz", "termin_hinweis", "mehrfach_ok",
+})
 
 
 @dataclass(frozen=True)
@@ -265,6 +312,10 @@ class TaskState:
     zuletzt_gefragt: str = ""
     # Reducer-interne Etappenmarker (JSON-sicher), z. B. Ruecklese-Stand.
     merker: dict[str, bool] = field(default_factory=dict)
+    # Loop-/Repair-Aufsicht: welche inhaltliche Frage haengt gerade fest und
+    # wie oft in Folge wurde sie schon gestellt? (siehe controller/aufsicht.py)
+    stock_frage: str = ""
+    stock_zahl: int = 0
 
     def gefuellt(self, slot: str) -> bool:
         v = self.slots.get(slot)
@@ -283,6 +334,8 @@ class TaskState:
             retries=dict(self.retries),
             zuletzt_gefragt=self.zuletzt_gefragt,
             merker=dict(self.merker),
+            stock_frage=self.stock_frage,
+            stock_zahl=self.stock_zahl,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -294,6 +347,8 @@ class TaskState:
             "retries": dict(self.retries),
             "zuletzt_gefragt": self.zuletzt_gefragt,
             "merker": dict(self.merker),
+            "stock_frage": self.stock_frage,
+            "stock_zahl": self.stock_zahl,
         }
 
 
@@ -376,6 +431,23 @@ class Policy:
     # Notfall-Sofortregel aktiv (DB-Marker); sonst kein Notfall-Sonderweg.
     notfall_sofort: bool = False
 
+    # --- Konfigurierbare Gespraechs-Projektion (aus DialogPolicyV1) ---------- #
+    # Alle Defaults reproduzieren das bisherige Verhalten byte-genau: ein neues
+    # Feld aendert nie etwas, solange keine Policy es setzt.
+    knapp: bool = False
+    ein_thema: bool = True
+    presence_einmal: bool = True
+    eingehen: bool = True
+    max_stupse: int = 2
+    mehrfach_absage: bool = True
+    termin_zuerst: bool = True
+    antwort_knapp: bool = False
+    sonst_noch_nur_nach_erfolg: bool = False
+    max_rueckfragen: int = 2
+    zusammenfassung_bei_stocken: bool = True
+    # Herkunft/Version der eingelesenen Policy (nur fuer Protokoll/Shadow).
+    policy_revision: int = 0
+
     def spec(self, typ: str) -> TaskSpec | None:
         return self.specs.get(typ)
 
@@ -404,6 +476,18 @@ class Policy:
             "eigene_tasks": sorted(self.eigene_tasks),
             "transfer_erlaubt": list(self.transfer_erlaubt),
             "notfall_sofort": self.notfall_sofort,
+            "knapp": self.knapp,
+            "ein_thema": self.ein_thema,
+            "presence_einmal": self.presence_einmal,
+            "eingehen": self.eingehen,
+            "max_stupse": self.max_stupse,
+            "mehrfach_absage": self.mehrfach_absage,
+            "termin_zuerst": self.termin_zuerst,
+            "antwort_knapp": self.antwort_knapp,
+            "sonst_noch_nur_nach_erfolg": self.sonst_noch_nur_nach_erfolg,
+            "max_rueckfragen": self.max_rueckfragen,
+            "zusammenfassung_bei_stocken": self.zusammenfassung_bei_stocken,
+            "policy_revision": self.policy_revision,
         }
 
 
@@ -415,6 +499,22 @@ class State:
     ledger: list[ToolOutcome] = field(default_factory=list)
     terminal: bool = False
     zug_nr: int = 0
+    anmeldung_gesagt: int = 0
+    # Zweites Bestehen auf Anmeldung: naechstes Ja oeffnet den Rueckruf.
+    anmeldung_rueckruf_offen: bool = False
+    # Gespraechsgedaechtnis: belegte Angaben und schon gestellte Fragen.
+    bekannt: dict[str, SlotValue] = field(default_factory=dict)
+    gefragt: set[str] = field(default_factory=set)
+    # Erkannter Anrufer (CF-pre / Dock-Szenario). None = noch nicht geprueft.
+    anrufer: dict[str, str] = field(default_factory=dict)
+    anrufer_ok: bool | None = None
+    anrufer_gefragt: bool = False
+    letzter_besuch: dict[str, str] = field(default_factory=dict)
+    bezug_gesagt: bool = False
+    auskunft_klar_offen: bool = False
+    fach_thema: str = ""
+    fach_weiter_offen: bool = False
+    letzte_termine: list[dict[str, Any]] = field(default_factory=list)
 
     # -- Aktive Aufgabe -------------------------------------------------- #
     def aktiv(self) -> TaskState | None:
@@ -425,6 +525,24 @@ class State:
 
     def geparkt(self) -> list[TaskState]:
         return [t for t in self.tasks if t.status == TaskStatus.GEPARKT]
+
+    def letzter_write(self) -> str:
+        """Belegte Schreibaktion, auf die sich Folgefragen beziehen."""
+        for t in reversed(self.tasks):
+            if t.status == TaskStatus.ERLEDIGT and t.typ in (
+                "absagen", "verschieben", "buchen",
+            ):
+                return t.typ
+        namen = {
+            "cancel_appointment": "absagen",
+            "book_slot": "buchen",
+            "move_appointment": "verschieben",
+        }
+        for o in reversed(self.ledger):
+            art = namen.get(o.name)
+            if art and o.committed:
+                return art
+        return ""
 
     # -- Belege ---------------------------------------------------------- #
     def hat_beleg(self, tool_name: str) -> bool:
@@ -442,6 +560,19 @@ class State:
             ledger=list(self.ledger),
             terminal=self.terminal,
             zug_nr=self.zug_nr,
+            anmeldung_gesagt=self.anmeldung_gesagt,
+            anmeldung_rueckruf_offen=self.anmeldung_rueckruf_offen,
+            bekannt=dict(self.bekannt),
+            gefragt=set(self.gefragt),
+            anrufer=dict(self.anrufer),
+            anrufer_ok=self.anrufer_ok,
+            anrufer_gefragt=self.anrufer_gefragt,
+            letzter_besuch=dict(self.letzter_besuch),
+            bezug_gesagt=self.bezug_gesagt,
+            auskunft_klar_offen=self.auskunft_klar_offen,
+            fach_thema=self.fach_thema,
+            fach_weiter_offen=self.fach_weiter_offen,
+            letzte_termine=[dict(a) for a in self.letzte_termine],
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -450,6 +581,19 @@ class State:
             "ledger": [o.as_dict() for o in self.ledger],
             "terminal": self.terminal,
             "zug_nr": self.zug_nr,
+            "anmeldung_gesagt": self.anmeldung_gesagt,
+            "anmeldung_rueckruf_offen": self.anmeldung_rueckruf_offen,
+            "bekannt": {k: v.as_dict() for k, v in self.bekannt.items()},
+            "gefragt": sorted(self.gefragt),
+            "anrufer": dict(self.anrufer),
+            "anrufer_ok": self.anrufer_ok,
+            "anrufer_gefragt": self.anrufer_gefragt,
+            "letzter_besuch": dict(self.letzter_besuch),
+            "bezug_gesagt": self.bezug_gesagt,
+            "auskunft_klar_offen": self.auskunft_klar_offen,
+            "fach_thema": self.fach_thema,
+            "fach_weiter_offen": self.fach_weiter_offen,
+            "letzte_termine": [dict(a) for a in self.letzte_termine],
         }
 
 

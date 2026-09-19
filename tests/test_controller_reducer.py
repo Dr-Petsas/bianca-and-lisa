@@ -9,6 +9,7 @@ ueber ALLE Task-Familien, damit kein spaeterer Umbau sie unbemerkt aufweicht:
   I3  Je Zug hoechstens EIN Werkzeug UND hoechstens EINE Frage (Decision-Form).
   I4  Beschraenkte Retries -> jede Aufgabe wird in endlich vielen Zuegen terminal.
   I5  Determinismus/Idempotenz.
+  I6  Werkzeug nie mit fehlenden Pflichtfeldern — Restfelder sammeln.
 
 Offline, kein Netz, keine schweren Importe (nur das Controller-Paket + stdlib).
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 import bianca.controller.typen as T
 from bianca.controller import policy as P
-from bianca.controller.reducer import reduce
+from bianca.controller.reducer import _fehlende_tool_slots, reduce
 from bianca.controller.typen import (
     Familie,
     Intent,
@@ -64,7 +65,7 @@ def _pol(**tenant):
 # --------------------------------------------------------------------------- #
 # Frage-IDs, die KEINE Sammelfelder sind (Steuerfragen) und darum von I1
 # ausgenommen bleiben.
-_STEUER_FRAGEN = {"aenderung", "auswahl", "ziel", "rueckruf_ja", "telefon"}
+_STEUER_FRAGEN = {"aenderung", "auswahl", "ziel", "rueckruf_ja", "anmeldung_rueckruf", "telefon", "anrufer_check", "auskunft_klar", "fach_weiter", "arzt_notiz", "termin_hinweis"}
 
 
 def _pruefe_invarianten(state: State, dec, policy) -> None:
@@ -94,6 +95,15 @@ def _pruefe_invarianten(state: State, dec, policy) -> None:
     if dec.speak and dec.speak.akt == SprechAkt.ERFOLG:
         assert any(o.committed for o in state.ledger), "ERFOLG ohne Beleg"
 
+    # I6: Werkzeug nur mit vollstaendigen Pflichtfeldern.
+    if dec.naechste == Naechste.WERKZEUG and dec.tool and task is not None:
+        spec = policy.spec(task.typ)
+        if spec:
+            fehl = _fehlende_tool_slots(task, spec, dec.tool.name)
+            assert not fehl, f"Werkzeug {dec.tool.name} ohne {fehl}: {dec.as_dict()}"
+            if spec.such_tool and dec.tool.name == spec.such_tool:
+                assert dec.tool.args.get("lastName"), dec.as_dict()
+
 
 def _fahre(policy, schritte, *, start=None):
     """Szenario fahren, Invarianten je Zug pruefen, (State, [Decisions]) zurueck."""
@@ -121,6 +131,7 @@ def test_buchen_happy_path_belegt():
     pol = _pol()
     st, decs = _fahre(pol, [
         ev(Intent.BUCHEN),
+        ev(Intent.BUCHEN, {"schonmal": "ja"}),
         ev(Intent.BUCHEN, {"besuchsgrund": "Kontrolle"}),
         ev(Intent.BUCHEN, {"wunschzeit": "morgen"}),
         ev(Intent.BUCHEN, {"nachname": "Meier"}),
@@ -132,8 +143,10 @@ def test_buchen_happy_path_belegt():
         ev(Intent.BUCHEN, {"telefon": "0170123"}),
         ev(Intent.BESTAETIGEN, bestaetigung=True),   # Telefon-Ruecklese Ja -> book
         oc("book_slot", OutcomeStatus.OK, committed=True, payload={"appointmentId": "A1"}),
+        ev(Intent.ABLEHNEN, bestaetigung=False),     # keine Arzt-Notiz
     ])
     assert _tools(decs) == ["offer_slots", "book_slot"]
+    assert decs[-2].speak.frage_id == "arzt_notiz"
     assert decs[-1].speak.akt == SprechAkt.ERFOLG
     assert st.aktiv() is None and st.tasks[-1].status == T.TaskStatus.ERLEDIGT
 
@@ -239,6 +252,33 @@ def test_notfall_ohne_regel_uebergibt_mit_regel_sofort():
 # --------------------------------------------------------------------------- #
 # I1: nie eine Frage zu einem gefuellten Feld — auch bei Doppelnennung.
 # --------------------------------------------------------------------------- #
+def test_session_hirn_keine_zweite_frage_nach_themenwechsel():
+    """Schonmal einmal gefragt — nach Rezeption/Termin nicht nochmal."""
+    pol = _pol()
+    st, decs = _fahre(pol, [
+        ev(Intent.BUCHEN),
+        ev(Intent.ANMELDUNG),
+        ev(Intent.BUCHEN),
+    ])
+    schonmal = [d.speak.frage_id for d in decs if d.speak and d.speak.frage_id == "schonmal"]
+    assert len(schonmal) == 1, [d.as_dict() for d in decs]
+
+
+def test_session_hirn_nachname_aus_rueckruf_fuer_absage():
+    pol = _pol()
+    st, decs = _fahre(pol, [
+        ev(Intent.RUECKRUF, {"nachname": "Haus", "telefon": "017755445566"}),
+        ev(Intent.BESTAETIGEN, bestaetigung=True),
+        oc("praxis_notiz", OutcomeStatus.OK, committed=True),
+        ev(Intent.ABSAGEN),
+    ])
+    nachname_fragen = [
+        d.speak.frage_id for d in decs if d.speak and d.speak.frage_id == "nachname"
+    ]
+    assert nachname_fragen == [], [d.as_dict() for d in decs]
+    assert any(d.tool and d.tool.name == "list_appointments" for d in decs)
+
+
 def test_i1_kein_wiederholtes_fragen_bei_doppelnennung():
     pol = _pol()
     st, decs = _fahre(pol, [
@@ -253,6 +293,7 @@ def test_i1_alle_pflichtfelder_werden_genau_einmal_gefragt():
     pol = _pol()
     st, decs = _fahre(pol, [
         ev(Intent.BUCHEN),
+        ev(Intent.BUCHEN, {"schonmal": "ja"}),
         ev(Intent.BUCHEN, {"besuchsgrund": "Kontrolle"}),
         ev(Intent.BUCHEN, {"wunschzeit": "morgen"}),
         ev(Intent.BUCHEN, {"nachname": "Meier"}),
@@ -261,6 +302,7 @@ def test_i1_alle_pflichtfelder_werden_genau_einmal_gefragt():
     ])
     gefragt = [d.speak.frage_id for d in decs if d.naechste == Naechste.FRAGEN]
     # ein Behandler -> keine Behandlerfrage; jedes andere Pflichtfeld genau einmal
+    assert gefragt.count("schonmal") <= 1
     assert gefragt.count("besuchsgrund") <= 1
     assert gefragt.count("wunschzeit") <= 1
     assert gefragt.count("nachname") <= 1
@@ -273,7 +315,7 @@ def test_i1_alle_pflichtfelder_werden_genau_einmal_gefragt():
 def test_i2_kein_erfolg_ohne_beleg():
     pol = _pol()
     st, decs = _fahre(pol, [
-        ev(Intent.BUCHEN, {"besuchsgrund": "Kontrolle", "wunschzeit": "morgen"}),
+        ev(Intent.BUCHEN, {"schonmal": "ja", "besuchsgrund": "Kontrolle", "wunschzeit": "morgen"}),
         ev(Intent.BUCHEN, {"nachname": "Meier"}),
         ev(Intent.BESTAETIGEN, bestaetigung=True),
         ev(Intent.BUCHEN, {"versicherung": "gesetzlich"}),
@@ -293,7 +335,7 @@ def test_i2_kein_erfolg_ohne_beleg():
 # --------------------------------------------------------------------------- #
 def _bis_buchung_reif(pol):
     st, _ = _fahre(pol, [
-        ev(Intent.BUCHEN, {"besuchsgrund": "Kontrolle", "wunschzeit": "morgen"}),
+        ev(Intent.BUCHEN, {"schonmal": "ja", "besuchsgrund": "Kontrolle", "wunschzeit": "morgen"}),
         ev(Intent.BUCHEN, {"nachname": "Meier"}),
         ev(Intent.BESTAETIGEN, bestaetigung=True),
         ev(Intent.BUCHEN, {"versicherung": "gesetzlich"}),
@@ -389,7 +431,7 @@ def test_i5_reducer_mutiert_eingangsstate_nicht():
 def test_korrektur_leert_und_fragt_gezielt():
     pol = _pol(nachnameReadbackNachBuchstabieren=False)
     st, _ = _fahre(pol, [
-        ev(Intent.BUCHEN, {"besuchsgrund": "Kontrolle", "wunschzeit": "morgen", "nachname": "Meier"}),
+        ev(Intent.BUCHEN, {"schonmal": "ja", "besuchsgrund": "Kontrolle", "wunschzeit": "morgen", "nachname": "Meier"}),
     ])
     st2, d = reduce(st, ev(Intent.KORREKTUR, korrektur_feld="nachname"), pol)
     _pruefe_invarianten(st2, d, pol)
@@ -402,6 +444,139 @@ def test_korrektur_leert_und_fragt_gezielt():
 # --------------------------------------------------------------------------- #
 def test_policy_mehrere_behandler_fragt_behandler():
     pol = P.aus_tenant({"clientId": "x", "calendars": [{"id": "c1"}, {"id": "c2"}]})
-    st, decs = _fahre(pol, [ev(Intent.BUCHEN)])
+    st, decs = _fahre(pol, [
+        ev(Intent.BUCHEN),
+        ev(Intent.BUCHEN, {"schonmal": "ja"}),
+    ])
     assert decs[-1].naechste == Naechste.FRAGEN
     assert decs[-1].speak.frage_id == "behandler"
+
+
+def test_arzt_notiz_nach_buchung_dann_erfolg():
+    pol = _pol()
+    st = _bis_buchung_reif(pol)
+    st, d = reduce(st, oc("book_slot", OutcomeStatus.OK, committed=True, payload={"appointmentId": "A1"}), pol)
+    _pruefe_invarianten(st, d, pol)
+    assert d.speak.frage_id == "arzt_notiz"
+    assert st.aktiv() is not None
+    st2, d2 = reduce(st, ev(Intent.BESTAETIGEN, bestaetigung=True), pol)
+    _pruefe_invarianten(st2, d2, pol)
+    assert d2.speak.akt == SprechAkt.ERFOLG
+    assert dict(d2.speak.fakten).get("notiz") == "ja"
+
+
+def test_absage_nein_sucht_weiter():
+    pol = _pol(nachnameReadbackNachBuchstabieren=False)
+    st, decs = _fahre(pol, [
+        ev(Intent.ABSAGEN, {"nachname": "Meier"}),
+        oc("list_appointments", OutcomeStatus.OK, payload={"appointments": [
+            {"id": "A1", "iso": "2026-09-20T09:00", "arzt": "Petsas"}]}),
+        ev(Intent.ABLEHNEN, bestaetigung=False),
+    ])
+    assert decs[-1].hangup is not True
+    assert decs[-1].naechste == Naechste.WERKZEUG
+    assert decs[-1].tool.name == "list_appointments"
+
+
+def test_drittpersonen_legen_geparkte_aufgaben_an():
+    pol = _pol()
+    st, _ = _fahre(pol, [
+        ev(Intent.BUCHEN, {"fuer_wen": "nachbar", "fuer_wen_mehr": "sohn"}),
+    ])
+    personen = {_person(t) for t in st.tasks}
+    assert "nachbar" in personen
+    assert "sohn" in personen
+    aktiv = st.aktiv()
+    assert aktiv is not None and _person(aktiv) == "nachbar"
+    assert any(t.status == T.TaskStatus.GEPARKT and _person(t) == "sohn" for t in st.tasks)
+
+
+def _person(task):
+    sv = task.slots.get("fuer_wen")
+    return sv.wert if sv and sv.wert != "selbst" else ""
+
+
+def test_anrufer_ok_fuellt_identitaet_ohne_nachfrage():
+    pol = _pol()
+    st = State()
+    st.anrufer = {"anrede": "Frau", "nachname": "Meier", "telefon": "0170123", "versicherung": "gesetzlich"}
+    st.letzter_besuch = {"arzt": "Doktor Blessing", "grund": "Hautscreening", "wann": "4 Monaten"}
+    st, decs = _fahre(pol, [
+        ev(Intent.BUCHEN),
+        ev(Intent.BESTAETIGEN, bestaetigung=True),
+    ], start=st)
+    fragen = [d.speak.frage_id for d in decs if d.naechste == Naechste.FRAGEN]
+    assert "nachname" not in fragen
+    assert "versicherung" not in fragen
+    assert "schonmal" not in fragen
+    aktiv = st.aktiv()
+    assert aktiv is not None
+    assert aktiv.slots["behandler"].wert == "Doktor Blessing"
+    assert aktiv.slots["besuchsgrund"].wert == "Hautscreening"
+
+
+# --------------------------------------------------------------------------- #
+# I6: Function ohne Pflichtfelder startet nicht — restliche Felder sammeln.
+# --------------------------------------------------------------------------- #
+def test_i6_absage_ohne_nachname_sucht_nicht():
+    pol = _pol(nachnameReadbackNachBuchstabieren=False)
+    st, d = reduce(State(), ev(Intent.ABSAGEN), pol)
+    _pruefe_invarianten(st, d, pol)
+    assert d.naechste == Naechste.FRAGEN and d.speak.frage_id == "nachname"
+    st2, d2 = reduce(st, ev(Intent.ABSAGEN), pol)
+    _pruefe_invarianten(st2, d2, pol)
+    assert d2.tool is None
+    assert d2.naechste == Naechste.FRAGEN
+    assert d2.speak.frage_id == "nachname"
+
+
+def test_i6_auskunft_ohne_nachname_sucht_nicht():
+    pol = _pol(nachnameReadbackNachBuchstabieren=False)
+    st, d = reduce(State(), ev(Intent.AUSKUNFT), pol)
+    _pruefe_invarianten(st, d, pol)
+    st2, d2 = reduce(st, ev(Intent.AUSKUNFT), pol)
+    _pruefe_invarianten(st2, d2, pol)
+    assert d2.tool is None
+    assert d2.speak.frage_id == "nachname"
+
+
+def test_i6_suchergebnis_ohne_identitaet_sammelt_nach():
+    pol = _pol(nachnameReadbackNachBuchstabieren=False)
+    st, _ = _fahre(pol, [ev(Intent.ABSAGEN)])
+    st2, d = reduce(st, oc("list_appointments", OutcomeStatus.NOT_FOUND), pol)
+    _pruefe_invarianten(st2, d, pol)
+    assert d.naechste == Naechste.FRAGEN
+    assert d.speak.frage_id == "nachname"
+    assert st2.aktiv() is not None
+    assert st2.aktiv().status == T.TaskStatus.AKTIV
+    assert "tool_luecke" in d.grund
+
+
+def test_i6_slotsuche_ohne_pflicht_bietet_nicht_an():
+    pol = _pol(nachnameReadbackNachBuchstabieren=False)
+    st, d = reduce(State(), ev(Intent.BUCHEN), pol)
+    _pruefe_invarianten(st, d, pol)
+    st2, d2 = reduce(st, ev(Intent.BUCHEN), pol)
+    _pruefe_invarianten(st2, d2, pol)
+    assert d2.tool is None
+    assert d2.naechste == Naechste.FRAGEN
+    assert d2.speak.frage_id in ("schonmal", "behandler", "besuchsgrund")
+
+
+def test_dialog_anliegen_schaltet_verbinden_aus():
+    pol = P.aus_tenant({
+        "clientId": "x",
+        "calendars": [{"id": "c1"}],
+        "dialog": {"anliegen": {"verbinden": {"an": False}}},
+    })
+    assert not pol.fuehrt("verbinden")
+    assert pol.fuehrt("buchen")
+
+
+def test_dialog_anliegen_kuerzt_buchungs_pflicht():
+    pol = P.aus_tenant({
+        "clientId": "x",
+        "calendars": [{"id": "c1"}, {"id": "c2"}],
+        "dialog": {"anliegen": {"buchen": {"pflicht": ["besuchsgrund", "wunschzeit", "nachname"]}}},
+    })
+    assert pol.spec("buchen").pflicht == ("besuchsgrund", "wunschzeit", "nachname")

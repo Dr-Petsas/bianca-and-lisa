@@ -326,6 +326,21 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     if db:
         t["dbPrompt"] = db
 
+    # DialogPolicyV1 (Praxis-Einstellungsmaske): der veroeffentlichte,
+    # versionierte Vertrag steuert die konfigurierbare Ebene des Dialogkerns
+    # (Knappheit, Slot-Reihenfolge, Transferziele, Notfallmarker ...). DB
+    # gewinnt (Chef 30.08.2026); ohne DB-Eintrag dient die lokale Datei als
+    # Basis. Validiert/geklemmt wird erst spaeter in
+    # bianca.controller.policy.aus_tenant (parse ist nie werfend) — hier nur
+    # das Roh-Dict durchreichen.
+    dp = agent.get("dialogPolicy")
+    if not isinstance(dp, dict):
+        dp = pre.get("dialogPolicy") if isinstance(pre.get("dialogPolicy"), dict) else None
+    if not isinstance(dp, dict) and isinstance(t.get("dialogPolicy"), dict):
+        dp = t["dialogPolicy"]
+    if isinstance(dp, dict) and dp:
+        t["dialogPolicy"] = dp
+
     # W-VERBINDEN-ECHT: die DB entscheidet die Weiterleitungen KOMPLETT —
     # auch das AUS (Schalter aus/keine Ziele ueberschreibt eine Datei-Basis,
     # sonst wuerde ein abgeschalteter Client weiter verbunden).

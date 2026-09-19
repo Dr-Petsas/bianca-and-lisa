@@ -204,6 +204,8 @@ def _kern_zug(sit: dict, spoken: str, vorher: dict[str, str],
     sit["_ctrlShadow"] = st2
 
     kern: dict[str, Any] = {"naechste": dec.naechste.value}
+    if getattr(pol, "policy_revision", 0):
+        kern["policy_rev"] = pol.policy_revision
     if dec.speak:
         kern["akt"] = dec.speak.akt.value
         if dec.speak.frage_id:
