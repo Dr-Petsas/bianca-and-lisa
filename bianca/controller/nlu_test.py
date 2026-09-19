@@ -165,6 +165,16 @@ def _norm(text: str) -> str:
     return " ".join(str(text or "").lower().split())
 
 
+# Satzzeichen NUR fuer den Ja/Nein-Abgleich weg: getippt kommt "ja", aus dem
+# STT immer "Ja." oder "Ja?". Nummern, Buchstabieren und Datumsangaben laufen
+# weiter ueber das unveraenderte _norm — dort traegt der Punkt Bedeutung.
+_JANEIN_ZEICHEN = ".,;:!?\"'…»«()"
+
+
+def _janein_form(t: str) -> str:
+    return " ".join(w.strip(_JANEIN_ZEICHEN) for w in t.split()).strip()
+
+
 # --------------------------------------------------------------------------- #
 # Power-Overrides (#slot=wert / #intent=... / #ja / #nein).
 # --------------------------------------------------------------------------- #
@@ -513,11 +523,12 @@ def deuten(
         elif dritter and _PREFIX_JA.search(t):
             bestaetigung = True
         elif not dritter:
-            worte = set(t.split())
+            tj = _janein_form(t)
+            worte = set(tj.split())
             if erwartet_janein or (worte and worte <= (_JA | _NEIN)):
-                if t in _JA or worte & _JA and not (worte & _NEIN):
+                if tj in _JA or worte & _JA and not (worte & _NEIN):
                     bestaetigung = True
-                elif t in _NEIN or worte & _NEIN:
+                elif tj in _NEIN or worte & _NEIN:
                     bestaetigung = False
 
     # Offene Schonmal-Frage: Ja/Nein landet im Slot (auch vor einem Personenwechsel).

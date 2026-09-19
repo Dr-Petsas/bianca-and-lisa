@@ -93,6 +93,28 @@ def _thema(v: Verstand) -> str:
     return _falt(" ".join(teile))
 
 
+def _gesagt(v: Verstand) -> str:
+    """Nur die eigenen Worte des Anrufers, ohne die Paraphrase des Modells."""
+    teile = [v.roh]
+    for k, val in (v.genannt or {}).items():
+        teile.append(str(k))
+        teile.append(str(val))
+    return _falt(" ".join(teile))
+
+
+def _sms_gefragt(v: Verstand) -> bool:
+    """SMS-Thema: in eigenen Worten immer, in der Paraphrase nur als Substantiv.
+
+    Die Paraphrase beschreibt die HANDLUNG des Anrufers ("Der Anrufer
+    bestaetigt die vorherige Frage") — dieses Verb ist kein SMS-Wunsch und
+    hat jede Ja-Antwort in die SMS-Auskunft umgeleitet.
+    """
+    if _SMS_RE.search(_gesagt(v)):
+        return True
+    para = _falt(v.verstanden or "")
+    return bool(re.search(r"sms|bestaetigung", para))
+
+
 def _slots_von_genannt(genannt: Mapping[str, Any]) -> dict[str, SlotValue]:
     slots: dict[str, SlotValue] = {}
     for k, raw in (genannt or {}).items():
@@ -112,13 +134,12 @@ def _slots_von_genannt(genannt: Mapping[str, Any]) -> dict[str, SlotValue]:
 
 def _will_sms(v: Verstand, lage: Mapping[str, Any] | None) -> bool:
     t = _thema(v)
-    if _DOKUMENT_RE.search(t) and not _SMS_RE.search(t):
+    sms = _sms_gefragt(v)
+    if _DOKUMENT_RE.search(t) and not sms:
         return False
-    if _SMS_RE.search(t):
+    if sms:
         return True
     write = str((lage or {}).get("letzter_write") or "").strip()
-    if write and _SMS_RE.search(t):
-        return True
     if write and v.hint in ("bestaetigen", "dokument", "praxisinfo", "unklar"):
         return True
     if write and v.janein is True and not (lage or {}).get("erwartet_janein"):
@@ -159,8 +180,10 @@ def zu_event(
         slots["sms"] = SlotValue(wert="ja", quelle=Quelle.ABGELEITET)
         return SemanticEvent(
             intent=Intent.PRAXISINFO,
+            # Ein Ja bleibt ein Ja, auch wenn nebenbei die SMS Thema ist —
+            # sonst verschluckt die Auskunft die Antwort auf die offene Frage.
+            bestaetigung=janein,
             slots=slots,
-            bestaetigung=None,
             korrektur_feld="",
             roh=(v.roh or anrufer)[:120],
             llm=v.llm,

@@ -27,6 +27,7 @@ from bianca.controller.gateway_sim import Szenario, ToolGatewaySim
 from bianca.controller.reducer import reduce
 from bianca.controller.typen import (
     Decision,
+    Intent,
     Naechste,
     Policy,
     Quelle,
@@ -162,7 +163,18 @@ class TestGespraech:
             llm=self.llm,
         )
         ev = self._wahl_aufloesen(ev)
+        return self._zug(ev, text)
 
+    def stille(self) -> Zugantwort:
+        """Der Anrufer sagt nichts (Stups aus der Bruecke).
+
+        Stille laeuft bewusst NICHT durch das Verstehen: es gibt nichts zu
+        deuten, und ein leerer Text duerfte nie als Unklar-Zug zaehlen.
+        """
+        return self._zug(SemanticEvent(intent=Intent.STILLE, deutung="stille"), "")
+
+    # ------------------------------------------------------------------ #
+    def _zug(self, ev: SemanticEvent, gesagt: str) -> Zugantwort:
         state, decision = reduce(self.state, ev, self.policy)
         state, decision = self._werkzeug_schleife(state, decision)
         self.state = state
@@ -171,7 +183,7 @@ class TestGespraech:
         antwort = self._uebergabe_text(decision, antwort)
         self._erwartung_setzen(decision)
 
-        self.verlauf.append({"anrufer": text, "bianca": antwort})
+        self.verlauf.append({"anrufer": gesagt, "bianca": antwort})
         return Zugantwort(
             antwort=antwort,
             grund=decision.grund,

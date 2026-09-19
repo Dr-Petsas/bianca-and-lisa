@@ -153,9 +153,11 @@ def test_glatter_buchungsfluss_ohne_aufsicht():
     assert not any(d.grund.startswith("aufsicht:") for d in decs), _gruende(decs)
 
 
-def test_steuerfrage_wird_nie_als_schleife_gezaehlt():
-    # Eine Auswahl-/Steuerfrage darf beliebig oft kommen, ohne Repair.
-    from bianca.controller.aufsicht import _ist_stockfrage
+def test_steuerfrage_faellt_nicht_unter_das_inhaltliche_budget():
+    # Eine Auswahl-/Steuerfrage darf oefter kommen als eine inhaltliche Frage
+    # (ihre Wiederholung regelt der Reducer) — sie tragen darum den Praefix
+    # ``steuer:`` und ein eigenes, grosszuegigeres Budget.
+    from bianca.controller.aufsicht import _anker
     from bianca.controller.typen import Decision, SpeakSpec
 
     for fid in ("auswahl", "anrufer_check", "ziel", "aenderung"):
@@ -163,18 +165,267 @@ def test_steuerfrage_wird_nie_als_schleife_gezaehlt():
             naechste=Naechste.FRAGEN,
             speak=SpeakSpec(akt=SprechAkt.FRAGE, frage_id=fid),
         )
-        assert _ist_stockfrage(d) == ""
+        assert _anker(d) == f"steuer:{fid}"
+
+
+def test_steuerfrage_laeuft_in_den_harten_deckel():
+    # Live lief "Rueckruf einrichten - ja oder nein?" 8x in Folge (nur der
+    # Wortlaut rotierte). Beliebig oft darf auch eine Steuerfrage nicht kommen.
+    from bianca.controller.aufsicht import _STEUER_DECKEL, ueberwachen
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    pol = _pol()
+    st = State()
+    frage = Decision(
+        naechste=Naechste.FRAGEN,
+        speak=SpeakSpec(akt=SprechAkt.FRAGE, frage_id="rueckruf_ja"),
+    )
+    gruende: list[str] = []
+    for _ in range(_STEUER_DECKEL + 2):
+        st, d = ueberwachen(st, frage, pol)
+        gruende.append(d.grund)
+    # Innerhalb des Deckels unangetastet, danach greift die Aufsicht.
+    assert all(not g.startswith("aufsicht:") for g in gruende[:_STEUER_DECKEL]), gruende
+    assert any(g.startswith("aufsicht:") for g in gruende[_STEUER_DECKEL:]), gruende
 
 
 def test_inhaltsfrage_wird_erkannt():
-    from bianca.controller.aufsicht import _ist_stockfrage
+    from bianca.controller.aufsicht import _anker
     from bianca.controller.typen import Decision, SpeakSpec
 
     d = Decision(
         naechste=Naechste.FRAGEN,
         speak=SpeakSpec(akt=SprechAkt.FRAGE, frage_id="nachname"),
     )
-    assert _ist_stockfrage(d) == "nachname"
+    assert _anker(d) == "nachname"
+
+
+# --------------------------------------------------------------------------- #
+# Audit 19.09.2026 (538 echte Anrufe): 96 % der wortgleichen Wiederholungen
+# waren KEINE Fragen — Ruecklesen 745x, Slot-Angebot 321x, "finde ich nichts"
+# 96x. Ein Angebot lief 13x wortgleich durch, weil die Aufsicht nur auf
+# SprechAkt.FRAGE schaute. Diese Akte muessen denselben Deckel haben.
+# --------------------------------------------------------------------------- #
+
+
+def _spec_angebot(*slots: str) -> SpeakSpec:
+    from bianca.controller.typen import SpeakSpec as S
+
+    return S(akt=SprechAkt.ANGEBOT, fakten=tuple(("slot", s) for s in slots))
+
+
+def test_reaktionsakte_bekommen_einen_anker():
+    from bianca.controller.aufsicht import _anker
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    for akt in (SprechAkt.RUECKLESEN, SprechAkt.ANGEBOT, SprechAkt.EHRLICH_KEIN):
+        d = Decision(naechste=Naechste.SPRECHEN, speak=SpeakSpec(akt=akt))
+        assert _anker(d), akt
+
+
+def test_terminale_akte_bekommen_nie_einen_anker():
+    # Erfolg/Abschied/Uebergabe/Notfall/Warten beenden oder halten — nie deckeln.
+    # RUECKRUF steht bewusst NICHT hier: die Notiz beendet den Anruf nicht, und
+    # live kam sie 3x wortgleich in Folge (Audit 19.09.2026) — sie wird gedeckelt.
+    from bianca.controller.aufsicht import _anker
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    for akt in (
+        SprechAkt.ERFOLG, SprechAkt.ABSCHIED,
+        SprechAkt.UEBERGEBEN, SprechAkt.NOTFALL, SprechAkt.WARTEN,
+    ):
+        d = Decision(naechste=Naechste.SPRECHEN, speak=SpeakSpec(akt=akt))
+        assert _anker(d) == "", akt
+
+
+def test_erlaubte_wiederholung_klingt_nicht_wortgleich():
+    """Die zweite Ruecklese darf kommen — aber nicht im selben Wortlaut.
+
+    Audit 19.09.2026: 153 der 298 wortgleichen Wiederholungen waren genau diese
+    eine erlaubte Wiederholung vor dem Rueckblick. Der Deckel bleibt unberuehrt
+    (``nochmal`` ist ein fluechtiger Fakt), nur die Einleitung wechselt.
+    """
+    from bianca.controller import renderer
+    from bianca.controller.aufsicht import _anker, ueberwachen
+    from bianca.controller.typen import Decision, Policy, SpeakSpec, State
+
+    st = State()
+    pol = Policy()
+    spec = SpeakSpec(
+        akt=SprechAkt.RUECKLESEN,
+        fakten=(("nachname", "Tannis"), ("zug", "1")),
+    )
+    d = Decision(naechste=Naechste.SPRECHEN, speak=spec)
+
+    st, erst = ueberwachen(st, d, pol)
+    st, zweit = ueberwachen(st, d, pol)
+
+    t1, t2 = renderer.rendern(erst.speak), renderer.rendern(zweit.speak)
+    assert t1 and t2 and t1 != t2, (t1, t2)
+    assert "noch einmal" in t2.lower()
+    # Der Zaehler zaehlt weiter dieselbe Aeusserung: gleicher Anker, Stufe 2.
+    assert _anker(erst) == _anker(zweit)
+    assert st.stock_zahl == 2
+
+
+def test_wiederholte_rueckruf_notiz_wird_gedeckelt():
+    """Dieselbe Notiz-Ansage laeuft in den Deckel statt endlos zu kommen."""
+    from bianca.controller.aufsicht import ueberwachen
+    from bianca.controller.typen import Decision, Policy, SpeakSpec, State
+
+    st = State()
+    pol = Policy(max_rueckfragen=2)
+    d = Decision(
+        naechste=Naechste.SPRECHEN,
+        speak=SpeakSpec(akt=SprechAkt.RUECKRUF, fakten=(("nachname", "Meier"),)),
+    )
+    gruende: list[str] = []
+    for _ in range(5):
+        st, out = ueberwachen(st, d, pol)
+        gruende.append(out.grund)
+    assert any(g.startswith("aufsicht:") for g in gruende), gruende
+
+
+def test_gleiches_angebot_hat_gleichen_anker_geaendertes_nicht():
+    # Derselbe Wortlaut = Schleife. Ein GEAENDERTES Angebot ist Fortschritt und
+    # muss den Zaehler zuruecksetzen, sonst deckelt die Aufsicht echte Arbeit.
+    from bianca.controller.aufsicht import _anker
+    from bianca.controller.typen import Decision
+
+    a = Decision(naechste=Naechste.SPRECHEN, speak=_spec_angebot("Mo 9:00", "Mo 10:00"))
+    b = Decision(naechste=Naechste.SPRECHEN, speak=_spec_angebot("Mo 9:00", "Mo 10:00"))
+    c = Decision(naechste=Naechste.SPRECHEN, speak=_spec_angebot("Di 8:00"))
+    assert _anker(a) == _anker(b)
+    assert _anker(a) != _anker(c)
+
+
+def test_variantenrotation_bricht_den_anker_nicht():
+    # Der ``zug``-Fakt wechselt jeden Zug (Wortlaut-Rotation). Wuerde er in den
+    # Fingerabdruck eingehen, waere jede Wiederholung "neu" und der Deckel tot.
+    from bianca.controller.aufsicht import _anker
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    def d(zug: str) -> Decision:
+        return Decision(
+            naechste=Naechste.SPRECHEN,
+            speak=SpeakSpec(
+                akt=SprechAkt.ANGEBOT,
+                fakten=(("slot", "Mo 9:00"), ("zug", zug)),
+            ),
+        )
+
+    assert _anker(d("3")) == _anker(d("7"))
+
+
+def test_gleicher_satz_aus_zwei_bauwegen_hat_denselben_anker():
+    # Audit 19.09.2026, Anruf d7f485d7a3ba: dasselbe Slot-Angebot lief 9x
+    # wortgleich durch, weil der Reducer es abwechselnd als frisches Angebot und
+    # als Wiederholung baute (unterschiedliche Buchfuehrungs-Fakten, EIN Satz im
+    # Ohr). Gezaehlt wird, was der Anrufer hoert.
+    from bianca.controller.aufsicht import _anker
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    slots = (("slot", "Mo 9:00"), ("slot", "Di 10:00"))
+    frisch = Decision(
+        naechste=Naechste.SPRECHEN,
+        speak=SpeakSpec(akt=SprechAkt.ANGEBOT, fakten=slots),
+    )
+    nochmal = Decision(
+        naechste=Naechste.SPRECHEN,
+        speak=SpeakSpec(
+            akt=SprechAkt.ANGEBOT,
+            fakten=slots + (("gehoert_wunschzeit", "nachmittag"), ("zug", "4")),
+        ),
+    )
+    assert _anker(frisch) == _anker(nochmal)
+
+
+def test_bezug_aufs_gehoerte_bricht_den_anker_nicht():
+    # Audit 19.09.2026, Anruf 2dcdbebefb03: dieselbe Ruecklese lief 7x durch,
+    # weil der ``gehoert_*``-Bezug je Zug anders war. Der Satz war wortgleich.
+    from bianca.controller.aufsicht import _anker
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    def d(bezug: tuple[str, str]) -> Decision:
+        return Decision(
+            naechste=Naechste.SPRECHEN,
+            speak=SpeakSpec(
+                akt=SprechAkt.RUECKLESEN,
+                detail="nachname",
+                fakten=(("nachname", "Meier"), bezug),
+            ),
+        )
+
+    assert _anker(d(("gehoert_terminwahl", "Montag"))) == _anker(
+        d(("gehoert_wunschzeit", "Oktober"))
+    )
+
+
+def test_wiederholtes_angebot_laeuft_in_rueckblick_und_dann_terminal():
+    from bianca.controller.aufsicht import ueberwachen
+    from bianca.controller.typen import Decision
+
+    pol = _pol()
+    budget = pol.max_rueckfragen
+    # Aufgabe echt ueber den Reducer entstehen lassen (keine Handbau-Attrappe).
+    st, _ = _fahre(pol, [ev(Intent.BUCHEN, {"schonmal": "ja"})])
+    assert st.aktiv() is not None
+    gruende: list[str] = []
+    for _ in range(budget + 2):
+        d = Decision(
+            naechste=Naechste.SPRECHEN,
+            speak=_spec_angebot("Mo 9:00"),
+            task=st.aktiv().typ,
+        )
+        st, d = ueberwachen(st, d, pol)
+        gruende.append(d.grund)
+    # Innerhalb des Budgets unveraendert, dann EIN Rueckblick, dann terminal.
+    assert all(not g.startswith("aufsicht:") for g in gruende[:budget]), gruende
+    assert gruende[budget].startswith("aufsicht:rueckblick:angebot"), gruende
+    assert gruende[budget + 1].startswith("aufsicht:uebergabe:angebot"), gruende
+
+
+def test_wiederholung_ohne_aufgabe_wird_gedeckelt():
+    """Anruf 357236c8edfa (Thaler): die Absage war gescheitert, also gab es keine
+    aktive Aufgabe mehr — "Zu Ihrem Namen sehe ich keinen Termin" lief danach
+    13x wortgleich durch, weil der Zaehler nur an der Aufgabe hing. Jetzt haengt
+    er am State: Neustart-Bitte, dann Uebergabe."""
+    from bianca.controller.aufsicht import ueberwachen
+    from bianca.controller.typen import Decision, SpeakSpec
+
+    pol = _pol()
+    budget = pol.max_rueckfragen
+    st = State()  # bewusst OHNE Aufgabe
+    gruende: list[str] = []
+    for _ in range(budget + 2):
+        d = Decision(
+            naechste=Naechste.SPRECHEN,
+            speak=SpeakSpec(akt=SprechAkt.EHRLICH_KEIN, detail="filter_kein_termin"),
+        )
+        st, d = ueberwachen(st, d, pol)
+        gruende.append(d.grund)
+        letzte = d
+    assert all(not g.startswith("aufsicht:") for g in gruende[:budget]), gruende
+    assert gruende[budget].startswith("aufsicht:neustart:"), gruende
+    assert gruende[budget + 1].startswith("aufsicht:uebergabe:"), gruende
+    assert letzte.naechste is Naechste.UEBERGEBEN
+
+
+def test_rueckblick_wird_bei_jedem_akt_gesprochen():
+    # Der Anker-Satz darf nicht nur an Fragen haengen (Renderer-Vertrag).
+    from bianca.controller import renderer
+    from bianca.controller.typen import SpeakSpec
+
+    for akt in (SprechAkt.ANGEBOT, SprechAkt.RUECKLESEN, SprechAkt.FRAGE):
+        spec = SpeakSpec(
+            akt=akt,
+            frage_id="nachname" if akt is SprechAkt.FRAGE else "",
+            detail="rueckblick" if akt is SprechAkt.FRAGE else "",
+            fakten=(("slot", "Mo 9:00"), ("rueckblick", "Nachname: Meier")),
+        )
+        text = renderer.rendern(spec)
+        assert "fasse kurz zusammen" in text, (akt, text)
+        assert "Nachname: Meier" in text, (akt, text)
 
 
 def test_determinismus_gleicher_eingang_gleicher_ausgang():

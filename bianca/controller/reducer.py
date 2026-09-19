@@ -97,6 +97,16 @@ _PATIENT_SLOTS = ("schonmal", "nachname", "vorname", "versicherung")
 # gelesen). Alias hier, damit der bestehende Reducer-Code unveraendert bleibt.
 _STEUER_FRAGEN = T_STEUER_FRAGEN
 
+# Meta-Bitten (controller/meta.py): so oft darf derselbe Satz auf Zuruf
+# wiederholt werden. Danach hilft Wiederholen nicht mehr — dann liegt es an der
+# Leitung oder am Ohr, und der Legacy-Pfad mit Stille-Regie und Notleine ist
+# der ehrlichere Ort. Dasselbe fuer die Stille im ganzen Anruf.
+_WIEDERHOL_DECKEL = 3
+_STILLE_GESAMT = 8
+# Fakten, die eine gespeicherte Absicht nie in den naechsten Zug mitnimmt: sie
+# beschreiben den VORIGEN Zug (was gehoert wurde, welche Wiederholungsstufe).
+_META_FLUECHTIG = frozenset({"nochmal", "wiederholt", "still", "rueckblick", "zug"})
+
 
 _STEUER_SLOTS = frozenset({
     "fuer_wen", "fuer_wen_mehr", "weiterer_task",
@@ -344,6 +354,11 @@ def _erste_luecke(task: TaskState, spec: TaskSpec, ns: State | None = None) -> s
     for slot in _sammel_slots(spec):
         if not task.gefuellt(slot):
             if ns is not None and slot in ns.gefragt:
+                continue
+            if slot in task.ausgelassen:
+                # Der Anrufer will das nicht nennen (meta.py "auslassen"). Ein
+                # WERKZEUG-Pflichtfeld landet nie hier (siehe _ist_pflicht_slot);
+                # alles andere wird uebersprungen statt erneut abverlangt.
                 continue
             return slot
         if slot in spec.ruecklese_slots and not task.bestaetigt(slot):
@@ -948,7 +963,12 @@ def reduce(state: State, event: Event, policy: Policy) -> tuple[State, Decision]
     ns = state.kopie()
     ns.zug_nr += 1
     if ns.terminal:
-        if isinstance(event, SemanticEvent) and event.intent != Intent.ABSCHIED:
+        if isinstance(event, SemanticEvent) and event.intent not in (
+            Intent.ABSCHIED,
+            # Stille nach dem Auflegen ist kein neues Gespraech, sondern eine
+            # tote Leitung — sonst begruesst der Kern das Freizeichen.
+            Intent.STILLE,
+        ):
             # Dock: nach Auflegen weiter tippen = neues Gespraech. Live waere tot.
             ns.tasks.clear()
             ns.ledger.clear()
@@ -965,6 +985,10 @@ def reduce(state: State, event: Event, policy: Policy) -> tuple[State, Decision]
             ns.fach_thema = ""
             ns.fach_weiter_offen = False
             ns.letzte_termine = []
+            ns.letzte_speak = None
+            ns.wiederhol_bitten = 0
+            ns.stupse = 0
+            ns.stupse_gesamt = 0
         else:
             return ns, Decision(
                 naechste=Naechste.WARTEN,
@@ -973,16 +997,29 @@ def reduce(state: State, event: Event, policy: Policy) -> tuple[State, Decision]
             )
     if isinstance(event, ToolOutcome):
         ns, decision = _nie_stumm(*_reduce_outcome(ns, event, policy), policy)
-        return _aufsicht.ueberwachen(ns, decision, policy)
+        return _merken(*_aufsicht.ueberwachen(ns, decision, policy))
     if isinstance(event, SemanticEvent):
         ns, decision = _nie_stumm(*_reduce_event(ns, event, policy), policy)
         ns, decision = _mit_gehoert(ns, decision, event)
-        return _aufsicht.ueberwachen(ns, decision, policy)
+        return _merken(*_aufsicht.ueberwachen(ns, decision, policy))
     return ns, Decision(
         naechste=Naechste.SPRECHEN,
         speak=SpeakSpec(akt=SprechAkt.INFO, detail="unklar"),
         grund="unbekanntes_event",
     )
+
+
+def _merken(ns: State, decision: Decision) -> tuple[State, Decision]:
+    """Die gesprochene ABSICHT fuer "Wie bitte?" festhalten.
+
+    NACH der Aufsicht, damit eine von ihr umgeschriebene Aeusserung (Rueckblick,
+    Notleine) auch die ist, die wiederholt wird. Presence merken wir bewusst
+    nicht: auf "Sind Sie noch dran?" gehoert die offene Frage wiederholt, nicht
+    die Rueckfrage nach dem Dasein.
+    """
+    if decision.speak is not None and decision.speak.detail != "presence":
+        ns.letzte_speak = replace(decision.speak, fakten=_ohne_fluechtige(decision.speak))
+    return ns, decision
 
 
 def _nie_stumm(
@@ -1050,9 +1087,240 @@ def _nie_stumm(
 
 
 # --------------------------------------------------------------------------- #
+# Meta-Bitten UEBER das Gespraech (controller/meta.py).
+#
+# Vier Bitten, die kein Anliegen sind und die ein reines Anliegen-Verstehen
+# darum auch nicht abbilden kann — Rasa CALM fuehrt sie als eigene Befehle
+# (``repeat bot messages`` / ``cancel flow`` / ``skip question``; Stille ist dort
+# ein eigenes Ereignis). Sie gehen VOR allen Anliegen durch und aendern nie
+# Slots: sie bestimmen nur, WAS jetzt gesagt wird.
+# --------------------------------------------------------------------------- #
+def _ohne_fluechtige(spec: SpeakSpec) -> tuple[tuple[str, str], ...]:
+    return tuple((k, v) for k, v in spec.fakten if k not in _META_FLUECHTIG)
+
+
+def _mit_fakt(decision: Decision, fakt: tuple[str, str]) -> Decision:
+    """Einen Hinweis an die schon gebaute Aeusserung haengen (nie ueberschreiben)."""
+    if decision.speak is None:
+        return decision
+    if any(k == fakt[0] for k, _ in decision.speak.fakten):
+        return decision
+    return replace(
+        decision, speak=replace(decision.speak, fakten=decision.speak.fakten + (fakt,))
+    )
+
+
+def _meta_wiederholen(ns: State) -> tuple[State, Decision]:
+    """"Wie bitte?" — dieselbe ABSICHT erneut sprechen.
+
+    Der teure Fehler waere, das als Unklar-Zug zu lesen: wer akustisch nichts
+    verstanden hat, bekaeme eine Rueckfrage auf seine Rueckfrage, und nach drei
+    Bitten schickt der Unklar-Deckel den Anruf in die Uebergabe. Wiederholt wird
+    die Absicht, nicht der Satz — der Renderer darf umformulieren (Fakt
+    ``wiederholt``), denn wortgleich hilft bei einem Hoerproblem selten.
+    """
+    ns.wiederhol_bitten += 1
+    aktiv = ns.aktiv()
+    typ = aktiv.typ if aktiv is not None else ""
+    if ns.letzte_speak is None:
+        # Noch nichts Eigenes gesagt (die Begruessung kommt nicht aus dem Kern):
+        # kein Vorwand fuer einen Unklar-Zug — nach dem Anliegen fragen.
+        return ns, Decision(
+            naechste=Naechste.FRAGEN,
+            speak=SpeakSpec(akt=SprechAkt.INFO, detail="hilfe"),
+            task=typ,
+            grund="meta:wiederholen_ohne_vorlage",
+        )
+    if ns.wiederhol_bitten > _WIEDERHOL_DECKEL:
+        return _uebergeben(ns, typ, grund="meta:wiederholen_deckel")
+    basis = ns.letzte_speak
+    naechste = Naechste.FRAGEN if basis.akt == SprechAkt.FRAGE else Naechste.SPRECHEN
+    return ns, Decision(
+        naechste=naechste,
+        speak=replace(
+            basis,
+            fakten=_ohne_fluechtige(basis) + (("wiederholt", str(ns.wiederhol_bitten)),),
+        ),
+        task=typ,
+        grund="meta:wiederholen",
+    )
+
+
+def _meta_abbrechen(ns: State, policy: Policy) -> tuple[State, Decision]:
+    """"Vergessen Sie's" — das laufende Anliegen zuruecknehmen.
+
+    Der Abbruch ist der ehrlichste Ausweg aus einer Schleife, weil der Anrufer
+    selbst sagt, dass es nicht weitergehen soll. Darum raeumt er auch die
+    Stock-Zaehler: sonst liest die Aufsicht die naechste Aeusserung noch als
+    Fortsetzung derselben Schleife.
+
+    Ein bereits GESCHRIEBENER Termin wird nie stillschweigend zurueckgenommen —
+    dafuer gibt es kein Werkzeug "Buchung ungeschehen machen". Dann sagt Bianca
+    ehrlich, was steht, und nennt den Weg (absagen).
+    """
+    ns.stock_anker, ns.stock_zahl, ns.unklar_folge = "", 0, 0
+    aktiv = ns.aktiv()
+    if aktiv is None:
+        write = ns.letzter_write()
+        if write:
+            return ns, Decision(
+                naechste=Naechste.SPRECHEN,
+                speak=SpeakSpec(
+                    akt=SprechAkt.INFO,
+                    detail="abbruch_zu_spaet",
+                    fakten=(("write_art", write),),
+                ),
+                grund="meta:abbrechen_nach_write",
+            )
+        return ns, Decision(
+            naechste=Naechste.SPRECHEN,
+            speak=SpeakSpec(akt=SprechAkt.INFO, detail="abbruch_leer"),
+            grund="meta:abbrechen_ohne_aufgabe",
+        )
+    typ = aktiv.typ
+    # Bewusst ABGEBROCHEN, nicht GESCHEITERT: es lief nichts schief, und ein
+    # zurueckgezogenes Anliegen darf keine Rueckruf-Notiz erzeugen.
+    aktiv.status = TaskStatus.ABGEBROCHEN
+    aktiv.phase = Phase.ABGESCHLOSSEN
+    aktiv.zuletzt_gefragt = ""
+    aktiv.stock_frage, aktiv.stock_zahl = "", 0
+    ns.letzte_termine = []
+    naechst = _naechste_geparkte(ns)
+    if naechst is not None:
+        naechst.status = TaskStatus.AKTIV
+        spec = policy.spec(naechst.typ)
+        if spec is not None and policy.fuehrt(naechst.typ):
+            luecke = _erste_luecke(naechst, spec, ns)
+            if luecke:
+                ns, d = _frage(
+                    ns, naechst, luecke, grund=f"meta:abbrechen_weiter:{typ}"
+                )
+                return ns, _mit_fakt(d, ("abgebrochen", typ))
+        # Kein offenes Feld: nur quittieren, der naechste Zug fuehrt sie weiter.
+    return ns, Decision(
+        naechste=Naechste.SPRECHEN,
+        speak=SpeakSpec(akt=SprechAkt.INFO, detail="abbruch", fakten=(("task", typ),)),
+        task=typ,
+        grund=f"meta:abbrechen:{typ}",
+    )
+
+
+def _ist_pflicht_slot(spec: TaskSpec, slot: str) -> bool:
+    """Braucht ein Werkzeug dieses Feld? Dann laesst es sich nicht auslassen."""
+    if slot in spec.identify:
+        return True
+    for name in (spec.such_tool, spec.offer_tool, spec.commit_tool, spec.notiz_tool):
+        if name and slot in _tool_pflicht(spec, name):
+            return True
+    return False
+
+
+def _meta_auslassen(
+    ns: State, ev: SemanticEvent, policy: Policy
+) -> tuple[State, Decision]:
+    """"Das sage ich nicht" — die offene Frage ueberspringen.
+
+    Was der Ablauf nicht braucht, faellt weg. Was ein Werkzeug braucht, wird
+    EINMAL ehrlich benannt und bleibt dann stehen — geraten wird nie: ein
+    erfundener Nachname landet in einer fremden Akte.
+    """
+    aktiv = ns.aktiv()
+    if aktiv is None:
+        return ns, Decision(
+            naechste=Naechste.FRAGEN,
+            speak=SpeakSpec(akt=SprechAkt.INFO, detail="hilfe"),
+            grund="meta:auslassen_ohne_aufgabe",
+        )
+    spec = policy.spec(aktiv.typ)
+    if spec is None or not policy.fuehrt(aktiv.typ):
+        return _uebergeben(ns, aktiv.typ, grund=f"task_nicht_im_kern:{aktiv.typ}")
+    slot = aktiv.zuletzt_gefragt
+    if not slot:
+        return ns, Decision(
+            naechste=Naechste.FRAGEN,
+            speak=SpeakSpec(akt=SprechAkt.INFO, detail="hilfe"),
+            task=aktiv.typ,
+            grund="meta:auslassen_ohne_frage",
+        )
+    if slot in _STEUER_FRAGEN or _ist_pflicht_slot(spec, slot):
+        # Steuerfragen (Auswahl, Anrufer-Check) SIND der Weg, Pflichtfelder die
+        # Bedingung. Beides bleibt offen; die Aufsicht deckelt die Wiederholung.
+        ns, d = _frage(ns, aktiv, slot, grund=f"meta:auslassen_pflicht:{slot}")
+        return ns, _mit_fakt(d, ("pflicht", slot))
+    aktiv.ausgelassen.add(slot)
+    ns.gefragt.add(slot)
+    luecke = _erste_luecke(aktiv, spec, ns)
+    if luecke:
+        ns, d = _frage(ns, aktiv, luecke, grund=f"meta:auslassen:{slot}")
+        return ns, _mit_fakt(d, ("ausgelassen", slot))
+    ns, d = _dispatch_familie(ns, aktiv, ev, spec, policy)
+    return ns, _mit_fakt(d, ("ausgelassen", slot))
+
+
+def _meta_stille(ns: State, policy: Policy) -> tuple[State, Decision]:
+    """Der Anrufer sagt nichts — Presence, dann die offene Frage, dann Schluss.
+
+    Stille ist ein EREIGNIS, kein Textzug: sie darf nie durch das Verstehen
+    laufen (es gibt nichts zu deuten) und nie als Unklar zaehlen. Reihenfolge wie
+    im Legacy-Pfad (W-STUPS-PRESENCE): erst "Sind Sie noch dran?", dann die offene
+    Frage — nie dreimal dasselbe. Kommt nichts mehr, wird ehrlich Schluss
+    gemacht, statt die Leitung offen zu halten.
+    """
+    ns.stupse += 1
+    ns.stupse_gesamt += 1
+    aktiv = ns.aktiv()
+    typ = aktiv.typ if aktiv is not None else ""
+    if ns.stupse > max(1, policy.max_stupse) or ns.stupse_gesamt > _STILLE_GESAMT:
+        ns.terminal = True
+        return ns, Decision(
+            naechste=Naechste.AUFLEGEN,
+            speak=SpeakSpec(akt=SprechAkt.ABSCHIED, detail="stille"),
+            task=typ,
+            hangup=True,
+            grund="meta:stille_schluss",
+        )
+    erster = ns.stupse_gesamt == 1 if policy.presence_einmal else ns.stupse == 1
+    if erster:
+        return ns, Decision(
+            naechste=Naechste.FRAGEN,
+            speak=SpeakSpec(akt=SprechAkt.INFO, detail="presence"),
+            task=typ,
+            grund="meta:stille_presence",
+        )
+    if ns.letzte_speak is not None and ns.letzte_speak.akt == SprechAkt.FRAGE:
+        basis = ns.letzte_speak
+        # Eigener Fakt, nicht ``wiederholt``: bei Stille hat niemand um die
+        # Wiederholung gebeten — "Meine Frage war: …" statt "Gerne noch einmal".
+        return ns, Decision(
+            naechste=Naechste.FRAGEN,
+            speak=replace(basis, fakten=_ohne_fluechtige(basis) + (("still", "1"),)),
+            task=typ,
+            grund="meta:stille_frage",
+        )
+    return ns, Decision(
+        naechste=Naechste.FRAGEN,
+        speak=SpeakSpec(akt=SprechAkt.INFO, detail="hilfe"),
+        task=typ,
+        grund="meta:stille_hilfe",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Anrufer-Zug.
 # --------------------------------------------------------------------------- #
 def _reduce_event(ns: State, ev: SemanticEvent, policy: Policy) -> tuple[State, Decision]:
+    # Meta-Bitten zuerst: sie sind kein Anliegen und aendern keine Slots.
+    if ev.intent == Intent.WIEDERHOLEN:
+        return _meta_wiederholen(ns)
+    if ev.intent == Intent.STILLE:
+        return _meta_stille(ns, policy)
+    if ev.intent == Intent.ABBRECHEN:
+        return _meta_abbrechen(ns, policy)
+    if ev.intent == Intent.AUSLASSEN:
+        return _meta_auslassen(ns, ev, policy)
+    # Jedes gehoerte Wort beendet die Stille- und die Wiederhol-Serie.
+    ns.stupse = 0
+    ns.wiederhol_bitten = 0
     # Globale Sofortregeln.
     anstand = ev.slots.get("anstand")
     if anstand and anstand.wert:

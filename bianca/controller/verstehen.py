@@ -25,12 +25,22 @@ from typing import Any
 from bianca.controller import anliegen as _anliegen
 from bianca.controller import fuer_wen as _fuer_wen
 from bianca.controller import hirn as _hirn
+from bianca.controller import meta as _meta
 from bianca.controller import nlu_test
 from bianca.controller import ordnen as _ordnen
 from bianca.controller import wuensche as _wuensche
 from bianca.controller.typen import Intent, Quelle, SemanticEvent, SlotValue, Verstand, replace
 
 _VERWALTUNG = {Intent.VERSCHIEBEN, Intent.ABSAGEN}
+
+# Meta-Bitten UEBER das Gespraech (meta.py) -> Intent. Sie gehen VOR allem
+# anderen durch: sie sind Formeln, kein Anliegen, und muessen auch ohne Modell
+# greifen — wer zum dritten Mal "Wie bitte?" sagt, darf nicht auf ein vLLM warten.
+_META_INTENT: dict[str, Intent] = {
+    _meta.WIEDERHOLEN: Intent.WIEDERHOLEN,
+    _meta.ABBRECHEN: Intent.ABBRECHEN,
+    _meta.AUSLASSEN: Intent.AUSLASSEN,
+}
 
 LlmVerstehen = Callable[..., SemanticEvent | Verstand]
 
@@ -253,6 +263,17 @@ def deuten(
     lage: Mapping[str, Any] | None = None,
     llm: LlmVerstehen | None = None,
 ) -> SemanticEvent:
+    # Vor jeder Deutung: bittet der Anrufer etwas UEBER das Gespraech?
+    # ``streng`` waehrend Angebot/Ruecklese: dort meint "moechte ich doch nicht"
+    # meist den angebotenen Termin, nicht das ganze Anliegen.
+    art = _meta.deute(text, streng=erwartet_janein or erwartet_wahl)
+    if art:
+        return SemanticEvent(
+            intent=_META_INTENT[art],
+            roh=str(text or ""),
+            deutung="meta",
+            llm="— Meta-Bitte, kein LLM —",
+        )
     if _ist_formular(text, janein=erwartet_janein, wahl=erwartet_wahl):
         ev = nlu_test.deuten(
             text,

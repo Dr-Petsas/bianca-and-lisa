@@ -270,12 +270,26 @@ def test_terminabgleich_korrigiert_uhrzeit_ohne_neue_suche():
     assert not sit.get("lastBook")
 
 
+def _nennt_den_tag(text: str) -> bool:
+    """Wird der Termintag genannt — egal in welcher Form?
+
+    Gesprochen wird IMMER relativ (AGENTS: nie JJJJ-MM-TT vorlesen), also haengt
+    die Form vom Testtag ab: derselbe Slot heisst zwei Tage vorher
+    "uebermorgen" und vier Wochen vorher "am einundzwanzigsten September".
+    Geprueft wird deshalb, DASS der Tag im Satz steht — das war der Befund.
+    """
+    return any(
+        m in text
+        for m in ("heute", "morgen", "übermorgen", "Montag", "September")
+    )
+
+
 def test_wiederhole_termindaten_bucht_nie_und_bleibt_hoerbar():
     """Live Helmich 09.09.: die zweite Wiederholbitte loeste book_slot aus.
     Ohne ausdrueckliches Ja bleibt Bianca beliebig oft vor dem Schreiben."""
     sit = _sit_bestaetigung_thaler()
     erster = flow.zug(sit, "Wiederhole den Termin.")
-    assert erster and "einundzwanzigsten September" in erster["text"]
+    assert erster and _nennt_den_tag(erster["text"])
     zweiter = flow.zug(sit, "Wiederhole mir zuerst die Termindaten, bitte.")
     assert zweiter and "sechzehn Uhr" in zweiter["text"]
     assert gehirn.sammler(sit)["phase"] == "bestaetigen"
@@ -289,7 +303,7 @@ def test_wiederhole_termindaten_bucht_nie_und_bleibt_hoerbar():
     })
     sit["messages"].append({"role": "assistant", "content": erster["text"]})
     aus = agent._maschinen_antwort(sit, zweiter, list(sit["messages"]))
-    assert "einundzwanzigsten September" in aus["text"]
+    assert _nennt_den_tag(aus["text"])
     assert "sechzehn Uhr" in aus["text"]
 
 

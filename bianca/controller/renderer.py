@@ -162,12 +162,7 @@ def _vorsatz(spec: SpeakSpec) -> str:
 
 
 def _frage(spec: SpeakSpec) -> str:
-    """Frage rendern; bei Loop-Aufsicht-Rueckblick der Zusammenfassung voran."""
-    kern = _frage_kern(spec)
-    recap = _fakt_map(spec).get("rueckblick")
-    if recap and spec.detail == "rueckblick":
-        return f"Ich fasse kurz zusammen, damit wir zusammenfinden — {recap}. " + kern
-    return kern
+    return _frage_kern(spec)
 
 
 def _frage_kern(spec: SpeakSpec) -> str:
@@ -275,6 +270,10 @@ def _angebot(spec: SpeakSpec) -> str:
     vorsatz = _vorsatz(spec)
     if f.get("naechstbestes"):
         vorsatz = "Genau dann ist leider nichts frei. " + vorsatz
+    if f.get("nochmal"):
+        # Die Zeiten standen schon: nicht wortgleich wiederholen, sondern
+        # hoerbar darauf Bezug nehmen (Audit 19.09.2026).
+        vorsatz = vorsatz + "Die Zeiten habe ich noch: "
     if not slots:
         return vorsatz + "Ich schaue nach freien Terminen."
     anrede = " ".join(x for x in (f.get("anrede") or "", f.get("name") or "") if x).strip()
@@ -387,6 +386,26 @@ def _info(spec: SpeakSpec) -> str:
         return ("Wir reden gerade aneinander vorbei, das tut mir leid. "
                 "Sagen Sie mir am besten in einem Satz, worum es geht — "
                 "zum Beispiel: ich möchte einen Termin.")
+    if spec.detail == "presence":
+        # Stille: erst nur nachfassen, ob jemand dran ist — die offene Frage
+        # kommt im naechsten Stups (controller/reducer._meta_stille).
+        return "Sind Sie noch dran?"
+    if spec.detail == "abbruch":
+        return "Alles klar, dann lassen wir das. Kann ich sonst etwas für Sie tun?"
+    if spec.detail == "abbruch_leer":
+        return "Kein Problem. Sagen Sie einfach, wenn ich etwas für Sie tun kann."
+    if spec.detail == "abbruch_zu_spaet":
+        # Ein GESCHRIEBENER Vorgang wird nie stillschweigend zurueckgenommen:
+        # ehrlich sagen, was steht, und den Weg nennen.
+        art = _fakt_map(spec).get("write_art") or ""
+        if art == "buchen":
+            return ("Der Termin ist allerdings schon eingetragen. Soll ich ihn "
+                    "wieder absagen?")
+        if art == "verschieben":
+            return "Der Termin ist allerdings schon verschoben. Passt er so?"
+        if art == "absagen":
+            return "Die Absage ist allerdings schon raus. Soll ich einen neuen Termin suchen?"
+        return "Das ist allerdings schon eingetragen. Soll ich daran etwas ändern?"
     if spec.detail == "hilfe":
         return _var.waehle("hilfe", n)
     if spec.detail == "hallo":
@@ -430,6 +449,11 @@ def _abschied(spec: SpeakSpec) -> str:
     d = spec.detail or ""
     if d == "nichts_geaendert":
         return "In Ordnung, dann bleibt alles wie es ist. Auf Wiederhoeren!"
+    if d == "stille":
+        # Es kam mehrfach kein Wort: die Leitung nicht offen halten, sondern
+        # freundlich schliessen (controller/reducer._meta_stille).
+        return ("Ich hoere Sie leider nicht. Rufen Sie gerne noch einmal an — "
+                "auf Wiederhoeren!")
     if d == "dokument_persoenlich":
         return ("Alles klar, dann besprechen wir das persoenlich in der Praxis. "
                 "Auf Wiederhoeren!")
@@ -454,6 +478,59 @@ _RENDER = {
 }
 
 
+# Einleitung, wenn dieselbe Aeusserung ein zweites Mal kommt (Fakt ``nochmal``,
+# gesetzt von der Loop-Aufsicht). ANGEBOT hat seine eigene Formulierung in
+# ``_angebot``; terminale Akte stehen bewusst nicht drin.
+_NOCHMAL: dict[SprechAkt, tuple[str, ...]] = {
+    SprechAkt.FRAGE: ("Noch einmal nachgefragt: ", "Ich frage anders: "),
+    SprechAkt.RUECKLESEN: ("Ich lese es noch einmal vor: ", "Zur Sicherheit noch einmal: "),
+    SprechAkt.EHRLICH_KEIN: ("Wie gesagt: ", "Ich sehe es weiterhin so: "),
+    SprechAkt.RUECKRUF: ("Wie gesagt: ", "Der Stand bleibt: "),
+    SprechAkt.INFO: ("Noch einmal: ", "Ich versuche es anders: "),
+}
+
+
+# Einleitung, wenn der ANRUFER um Wiederholung gebeten hat (Fakt ``wiederholt``,
+# gesetzt im Reducer). Bewusst andere Formen als ``_NOCHMAL``: dort wiederholt
+# die Maschine von sich aus, hier hat jemand danach gefragt — das ist kein
+# Nachbohren, sondern ein Dienst.
+_WIEDERHOLT: tuple[str, ...] = (
+    "Natürlich, gerne noch einmal: ",
+    "Ich sage es noch einmal: ",
+    "Gerne — in anderen Worten: ",
+)
+# Der Anrufer will eine Angabe nicht nennen (Fakt ``ausgelassen``) bzw. sie ist
+# fuer den Vorgang unverzichtbar (Fakt ``pflicht``, s. reducer._meta_auslassen).
+_AUSGELASSEN = "In Ordnung, das lassen wir aus. "
+_PFLICHT: dict[str, str] = {
+    "nachname": "Ohne den Namen finde ich die Akte leider nicht — geraten wird hier nichts. ",
+    "telefon": "Ohne Rufnummer kann die Praxis Sie nicht erreichen. ",
+    "terminwahl": "Einen Termin kann ich nur eintragen, wenn Sie einen auswählen. ",
+}
+_PFLICHT_ALLGEMEIN = "Diese Angabe brauche ich leider, sonst kann ich nichts eintragen. "
+
+
+def _zuruf_bruecke(zahl: str) -> str:
+    """Einleitung der n-ten Wiederholung auf Bitte — nie zweimal dieselbe."""
+    try:
+        stufe = max(int(zahl), 1) - 1
+    except ValueError:
+        stufe = 0
+    return _WIEDERHOLT[stufe % len(_WIEDERHOLT)]
+
+
+def _nochmal_bruecke(akt: SprechAkt, zahl: str) -> str:
+    """Einleitung der n-ten Wiederholung — je Stufe eine andere, nie wortgleich."""
+    formen = _NOCHMAL.get(akt)
+    if not formen:
+        return ""
+    try:
+        stufe = max(int(zahl), 2) - 2
+    except ValueError:
+        stufe = 0
+    return formen[stufe % len(formen)]
+
+
 def rendern(spec: SpeakSpec | None) -> str:
     """Vorbezug + belegte Fakten. ``None`` -> leer."""
     if spec is None:
@@ -465,6 +542,40 @@ def rendern(spec: SpeakSpec | None) -> str:
     vz = _vorbezug(spec)
     if vz and vz.strip() not in text:
         text = vz + text
+    # Rueckblick der Loop-Aufsicht: gilt fuer JEDEN Akt (Frage, Angebot,
+    # Ruecklesen, "finde ich nichts") — er ist der Anker gegen die Schleife.
+    fakten = _fakt_map(spec)
+    # Meta-Bitte des Anrufers (controller/meta.py): sie IST die Einleitung und
+    # verdraengt jede Wiederholungs-Bruecke — zwei Vorsaetze klingen wirr.
+    meta = ""
+    if text:
+        slot = fakten.get("pflicht")
+        if slot:
+            meta = _PFLICHT.get(slot, _PFLICHT_ALLGEMEIN)
+        elif fakten.get("ausgelassen"):
+            meta = _AUSGELASSEN
+        elif fakten.get("abgebrochen"):
+            meta = "Alles klar, das lassen wir. "
+    if meta:
+        return meta + text
+    recap = fakten.get("rueckblick")
+    if fakten.get("still") and text:
+        # Nach Stille: an die offene Frage erinnern, ohne sie als Nachbohren zu
+        # verkaufen — niemand hat um die Wiederholung gebeten.
+        text = "Meine Frage war: " + text[:1].lower() + text[1:]
+    elif fakten.get("wiederholt") and text:
+        bruecke = _zuruf_bruecke(fakten.get("wiederholt") or "1")
+        if not text.startswith(bruecke):
+            text = bruecke + text
+    elif recap and text:
+        text = f"Ich fasse kurz zusammen, damit wir zusammenfinden — {recap}. " + text
+    elif fakten.get("nochmal") and text:
+        # Dieselbe Aeusserung ein zweites Mal: hoerbar als Wiederholung
+        # einleiten statt wortgleich (Audit 19.09.2026). Das Angebot bringt
+        # seine eigene Einleitung mit, der Rueckblick ist die naechste Stufe.
+        bruecke = _nochmal_bruecke(spec.akt, fakten.get("nochmal") or "2")
+        if bruecke and not text.startswith(bruecke):
+            text = bruecke + text
     return text
 
 

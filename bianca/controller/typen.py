@@ -81,6 +81,11 @@ class Intent(str, Enum):
     ABSCHIED = "abschied"
     SMALLTALK = "smalltalk"
     NOTFALL = "notfall"
+    # Meta-Bitten UEBER das Gespraech (nicht ueber ein Anliegen) — s. meta.py
+    WIEDERHOLEN = "wiederholen"  # "Wie bitte?" -> letzte Aeusserung erneut
+    ABBRECHEN = "abbrechen"      # "Vergessen Sie's" -> laufendes Anliegen raeumen
+    AUSLASSEN = "auslassen"      # "Das sage ich nicht" -> Frage ueberspringen
+    STILLE = "stille"            # der Anrufer sagt nichts (Stups aus der Bruecke)
     UNKLAR = "unklar"
 
 
@@ -298,6 +303,10 @@ class TaskStatus(str, Enum):
     GEPARKT = "geparkt"
     ERLEDIGT = "erledigt"
     GESCHEITERT = "gescheitert"
+    # Der Anrufer hat das Anliegen selbst zurueckgezogen ("Vergessen Sie's").
+    # Bewusst NICHT "gescheitert": es lief nichts schief, es wurde nur gelassen —
+    # und ein zurueckgezogenes Anliegen darf keine Rueckruf-Notiz erzeugen.
+    ABGEBROCHEN = "abgebrochen"
 
 
 @dataclass
@@ -316,6 +325,11 @@ class TaskState:
     # wie oft in Folge wurde sie schon gestellt? (siehe controller/aufsicht.py)
     stock_frage: str = ""
     stock_zahl: int = 0
+    # Felder, die der Anrufer nicht nennen WILL ("das sage ich nicht"). Sie
+    # werden uebersprungen, statt sie ihm erneut abzuverlangen — aber nur, wenn
+    # der Ablauf ohne sie weiterkommt (siehe reducer: Pflicht wird EINMAL
+    # ehrlich benannt und bleibt dann stehen).
+    ausgelassen: set[str] = field(default_factory=set)
 
     def gefuellt(self, slot: str) -> bool:
         v = self.slots.get(slot)
@@ -336,6 +350,7 @@ class TaskState:
             merker=dict(self.merker),
             stock_frage=self.stock_frage,
             stock_zahl=self.stock_zahl,
+            ausgelassen=set(self.ausgelassen),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -349,6 +364,7 @@ class TaskState:
             "merker": dict(self.merker),
             "stock_frage": self.stock_frage,
             "stock_zahl": self.stock_zahl,
+            "ausgelassen": sorted(self.ausgelassen),
         }
 
 
@@ -518,6 +534,33 @@ class State:
     # Ohne Aufgabe gibt es keine Frage zum Zaehlen — der Deckel haengt deshalb am
     # State (controller/aufsicht.py: Neustart-Bitte, dann Uebergabe).
     unklar_folge: int = 0
+    # Wortgleiche Wiederholung EINER Aeusserung (Frage, Angebot, Ruecklesen,
+    # "finde ich nichts"): Zaehler am State, damit der Deckel auch greift, wenn
+    # gerade KEINE Aufgabe laeuft (Audit 19.09.2026: eine beendete Absage
+    # wiederholte "Zu Ihrem Namen sehe ich keinen Termin" 13x, weil der Zaehler
+    # nur an der aktiven Aufgabe hing). Autoritativ; TaskState.stock_* ist nur
+    # der Spiegel fuer Anzeige/Replay.
+    stock_anker: str = ""
+    stock_zahl: int = 0
+    # Die ehrliche Notiz der Loop-Aufsicht ist das LETZTE Wort des Kerns zu
+    # diesem Anruf: danach gehoert der Anrufer an den Legacy-Pfad. Ohne diese
+    # Marke eskalierte derselbe Anker in jedem Folgezug erneut und die Ansage
+    # "Ich habe eine Notiz gemacht" kam bis zu 3x wortgleich (Audit 19.09.2026).
+    abgabe_faellig: bool = False
+    # Die letzte gesprochene Absicht — fuer "Wie bitte?": die Bitte um
+    # Wiederholung darf NIE als Unklar-Zug zaehlen und nie eine neue Frage
+    # erzeugen; sie spricht dieselbe Absicht erneut (Rasa CALM: ``repeat bot
+    # messages``). Absicht statt Text, damit der Renderer wieder formulieren darf.
+    letzte_speak: SpeakSpec | None = None
+    # Wie oft hat der Anrufer in Folge um Wiederholung gebeten? Auch die Geduld
+    # ist endlich: nach dem Deckel (siehe reducer) gehoert der Anruf an den
+    # Legacy-Pfad, statt ein viertes Mal dasselbe zu sagen.
+    wiederhol_bitten: int = 0
+    # Stille: wie oft in Folge kam kein Wort (``stupse``) und wie oft im ganzen
+    # Anruf (``stupse_gesamt``). Presence zuerst, dann die offene Frage, dann
+    # ehrlicher Abschluss — nie derselbe Stups dreimal (W-STUPS-PRESENCE).
+    stupse: int = 0
+    stupse_gesamt: int = 0
     letzter_besuch: dict[str, str] = field(default_factory=dict)
     bezug_gesagt: bool = False
     auskunft_klar_offen: bool = False
@@ -578,6 +621,13 @@ class State:
             anrufer_gefragt=self.anrufer_gefragt,
             anrufer_fragen=self.anrufer_fragen,
             unklar_folge=self.unklar_folge,
+            stock_anker=self.stock_anker,
+            stock_zahl=self.stock_zahl,
+            abgabe_faellig=self.abgabe_faellig,
+            letzte_speak=self.letzte_speak,
+            wiederhol_bitten=self.wiederhol_bitten,
+            stupse=self.stupse,
+            stupse_gesamt=self.stupse_gesamt,
             letzter_besuch=dict(self.letzter_besuch),
             bezug_gesagt=self.bezug_gesagt,
             auskunft_klar_offen=self.auskunft_klar_offen,
@@ -601,6 +651,10 @@ class State:
             "anrufer_gefragt": self.anrufer_gefragt,
             "anrufer_fragen": self.anrufer_fragen,
             "unklar_folge": self.unklar_folge,
+            "letzte_speak": self.letzte_speak.as_dict() if self.letzte_speak else None,
+            "wiederhol_bitten": self.wiederhol_bitten,
+            "stupse": self.stupse,
+            "stupse_gesamt": self.stupse_gesamt,
             "letzter_besuch": dict(self.letzter_besuch),
             "bezug_gesagt": self.bezug_gesagt,
             "auskunft_klar_offen": self.auskunft_klar_offen,
