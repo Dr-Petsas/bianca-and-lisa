@@ -52,6 +52,11 @@ _BUCHEN_PFLICHT_STD = (
     "schonmal", "behandler", "besuchsgrund", "wunschzeit", "nachname", "versicherung",
 )
 
+# Oeffentliche Auswahl-Listen fuer Masken/Editoren: dieselbe Wahrheit wie der
+# Parser oben, nur in kanonischer Reihenfolge (ein Set hat keine).
+BUCHEN_SLOTS: tuple[str, ...] = _BUCHEN_PFLICHT_STD
+IDENTIFY_SLOTS: tuple[str, ...] = ("nachname", "vorname")
+
 
 # --------------------------------------------------------------------------- #
 # Unveraenderliche Sicherheitsgrenzen — NIE konfigurierbar.
@@ -417,6 +422,7 @@ def parse(raw: Any) -> ParseErgebnis:
 
 __all__ = [
     "SCHEMA_VERSION", "ANLIEGEN", "INVARIANTEN", "GRENZEN",
+    "BUCHEN_SLOTS", "IDENTIFY_SLOTS",
     "GespraechPolicy", "IdentitaetPolicy", "AnliegenPolicy", "VerwaltungPolicy",
     "MundPolicy", "TransferPolicy", "FachPolicy", "RueckfragePolicy",
     "DialogPolicyV1", "ParseErgebnis", "parse", "sicher_default", "replace",

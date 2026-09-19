@@ -220,6 +220,8 @@ def _dec_dict(dec) -> dict[str, Any]:
         d["akt"] = dec.speak.akt.value
         if dec.speak.frage_id:
             d["frage_id"] = dec.speak.frage_id
+        if dec.speak.detail:
+            d["detail"] = dec.speak.detail
     if dec.tool:
         d["tool"] = dec.tool.name
     if dec.hangup:
@@ -227,6 +229,47 @@ def _dec_dict(dec) -> dict[str, Any]:
     if dec.grund:
         d["grund"] = dec.grund
     return d
+
+
+# Gruende der Loop-Aufsicht (controller/aufsicht.py) -> Kurzform fuer die Anzeige.
+# Genau DAS ist der Unterschied zum Live-Pfad: der Kern darf eine Frage nicht
+# endlos stellen, sondern fasst einmal zusammen und gibt dann ehrlich ab.
+_AUFSICHT: dict[str, str] = {
+    "rueckblick": "rueckblick",
+    "uebergabe": "uebergabe",
+    "unklar_neustart": "unklar_neustart",
+    "unklar_uebergabe": "unklar_uebergabe",
+}
+
+
+def _aufsicht_von(grund: str) -> dict[str, str]:
+    """``aufsicht:rueckblick:nachname`` -> ``{"art": ..., "frage": ...}``."""
+    if not grund.startswith("aufsicht:"):
+        return {}
+    teile = grund.split(":")
+    art = _AUFSICHT.get(teile[1] if len(teile) > 1 else "", "")
+    if not art:
+        return {}
+    out = {"art": art}
+    if len(teile) > 2 and teile[2]:
+        out["frage"] = teile[2]
+    return out
+
+
+def _stock_von(st: State) -> dict[str, Any]:
+    """Zaehlerstand der Aufsicht nach diesem Zug — nur wenn es wirklich stockt.
+
+    ``stock_zahl == 1`` heisst "einmal gefragt" und ist der Normalfall; erst ab
+    der zweiten Wiederholung derselben Frage ist der Zaehler eine Aussage.
+    """
+    t = st.aktiv()
+    out: dict[str, Any] = {}
+    if t is not None and t.stock_frage and t.stock_zahl >= 2:
+        out["frage"] = t.stock_frage
+        out["zahl"] = t.stock_zahl
+    if st.unklar_folge:
+        out["unklar"] = st.unklar_folge
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -260,6 +303,12 @@ def replay_manifest(m: dict) -> dict[str, Any]:
         "intent": "",
         "intent_quelle": "",
         "kern_terminal": False,
+        # Loop-Aufsicht des Kerns (das kann der Live-Pfad nicht):
+        "aufsicht_rueckblick": 0,   # EINE Zusammenfassung + Frage frisch
+        "aufsicht_uebergabe": 0,    # ehrlicher Rueckruf statt Endlosschleife
+        "aufsicht_unklar": 0,       # Neustart-Bitte / Uebergabe ohne Aufgabe
+        "gerettet": 0,              # Live-Schleife, die der Kern nicht gelaufen waere
+        "kern_uebergeben": 0,       # Zuege, die der Kern dem bisherigen Pfad laesst
     }
     if not caller:
         return agg
@@ -281,6 +330,8 @@ def replay_manifest(m: dict) -> dict[str, Any]:
     prev_frage = ""            # was Bianca vor diesem Anrufer-Zug fragte
     live_frage_hist: list[str] = []
     gefuellt: dict[str, str] = {}   # rein zur I1-Heuristik (aus prev_frage-Fills)
+    kern_frage_hier = ""       # was der Kern in DIESEM Zug fragen wuerde
+    kern_griff_ein = False     # ... oder ob die Aufsicht hier eingegriffen hat
 
     for idx, z in enumerate(zuege):
         if not isinstance(z, dict):
@@ -323,10 +374,38 @@ def replay_manifest(m: dict) -> dict[str, Any]:
                 kr["divergenz"] = {"live": live_frage, "kern": kern_frage}
                 agg["divergenzen"] += 1
 
+            # --- Loop-Aufsicht: der eigentliche Unterschied zum Live-Pfad -- #
+            auf = _aufsicht_von(dec.grund or "")
+            if not auf:
+                for n in kr.get("nach_werkzeug") or []:
+                    auf = _aufsicht_von(str(n.get("grund") or ""))
+                    if auf:
+                        break
+            if auf:
+                kr["aufsicht"] = auf
+                if auf["art"] == "rueckblick":
+                    agg["aufsicht_rueckblick"] += 1
+                elif auf["art"] == "uebergabe":
+                    agg["aufsicht_uebergabe"] += 1
+                else:
+                    agg["aufsicht_unklar"] += 1
+            stock = _stock_von(st)
+            if stock:
+                stock["budget"] = pol.max_rueckfragen
+                kr["stock"] = stock
+            if dec.naechste == Naechste.UEBERGEBEN:
+                kr["uebergeben"] = True
+                agg["kern_uebergeben"] += 1
+
             if st.terminal:
                 agg["kern_terminal"] = True
 
+            kern_frage_hier = kern_frage
+            kern_griff_ein = bool(auf)
             z["kernReplay"] = kr
+        else:
+            kern_frage_hier = ""
+            kern_griff_ein = False
 
         # --- Live-Gesundheitssignale (unabhaengig vom Kern) ------------- #
         if live_frage:
@@ -339,9 +418,22 @@ def replay_manifest(m: dict) -> dict[str, Any]:
             if len(live_frage_hist) >= 3 and live_frage_hist[-3:] == [live_frage] * 3:
                 z.setdefault("liveSignal", {})["schleife"] = {"frage": live_frage, "n": 3}
                 agg["schleifen"] += 1
+            # Haette der Kern hier dieselbe Frage gestellt? Nur wenn NEIN (andere
+            # Frage oder Aufsicht-Eingriff) zaehlt der Live-Befund als vermieden.
+            sig = z.get("liveSignal") or {}
+            if sig.get("i1") or sig.get("schleife"):
+                anders = bool(kern_frage_hier) and _kanon(kern_frage_hier) != _kanon(live_frage)
+                if kern_griff_ein or anders:
+                    sig["gerettet"] = {
+                        "grund": "aufsicht" if kern_griff_ein else "andere_frage",
+                        "kern": kern_frage_hier,
+                    }
+                    z["liveSignal"] = sig
+                    agg["gerettet"] += 1
             prev_frage = live_frage
 
     m["kernReplaySummary"] = {
+        "v": 2,
         "intent": agg["intent"],
         "intent_quelle": agg["intent_quelle"],
         "anrufer_zuege": agg["anrufer_zuege"],
@@ -349,6 +441,21 @@ def replay_manifest(m: dict) -> dict[str, Any]:
         "schleifen": agg["schleifen"],
         "divergenzen": agg["divergenzen"],
         "kern_terminal": agg["kern_terminal"],
+        # Loop-Aufsicht + Policy-Herkunft: daran ist der heutige Kern zu erkennen.
+        "aufsicht_rueckblick": agg["aufsicht_rueckblick"],
+        "aufsicht_uebergabe": agg["aufsicht_uebergabe"],
+        "aufsicht_unklar": agg["aufsicht_unklar"],
+        "gerettet": agg["gerettet"],
+        "kern_uebergeben": agg["kern_uebergeben"],
+        "policy": {
+            "mandant": pol.mandant,
+            "fach_id": pol.fach_id,
+            "revision": pol.policy_revision,
+            "quelle": "vertrag" if pol.policy_revision else "legacy",
+            "max_rueckfragen": pol.max_rueckfragen,
+            "zusammenfassung_bei_stocken": pol.zusammenfassung_bei_stocken,
+            "eigene_tasks": sorted(pol.eigene_tasks),
+        },
         "erzeugt": datetime.now(timezone.utc).isoformat(),
     }
     return agg
@@ -395,6 +502,8 @@ def cmd_scan(args) -> int:
     ges = {
         "anrufe": 0, "echt": 0, "test": 0, "anrufer_zuege": 0,
         "i1": 0, "schleifen": 0, "divergenzen": 0, "kern_terminal": 0,
+        "aufsicht_rueckblick": 0, "aufsicht_uebergabe": 0, "aufsicht_unklar": 0,
+        "gerettet": 0, "kern_uebergeben": 0,
         "intents": {}, "pro_mandant": {},
     }
     details: list[dict[str, Any]] = []
@@ -408,8 +517,12 @@ def cmd_scan(args) -> int:
         if _testanruf(m) and not args.mit_test:
             ges["test"] += 1
             continue
+        # SICHERHEIT: laufende Anrufe (noch kein endedAt) werden im Live-Pfad
+        # bei jedem Zug neu geschrieben — die duerfen wir NICHT zurueckschreiben
+        # (Race mit dem Mitschnitt). Nur zaehlen, nicht anfassen.
+        laufend = not str(m.get("endedAt") or "").strip()
         agg = replay_manifest(m)
-        if not args.trocken:
+        if not args.trocken and not laufend:
             p.write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
         ges["anrufe"] += 1
         ges["echt"] += 1
@@ -418,6 +531,9 @@ def cmd_scan(args) -> int:
         ges["schleifen"] += agg["schleifen"]
         ges["divergenzen"] += agg["divergenzen"]
         ges["kern_terminal"] += 1 if agg["kern_terminal"] else 0
+        for k in ("aufsicht_rueckblick", "aufsicht_uebergabe", "aufsicht_unklar",
+                  "gerettet", "kern_uebergeben"):
+            ges[k] += agg[k]
         ges["intents"][agg["intent"]] = ges["intents"].get(agg["intent"], 0) + 1
         md = ges["pro_mandant"].setdefault(agg["tenantId"] or "?", {"anrufe": 0, "i1": 0, "schleifen": 0, "divergenzen": 0})
         md["anrufe"] += 1
@@ -436,6 +552,13 @@ def cmd_scan(args) -> int:
     print(" LIVE-Fehlklassen (im echten Anruf gemessen):")
     print(f"   Frage zu gefuelltem Feld (I1): {ges['i1']}")
     print(f"   Schleife (gleiche Frage 3x):   {ges['schleifen']}")
+    print(f"   davon vom Kern vermieden:      {ges['gerettet']}")
+    print("-" * 62)
+    print(" Loop-Aufsicht des Kerns (controller/aufsicht.py):")
+    print(f"   Rueckblick + Frage frisch:     {ges['aufsicht_rueckblick']}")
+    print(f"   ehrliche Uebergabe statt Loop: {ges['aufsicht_uebergabe']}")
+    print(f"   Unklar-Deckel (ohne Aufgabe):  {ges['aufsicht_unklar']}")
+    print(f"   Zuege an den bisherigen Pfad:  {ges['kern_uebergeben']}")
     print("-" * 62)
     print(f" Divergenz Live-Frage vs Kern-Frage (Sammelphase): {ges['divergenzen']}")
     print("-" * 62)

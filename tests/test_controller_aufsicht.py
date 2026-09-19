@@ -182,3 +182,87 @@ def test_determinismus_gleicher_eingang_gleicher_ausgang():
     _, a = _fahre(_pol(), seq)
     _, b = _fahre(_pol(), seq)
     assert _gruende(a) == _gruende(b)
+
+
+# --------------------------------------------------------------------------- #
+# Zweite Schleifenklasse: die Rueckfrage OHNE Aufgabe ("nicht verstanden").
+# Ohne Aufgabe gibt es keine Frage-Id — der Deckel haengt am State
+# (``unklar_folge``): Rueckfrage, EINMAL Neustart-Bitte, dann Uebergabe.
+# --------------------------------------------------------------------------- #
+def _unklar(n):
+    return [ev(Intent.UNKLAR, {}, "haeh?") for _ in range(n)]
+
+
+def test_unklar_endet_in_uebergabe_statt_endlos():
+    _, decs = _fahre(_pol(), _unklar(8))
+    gr = _gruende(decs)
+    assert "aufsicht:unklar_neustart" in gr, gr
+    assert "aufsicht:unklar_uebergabe" in gr, gr
+    assert gr.index("aufsicht:unklar_neustart") < gr.index("aufsicht:unklar_uebergabe")
+    # Ab der Uebergabe kommt keine Rueckfrage mehr zurueck.
+    ab = gr[gr.index("aufsicht:unklar_uebergabe"):]
+    assert all(g == "aufsicht:unklar_uebergabe" for g in ab), gr
+
+
+def test_unklar_neustart_kommt_genau_einmal():
+    _, decs = _fahre(_pol(), _unklar(8))
+    gr = _gruende(decs)
+    assert gr.count("aufsicht:unklar_neustart") == 1, gr
+
+
+def test_unklar_uebergabe_geht_an_den_legacy_pfad():
+    _, decs = _fahre(_pol(), _unklar(8))
+    ueb = next(d for d in decs if d.grund == "aufsicht:unklar_uebergabe")
+    # Kein erfundener Abschied: der bisherige Pfad uebernimmt (Stille-Regie dort).
+    assert ueb.naechste == Naechste.UEBERGEBEN
+    assert ueb.speak is None and not ueb.hangup
+
+
+def test_unklar_schwelle_kommt_aus_der_policy():
+    eng = _pol(dialogPolicy={"rueckfrage": {"max_rueckfragen": 1}})
+    _, a = _fahre(eng, _unklar(3))
+    weit = _pol(dialogPolicy={"rueckfrage": {"max_rueckfragen": 3}})
+    _, b = _fahre(weit, _unklar(3))
+    assert "aufsicht:unklar_uebergabe" in _gruende(a)
+    # Mit weiter Schwelle darf die Rueckfrage dreimal kommen.
+    assert not any(g.startswith("aufsicht:") for g in _gruende(b)), _gruende(b)
+
+
+def test_unklar_serie_bricht_bei_verstandenem_zug():
+    # Zwei unklare Zuege (Zaehler 2), dann ein echtes Anliegen: der Zaehler faellt
+    # auf null. Ab da laeuft die Frage-Aufsicht der Aufgabe (stock_zahl), die
+    # Unklar-Eskalation faengt bei einer spaeteren Serie frisch an.
+    st, decs = _fahre(_pol(), _unklar(2))
+    assert st.unklar_folge == 2, _gruende(decs)
+    st, decs = _fahre(_pol(), [ev(Intent.BUCHEN, {"schonmal": "ja"})], start=st)
+    assert st.unklar_folge == 0, _gruende(decs)
+    assert not any(g.startswith("aufsicht:unklar") for g in _gruende(decs))
+
+
+def test_unklar_rueckfragen_sind_nicht_wortgleich():
+    from bianca.controller.renderer import rendern
+
+    _, decs = _fahre(_pol(dialogPolicy={"rueckfrage": {"max_rueckfragen": 3}}), _unklar(3))
+    saetze = [rendern(d.speak) for d in decs if d.speak is not None]
+    assert len(set(saetze)) == len(saetze), saetze
+
+
+# --------------------------------------------------------------------------- #
+# Der Anrufer-Check ist eine STEUER_FRAGE (die Aufsicht zaehlt ihn nicht) —
+# sein Deckel sitzt im Reducer: unklare Antworten verwerfen lieber den Treffer.
+# --------------------------------------------------------------------------- #
+def _mit_anrufer(**tenant):
+    st = State()
+    st.anrufer = {"vorname": "Anna", "nachname": "Meier", "geschlecht": "f"}
+    return _pol(**tenant), st
+
+
+def test_anrufer_check_wird_nicht_endlos_gefragt():
+    pol, st = _mit_anrufer()
+    seq = [ev(Intent.BUCHEN, {"besuchsgrund": "Kontrolle"})] + _unklar(6)
+    st, decs = _fahre(pol, seq, start=st)
+    checks = [d for d in decs
+              if d.speak is not None and d.speak.frage_id == "anrufer_check"]
+    assert len(checks) <= (pol.max_rueckfragen or 1), _gruende(decs)
+    # Treffer verworfen: danach wird klassisch nach dem Namen gefragt.
+    assert st.anrufer_ok is False and not st.anrufer

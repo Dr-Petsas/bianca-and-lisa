@@ -381,6 +381,12 @@ def _info(spec: SpeakSpec) -> str:
         return _FRAGE["anmeldung_rueckruf"]
     if spec.detail == "unklar":
         return _var.waehle("unklar", n)
+    if spec.detail == "unklar_neustart":
+        # Nach mehreren unklaren Zuegen NICHT dieselbe Rueckfrage noch einmal
+        # (controller/aufsicht.py): einmal ausdruecklich zum Neuanfang bitten.
+        return ("Wir reden gerade aneinander vorbei, das tut mir leid. "
+                "Sagen Sie mir am besten in einem Satz, worum es geht — "
+                "zum Beispiel: ich möchte einen Termin.")
     if spec.detail == "hilfe":
         return _var.waehle("hilfe", n)
     if spec.detail == "hallo":

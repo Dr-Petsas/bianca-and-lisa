@@ -959,6 +959,7 @@ def reduce(state: State, event: Event, policy: Policy) -> tuple[State, Decision]
             ns.gefragt.clear()
             ns.anrufer_ok = None
             ns.anrufer_gefragt = False
+            ns.anrufer_fragen = 0
             ns.bezug_gesagt = False
             ns.auskunft_klar_offen = False
             ns.fach_thema = ""
@@ -1275,6 +1276,14 @@ def _reduce_event(ns: State, ev: SemanticEvent, policy: Policy) -> tuple[State, 
             _anrufer_in_hirn(ns)
             if active is not None:
                 _fuelle_aus_bekannt(ns, active)
+        elif ns.anrufer_fragen >= (policy.max_rueckfragen if policy.max_rueckfragen > 0 else 1):
+            # Deckel statt Schleife: der Anrufer-Check ist eine STEUER_FRAGE, die
+            # Loop-Aufsicht zaehlt ihn nicht. Bleibt die Antwort mehrfach unklar,
+            # wird der Treffer VERWORFEN und klassisch gefragt (W-ANRUFER-CHECK)
+            # — nie dieselbe Kontrollfrage in Endlos-Umformulierungen.
+            ns.anrufer_ok = False
+            ns.anrufer = {}
+            ns.letzter_besuch = {}
         else:
             if active is not None and ev.slots.get("auskunft_art"):
                 active.slots["auskunft_art"] = ev.slots["auskunft_art"]
@@ -1287,6 +1296,7 @@ def _reduce_event(ns: State, ev: SemanticEvent, policy: Policy) -> tuple[State, 
             if fw and fw.wert and fw.wert != "selbst":
                 frage_task.slots["fuer_wen"] = fw
             ns.anrufer_gefragt = True
+            ns.anrufer_fragen += 1
             return _frage(ns, frage_task, "anrufer_check", grund="anrufer_check")
 
     # Terminauskunft ist doppeldeutig — erst klaeren, nie sofort buchen.
@@ -1339,7 +1349,12 @@ def _reduce_event(ns: State, ev: SemanticEvent, policy: Policy) -> tuple[State, 
         else:
             return ns, Decision(
                 naechste=Naechste.SPRECHEN,
-                speak=SpeakSpec(akt=SprechAkt.INFO, detail="unklar"),
+                # Zug-Nummer mitgeben: der Renderer waehlt daran die Variante —
+                # ohne sie kaeme wortgleich dieselbe Zeile (die Aufsicht deckelt
+                # die Serie zusaetzlich).
+                speak=SpeakSpec(
+                    akt=SprechAkt.INFO, detail="unklar", fakten=(("zug", str(ns.zug_nr)),),
+                ),
                 grund=f"kein_task:{ev.intent.value}",
             )
 

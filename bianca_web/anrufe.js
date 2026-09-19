@@ -329,23 +329,82 @@ function escapeHtml(s) {
 const _KERN_FRAGE = {
   besuchsgrund: "Besuchsgrund", wunschzeit: "Wunschzeit", behandler: "Behandler",
   nachname: "Nachname", vorname: "Vorname", versicherung: "Versicherung",
-  terminwahl: "Terminwahl", telefon: "Telefonnummer",
+  terminwahl: "Terminwahl", telefon: "Telefonnummer", schonmal: "schon mal hier",
+  // Steuerfragen: sie führen den Ablauf, zählen aber nicht als Pflichtfeld.
+  auswahl: "Terminauswahl", aenderung: "was zu ändern ist", ziel: "Ziel der Weiterleitung",
+  anrufer_check: "Kennung des Anrufers", auskunft_klar: "worum es genau geht",
+  fach_weiter: "fachliche Rückfrage", arzt_notiz: "Nachricht an die Praxis",
+  termin_hinweis: "Hinweis zum Termin", mehrfach_ok: "Sammelbestätigung",
+  rueckruf_ja: "Rückruf gewünscht", anmeldung_rueckruf: "Rückruf der Anmeldung",
+  // Frage-Ids des bisherigen Pfads (bianca/agent.py -> _FRAGE_KERN): sie stehen
+  // in der Divergenz-Zeile links und sollen dort genauso lesbar sein.
+  grund: "Besuchsgrund", wunsch: "Wunschzeit", arzt: "Behandler",
+  slotwahl: "Terminwahl", bestaetigung: "Bestätigung zum Eintragen",
+  telefon_check: "Nummer zur Kontrolle", telefon_alt: "alte oder neue Nummer",
+  buchstabieren: "Buchstabieren", versicherung_check: "Versicherung noch aktuell",
+  vorname_check: "Vorname zur Kontrolle", nachname_check: "Schreibweise des Nachnamens",
+  arzt_check: "Behandler beim letzten Besuch", fuer_wen_check: "Termin für Sie selbst",
+  wann: "Zeit des Bestandstermins", behandlung: "Behandlung des Bestandstermins",
+  neubuchung: "neuer Termin", rueckblick: "Verlauf seit dem letzten Besuch",
+  pzr: "Zahnreinigung dazu", bleaching: "Aufhellung dazu",
+  sonst_noch: "sonst noch etwas", termin_ok: "Termin so in Ordnung",
+  termin_aendern: "verschieben oder absagen", absage_ok: "Absage bestätigen",
 };
+
+// Was die Loop-Aufsicht (controller/aufsicht.py) getan hat — das kann der
+// bisherige Pfad nicht und ist der eigentliche Unterschied der rechten Spalte.
+const _KERN_AUFSICHT = {
+  rueckblick: "fasst zusammen und fragt frisch",
+  uebergabe: "gibt ehrlich ab (Rückruf) statt weiter zu fragen",
+  unklar_neustart: "bittet einmal ausdrücklich um einen Neuanfang",
+  unklar_uebergabe: "übergibt an den bisherigen Pfad statt weiter zu fragen",
+};
+
+// Sprech-Akte des Kerns (controller/typen.py -> SprechAkt) in Klartext. Ohne
+// diese Tabelle stand in der Spalte der nackte Feldname ("rueckruf").
+const _KERN_AKT = {
+  angebot: "liest Terminvorschläge vor",
+  erfolg: "bestätigt den belegten Eintrag",
+  ehrlich_kein: "sagt ehrlich, dass es telefonisch nicht geht",
+  rueckruf: "hält einen Rückruf fest",
+  uebergeben: "kündigt die Weiterleitung an",
+  notfall: "greift die Notfallregel",
+  info: "gibt Auskunft aus belegten Fakten",
+  warten: "hält still und hört weiter zu",
+  abschied: "verabschiedet sich",
+};
+
+function kernFrageName(id) {
+  return _KERN_FRAGE[id] || id;
+}
 
 function kernBeschreibung(d) {
   if (!d || typeof d !== "object") return "";
-  if (d.frage_id) return "fragt " + (_KERN_FRAGE[d.frage_id] || d.frage_id);
+  if (d.frage_id) return "fragt " + kernFrageName(d.frage_id);
   if (d.tool) return "Werkzeug " + d.tool;
   if (d.hangup) return "legt auf" + (d.grund ? " (" + d.grund + ")" : "");
+  if (String(d.naechste || "").toLowerCase().includes("uebergeb")) {
+    return "übergibt an den bisherigen Pfad";
+  }
   if (d.akt) {
     const a = String(d.akt).toLowerCase();
     if (a.includes("ruecklese") || a.includes("rücklese")) return "liest zur Kontrolle zurück";
     if (a.includes("bestaet") || a.includes("bestät")) return "bestätigt";
     if (a.includes("abschluss") || a.includes("terminal")) return "schließt ab";
-    return d.akt;
+    if (a === "info" && d.detail === "unklar") return "fragt einmal nach";
+    if (a === "info" && d.detail === "unklar_neustart") return "bittet um einen Neuanfang";
+    return _KERN_AKT[a] || d.akt;
   }
   if (d.naechste) return String(d.naechste);
   return "";
+}
+
+// Textzeile der Aufsicht für einen Zug (oder "" wenn sie nicht eingriff).
+function kernAufsichtText(kr) {
+  const a = kr && kr.aufsicht;
+  if (!a || !a.art) return "";
+  const was = _KERN_AUFSICHT[a.art] || a.art;
+  return a.frage ? `${was} (${kernFrageName(a.frage)})` : was;
 }
 
 function kernReplayZeile(z) {
@@ -369,11 +428,18 @@ function kernReplayZeile(z) {
       `Kern „${escapeHtml(kr.divergenz.kern)}“`
     );
   }
+  const auf = kernAufsichtText(kr);
+  if (auf) teile.push(`<span class="kern-gut">⟳ Schleifen-Aufsicht:</span> ${escapeHtml(auf)}`);
+  if (kr && kr.uebergeben) teile.push("→ Zug bleibt beim bisherigen Pfad");
   if (ls && ls.i1) {
     teile.push(`<span class="kern-warn">⚠ Live fragt bereits erfasstes Feld</span> (${escapeHtml(ls.i1.frage)})`);
   }
   if (ls && ls.schleife) {
     teile.push(`<span class="kern-warn">⚠ Live-Schleife</span> (${escapeHtml(ls.schleife.frage)} ${ls.schleife.n}×)`);
+  }
+  if (ls && ls.gerettet) {
+    teile.push(`<span class="kern-gut">✓ der Kern wäre hier nicht in die Schleife gelaufen</span>` +
+      (ls.gerettet.kern ? ` (er fragte ${escapeHtml(kernFrageName(ls.gerettet.kern))})` : ""));
   }
   if (!teile.length) return null;
   box.innerHTML = teile.join("<br>");
@@ -387,12 +453,39 @@ function kernSummaryBox(a) {
   d.className = "zeiten kern-summary";
   d.style.marginTop = "8px";
   const probleme = (Number(s.i1) || 0) + (Number(s.schleifen) || 0);
-  d.innerHTML =
+  const p = s.policy || {};
+  const aufsicht = (Number(s.aufsicht_rueckblick) || 0) + (Number(s.aufsicht_uebergabe) || 0) +
+    (Number(s.aufsicht_unklar) || 0);
+  const zeilen = [
     `<b>Schattenlauf neuer Dialogkern</b> · Anliegen erkannt: <b>${escapeHtml(s.intent || "?")}</b>` +
-    ` (${escapeHtml(s.intent_quelle || "?")}) · ${s.anrufer_zuege || 0} Anrufer-Züge<br>` +
+    ` (${escapeHtml(s.intent_quelle || "?")}) · ${s.anrufer_zuege || 0} Anrufer-Züge`,
     `Live-Probleme: <b>${probleme}</b> (Frage zu erfasstem Feld: ${s.i1 || 0}, Schleifen: ${s.schleifen || 0})` +
+    (s.gerettet ? ` · davon <b class="kern-gut">${s.gerettet} vom Kern vermieden</b>` : "") +
     ` · Abweichungen Frageführung: <b>${s.divergenzen || 0}</b>` +
-    ` · Kern läuft bis Abschluss: <b>${s.kern_terminal ? "ja" : "nein"}</b>`;
+    ` · Kern läuft bis Abschluss: <b>${s.kern_terminal ? "ja" : "nein"}</b>`,
+  ];
+  if (s.v >= 2) {
+    zeilen.push(
+      `Schleifen-Aufsicht: <b>${aufsicht}</b> Eingriffe` +
+      ` (Rückblick ${s.aufsicht_rueckblick || 0}, Rückruf statt Schleife ${s.aufsicht_uebergabe || 0},` +
+      ` Unklar-Deckel ${s.aufsicht_unklar || 0})` +
+      ` · an den bisherigen Pfad übergeben: ${s.kern_uebergeben || 0} Züge`
+    );
+    zeilen.push(
+      `Praxis-Policy: <b>${escapeHtml(p.quelle === "vertrag" ? "DialogPolicyV1" : "Alt-Einstellungen")}</b>` +
+      (p.revision ? ` Rev. ${p.revision}` : "") +
+      ` · Fach ${escapeHtml(p.fach_id || "?")}` +
+      ` · max. Rückfragen ${p.max_rueckfragen != null ? p.max_rueckfragen : "?"}` +
+      ` · Rückblick bei Stocken: ${p.zusammenfassung_bei_stocken ? "an" : "aus"}` +
+      (p.eigene_tasks && p.eigene_tasks.length
+        ? ` · Kern führt: ${escapeHtml(p.eigene_tasks.join(", "))}`
+        : " · Kern führt: nichts (alles übergeben)")
+    );
+  } else {
+    zeilen.push('<span class="alt">Älterer Schattenlauf — für Aufsicht und Policy neu einlesen: '
+      + '<code>python tools/kern_replay.py scan --alle</code></span>');
+  }
+  d.innerHTML = zeilen.join("<br>");
   return d;
 }
 
@@ -437,6 +530,14 @@ function fuelleLinks(cell, z, sid) {
     w.textContent = `\u26A0 Schleife: „${ls.schleife.frage}“ ${ls.schleife.n}\u00D7`;
     cell.appendChild(w);
   }
+  if (ls && ls.gerettet) {
+    const w = document.createElement("div");
+    w.className = "vmark gut";
+    w.textContent = ls.gerettet.grund === "aufsicht"
+      ? "\u2713 der neue Kern hätte hier eingegriffen (siehe rechts)"
+      : "\u2713 der neue Kern hätte hier etwas anderes gefragt";
+    cell.appendChild(w);
+  }
   if (z.book && (z.book.ok || z.book.booked)) {
     cell.appendChild(bubble("sys", `Buchung: ${z.book.spoken || z.book.slotIso || "ok"}`));
   }
@@ -465,16 +566,43 @@ function fuelleRechts(cell, z) {
         (nw.outcome ? ` [${nw.outcome}${nw.synth ? ", synth" : ""}]` : "");
     }
     b.textContent = "Kern: " + s;
+    const auf = kernAufsichtText(kr);
     if (kr.divergenz) {
       b.classList.add("diff");
       cell.appendChild(b);
       const d = document.createElement("div");
       d.className = "vmark diff-note";
-      d.textContent = `\u21AF Live fragte „${kr.divergenz.live}“ — Kern „${kr.divergenz.kern}“`;
+      d.textContent = `\u21AF Live fragte „${kernFrageName(kr.divergenz.live)}“ — Kern „${kernFrageName(kr.divergenz.kern)}“`;
       cell.appendChild(d);
     } else {
-      b.classList.add("gleich");
+      b.classList.add(auf ? "diff" : "gleich");
       cell.appendChild(b);
+    }
+    // Loop-Aufsicht: EIN Rückblick, dann ehrliche Abgabe — nie dieselbe Frage
+    // in Endlos-Umformulierungen (das war die Beschwerde am alten Verhalten).
+    if (auf) {
+      const d = document.createElement("div");
+      d.className = "vmark aufsicht";
+      d.textContent = "\u27F3 Schleifen-Aufsicht: " + auf;
+      cell.appendChild(d);
+    }
+    if (kr.stock && (kr.stock.zahl || kr.stock.unklar)) {
+      const d = document.createElement("div");
+      d.className = "vmark zaehler";
+      const teile = [];
+      if (kr.stock.frage) {
+        teile.push(`„${kernFrageName(kr.stock.frage)}“ ${kr.stock.zahl}\u00D7 offen`);
+      }
+      if (kr.stock.unklar) teile.push(`${kr.stock.unklar}\u00D7 nichts Verwertbares`);
+      if (kr.stock.budget != null) teile.push(`Budget ${kr.stock.budget}`);
+      d.textContent = teile.join(" · ");
+      cell.appendChild(d);
+    }
+    if (kr.uebergeben) {
+      const d = document.createElement("div");
+      d.className = "vmark uebergabe";
+      d.textContent = "\u2192 dieser Zug bleibt beim bisherigen Pfad";
+      cell.appendChild(d);
     }
   } else if (z.text) {
     const b = document.createElement("div");
@@ -798,7 +926,14 @@ function maleDetail(a) {
   hL.textContent = "Echtes Gespräch (Live)";
   const hR = document.createElement("div");
   hR.className = "vkopf";
-  hR.textContent = hatKern ? "Neuer Dialogkern (Schatten)" : "Neuer Dialogkern (kein Replay vorhanden)";
+  const sum = a.kernReplaySummary || {};
+  const pol = sum.policy || {};
+  hR.textContent = !hatKern
+    ? "Neuer Dialogkern (kein Replay vorhanden)"
+    : "Neuer Dialogkern (Schatten)" + (sum.v >= 2
+        ? ` — ${pol.quelle === "vertrag" ? "DialogPolicyV1" : "Alt-Einstellungen"}`
+          + `${pol.revision ? " Rev. " + pol.revision : ""}, max. ${pol.max_rueckfragen} Rückfragen`
+        : " — älterer Stand, bitte neu einlesen");
   verg.appendChild(hL);
   verg.appendChild(hR);
   for (const z of a.zuege || []) {

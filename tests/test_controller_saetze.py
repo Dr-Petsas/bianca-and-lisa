@@ -1,4 +1,9 @@
-"""Wortgleiche Dock-Saetze: Auskunft, Rezeption ≠ Rezept, Hallo, Mitarbeiter."""
+"""Wortgleiche Live-Saetze am reinen Kern: Auskunft, Rezeption ≠ Rezept, Hallo.
+
+Fruehere Quelle war das eigene Dock (``bianca/controller/dock.py``, Port 8199).
+Das ist raus — getestet wird derselbe reine Kern ueber ``TestGespraech``, bedient
+wird er im Studio (``/dialogkern`` auf 8097).
+"""
 
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ def test_nlu_rezeption_ist_keine_rezept():
     assert "behandler" not in nlu_test.deuten("arzt sprechen").slots
 
 
-def test_live_dock_verlauf_kein_legacy_kein_stumm():
+def test_live_verlauf_kein_legacy_kein_stumm():
     """Der getippte Verlauf vom 19.09. — kein UEBERGEBEN, kein leerer Satz."""
     g = TestGespraech(policy.default())
     g.start()

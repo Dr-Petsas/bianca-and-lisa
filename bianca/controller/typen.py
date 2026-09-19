@@ -509,6 +509,15 @@ class State:
     anrufer: dict[str, str] = field(default_factory=dict)
     anrufer_ok: bool | None = None
     anrufer_gefragt: bool = False
+    # Wie oft die Kennungsfrage schon lief. Der Anrufer-Check ist eine
+    # STEUER_FRAGE, die Loop-Aufsicht zaehlt ihn also nicht — der Deckel sitzt
+    # im Reducer (W-ANRUFER-CHECK: unklare Antworten verwerfen lieber den
+    # Treffer, als die Kontrollfrage zu wiederholen).
+    anrufer_fragen: int = 0
+    # Wie oft in Folge nichts Verwertbares ankam, OHNE dass eine Aufgabe laeuft.
+    # Ohne Aufgabe gibt es keine Frage zum Zaehlen — der Deckel haengt deshalb am
+    # State (controller/aufsicht.py: Neustart-Bitte, dann Uebergabe).
+    unklar_folge: int = 0
     letzter_besuch: dict[str, str] = field(default_factory=dict)
     bezug_gesagt: bool = False
     auskunft_klar_offen: bool = False
@@ -567,6 +576,8 @@ class State:
             anrufer=dict(self.anrufer),
             anrufer_ok=self.anrufer_ok,
             anrufer_gefragt=self.anrufer_gefragt,
+            anrufer_fragen=self.anrufer_fragen,
+            unklar_folge=self.unklar_folge,
             letzter_besuch=dict(self.letzter_besuch),
             bezug_gesagt=self.bezug_gesagt,
             auskunft_klar_offen=self.auskunft_klar_offen,
@@ -588,6 +599,8 @@ class State:
             "anrufer": dict(self.anrufer),
             "anrufer_ok": self.anrufer_ok,
             "anrufer_gefragt": self.anrufer_gefragt,
+            "anrufer_fragen": self.anrufer_fragen,
+            "unklar_folge": self.unklar_folge,
             "letzter_besuch": dict(self.letzter_besuch),
             "bezug_gesagt": self.bezug_gesagt,
             "auskunft_klar_offen": self.auskunft_klar_offen,

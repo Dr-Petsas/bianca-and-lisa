@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dialogkern-Probe</title>
+<link rel="stylesheet" href="web/stil.css?v=19">
+</head>
+<body class="kern">
+<header class="kopf">
+  <div class="kopf-links">
+    <h1>Dialogkern</h1>
+    <span class="status" id="status">lädt …</span>
+  </div>
+  <div class="rechts"><a href="./">&larr; Teststudio</a></div>
+</header>
+
+<main class="kern-raster">
+
+  <section class="block kern-links">
+    <h2>Praxis &amp; Szenario</h2>
+    <label class="kern-feld">
+      <span>Praxis</span>
+      <select id="tenant"></select>
+    </label>
+    <label class="kern-feld">
+      <span>Werkzeug-Szenario</span>
+      <select id="szenario"></select>
+    </label>
+    <div class="knoepfe" style="margin-top:12px">
+      <button class="chip an" id="knopf-start" type="button">Gespräch starten</button>
+      <button class="chip" id="knopf-zuruecksetzen" type="button">Maske zurücksetzen</button>
+    </div>
+    <div class="kern-quelle" id="quelle"></div>
+    <div class="warnungen" id="warnungen" style="margin-top:10px"></div>
+
+    <h2 style="margin-top:18px">Einstellungen der Praxis</h2>
+    <p class="klein" id="maske-hinweis">
+      Änderungen gelten nur für den nächsten Probelauf — es wird nichts gespeichert.
+    </p>
+    <div id="maske"></div>
+
+    <h2 style="margin-top:18px">Unveränderlich</h2>
+    <ul class="kern-invarianten" id="invarianten"></ul>
+  </section>
+
+  <section class="block kern-mitte">
+    <h2>Gespräch gegen den reinen Kern</h2>
+    <div class="dialog" id="dialog"></div>
+    <div class="fehlerbox" id="fehler" hidden></div>
+    <div class="kern-eingabe">
+      <input id="eingabe" type="text" placeholder="Was sagt der Anrufer?" autocomplete="off" disabled>
+      <button class="chip an" id="knopf-senden" type="button" disabled>Sagen</button>
+    </div>
+  </section>
+
+  <section class="block kern-rechts">
+    <h2>Zustand</h2>
+    <div id="zustand" class="kern-zustand"></div>
+    <h2 style="margin-top:18px">Werkzeug-Protokoll</h2>
+    <div id="ledger" class="kern-ledger"></div>
+  </section>
+
+</main>
+<script src="web/dialogkern.js?v=1"></script>
+</body>
+</html>

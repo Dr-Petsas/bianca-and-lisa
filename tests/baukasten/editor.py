@@ -33,8 +33,8 @@ from kern.config import DEFAULT_TENANT  # noqa: E402
 from kern.patients import arzt_sprechname  # noqa: E402
 from kern import tenants, zimmer_map  # noqa: E402
 from tests.baukasten import (  # noqa: E402
-    aufraeumen, deutlichkeit, geschichten, klang, lasttest, runner, saetze,
-    statistik,
+    aufraeumen, deutlichkeit, geschichten, kernprobe, klang, lasttest, runner,
+    saetze, statistik,
 )
 
 WEB_PRAXIS_JS = Path(__file__).resolve().parent.parent.parent / "bianca_web" / "praxis.js"
@@ -590,6 +590,68 @@ def bericht(lauf_id: str, story_id: str) -> dict[str, Any]:
         return {"id": story_id, "zuege": [], "fehler": "Bericht nicht gefunden"}
 
 
+# ------------------------------------------------------- Dialogkern-Probe (W-KERN-STUDIO)
+# Ersetzt das fruehere Einzel-Dock auf 8199: derselbe reine Kern, aber
+# mandantenscharf und mit Superuser-Policy-Maske. Werkzeuge bleiben simuliert —
+# diese Endpunkte schreiben nie in einen Kalender.
+
+
+class KernPolicyWunsch(BaseModel):
+    tenant: str = ""
+    policy: dict[str, Any] | None = None
+
+
+class KernStartWunsch(BaseModel):
+    tenant: str = ""
+    szenario: str = ""
+    policy: dict[str, Any] | None = None
+
+
+class KernZugWunsch(BaseModel):
+    sid: str = ""
+    text: str = ""
+
+
+@app.get("/api/kern/maske")
+def kern_maske() -> dict[str, Any]:
+    """Maskenschema + unveraenderliche Grenzen + Szenarienliste."""
+    return {"ok": True, **kernprobe.maske()}
+
+
+@app.post("/api/kern/policy")
+def kern_policy(w: KernPolicyWunsch) -> dict[str, Any]:
+    """Wirksame Policy einer Praxis — optional mit uebersteuertem Vertrag."""
+    try:
+        g = kernprobe.policy_bauen(w.tenant or DEFAULT_TENANT, w.policy)
+    except Exception as exc:  # pragma: no cover - Mandant kaputt/unbekannt
+        return {"ok": False, "fehler": f"{type(exc).__name__}: {exc}"}
+    g.pop("_reducer", None)
+    return {"ok": True, **g}
+
+
+@app.post("/api/kern/start")
+def kern_start(w: KernStartWunsch) -> dict[str, Any]:
+    try:
+        probe = kernprobe.starten(w.tenant or DEFAULT_TENANT, w.szenario, w.policy)
+    except Exception as exc:  # pragma: no cover
+        return {"ok": False, "fehler": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "kopf": probe.kopf(), "zug": probe.start()}
+
+
+@app.post("/api/kern/zug")
+def kern_zug(w: KernZugWunsch) -> dict[str, Any]:
+    probe = kernprobe.hole(w.sid)
+    if probe is None:
+        return {"ok": False, "fehler": "Probe abgelaufen — bitte neu starten."}
+    text = (w.text or "").strip()
+    if not text:
+        return {"ok": False, "fehler": "Kein Text."}
+    try:
+        return {"ok": True, "zug": probe.zug(text)}
+    except Exception as exc:  # pragma: no cover
+        return {"ok": False, "fehler": f"{type(exc).__name__}: {exc}"}
+
+
 @app.on_event("startup")
 def _autoloesch_start() -> None:
     """Testtermine aus dem Studio nach 2 Stunden wieder aus dem Kalender."""
@@ -604,6 +666,11 @@ def index() -> FileResponse:
 @app.get("/ergebnisse")
 def ergebnisse() -> FileResponse:
     return FileResponse(WEB_DIR / "ergebnisse.html")
+
+
+@app.get("/dialogkern")
+def dialogkern() -> FileResponse:
+    return FileResponse(WEB_DIR / "dialogkern.html")
 
 
 BERICHTE_DIR.mkdir(parents=True, exist_ok=True)

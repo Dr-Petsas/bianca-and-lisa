@@ -65,6 +65,43 @@ def _recap(task: TaskState) -> str:
     return ", ".join(teile)
 
 
+def _ist_unklar(decision: Decision) -> bool:
+    """Der "das habe ich nicht verstanden"-Zug OHNE laufende Aufgabe."""
+    sp = decision.speak
+    return sp is not None and sp.akt == SprechAkt.INFO and sp.detail == "unklar"
+
+
+def _unklar_aufsicht(
+    ns: State, decision: Decision, policy: Policy
+) -> tuple[State, Decision]:
+    """Deckel fuer die Rueckfrage ohne Aufgabe (zweite Schleifenklasse).
+
+    Ohne Aufgabe gibt es keine Frage-Id zum Zaehlen — der Zaehler haengt darum am
+    State. Stufen wie beim Stocken einer Frage:
+
+      <= budget      : die Rueckfrage darf kommen (Wortlaut rotiert ueber den Zug)
+      == budget + 1  : EINMAL ausdruecklich zum Neuanfang bitten
+      >= budget + 2  : an den Legacy-Pfad uebergeben statt weiter zu fragen
+    """
+    ns.unklar_folge += 1
+    budget = policy.max_rueckfragen if policy.max_rueckfragen > 0 else 1
+    if ns.unklar_folge <= budget:
+        return ns, decision
+    if ns.unklar_folge == budget + 1:
+        return ns, Decision(
+            naechste=Naechste.SPRECHEN,
+            speak=SpeakSpec(
+                akt=SprechAkt.INFO,
+                detail="unklar_neustart",
+                fakten=(("zug", str(ns.zug_nr)),),
+            ),
+            grund="aufsicht:unklar_neustart",
+        )
+    # Kein dritter Anlauf mit derselben Bitte: der Legacy-Pfad uebernimmt
+    # (dort haengen Stille-Regie, Notleine und Abschied).
+    return ns, Decision(naechste=Naechste.UEBERGEBEN, grund="aufsicht:unklar_uebergabe")
+
+
 def _ist_stockfrage(decision: Decision) -> str:
     """Inhaltliche Frage-Id der Entscheidung, oder "" (Steuerfragen zaehlen nie)."""
     sp = decision.speak
@@ -118,6 +155,11 @@ def ueberwachen(ns: State, decision: Decision, policy: Policy) -> tuple[State, D
     Gibt die urspruengliche Entscheidung zurueck, solange die Schwelle
     (``policy.max_rueckfragen``) nicht ueberschritten ist.
     """
+    if _ist_unklar(decision):
+        return _unklar_aufsicht(ns, decision, policy)
+    # Jeder verwertbare Zug bricht die Unklar-Serie.
+    ns.unklar_folge = 0
+
     task = ns.aktiv()
     if task is None:
         return ns, decision
