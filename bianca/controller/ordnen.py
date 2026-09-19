@@ -271,4 +271,14 @@ def zu_event(
     )
 
 
-__all__ = ["zu_event"]
+#: Familien-Name (``anliegen.befehlsfolge``) -> Schublade. Nur die drei
+#: Termin-Familien: ein Nachtrag darf nie eine Auskunft oder ein Dokument
+#: erfinden (W-BEFEHLSLISTE, ``verstehen.nachtraege``).
+FAMILIE_INTENT = {
+    "absagen": Intent.ABSAGEN,
+    "verschieben": Intent.VERSCHIEBEN,
+    "buchen": Intent.BUCHEN,
+}
+
+
+__all__ = ["FAMILIE_INTENT", "zu_event"]

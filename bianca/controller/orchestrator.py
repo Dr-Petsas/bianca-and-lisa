@@ -24,7 +24,7 @@ from typing import Any
 
 from bianca.controller import renderer, verstehen
 from bianca.controller.gateway_sim import Szenario, ToolGatewaySim
-from bianca.controller.reducer import reduce
+from bianca.controller.reducer import nachtragen, reduce
 from bianca.controller.typen import (
     Decision,
     Intent,
@@ -114,6 +114,7 @@ class TestGespraech:
         self._erw = _Erwartung()
         self._slots_angebot: list[str] = []
         self._appt_angebot: list[dict[str, Any]] = []
+        self._nachtrag: list[SemanticEvent] = []
         self.verlauf: list[dict[str, str]] = []
         sz = szenario or Szenario()
         if sz.anrufer_nachname or sz.anrufer_anrede:
@@ -163,6 +164,14 @@ class TestGespraech:
             llm=self.llm,
         )
         ev = self._wahl_aufloesen(ev)
+        # W-BEFEHLSLISTE: "absagen UND einen neuen ausmachen" ist ein Satz mit
+        # zwei Auftraegen. Der erste laeuft sofort, die weiteren warten geparkt.
+        self._nachtrag = verstehen.nachtraege(
+            text,
+            erwartet_janein=self._erw.janein,
+            erwartet_wahl=self._erw.wahl,
+            ev=ev,
+        )
         return self._zug(ev, text)
 
     def stille(self) -> Zugantwort:
@@ -177,6 +186,9 @@ class TestGespraech:
     def _zug(self, ev: SemanticEvent, gesagt: str) -> Zugantwort:
         state, decision = reduce(self.state, ev, self.policy)
         state, decision = self._werkzeug_schleife(state, decision)
+        if self._nachtrag:
+            state = nachtragen(state, self._nachtrag, self.policy)
+            self._nachtrag = []
         self.state = state
 
         antwort = renderer.rendern(decision.speak)

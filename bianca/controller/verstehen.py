@@ -326,4 +326,54 @@ def deuten(
     return _sichern(_kanon_slots(replace(ev, deutung=ev.deutung or "hirn")), text)
 
 
-__all__ = ["deuten", "LlmVerstehen", "ist_umzug_wert", "ist_alle_wert"]
+def nachtraege(
+    text: str,
+    *,
+    erwartet_janein: bool = False,
+    erwartet_wahl: bool = False,
+    ev: SemanticEvent | None = None,
+) -> list[SemanticEvent]:
+    """Weitere Anliegen desselben Satzes (W-BEFEHLSLISTE), oder leer.
+
+    Bewusst NICHT in ``deuten`` eingebaut: der Vertrag "ein Satz -> ein
+    SemanticEvent" haelt jeden bestehenden Aufrufer unveraendert. Wer
+    mehrteilige Anliegen will, fragt hier nach und legt sie mit
+    ``reducer.nachtragen`` auf den Stapel.
+
+    Kein Nachtrag auf einer offenen Ja/Nein- oder Wahlfrage: dort gehoert der
+    Satz der Frage ("ja, den frueheren"), und ein geparkter Auftrag daraus
+    waere geraten.
+    """
+    t = str(text or "").strip()
+    if not t or erwartet_janein or erwartet_wahl:
+        return []
+    if ev is not None and ev.deutung in ("meta", "formular", "stille"):
+        return []
+    folge = _anliegen.befehlsfolge(t)
+    if len(folge) < 2:
+        return []
+    schon = {ev.intent} if ev is not None else set()
+    out: list[SemanticEvent] = []
+    for name in folge:
+        intent = _ordnen.FAMILIE_INTENT.get(name)
+        if intent is None or intent in schon:
+            continue
+        schon.add(intent)
+        out.append(
+            SemanticEvent(
+                intent=intent,
+                roh=t[:120],
+                deutung="nachtrag",
+                llm="— Befehlsliste, kein LLM —",
+            )
+        )
+    return out[:2]
+
+
+__all__ = [
+    "deuten",
+    "nachtraege",
+    "LlmVerstehen",
+    "ist_umzug_wert",
+    "ist_alle_wert",
+]

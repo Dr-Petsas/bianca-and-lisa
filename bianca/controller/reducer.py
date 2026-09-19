@@ -955,6 +955,44 @@ def _uebergeben(ns: State, typ: str, grund: str) -> tuple[State, Decision]:
     return ns, Decision(naechste=Naechste.UEBERGEBEN, task=typ, grund=grund)
 
 
+def nachtragen(state: State, events: list[SemanticEvent], policy: Policy) -> State:
+    """Weitere Anliegen EINES Satzes auf den Stapel legen (W-BEFEHLSLISTE).
+
+    Wird NACH ``reduce`` des ersten Ereignisses gerufen und spricht nie: der
+    Nachtrag wartet geparkt, bis die laufende Aufgabe fertig ist — dann holt
+    ``_naechste_geparkte`` ihn wie jedes andere geparkte Anliegen.
+
+    Streng gehalten, weil ein falscher Nachtrag spaeter von selbst eine Absage
+    oder Buchung anfaengt, die niemand wollte:
+
+    * nur Familien, die der Mandant im Kern fuehrt (``policy.fuehrt``),
+    * nie die Art der gerade laufenden Aufgabe,
+    * nie, wenn dieselbe Art schon geparkt liegt,
+    * nichts, solange gar keine Aufgabe laeuft (dann ist der erste Auftrag
+      selbst noch nicht verstanden).
+    """
+    if not events:
+        return state
+    ns = state.kopie()
+    if ns.terminal:
+        return ns
+    aktiv = ns.aktiv()
+    if aktiv is None:
+        return ns
+    vorhanden = {t.typ for t in ns.tasks if t.status in (TaskStatus.AKTIV, TaskStatus.GEPARKT)}
+    for ev in events:
+        typ = _INTENT_TASK.get(ev.intent)
+        if not typ or typ in vorhanden or typ == aktiv.typ:
+            continue
+        if policy.spec(typ) is None or not policy.fuehrt(typ):
+            continue
+        t = TaskState(typ=typ, status=TaskStatus.GEPARKT)
+        ns.tasks.append(t)
+        vorhanden.add(typ)
+        aktiv.merker.setdefault("plan_typ", typ)
+    return ns
+
+
 # --------------------------------------------------------------------------- #
 # Einstieg.
 # --------------------------------------------------------------------------- #

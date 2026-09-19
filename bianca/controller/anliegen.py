@@ -302,6 +302,32 @@ def zwei_anliegen_slots(text: str) -> dict[str, str]:
     return {"zweit_anliegen": zweit, "zweit_fuer_wen": rollen[0]}
 
 
+def befehlsfolge(text: str) -> list[str]:
+    """Alle Anliegen EINES Satzes in der Reihenfolge, in der sie fallen.
+
+    W-BEFEHLSLISTE (19.09.2026): "Ich moechte meinen Termin absagen und einen
+    neuen ausmachen" ist ZWEI Auftraege. ``zwei_anliegen_slots`` erkannte das
+    bisher nur, wenn eine PERSON dabei war ("... und einen fuer meinen Sohn") —
+    fuer den Anrufer selbst fiel das zweite Anliegen unter den Tisch, und nach
+    der Absage begann das Gespraech von vorn.
+
+    Rueckgabe ist bewusst nur die FAMILIE ("absagen", "verschieben",
+    "buchen"), nie ein Slot: wer den zweiten Auftrag bearbeitet, fragt seine
+    Felder selbst ab. Doppelte Nennungen derselben Familie fallen weg.
+    """
+    t = _falt(text)
+    found: list[tuple[int, str]] = []
+    gesehen: set[str] = set()
+    for rx, name in _TASK_POS:
+        for m in rx.finditer(t):
+            if name in gesehen:
+                break
+            found.append((m.start(), name))
+            gesehen.add(name)
+    found.sort()
+    return [name for _pos, name in found]
+
+
 def auskunft_antwort(text: str) -> str:
     """Antwort auf die Klaerung: bestehend | neu | ''."""
     t = _falt(text)
@@ -312,4 +338,4 @@ def auskunft_antwort(text: str) -> str:
     return ""
 
 
-__all__ = ["deute", "auskunft_antwort", "zwei_anliegen_slots"]
+__all__ = ["befehlsfolge", "deute", "auskunft_antwort", "zwei_anliegen_slots"]
