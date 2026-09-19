@@ -263,10 +263,18 @@ _REZEPT_THEMA = re.compile(r"\brezept(?!ion)|ueberweis|überweis|krankmeldung", 
 
 
 def _klingt_sms(ev: SemanticEvent) -> bool:
+    """Nur der ANRUFER kann die SMS zum Thema machen — nie die Paraphrase.
+
+    Live 19.09.2026 (MedDent 5e5b15b0): auf "Ja, verstimmt." antwortete Bianca
+    mit der SMS-Auskunft. Das Wort stand nur in ``ev.verstanden``, der
+    Umschrift des Modells ("... bestaetigt ..."), nie im Satz des Anrufers.
+    Deutungstexte duerfen keine Zweige zuenden — wie bei jeder anderen Wache
+    zaehlen ausschliesslich Rohtext und ausdrueckliche Slots.
+    """
     sm = ev.slots.get("sms")
     if sm and sm.wert and str(sm.wert).lower() not in ("nein", "0", "false"):
         return True
-    t = " ".join(x for x in (ev.verstanden, ev.roh) if x)
+    t = str(ev.roh or "")
     if _REZEPT_THEMA.search(t) and not _SMS_THEMA.search(t):
         return False
     return bool(_SMS_THEMA.search(t))
@@ -647,6 +655,19 @@ def _slot_fuer_tool_bereit(task: TaskState, spec: TaskSpec, slot: str) -> bool:
     return True
 
 
+# Sammel-Reihenfolge ist NICHT die Werkzeug-Bedingung. ``offer_slots`` braucht
+# Motiv und Patient; "schon mal hier?", die Behandler-WAHL, die Wunschzeit und
+# der Versichertenstatus sind Gespraechsfelder — ohne sie sucht die Funktion ab
+# heute beim Standard-Behandler.
+#
+# Live 19.09.2026 (MedDent 5e5b15b0) war genau diese Gleichsetzung die Schleife:
+# auf "keine Ahnung" blieb die Wunschzeit leer, ``_erste_luecke`` uebersprang sie
+# korrekt — und ``_fehlende_tool_slots`` holte sie vor jedem Angebot zurueck,
+# Zug fuer Zug dieselbe Frage. Nachname bleibt bewusst drin: ohne Patient wird
+# kein Termin angeboten und schon gar nicht gebucht.
+_OFFER_ENTBEHRLICH = frozenset({"schonmal", "behandler", "wunschzeit", "versicherung"})
+
+
 def _tool_pflicht(spec: TaskSpec, name: str) -> tuple[str, ...]:
     """Welche Task-Slots muss dieses Werkzeug schon haben?"""
     if not name:
@@ -655,7 +676,7 @@ def _tool_pflicht(spec: TaskSpec, name: str) -> tuple[str, ...]:
         return spec.identify
     if name == spec.offer_tool:
         if spec.familie == Familie.BUCHEN:
-            return spec.pflicht
+            return tuple(s for s in spec.pflicht if s not in _OFFER_ENTBEHRLICH)
         if spec.neue_zeit:
             return ("gefunden_id",)
         return ()
@@ -1294,19 +1315,24 @@ def _meta_auslassen(
             task=aktiv.typ,
             grund="meta:auslassen_ohne_frage",
         )
+    # "Keine Ahnung" (Verstehen setzt den Merker) klingt anders als "das sage ich
+    # nicht": der Anrufer WILL ja, er weiss es nur nicht. Der Renderer waehlt
+    # daran die freundliche Form — der Weg ist derselbe.
+    art = "nicht_wissen" if ev.slots.get("nicht_wissen") else "ausgelassen"
     if slot in _STEUER_FRAGEN or _ist_pflicht_slot(spec, slot):
         # Steuerfragen (Auswahl, Anrufer-Check) SIND der Weg, Pflichtfelder die
         # Bedingung. Beides bleibt offen; die Aufsicht deckelt die Wiederholung.
         ns, d = _frage(ns, aktiv, slot, grund=f"meta:auslassen_pflicht:{slot}")
-        return ns, _mit_fakt(d, ("pflicht", slot))
+        d = _mit_fakt(d, ("pflicht", slot))
+        return ns, (_mit_fakt(d, ("nicht_wissen", slot)) if art == "nicht_wissen" else d)
     aktiv.ausgelassen.add(slot)
     ns.gefragt.add(slot)
     luecke = _erste_luecke(aktiv, spec, ns)
     if luecke:
-        ns, d = _frage(ns, aktiv, luecke, grund=f"meta:auslassen:{slot}")
-        return ns, _mit_fakt(d, ("ausgelassen", slot))
+        ns, d = _frage(ns, aktiv, luecke, grund=f"meta:{art}:{slot}")
+        return ns, _mit_fakt(d, (art, slot))
     ns, d = _dispatch_familie(ns, aktiv, ev, spec, policy)
-    return ns, _mit_fakt(d, ("ausgelassen", slot))
+    return ns, _mit_fakt(d, (art, slot))
 
 
 def _meta_stille(ns: State, policy: Policy) -> tuple[State, Decision]:

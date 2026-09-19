@@ -18,7 +18,9 @@ Dock haengt ``hirn.deuten`` (vLLM) an; Tests geben einen Stub.
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -82,6 +84,114 @@ _WESSEN_RE = re.compile(
 )
 
 
+# W-KERN-TEMPO (19.09.2026, MedDent-Anruf 5e5b15b0): jeder Satz ging ans
+# Modell — 3,0 s / 4,3 s / 10,2 s je Zug. Eine Antwort auf eine geschlossene
+# Frage ist aber eine Formel und braucht kein Modell. Deshalb zaehlt jetzt auch
+# ein Ja/Nein/Wahl-KOPF, solange der Satz kurz ist, keine Frage stellt und kein
+# zweites Anliegen traegt ("Ja, aber ich moechte absagen" geht weiter ans Modell).
+_JA_KOPF = re.compile(
+    r"^\s*(?:ja+|jo+|jup|jawohl|genau|richtig|stimmt|korrekt|klar|gerne|"
+    r"ok(?:ay)?|yes|passt|sicher)\b",
+    re.I,
+)
+_NEIN_KOPF = re.compile(r"^\s*(?:nein+|nee+|ne|n[oö]e?|falsch|nope|no)\b", re.I)
+_WAHL_KOPF = re.compile(
+    r"^\s*(?:der\s+|die\s+|das\s+|den\s+)?"
+    r"(?:erste|zweite|dritte|vierte|letzte|alle|beide|[123])\b",
+    re.I,
+)
+_KURZ_WOERTER = 5
+_SIGNAL_RE = re.compile(
+    r"\?|\baber\b|\bdoch\b|\bstattdessen\b|\bsondern\b|\btrotzdem\b",
+    re.I,
+)
+# Fragen mit eigenem Leser in nlu_test (geschlossenes Vokabular oder ein
+# deterministischer Extraktor). Traegt die Antwort genau diesen Wert, ist das
+# Modell ueberfluessig — die Maschine wusste ohnehin, worauf sie wartet.
+_REGEL_FRAGEN = frozenset({
+    "nachname", "vorname", "telefon", "versicherung", "behandler",
+    "schonmal", "besuchsgrund", "wunschzeit", "terminwahl", "fuer_wen",
+})
+
+# "Keine Ahnung" ist keine Angabe, sondern die Bitte, weiterzugehen. Live
+# 19.09.2026 lief das ans Modell, landete als Wert "unbekannt" im Slot und wurde
+# vorgelesen ("unbekannt — Wann soll ich suchen?"). Deterministisch ist es ein
+# AUSLASSEN; ob das Feld verzichtbar ist, entscheidet allein der Reducer.
+_NICHT_WISSEN_RE = re.compile(
+    r"\b(?:kein[e]?\s+ahnung"
+    r"|wei(?:ss|ß)\s+(?:ich\s+)?(?:noch\s+|leider\s+)?nicht"
+    r"|wei(?:ss|ß)\s+ich\s+(?:gerade\s+|jetzt\s+)?nicht"
+    r"|kann\s+ich\s+(?:so\s+)?nicht\s+sagen"
+    r"|schwer\s+zu\s+sagen"
+    r"|(?:habe|hab)\s+ich\s+(?:gerade\s+)?nicht\s+im\s+kopf)\b",
+    re.I,
+)
+# NUR Feldfragen. Steuerfragen (Anrufer-Check, Auswahl) bleiben beim normalen
+# Weg: dort ist "weiss nicht" keine Auslassung, sondern echte Unklarheit.
+_NICHT_WISSEN_FRAGEN = frozenset({
+    "schonmal", "behandler", "besuchsgrund", "wunschzeit", "versicherung",
+    "nachname", "vorname", "telefon", "termin_hinweis", "aenderung",
+    "arzt_notiz",
+})
+_NICHT_WISSEN_WOERTER = 9
+_ZIFFER_RE = re.compile(r"\d")
+
+
+def _ist_nicht_wissen(text: str, offene_frage: str) -> bool:
+    t = " ".join(str(text or "").split())
+    if offene_frage not in _NICHT_WISSEN_FRAGEN or not t:
+        return False
+    if len(t.split()) > _NICHT_WISSEN_WOERTER or _ZIFFER_RE.search(t):
+        return False
+    if not _NICHT_WISSEN_RE.search(t):
+        return False
+    # "Ich weiss nicht, ob ich einen Termin habe" ist ein ANLIEGEN, keine
+    # Auslassung — das gehoert weiter dem Verstehen.
+    return _anliegen.deute(t)[0] is None
+
+
+# Zeitdeckel ums Modell: lieber die Regel-Deutung als ein Anrufer, der zehn
+# Sekunden ins Leere hoert (Live 19.09.2026: ein Zug brauchte 10,2 s). Der
+# angefangene Wurf laeuft im Hintergrund aus; er wird nur nicht mehr beachtet.
+_BUDGET_S = 1.8
+
+
+def _budget_s() -> float:
+    try:
+        return float(os.environ.get("KERN_HIRN_BUDGET_S", _BUDGET_S))
+    except (TypeError, ValueError):
+        return _BUDGET_S
+
+
+def _mit_deckel(fn: Callable[[], Any], budget: float) -> tuple[Any, bool]:
+    kasten: dict[str, Any] = {}
+
+    def lauf() -> None:
+        try:
+            kasten["wert"] = fn()
+        except BaseException as exc:  # noqa: BLE001 — wird unten neu geworfen
+            kasten["fehler"] = exc
+
+    faden = threading.Thread(target=lauf, name="kern-hirn", daemon=True)
+    faden.start()
+    faden.join(budget)
+    if faden.is_alive():
+        return None, True
+    fehler = kasten.get("fehler")
+    if fehler is not None:
+        raise fehler
+    return kasten.get("wert"), False
+
+
+def _kurz_ohne_anliegen(t: str) -> bool:
+    """Kurz, keine Rueckfrage, kein Einwand, kein zweites Anliegen."""
+    if not t or len(t.split()) > _KURZ_WOERTER:
+        return False
+    if _SIGNAL_RE.search(t):
+        return False
+    return _anliegen.deute(t)[0] is None
+
+
 def _ist_formular(text: str, *, janein: bool, wahl: bool) -> bool:
     t = str(text or "").strip()
     if not t:
@@ -92,12 +202,49 @@ def _ist_formular(text: str, *, janein: bool, wahl: bool) -> bool:
         return True
     if wahl and _NUR_WAHL.match(t):
         return True
-    return False
+    if not (janein or wahl):
+        return False
+    if not _kurz_ohne_anliegen(t):
+        return False
+    if janein and (_JA_KOPF.match(t) or _NEIN_KOPF.match(t)):
+        return True
+    return bool(wahl and _WAHL_KOPF.match(t))
+
+
+# Nicht-Werte: das Modell schreibt "unbekannt"/"keine Ahnung" in einen Slot,
+# wenn der Anrufer NICHTS gesagt hat. Der Reducer haelt das Feld dann fuer
+# gefuellt und der Renderer liest es vor ("Keine Ahnung — Wann passt es
+# Ihnen?", Live 19.09.2026). "egal" bleibt bewusst drin: das IST eine Angabe.
+_KEIN_WERT = frozenset({
+    "unbekannt", "unklar", "unbestimmt", "keine ahnung", "kein ahnung",
+    "weiss nicht", "weiß nicht", "weiss ich nicht", "weiß ich nicht",
+    "keine angabe", "nicht genannt", "nichts", "none", "null", "n/a", "na",
+    "-", "--", "?", "leer",
+})
+# Nur Felder, die einen GEHOERTEN Wert tragen. Steuer-Slots bleiben aussen vor:
+# "auskunft_art" kennt "unklar" als echten Zustand (= Anrufer hat noch nicht
+# gesagt, ob bestehender oder neuer Termin) — ein Filter darauf verschluckt die
+# Rueckfrage und schickt die Maschine direkt in die Namensfrage.
+_WERT_SLOTS = frozenset({
+    "nachname", "vorname", "telefon", "versicherung", "behandler",
+    "besuchsgrund", "wunschzeit", "terminwahl", "termin_hinweis",
+    "absage_grund", "fuer_wen", "zweit_fuer_wen",
+})
+
+
+def _ohne_nicht_werte(slots: dict[str, SlotValue]) -> dict[str, SlotValue]:
+    for name, sv in list(slots.items()):
+        if sv is None or name not in _WERT_SLOTS:
+            continue
+        wert = str(getattr(sv, "wert", "") or "").strip().lower().rstrip(".!?")
+        if wert in _KEIN_WERT:
+            slots.pop(name, None)
+    return slots
 
 
 def _kanon_slots(ev: SemanticEvent) -> SemanticEvent:
     """Hirn-Werte in die Form bringen, die Reducer und Suche wirklich lesen."""
-    slots: dict[str, SlotValue] = dict(ev.slots)
+    slots: dict[str, SlotValue] = _ohne_nicht_werte(dict(ev.slots))
     wz = slots.get("wunschzeit")
     if wz and wz.wert:
         kanon = _wuensche.wunschzeit(wz.wert)
@@ -274,6 +421,16 @@ def deuten(
             deutung="meta",
             llm="— Meta-Bitte, kein LLM —",
         )
+    # "Hallo?" mitten in einer offenen Frage ist kein neuer Auftrag — der
+    # Anrufer prueft, ob noch jemand da ist (Live 34979221, 10 s Stille).
+    # Ein Hallo GANZ am Anfang (keine offene Frage) bleibt ein Anliegen/Gruss.
+    if offene_frage and re.match(r"^\s*hallo+\s*[?]\s*$", str(text or ""), re.I):
+        return SemanticEvent(
+            intent=Intent.WIEDERHOLEN,
+            roh=str(text or ""),
+            deutung="meta",
+            llm="— Hallo auf offener Frage, kein LLM —",
+        )
     if _ist_formular(text, janein=erwartet_janein, wahl=erwartet_wahl):
         ev = nlu_test.deuten(
             text,
@@ -284,6 +441,61 @@ def deuten(
         return _sichern(
             replace(ev, deutung="formular", llm="— Formular, kein LLM —"),
             text,
+        )
+    # Eindeutiges Anliegen ohne offene Ja/Nein-Frage: 0 ms, kein Modell.
+    # Live 19.09.2026 kostete "Ich haette gern einen Termin." drei Sekunden
+    # Hirn, bevor die Identitaetsfrage kam. Ein Mischzug ("Ja, aber absagen")
+    # bleibt beim Modell, weil dort erwartet_janein gesetzt ist.
+    if not offene_frage and not erwartet_janein and not erwartet_wahl:
+        intent, extra = _anliegen.deute(text)
+        # Mehr als ein Auftrag: das Modell (oder nachtraege) muss beide sehen.
+        if intent is not None and len(_anliegen.befehlsfolge(text)) <= 1:
+            slots = {
+                k: SlotValue(wert=str(v), quelle=Quelle.GESAGT)
+                for k, v in extra.items()
+                if v
+            }
+            return _sichern(
+                _kanon_slots(
+                    SemanticEvent(
+                        intent=intent,
+                        slots=slots,
+                        roh=str(text or ""),
+                        deutung="anliegen",
+                        llm="— Anliegen-Regex, kein LLM —",
+                    )
+                ),
+                text,
+            )
+    # Regel-Schnellweg: die Maschine wartet auf ein Feld mit eigenem Leser und
+    # bekommt genau diesen Wert. Kein Modell — sonst kostet "Petsas" 3 Sekunden.
+    if offene_frage in _REGEL_FRAGEN and _kurz_ohne_anliegen(str(text or "").strip()):
+        ev = nlu_test.deuten(
+            text,
+            offene_frage=offene_frage,
+            erwartet_janein=erwartet_janein,
+            erwartet_wahl=erwartet_wahl,
+        )
+        traf = ev.slots.get(offene_frage)
+        if traf is not None and str(getattr(traf, "wert", "") or "").strip():
+            return _sichern(
+                replace(
+                    _kanon_slots(ev),
+                    deutung="regel",
+                    llm="— Regel traf die offene Frage, kein LLM —",
+                ),
+                text,
+            )
+    # "Keine Ahnung" NACH dem Regel-Weg: wo die Regel eine echte Bedeutung kennt
+    # (Behandler "weiss nicht" = egal), gewinnt sie. Sonst ist es ein AUSLASSEN —
+    # verzichtbare Felder fallen weg, Pflichtfelder benennt der Reducer ehrlich.
+    if _ist_nicht_wissen(text, offene_frage):
+        return SemanticEvent(
+            intent=Intent.AUSLASSEN,
+            slots={"nicht_wissen": SlotValue(wert=offene_frage, quelle=Quelle.GESAGT)},
+            roh=str(text or ""),
+            deutung="meta",
+            llm="— weiss nicht, kein LLM —",
         )
     if llm is None:
         return _nlu(
@@ -297,8 +509,20 @@ def deuten(
     ctx.setdefault("offene_frage", offene_frage)
     ctx.setdefault("erwartet_janein", erwartet_janein)
     ctx.setdefault("erwartet_wahl", erwartet_wahl)
+    budget = _budget_s()
     try:
-        hirn = llm(text, lage=ctx)
+        if budget > 0:
+            hirn, zu_spaet = _mit_deckel(lambda: llm(text, lage=ctx), budget)
+            if zu_spaet:
+                return _nlu(
+                    text,
+                    offene_frage=offene_frage,
+                    erwartet_janein=erwartet_janein,
+                    erwartet_wahl=erwartet_wahl,
+                    llm_notiz=f"— Hirn ueber {budget:g} s, Regel —",
+                )
+        else:
+            hirn = llm(text, lage=ctx)
     except Exception as exc:
         return _nlu(
             text,

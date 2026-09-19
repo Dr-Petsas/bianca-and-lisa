@@ -18,14 +18,15 @@ _JSON = re.compile(r"\{.*\}", re.S)
 _SYSTEM = """\
 Du verstehst den Anrufer. Du waehlst keine Aktion und keine Antwort.
 
-Nur EIN JSON:
-  verstanden: ein Satz in deinen Worten — was die Person JETZT will,
+Nur EIN JSON, so kurz wie moeglich:
+  verstanden: HOECHSTENS 12 WOERTER — was die Person JETZT will,
               bezogen auf die Lage (letzter Satz, letzter Vorgang)
   janein: true | false | null
   genannt: freie Schluessel fuer konkret Genanntes
            (wer, wann, warum, wieviele, kanal, … — keine Pflichtliste)
 
 Kein intent. Kein Tool. Kein Bianca-Satz. Nichts erfinden.
+Keine Begruendung, keine Aufzaehlung, kein Fliesstext neben dem JSON.
 Zwei Anliegen in einem Satz: beide in verstanden nennen, in genannt trennen.
 """
 
@@ -119,6 +120,18 @@ def ohne_alte_wiederholung(
     return replace(ev, slots=slots)
 
 
+_TOKENS = 110
+
+
+def _tokens() -> int:
+    import os
+
+    try:
+        return max(40, int(os.environ.get("KERN_HIRN_TOKENS", _TOKENS)))
+    except (TypeError, ValueError):
+        return _TOKENS
+
+
 def deuten(text: str, *, lage: Mapping[str, Any] | None = None, **_: Any) -> Verstand:
     """Freier Vorlauf gegen vLLM. Wirft bei Netz-/Parsefehler."""
     from kern import llm as _llm
@@ -132,7 +145,10 @@ def deuten(text: str, *, lage: Mapping[str, Any] | None = None, **_: Any) -> Ver
             ),
         },
     ]
-    r = _llm.chat(messages, tools=None, temperature=0.0, max_tokens=220)
+    # 220 Tokens waren am 19.09.2026 live 3-10 s je Zug (vLLM ~22 Tok/s auf der
+    # geteilten 5090). Die Deutung braucht keinen Aufsatz: 12 Woerter Paraphrase
+    # plus ein paar Schluessel passen in ~100 Tokens. Deckel bleibt stellbar.
+    r = _llm.chat(messages, tools=None, temperature=0.0, max_tokens=_tokens())
     roh_llm = str(r.get("text") or "").strip()
     if not r.get("ok"):
         raise RuntimeError(r.get("error") or "hirn_offline")

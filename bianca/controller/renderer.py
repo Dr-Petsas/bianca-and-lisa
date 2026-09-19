@@ -97,12 +97,43 @@ def _sprechbar(wert: str) -> str:
         return text
 
 
+# Nicht-Werte nie vorlesen: "Keine Ahnung — Wann passt es Ihnen?" (Live
+# 19.09.2026). Der Filter sitzt schon im Verstehen; das hier ist der Guertel,
+# damit kein anderer Weg so etwas in den Mund legt.
+_KEIN_WERT = frozenset({
+    "unbekannt", "unklar", "unbestimmt", "keine ahnung", "weiss nicht",
+    "weiß nicht", "keine angabe", "nichts", "none", "null", "n/a", "-", "?",
+})
+
+
+def _echt(wert: str | None) -> bool:
+    return str(wert or "").strip().lower().rstrip(".!?") not in _KEIN_WERT | {""}
+
+
+def _arzt_kurz(name: str) -> str:
+    """"Doktor Michael Petsas" -> "Doktor Petsas" — Vornamen nie sprechen."""
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    try:
+        from kern.patients import arzt_sprechname
+    except Exception:  # noqa: BLE001 — Renderer laeuft auch ohne kern
+        return text
+    try:
+        return arzt_sprechname(text) or text
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def _lesbar(fakten: Mapping[str, str], *keys: str) -> str:
     teile = []
     for k in keys:
         v = fakten.get(k)
-        if v and str(v).strip().lower() != "egal":
-            teile.append(f"{_LABEL.get(k, k)}: {_sprechbar(v)}")
+        if not _echt(v) or str(v).strip().lower() == "egal":
+            continue
+        if k in ("behandler", "gefunden_arzt"):
+            v = _arzt_kurz(v)
+        teile.append(f"{_LABEL.get(k, k)}: {_sprechbar(v)}")
     return ", ".join(teile)
 
 
@@ -165,9 +196,9 @@ def _vorbezug(spec: SpeakSpec) -> str:
         return "Sie möchten alle Termine absagen. "
     if f.get("gehoert_intent") == "absagen" and spec.frage_id == "auswahl":
         return "Sie möchten absagen. "
-    if f.get("gehoert_wunsch"):
+    if _echt(f.get("gehoert_wunsch")):
         return f"{f['gehoert_wunsch']} — "
-    if f.get("gehoert_grund"):
+    if _echt(f.get("gehoert_grund")):
         return f"{f['gehoert_grund']} — "
     if f.get("gehoert_rolle"):
         wen = _fuer_wen.phrase(f["gehoert_rolle"], fall="wen") or f["gehoert_rolle"]
@@ -177,12 +208,16 @@ def _vorbezug(spec: SpeakSpec) -> str:
 
 def _vorsatz(spec: SpeakSpec) -> str:
     f = _fakt_map(spec)
-    arzt = f.get("letzter_arzt") or ""
+    arzt = _arzt_kurz(f.get("letzter_arzt") or "")
     grund = f.get("letzter_grund") or ""
     wann = f.get("letzter_wann") or "einiger Zeit"
     if not (arzt or grund):
         return ""
     n = _var.zug_von(f)
+    if arzt and not _echt(grund):
+        # Ohne Anlass in der Akte eine eigene Form. Mit der {grund}-Form endete
+        # der Satz live auf "... war bei Doktor Petsas wegen." (19.09.2026).
+        return _var.waehle("bezug_ohne_grund", n, arzt=arzt, wann=wann)
     return _var.waehle("bezug", n, arzt=arzt, grund=grund, wann=wann)
 
 
@@ -541,6 +576,25 @@ _PFLICHT: dict[str, str] = {
 }
 _PFLICHT_ALLGEMEIN = "Diese Angabe brauche ich leider, sonst kann ich nichts eintragen. "
 
+# "Keine Ahnung" ist kein Verweigern (Fakt ``nicht_wissen``, s. verstehen.py).
+# Live 19.09.2026 wurde daraus "unbekannt — Wann soll ich suchen?" und die Frage
+# kam im naechsten Zug erneut. Je Feld eine eigene Schublade: wo die Angabe
+# verzichtbar ist, sagt Bianca, WIE es ohne sie weitergeht; wo sie gebraucht
+# wird, macht sie das Antworten leicht, statt dieselbe Frage zu wiederholen.
+_NICHT_WISSEN: dict[str, str] = {
+    "wunschzeit": "weiss_nicht_zeit",
+    "behandler": "weiss_nicht_arzt",
+}
+_NICHT_WISSEN_ALLGEMEIN = "weiss_nicht_offen"
+# Pflichtfeld und der Anrufer weiss es nicht: die Frage bleibt stehen, bekommt
+# aber eine Hilfe vorangestellt — grob genuegt.
+_NICHT_WISSEN_HILFE: dict[str, str] = {
+    "besuchsgrund": "Ganz grob genügt mir — Kontrolle, Schmerzen, Beratung oder etwas anderes. ",
+    "nachname": "Es genügt der Name, der in der Praxis in Ihrer Akte steht. ",
+    "telefon": "Am besten die Handynummer, auf der Sie die Bestätigung lesen können. ",
+    "terminwahl": "Sagen Sie einfach den, der am besten passt — oder nennen Sie mir eine andere Zeit. ",
+}
+
 
 def _zuruf_bruecke(zahl: str) -> str:
     """Einleitung der n-ten Wiederholung auf Bitte — nie zweimal dieselbe."""
@@ -582,8 +636,16 @@ def rendern(spec: SpeakSpec | None) -> str:
     meta = ""
     if text:
         slot = fakten.get("pflicht")
-        if slot:
+        weiss_nicht = fakten.get("nicht_wissen")
+        if slot and weiss_nicht:
+            # Er will ja — er weiss es nur nicht. Die Frage bleibt stehen, davor
+            # kommt eine Hilfe statt eines Vorwurfs.
+            meta = _NICHT_WISSEN_HILFE.get(slot, _PFLICHT.get(slot, _PFLICHT_ALLGEMEIN))
+        elif slot:
             meta = _PFLICHT.get(slot, _PFLICHT_ALLGEMEIN)
+        elif weiss_nicht:
+            key = _NICHT_WISSEN.get(weiss_nicht, _NICHT_WISSEN_ALLGEMEIN)
+            meta = _var.waehle(key, _var.zug_von(fakten)) or _AUSGELASSEN
         elif fakten.get("ausgelassen"):
             meta = _AUSGELASSEN
         elif fakten.get("abgebrochen"):

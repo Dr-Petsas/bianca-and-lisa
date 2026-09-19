@@ -89,6 +89,47 @@ _F: dict[str, tuple[str, ...]] = {
         "Wünschen Sie die Daten Ihres aktuellen Termins — oder einen neuen Slot?",
         "Klarheit kurz: vorhandenen Termin ansagen, oder einen neuen buchen?",
     ),
+    # Letzter Besuch OHNE Anlass in der Akte. Live 19.09.2026 lief der Satz durch
+    # die {grund}-Form und endete auf "... war bei Doktor Petsas wegen." — ein
+    # fehlender Fakt darf nie eine Praeposition im Leeren stehen lassen.
+    "bezug_ohne_grund": (
+        "Ich sehe, Sie waren vor {wann} bei {arzt}. Ich buche Ihnen wieder dort. ",
+        "Ihr letzter Termin vor {wann} war bei {arzt} — ich bleibe bei {arzt}. ",
+        "Beim letzten Besuch vor {wann} waren Sie bei {arzt}. Wieder dort? Ich nehme {arzt}. ",
+        "In der Kartei steht vor {wann} ein Termin bei {arzt}. Ich buche wieder dort. ",
+        "Zuletzt hat Sie vor {wann} {arzt} gesehen. Ich lege den Termin wieder dort. ",
+        "Aus der Akte: vor {wann} bei {arzt}. Ich bleibe bei {arzt}. ",
+        "Sie waren das letzte Mal vor {wann} bei {arzt}. Wieder {arzt}. ",
+        "Letzter Eintrag vor {wann}: {arzt}. Ich buche Ihnen wieder dort. ",
+        "Ich sehe den letzten Besuch vor {wann} bei {arzt}. Wieder bei {arzt}. ",
+        "Vor {wann} waren Sie bei {arzt} — dort buche ich auch diesmal. ",
+    ),
+    # "Keine Ahnung" auf ein verzichtbares Feld: sagen, wie es ohne die Angabe
+    # weitergeht (s. renderer._NICHT_WISSEN).
+    "weiss_nicht_zeit": (
+        "Kein Problem, dann nehme ich einfach den nächstmöglichen. ",
+        "Das macht nichts — ich schaue nach dem nächsten freien Termin. ",
+        "Kein Problem, ich suche einfach ab sofort. ",
+        "Dann lasse ich die Zeit offen und nehme das Nächstbeste. ",
+        "Alles gut — ich schaue, was als Nächstes frei ist. ",
+        "Kein Thema, ich gehe vom nächstmöglichen Termin aus. ",
+    ),
+    "weiss_nicht_arzt": (
+        "Kein Problem, dann suche ich beim nächsten freien Behandler. ",
+        "Das macht nichts — ich nehme, wer zuerst frei ist. ",
+        "Kein Problem, ich schaue über alle Behandler. ",
+        "Dann lasse ich das offen und nehme den nächsten freien Termin. ",
+        "Alles gut, ich suche unabhängig vom Behandler. ",
+        "Kein Thema — ich nehme den Behandler mit dem nächsten Platz. ",
+    ),
+    "weiss_nicht_offen": (
+        "Kein Problem, das lassen wir offen. ",
+        "Das macht nichts, das brauche ich nicht zwingend. ",
+        "Alles gut, darüber gehe ich hinweg. ",
+        "Kein Thema, das können wir offen lassen. ",
+        "Das ist kein Problem — ich lasse es weg. ",
+        "Gut, dann überspringe ich das. ",
+    ),
     "bezug": (
         "Ich sehe, Sie waren vor {wann} wegen {grund} bei {arzt}. Ich buche Ihnen wieder bei {arzt}. ",
         "Sie waren vor {wann} bei {arzt} wegen {grund} — ich lege den Termin wieder bei {arzt}. ",
@@ -178,7 +219,7 @@ _F: dict[str, tuple[str, ...]] = {
         "Was ist der Anlass?",
         "Welches Anliegen soll ich eintragen?",
         "Worum soll sich der Termin drehen?",
-        "Was darf die Ärztin oder der Arzt vorbereiten?",
+        "Geht es um eine Kontrolle, um Schmerzen, oder um etwas anderes?",
         "Welcher Besuchsgrund passt?",
         "Was liegt an — Kontrolle, Beschwerden, etwas anderes?",
         "Wofür brauchen Sie den Termin?",
