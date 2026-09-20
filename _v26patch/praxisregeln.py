@@ -1,0 +1,412 @@
+"""Kompakte, DB-gesteuerte Praxisregeln fuer kritische Sonderwege.
+
+Die Pickadoc-CF liefert aktuell nur einen Teil der Agent-Promptfelder an
+TelefonKI. Kritische Praxisregeln tragen deshalb einen kurzen Marker in einem
+tatsaechlich uebertragenen Promptfeld. Der feste Flow erkennt den Marker und
+setzt die Regel deterministisch um; ohne Marker bleibt jede andere Praxis
+byte-identisch.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+NOTFALL_MARKER = "NOTFALL-SOFORTREGEL"
+DOKUMENT_MARKER = "DOKUMENT-VORSPRACHEREGEL"
+TZ = ZoneInfo("Europe/Berlin")
+
+_LEBENSGEFAHR_RE = re.compile(
+    r"\batemnot\b|pfeifende?\s+atmung|enge\s+im\s+hals|"
+    r"(?:zunge|mund|hals)[^.!?]{0,30}geschwollen|"
+    r"kreislauf(?:kollaps|zusammenbruch)|bewusstlos|krampf(?:artig|anfall)|"
+    r"gro(?:ß|ss)fl(?:ä|ae)chige?\s+hautabl(?:ö|oe)sung|"
+    r"blutige?\s+lippen|schleimhaut[^.!?]{0,30}(?:blutig|abl(?:ö|oe)s)|"
+    r"schwere?\s+(?:arzneimittel|medikamenten)(?:reaktion|allergie)",
+    re.I,
+)
+# Fix 3 (13.09.2026, Feldtest-Analyse): „dringend"/„sofort"/„heute
+# unbedingt" standen hier als eigenstaendige Notfall-Marker. Damit wurde
+# „Ich brauche dringend einen Termin", „Ich muss den Termin sofort absagen"
+# oder „Stellen Sie mich sofort durch" zum Akutfall: Buchung/Absage
+# abgebrochen, „Kommen Sie jetzt direkt in die Praxis". Dringlichkeit
+# zaehlt jetzt NUR zusammen mit einem Beschwerde-Wort im selben Satz
+# (_DRINGLICHKEIT_RE + _BESCHWERDE_RE in akut()). Die Symptom-Muster unten
+# und notfall/akut bleiben unveraendert eigenstaendig.
+_DRINGLICHKEIT_RE = re.compile(
+    r"\bdringend\w*|\bsofort\b|heute\s+unbedingt|schnellstm(?:ö|oe)glich|"
+    r"so\s+schnell\s+wie\s+m(?:ö|oe)glich|\beilig\b|ganz\s+schnell|umgehend",
+    re.I,
+)
+_BESCHWERDE_RE = re.compile(
+    r"\bhaut(?!arzt|(?:ä|ae)rzt)\w*|ausschlag|ekzem|\bfleck\w*|pustel\w*|pickel|"
+    r"quaddel\w*|\bblasen?\b|juck\w*|brenn\w*|schmerz\w*|\bweh\b|wehtut|"
+    r"tut\s+(?:\w+\s+)?weh|schwell\w*|geschwollen|entz(?:ü|ue)nd\w*|eiter\w*|"
+    r"\bblut(?:et|en|ung\w*|ig\w*)\b|wunde\w*|n(?:ä|ae)ssend\w*|offene?\s+stelle|"
+    r"fieber|allergi\w*|reaktion|muttermal\w*|leberfleck\w*|"
+    r"(?:fleck|muttermal|stelle|haut)\w*[^.!?]{0,30}(?:ver(?:ä|ae)nder|w(?:ä|ae)chst|gr(?:ö|oe)(?:ß|ss)er)|"
+    r"g(?:ü|ue)rtelrose|herpes|zecke\w*|sonnenbrand|verbrenn\w*|verbr(?:ü|ue)h\w*|"
+    r"\b(?:insekten|m(?:ü|ue)cken|wespen|bienen)?stich(?:e|es|en)?\b|gestochen|"
+    r"gebissen|\bbiss\b|infekt\w*|beschwerden|symptom\w*|"
+    r"breitet\s+sich\s+aus|ausgebreitet",
+    re.I,
+)
+_AKUT_RE = re.compile(
+    r"\bnotfall\b|\bakut\w*|"
+    r"pl(?:ö|oe)tzlich[^.!?]{0,50}(?:haut|ausschlag|fleck|ver(?:ä|ae)nder)|"
+    r"schnell[^.!?]{0,30}(?:schlimmer|ausbreit)|"
+    r"starke?\s+(?:schmerz|brennen|juckreiz)|nicht\s+aus(?:zu)?halten|"
+    r"(?:gesicht|lippe|augenlid|hals)[^.!?]{0,30}(?:schwell|geschwollen)|"
+    r"\bblasen\b|n(?:ä|ae)ssende?\s+fl(?:ä|ae)che|offene?\s+stelle|eitrig|"
+    r"hautausschlag[^.!?]{0,40}(?:fieber|kreislauf|krankheitsgef(?:ü|ue)hl)|"
+    r"g(?:ü|ue)rtelrose|akute?\s+allergische?\s+reaktion|"
+    r"(?:wunde|infektion)[^.!?]{0,40}(?:eingriff|operation|praxis)|"
+    r"kind[^.!?]{0,40}(?:ausgedehnt|ganze[rm]?\s+k(?:ö|oe)rper)[^.!?]{0,30}ausschlag",
+    re.I,
+)
+_VERNEINT_RE = re.compile(
+    r"\b(?:kein|keine|nicht)\s+(?:akut\w*|notfall|dringend)\b", re.I)
+_UHRFRAGE_RE = re.compile(
+    r"\bwann\b|welche\s+uhrzeit|um\s+wie\s+viel\s+uhr|feste?\s+uhrzeit",
+    re.I,
+)
+_REZEPT_UEBERWEISUNG_RE = re.compile(
+    r"\b(?:(?:folge|dauer|privat|kassen)[-\s]?)?rezept(?:e|es|en)?\b|"
+    r"\brezept(?:wunsch|bestell\w*|abhol\w*|verlänger\w*|verlaenger\w*)\b|"
+    r"\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen",
+    re.I,
+)
+# Chef 20.09.2026: alles, was nur persoenlich geht — kein Rueckruf.
+_PERSOENLICH_DOKUMENT_RE = re.compile(
+    r"\brezept(?!ion)\w*"
+    r"|\b(?:ü|ue)berweisung\w*|(?:ü|ue)berweisen"
+    r"|\bkrankmeldung\w*|\barbeitsunf|\battest\b"
+    r"|\brechnung(?:en|s)?\b|\babrechnung\w*"
+    r"|\bbefund(?:e|s|es|bericht\w*|unterlagen|kopie\w*)?\b"
+    r"|\bbehandlungsunterlagen|\bpatientenunterlagen|\bunterlagen\b"
+    r"|\bpatientenakte|\bkrankenakte|\bakten\b|\bakte\b"
+    r"|\bbehandlungsplan\w*|\bkostenplan\w*|\bheil-?\s*und\s*kosten|\bhkp\b",
+    re.I,
+)
+_DOKUMENT_WUNSCH_RE = re.compile(
+    r"\bbitte\b|"
+    r"mein(?:e[ns]?)?\s+(?:rezept|(?:ü|ue)berweisung|befund|rechnung|akte|"
+    r"unterlagen|krankmeldung|plan)|"
+    r"(?:ein|eine|das|die|den|ne)\s+(?:rezept|(?:ü|ue)berweisung|befund|"
+    r"rechnung|akte|krankmeldung|attest)",
+    re.I,
+)
+_PREISFRAGE_RE = re.compile(r"was\s+kost|wie\s+teuer|\bpreis\b", re.I)
+_DOKUMENT_LABEL = {
+    "rezept": "Rezepte",
+    "ueberweisung": "Überweisungen",
+    "krankmeldung": "Krankmeldungen",
+    "rechnung": "Rechnungen",
+    "plan": "Behandlungspläne",
+    "akte": "Akten",
+    "befund": "Befunde",
+    "unterlagen": "Behandlungsunterlagen",
+    "dokument": "Solche Unterlagen",
+}
+# Zahnaerztliche Unterlagen, die HERAUSGEGEBEN werden koennten (Dienstweg):
+# Roentgenbilder/-aufnahmen, Befundberichte, Behandlungsunterlagen. Bewusst
+# NICHT „Befundbesprechung"/„Roentgentermin" — das sind Termine (Fix 1,
+# 13.09.2026: die alte Form `befund\w*` fing jede Befundbesprechung ab).
+_DENTAL_UNTERLAGEN_RE = re.compile(
+    r"\b(?:r(?:ö|oe)ntgen(?:bild\w*|aufnahme\w*|unterlagen|befund\w*)?"
+    r"|befund(?:e|s|es|bericht\w*|unterlagen|bilder?|kopie\w*)?"
+    r"|behandlungsunterlagen|unterlagen|patientenakte|krankenakte)\b",
+    re.I,
+)
+
+# Der Anrufer WILL ein Dokument bekommen/ausgestellt/geschickt haben. Ohne
+# ein solches Anforderungs-Verb ist die blosse Nennung („Rezept", „Roentgen")
+# kein Dokumentwunsch — z. B. „Termin zum Roentgen", „Befundbesprechung".
+_ANFORDERUNG_RE = re.compile(
+    r"\b(?:brauch\w*|br(?:ä|ae)uchte\w*|ben(?:ö|oe)tig\w*"
+    r"|h(?:ä|ae)tte?n?\s+(?:\w+\s+){0,3}?gern\w*"
+    r"|m(?:ö|oe)chte\w*|will|wollte\w*|wollen|bitte\s+um|bestell\w*"
+    r"|abhol\w*|verl(?:ä|ae)nger\w*|ausstell\w*|ausgestellt|verschreib\w*|aufschreib\w*"
+    r"|(?:zu|r(?:ü|ue)ber|zur(?:ü|ue)ck|nach)?schick\w*|(?:zu)?send\w*|(?:zu)?mail\w*"
+    r"|fax\w*|bekomm\w*|krieg\w*|erhalt\w*|mitgeb\w*|mitnehm\w*|hinterleg\w*"
+    r"|fertig\s*mach\w*|bereitleg\w*|kopie\w*|anforder\w*|beantrag\w*"
+    r"|abgelaufen|aufgebraucht|alle\b|leer\b"
+    r"|neue[sn]?\s+(?:rezept|(?:ü|ue)berweisung|verordnung|attest)"
+    r"|noch\s+(?:ein\w*|mal)\s+(?:ein\w*\s+)?(?:rezept|(?:ü|ue)berweisung|verordnung))",
+    re.I,
+)
+
+# Der Anrufer HAT eine Ueberweisung (vom Hausarzt/Kollegen) — das ist ein
+# Buchungsgrund, kein Dokumentwunsch. Gewinnt gegen die Anforderung.
+_HAT_UEBERWEISUNG_RE = re.compile(
+    r"(?:ü|ue)berwiesen"
+    r"|(?:ü|ue)berweisung\w*\s+(?:von|vom|durch|des|der|meine[rs]|aus|liegt|dabei|mitgebracht)\b"
+    r"|\b(?:hab(?:e|en)?|hatte|hat|liegt|bring\w*)\s+(?:\w+\s+){0,3}?"
+    r"(?:eine|die|ne|meine|schon\s+eine|bereits\s+eine|so\s+eine)\s+(?:ü|ue)berweisung"
+    r"|\bmit\s+(?:einer\s+|der\s+|meiner\s+)?(?:ü|ue)berweisung"
+    r"|(?:ü|ue)berweisung\w*\s+(?:\w+\s+){0,2}?(?:dabei|mitgebracht|in\s+der\s+hand|vorliegen)",
+    re.I,
+)
+
+# Terminbezug im Satz — beim Zahnarzt sind „Roentgen"/„Befund" dann Termine
+# (Roentgentermin, Befundbesprechung, Aufnahmen machen lassen).
+_TERMIN_KONTEXT_RE = re.compile(
+    r"\btermin\w*|besprech\w*|kontroll\w*|untersuch\w*|aufnahmen?\s+machen"
+    r"|r(?:ö|oe)ntgen\s+(?:lassen|machen)|zum\s+r(?:ö|oe)ntgen|ger(?:ö|oe)ntgt"
+    r"|r(?:ö|oe)ntgentermin|vorbeikommen",
+    re.I,
+)
+_WOCHENTAGE = {
+    0: "montag", 1: "dienstag", 2: "mittwoch", 3: "donnerstag",
+    4: "freitag", 5: "samstag", 6: "sonntag",
+}
+_ZEIT_RE = re.compile(
+    r"(\d{1,2})(?:[:.](\d{2}))?\s*(?:uhr\s*)?(?:-|bis)\s*"
+    r"(\d{1,2})(?:[:.](\d{2}))?",
+    re.I,
+)
+
+
+def _s(v: Any) -> str:
+    return " ".join(str(v or "").split()).strip()
+
+
+def _prompt(tenant: dict | None) -> str:
+    return str((tenant or {}).get("dbPrompt") or "")
+
+
+def notfall_sofort_aktiv(tenant: dict | None) -> bool:
+    return NOTFALL_MARKER in _prompt(tenant)
+
+
+def dokument_vorsprache_aktiv(tenant: dict | None) -> bool:
+    return DOKUMENT_MARKER in _prompt(tenant)
+
+
+# Chef 13.09.2026 (Punkt 6): Der Verweis auf den aerztlichen Bereitschafts-
+# dienst 116 117 gehoert NUR zur Blessing-Notfallregel (DB-Marker). In den
+# Zahnpraxen (MedDent, Thaler) gibt es den Akut-Termin im Haus — dort darf
+# weder die Maschine noch das Modell die 116 117 nennen. Der feste Text oben
+# ist ueber `notfall_sofort_aktiv` gegated; diese Wache faengt das MODELL.
+_NOTDIENST_RE = re.compile(r"\b116\s?117\b|\b1\s?1\s?6\s+1\s?1\s?7\b", re.I)
+
+
+def notdienst_erlaubt(tenant: dict | None) -> bool:
+    """Darf die 116 117 in dieser Praxis ueberhaupt fallen? Nur mit Marker."""
+    return notfall_sofort_aktiv(tenant)
+
+
+def notdienst_saeubern(tenant: dict | None, text: str) -> tuple[str, bool]:
+    """(Text ohne 116-117-Saetze, gestrichen?) — unveraendert, wenn erlaubt.
+
+    Streicht satzweise (kern.sprech.tts_saetze); bleibt nichts uebrig, kommt
+    ein ehrlicher Satz statt Stille — der Frage-Anker haengt die offene
+    Frage an."""
+    t = _s(text)
+    if not t or notdienst_erlaubt(tenant) or not _NOTDIENST_RE.search(t):
+        return text, False
+    from kern import sprech
+    # tts_saetze trennt NIE hinter einer Ziffer ("im 3. Stock") — endet der
+    # 116-117-Satz auf die Nummer, wuerde der Folgesatz mit ihm fallen. Der
+    # markierte Satz verschwindet gleich, das Satzzeichen hoert also niemand.
+    t = re.sub(r"(116\s?117)\.(\s+[A-ZÄÖÜ])", r"\1!\2", t)
+    behalten = [s for s in sprech.tts_saetze(t) if not _NOTDIENST_RE.search(s)]
+    neu = " ".join(behalten).strip()
+    if not neu:
+        neu = "Bei akuten Beschwerden helfen wir Ihnen hier in der Praxis weiter."
+    return neu, True
+
+
+def lebensgefahr(text: str) -> bool:
+    return bool(_LEBENSGEFAHR_RE.search(_s(text)))
+
+
+def akut(text: str) -> bool:
+    t = _s(text)
+    if not t or _VERNEINT_RE.search(t):
+        return False
+    if lebensgefahr(t) or _AKUT_RE.search(t):
+        return True
+    # Fix 3: Dringlichkeit allein ist kein Notfall — nur mit Beschwerde-Wort.
+    return bool(_DRINGLICHKEIT_RE.search(t) and _BESCHWERDE_RE.search(t))
+
+
+def praxis_offen(tenant: dict | None, jetzt: datetime | None = None) -> bool | None:
+    """Ist die Praxis gerade geoeffnet? None, wenn keine Zeiten bekannt sind.
+
+    W-STANDORT (13.09.2026): liegen strukturierte Zeiten aus den
+    Standorteinstellungen vor (``tenant["standort"]["zeiten"]``), gelten
+    die — sonst wie bisher die Sprechzeiten-Zeilen des DB-Prompts.
+    """
+    now = jetzt or datetime.now(TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=TZ)
+    st = (tenant or {}).get("standort") if isinstance(tenant, dict) else None
+    if isinstance(st, dict) and st.get("zeiten"):
+        from kern import standort as standortmod
+        # Gleiche Rangfolge wie kern.wissen: eine ausdrueckliche Einzeiler-
+        # Angabe im Agent-Prompt (MedDent) bleibt die Wahrheit des Kunden.
+        if not standortmod.hat_explizite_zeiten(_prompt(tenant)):
+            offen = standortmod.offen(st.get("zeiten"), now)
+            if offen is not None:
+                return offen
+    tag = _WOCHENTAGE[now.weekday()]
+    prompt = _prompt(tenant)
+    zeile = next(
+        (z for z in prompt.splitlines() if re.search(rf"\b{tag}\b", z, re.I)),
+        "",
+    )
+    if not zeile:
+        # Sind andere Wochentage mit Zeiten gepflegt, ist ein fehlender Tag
+        # (typisch Samstag/Sonntag) geschlossen — nie versehentlich "jetzt
+        # kommen" sagen. Nur bei ganz fehlendem Stundenplan bleibt es unbekannt.
+        hat_plan = any(
+            _ZEIT_RE.search(z) and any(
+                re.search(rf"\b{wt}\b", z, re.I)
+                for wt in _WOCHENTAGE.values()
+            )
+            for z in prompt.splitlines()
+        )
+        return False if hat_plan else None
+    fenster = list(_ZEIT_RE.finditer(zeile))
+    if not fenster:
+        return None
+    minute = now.hour * 60 + now.minute
+    for m in fenster:
+        start = int(m.group(1)) * 60 + int(m.group(2) or 0)
+        ende = int(m.group(3)) * 60 + int(m.group(4) or 0)
+        if start <= minute <= ende:
+            return True
+    return False
+
+
+def notfall_antwort(
+    tenant: dict | None,
+    text: str,
+    *,
+    jetzt: datetime | None = None,
+    bereits_akut: bool = False,
+) -> str:
+    """Feste, kurze Notfallantwort oder ""."""
+    if not notfall_sofort_aktiv(tenant):
+        return ""
+    t = _s(text)
+    if lebensgefahr(t):
+        return (
+            "Das ist ein medizinischer Notfall. Wählen Sie bitte jetzt die "
+            "112."
+        )
+    if not (akut(t) or (bereits_akut and _UHRFRAGE_RE.search(t))):
+        return ""
+    offen = praxis_offen(tenant, jetzt)
+    if offen is False:
+        return (
+            "Die Praxis ist gerade geschlossen. Wenden Sie sich bitte an den "
+            "ärztlichen Bereitschaftsdienst unter 116 117. Bei Atemnot oder "
+            "Kreislaufproblemen wählen Sie sofort die 112."
+        )
+    return (
+        "Das klingt akut. Kommen Sie bitte jetzt direkt in die Praxis. "
+        "Dafür gibt es keine feste Uhrzeit; bringen Sie bitte Wartezeit mit. "
+        "Sie werden auf jeden Fall so schnell wie möglich gesehen und versorgt."
+    )
+
+
+def dokument_art(text: str) -> str:
+    t = _s(text)
+    if re.search(r"\brezept(?!ion)", t, re.I):
+        return "rezept"
+    if re.search(r"(?:ü|ue)berweis", t, re.I):
+        return "ueberweisung"
+    if re.search(r"krankmeldung|arbeitsunf|attest", t, re.I):
+        return "krankmeldung"
+    if re.search(r"\brechnung|\babrechnung", t, re.I):
+        return "rechnung"
+    if re.search(r"behandlungsplan|kostenplan|heil-?\s*und\s*kosten|\bhkp\b", t, re.I):
+        return "plan"
+    if re.search(r"patientenakte|krankenakte|\bakten\b|\bakte\b", t, re.I):
+        return "akte"
+    if re.search(r"befund", t, re.I):
+        return "befund"
+    if re.search(r"unterlagen", t, re.I):
+        return "unterlagen"
+    return "dokument"
+
+
+def behandler_fuer_dokument(tenant: dict | None, sit: dict | None = None) -> str:
+    """Letzter bekannter Behandler, sonst der Standardkalender, sonst leer."""
+    from kern.patients import arzt_sprechname
+
+    sit = sit if isinstance(sit, dict) else {}
+    k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    for src in (k.get("doctorName"), k.get("calendarName"), s.get("arzt")):
+        name = arzt_sprechname(src, tenant or {})
+        if name:
+            return name
+    default_id = _s((tenant or {}).get("defaultCalendarId"))
+    for c in (tenant or {}).get("calendars") or []:
+        if not isinstance(c, dict):
+            continue
+        if default_id and _s(c.get("id")) != default_id:
+            continue
+        name = arzt_sprechname(c.get("name"), tenant or {})
+        if name:
+            return name
+        break
+    return ""
+
+
+def dokument_antwort(behandler: str = "", art: str = "") -> str:
+    wer = _s(behandler) or "der Behandler"
+    art = art or "dokument"
+    if art == "rezept":
+        return (
+            f"Rezepte können nur in der Praxis abgeholt werden. "
+            f"{wer} stellt sie nur nach persönlicher Rücksprache aus."
+        )
+    if art == "ueberweisung":
+        return "Überweisungen werden nur persönlich in der Praxis ausgestellt."
+    label = _DOKUMENT_LABEL.get(art, "Solche Unterlagen")
+    return (
+        f"{label} gebe ich am Telefon nicht heraus. "
+        f"Das geht nur persönlich in der Praxis, nach Rücksprache mit {wer}."
+    )
+
+
+def hat_ueberweisung(text: str) -> bool:
+    """Der Anrufer HAT eine Ueberweisung / ist ueberwiesen worden — das ist
+    ein Buchungsgrund, kein Dokumentwunsch (Fix 1/2, 13.09.2026)."""
+    return bool(_HAT_UEBERWEISUNG_RE.search(_s(text)))
+
+
+def dokument_anforderung(text: str) -> bool:
+    """Will der Anrufer ein Dokument BEKOMMEN (nicht: er hat eine
+    Ueberweisung und will deshalb einen Termin)?"""
+    t = _s(text)
+    if not _PERSOENLICH_DOKUMENT_RE.search(t):
+        return False
+    if hat_ueberweisung(t):
+        return False
+    if _TERMIN_KONTEXT_RE.search(t) and not _REZEPT_UEBERWEISUNG_RE.search(t):
+        return False
+    if _PREISFRAGE_RE.search(t) and "rechnung" not in t.lower():
+        return False
+    return bool(_ANFORDERUNG_RE.search(t) or _DOKUMENT_WUNSCH_RE.search(t))
+
+
+def unterlagen_antwort(tenant: dict | None, text: str, sit: dict | None = None) -> str:
+    """Dokumente nur persoenlich — fuer alle Mandanten, nie Rueckruf.
+
+    „Ich habe eine Ueberweisung" und Befundbesprechung/Roentgentermin
+    bleiben Buchungsgruende.
+    """
+    t = _s(text)
+    if not t or not dokument_anforderung(t):
+        return ""
+    return dokument_antwort(
+        behandler=behandler_fuer_dokument(tenant, sit),
+        art=dokument_art(t),
+    )
