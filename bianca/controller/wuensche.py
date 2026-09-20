@@ -82,7 +82,16 @@ _FELD = (
 _MUELL_WUNSCH = frozenset({
     "ja", "nein", "ok", "okay", "gerne", "genau", "richtig", "passt",
     "den grund", "der grund", "die zeit", "den arzt", "der arzt",
+    "egal", "ist egal", "mir egal", "ist mir egal", "irgendwann",
 })
+
+
+def ist_egal_zeit(text: str) -> bool:
+    """Kein Zeitwunsch, sondern 'nimm den naechsten'. Nicht fuer Behandler."""
+    t = falt(" ".join(str(text or "").split())).strip(" .!?,;:")
+    return t in {
+        "egal", "ist egal", "mir egal", "ist mir egal", "irgendwann",
+    }
 
 
 def falt(s: str) -> str:
@@ -372,5 +381,5 @@ def feld_allein(text: str) -> str:
 __all__ = [
     "HEUTE", "besuchsgrund", "falt", "feld_allein", "feld_name",
     "fenster", "passt_slot", "slot_datum", "teile",
-    "tageszeit", "wochentag", "wunsch_mischen", "wunschzeit",
+    "tageszeit", "wochentag", "wunsch_mischen", "wunschzeit", "ist_egal_zeit",
 ]

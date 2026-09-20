@@ -525,6 +525,45 @@ def test_vorbezug_echot_keinen_anrufer_rohsatz():
         assert f"{roh.rstrip('.!?')} —" not in t
 
 
+def test_ist_egal_ist_kein_wunschtag():
+    """dc03a9ea: 'Ist egal.' fuellt die Wunschzeit nicht, Behandler-egal bleibt."""
+    ev = nlu_test.deuten("Ist egal.", offene_frage="wunschzeit")
+    assert "wunschzeit" not in ev.slots
+    ev_m = nlu_test.deuten("Mittwoch.", offene_frage="wunschzeit")
+    assert "mittwoch" in ev_m.slots["wunschzeit"].wert.lower()
+    ev_b = nlu_test.deuten("egal", offene_frage="behandler")
+    assert ev_b.slots["behandler"].wert == "egal"
+    llm_box: list[str] = []
+
+    def _kein_llm(text, **kw):
+        llm_box.append(text)
+        raise AssertionError("egal auf Wunschzeit darf nicht ins Modell")
+
+    ev_v = verstehen.deuten(
+        "Ist egal.", offene_frage="wunschzeit", llm=_kein_llm,
+    )
+    assert llm_box == []
+    assert ev_v.intent == Intent.AUSLASSEN
+    assert ev_v.slots["nicht_wissen"].wert == "wunschzeit"
+    ev_art = verstehen.deuten("egal", offene_frage="behandler", llm=_kein_llm)
+    assert ev_art.slots.get("behandler") and ev_art.slots["behandler"].wert == "egal"
+    assert ev_art.intent != Intent.AUSLASSEN
+
+
+def test_ist_egal_bietet_naechsten_slot_ohne_echo():
+    """dc03a9ea: nach 'Ist egal.' kein 'Ist egal. ist leider nichts frei'."""
+    g = TestGespraech(policy.default())
+    g.start()
+    g.eingabe("Ich hätte gern einen Termin")
+    g.eingabe("ja")
+    a = g.eingabe("Kontrolle")
+    assert "passen" in a.antwort.lower() or "tage" in a.antwort.lower()
+    a = g.eingabe("Ist egal.")
+    t = a.antwort.lower()
+    assert "ist egal" not in t
+    assert "leider nichts frei" not in t
+
+
 def test_anrede_mit_herrn_nicht_herr():
     """dc03a9ea: nach 'mit' steht Herrn, Nominativ und Frau bleiben."""
     t = varianten.waehle(

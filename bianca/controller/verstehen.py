@@ -141,6 +141,10 @@ def _ist_nicht_wissen(text: str, offene_frage: str) -> bool:
     t = " ".join(str(text or "").split())
     if offene_frage not in _NICHT_WISSEN_FRAGEN or not t:
         return False
+    # Nur auf der Wunschzeit: "egal" heisst naechster freier Slot, kein Tag.
+    # Beim Behandler bleibt "egal" eine Angabe (irgendein Arzt).
+    if offene_frage in ("wunschzeit", "termin_hinweis") and _wuensche.ist_egal_zeit(t):
+        return True
     if len(t.split()) > _NICHT_WISSEN_WOERTER or _ZIFFER_RE.search(t):
         return False
     if not _NICHT_WISSEN_RE.search(t):
@@ -250,11 +254,15 @@ def _kanon_slots(ev: SemanticEvent) -> SemanticEvent:
         kanon = _wuensche.wunschzeit(wz.wert)
         if kanon:
             slots["wunschzeit"] = replace(wz, wert=kanon)
+        elif _wuensche.ist_egal_zeit(wz.wert):
+            slots.pop("wunschzeit", None)
     th = slots.get("termin_hinweis")
     if th and th.wert:
         kanon = _wuensche.wunschzeit(th.wert)
         if kanon:
             slots["termin_hinweis"] = replace(th, wert=kanon)
+        elif _wuensche.ist_egal_zeit(th.wert):
+            slots.pop("termin_hinweis", None)
     bg = slots.get("besuchsgrund")
     if bg and bg.wert:
         kanon = _wuensche.besuchsgrund(bg.wert)

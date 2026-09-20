@@ -466,7 +466,8 @@ def _schonmal(t: str) -> str:
 # Felder mit geschlossener Auswahl bzw. eigenem Leser weiter unten. Rohtext
 # darf dort NIE hinein - er wuerde die Frage als beantwortet gelten lassen.
 _EIGENER_LESER = frozenset(
-    {"behandler", "versicherung", "schonmal", "fuer_wen", "terminwahl"}
+    {"behandler", "versicherung", "schonmal", "fuer_wen", "terminwahl",
+     "wunschzeit"}
 )
 
 
@@ -642,7 +643,10 @@ def deuten(
         w = _wunschzeit(t)
         if w:
             slots["termin_hinweis"] = w
-        elif t and not bestaetigung and not dritter:
+        elif (
+            t and not bestaetigung and not dritter
+            and not _wuensche.ist_egal_zeit(t)
+        ):
             slots["termin_hinweis"] = rest.strip()
     if offene_frage == "aenderung":
         kf = kf or _wuensche.feld_name(t) or _wuensche.feld_allein(t)
