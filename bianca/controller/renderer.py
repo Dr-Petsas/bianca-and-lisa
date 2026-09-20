@@ -33,7 +33,7 @@ _FRAGE: dict[str, str] = {
     "wunschzeit": "Wann würde es Ihnen denn passen?",
     "nachname": "Wie ist Ihr Nachname?",
     "vorname": "Und wie ist Ihr Vorname?",
-    "versicherung": "Sind Sie gesetzlich oder privat versichert?",
+    "versicherung": "Wie sind Sie versichert?",
     "telefon": "Unter welcher Handynummer erreichen wir Sie?",
     "aenderung": "Was möchten Sie ändern?",
     "ziel": "Zu wem darf ich Sie verbinden?",
@@ -255,7 +255,7 @@ def _frage_kern(spec: SpeakSpec) -> str:
     if wer and fid == "vorname":
         return f"Und wie heißt {wer} mit Vornamen?"
     if wer and fid == "versicherung":
-        return f"Ist {wer} gesetzlich oder privat versichert?"
+        return f"Wie ist {wer} versichert?"
     if fid == "mehrfach_ok":
         return "Soll ich das wirklich tun?"
     if fid == "auswahl":
