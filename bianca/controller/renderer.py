@@ -196,10 +196,9 @@ def _vorbezug(spec: SpeakSpec) -> str:
         return "Sie möchten alle Termine absagen. "
     if f.get("gehoert_intent") == "absagen" and spec.frage_id == "auswahl":
         return "Sie möchten absagen. "
-    if _echt(f.get("gehoert_wunsch")):
-        return f"{f['gehoert_wunsch']} — "
-    if _echt(f.get("gehoert_grund")):
-        return f"{f['gehoert_grund']} — "
+    # Rohsatz des Anrufers nie als Prefix. Live dc03a9ea (20.09.2026):
+    # "Ja, bitte. —", "Mittwoch —", "Ist egal. —" vor der nächsten Frage.
+    # Absage und Für-wen-Rolle bleiben Semantik, kein Echo.
     if f.get("gehoert_rolle"):
         wen = _fuer_wen.phrase(f["gehoert_rolle"], fall="wen") or f["gehoert_rolle"]
         return f"Für {wen}. "

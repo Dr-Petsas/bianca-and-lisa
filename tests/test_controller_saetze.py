@@ -511,6 +511,31 @@ def test_renderer_vorbezug_dann_faktenfrage():
     assert t.endswith("Soll ich das wirklich tun?")
 
 
+def test_vorbezug_echot_keinen_anrufer_rohsatz():
+    """dc03a9ea: der gehörte Wunsch darf nicht vor der nächsten Frage stehen."""
+    for roh in ("Ja, bitte.", "Mittwoch", "Ist egal.", "Dienstag", "Kontrolle"):
+        spec = SpeakSpec(
+            akt=SprechAkt.FRAGE,
+            frage_id="versicherung",
+            fakten=(("gehoert_wunsch", roh), ("gehoert_grund", roh)),
+        )
+        t = renderer.rendern(spec)
+        kopf = roh.rstrip(".!?").lower()
+        assert not t.lower().startswith(kopf)
+        assert f"{roh.rstrip('.!?')} —" not in t
+
+
+def test_vorbezug_rolle_bleibt():
+    spec = SpeakSpec(
+        akt=SprechAkt.FRAGE,
+        frage_id="nachname",
+        fakten=(("gehoert_rolle", "sohn"),),
+    )
+    t = renderer.rendern(spec)
+    assert t.lower().startswith("für")
+    assert "sohn" in t.lower()
+
+
 def test_nlu_verschieben_und_mann_absagen():
     ev = nlu_test.deuten(
         "hallo ich will meinen termin verschieben und den von meinem mann absagen"
