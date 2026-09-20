@@ -650,7 +650,7 @@ def rendern(spec: SpeakSpec | None) -> str:
         elif fakten.get("abgebrochen"):
             meta = "Alles klar, das lassen wir. "
     if meta:
-        return meta + text
+        return _var.herr_beugen(meta + text)
     recap = fakten.get("rueckblick")
     if fakten.get("still") and text:
         # Nach Stille: an die offene Frage erinnern, ohne sie als Nachbohren zu
@@ -669,7 +669,7 @@ def rendern(spec: SpeakSpec | None) -> str:
         bruecke = _nochmal_bruecke(spec.akt, fakten.get("nochmal") or "2")
         if bruecke and not text.startswith(bruecke):
             text = bruecke + text
-    return text
+    return _var.herr_beugen(text)
 
 
 __all__ = ["rendern"]

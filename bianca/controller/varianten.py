@@ -519,6 +519,24 @@ _F: dict[str, tuple[str, ...]] = {
 }
 
 
+# Nach Präposition/Objekt: Herr -> Herrn. Nominativ bleibt ("Sie sind Herr").
+# Live dc03a9ea: "spreche ich mit Herr Petsas".
+_HERR_NACH = (
+    "mit Herr ",
+    "bei Herr ",
+    "von Herr ",
+    "zu Herr ",
+    "sehe ich Herr ",
+)
+
+
+def herr_beugen(text: str) -> str:
+    neu = str(text or "")
+    for alt in _HERR_NACH:
+        neu = neu.replace(alt, alt.replace("Herr ", "Herrn "))
+    return neu
+
+
 def waehle(key: str, zug_nr: int = 0, **werte: str) -> str:
     """Deterministische Variante. Unbekannter Key -> leer."""
     liste = _F.get(key) or ()
@@ -527,9 +545,9 @@ def waehle(key: str, zug_nr: int = 0, **werte: str) -> str:
     satz = liste[int(zug_nr) % len(liste)]
     sauber = {k: v for k, v in werte.items() if v}
     try:
-        return satz.format_map(_Default(sauber))
+        return herr_beugen(satz.format_map(_Default(sauber)))
     except (KeyError, ValueError):
-        return satz
+        return herr_beugen(satz)
 
 
 class _Default(dict):
@@ -547,4 +565,4 @@ def zug_von(fakten: Mapping[str, str] | None) -> int:
         return 0
 
 
-__all__ = ["waehle", "zug_von"]
+__all__ = ["waehle", "zug_von", "herr_beugen"]

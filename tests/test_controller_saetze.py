@@ -525,6 +525,36 @@ def test_vorbezug_echot_keinen_anrufer_rohsatz():
         assert f"{roh.rstrip('.!?')} —" not in t
 
 
+def test_anrede_mit_herrn_nicht_herr():
+    """dc03a9ea: nach 'mit' steht Herrn, Nominativ und Frau bleiben."""
+    t = varianten.waehle(
+        "anrufer_check", 1, anrede="Herr", name="Petsas",
+    )
+    assert "mit Herrn Petsas" in t
+    assert "mit Herr Petsas" not in t
+    nom = varianten.waehle(
+        "anrufer_check", 0, anrede="Herr", name="Petsas",
+    )
+    assert nom.startswith("Herr Petsas")
+    frau = varianten.waehle(
+        "anrufer_check", 1, anrede="Frau", name="Meier",
+    )
+    assert "mit Frau Meier" in frau
+    assert "Herrn" not in frau
+    sind = varianten.waehle(
+        "anrufer_check", 5, anrede="Herr", name="Petsas",
+    )
+    assert "Sie sind Herr Petsas" in sind
+    spec = SpeakSpec(
+        akt=SprechAkt.FRAGE,
+        frage_id="anrufer_check",
+        fakten=(("anrede", "Herr"), ("name", "Petsas"), ("zug", "1")),
+    )
+    rt = renderer.rendern(spec)
+    assert "mit Herrn Petsas" in rt
+    assert "mit Herr Petsas" not in rt
+
+
 def test_vorbezug_rolle_bleibt():
     spec = SpeakSpec(
         akt=SprechAkt.FRAGE,
