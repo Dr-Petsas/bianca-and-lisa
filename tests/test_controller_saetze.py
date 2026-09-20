@@ -550,6 +550,36 @@ def test_ist_egal_ist_kein_wunschtag():
     assert ev_art.intent != Intent.AUSLASSEN
 
 
+def test_leerer_wochentag_bietet_naechstbestes_keine_notiz():
+    """dc03a9ea: Samstag ohne Sim-Slots → nächster Tag, keine Praxisnotiz."""
+    from bianca.controller.gateway_sim import Szenario
+    g = TestGespraech(policy.default(), Szenario(
+        anrufer_anrede="Herr",
+        anrufer_nachname="Petsas",
+        anrufer_versicherung="gesetzlich",
+    ))
+    g.start()
+    g.eingabe("Ich hätte gern einen Termin")
+    a = g.eingabe("ja")
+    if "schon" in a.antwort.lower() or "behandler" in a.antwort.lower() or "passen" not in a.antwort.lower():
+        a = g.eingabe("Kontrolle")
+    a = g.eingabe("Samstag")
+    t = a.antwort.lower()
+    if "nachname" in t or "heißt" in t or "versichert" in t:
+        a = g.eingabe("Petsas")
+        t = a.antwort.lower()
+        if "versichert" in t:
+            a = g.eingabe("gesetzlich")
+            t = a.antwort.lower()
+    assert "samstag ist leider nichts frei" not in t
+    assert "notiz" not in t
+    assert "rückruf" not in t and "rueckruf" not in t
+    assert (
+        "welcher passt" in t or "anbieten" in t or "genau dann" in t
+        or "frei" in t
+    )
+
+
 def test_ist_egal_bietet_naechsten_slot_ohne_echo():
     """dc03a9ea: nach 'Ist egal.' kein 'Ist egal. ist leider nichts frei'."""
     g = TestGespraech(policy.default())

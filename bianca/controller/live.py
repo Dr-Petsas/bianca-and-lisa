@@ -159,6 +159,7 @@ def _vorbelegen(gespraech: TestGespraech, sit: dict) -> None:
             "nachname": _s(a.get("nachname")),
             "vorname": _s(a.get("vorname")),
             "telefon": _s(a.get("telefon")),
+            "patientId": _s(a.get("patientId")),
         }
     k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
     if k:

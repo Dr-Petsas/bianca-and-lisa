@@ -7,8 +7,9 @@ ToolOutcome und vor allem die Schreibsperre (nur_lesen).
 
 from __future__ import annotations
 
+from bianca.controller.reducer import _offer_args
 from bianca.controller.tool_gateway import ToolGateway
-from bianca.controller.typen import OutcomeStatus, ToolCommand
+from bianca.controller.typen import OutcomeStatus, Quelle, SlotValue, TaskState, ToolCommand
 
 
 # --------------------------------------------------------------------------- #
@@ -24,6 +25,9 @@ class FakeKalender:
 
     def offer_slots(self, tenant, ctx, *, wish_text="", **kw):
         self._log("offer_slots", tenant, ctx, {"wish_text": wish_text})
+        q = self.rueck.get("offer_queue")
+        if isinstance(q, list) and q:
+            return q.pop(0)
         return self.rueck.get("offer_slots", {"ok": True, "slots": []})
 
     def find_patient_appointments(self, tenant, ctx):
@@ -57,6 +61,19 @@ def _gw(nur_lesen=True, **rueck) -> tuple[ToolGateway, FakeKalender]:
 # --------------------------------------------------------------------------- #
 # offer_slots (read)
 # --------------------------------------------------------------------------- #
+def test_offer_args_tragen_patient_und_wunsch():
+    task = TaskState(typ="buchen")
+    task.slots["nachname"] = SlotValue(wert="Petsas", quelle=Quelle.ANRUFER_CF)
+    task.slots["vorname"] = SlotValue(wert="Michael", quelle=Quelle.ANRUFER_CF)
+    task.slots["besuchsgrund"] = SlotValue(wert="Kontrolle", quelle=Quelle.GESAGT)
+    task.slots["wunschzeit"] = SlotValue(wert="Mittwoch", quelle=Quelle.GESAGT)
+    a = _offer_args(task)
+    assert a["patientName"] == "Michael Petsas"
+    assert a["lastName"] == "Petsas"
+    assert a["visitMotiveName"] == "Kontrolle"
+    assert a["wish"] == "Mittwoch"
+
+
 def test_offer_ok_mit_slots():
     gw, _ = _gw(offer_slots={
         "ok": True,
@@ -72,6 +89,39 @@ def test_offer_leer_ist_empty():
     gw, _ = _gw(offer_slots={"ok": True, "slots": []})
     oc = gw.ausfuehren(ToolCommand(name="offer_slots"))
     assert oc.status == OutcomeStatus.EMPTY
+
+
+def test_offer_leerer_wunschtag_holt_naechstbestes():
+    """dc03a9ea: Mittwoch ohne Treffer → nächster freier Slot, nicht EMPTY."""
+    gw, fake = _gw(offer_queue=[
+        {"ok": True, "slots": []},
+        {"ok": True, "slots": [{"iso": "x", "spoken": "Donnerstag 09:00 Uhr"}]},
+    ])
+    oc = gw.ausfuehren(ToolCommand(
+        name="offer_slots",
+        args={"wish": "Mittwoch", "patientName": "Petsas", "lastName": "Petsas"},
+    ))
+    assert oc.status == OutcomeStatus.OK
+    assert oc.payload["slots"] == ["Donnerstag 09:00 Uhr"]
+    assert oc.payload.get("exakt") is False
+    assert [a[2].get("wish_text") for a in fake.aufrufe] == ["Mittwoch", ""]
+
+
+def test_offer_args_patient_landet_im_ctx():
+    gw, fake = _gw(offer_slots={
+        "ok": True,
+        "slots": [{"iso": "x", "spoken": "Montag 09:00 Uhr"}],
+    })
+    gw.ausfuehren(ToolCommand(
+        name="offer_slots",
+        args={"wish": "Mittwoch", "patientName": "Michael Petsas",
+              "lastName": "Petsas", "visitMotiveName": "Kontrolle"},
+    ))
+    _, ctx, extra = fake.aufrufe[-1]
+    assert ctx["patientName"] == "Michael Petsas"
+    assert ctx["lastName"] == "Petsas"
+    assert ctx["visitMotiveName"] == "Kontrolle"
+    assert extra["wish_text"] == "Mittwoch"
 
 
 def test_offer_naechstbestes_setzt_exakt_false():

@@ -95,7 +95,7 @@ _ANGEBOT_VERB_RE = re.compile(
 # 8 s); erst eine SERIE ohne Inhalt (_KURZLAUT_SERIE) laeuft wieder auf den
 # Stille-Stups, damit Leitungs-Artefakte das Gespraech nicht einfrieren.
 _NUR_LAUT_RE = re.compile(
-    r"^\s*(?:hm+|mhm+|hmm+|ähm*|aehm*|äh+|aeh+|ehm+|öhm*|oehm*|"
+    r"^\s*(?:hm+|mhm+|hmm+|mm+|ähm*|aehm*|äh+|aeh+|ehm+|öhm*|oehm*|"
     r"tja+|na\s*ja|well|puh+|puff+|uff+|hach+|oh(?:\s*je)?|oha+|"
     r"ups|hoppla|huch|boah+|ach\s*so|aha+)"
     r"[\s.,!?…]*$",

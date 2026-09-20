@@ -52,7 +52,7 @@ def _sit() -> dict:
 # --- W-KURZLAUT ----------------------------------------------------------------
 
 @pytest.mark.parametrize("laut", ["Oh.", "Puff.", "Uff.", "Hoppla.", "Ach so.", "Boah.", "Aha.",
-                                  "Hm.", "Mhm.", "Äh.", "Tja.", "Oh je."])
+                                  "Hm.", "Mhm.", "Mm.", "Äh.", "Tja.", "Oh je."])
 def test_kurzlaute_werden_erkannt(laut):
     assert agent._NUR_LAUT_RE.match(laut), laut
 

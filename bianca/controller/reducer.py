@@ -485,8 +485,46 @@ def _fakten(task: TaskState, *slots: str) -> tuple[tuple[str, str], ...]:
     return tuple(out)
 
 
-def _bindings(task: TaskState) -> dict[str, str]:
+def _slot_wert(task: TaskState, name: str) -> str:
+    sv = task.slots.get(name)
+    return (sv.wert or "").strip() if sv else ""
+
+
+def _identitaet(task: TaskState, ns: State | None = None) -> dict[str, str]:
+    """Patient, Motiv und Behandler fuer kern.calendar.offer_slots.
+
+    Live dc03a9ea: ohne patientName/patientId antwortet offer_slots mit
+    NO_CONTEXT — jeder Wunschtag wirkte leer, danach kam die Notiz.
+    """
     b: dict[str, str] = {}
+    nn = _slot_wert(task, "nachname")
+    vn = _slot_wert(task, "vorname")
+    pid = _slot_wert(task, "patientId")
+    if ns is not None:
+        nn = nn or (ns.anrufer.get("nachname") or "").strip()
+        vn = vn or (ns.anrufer.get("vorname") or "").strip()
+        pid = pid or (ns.anrufer.get("patientId") or "").strip()
+    if nn:
+        b["lastName"] = nn
+    if vn:
+        b["firstName"] = vn
+    name = " ".join(x for x in (vn, nn) if x).strip()
+    if name:
+        b["patientName"] = name
+    if pid:
+        b["patientId"] = pid
+    grund = _slot_wert(task, "besuchsgrund")
+    if grund:
+        b["visitMotiveName"] = grund
+    arzt = _slot_wert(task, "behandler")
+    if arzt and arzt.lower() != "egal":
+        b["calendarName"] = arzt
+        b["doctorName"] = arzt
+    return b
+
+
+def _bindings(task: TaskState, ns: State | None = None) -> dict[str, str]:
+    b = _identitaet(task, ns)
     cal = task.slots.get("calendarId")
     mot = task.slots.get("motivId")
     if cal and cal.wert:
@@ -496,9 +534,12 @@ def _bindings(task: TaskState) -> dict[str, str]:
     return b
 
 
-def _offer_args(task: TaskState) -> dict[str, str]:
+def _offer_args(task: TaskState, ns: State | None = None) -> dict[str, str]:
+    a = _identitaet(task, ns)
     w = task.slots.get("wunschzeit")
-    return {"wish": w.wert} if (w and w.wert) else {}
+    if w and w.wert:
+        a["wish"] = w.wert
+    return a
 
 
 def _slots_neu_laden(
@@ -512,7 +553,7 @@ def _slots_neu_laden(
         task.phase = Phase.ANGEBOT
     return _werkzeug(
         ns, task, spec,
-        ToolCommand(name=spec.offer_tool, args=_offer_args(task), bindings=_bindings(task)),
+        ToolCommand(name=spec.offer_tool, args=_offer_args(task, ns), bindings=_bindings(task, ns)),
         grund=grund,
     )
 
@@ -599,7 +640,7 @@ def _verwalten_neu_suchen(
     task.merker["gesucht"] = True
     return _werkzeug(
         ns, task, spec,
-        ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task)),
+        ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task, ns)),
         grund=grund,
     )
 
@@ -1758,7 +1799,7 @@ def _adv_buchen(ns: State, task: TaskState, ev: SemanticEvent, spec: TaskSpec) -
         task.merker.clear()
         return _werkzeug(
             ns, task, spec,
-            ToolCommand(name=spec.offer_tool, args=_offer_args(task), bindings=_bindings(task)),
+            ToolCommand(name=spec.offer_tool, args=_offer_args(task, ns), bindings=_bindings(task, ns)),
             grund="slots_vollstaendig",
         )
 
@@ -1868,7 +1909,7 @@ def _commit_werkzeug(
         args["slot_iso"] = wahl.wert
     return _werkzeug(
         ns, task, spec,
-        ToolCommand(name=spec.commit_tool, args=args, bindings=_bindings(task)),
+        ToolCommand(name=spec.commit_tool, args=args, bindings=_bindings(task, ns)),
         grund=grund,
     )
 
@@ -1897,7 +1938,7 @@ def _adv_verwalten(ns: State, task: TaskState, ev: SemanticEvent, spec: TaskSpec
         task.merker["gesucht"] = True
         return _werkzeug(
             ns, task, spec,
-            ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task)),
+            ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task, ns)),
             grund="identify_vollstaendig",
         )
 
@@ -1947,7 +1988,7 @@ def _bestaetigen_verwalten(
         if ev.bestaetigung is True or _ist_alle(ev, task):
             return _werkzeug(
                 ns, task, spec,
-                ToolCommand(name=spec.commit_tool, args=_storno_args(task), bindings=_bindings(task)),
+                ToolCommand(name=spec.commit_tool, args=_storno_args(task), bindings=_bindings(task, ns)),
                 grund="storno_alle_bestaetigt",
             )
         return ns, Decision(naechste=Naechste.WARTEN, task=task.typ, grund="mehrfach_offen")
@@ -1959,7 +2000,7 @@ def _bestaetigen_verwalten(
         if ev.bestaetigung is True:
             return _werkzeug(
                 ns, task, spec,
-                ToolCommand(name=spec.commit_tool, args=_storno_args(task), bindings=_bindings(task)),
+                ToolCommand(name=spec.commit_tool, args=_storno_args(task), bindings=_bindings(task, ns)),
                 grund="storno_bestaetigt",
             )
         if ev.bestaetigung is False:
@@ -1984,7 +2025,7 @@ def _bestaetigen_verwalten(
                 task.merker["gesucht"] = True
                 return _werkzeug(
                     ns, task, spec,
-                    ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task)),
+                    ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task, ns)),
                     grund="storno_nicht_dieser",
                 )
             return _frage(ns, task, "termin_hinweis", grund="storno_nicht_dieser")
@@ -1996,7 +2037,7 @@ def _bestaetigen_verwalten(
             task.merker["bestand_bestaetigt"] = True
             return _werkzeug(
                 ns, task, spec,
-                ToolCommand(name=spec.offer_tool, args=_offer_args(task), bindings=_bindings(task)),
+                ToolCommand(name=spec.offer_tool, args=_offer_args(task, ns), bindings=_bindings(task, ns)),
                 grund="verschieben_neue_slots",
             )
         if ev.bestaetigung is False:
@@ -2010,7 +2051,7 @@ def _bestaetigen_verwalten(
                 task.merker["gesucht"] = True
                 return _werkzeug(
                     ns, task, spec,
-                    ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task)),
+                    ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task, ns)),
                     grund="verschieben_nicht_dieser",
                 )
             return _frage(ns, task, "termin_hinweis", grund="verschieben_nicht_dieser")
@@ -2035,7 +2076,7 @@ def _bestaetigen_verwalten(
     if ev.bestaetigung is True:
         return _werkzeug(
             ns, task, spec,
-            ToolCommand(name=spec.commit_tool, args=_move_args(task), bindings=_bindings(task)),
+            ToolCommand(name=spec.commit_tool, args=_move_args(task), bindings=_bindings(task, ns)),
             grund="verschieben_bestaetigt",
         )
     if ev.bestaetigung is False:
@@ -2045,7 +2086,7 @@ def _bestaetigen_verwalten(
         if task.retries["neu_offer"] <= spec.max_commit_retries:
             return _werkzeug(
                 ns, task, spec,
-                ToolCommand(name=spec.offer_tool, args=_offer_args(task), bindings=_bindings(task)),
+                ToolCommand(name=spec.offer_tool, args=_offer_args(task, ns), bindings=_bindings(task, ns)),
                 grund="verschieben_neu_wieder",
             )
         return _terminal_task(
@@ -2095,7 +2136,7 @@ def _adv_auskunft(ns: State, task: TaskState, ev: SemanticEvent, spec: TaskSpec)
         task.phase = Phase.ANGEBOT
         return _werkzeug(
             ns, task, spec,
-            ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task)),
+            ToolCommand(name=spec.such_tool, args=_such_args(task), bindings=_bindings(task, ns)),
             grund="identify_vollstaendig",
         )
     return ns, Decision(naechste=Naechste.WARTEN, task=task.typ, grund="auskunft_offen")
@@ -2314,7 +2355,7 @@ def _oc_commit_buchen(
             task.merker.pop("termin_gelesen", None)
             return _werkzeug(
                 ns, task, spec,
-                ToolCommand(name=spec.offer_tool, args=_offer_args(task), bindings=_bindings(task)),
+                ToolCommand(name=spec.offer_tool, args=_offer_args(task, ns), bindings=_bindings(task, ns)),
                 grund="slot_weg_neu_suchen",
             )
         return _terminal_task(
@@ -2489,7 +2530,7 @@ def _oc_commit_verwalten(
             task.slots.pop("terminwahl", None)
             return _werkzeug(
                 ns, task, spec,
-                ToolCommand(name=spec.offer_tool, args=_offer_args(task), bindings=_bindings(task)),
+                ToolCommand(name=spec.offer_tool, args=_offer_args(task, ns), bindings=_bindings(task, ns)),
                 grund="verschieben_slot_weg",
             )
     return _terminal_task(

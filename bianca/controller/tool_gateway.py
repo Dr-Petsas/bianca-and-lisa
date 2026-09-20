@@ -138,12 +138,37 @@ class ToolGateway:
         for quelle, ziel in (
             ("lastName", "lastName"),
             ("firstName", "firstName"),
+            ("patientName", "patientName"),
+            ("patientId", "patientId"),
             ("visitMotiveId", "visitMotiveId"),
+            ("visitMotiveName", "visitMotiveName"),
             ("calendarId", "calendarId"),
+            ("calendarName", "calendarName"),
+            ("doctorName", "doctorName"),
         ):
             if _s(a.get(quelle)):
                 self.ctx[ziel] = a[quelle]
+        self._anrufer_in_ctx()
         return self.ctx
+
+    def _anrufer_in_ctx(self) -> None:
+        """Bekannte Akte aus der Sitzung, falls der Befehl sie nicht trug."""
+        if _s(self.ctx.get("patientId")) or _s(self.ctx.get("patientName")):
+            return
+        sit = self.sit if isinstance(self.sit, dict) else {}
+        a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+        pid = _s(a.get("patientId"))
+        nn = _s(a.get("nachname"))
+        vn = _s(a.get("vorname"))
+        if pid:
+            self.ctx["patientId"] = pid
+        name = " ".join(x for x in (vn, nn) if x).strip()
+        if name:
+            self.ctx["patientName"] = name
+        if nn:
+            self.ctx["lastName"] = nn
+        if vn:
+            self.ctx["firstName"] = vn
 
     # ------------------------------------------------------------------ #
     def ausfuehren(self, cmd: ToolCommand) -> ToolOutcome:
@@ -192,6 +217,27 @@ class ToolGateway:
             self._kal().offer_slots(self.tenant, ctx, wish_text=wish),
             {"wish": wish},
         )
+        oc = self._offer_aus(res, wish)
+        if oc is not None:
+            return oc
+        # Wunschtag ohne Treffer: nochmal ohne Filter — naechster freier Slot
+        # statt "Mittwoch ist leider nichts frei" und dann eine Notiz (dc03a9ea).
+        if wish and isinstance(res, dict) and res.get("ok"):
+            res2 = self._merke(
+                "offer_slots",
+                self._kal().offer_slots(self.tenant, ctx, wish_text=""),
+                {"wish": "", "naechstbestes": True},
+            )
+            oc2 = self._offer_aus(res2, wish, naechstbestes=True)
+            if oc2 is not None:
+                return oc2
+        if isinstance(res, dict) and _denied(res):
+            return ToolOutcome(name="offer_slots", status=OutcomeStatus.DENIED)
+        return ToolOutcome(name="offer_slots", status=OutcomeStatus.EMPTY)
+
+    def _offer_aus(
+        self, res: Any, wish: str, *, naechstbestes: bool = False
+    ) -> ToolOutcome | None:
         if not isinstance(res, dict):
             return ToolOutcome(name="offer_slots", status=OutcomeStatus.CALENDAR_ERROR)
         roh = res.get("slots") or []
@@ -202,7 +248,11 @@ class ToolGateway:
         slots = [s for s in slots if s]
         if res.get("ok") and slots:
             payload: dict[str, Any] = {"slots": slots}
-            if res.get("exakt") is False or res.get("wishMatched") is False:
+            if (
+                naechstbestes
+                or res.get("exakt") is False
+                or res.get("wishMatched") is False
+            ):
                 payload["exakt"] = False
                 if _s(res.get("wunsch")) or wish:
                     payload["wunsch"] = _s(res.get("wunsch")) or wish
@@ -211,7 +261,7 @@ class ToolGateway:
             )
         if _denied(res):
             return ToolOutcome(name="offer_slots", status=OutcomeStatus.DENIED)
-        return ToolOutcome(name="offer_slots", status=OutcomeStatus.EMPTY)
+        return None
 
     def _list(self, cmd: ToolCommand) -> ToolOutcome:
         ctx = self._ctx_fuer(cmd)
