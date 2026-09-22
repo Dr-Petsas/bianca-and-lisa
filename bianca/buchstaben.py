@@ -186,7 +186,7 @@ def _name_anker_vor_also(toks: list[str], kandidat: str) -> bool:
 _TAFEL_KEYS = sorted(_TAFEL)
 
 
-def _tafel_anlaute(toks: list[str]) -> list[str]:
+def _tafel_anlaute(toks: list[str], *, fuzzy: bool = True) -> list[str]:
     """Buchstabiertafel-Woerter im Satz (auch verhoert: "Nordpool", "Bertha")
     -> ihre Anlaute in Sprechreihenfolge.
 
@@ -200,7 +200,7 @@ def _tafel_anlaute(toks: list[str]) -> list[str]:
         if tok in _TAFEL:
             anlaute.append(_TAFEL[tok])
             continue
-        if len(tok) >= 4:
+        if fuzzy and len(tok) >= 4:
             m = difflib.get_close_matches(tok, _TAFEL_KEYS, n=1, cutoff=0.8)
             if m:
                 anlaute.append(_TAFEL[m[0]])
@@ -220,11 +220,14 @@ def _fuzzy_tafel_fragment(toks: list[str]) -> str:
         return ""
     pro_buchstabe: dict[str, float] = {}
     for wort, letter in _TAFEL.items():
+        # Das nackte Tafelwort nicht gegen einen ähnlichen Nachnamen
+        # halten: „Berger“ lag bei 0,83 auf „Ärger“ und wurde zum
+        # Buchstaben Ä. Verschliffenes „Z wie Zacharias“ trifft die
+        # geklebten Formen weiter.
         for soll in (
             f"{letter}wie{wort}",
             f"{letter}vi{wort}",
             f"wie{wort}",
-            wort,
         ):
             score = difflib.SequenceMatcher(None, gehoert, soll).ratio()
             pro_buchstabe[letter] = max(pro_buchstabe.get(letter, 0.0), score)
@@ -499,7 +502,10 @@ def teil(text: str) -> str:
     # Das Tafelwort ist im Telefon-ASR stabiler als der davor gesprochene
     # Einzelbuchstabe: „I wie Ida“ kam als „E wie Ida“, „Z wie Zacharias“
     # als „Zwesacharias“. Die bestehende fuzzy Tafelrettung löst beides.
-    tafel = _tafel_anlaute(toks)
+    # Fuzzy nur, wenn der Satz schon buchstabiert („wie“, Einzelbuchstabe).
+    # Sonst wird „Berger“ über „Ärger“ zum Fragment Ä und Bianca wartet stumm.
+    signal = "wie" in toks or any(_als_buchstabe(t) for t in toks)
+    tafel = _tafel_anlaute(toks, fuzzy=signal)
     if tafel:
         return "".join(tafel)
     fuzzy = _fuzzy_tafel_fragment(toks)
@@ -572,6 +578,23 @@ def teil(text: str) -> str:
 
 def ist_buchstabierung(text: str) -> bool:
     return deute(text) is not None
+
+
+def stt_hotwords() -> list[str]:
+    """DIN-Tafel und Vorlesewörter als Parakeet-Hotwords im Namensdiktat.
+
+    Behandler-Namen bleiben in diesem Zug bewusst draußen — sonst zieht die
+    Fuzzy-Nachkorrektur einen fremden Nachnamen auf Petsas/Thaler.
+    """
+    out: list[str] = []
+    for w in list(_TAFEL) + list(_VORLESE.values()) + list(_LAUT):
+        t = _s(w)
+        if len(t) < 4:
+            continue
+        form = t[0].upper() + t[1:]
+        if form not in out:
+            out.append(form)
+    return out
 
 
 def vorlesen(name: str) -> str:

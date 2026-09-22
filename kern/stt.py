@@ -29,7 +29,7 @@ import subprocess
 import threading
 import time
 import wave
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -116,6 +116,85 @@ _ZAHLWORT = {
 
 def _woerter(text: str) -> list[str]:
     return re.findall(r"[^\W\d_]+", str(text or "").casefold(), re.UNICODE)
+
+
+_NAMENS_STT_FRAGEN = frozenset({
+    "name", "nachname", "vorname", "buchstabieren",
+    "nachname_korr", "nachname_check", "vorname_check",
+})
+_TELEFON_STT_FRAGEN = frozenset({"telefon"})
+_TELEFON_CHECK_FRAGEN = frozenset({
+    "telefon_check", "sms_empfaenger", "telefon_alt",
+})
+_ZEIT_STT_FRAGEN = frozenset({
+    "wunsch", "slotwahl", "termin_ok", "termin_aendern",
+})
+
+
+def keywords_fuer_sitzung(sit: dict[str, Any] | None) -> str:
+    """Hotwords je Zug: Name = DIN-Tafel, Nummer = Ziffern, sonst Praxis + Qwen.
+
+    Behandler-Namen im Buchstabier-Zug würden fremde Nachnamen auf
+    Petsas/Thaler ziehen; dieselben Namen im Nummernzug machen aus
+    Ziffern Praxisvokabular. Vorab-Ohr und echter Zug müssen dieselbe
+    Liste sehen, sonst weicht das Vorab-Transkript vom Final ab.
+    """
+    sit = sit if isinstance(sit, dict) else {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    frage = str((s or {}).get("frage") or "")
+    if frage in _NAMENS_STT_FRAGEN or (s or {}).get("buchstabenTeil") or (s or {}).get("vornameTeil"):
+        try:
+            from bianca import buchstaben
+            namen = list(buchstaben.stt_hotwords())
+        except Exception:
+            namen = []
+        extra = _bestaetigter_nachname(sit)
+        if extra and extra not in namen:
+            namen.append(extra)
+        return ",".join(namen)
+    check = frage in _TELEFON_CHECK_FRAGEN
+    diktat = frage in _TELEFON_STT_FRAGEN or bool((s or {}).get("telefonTeil"))
+    if check or diktat:
+        try:
+            from bianca import telefon as tel
+            return ",".join(tel.stt_hotwords(check=check))
+        except Exception:
+            return ""
+    from kern import qwen_korrektor
+    from kern import tenants
+    kw = list(tenants.stt_keywords(sit.get("tenant") or {}))
+    for w in qwen_korrektor.hotwords(sit):
+        if w not in kw:
+            kw.append(w)
+    if frage in _ZEIT_STT_FRAGEN:
+        from kern.slots import zeit_stt_hotwords
+        for w in zeit_stt_hotwords():
+            if w not in kw:
+                kw.append(w)
+    extra = _bestaetigter_nachname(sit)
+    if extra and extra not in kw:
+        kw.append(extra)
+    return ",".join(kw)
+
+
+def _bestaetigter_nachname(sit: dict[str, Any]) -> str:
+    """Genau EIN bestätigter Kartei-Nachname als Hotword, nie die ganze Kartei.
+
+    Erst nach dem Ja auf die erkannte Rufnummer. Ein Dritttermin (fuerWen)
+    gehört einer anderen Person — deren Name darf nicht auf die Anrufer-Akte
+    gezogen werden.
+    """
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if (s or {}).get("fuerWen"):
+        return ""
+    if str((s or {}).get("anruferCheck") or "") != "ja":
+        return ""
+    anrufer = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    name = str(anrufer.get("nachname") or "").strip()
+    teile = [t for t in name.split() if t]
+    if len(teile) != 1 or len(teile[0]) < 4:
+        return ""
+    return teile[0]
 
 
 def _qwen_konfiguriert() -> bool:

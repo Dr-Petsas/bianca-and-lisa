@@ -278,10 +278,10 @@ def test_unklares_wort_wird_gespiegelt_danach_konkrete_auswahl():
         else:
             os.environ["INTENT_NACHZUG"] = env_alt
 
-    assert "Füsebte" in erste["text"]
-    assert "Was meinen Sie damit?" in erste["text"]
-    assert "Meinen Sie vielleicht etwas anderes?" in erste["text"]
-    assert "Dornenze" in zweite["text"]
+    assert "Füsebte" not in erste["text"]
+    assert "Wobei darf ich Ihnen helfen?" in erste["text"]
+    assert "verstanden" not in erste["text"].lower()
+    assert "Dornenze" not in zweite["text"]
     assert dritte["text"] == gespraech.GANZSATZ_ANTWORT
     assert "Füsebte" not in zweite["text"]
     assert sit["ganzsatzHinweisGegeben"] is True
@@ -319,8 +319,8 @@ def test_zweite_unklare_namensantwort_zieht_aus_zustandsluecke_zurueck():
             os.environ.pop("INTENT_NACHZUG", None)
         else:
             os.environ["INTENT_NACHZUG"] = env_alt
-    assert "Hrisovalanis Charalampopoulos" in z1["text"]
-    assert "Was meinen Sie damit?" in z1["text"]
+    assert "Hrisovalanis Charalampopoulos" not in z1["text"]
+    assert "Wobei darf ich Ihnen helfen?" in z1["text"]
     assert "schon einmal" in z2["text"]
     assert "Ihr Sohn" in z2["text"]
     assert s["modus"] == "buchen"

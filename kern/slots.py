@@ -11,13 +11,13 @@ from kern.sprech import slot_wort, tag_wort
 
 TZ = ZoneInfo("Europe/Berlin")
 WEEKDAYS = [
-    (1, re.compile(r"\bmontags?(?=\b|vormittag|nachmittag|abend)")),
-    (2, re.compile(r"\bdienstags?(?=\b|vormittag|nachmittag|abend)")),
-    (3, re.compile(r"\bmittwochs?(?=\b|vormittag|nachmittag|abend)")),
-    (4, re.compile(r"\bdonnerstags?(?=\b|vormittag|nachmittag|abend)")),
-    (5, re.compile(r"\bfreitags?(?=\b|vormittag|nachmittag|abend)")),
-    (6, re.compile(r"\bsamstags?(?=\b|vormittag|nachmittag|abend)")),
-    (0, re.compile(r"\bsonntags?(?=\b|vormittag|nachmittag|abend)")),
+    (1, re.compile(r"\bmontags?(?=\b|vormittag|nachmittag|abend|mittag)")),
+    (2, re.compile(r"\bdienstags?(?=\b|vormittag|nachmittag|abend|mittag)")),
+    (3, re.compile(r"\bmittwochs?(?=\b|vormittag|nachmittag|abend|mittag)")),
+    (4, re.compile(r"\bdonnerstags?(?=\b|vormittag|nachmittag|abend|mittag)")),
+    (5, re.compile(r"\bfreitags?(?=\b|vormittag|nachmittag|abend|mittag)")),
+    (6, re.compile(r"\bsamstags?(?=\b|vormittag|nachmittag|abend|mittag)")),
+    (0, re.compile(r"\bsonntags?(?=\b|vormittag|nachmittag|abend|mittag)")),
 ]
 
 
@@ -36,13 +36,55 @@ _STUNDEN_WORT = {
     "neunzehn": 19, "zwanzig": 20, "einundzwanzig": 21, "zweiundzwanzig": 22,
     "dreiundzwanzig": 23,
 }
+_MINUTEN_WORT = {
+    "null": 0, "fünf": 5, "fuenf": 5, "zehn": 10,
+    "fünfzehn": 15, "fuenfzehn": 15,
+    "zwanzig": 20, "dreißig": 30, "dreissig": 30,
+    "vierzig": 40,
+    "fünfundvierzig": 45, "fuenfundvierzig": 45,
+    "fünfzig": 50, "fuenfzig": 50,
+}
+_EINER_UHR = {
+    "ein": 1, "eins": 1, "zwei": 2, "drei": 3, "vier": 4,
+    "fünf": 5, "fuenf": 5, "sechs": 6, "sieben": 7, "acht": 8, "neun": 9,
+}
+_STUNDEN_ALT = "|".join(sorted(_STUNDEN_WORT, key=len, reverse=True))
+_MINUTEN_ALT = "|".join(sorted(_MINUTEN_WORT, key=len, reverse=True))
+# "9 Uhr dreißig" / "neun Uhr 30" / "9:30 Uhr" — Minuten NACH Uhr mit.
+# Semikolon: Parakeet schreibt 9:30 oft als 9;30.
 _UHR_RE = re.compile(
     r"\b(?:(?:um|gegen|auf|ab)\s+)?(\d{1,2}|"
-    + "|".join(sorted(_STUNDEN_WORT, key=len, reverse=True))
-    + r")(?::(\d{2}))?\s*uhr\b",
+    + _STUNDEN_ALT
+    + r")(?:[:.;](\d{2}))?\s*uhr(?:\s+(\d{1,2}|"
+    + _MINUTEN_ALT
+    + r"|[a-zäöüß]+und[a-zäöüß]+))?\b",
     re.I,
 )
-_UHR_ZIFFER_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+_UHR_ZIFFER_RE = re.compile(r"\b(\d{1,2})[:;](\d{2})\b")
+_DREISSIG_RE = re.compile(r"^drei[sß]+ig$")
+# STT klebt "neun Uhr dreißig" zu "neununddreißig" / "neun und dreißig".
+# Gilt für alle Stunden 1–9 (einunddreißig … neununddreißig).
+_GEQUETSCHT_DREISSIG_RE = re.compile(
+    r"\b(" + "|".join(sorted(_EINER_UHR, key=len, reverse=True)) + r")"
+    r"(?:\s+und\s+|und)"
+    r"(drei[sß]+ig)\b",
+    re.I,
+)
+_ZAHL_DREISSIG_RE = re.compile(r"\b(?:um|gegen|auf)\s+3([1-9])\b", re.I)
+_ZEIT_CUE_RE = re.compile(
+    r"\b(?:um|gegen|auf|uhr|termin|vormittag|nachmittag|mittag|abend|"
+    r"passt|bitte|frei|heute|morgen|übermorgen|uebermorgen|"
+    r"montags?|dienstags?|mittwochs?|donnerstags?|freitags?|"
+    r"samstags?|sonntags?)\b",
+    re.I,
+)
+_ALTER_RE = re.compile(r"\b(?:jahre?|alt|geboren|geburtstag|alter)\b", re.I)
+_GEQUETSCHT_FUELL = frozenset({
+    "bitte", "gerne", "gern", "dann", "doch", "so", "etwa",
+    "ungefähr", "ungefaehr", "der", "die", "das", "um", "gegen",
+    "auf", "ein", "eine", "termin", "uhr", "passt", "heute", "morgen",
+})
+_UHR_PUNKT_RE = re.compile(r"\b(\d{1,2})\.(\d{2})\s*uhr\b", re.I)
 # W-SUCHFENSTER (14.09.2026, Anruf 5aa87268: "heute um halb zwei"): Uhrzeiten
 # OHNE das Wort "Uhr". "halb zwei" = 13:30 (Praxiszeit: Stunden unter 7 sind
 # nachmittags). "um/gegen zwei" nur, wenn kein Zaehl-Hauptwort folgt ("um zwei
@@ -71,7 +113,149 @@ def _stunde_von(token: str) -> int | None:
     return _STUNDEN_WORT.get(tok)
 
 
-def parse_slot_wish(text: str) -> dict[str, Any] | None:
+def minute_von(token: str) -> int | None:
+    """Minutenwort oder Ziffer: 'dreißig'/'30'/'fünfundvierzig'."""
+    tok = str(token or "").strip().lower()
+    if not tok:
+        return None
+    if tok.isdigit():
+        n = int(tok)
+        return n if 0 <= n <= 59 else None
+    if tok in _MINUTEN_WORT:
+        return _MINUTEN_WORT[tok]
+    if _DREISSIG_RE.match(tok):
+        return 30
+    m = re.match(r"^([a-zäöüß]+)und([a-zäöüß]+)$", tok)
+    if m and m.group(1) in _STUNDEN_WORT and _STUNDEN_WORT[m.group(1)] <= 9:
+        z = _MINUTEN_WORT.get(m.group(2))
+        if z is None and _DREISSIG_RE.match(m.group(2)):
+            z = 30
+        if z in (20, 30, 40, 50):
+            return z + _STUNDEN_WORT[m.group(1)]
+    return None
+
+
+def _uhr_minute(m: re.Match) -> int | None:
+    if m.group(2) and 0 <= int(m.group(2)) <= 59:
+        return int(m.group(2))
+    if m.lastindex and m.lastindex >= 3 and m.group(3):
+        return minute_von(m.group(3))
+    return None
+
+
+def _gequetscht_ok(text: str, m: re.Match) -> bool:
+    if _ALTER_RE.search(text):
+        return False
+    if _ZEIT_CUE_RE.search(text):
+        return True
+    woerter = re.findall(r"[^\W\d_]+", text.casefold(), re.UNICODE)
+    mashed = {
+        m.group(0).casefold(),
+        m.group(1).casefold(),
+        m.group(2).casefold(),
+        "und",
+    }
+    rest = [w for w in woerter if w not in mashed and w not in _GEQUETSCHT_FUELL]
+    return not rest
+
+
+def gequetscht_dreissig(text: str) -> tuple[int, int] | None:
+    """STT klebt 'X Uhr dreißig' zu 'Xunddreißig' — Stunden 1–9.
+
+    Nackte '39' ohne um/gegen bleibt Alter. 'Ich bin neununddreißig Jahre'
+    bleibt Alter (kein Zeit-Cue, mehr als fünf Wörter).
+    """
+    raw = _s(text)
+    if not raw:
+        return None
+    m = _GEQUETSCHT_DREISSIG_RE.search(raw)
+    if m and _gequetscht_ok(raw, m):
+        h = _EINER_UHR.get(m.group(1).lower())
+        if h:
+            return h, 30
+    m = _ZAHL_DREISSIG_RE.search(raw)
+    if m:
+        return int(m.group(1)), 30
+    return None
+
+
+def zeit_stt_hotwords() -> list[str]:
+    """Parakeet soll 'Uhr' und 'dreißig' nicht zu 'und dreißig' kleben."""
+    return ["Uhr", "dreißig", "dreissig", "halb"]
+
+
+# "ab 13 Uhr" / "nach 12 Uhr" / "arbeite bis 12, danach" = Untergrenze, keine
+# Punktlandung auf genau dieser Stunde (Chef 20.09.2026).
+_AB_UHR_RE = re.compile(
+    r"\b(?:ab|fruehestens|frühestens|nach)\s+(\d{1,2}|" + _STUNDEN_ALT
+    + r")(?::\d{2})?\s*uhr\b",
+    re.I,
+)
+_AB_STUNDE_RE = re.compile(
+    r"\b(?:ab|fruehestens|frühestens|nach)\s+(\d{1,2}|" + _STUNDEN_ALT
+    + r")\b(?!\s*[.:]|uhr)",
+    re.I,
+)
+_BIS_DANACH_RE = re.compile(
+    r"\bbis\s+(\d{1,2}|" + _STUNDEN_ALT + r")(?::\d{2})?\s*(?:uhr\b)?.{0,50}\bdanach\b",
+    re.I,
+)
+_ARBEITE_BIS_RE = re.compile(
+    r"\barbeite\w*.{0,80}\bbis\s+(\d{1,2}|" + _STUNDEN_ALT + r")",
+    re.I,
+)
+
+
+# "ich muss bis 4 arbeiten" / "bis vier arbeiten" — frei AB dieser Stunde.
+# "bis 4" ohne "danach" und ohne "arbeite" davor (Chef 22.09.2026).
+_BIS_ARBEITEN_RE = re.compile(
+    r"\bbis\s+(\d{1,2}|" + _STUNDEN_ALT + r")(?::\d{2})?(?:\s*uhr)?"
+    r"\s+(?:arbeiten|arbeit\b|auf\s+arbeit|im\s+b[uü]ro)",
+    re.I,
+)
+
+
+def _arbeit_ende(t: str) -> int | None:
+    """Schichtende: der Anrufer kann erst danach. 'bis 4' = 16 Uhr."""
+    m = _BIS_ARBEITEN_RE.search(t) or _ARBEITE_BIS_RE.search(t)
+    if not m:
+        return None
+    h = _stunde_von(m.group(1))
+    if h is None:
+        return None
+    return _praxis_stunde(h)
+
+
+def _uhr_spanne_min(t: str) -> int | None:
+    """Früheste Stunde aus 'ab/nach X Uhr', 'bis X arbeiten' oder 'bis X … danach'."""
+    h = _arbeit_ende(t)
+    if h is not None:
+        return h
+    m = _BIS_DANACH_RE.search(t)
+    if m:
+        h = _stunde_von(m.group(1))
+        if h is not None:
+            return h
+    m = _AB_UHR_RE.search(t)
+    if m:
+        h = _stunde_von(m.group(1))
+        if h is not None:
+            return _praxis_stunde(h) if 0 < h < 7 else h
+    # "donnerstags ab 13" / "erst ab 16" ohne Uhr-Wort, nie "ab 23.10."
+    if re.search(
+        r"\b(?:montags?|dienstags?|mittwochs?|donnerstags?|freitags?|"
+        r"samstags?|sonntags?)\b",
+        t,
+    ) or "danach" in t or re.search(r"\berst\b", t):
+        m = _AB_STUNDE_RE.search(t)
+        if m:
+            h = _stunde_von(m.group(1))
+            if h is not None:
+                return _praxis_stunde(h) if 0 < h < 7 else h
+    return None
+
+
+def parse_slot_wish(text: str, *, fenster: int | None = None) -> dict[str, Any] | None:
     raw = _s(text)
     if not raw:
         return None
@@ -94,19 +278,23 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
         wish["hourMin"], wish["hourMax"] = 12, 18
     elif re.search(r"abend|\bspaet\b|\bspät\b", t):
         wish["hourMin"], wish["hourMax"] = 16, 21
+    elif re.search(r"(?<!vor)(?<!nach)\bmittags?\b", t):
+        wish["hourMin"], wish["hourMax"] = 11, 14
     if re.search(r"(?:uebernaechste|übernächste|übernaechste)[nrs]?\s+woche", t):
         wish["minDaysAhead"] = 14
     elif re.search(r"n[äa]chste[nrs]?\s+woche|kommende[nrs]?\s+woche", t):
         wish["minDaysAhead"] = 7
-    # W-SUCHFENSTER (14.09.2026): "in drei Wochen", "in zwei Monaten",
-    # "in vierzehn Tagen" — relativer Abstand statt "irgendwann".
-    voraus = _voraus_tage(t)
+    # Expliziter Abstand ("in 7 Monaten") reicht bis 12 Monate, auch wenn
+    # die Praxis sonst nur 6 Monate sucht (Chef 22.09.2026). Der Praxis-
+    # Horizont bleibt der Default, wenn der Anrufer keine Spanne nennt.
+    voraus = _voraus_tage(t, deckel=FENSTER_TAGE_MAX)
     if voraus:
         wish["minDaysAhead"] = max(int(wish["minDaysAhead"] or 0), voraus)
     # Uhrzeit: Ziffern ("13:15", "um 9 Uhr") UND Zahlwörter ("zwölf Uhr zwanzig").
     # Bei "statt zwölf Uhr fünfundvierzig bitte zwölf Uhr zwanzig" zählt die
     # ZIEL-Zeit — Nennungen direkt nach "statt" werden übersprungen.
     stunde = None
+    minute = None
     for m in _UHR_RE.finditer(t):
         davor = t[max(0, m.start() - 12):m.start()]
         if re.search(r"\bstatt\s*$", davor):
@@ -114,14 +302,19 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
         h = _stunde_von(m.group(1))
         if h is not None:
             stunde = h
+            mm = _uhr_minute(m)
+            if mm is not None:
+                minute = mm
     if stunde is None:
-        for m in _UHR_ZIFFER_RE.finditer(t):
-            davor = t[max(0, m.start() - 12):m.start()]
-            if re.search(r"\bstatt\s*$", davor):
-                continue
-            h = _stunde_von(m.group(1))
-            if h is not None and 0 <= int(m.group(2)) <= 59:
-                stunde = h
+        for src in (_UHR_ZIFFER_RE, _UHR_PUNKT_RE):
+            for m in src.finditer(t):
+                davor = t[max(0, m.start() - 12):m.start()]
+                if re.search(r"\bstatt\s*$", davor):
+                    continue
+                h = _stunde_von(m.group(1))
+                if h is not None and 0 <= int(m.group(2)) <= 59:
+                    stunde = h
+                    minute = int(m.group(2))
     if stunde is None:
         # "halb zwei" -> 13 (Slot-Filter arbeitet stundenweise, ±1 h).
         m = _HALB_RE.search(t)
@@ -141,13 +334,29 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
             h = _stunde_von(m.group(1))
             if h is not None and 0 < h <= 23:
                 stunde = _praxis_stunde(h)
+    if stunde is None:
+        # "neununddreißig" = 9:30, nicht Alter — nur mit Cue oder kurzem Satz.
+        g = gequetscht_dreissig(raw)
+        if g:
+            stunde, minute = _praxis_stunde(g[0]), g[1]
+    span_min = _uhr_spanne_min(t)
+    if span_min is not None:
+        lo = wish["hourMin"]
+        wish["hourMin"] = span_min if lo is None else max(int(lo), span_min)
+        if wish["hourMax"] is None:
+            wish["hourMax"] = 21
+        stunde = None
     if stunde is not None:
         wish["hour"] = stunde
+        if minute is not None:
+            wish["minute"] = minute
     # "heute um 14 Uhr einen Termin … verschieben": die Uhr gehört zum
     # BESTANDSTERMIN, nicht zum Neu-Wunsch (Lülf 08.09.2026).
     if _bestand_uhr_im_satz(t) and not re.search(
-            r"\b(?:auf|zu|lieber|geht(?:'s|s)?)\s+(?:um\s+)?\d", t):
+            r"\b(?:auf|zu|lieber|geht(?:'s|s)?)\s+(?:um\s+)?(?:\d|"
+            + _STUNDEN_ALT + r")", t):
         wish["hour"] = None
+        wish.pop("minute", None)
     datum = datum_aus_text(raw)
     tage = tage_aus_text(raw)
     if tage:
@@ -166,6 +375,40 @@ def parse_slot_wish(text: str) -> dict[str, Any] | None:
         if von or bis:
             wish["von"], wish["bis"] = von or None, bis or None
     return wish
+
+
+def start_iso(wish: dict | None, heute: date | None = None) -> str:
+    """Suchstart als ISO-Tag: Datum > Zeitraum > naechster Wochentag.
+
+    Leer heisst „ab heute“. Ein nackter Wochentag springt auf den
+    naechsten solchen Tag, sonst fuellt die erste CF-Seite den Montag
+    und Dienstag 13:30 kommt nie vor (Live 9f984dfe).
+    """
+    if not isinstance(wish, dict):
+        return ""
+    heute = heute or datetime.now(TZ).date()
+    daten = [str(d) for d in (wish.get("tage") or []) if d]
+    if wish.get("date"):
+        daten.append(str(wish["date"]))
+    if daten:
+        return min(daten)
+    start = heute
+    if wish.get("von"):
+        try:
+            start = max(start, datetime.fromisoformat(str(wish["von"])[:10]).date())
+        except ValueError:
+            pass
+    tage = int(wish.get("minDaysAhead") or 0)
+    if tage:
+        start = max(start, heute + timedelta(days=tage))
+    if wish.get("weekday") is not None:
+        try:
+            # Python: Montag=0 … Sonntag=6; Wunsch (WEEKDAYS): Sonntag=0.
+            ziel = (int(wish["weekday"]) - 1) % 7
+            start = start + timedelta(days=(ziel - start.weekday()) % 7)
+        except (TypeError, ValueError):
+            pass
+    return start.isoformat() if start != heute else ""
 
 
 # --- Harte Korrekturen auf ein bereits gesprochenes Angebot -----------------
@@ -500,7 +743,7 @@ def slot_praeferenz_aenderung(
         if _negiert(t, m.start(), m.end(), verbraucht):
             ausgeschlossen_stunden.append(_praxis_stunde(h))
         else:
-            pos_stunden.append((m.start(), _praxis_stunde(h), int(m.group(2)) if m.group(2) else None))
+            pos_stunden.append((m.start(), _praxis_stunde(h), _uhr_minute(m)))
     for m in _UHR_ZIFFER_RE.finditer(t):
         h = _stunde_von(m.group(1))
         uhr_spannen.append((m.start(), m.end()))
@@ -538,6 +781,15 @@ def slot_praeferenz_aenderung(
             ausgeschlossen_stunden.append(_praxis_stunde(h))
         else:
             pos_stunden.append((m.start(), _praxis_stunde(h), None))
+    g = gequetscht_dreissig(t)
+    if g and not pos_stunden:
+        # "nicht um neununddreißig" bleibt ausgeschlossen; nacktes Wort
+        # nur wenn noch keine klare Uhrzeit im Satz steht.
+        m = _GEQUETSCHT_DREISSIG_RE.search(t)
+        if m and _negiert(t, m.start(), m.end(), verbraucht):
+            ausgeschlossen_stunden.append(_praxis_stunde(g[0]))
+        else:
+            pos_stunden.append((0, _praxis_stunde(g[0]), g[1]))
     pos_stunden = [x for x in pos_stunden if x[1] not in ausgeschlossen_stunden]
 
     exclude_isos: list[str] = []
@@ -562,9 +814,19 @@ def slot_praeferenz_aenderung(
     # Donnerstag", "Nein, lieber Freitag", "der erste nicht"), gilt NUR das
     # Konkrete — sonst flöge der Montag-Slot mit, den der Anrufer gar nicht
     # abgelehnt hat.
+    span_min = _uhr_spanne_min(f" {t} ")
+    if span_min is not None:
+        # "erst ab 16 Uhr" / "bis 4 arbeiten" ist eine Untergrenze, keine
+        # Punktlandung auf genau dieser Stunde. Das "nee" davor ist der
+        # Gegenvorschlag, kein blindes "keiner davon".
+        pos_stunden = [
+            x for x in pos_stunden
+            if not (x[1] == span_min and x[2] is None)
+        ]
     spezifisch = bool(
         negativ or neg_daten or neg_bereiche or ausgeschlossen_stunden or spans
         or exclude_isos or positiv or pos_daten or pos_bereiche or waehle
+        or span_min is not None
     )
     reject_all = bool(_ALLE_ABGELEHNT_RE.search(t)) or (
         bool(offered) and not spezifisch and bool(_EINZEL_ABGELEHNT_RE.search(t))
@@ -579,7 +841,7 @@ def slot_praeferenz_aenderung(
     aenderung = bool(
         negativ or neg_bereiche or ausgeschlossen_stunden or anderer_tag
         or vorkommen > 1 or tageszeit_korrektur or neg_daten or spans
-        or exclude_isos or reject_all
+        or exclude_isos or reject_all or span_min is not None
     )
     if not aenderung:
         return None
@@ -603,11 +865,18 @@ def slot_praeferenz_aenderung(
     if pos_bereiche:
         _zs, lo, hi = max(pos_bereiche, key=lambda x: x[0])
         out["hourMin"], out["hourMax"] = lo, hi
-    if pos_stunden and not pos_bereiche:
+    if pos_stunden and not pos_bereiche and span_min is None:
         _ps, h, minute = max(pos_stunden, key=lambda x: x[0])
         out["hour"] = h
         if minute is not None:
             out["minute"] = minute
+    if span_min is not None:
+        bisher = out.get("hourMin")
+        out["hourMin"] = span_min if bisher is None else max(int(bisher), span_min)
+        if out.get("hourMax") is None:
+            out["hourMax"] = 21
+        out.pop("hour", None)
+        out.pop("minute", None)
     if exclude_isos:
         out["excludeIsos"] = sorted(set(exclude_isos))
     if waehle and waehle not in exclude_isos:
@@ -759,7 +1028,74 @@ def slot_praeferenz_bestaetigung(aenderung: dict[str, Any]) -> str:
 # Wochentage — "im Oktober" war KEIN Wunsch, die Suche lief ab heute und der
 # Vorrat (20 Slots der Plattform) endete mitten im laufenden Monat.
 
-FENSTER_TAGE = 183  # 6 Monate Suchhorizont
+FENSTER_TAGE = 183  # 6 Monate Suchhorizont (Default, alle Praxen)
+FENSTER_TAGE_NEUN = 274  # 9 Monate — Blessing / Anliegen-Einstellung
+FENSTER_TAGE_MAX = 366
+# Erlaubte Vorlauf-Monate in der Anliegen-Maske → Tage (6 Monate = 183).
+FENSTER_MONATE = {3: 92, 6: 183, 9: 274, 12: 366}
+
+
+def tage_fuer_monate(monate: Any) -> int | None:
+    """3/6/9/12 Monate → Tage. Alles andere None (gilt der Default)."""
+    try:
+        m = int(monate)
+    except (TypeError, ValueError):
+        return None
+    return FENSTER_MONATE.get(m)
+
+
+def _tage_roh(roh: Any) -> int | None:
+    try:
+        n = int(roh)
+    except (TypeError, ValueError):
+        return None
+    if n < 30:
+        return None
+    return min(n, FENSTER_TAGE_MAX)
+
+
+def such_horizont_tage(tenant: dict | None, wish: dict | None = None) -> int:
+    """Suchende in Tagen. Ein ausgesprochener Abstand darf über den
+    Praxis-Default hinaus, höchstens 12 Monate ("in 7 Monaten")."""
+    basis = such_fenster_tage(tenant)
+    extra = 0
+    if isinstance(wish, dict):
+        try:
+            extra = int(wish.get("minDaysAhead") or 0)
+        except (TypeError, ValueError):
+            extra = 0
+        von = str(wish.get("von") or "")[:10]
+        if len(von) == 10:
+            try:
+                tage = (date.fromisoformat(von) - datetime.now(TZ).date()).days
+            except ValueError:
+                tage = 0
+            if 0 < tage <= FENSTER_TAGE_MAX:
+                extra = max(extra, tage)
+    if extra > basis:
+        return min(FENSTER_TAGE_MAX, extra + 21)
+    return basis
+
+
+def such_fenster_tage(tenant: dict | None = None) -> int:
+    """Suchhorizont in Tagen.
+
+    Reihenfolge: Anliegen-Einstellung (``anliegenPolicy.suchFensterMonate``)
+    → gesetztes ``suchFensterTage`` (Tenant-Datei / anreichern)
+    → 183 (6 Monate). Werte unter 30 oder unlesbar fallen auf den Default.
+    """
+    if not isinstance(tenant, dict):
+        return FENSTER_TAGE
+    pol = tenant.get("anliegenPolicy")
+    if isinstance(pol, dict):
+        n = tage_fuer_monate(pol.get("suchFensterMonate"))
+        if n:
+            return n
+        n = _tage_roh(pol.get("suchFensterTage"))
+        if n:
+            return n
+    n = _tage_roh(tenant.get("suchFensterTage"))
+    return n if n else FENSTER_TAGE
 
 # Nur VOLLE Monatsnamen (plus ae/oe-Schreibungen): die Kuerzel aus _MONAT_NAME
 # ("sep", "jun", "mär" ...) gehoeren zu Datumsformen wie "15. Sep" und waeren
@@ -797,7 +1133,7 @@ def _zahl(tok: str) -> int:
     return int(_ZAHL_KLEIN.get(tok, 0))
 
 
-def _voraus_tage(t: str) -> int:
+def _voraus_tage(t: str, *, deckel: int | None = None) -> int:
     """'in drei Wochen' → 21, 'in zwei Monaten' → 60, 'in vierzehn Tagen' → 14 (gedeckelt)."""
     tage = 0
     m = _IN_WOCHEN_RE.search(t)
@@ -809,7 +1145,8 @@ def _voraus_tage(t: str) -> int:
     m = _IN_TAGEN_RE.search(t)
     if m:
         tage = max(tage, _zahl(m.group(1)))
-    return min(tage, FENSTER_TAGE)
+    limit = FENSTER_TAGE if deckel is None else max(30, min(int(deckel), FENSTER_TAGE_MAX))
+    return min(tage, limit)
 
 
 def _monat_grenzen(jahr: int, monat: int) -> tuple[date, date]:
@@ -1109,13 +1446,14 @@ def _streuen(pool: list[dict], parsed: list[dict], wish: dict | None, max_n: int
     3. Dann derselbe Tag, aber nur mit >= 2,5 h Abstand.
     4. Fallback (< 2 Optionen): lieber EIN Slot des Wunschtags plus Alternativen
        anderer Tage außerhalb des Wunschrahmens.
-    5. Allerletzter Ausweg: nahe Slots durchrutschen lassen — besser als nichts.
+    Nahe Slots (unter 2,5 Stunden) werden nicht nachgeschoben: lieber eine
+    Zeit nennen als 12:15 und 12:45 (Chef 22.09.2026).
     """
     if not pool:
         return []
     anker = pool[0]
     if wish and wish.get("hour") is not None:
-        ziel = int(wish["hour"]) * 60
+        ziel = int(wish["hour"]) * 60 + int(wish.get("minute") or 0)
         anker = min(pool, key=lambda p: (abs(p["hour"] * 60 + int(p["time"][3:5]) - ziel), p["ms"]))
     gewaehlt = [anker]
     for p in pool:
@@ -1134,12 +1472,6 @@ def _streuen(pool: list[dict], parsed: list[dict], wish: dict | None, max_n: int
             if len(gewaehlt) >= max_n:
                 break
             if id(p) not in pool_ids and p not in gewaehlt and _vertraegt(p, gewaehlt):
-                gewaehlt.append(p)
-    if len(gewaehlt) < 2:
-        for p in pool:
-            if len(gewaehlt) >= max_n:
-                break
-            if p not in gewaehlt:
                 gewaehlt.append(p)
     rest = sorted((g for g in gewaehlt if g is not anker), key=lambda p: p["ms"])
     return [anker] + rest
@@ -1198,7 +1530,7 @@ def hat_ausschluesse(wish: dict | None) -> bool:
 
 
 _RICHTUNG_KEYS = (
-    "date", "tage", "weekday", "weekdays", "hour", "hourMin", "hourMax",
+    "date", "tage", "weekday", "weekdays", "hour", "minute", "hourMin", "hourMax",
     "minDaysAhead", "von", "bis",
 )
 
@@ -1337,7 +1669,17 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             mitternacht = ziel.replace(hour=0, minute=0, second=0, microsecond=0)
             out = [p for p in out if p["ms"] >= int(mitternacht.timestamp() * 1000)]
         if w.get("hour") is not None:
-            out = [p for p in out if abs(p["hour"] - w["hour"]) <= 1]
+            if w.get("minute") is not None:
+                ziel_m = int(w["hour"]) * 60 + int(w["minute"])
+                out = [
+                    p for p in out
+                    if p["hour"] * 60 + int(p["time"][3:5]) == ziel_m
+                ]
+            else:
+                # Live c1c619e6: "um 12 Uhr" darf 11:15/11:30/11:45 NICHT
+                # als Treffer zaehlen — das ±1-Fenster machte aus Alternativen
+                # eine scheinbar passende Liste und die Ansage log "12 ist frei".
+                out = [p for p in out if int(p["hour"]) == int(w["hour"])]
         elif w.get("minutenMin") is not None:
             lo = int(w["minutenMin"])
             hi = int(w.get("minutenMax") if w.get("minutenMax") is not None else 24 * 60)
@@ -1366,6 +1708,27 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
     matched = not wish or bool(pool)
     hart = _harte_slotgrenzen(wish)
     schieben = bool(schub or (wish and wish.get("schub")))
+    # Genannter Wochentag bleibt hart: nie Montag dazu streuen, nur weil
+    # Dienstag 13:30 auf der ersten Seite fehlt (Live 9f984dfe).
+    nur_wochentag = bool(wish and wish.get("weekday") is not None)
+    if pool and nur_wochentag:
+        extra = [
+            p for p in parsed
+            if _weekday_of(p["date"]) == wish["weekday"] and p not in pool
+        ]
+        if wish.get("hour") is not None:
+            extra = [p for p in extra if int(p["hour"]) == int(wish["hour"])]
+            if wish.get("minute") is not None:
+                extra = [
+                    p for p in extra
+                    if int(p["time"][3:5]) == int(wish["minute"])
+                ]
+            else:
+                ziel_m = int(wish["hour"]) * 60
+                extra.sort(key=lambda p: (
+                    abs(p["hour"] * 60 + int(p["time"][3:5]) - ziel_m), p["ms"],
+                ))
+        pool = pool + extra
     if not pool and wish and wish.get("date") and not schieben and not wish.get("tage"):
         # Konkretes Datum ohne Treffer: ±2 Tage in der Region, nicht irgendwo.
         nachbarn = [d for d in _region_tage(str(wish["date"]), 2) if d != wish["date"]]
@@ -1404,18 +1767,22 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
             # Schub ohne Treffer: NICHT auf die drei Vormittagsslots
             # zurückfallen (live 30.08.2026: „keine weiteren“ + dieselben 09:45er).
             return {"slots": [], "wishMatched": False}
-        elif wish and _zeitanker(wish):
+        elif wish and (_zeitanker(wish) or nur_wochentag or wish.get("hour") is not None):
             # W-SUCHFENSTER (14.09.2026, Anruf 5aa87268): "heute um halb zwei"
             # ohne Treffer hiess frueher "kein freier Termin" — bei 20 freien
             # Slots im Vorrat. Jetzt: das NAECHSTBESTE ab dem Wunschzeitpunkt,
             # als solches angesagt ("Genau dann ist leider nichts frei").
+            # Wochentag + HH:MM zaehlen als Anker (Live 9f984dfe: Dienstag
+            # 13:30 darf nicht auf Montag 09:15 fallen).
             pool = _naechstbestes(parsed, wish)
             naechstbestes = True
         if not pool:
+            if nur_wochentag or (wish and wish.get("minute") is not None):
+                return {"slots": [], "wishMatched": False}
             pool = parsed
     if dringend:
         auswahl = pool[:max_n]
-    elif hart_ausweich:
+    elif hart_ausweich or nur_wochentag:
         # Ausweich innerhalb der harten Grenzen: gestreut, aber NIE ausserhalb
         # des gefilterten Pools (kein Rueckgriff auf `parsed`).
         auswahl = _streuen(pool, pool, wish, max_n)
@@ -1427,7 +1794,12 @@ def pick_slots(iso_slots: list[str], *, wish: dict | None = None, now_ms: int | 
         # Der normale Streu-Fallback darf weiche Wünsche verlassen. Harte
         # Ausschlüsse dagegen gelten auch für zweite/dritte Alternativen.
         auswahl = _streuen(pool, pool if hart else parsed, wish, max_n)
-    if naechstbestes:
+    if naechstbestes and not (wish and wish.get("hour") is not None):
+        # Ohne Uhr bleibt die zeitliche Reihenfolge. Mit Uhr hat
+        # ``_naechstbestes``/``_streuen`` schon nach Minutenabstand
+        # sortiert — ein erneutes Sortieren nach ``ms`` wuerde
+        # 11:15 vor 12:00 ziehen, obwohl 13:30 gemeint war
+        # (Live 9f984dfe / Suchfenster-Wache).
         auswahl = sorted(auswahl, key=lambda p: p["ms"])
     slots = [{"iso": p["iso"], "date": p["date"], "time": p["time"]} for p in auswahl]
     return {"slots": slots, "wishMatched": matched}
@@ -1455,6 +1827,22 @@ def _naechstbestes(parsed: list[dict], wish: dict) -> list[dict]:
     Ein Wunschtag in der Vergangenheit oder ein Zeitraum, den der Kalender
     noch nicht freigegeben hat, bekommt so trotzdem ein ehrliches Angebot
     statt "kein freier Termin"."""
+    if wish.get("weekday") is not None:
+        nur_tag = [p for p in parsed if _weekday_of(p["date"]) == wish["weekday"]]
+        if not nur_tag:
+            return []
+        parsed = nur_tag
+    if wish.get("hour") is not None and parsed:
+        h = int(wish["hour"])
+        mi = int(wish["minute"]) if wish.get("minute") is not None else 0
+        ziel_m = h * 60 + mi
+        return sorted(
+            parsed,
+            key=lambda p: (
+                abs(p["hour"] * 60 + int(p["time"][3:5]) - ziel_m),
+                p["ms"],
+            ),
+        )
     anker = _zeitanker(wish)
     if not anker or not parsed:
         return []
@@ -1482,17 +1870,215 @@ def _naechstbestes(parsed: list[dict], wish: dict) -> list[dict]:
     return sorted(davor, key=lambda p: p["ms"], reverse=True)
 
 
+def slots_mit_abstand(slots: list[dict]) -> list[dict]:
+    """Gleiche-Tag-Nachbarn unter 2,5 Stunden fallen weg. Der frühere bleibt."""
+    gewaehlt: list[dict] = []
+    for p in slots or []:
+        if not isinstance(p, dict) or "ms" not in p or "date" not in p:
+            gewaehlt.append(p)
+            continue
+        if _vertraegt(p, gewaehlt):
+            gewaehlt.append(p)
+    return gewaehlt
+
+
+_WT_NAME = [
+    "Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag",
+]
+_ANZAHL = {2: "zwei", 3: "drei"}
+
+
+def _iso_von(slot: Any) -> str:
+    if isinstance(slot, dict):
+        return str(slot.get("iso") or "")
+    return str(slot or "")
+
+
+def _iso_stunde(slot: Any) -> int:
+    if isinstance(slot, dict) and slot.get("hour") is not None:
+        try:
+            return int(slot["hour"])
+        except (TypeError, ValueError):
+            pass
+    iso = _iso_von(slot)
+    if len(iso) >= 13 and iso[11:13].isdigit():
+        return int(iso[11:13])
+    return 0
+
+
+def _iso_datum(slot: Any) -> str:
+    if isinstance(slot, dict) and slot.get("date"):
+        return str(slot["date"])[:10]
+    return _iso_von(slot)[:10]
+
+
+def tageszeit_band(hour: int) -> str:
+    """Grobe Lage, wie der Anrufer sie sich merken kann."""
+    h = int(hour)
+    if h < 11:
+        return "morgens"
+    if h < 12:
+        return "vormittags"
+    if h < 15:
+        return "mittags"
+    if h < 18:
+        return "nachmittags"
+    return "abends"
+
+
+def _minuten(slot: Any) -> int:
+    iso = _iso_von(slot)
+    minute = int(iso[14:16]) if len(iso) >= 16 and iso[14:16].isdigit() else 0
+    return _iso_stunde(slot) * 60 + minute
+
+
+def _ohne_nahe(slots: list) -> list:
+    """Pro Tag nur Zeiten mit mindestens 2,5 Stunden Abstand. Der frühere bleibt."""
+    out: list = []
+    for s in slots or []:
+        if all(
+            _iso_datum(s) != _iso_datum(g) or abs(_minuten(s) - _minuten(g)) >= 150
+            for g in out
+        ):
+            out.append(s)
+    return out
+
+
+def angebot_ist_grob(slots: list) -> bool:
+    """Mehrere Tage oder Tageszeiten: erst die Lage, noch keine Uhrzeit."""
+    if len(slots or []) < 2:
+        return False
+    tage = {_iso_datum(s) for s in slots}
+    baender = {tageszeit_band(_iso_stunde(s)) for s in slots}
+    return len(tage) > 1 or len(baender) > 1
+
+
+def _lage_teile(slots: list) -> list[str]:
+    gruppen: list[list] = []
+    for s in slots:
+        d = _iso_datum(s)
+        if not gruppen or gruppen[-1][0] != d:
+            gruppen.append([d, []])
+        gruppen[-1][1].append(s)
+    teile: list[str] = []
+    for i, (d, items) in enumerate(gruppen):
+        name = _WT_NAME[_weekday_of(d)] if len(d) == 10 else d
+        baender: list[str] = []
+        for it in items:
+            b = tageszeit_band(_iso_stunde(it))
+            if b not in baender:
+                baender.append(b)
+        band_txt = " oder ".join(baender)
+        if len(items) >= 2 and len(baender) >= 2:
+            n = _ANZAHL.get(len(items), str(len(items)))
+            if i > 0:
+                teile.append(f"{name} auch noch {n} Termine, {band_txt}")
+            else:
+                teile.append(f"{name} {n} Termine, {band_txt}")
+        else:
+            teile.append(f"{name} {band_txt}")
+    return teile
+
+
+def angebot_kern(slots: list) -> str:
+    """Das Merkbare ohne Frage: Tage und Tageszeiten, sonst weit auseinanderliegende Uhren."""
+    weit = _ohne_nahe(slots)
+    if not weit:
+        return ""
+    if angebot_ist_grob(weit):
+        return " und ".join(_lage_teile(weit))
+    if len(weit) > 1:
+        return " oder ".join(spoken_slot(_iso_von(s)) for s in weit[:3])
+    return spoken_slot(_iso_von(weit[0]))
+
+
+def _ein_slot_satz(slot: Any, *, wish_matched: bool) -> str:
+    liste = spoken_slot(_iso_von(slot))
+    if wish_matched:
+        return f"Frei ist {liste}. Welcher passt Ihnen?"
+    return f"Genau dann ist leider nichts frei. Frei wäre {liste}. Welcher passt Ihnen?"
+
+
 def spoken_offer(slots: list[dict], *, wish_matched: bool = True) -> str:
-    """Nur was der Patient hört — keine Werkzeugnamen, keine Regie."""
+    """Erst Tag und Tageszeit. Die Uhrzeit kommt, wenn nur noch eine Lage übrig ist."""
     if not slots:
         return (
             "Im Moment habe ich leider keinen freien Termin. "
             "Die Praxis meldet sich kurzfristig bei Ihnen."
         )
-    liste = "; oder ".join(spoken_slot(x["iso"]) for x in slots)
-    if wish_matched:
-        return f"Frei ist {liste}. Welcher passt Ihnen?"
-    return f"Genau dann ist leider nichts frei. Frei wäre {liste}. Welcher passt Ihnen?"
+    weit = _ohne_nahe(slots)
+    if len(weit) <= 1:
+        return _ein_slot_satz(weit[0] if weit else slots[0], wish_matched=wish_matched)
+    kern = angebot_kern(weit)
+    if angebot_ist_grob(weit):
+        satz = f"Ich habe {kern} frei. Was passt Ihnen besser?"
+    else:
+        satz = f"Frei wäre {kern}. Was passt davon?"
+    if not wish_matched:
+        return f"Genau dann ist leider nichts frei. {satz}"
+    return satz
+
+
+def will_neu_suchen(text: str, offered: list) -> bool:
+    """Ein neuer Rahmen (ab 16 Uhr, nächste Woche, in 7 Monaten), keine Auswahl aus dem Angebot."""
+    w = parse_slot_wish(text) or {}
+    if not w:
+        return False
+    if int(w.get("minDaysAhead") or 0) > 0:
+        return True
+    if w.get("von") or w.get("bis"):
+        return True
+    if _uhr_spanne_min(f" {_s(text).lower()} ") is not None:
+        return True
+    tage = {_iso_datum(o) for o in offered or []}
+    if w.get("date") and str(w["date"])[:10] not in tage:
+        return True
+    if w.get("weekday") is not None:
+        wds = {_weekday_of(d) for d in tage if len(d) == 10}
+        if int(w["weekday"]) not in wds:
+            return True
+    return False
+
+
+def _band_passt(band_wunsch: str, stunde: int) -> bool:
+    b = tageszeit_band(stunde)
+    if band_wunsch == "vor_mittag":
+        return b in {"morgens", "vormittags"}
+    return b == band_wunsch
+
+
+def angebot_engen(text: str, offered: list) -> list | None:
+    """Tag oder Tageszeit aus dem offenen Angebot, ohne neu zu suchen.
+
+    None, wenn der Satz kein engerer Ausschnitt ist (alles, nichts, oder neue Suche).
+    """
+    if not offered or will_neu_suchen(text, offered):
+        return None
+    t = f" {_s(text).lower()} "
+    wd = next((idx for idx, cre in WEEKDAYS if cre.search(t)), None)
+    band = ""
+    if re.search(r"\bmorgens\b|\bfrüh\b|\bfrueh\b", t):
+        band = "morgens"
+    elif "vormittag" in t:
+        band = "vor_mittag"
+    elif re.search(r"(?<!vor)(?<!nach)\bmittags?\b", t):
+        band = "mittags"
+    elif "nachmittag" in t:
+        band = "nachmittags"
+    elif re.search(r"abend|\bspät\b|\bspaet\b", t):
+        band = "abends"
+    if wd is None and not band:
+        return None
+    out = []
+    for o in offered:
+        if wd is not None and _weekday_of(_iso_datum(o)) != wd:
+            continue
+        if band and not _band_passt(band, _iso_stunde(o)):
+            continue
+        out.append(o)
+    if not out or len(out) == len(offered):
+        return None
+    return out
 
 
 REGIE_ANGEBOT = (

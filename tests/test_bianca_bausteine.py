@@ -7,12 +7,44 @@ tenants/meddent.json (lokale Datei).
 from datetime import datetime, timedelta
 import re
 
+import pytest
+
 from bianca import buchstaben, flow, gehirn, telefon
 from kern.tenants import laden
 
 
+@pytest.fixture(autouse=True)
+def _namens_am_telefon(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
+
+
 def _sit() -> dict:
     return {"tenant": laden("meddent"), "messages": [{"role": "system", "content": "x"}]}
+
+
+def _kette(name: str) -> str:
+    letters = [c for c in name if c.isalpha()]
+    return "-".join(letters) + ", fertig."
+
+
+def _suchname(sit: dict, text: str, buchstaben: str | None = None) -> dict | None:
+    """Gesprochenen Namen buchstabieren und die Tafel bestätigen.
+
+    Danach läuft dieselbe Suche wie früher nach dem Ja.
+    """
+    z = flow.zug(sit, text)
+    s = gehirn.sammler(sit)
+    if (z or {}).get("warte") and s.get("buchstabenTeil"):
+        z = flow.zug(sit, "fertig.")
+        s = gehirn.sammler(sit)
+    low = str((z or {}).get("text") or "").lower()
+    if (s.get("frage") == "buchstabieren" and "buchstabe" in low
+            and s.get("nachnameCheck") != "offen"):
+        z = flow.zug(sit, buchstaben or _kette(s.get("nachname") or "Berger"))
+        s = gehirn.sammler(sit)
+    if s.get("nachnameCheck") == "offen" or s.get("frage") == "nachname_check":
+        z = flow.zug(sit, "Ja.")
+    return z
 
 
 def _verwaltung_start(sit: dict, text: str) -> dict | None:
@@ -61,7 +93,25 @@ def test_nummer_gemischt_mit_doppel():
 
 
 def test_sprechbar_gruppen():
-    assert telefon.sprechbar("0177") .count("null") == 1
+    assert telefon.sprechbar("0177").count("null") == 1
+    assert telefon.sprechbar("01776004600") == (
+        "null eins sieben sieben, sechs null null, vier sechs, null null"
+    )
+    assert "zwo" not in telefon.sprechbar("0221")
+
+
+def test_nummer_stt_hotwords_ohne_arzt_und_ohne_nein_zu_neun():
+    diktat = telefon.stt_hotwords()
+    check = telefon.stt_hotwords(check=True)
+    assert "null" in diktat and "neun" in diktat and "nine" in diktat
+    assert "nein" not in diktat
+    assert check[0] == "ja" and "nein" in check and "neun" in check
+    assert "nine" not in check
+    assert "Petsas" not in diktat and "Petsas" not in check
+    assert telefon.check_ist_nein("Neun.")
+    assert telefon.check_ist_nein("nine")
+    assert not telefon.check_ist_nein("die letzte war eine neun")
+    assert telefon.aus_satz("null eins sieben sieben six hundred vier six hundred") == "01776004600"
 
 
 # --- Sammler: ein Satz füllt viele Felder ---------------------------------
@@ -272,6 +322,12 @@ def test_fluss_fragenkette_bis_angebot():
         assert z3 and "name" in z3["text"].lower()
 
         z4 = flow.zug(sit, "Martin Berger.")
+        assert z4 and "buchstabe" in z4["text"].lower()
+        z4 = flow.zug(sit, "B-E-R-G-E-R, fertig.")
+        assert z4 and "ist das richtig" in z4["text"].lower()
+        z4 = flow.zug(sit, "Ja.")
+        if gehirn.sammler(sit)["frage"] == "vorname":
+            z4 = flow.zug(sit, "Martin.")
         assert z4 and "worum" in z4["text"].lower()
 
         z5 = flow.zug(sit, "Eine Kontrolle bitte.")
@@ -292,17 +348,14 @@ def test_fluss_fragenkette_bis_angebot():
         assert s["phase"] == "bestaetigen" and s["slotIso"]
         assert not s["telefon"]
 
-        # Ja auf den Termin -> Zusatzangebot (PZR) -> und erst dann, als
-        # LETZTES vor dem Eintragen und der SMS, die Handynummer.
+        # Ja auf den Termin -> Zusatzangebot (PZR). Den Grund hat der
+        # Anrufer selbst gesagt — dann keine Doktor-Notiz, direkt die
+        # Handynummer als Letztes vor dem Eintragen.
         z8 = flow.zug(sit, "Ja, passt.")
         assert z8 and "zahnreinigung" in z8["text"].lower()
         assert "handynummer" not in z8["text"].lower()
 
-        z9a = flow.zug(sit, "Nein, danke.")
-        assert z9a and "notiz" in z9a["text"].lower()
-        assert "handynummer" not in z9a["text"].lower()
-
-        z9 = flow.zug(sit, "Nein, nichts Besonderes.")
+        z9 = flow.zug(sit, "Nein, danke.")
         assert z9 and "handynummer" in z9["text"].lower()
         assert "sms" in z9["text"].lower()
 
@@ -498,11 +551,11 @@ def test_absage_fluss_komplett():
         sit = _sit()
         z1 = _verwaltung_start(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
         assert z1 and "nachname" in z1["text"].lower()
-        assert "buchstabieren" in z1["text"].lower()  # direkt einladen (31.08.)
+        assert "buchstabe" in z1["text"].lower()
         assert "vor- und nachname" not in z1["text"].lower()
-        assert gehirn.sammler(sit)["frage"] == "nachname"
+        assert gehirn.sammler(sit)["frage"] == "buchstabieren"
 
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         assert z2 and "wirklich absagen" in z2["text"].lower()
         assert "Herr Berger" in z2["text"]  # Anrede: "… Herr Berger?"
         assert gehirn.sammler(sit)["phase"] == "absage_bestaetigen"
@@ -533,8 +586,8 @@ def test_absage_nachname_buchstabiert_geht_direkt_in_suche():
     try:
         sit = _sit()
         z1 = _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
-        assert z1 and "buchstabieren" in z1["text"].lower()
-        z2 = flow.zug(sit, "B E R G E R.")
+        assert z1 and "buchstabe" in z1["text"].lower()
+        z2 = _suchname(sit, "B E R G E R.")
         assert z2 and "wirklich absagen" in z2["text"].lower(), z2
         assert gesucht[-1].get("lastName") == "Berger"
     finally:
@@ -608,7 +661,7 @@ def test_absage_stallone_fallback_trotz_fremder_anrufernummer():
         s["telefon"] = "01776004600"
         z1 = flow.zug(sit, "Ich möchte den Termin heute um zwölf absagen.")
         assert z1 and "nachname" in z1["text"].lower()
-        z2 = flow.zug(sit, "Stallone, S-T-A-L-L-O-N-E.")
+        z2 = _suchname(sit, "Stallone, S-T-A-L-L-O-N-E.")
         assert z2 and "wirklich absagen" in z2["text"].lower()
         assert "zwölf Uhr" in z2["text"]
         assert [r for r, _ in aufrufe] == [
@@ -675,7 +728,7 @@ def test_absage_mehrere_patienten_gleicher_nachname():
         z1 = _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
         assert z1 and "nachname" in z1["text"].lower()
 
-        z2 = flow.zug(sit, "Berger.")
+        z2 = _suchname(sit, "Berger.")
         assert z2 and "mehrere patienten" in z2["text"].lower()
         assert "vorname" in z2["text"].lower()
         assert gehirn.sammler(sit)["frage"] == "vorname"
@@ -703,7 +756,7 @@ def test_absage_hinweis_im_einstiegssatz_filtert():
         s = gehirn.sammler(sit)
         assert not s["wunsch"]  # die Zeitangabe ist KEIN Neubuchungs-Wunsch
 
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         assert z2 and "wirklich absagen" in z2["text"].lower()
     finally:
         verwalten.kal.find_patient_appointments = echt_find
@@ -716,7 +769,7 @@ def test_absage_name_im_einstiegssatz_sucht_sofort():
     verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
     try:
         sit = _sit()
-        z = flow.zug(sit, "Ich möchte meinen Termin absagen, mein Name ist Martin Berger.")
+        z = _suchname(sit, "Ich möchte meinen Termin absagen, mein Name ist Martin Berger.")
         assert z and "wirklich absagen" in z["text"].lower()
     finally:
         verwalten.kal.find_patient_appointments = echt_find
@@ -733,7 +786,7 @@ def test_absage_startet_neubuchung_nur_auf_ausdruecklichen_wunsch():
     try:
         sit = _sit()
         _verwaltung_start(sit, "Ich möchte meinen Termin absagen.")
-        flow.zug(sit, "Martin Berger.")
+        _suchname(sit, "Martin Berger.")
         flow.zug(sit, "Ja.")
         z = flow.zug(sit, "Ich möchte einen neuen Termin buchen.")
         s = gehirn.sammler(sit)
@@ -763,7 +816,7 @@ def test_termin_auskunft_statt_schonmal_frage():
         assert z1 and "kalender schauen" in z1["text"].lower()  # Namensfrage
         assert "schon einmal" not in z1["text"].lower()
         assert gehirn.sammler(sit)["modus"] == "auskunft"
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         assert z2 and "nächster termin" in z2["text"].lower()
         assert "Petsas" in z2["text"]
     finally:
@@ -781,7 +834,7 @@ def test_auskunft_und_folgeabsage():
         z2 = flow.zug(sit, "Bei Doktor Petsas.")
         assert z2 and "nachname" in z2["text"].lower()
 
-        z3 = flow.zug(sit, "Martin Berger.")
+        z3 = _suchname(sit, "Martin Berger.")
         assert z3 and "nächster termin" in z3["text"].lower()
         assert "Petsas" in z3["text"]
 
@@ -822,7 +875,7 @@ def test_verschieben_fluss_komplett():
         z1 = _verwaltung_start(sit, "Ich würde meinen Termin gern verschieben.")
         assert z1 and "nachname" in z1["text"].lower()
 
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         assert z2 and "gefunden" in z2["text"].lower() and "besser" in z2["text"].lower()
         assert gehirn.sammler(sit)["phase"] == "verschieb_wunsch"
 
@@ -874,7 +927,7 @@ def test_verschieben_alt_neu_trennung():
         s = gehirn.sammler(sit)
         assert (s["wunsch"] or {}).get("weekday") == 5              # neu: Freitag
 
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         # Wunsch liegt vor -> direkt Angebot, gefiltert auf den nächsten Freitag.
         assert z2 and sit.get("offered"), z2
         assert all(o["iso"].startswith(freitag.date().isoformat()) for o in sit["offered"])
@@ -896,14 +949,14 @@ def test_verwaltung_kein_termin_gefunden():
         assert z1 and "nachname" in z1["text"].lower()
         assert "Petsas" in ((gehirn.sammler(sit)["arzt"] or {}).get("calendarName") or "")
 
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         assert z2, "Antwort fehlt"
         # ERSTER Fehlschlag: nicht aufgeben — der Nachname war womoeglich
         # verhoert, der Anrufer darf ihn korrigieren (W-NAMESKORREKTUR).
         assert "falsch verstanden" in z2["text"].lower(), z2
         assert "notiz" not in z2["text"].lower()
 
-        z3 = flow.zug(sit, "Berger.")
+        z3 = _suchname(sit, "Berger.")
         assert z3, "Antwort fehlt"
         tl = z3["text"].lower()  # ZWEITER Fehlschlag: jetzt ehrlich + Notiz
         assert "ehrlich" in tl and "notiz" in tl and "vorgelegt" in tl
@@ -972,12 +1025,12 @@ def test_absage_neustart_nach_notfound_mit_namenskorrektur():
         sit = _sit()
         z1 = _verwaltung_start(sit, "Ich würde gerne meinen Termin absagen.")
         assert z1 and "nachname" in z1["text"].lower()
-        z2 = flow.zug(sit, "Peter Möbel.")
+        z2 = _suchname(sit, "Peter Möbel.")
         # Erster Fehlschlag: Korrektur-Chance statt Notiz (W-NAMESKORREKTUR).
         assert z2 and "falsch verstanden" in z2["text"].lower()
         assert gesucht[-1].get("lastName") == "Möbel"
         # Anrufer beharrt (STT hoert dasselbe): ZWEITER Fehlschlag -> Notiz.
-        z3 = flow.zug(sit, "Peter Möbel.")
+        z3 = _suchname(sit, "Peter Möbel.")
         assert z3 and "ehrlich" in z3["text"].lower() and "notiz" in z3["text"].lower()
         # Anrufer verneint die Neubuchung UND wiederholt das Anliegen im
         # selben Satz — das darf NICHT im Nein-Zweig verschluckt werden:
@@ -988,7 +1041,7 @@ def test_absage_neustart_nach_notfound_mit_namenskorrektur():
         s = gehirn.sammler(sit)
         assert not s["nachname"], "verhoerter Name muss raus sein"
         # Frischer Anlauf: der neue Name wird direkt gesucht.
-        z5 = flow.zug(sit, "Peter Müller.")
+        z5 = _suchname(sit, "Peter Müller.")
         assert z5 and gesucht[-1].get("lastName") == "Müller"
     finally:
         verwalten.kal.find_patient_appointments = echt_find
@@ -1014,12 +1067,12 @@ def test_absage_korrektur_chance_nach_erstem_fehlschlag():
         z1 = _verwaltung_start(sit, "Hallo, ich muss meinen Termin leider absagen.")
         assert z1 and "nachname" in z1["text"].lower()
 
-        z2 = flow.zug(sit, "Sannes Czannis.")
+        z2 = _suchname(sit, "Sannes Czannis.")
         assert z2 and "falsch verstanden" in z2["text"].lower(), z2
         assert "notiz" not in z2["text"].lower(), "nie beim ersten Fehlschlag aufgeben"
         assert gesucht[-1].get("lastName") == "Czannis"
 
-        z3 = flow.zug(sit, "Nein, mein Nachname ist Zannes.")
+        z3 = _suchname(sit, "Nein, mein Nachname ist Zannes.")
         assert z3 and "wirklich absagen" in z3["text"].lower(), z3
         assert gesucht[-1].get("lastName") == "Zannes"
         # Der Vorname 'Sannes' stammte aus derselben verhoerten Aeusserung —
@@ -1045,12 +1098,12 @@ def test_absage_korrektur_am_nein_zweig_vorbei():
     try:
         sit = _sit()
         _verwaltung_start(sit, "Ich muss meinen Termin absagen.")
-        flow.zug(sit, "Sannes Czannis.")       # 1. Fehlschlag -> Korrektur-Frage
-        z = flow.zug(sit, "Tschannis.")        # 2. Fehlschlag -> Notiz + Neubuchung?
+        _suchname(sit, "Sannes Czannis.")       # 1. Fehlschlag -> Korrektur-Frage
+        z = _suchname(sit, "Tschannis.")        # 2. Fehlschlag -> Notiz + Neubuchung?
         assert z and "notiz" in z["text"].lower()
         assert gehirn.sammler(sit)["frage"] == "sonst_noch"
 
-        z2 = flow.zug(sit, "Nein, mein Nachname ist Zannes.")
+        z2 = _suchname(sit, "Nein, mein Nachname ist Zannes.")
         assert z2, "Korrektur darf nicht ans LLM fallen"
         assert "alles klar" not in z2["text"].lower(), "Nein-Zweig hat die Korrektur verschluckt"
         assert "wirklich absagen" in z2["text"].lower(), z2
@@ -1070,7 +1123,7 @@ def test_vorname_verworfen_kartei_schlaegt_verhoer():
     try:
         sit = _sit()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
-        z = flow.zug(sit, "Sannes Berger.")
+        z = _suchname(sit, "Sannes Berger.")
         assert z and "wirklich absagen" in z["text"].lower()
         assert gehirn.sammler(sit)["vorname"] == "Martin"  # aus der Kartei
     finally:
@@ -1085,7 +1138,7 @@ def test_vorname_verworfen_kartei_schlaegt_verhoer():
     try:
         sit = _sit()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
-        z = flow.zug(sit, "Sannes Berger.")
+        z = _suchname(sit, "Sannes Berger.")
         assert z and "vorname" in z["text"].lower(), z
         s = gehirn.sammler(sit)
         assert s["frage"] == "vorname" and not s["vorname"]
@@ -1149,9 +1202,9 @@ def test_absage_wiederholt_nach_abschluss_startet_neu():
     try:
         sit = _sit()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
-        z = flow.zug(sit, "Kasimir Probefall.")
+        z = _suchname(sit, "Kasimir Probefall.")
         assert z and "falsch verstanden" in z["text"].lower()  # Korrektur-Chance
-        z2 = flow.zug(sit, "Probefall.")
+        z2 = _suchname(sit, "Probefall.")
         assert z2 and "notiz" in z2["text"].lower()  # zweiter Fehlschlag
         z3 = flow.zug(sit, "Nein.")
         assert z3 and "wiederhören" in z3["text"].lower()
@@ -1171,7 +1224,7 @@ def test_verwaltung_hinweis_passt_nicht_ehrliche_rueckfrage():
     try:
         sit = _sit()
         flow.zug(sit, "Ich muss meinen Termin am Dienstag absagen.")
-        z = flow.zug(sit, "Martin Berger.")
+        z = _suchname(sit, "Martin Berger.")
         assert z and "meinen sie den" in z["text"].lower()
         assert gehirn.sammler(sit)["phase"] == "wahl"
 
@@ -1187,7 +1240,7 @@ def test_verwaltung_wahl_nein_fuehrt_zu_notiz():
     try:
         sit = _sit()
         flow.zug(sit, "Ich muss meinen Termin am Dienstag absagen.")
-        flow.zug(sit, "Martin Berger.")
+        _suchname(sit, "Martin Berger.")
         z = flow.zug(sit, "Nein, den meine ich nicht.")
         assert z and "notiz" in z["text"].lower() and "vorgelegt" in z["text"].lower()
         assert "Martin Berger" in (sit.get("praxisNotiz") or "")
@@ -1223,7 +1276,7 @@ def test_verwaltung_behandlung_grenzt_ein():
     try:
         sit = _sit()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
-        z = flow.zug(sit, "Martin Berger.")
+        z = _suchname(sit, "Martin Berger.")
         assert z and "für welche behandlung" in z["text"].lower()
         assert gehirn.sammler(sit)["frage"] == "behandlung"
 
@@ -1244,7 +1297,7 @@ def test_verwaltung_behandler_filtert_kalender():
         sit = _sit()
         z = _verwaltung_start(sit, "Ich möchte meinen Termin bei Doktor Petsas absagen.")
         assert z and "nachname" in z["text"].lower()
-        z2 = flow.zug(sit, "Martin Berger.")
+        z2 = _suchname(sit, "Martin Berger.")
         assert z2 and "wirklich absagen" in z2["text"].lower()
         assert sit.get("verwaltenTermin") == "apt-1"  # nur der Petsas-Termin
     finally:
@@ -2035,7 +2088,7 @@ def test_wunsch_uhrzeit_in_worten_und_statt():
     Uhr zwanzig' loeste keine neue Suche aus)."""
     from kern.slots import parse_slot_wish
     w = parse_slot_wish("Geht auch zwölf Uhr zwanzig?")
-    assert w and w.get("hour") == 12
+    assert w and w.get("hour") == 12 and w.get("minute") == 20
     w2 = parse_slot_wish("Statt zwölf Uhr fünfundvierzig bitte dreizehn Uhr.")
     assert w2 and w2.get("hour") == 13
     # "früher" ist ein RELATIVER Wunsch, keine Tageszeit (wurde als
@@ -2129,6 +2182,12 @@ def test_zeit_von_zusammengesetzte_minuten():
     assert flow._zeit_von(" um neun uhr vierundvierzig ") == (9, 44)
     assert flow._zeit_von(" zwölf uhr sieben ") == (12, 7)
     assert flow._zeit_von(" 9 uhr 44 ") == (9, 44)
+    assert flow._zeit_von(" 9 uhr dreißig ") == (9, 30)
+    assert flow._zeit_von(" neun uhr dreissig ") == (9, 30)
+    assert flow._zeit_von(" 9;30 uhr ") == (9, 30)
+    assert flow._zeit_von(" neununddreißig ") == (9, 30)
+    assert flow._zeit_von(" um zweiunddreißig ") == (2, 30)
+    assert flow._zeit_von(" Ich bin neununddreißig Jahre ") == (None, None)
 
 
 def test_slot_wahl_rundet_auf_naechsten_slot():
@@ -2259,14 +2318,13 @@ def test_streuung_fallback_ein_slot_plus_andere_tage():
     _keine_nachbarn(res["slots"])
 
 
-def test_streuung_gar_nichts_anderes_laesst_nahe_zu():
-    """Nur drei benachbarte Slots im ganzen Vorrat: besser dicht anbieten
-    als gar nichts."""
+def test_streuung_gar_nichts_anderes_nennt_eine_zeit():
+    """Nur drei benachbarte Slots: eine Zeit, nicht 12:15 und 12:45."""
     from kern.slots import pick_slots
     vorrat = ["2026-08-28T12:15:00+02:00", "2026-08-28T12:45:00+02:00",
               "2026-08-28T13:15:00+02:00"]
     res = pick_slots(vorrat, now_ms=_now_ms_test())
-    assert [x["iso"] for x in res["slots"]] == vorrat
+    assert [x["iso"] for x in res["slots"]] == [vorrat[0]]
 
 
 def test_streuung_notfall_bleibt_dicht():
@@ -2392,7 +2450,7 @@ def test_buchstabieren_nachgesprochen_in_silben():
     s["frage"] = "buchstabieren"
     s["nachname"] = "Pidoq"
     gehirn.einsammeln(sit, "MATTA VATTA")
-    assert s["nachname"] == "Mattavatta" and s["buchstabiert"]
+    assert s["nachname"] == "Mattavatta" and not s["buchstabiert"]
 
 
 def test_buchstabieren_stt_cluster_und_wortanker():
@@ -2568,6 +2626,22 @@ def test_jupp_und_hier_nein():
     assert gehirn.ist_ja("Joa, passt schon")
     assert gehirn.ist_nein("Äh, hier nein")
     assert gehirn.ist_nein("Ich glaube nein.")
+
+
+def test_telefon_check_nacktes_neun_ist_nein():
+    """Parakeet hört 'nein' oft als 'neun' — auf dem Readback keine Ziffer 9."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen", "frage": "telefon_check",
+        "telefonOffen": "01776004600", "telefonOk": False,
+    })
+    neu = gehirn.einsammeln(sit, "Neun.")
+    assert "telefonKorrektur" in neu
+    assert not s["telefonOffen"] and not s["telefonTeil"]
+    assert not s["telefonOk"]
+    assert not telefon.check_ist_nein("Nein, die letzte war eine neun.")
+    assert "9" in telefon.ziffern("die letzte war eine neun")
 
 
 def test_telefon_check_bleibt_deterministisch():
@@ -3033,8 +3107,7 @@ def test_anrufer_check_buchung_trennt_identitaet_terminempfaenger_und_sms():
         assert s["warSchonMal"] is True  # steht in der Kartei => Bestand
         assert s["vorname"] == "Julia" and s["nachname"] == "Berger"
         assert s["patientId"] == "pat-7" and s["bekannt"] and s["buchstabiert"]
-        assert not s["telefonOk"] and not s["telefon"]
-        assert s["telefonBekannt"] == "015253904756"
+        assert telefon.normaliert(s["telefonBekannt"]) == "015253904756"
         assert s["geschlecht"] == "f" and s["geschlechtQuelle"] == "akte"
         assert z2 and "Danke." in z2["text"]
         assert "Julia Berger" not in z2["text"]
@@ -3056,16 +3129,11 @@ def test_anrufer_check_buchung_trennt_identitaet_terminempfaenger_und_sms():
                            "telefon", "telefon_check", "sms_empfaenger",
                            "anrufer_check"}
 
-        # Das Tor liest die hinterlegte Nummer als SMS-Ziel vor und verwendet
-        # sie erst nach einem klaren Ja.
+        # CLIP-Handy sichtbar: Nummer uebernehmen, nicht vorlesen und
+        # nicht diktieren lassen (Anruf 785a910a).
         fid, frage = gehirn.telefon_frage(sit)
-        assert fid == "telefon_check"
-        assert "Bestätigungs-SMS" in frage
-        assert telefon.sprechbar("015253904756") in frage
-        s["frage"] = fid
-        gehirn.einsammeln(sit, "Ja.")
+        assert (fid, frage) == ("", "")
         assert s["telefonOk"] and s["telefon"] == "015253904756"
-        assert gehirn.telefon_frage(sit) == ("", "")
     finally:
         flow.hintergrund.anstossen = echt_anstossen
 

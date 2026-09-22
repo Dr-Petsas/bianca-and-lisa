@@ -264,7 +264,7 @@ def test_absage_termindaten_grenzen_ein_aber_verraten_keinen_patienten(monkeypat
     assert handled and antwort
     assert "Elisabeth Päsler" not in antwort["text"]
     assert "patientenabgleich" in antwort["text"].lower()
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
     assert "_verwDetailTermine" in sit
     assert "verwDetailTermine" not in sit
     assert calls == [], "vor der Rueckbestaetigung darf kein Write laufen"
@@ -354,7 +354,7 @@ def test_gleiche_uhrzeit_wird_vor_dem_namen_ueber_behandler_eingegrenzt(
     }
     handled2, antwort2 = verwalten._detail_dispatch(sit, None)
     assert handled2 and antwort2
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
     assert "Patientenabgleich" in antwort2["text"]
 
 
@@ -383,7 +383,7 @@ def test_name_ab_sechzig_prozent_ist_nur_rueckversicherter_kandidat(monkeypatch)
     assert handled2 and antwort2
     assert "passt noch nicht sicher genug" in antwort2["text"]
     assert s2["nachname"] == ""
-    assert s2["frage"] == "nachname"
+    assert s2["frage"] == "buchstabieren"
 
 
 def test_nein_zum_sechzig_prozent_kandidaten_fragt_namen_neu(monkeypatch):
@@ -400,7 +400,7 @@ def test_nein_zum_sechzig_prozent_kandidaten_fragt_namen_neu(monkeypatch):
 
     antwort = verwalten.zug(sit, "Nein, das ist nicht mein Termin.", set())
     assert antwort
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
     assert s["nachname"] == ""
     assert not s["bekannt"] and not s["patientId"]
     assert "Nachnamen" in antwort["text"]
@@ -472,7 +472,7 @@ def test_auskunft_verwirft_fuzzy_patienten_nach_nein_vollstaendig(monkeypatch):
     verwalten._dispatch(sit, None)
     assert not s["bekannt"] and not s["patientId"]
     antwort = verwalten.zug(sit, "Nein, die Person ist es nicht.", set())
-    assert antwort and s["frage"] == "nachname"
+    assert antwort and s["frage"] == "buchstabieren"
     assert not s["bekannt"] and not s["patientId"]
     assert sit.get("patient") == {}
 
@@ -495,7 +495,7 @@ def test_unbestaetigte_anrufernummer_ist_kein_tageskalender_beweis(monkeypatch):
     handled, antwort = verwalten._detail_dispatch(sit, None)
     assert handled and antwort
     assert "Elisabeth Päsler" not in antwort["text"]
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
 
 
 def test_namenssuche_nutzt_nur_bestaetigte_patientennummer():
@@ -889,7 +889,7 @@ def test_widerspruechliches_ja_bestaetigt_keinen_fuzzy_patienten():
 
     antwort = verwalten.zug(
         sit, "Ja, aber das ist nicht mein Termin.", set())
-    assert antwort and s["frage"] == "nachname"
+    assert antwort and s["frage"] == "buchstabieren"
     assert not s["patientId"] and not s["bekannt"]
 
 
@@ -928,7 +928,7 @@ def test_verworfener_fuzzy_patient_wird_nicht_erneut_angeboten(monkeypatch):
     sit["gefunden"] = [dict(TERMIN)]
 
     verworfen = verwalten.zug(sit, "Nein, das ist nicht mein Termin.", set())
-    assert verworfen and s["frage"] == "nachname"
+    assert verworfen and s["frage"] == "buchstabieren"
     assert "patient-paesler" in sit["_verwAusgeschlossenePatienten"]
 
     monkeypatch.setattr(
@@ -1012,7 +1012,7 @@ def test_erinnerter_tag_ohne_treffer_wechselt_zum_namen_statt_tagesschleife(
     verwalten._hinweis_merken(sit, "am 13. Oktober 2026", relativ=True)
     handled, antwort = verwalten._detail_dispatch(sit, None)
     assert handled and antwort
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
     assert "nachname" in antwort["text"].lower()
     assert "welcher tag" not in antwort["text"].lower()
 
@@ -1124,7 +1124,7 @@ def test_wiederholter_name_wechselt_auf_patientensuche_statt_schleife(
         sit, "13. Oktober 2026 um 9:45 Uhr", relativ=True)
     handled1, frage = verwalten._detail_dispatch(sit, None)
     assert handled1 and frage
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
     assert s["nachname"] == ""
 
     s["nachname"] = "Müller"
@@ -1377,6 +1377,11 @@ def test_live_brucklacher_satz_trennt_name_von_oktober(monkeypatch):
     assert s["vorname"] == "Siegfried"
     assert s["nachname"] == "Brucklacher"
     assert "Oktober" not in f"{s['vorname']} {s['nachname']}"
+    assert antwort and "buchstabe" in antwort["text"].lower()
+    s["nachnameCheck"] = "ja"
+    s["buchstabiert"] = True
+    s["frage"] = ""
+    antwort = verwalten._sammeln(sit, text, set(), None)
     assert antwort and "Siegfried Brucklacher" in antwort["text"]
 
 
@@ -1416,7 +1421,7 @@ def test_vergessene_terminzeit_fragt_nie_nach_dem_vergessenen_datum():
         sit, "Ich weiß nicht mehr, wann mein Termin ist.", set(), None)
     assert antwort and "nachname" in antwort["text"].lower()
     assert "welcher tag" not in antwort["text"].lower()
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
 
     # Absage/Verschiebung mit unbekannter Zeit: in einer Mehrbehandlerpraxis
     # zuerst Behandler, dann Patientenname — ebenfalls kein Datum erfragen.
@@ -1454,7 +1459,7 @@ def test_vergessene_terminzeit_kompletter_flow_fragt_behandler_nicht_datum(
     assert antwort and "welchem behandler" in antwort["text"].lower()
     assert "welcher tag" not in antwort["text"].lower()
     antwort2 = flow.zug(sit, "Bei Doktor Petsas.")
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
     assert antwort2 and "nachname" in antwort2["text"].lower()
     assert "welcher tag" not in antwort2["text"].lower()
 

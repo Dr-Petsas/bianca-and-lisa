@@ -23,12 +23,14 @@ from zoneinfo import ZoneInfo
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, buchstaben, telefon
 from kern import (
-    assistent, dossier, fachprofil, motive, sprech, tenants as kern_tenants, vornamen,
+    assistent, dossier, eilig, ersatz, fachprofil, motive, sprech, tenants as kern_tenants, vornamen,
 )
 from kern.patients import arzt_sprechname
 from kern.slots import (
     parse_slot_wish,
     slot_praeferenz_aenderung,
+    start_iso,
+    such_fenster_tage,
     wunsch_ausschluesse,
     wunsch_hat_richtung,
     wunsch_mit_slot_praeferenz,
@@ -312,6 +314,7 @@ _KEIN_WUNSCH_TOKEN = (
 )
 _AUSKUNFT_RE = re.compile(
     r"wann\s+(ist|war|wäre|waere|hab(e)?\s+ich)\b.{0,30}termin|"
+    r"wann\s+mein(?:en|er|e)?\s+(?:nächste[nrs]?|nächster|kommende[nrs]?)\s+termin|"
     r"hab(e)?\s+ich\s+(überhaupt\s+|ueberhaupt\s+)?(noch\s+)?(irgend)?einen\s+termin|"
     # W-BESTAND-ANSAGE (Anruf 9dd61a59): "Ich habe meinen Termin vergessen" /
     # "Habe ich da einen Termin?" — Bestandsauskunft, keine Neubuchung
@@ -578,7 +581,7 @@ def geschlecht_aus_rolle(s: dict) -> str:
     geltende Geschlecht zurueck. Nie werfend, nie fragend.
     """
     g = _ROLLE_GESCHLECHT.get(_s(s.get("fuerWen")).lower(), "")
-    if not g or s.get("geschlechtQuelle") == "akte":
+    if not g or s.get("geschlechtQuelle") in {"akte", "gesagt"}:
         return _s(s.get("geschlecht"))
     if s.get("geschlecht") != g or s.get("geschlechtQuelle") != "rolle":
         s["geschlecht"] = g
@@ -970,10 +973,10 @@ FELDER_START = {
     # Antwort auf die Bestaetigung.
     "vornameQuelle": "",
     "vornameCheck": "",
-    # A3 (Blessing 15.09., Rüther 16.09.): Eine vom Anrufer buchstabierte Schreibweise
-    # wird genau einmal vorgelesen und mit Ja/Nein bestätigt, BEVOR eine
-    # Patienten-/Termin-Suche startet. Andere Mandanten aktivieren den
-    # Zustand nicht (Tenant-Opt-in ``nachnameReadbackNachBuchstabieren``).
+    # A3: Eine vom Anrufer buchstabierte Schreibweise wird genau einmal
+    # vorgelesen und mit Ja/Nein bestätigt, BEVOR eine Patienten-/Termin-
+    # Suche startet. Gemeinsamer Stand aller Live-Praxen
+    # (``nachnameReadbackNachBuchstabieren``).
     "nachnameCheck": "",
     # W-NAME-EINWAND (Chef 13.09.2026 zum Anruf e5c25e25: "der Nachname wurde
     # nicht richtig erkannt und sie springt trotzdem vor der klärung zum
@@ -987,6 +990,7 @@ FELDER_START = {
     "nameKorrekturFeld": "",
     "nachnameKlaeren": False,
     "grundWortlaut": "",
+    "grundSelbstGesagt": False,
     # Nacktes Motiv ("Zahnreinigung"): erst nachfragen, ob ein Termin
     # gewollt ist — nicht sofort die Buchungsmaschine starten.
     "terminAnbieten": "",
@@ -1246,9 +1250,17 @@ def arzt_notiz_frage(s: dict | None = None, sit: dict | None = None) -> str:
     eigener_text = _s(tenant.get("arztNotizFrageText"))
     if eigener_text:
         return eigener_text
+    arzt_roh = (s or {}).get("arzt")
+    if isinstance(arzt_roh, dict):
+        arzt = _s(arzt_roh.get("calendarName") or arzt_roh.get("name"))
+    else:
+        arzt = _s(arzt_roh)
+    if not arzt:
+        arzt = "der Doktor"
+    elif not arzt.lower().startswith(("doktor", "dr.", "dr ", "der ")):
+        arzt = f"Doktor {arzt}"
     return (
-        "Soll ich für den Termin noch eine Notiz für den Doktor anlegen? "
-        "Irgendeine besondere Frage, auf die er eingehen soll?"
+        f"Worum genau geht es in dem Termin — worauf soll sich {arzt} vorbereiten?"
     )
 
 
@@ -1374,9 +1386,9 @@ def _ist_zeitantwort(text: str) -> bool:
     return any(w.get(k) is not None for k in ("hour", "hourMin", "hourMax"))
 
 
-def _wunsch_deuten(text: str) -> dict | None:
+def _wunsch_deuten(text: str, tenant: dict | None = None) -> dict | None:
     """parse_slot_wish plus relative Tage — None, wenn der Satz nichts Zeitliches hat."""
-    wish = parse_slot_wish(text) or {}
+    wish = parse_slot_wish(text, fenster=such_fenster_tage(tenant)) or {}
     rel = _relatives_datum(f" {_s(text).lower()} ")
     if rel and not wish.get("date"):
         wish["date"] = rel
@@ -1438,7 +1450,14 @@ def _wunsch_mischen(alt: dict | None, neu: dict) -> dict:
     elif neu.get("minDaysAhead") and not (neu.get("von") or neu.get("bis")):
         # "im Oktober" -> spaeter "dann doch naechste Woche": der relative
         # Abstand ersetzt den Zeitraum (sonst filtert apply() beides zugleich).
+        # Ebenso einen konkreten Tag ("Montag" -> "nächste Woche").
         out["von"], out["bis"] = None, None
+        if not (neu.get("date") or neu.get("tage")):
+            out["date"], out["tage"] = None, None
+    if neu.get("hourMin") is not None and neu.get("hour") is None:
+        # "ab 16 Uhr" / "bis 4 arbeiten" ersetzt eine frühere Punkt-Uhrzeit.
+        out["hour"] = None
+        out.pop("minute", None)
     if out.get("date") or out.get("tage"):
         out["weekday"] = None
         # Ein konkreter Tag ersetzt einen frueheren Zeitraum-Wunsch ("im
@@ -1496,6 +1515,39 @@ def _grund_deuten(tenant: dict, text: str, katalog: list[dict] | None = None) ->
     return ohne_katalog.get(wortlaut, ""), None
 
 
+def grund_als_kontrolle(sit: dict, wortlaut: str) -> dict | None:
+    """Goldene Regel 21.09.2026: unbekannten Grund als Kontrolle merken.
+
+    Nie „Leistung nicht angeboten“. Der O-Ton bleibt in grundWortlaut für
+    die Terminnotiz. Gibt es telefonisch keine Kontrolle, bleibt der
+    Wortlaut trotzdem stehen — die Slotsuche sagt ehrlich Bescheid.
+    """
+    s = sammler(sit)
+    kurz = _s(wortlaut)
+    if len(kurz) > 90:
+        kurz = kurz[:87] + "…"
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    from kern import zimmer_map as _zm
+    kat = _zm.buchbarer_katalog(tenant, motive.katalog(sit))
+    vm = (besuchsgrund.kontrolle_auffang(tenant, katalog=kat)
+          or besuchsgrund.fallback_motiv(tenant, katalog=kat)
+          or besuchsgrund.generisches_motiv(tenant, katalog=kat))
+    s["grund"] = kurz or "Kontrolle"
+    s["grundWortlaut"] = kurz
+    s["grundSelbstGesagt"] = True
+    s["grundGenerisch"] = True
+    sit.pop("grundKlaerungen", None)
+    sit.pop("grundNichtBuchbarArt", None)
+    sit.pop("grundNichtBuchbarText", None)
+    if vm:
+        s["motivId"] = _s(vm.get("id"))
+        s["motivName"] = _s(vm.get("name"))
+    else:
+        s["motivId"] = ""
+        s["motivName"] = ""
+    return vm
+
+
 def _name_tokens(text: str) -> list[str]:
     raw = re.sub(r"[^\wäöüßÄÖÜ' -]+", " ", _s(text))
     return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
@@ -1515,6 +1567,23 @@ def _anrufer_nummer(sit: dict) -> str:
     """Nummer, unter der der Anrufer anruft (Anrufer-ID/CF-pre) — oder ""."""
     an = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
     return _s(an.get("telefon")) or _s(sit.get("callerPhone"))
+
+
+def _clip_handy(sit: dict) -> str:
+    """In der Leitung sichtbare Mobilnummer — nicht die Aktennummer.
+
+    Chef 21.09.2026 (Anruf 785a910a): Ist die CLIP nicht unterdrueckt und
+    ein deutsches Handy, darf Bianca sie nicht noch einmal diktieren
+    lassen. Festnetz bleibt Pflicht zur Handy-Angabe.
+    """
+    s = sammler(sit)
+    for roh in (
+        _anrufer_nummer(sit),
+        s.get("kontaktTelefon") or "",
+    ):
+        if roh and telefon.ist_handy(roh):
+            return telefon.normaliert(roh)
+    return ""
 
 
 def anrufer_name(sit: dict) -> str:
@@ -1741,6 +1810,11 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool,
     text = _s(_KEIN_NAME_RE.sub(" ", text))
     if not text:
         return False
+    # Getippter, vom Patienten bestätigter Name ist die führende Wahrheit.
+    # STT darf ihn nicht mehr überschreiben — nur eine ausdrückliche Korrektur.
+    if s.get("nameVerified") and not _name_leadin(text) and not (
+            _TEIL_VOR_RE.search(text) or _TEIL_NACH_RE.search(text)):
+        return False
     # W-SCHLEIFE (04.09.2026): "Uh Dr. Petter" auf die Behandler-Frage
     # darf NICHT als Patienten-Nachname "Udrpetter" landen — das war die
     # Live-Schleife (nochmal Behandler, dann falscher Name, dann 4×
@@ -1901,6 +1975,43 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool,
     return False
 
 
+def _dringlichkeit_anwenden(sit: dict, t: str, neu: set[str]) -> None:
+    """Schaden bleibt Akut/Reparatur, die Suche startet ab heute."""
+    from kern import dringlichkeit, zimmer_map
+    dringlichkeit.merken(sit, t)
+    s = sammler(sit)
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if (not zimmer_map.aktiv(tenant)
+            and _s(s.get("phase")) not in {"gebucht", "fertig"}):
+        hit = dringlichkeit.konzept(tenant, dringlichkeit.fenster(sit, t))
+        if hit:
+            kern_name, muster = hit
+            aktuell = _s(s.get("grund")).casefold()
+            weich = (not aktuell or s.get("grundGenerisch")
+                     or aktuell in dringlichkeit.WEICHE_GRUENDE)
+            if weich and aktuell != kern_name.casefold():
+                kat = motive.katalog(sit)
+                vm = (besuchsgrund.motiv_suchen(tenant, muster, katalog=kat)
+                      or besuchsgrund.motiv_suchen(
+                          tenant, besuchsgrund.FALLBACK_MUSTER, katalog=kat))
+                s["grund"] = kern_name
+                wort = dringlichkeit.fenster(sit, t) or t
+                s["grundWortlaut"] = wort if len(wort) <= 120 else wort[:117] + "…"
+                s["grundSelbstGesagt"] = True
+                s["grundGenerisch"] = False
+                if vm:
+                    s["motivId"] = _s(vm.get("id"))
+                    s["motivName"] = _s(vm.get("name"))
+                neu.add("grund")
+                sit["slotVorrat"] = []
+                sit["vorratGemerkt"] = False
+                sit.pop("vorratFuer", None)
+                sit.pop("vorratDispatch", None)
+    if dringlichkeit.sucht_ab_heute(sit) and not sit.get("dringlichkeitGehoert"):
+        s["wunsch"] = eilig.wunsch_heute(sit)
+        neu.add("wunsch")
+
+
 def einsammeln(sit: dict, text: str) -> set[str]:
     """Alle Deuter über den Satz laufen lassen; liefert die neu gefüllten Felder."""
     s = sammler(sit)
@@ -1946,7 +2057,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
-        elif _ABSAGE_RE.search(t):
+        elif (_ABSAGE_RE.search(t) and not eilig.vergangene_absage_plus_neubuchung(t)
+              and not ersatz.blockiert_absage(t)):
             if s["modus"] != "absagen" or s["phase"] == "fertig":
                 s["modus"] = "absagen"
                 s["phase"] = ""
@@ -1971,6 +2083,19 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 s["phase"] = ""
                 s["frage"] = ""
                 neu.add("modus")
+
+    if eilig.vergangene_absage_plus_neubuchung(t) and s["modus"] in {"", "absagen"}:
+        s["modus"] = "buchen"
+        s["phase"] = ""
+        s["frage"] = ""
+        neu.add("modus")
+    if ersatz.merken(sit, t):
+        ersatz.modus_buchen(sit)
+        if s["modus"] == "buchen":
+            neu.add("modus")
+    if eilig.merken(sit, t) and s["wunsch"] is None:
+        s["wunsch"] = eilig.wunsch_heute(sit)
+        neu.add("wunsch")
 
     # Eine bereits BESTÄTIGTE Anruferidentität bleibt gebunden. Der bloße
     # Rufnummer-Treffer darf die ausdrückliche Identitätskontrolle dagegen
@@ -2226,31 +2351,14 @@ def einsammeln(sit: dict, text: str) -> set[str]:
 
     katalog = motive.katalog(sit)
 
-    # Fachgrenze: ein Zahnwunsch bei Blessing oder einer anderen
-    # nicht-zahnärztlichen Praxis darf nie zum generischen Kontrolltermin
-    # werden. Der Flow antwortet anschließend aus dem passenden Fachtemplate.
-    if (besuchsgrund.fachfremder_zahngrund(tenant, t, katalog=katalog)
+    # Goldene Regel 21.09.2026: unbekannter oder nicht zuordenbarer
+    # Besuchsgrund wird Kontrolle — nie „Leistung nicht angeboten“.
+    # Gilt für alle Praxen (Blessing d64b2cf9 „Eine Beratung.“, Stechwarze).
+    if ((besuchsgrund.fachfremder_zahngrund(tenant, t, katalog=katalog)
+         or _zimmer_map.klar_nicht_buchbar(tenant, t))
             and (s["frage"] == "grund" or _ANLIEGEN_SIGNAL_RE.search(t))):
-        s["grund"] = ""
-        s["grundWortlaut"] = ""
-        s["motivId"] = ""
-        s["motivName"] = ""
-        s["frage"] = "grund"
-        sit["grundNichtBuchbarArt"] = "fachfremd"
-        neu.add("grundNichtBuchbar")
-
-    # Thaler nimmt telefonisch nur die sechs freigegebenen Motivgruppen an.
-    # Explizite andere Behandlungen werden nicht still als Kontrolle gebucht:
-    # der Flow nennt die erlaubten Gruppen und bleibt bei der Grundfrage.
-    elif (_zimmer_map.klar_nicht_buchbar(tenant, t)
-            and (s["frage"] == "grund" or _ANLIEGEN_SIGNAL_RE.search(t))):
-        s["grund"] = ""
-        s["grundWortlaut"] = ""
-        s["motivId"] = ""
-        s["motivName"] = ""
-        s["frage"] = "grund"
-        sit["grundNichtBuchbarArt"] = "mandantengrenze"
-        neu.add("grundNichtBuchbar")
+        grund_als_kontrolle(sit, t)
+        neu.add("grund")
 
     # Besuchsgrund: auf die Besuchsgrund-Liste des Behandlers mappen; der
     # WORTLAUT des Patienten bleibt für die Terminnotiz erhalten (Chef 27.08.).
@@ -2266,6 +2374,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         if kern_name:
             s["grund"] = kern_name
             s["grundWortlaut"] = t if len(t) <= 120 else t[:117] + "…"
+            s["grundSelbstGesagt"] = True
             s["grundGenerisch"] = False
             sit.pop("grundKlaerungen", None)
             if vm:
@@ -2276,56 +2385,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
               and not ist_nein(t) and not _KEIN_GRUND_RE.search(t)
               and not _grund_unglaubwuerdig(t) and not _grund_ist_frage(t)
               and (len(t.split()) <= 5 or _ANLIEGEN_SIGNAL_RE.search(t))):
-            # Nicht-zahnärztliche Praxen buchen unbekannte/fachfremde Wünsche
-            # nie als Kontrolle. Zahnmandanten behalten den bewährten
-            # Besprechungs-/Kontrollfallback samt O-Ton-Notiz.
-            if katalog and not motive.ist_zahn(katalog):
-                # B2 (17.09.2026, Blessing-Anrufe 66913eb8/a467367e): "Diese
-                # Leistung wird nicht angeboten" kam SOFORT auf jeden Grund,
-                # den der Katalog nicht kannte — auch auf echte Hautbeschwerden
-                # und auf blosse Verhoerer. Die Absage bleibt NUR fuer klar
-                # Fachfremdes (Zahnwunsch beim Hautarzt, oben). Sonst in drei
-                # Stufen: (1) einmal nachfragen, (2) erkennbare Beschwerde oder
-                # zweiter unklarer Anlauf -> allgemeine Sprechstunde/Kontrolle
-                # mit O-Ton in der Terminnotiz (flow._buchen), (3) ohne solches
-                # Motiv ehrlich absagen + Notiz an die Praxis (flow).
-                kat_b = _zimmer_map.buchbarer_katalog(tenant, katalog)
-                generisch = besuchsgrund.generisches_motiv(tenant, katalog=kat_b)
-                beschwerde = besuchsgrund.ist_derma_beschwerde(tenant, t)
-                klaerungen = int(sit.get("grundKlaerungen") or 0)
-                kurz = t if len(t) <= 90 else t[:87] + "…"
-                if generisch and (beschwerde or klaerungen >= 1):
-                    s["grund"] = kurz
-                    s["grundWortlaut"] = kurz
-                    s["motivId"] = _s(generisch.get("id"))
-                    s["motivName"] = _s(generisch.get("name"))
-                    s["grundGenerisch"] = True
-                    sit.pop("grundKlaerungen", None)
-                    neu.add("grund")
-                else:
-                    s["grund"] = ""
-                    s["grundWortlaut"] = ""
-                    s["motivId"] = ""
-                    s["motivName"] = ""
-                    s["frage"] = "grund"
-                    if klaerungen < 1:
-                        sit["grundKlaerungen"] = klaerungen + 1
-                        sit["grundKlaerungText"] = kurz
-                        neu.add("grundKlaerung")
-                    else:
-                        sit.pop("grundKlaerungen", None)
-                        sit["grundNichtBuchbarArt"] = "nicht_im_katalog"
-                        sit["grundNichtBuchbarText"] = kurz
-                        neu.add("grundNichtBuchbar")
-            else:
-                s["grund"] = t if len(t) <= 90 else t[:87] + "…"
-                s["grundWortlaut"] = s["grund"]
-                kat = _zimmer_map.buchbarer_katalog(tenant, motive.katalog(sit))
-                vm = besuchsgrund.fallback_motiv(tenant, katalog=kat)
-                if vm:
-                    s["motivId"] = _s(vm.get("id"))
-                    s["motivName"] = _s(vm.get("name"))
-                neu.add("grund")
+            grund_als_kontrolle(sit, t)
+            neu.add("grund")
 
     # W-DOSSIER: Talk darf den Job-Grund nachziehen (Kontrolle genannt,
     # dann „ich brauche noch ein Implantat") — nie nach dem Buchen.
@@ -2363,7 +2424,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                 pass
 
     # Wunschzeit (mehrturnig gemischt)
-    wish = _wunsch_deuten(t)
+    wish = _wunsch_deuten(t, sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None)
     # C3 (17.09.2026, Anruf 53986f42): "Vormittag oder Nachmittag, eigentlich
     # egal" — der Parser nahm die ERSTE Tageszeit als Wunsch (7-12 Uhr) und
     # die Nachmittagsslots fielen weg. Ein "egal" neben einer Oder-
@@ -2402,6 +2463,12 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         s["wunsch"] = wunsch_ausschluesse(s["wunsch"])
         s["wunschText"] = t
         neu.add("wunsch")
+    if sit.get("eiligHeute"):
+        # Der ausgefallene Alttermin ("20. Juli") darf den Eilig-Wunsch
+        # nicht ins nächste Jahr schieben. Heute zuerst, sonst kommen.
+        s["wunsch"] = eilig.wunsch_heute(sit)
+        neu.add("wunsch")
+    _dringlichkeit_anwenden(sit, t, neu)
 
     # Buchstabierung schlägt den frei gehörten Nachnamen — auch wenn sie ihm
     # WIDERSPRICHT: wer buchstabiert, korrigiert gerade (live 27.08.2026:
@@ -2410,7 +2477,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         neu.add("name")
     buch = (
         buchstaben.deute_feldsegment(t)
-        if tenant.get("buchstabierSegmenteTrennen") is True
+        if kern_tenants.namens_sicherung(tenant, "buchstabierSegmenteTrennen")
         else buchstaben.deute(t)
     )
     buch_fragment = False
@@ -2423,6 +2490,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # "Den Anfang habe ich. Bitte mit den restlichen Buchstaben weiter".
     explizit = bool(_TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
                     or _TEIL_NACH_RE.search(t) or _TEIL_NACH_UMGEKEHRT_RE.search(t))
+    hilfe_start = bool(s.get("buchstabierHilfe"))
 
     # C3 (17.09.2026, Anruf 53986f42): Der Anrufer BENENNT das Feld, das er
     # gerade buchstabiert ("B, U, S, C, H, Busch, fertig, Nachname" auf die
@@ -2607,7 +2675,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     elif s["frage"] == "buchstabieren":
         nach = _nachgesprochen(
             t,
-            schlusswort_trennen=tenant.get("buchstabierSegmenteTrennen") is True,
+            schlusswort_trennen=kern_tenants.namens_sicherung(
+                tenant, "buchstabierSegmenteTrennen"
+            ),
         )
         if nach:
             # Statt zu buchstabieren hat der Anrufer den Namen (ggf. in
@@ -2673,14 +2743,24 @@ def einsammeln(sit: dict, text: str) -> set[str]:
 
     # Telefonnummer: gehört -> erst rückbestätigen, dann fest.
     if s["frage"] == "telefon_check":
-        if ist_ja(t) and s["telefonOffen"]:
-            s["telefon"] = s["telefonOffen"]
-            s["telefonOk"] = True
-            s["telefonOffen"] = ""
-            neu.add("telefon")
-        elif ist_nein(t):
+        if ist_ja(t) and s["telefonOffen"] and not telefon.check_ist_nein(t):
+            if not sit.get("rueckrufNummer") and not telefon.ist_handy(s["telefonOffen"]):
+                sit["_festnetzStattHandy"] = True
+                s["telefonOffen"] = ""
+                s["telefonBekannt"] = ""
+                s["telefonOk"] = False
+                neu.add("telefonKorrektur")
+            else:
+                s["telefon"] = s["telefonOffen"]
+                s["telefonOk"] = True
+                s["telefonOffen"] = ""
+                sit["_festnetzStattHandy"] = False
+                neu.add("telefon")
+        elif ist_nein(t) or telefon.check_ist_nein(t):
             # Live 06.09.2026: nach Nein kam dieselbe Kette wieder (Echo/STT)
             # und wurde erneut vorgelesen — Sperre, sonst Nummern-Schleife.
+            # Nacktes "neun"/"nine" auf diesem Zug ist ein verhörtes Nein,
+            # keine Ziffer — sonst landet 9 im Fragment.
             _telefon_sperren(s, s.get("telefonOffen") or "")
             if (telefon.normaliert(s.get("telefonOffen") or "")
                     == telefon.normaliert(s.get("telefonBekannt") or "")):
@@ -2692,14 +2772,19 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             neu.add("telefonKorrektur")
     d = telefon.aus_satz(t)
     if d and d != s["telefon"]:
-        if _telefon_gesperrt(s, d):
+        if _telefon_gesperrt(s, d) or (
+            not sit.get("rueckrufNummer") and not telefon.ist_handy(d)
+        ):
+            if not telefon.ist_handy(d) and not sit.get("rueckrufNummer"):
+                sit["_festnetzStattHandy"] = True
             neu.add("telefonKorrektur")
         else:
             s["telefonOffen"] = d
             s["telefonTeil"] = ""
             s["telefonOk"] = False
             neu.add("telefonOffen")
-    elif not d and s["frage"] in {"telefon", "telefon_check"} and not s["telefonOk"]:
+    elif (not d and s["frage"] in {"telefon", "telefon_check"}
+            and not s["telefonOk"] and not telefon.check_ist_nein(t)):
         # Stückweise diktierte Nummer ("null eins sieben sieben" … Pause …
         # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
         stueck = telefon.ziffern(t).replace("+", "")
@@ -2740,7 +2825,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             vollstaendig = (telefon.plausibel_kurz(zusammen) if ausdruecklich
                             else telefon.plausibel(zusammen))
             if vollstaendig and fragment_fertig:
-                if _telefon_gesperrt(s, zusammen):
+                if _telefon_gesperrt(s, zusammen) or (
+                    not sit.get("rueckrufNummer") and not telefon.ist_handy(zusammen)
+                ):
+                    if not telefon.ist_handy(zusammen) and not sit.get("rueckrufNummer"):
+                        sit["_festnetzStattHandy"] = True
                     s["telefonTeil"] = ""
                     neu.add("telefonKorrektur")
                 else:
@@ -2776,19 +2865,29 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             or _s(s.get("aktePhone"))
         )
         ziffern = telefon.ziffern(bekannt).replace("+", "") if bekannt else ""
-        if ziffern and telefon.plausibel(ziffern):
+        if ziffern and telefon.plausibel(ziffern) and telefon.ist_handy(bekannt):
             s["telefonBekannt"] = telefon.normaliert(bekannt)
             s["telefonOffen"] = s["telefonBekannt"]
             s["telefonTeil"] = ""
             neu.add("telefonBekannt")
+        elif ziffern and not telefon.ist_handy(bekannt):
+            sit["_festnetzStattHandy"] = True
+            neu.add("telefonKorrektur")
         else:
             s["telefonAkte"] = True
             neu.add("telefonAkte")
     elif not d and not s["telefonOk"] and not s["telefonAkte"] and _AKTE_NUMMER_RE.search(t):
         # "Meine Nummer haben Sie ja in der Akte" — nicht darauf beharren,
         # die Akten-Nummer (oder die Praxis-Nachpflege) übernimmt das.
-        s["telefonAkte"] = True
-        neu.add("telefonAkte")
+        # Bekanntes Festnetz zaehlt nie als SMS-Ziel.
+        akte = _s(s.get("aktePhone")) or _anrufer_nummer(sit)
+        if akte and not telefon.ist_handy(akte):
+            sit["_festnetzStattHandy"] = True
+            s["telefonPflicht"] = True
+            neu.add("telefonKorrektur")
+        else:
+            s["telefonAkte"] = True
+            neu.add("telefonAkte")
 
     # Versichertenstatus (Chef 29.08.2026): in der offenen Frage zaehlt das
     # nackte Wort ("privat"), ausserhalb nur mit Kontext ("ich bin privat
@@ -2890,10 +2989,24 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["bleachingInfo"] = "zahnersatz"
             neu.add("bleaching")
 
+    # Ausgesprochene Herr/Frau-Korrektur schlaegt Akte und Vornamen-Schaetzung
+    # und schreibt die Kartei im selben Gespraech nach (Chef 21.09.2026).
+    g_korr = geschlecht_korrektur(t, sit)
+    if g_korr:
+        a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+        if a:
+            a["geschlecht"] = "male" if g_korr == "m" else "female"
+        if not s.get("fuerWen"):
+            s["geschlecht"] = g_korr
+            s["geschlechtQuelle"] = "gesagt"
+            s["geschlechtUnklar"] = False
+            neu.add("geschlecht")
+        geschlecht_kartei_schreiben(sit, g_korr)
+
     # Vornamen-Waechter (Chef 29.08.2026): Anrede-Geschlecht aus dem Vornamen,
     # sobald er da ist oder korrigiert wurde. Ein Kartei-Geschlecht (Quelle
     # "akte", gesetzt vom Hintergrund-Treffer) wird NIE ueberschrieben.
-    if s["vorname"] and s["geschlechtQuelle"] != "akte" and s["geschlechtVon"] != s["vorname"]:
+    if s["vorname"] and s["geschlechtQuelle"] not in {"akte", "gesagt"} and s["geschlechtVon"] != s["vorname"]:
         g = vornamen.geschlecht(s["vorname"])
         s["geschlecht"] = g or "f"  # Chef: unklarer Vorname -> weiblich + Notiz
         s["geschlechtUnklar"] = not g
@@ -2949,17 +3062,37 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # W-NACHNAME-READBACK (A3): Eine echte Buchstabierkette darf
     # nicht unmittelbar eine Suche auslösen. Live gingen Pusch/Busch-artige
     # Verhörer sonst als vermeintlich sicherer Nachname an die Patienten-
-    # suche. Blessing und seit dem Rüther-Anruf 008a9f2c auch Rüther
-    # aktivieren den zusätzlichen Ja/Nein-Zug; MedDent und Thaler bleiben
-    # ohne ein einziges Extra-Wort.
+    # suche. Gemeinsamer Stand aller Live-Praxen.
     buchstabiert_jetzt = bool(
         buch
         or buchstaben_teil_start
         or len(_einzelbuchstaben(t)) >= 2
         or (frage_start == "buchstabieren" and _DIKTAT_FERTIG_RE.search(t))
     )
+    # Gesprochen ist noch keine Schreibweise. Sonst springt „Mülhausen.“
+    # auf der Buchstabierfrage direkt zum Vornamen und die Suche läuft
+    # auf den Verhörer. Bekannte Rufnummern bleiben frei.
     if (
-        tenant.get("nachnameReadbackNachBuchstabieren") is True
+        kern_tenants.namens_sicherung(tenant, "nachnameDirektBuchstabieren")
+        and not buchstabiert_jetzt
+        and _s(s.get("nachnameCheck")) != "ja"
+        and not s.get("bekannt")
+        and not (
+            not s.get("fuerWen") and _s(s.get("anruferCheck")) == "ja"
+        )
+        and frage_start in {"name", "nachname", "buchstabieren"}
+        and bool({"name", "nachname"} & neu)
+        and not hilfe_start
+    ):
+        s["buchstabiert"] = False
+    elif hilfe_start and _s(s.get("nachname")) and "nachname" in neu:
+        # „Ich kann nicht buchstabieren“ plus langsam gesprochen: das
+        # gehörte Wort ist die Schreibweise, die Suche darf laufen.
+        s["buchstabiert"] = True
+        s["nachnameCheck"] = "ja"
+    if (
+        not s.get("nameNurGehoert")
+        and kern_tenants.namens_sicherung(tenant, "nachnameReadbackNachBuchstabieren")
         and frage_start in {"name", "nachname", "buchstabieren"}
         and buchstabiert_jetzt
         and _s(s.get("nachname"))
@@ -3080,12 +3213,12 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Was darf ich ändern — Zeitpunkt, Name, Nummer, Besuchsgrund — oder lieber gar keinen Termin?",
     ),
     "versicherung": (
+        "Sind Sie gesetzlich oder privat versichert?",
         "Sind Sie privat oder gesetzlich versichert?",
-        "Wie sind Sie versichert — privat oder gesetzlich?",
     ),
     "versicherung_check": (
-        "Hat sich an Ihrer Versicherung etwas geändert — privat oder gesetzlich?",
-        "Sind Sie noch genauso versichert wie bei Ihrem letzten Besuch — privat oder gesetzlich?",
+        "Bei mir in der Akte steht gesetzlich versichert, ist das noch aktuell?",
+        "Bei mir in der Akte steht privat versichert, ist das noch aktuell?",
     ),
     "pzr": (
         "Möchten Sie eine professionelle Zahnreinigung mit dazu?",
@@ -3100,12 +3233,12 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
         "Soll ich Ihnen zur Zahnreinigung einen Termin suchen?",
     ),
     "arzt_notiz": (
-        "Darf ich dem Doktor noch eine Notiz zum Termin mitgeben?",
-        "Soll ich ihm eine besondere Frage für den Termin notieren?",
+        "Worum genau geht es in dem Termin — worauf soll sich der Doktor vorbereiten?",
+        "Was genau möchten Sie behandelt wissen, damit der Doktor sich vorbereiten kann?",
     ),
     "arzt_notiz_diktat": (
-        "Was soll der Doktor zum Termin wissen?",
-        "Was soll ich dem Doktor auf den Termin schreiben?",
+        "Was genau möchten Sie behandelt wissen?",
+        "Worauf soll sich der Doktor vorbereiten?",
     ),
     "termin_notiz": (
         "Welchen Inhalt soll ich als Nachricht in den Termin schreiben?",
@@ -3126,6 +3259,10 @@ FRAGE_VARIANTEN: dict[str, tuple[str, ...]] = {
     "anrufer_check": (
         "Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt.",
         "Habe ich die richtige Person erkannt — ja oder nein?",
+    ),
+    "ersatz_check": (
+        "Soll ich Ihnen dafür einen Ersatz suchen?",
+        "Möchten Sie für den abgesagten Termin einen neuen?",
     ),
     "fuer_wen_check": (
         "Ist der Termin für Sie selbst?",
@@ -3309,7 +3446,114 @@ def anrufer_anrede(sit: dict) -> str:
         return f"Herr {last}"
     if last and vg == "f":
         return f"Frau {last}"
-    return f"{first} {last}".strip() or last
+    # Chef 21.09.2026: nie nackter Nachname, nie Vorname+Nachname ohne Titel.
+    # Unklarer Vorname bleibt der weibliche Default.
+    return f"Frau {last}" if last else ""
+
+
+_GESCHLECHT_HERR_RE = re.compile(
+    r"(?:ich\s+bin|ich\s+heiße|ich\s+heiss|für\s+mich)\s+"
+    r"(?:bitte\s+)?(?:ein(?:em)?\s+)?herr(?:n)?\b"
+    r"|(?:sprechen|anreden|nennen)\s+sie\s+mich\s+(?:bitte\s+)?"
+    r"(?:als\s+|mit\s+)?herr(?:n)?\b"
+    r"|ich\s+bin\s+(?:ein\s+)?mann\b"
+    r"|ich\s+bin\s+m(?:ä|ae)nnlich\b"
+    r"|(?:nicht|keine)\s+(?:die\s+)?frau\b"
+    r"|frau\s+(?:ist\s+)?(?:falsch|stimmt\s+nicht)\b"
+    r"|es\s+ist\s+herr\b",
+    re.I,
+)
+_GESCHLECHT_FRAU_RE = re.compile(
+    r"(?:ich\s+bin|ich\s+heiße|ich\s+heiss|für\s+mich)\s+"
+    r"(?:bitte\s+)?(?:eine?\s+)?frau\b"
+    r"|(?:sprechen|anreden|nennen)\s+sie\s+mich\s+(?:bitte\s+)?"
+    r"(?:als\s+|mit\s+)?frau\b"
+    r"|ich\s+bin\s+(?:eine\s+)?dame\b"
+    r"|ich\s+bin\s+weiblich\b"
+    r"|(?:nicht|kein)\s+(?:der\s+)?herr\b"
+    r"|herr\s+(?:ist\s+)?(?:falsch|stimmt\s+nicht)\b"
+    r"|es\s+ist\s+frau\b",
+    re.I,
+)
+_GESCHLECHT_FREMDE_RE = re.compile(
+    r"\bmeine\s+(?:frau|tochter|mutter)\b|"
+    r"\b(?:frau|herr)\s+(?:doktor|dr)\b",
+    re.I,
+)
+
+
+def geschlecht_korrektur(text: str, sit: dict | None = None) -> str:
+    """Ausdrückliche Herr/Frau-Korrektur des Anrufers — sonst leer.
+
+    Nie im Nummern- oder Buchstabier-Diktat, nie bei 'meine Frau' oder
+    'Frau Doktor'. Gegenprobe: ein echter Nachname 'Herr' bleibt Name."""
+    t = _s(text)
+    if not t or _GESCHLECHT_FREMDE_RE.search(t):
+        return ""
+    if sit is not None:
+        s = sammler(sit)
+        if s.get("telefonTeil") or s.get("buchstabenTeil"):
+            return ""
+        if _s(s.get("frage")) in {"telefon", "telefon_check", "buchstabieren"}:
+            return ""
+    herr = bool(_GESCHLECHT_HERR_RE.search(t))
+    frau = bool(_GESCHLECHT_FRAU_RE.search(t))
+    if herr and not frau:
+        return "m"
+    if frau and not herr:
+        return "f"
+    if herr and frau:
+        if re.search(r"nicht\s+(?:die\s+)?frau", t, re.I):
+            return "m"
+        if re.search(r"nicht\s+(?:der\s+)?herr", t, re.I):
+            return "f"
+        if re.search(r"ich\s+bin\b.*\bherr", t, re.I):
+            return "m"
+        if re.search(r"ich\s+bin\b.*\bfrau", t, re.I):
+            return "f"
+    return ""
+
+
+def geschlecht_kartei_schreiben(sit: dict, g: str, patient_id: str = "") -> dict:
+    """Kartei im selben Gespräch nachziehen — nie werfend, nie blockierend."""
+    from kern.patients import geschlecht_aktualisieren
+    from kern.sitzung import merke_tool
+    s = sammler(sit)
+    a = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    pid = (
+        _s(patient_id)
+        or (_s(s.get("patientId")) if not s.get("fuerWen") else "")
+        or _s(a.get("patientId"))
+    )
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if not pid or g not in {"m", "f"} or not tenant:
+        return {"ok": False, "error": "kein ziel"}
+    if sit.get("geschlechtKartei") == g:
+        return {"ok": True, "already": True, "patientId": pid, "gender": g}
+    try:
+        res = geschlecht_aktualisieren(tenant, pid, g)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if res.get("ok"):
+        sit["geschlechtKartei"] = g
+        merke_tool(sit, "update_gender", res)
+    return res
+
+
+def erkannt_satz(sit: dict) -> str:
+    """Erkannt-Satz: Anrede am Ende, nie nackter Nachname am Satzanfang."""
+    wer = anrufer_anrede(sit)
+    if wer:
+        return f"Ich habe Sie erkannt, {wer}."
+    return "Ich habe Sie erkannt."
+
+
+def name_quittung(s: dict) -> str:
+    """Namens-Quittung immer mit Herr/Frau, nie 'Danke — Müller, notiert.'"""
+    wer = anrede(s)
+    if wer:
+        return f"Danke, {wer}. "
+    return "Danke. "
 
 
 def voriges_gespraech(sit: dict) -> dict:
@@ -3336,13 +3580,13 @@ HALLO_NEU = (
 HALLO_NEU_WER = (
     "Ah, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!",
     "Ah, {wer} — wir kennen uns am Telefon noch nicht. Ich bin die Neue!",
-    "{wer}, schön dass Sie anrufen. Wir kennen uns noch nicht. Ich bin die Neue!",
+    "Schön, dass Sie anrufen, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!",
     "Wir kennen uns noch nicht, {wer}. Ich bin die Neue!",
 )
 HALLO_ANRUF = (
     "Ah, {wer}, wie geht es Ihnen?",
     "Ah, {wer}, schön Sie wieder zu hören. Sie hatten {wann} schon einmal angerufen.",
-    "{wer} — schön, Sie wieder zu hören. Wie geht es Ihnen?",
+    "Schön, Sie wieder zu hören, {wer}. Wie geht es Ihnen?",
     "Ah, {wer}. Ich sehe, Sie hatten {wann} schon einmal in der Leitung.",
 )
 HALLO_ANRUF_OHNE = (
@@ -3354,7 +3598,7 @@ HALLO_ANRUF_OHNE = (
 HALLO_BESUCH = (
     "Ah, {wer}, wie geht es Ihnen?",
     "Ah, {wer}, schön Sie wieder zu hören. Zuletzt waren Sie bei {arzt} in Behandlung.",
-    "{wer} — schön, Sie wieder zu hören. Wie geht es Ihnen?",
+    "Schön, Sie wieder zu hören, {wer}. Wie geht es Ihnen?",
     "Ah, {wer}. Ich sehe, Sie waren zuletzt bei {arzt}.",
 )
 HALLO_BESUCH_OHNE = (
@@ -3564,6 +3808,10 @@ def anrufer_wohl_quittung(text: str) -> str:
 def anrufer_bekannt(sit: dict) -> dict:
     """DB-Patient zur Anrufernummer — {} wenn keiner da oder Notaus an."""
     if os.environ.get("ANRUFER_CHECK", "1").strip() == "0":
+        return {}
+    from kern import namenslink
+    namenslink.nummer_parken(sit)
+    if namenslink.test_unbekannt(sit):
         return {}
     a = sit.get("anrufer")
     if not isinstance(a, dict):
@@ -4166,12 +4414,10 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Ziffern; am Ende können Sie einfach fertig sagen.",
         "Und unter welcher Handynummer erreichen wir Sie?",
         "Und unter welcher Handynummer erreichen wir Sie? Die brauche ich für die Terminbestätigung.",
-        "Und sind Sie privat oder gesetzlich versichert?",
-        "Kurz für unsere Unterlagen: Sind Sie privat oder gesetzlich versichert?",
-        ("Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
-         "Unterlagen: Sind Sie weiterhin privat versichert, oder hat sich da etwas geändert?"),
-        ("Ihr letzter Besuch ist ja schon eine Weile her — kurz für unsere "
-         "Unterlagen: Sind Sie weiterhin gesetzlich versichert, oder hat sich da etwas geändert?"),
+        "Sind Sie gesetzlich oder privat versichert?",
+        "Sind Sie privat oder gesetzlich versichert?",
+        "Bei mir in der Akte steht privat versichert, ist das noch aktuell?",
+        "Bei mir in der Akte steht gesetzlich versichert, ist das noch aktuell?",
         # P1 Readback-Parallelisierung: Vorsatz + Schlussfrage der Nummern-
         # Rückbestätigung (readback_text) — gewärmt spielt der Vorsatz
         # sofort, während der Ziffern-Satz rendert und nachgehört wird.
@@ -4292,10 +4538,14 @@ def anrede(s: dict, patient: dict | None = None, *, beugen: bool = False) -> str
     """Geschlechts-Anrede 'Frau Müller' / 'Herr Müller' (beugen: 'Herrn Müller').
 
     Kartei-Geschlecht schlaegt die Vornamen-Schaetzung. Der Vornamen-Waechter
-    setzt bei unklaren Namen ohnehin den Chef-Default weiblich — faellt
-    trotzdem alles aus, bleibt der volle Name (nie falsch raten)."""
+    setzt bei unklaren Namen den Chef-Default weiblich. Es gibt keinen
+    nackten Nachnamen und keinen Vornamen+Nachnamen ohne Herr/Frau."""
     last = _s(s.get("nachname"))
     if not last:
+        return ""
+    if (s.get("platzhalterName") or s.get("nameQuelle") == "platzhalter"
+            or (last.casefold() == "sms"
+                and _s(s.get("vorname")).casefold() == "reservierung")):
         return ""
     g = (_s((patient or {}).get("gender")) or _s(s.get("geschlecht"))).lower()
     if g in _HERR:
@@ -4307,7 +4557,8 @@ def anrede(s: dict, patient: dict | None = None, *, beugen: bool = False) -> str
         return f"{'Herrn' if beugen else 'Herr'} {last}"
     if vg == "f":
         return f"Frau {last}"
-    return f"{_s(s.get('vorname'))} {last}".strip()
+    # Chef 21.09.2026: immer Frau/Herr + Nachname. Unklar = weiblich.
+    return f"Frau {last}"
 
 
 def telefon_alt_frage(s: dict) -> str:
@@ -4333,7 +4584,7 @@ def sms_nummer_frage(nummer: str) -> str:
 
 def sms_empfaenger_frage(s: dict) -> str:
     """Beim Dritttermin erst den SMS-Empfänger wählen, dann ggf. Nummer fragen."""
-    patient = anrede(s) or f"{_s(s.get('vorname'))} {_s(s.get('nachname'))}".strip()
+    patient = anrede(s, beugen=True)
     if patient:
         return f"Soll die Bestätigungs-SMS an {patient} oder an Sie gehen?"
     return "Soll die Bestätigungs-SMS an die Patientin oder den Patienten oder an Sie gehen?"
@@ -4363,7 +4614,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 # kurze Ja/Nein-/"alles gut"-Antworten.
                 "termin_ok", "sonst_noch", "termin_aendern",
                 # W-RECHNUNG: "Soll ich Ihnen dafuer einen Rueckruf einrichten?"
-                "rechnung_rueckruf"}
+                "rechnung_rueckruf", "ersatz_check"}
 # "nachname" zaehlt als Diktat, seit die Verwaltungs-Frage direkt zum
 # Buchstabieren einlaedt (31.08.2026) — wer "Z … A … N" langsam diktiert,
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.
@@ -4436,9 +4687,9 @@ def _nachname_start_frage(sit: dict, einstieg: str) -> tuple[str, str]:
     mehr als Nachsatz hinter einem Fragezeichen abschneiden.
     """
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-    if tenant.get("nachnameDirektBuchstabieren") is True:
+    if kern_tenants.namens_sicherung(tenant, "nachnameDirektBuchstabieren"):
         return (
-            "nachname",
+            "buchstabieren",
             f"{einstieg}Bitte nennen Sie den Nachnamen Buchstabe für Buchstabe. "
             "Wie lautet die genaue Schreibweise?",
         )
@@ -4472,16 +4723,53 @@ def vorname_frage(s: dict) -> tuple[str, str]:
     return "vorname", "Und der Vorname?"
 
 
+def name_suche_frei(sit: dict) -> bool:
+    """Unbekannter Nachname: Kalender erst nach bestätigter Schreibweise.
+
+    Bekannte Rufnummer (bestätigter Anrufer oder gebundene Akte) sucht sofort.
+    Praxen ohne den Schalter bleiben beim alten Sofort-Weg.
+    """
+    s = sammler(sit)
+    # Gehörter Neupatienten-Name ist ein SMS-Hinweis, keine Akte.
+    if s.get("platzhalterName") or s.get("nameQuelle") == "platzhalter":
+        return False
+    if s.get("nameNurGehoert") and not s.get("nameVerified"):
+        return False
+    # Dritttermin: die bestätigte Anrufer-Akte ist nicht der Patient.
+    if not s.get("fuerWen"):
+        if s.get("bekannt") or _s(s.get("patientId")):
+            return True
+        if _s(s.get("anruferCheck")) == "ja":
+            return True
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if not kern_tenants.namens_sicherung(tenant, "nachnameDirektBuchstabieren"):
+        return True
+    if _s(s.get("nachnameCheck")) == "ja":
+        return True
+    if not _s(s.get("nachname")):
+        return True
+    # Tafel-Ja ist die Freigabe. Ohne Readback-Schalter reicht das Buchstabieren.
+    if s.get("buchstabiert") and not kern_tenants.namens_sicherung(
+        tenant, "nachnameReadbackNachBuchstabieren"
+    ):
+        return True
+    return False
+
+
 def _nachname_vor_vorname_absichern(
     sit: dict, s: dict
 ) -> tuple[str, str] | None:
     """Bei Opt-in erst die Schreibweise sichern, dann nach dem Vornamen fragen."""
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     if (
-        tenant.get("nachnameDirektBuchstabieren") is True
+        kern_tenants.namens_sicherung(tenant, "nachnameDirektBuchstabieren")
         and _s(s.get("nachname"))
         and not s.get("buchstabiert")
         and not s.get("bekannt")
+        and _s(s.get("nachnameCheck")) != "ja"
+        and not (
+            not s.get("fuerWen") and _s(s.get("anruferCheck")) == "ja"
+        )
     ):
         return _buchstabier_frage(
             s,
@@ -4494,6 +4782,13 @@ def _nachname_vor_vorname_absichern(
 def naechste_frage(sit: dict) -> tuple[str, str]:
     """Welches Pflichtfeld fehlt als nächstes — und wie fragt Bianca danach?"""
     s = sammler(sit)
+    from kern import namenslink
+    namenslink.nummer_parken(sit)
+    namenslink.stammdaten_parken(sit)
+    if namenslink.ohne_stammdaten(sit) and not s.get("arzt"):
+        d = arzt_default(sit.get("tenant") or {})
+        if d:
+            s["arzt"] = d
 
     if _s(s.get("nachnameCheck")) == "offen" and _s(s.get("nachname")):
         return "nachname_check", nachname_check_frage(s)
@@ -4657,15 +4952,30 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
                 return "grund", zimmer_map.buchbare_frage()
             return "grund", fachprofil.besuchsgrund_frage(sit)
         if s["wunsch"] is None:
-            return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
+            from kern import dringlichkeit
+            if sit.get("eiligHeute") or dringlichkeit.sucht_ab_heute(sit):
+                s["wunsch"] = eilig.wunsch_heute(sit)
+            else:
+                return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
         if sit.get("rueckrufBuchung"):
             return "", ""
-        if not s["bekannt"] and not s["buchstabiert"]:
-            return _buchstabier_frage(
-                s,
-                "Ich will nichts falsch schreiben: "
-                "Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
-            )
+        if not s["bekannt"] and not s["buchstabiert"] and not s.get("nameVerified"):
+            from kern import namenslink
+            if namenslink.offen(sit):
+                pass
+            elif namenslink.soll_statt_buchstabieren(sit):
+                if namenslink.starten(sit, parallel=True) is None and not namenslink.offen(sit):
+                    return _buchstabier_frage(
+                        s,
+                        "Ich will nichts falsch schreiben: "
+                        "Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
+                    )
+            else:
+                return _buchstabier_frage(
+                    s,
+                    "Ich will nichts falsch schreiben: "
+                    "Buchstabieren Sie mir den Nachnamen bitte einmal kurz?",
+                )
         # W-TELEFON-ZULETZT (Chef 14.09.2026): Handynummer und SMS-Empfaenger
         # werden NICHT mehr hier erfragt, sondern erst nach dem Okay zum
         # Termin — unmittelbar vor dem Eintragen (`telefon_frage`, Tor in
@@ -4695,25 +5005,44 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             return "grund", zimmer_map.buchbare_frage()
         return "grund", fachprofil.besuchsgrund_frage(sit)
     if s["wunsch"] is None:
-        return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
+        from kern import dringlichkeit
+        if sit.get("eiligHeute") or dringlichkeit.sucht_ab_heute(sit):
+            s["wunsch"] = eilig.wunsch_heute(sit)
+        else:
+            return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
     if not s["nachname"]:
         wen = fuer_wen_phrase(s, fall="wen")
         einstieg = (
             f"Dann nehme ich die Daten für {wen} einmal auf. "
             if wen else "Dann nehme ich die Daten einmal auf. "
         )
+        from kern import namenslink
+        if namenslink.soll_statt_buchstabieren(sit):
+            return "nachname", f"{einstieg}Wie lautet Ihr Nachname?"
         return _nachname_start_frage(sit, einstieg)
-    schreibweise = _nachname_vor_vorname_absichern(sit, s)
-    if schreibweise:
-        return schreibweise
+    from kern import namenslink
+    if not namenslink.soll_statt_buchstabieren(sit):
+        schreibweise = _nachname_vor_vorname_absichern(sit, s)
+        if schreibweise:
+            return schreibweise
     if not s["vorname"]:
         return vorname_frage(s)
-    if not s["buchstabiert"] and not s["bekannt"]:
-        return _buchstabier_frage(
-            s,
-            "Damit ich nichts falsch schreibe: "
-            "Buchstabieren Sie den Nachnamen bitte einmal kurz?",
-        )
+    if not s["buchstabiert"] and not s["bekannt"] and not s.get("nameVerified"):
+        if namenslink.offen(sit):
+            pass
+        elif namenslink.soll_statt_buchstabieren(sit):
+            if namenslink.starten(sit, parallel=True) is None and not namenslink.offen(sit):
+                return _buchstabier_frage(
+                    s,
+                    "Damit ich nichts falsch schreibe: "
+                    "Buchstabieren Sie den Nachnamen bitte einmal kurz?",
+                )
+        else:
+            return _buchstabier_frage(
+                s,
+                "Damit ich nichts falsch schreibe: "
+                "Buchstabieren Sie den Nachnamen bitte einmal kurz?",
+            )
     # W-TELEFON-ZULETZT: Nummer/SMS-Empfaenger erst nach dem Okay zum Termin
     # (`telefon_frage`), hier nur noch die Versicherung.
     fid_v, frage_v = _versicherung_frage(s)
@@ -4731,17 +5060,36 @@ def telefon_frage(sit: dict) -> tuple[str, str]:
     steht, der Anrufer hat Ja gesagt, PZR/Doktor-Notiz sind durch — JETZT
     kommt die Nummer, und direkt danach book_slot (= SMS). Reihenfolge hier:
 
-    1. gehoerte, noch unbestaetigte Nummer -> Rueckbestaetigung (nie ohne),
-    2. Dritttermin ohne SMS-Ziel -> "an den Patienten oder an Sie?",
-    3. hinterlegte Nummer (Anrufer-ID / Akte) -> "SMS an die … schicken?",
-    4. sonst die Nummer erfragen — es sei denn, der Anrufer hat sie zweimal
+    1. CLIP-Handy sichtbar (nicht unterdrueckt) -> uebernehmen, nicht fragen,
+    2. gehoerte, noch unbestaetigte Nummer -> Rueckbestaetigung (nie ohne),
+    3. Dritttermin ohne SMS-Ziel -> "an den Patienten oder an Sie?",
+    4. hinterlegte Aktennummer ohne CLIP -> "SMS an die … schicken?",
+    5. sonst die Nummer erfragen — es sei denn, der Anrufer hat sie zweimal
        nicht genannt (telefonAkte) und die Plattform verlangt sie nicht
        (telefonPflicht).
     ("", "") heisst: nichts zu fragen, buchen.
     """
+    from kern import namenslink
     s = sammler(sit)
-    if s["telefonOk"]:
+    clip = _clip_handy(sit)
+    if clip and s.get("smsEmpfaenger") != "patient" and not sit.get("rueckrufNummer"):
+        if s["fuerWen"] and not s["smsEmpfaenger"]:
+            s["smsEmpfaenger"] = "anrufer"
+        s["telefonBekannt"] = clip
+        s["telefon"] = clip
+        s["telefonOk"] = True
+        s["telefonOffen"] = ""
         return "", ""
+    if s["telefonOk"]:
+        if not sit.get("rueckrufNummer") and not telefon.ist_handy(s.get("telefon") or ""):
+            s["telefonOk"] = False
+            s["telefon"] = ""
+            sit["_festnetzStattHandy"] = True
+        else:
+            return "", ""
+    if s["telefonOffen"] and not sit.get("rueckrufNummer") and not telefon.ist_handy(s["telefonOffen"]):
+        s["telefonOffen"] = ""
+        sit["_festnetzStattHandy"] = True
     if s["telefonOffen"]:
         if (s["telefonBekannt"]
                 and telefon.normaliert(s["telefonOffen"])
@@ -4751,6 +5099,9 @@ def telefon_frage(sit: dict) -> tuple[str, str]:
     if s["fuerWen"] and not s["smsEmpfaenger"]:
         return "sms_empfaenger", sms_empfaenger_frage(s)
     bekannte_nr = s["telefonBekannt"] or (s["aktePhone"] if s["bekannt"] else "")
+    if bekannte_nr and not telefon.ist_handy(bekannte_nr):
+        sit["_festnetzStattHandy"] = True
+        bekannte_nr = ""
     if bekannte_nr and not _telefon_gesperrt(s, bekannte_nr):
         s["telefonBekannt"] = telefon.normaliert(bekannte_nr)
         s["telefonOffen"] = s["telefonBekannt"]
@@ -4760,10 +5111,16 @@ def telefon_frage(sit: dict) -> tuple[str, str]:
     # Nummer verlangt (kein Treffer / Akte ohne Handy -> `book_slot` sagt
     # "Handynummer", flow._buchen setzt telefonPflicht), ist sie Pflicht —
     # dann nicht noch einmal vertagen (sonst Eskalation -> _buchen -> Fehler
-    # -> Eskalation im Kreis).
+    # -> Eskalation im Kreis). Festnetz zaehlt nie als SMS-Ziel.
     pflicht = bool(s.get("telefonPflicht"))
+    akte_nr = s.get("aktePhone") or s.get("telefonBekannt") or _anrufer_nummer(sit)
     if s["telefonAkte"] and not pflicht:
-        return "", ""
+        if akte_nr and not telefon.ist_handy(akte_nr):
+            s["telefonAkte"] = False
+            s["telefonPflicht"] = True
+            sit["_festnetzStattHandy"] = True
+        else:
+            return "", ""
     if s["telefonTeil"]:
         return "telefon", (
             "Den Anfang der Nummer habe ich; ein Stück fehlt noch. Bitte nennen Sie die "
@@ -4776,6 +5133,8 @@ def telefon_frage(sit: dict) -> tuple[str, str]:
             "Ohne Handynummer kann ich den Termin leider nicht eintragen — "
             "unter welcher Nummer erreichen wir Sie?"
         )
+    if sit.get("_festnetzStattHandy") or namenslink.ist_festnetz_anrufer(sit):
+        return "telefon", namenslink.handy_frage(sit)
     return "telefon", (
         "Dann brauche ich für die Terminbestätigung per SMS noch Ihre Handynummer — "
         "unter welcher Nummer erreichen wir Sie?"
@@ -4803,10 +5162,7 @@ def versicherung_check_frage(s: dict) -> str:
     genannt und dann bestaetigt, nicht in eine Entweder-oder-Frage versteckt.
     """
     art = "privat" if _s(s.get("versicherungAkte")) == "privat" else "gesetzlich"
-    return (
-        "Ihr letzter Besuch ist ja schon eine Weile her — "
-        f"{art} versichert habe ich hier stehen. Ist das noch aktuell?"
-    )
+    return f"Bei mir in der Akte steht {art} versichert, ist das noch aktuell?"
 
 
 def _versicherung_frage(s: dict) -> tuple[str, str]:
@@ -4823,14 +5179,14 @@ def _versicherung_frage(s: dict) -> tuple[str, str]:
             return "", ""
         if s["versicherungAkte"]:
             return "versicherung_check", versicherung_check_frage(s)
-        return "versicherung", "Kurz für unsere Unterlagen: Sind Sie privat oder gesetzlich versichert?"
+            return "versicherung", "Sind Sie gesetzlich oder privat versichert?"
     if s["warSchonMal"]:
         return "", ""
     wer = fuer_wen_phrase(s)
     if wer:
         # W-FUER-WEN: der Patient ist ein Dritter — nach IHM fragen.
-        return "versicherung", f"Und ist {wer} privat oder gesetzlich versichert?"
-    return "versicherung", "Und sind Sie privat oder gesetzlich versichert?"
+        return "versicherung", f"Ist {wer} gesetzlich oder privat versichert?"
+    return "versicherung", "Sind Sie gesetzlich oder privat versichert?"
 
 
 # --- Rueckblick auf den letzten Besuch + Zahnreinigung-Mitbuchung (30.08.2026) ---
@@ -5461,26 +5817,4 @@ def start_datum(s: dict) -> str:
     w = s.get("wunsch") or {}
     if not isinstance(w, dict):
         return ""
-    daten = [str(d) for d in (w.get("tage") or []) if d]
-    if w.get("date"):
-        daten.append(str(w["date"]))
-    if daten:
-        return min(daten)
-    heute = datetime.now(TZ).date()
-    start = heute
-    if w.get("von"):
-        try:
-            start = max(start, datetime.fromisoformat(str(w["von"])[:10]).date())
-        except ValueError:
-            pass
-    tage = int(w.get("minDaysAhead") or 0)
-    if tage:
-        start = max(start, heute + timedelta(days=tage))
-    if w.get("weekday") is not None:
-        try:
-            # Python: Montag=0 ... Sonntag=6; Wunsch (WEEKDAYS): Sonntag=0, Montag=1.
-            ziel = (int(w["weekday"]) - 1) % 7
-            start = start + timedelta(days=(ziel - start.weekday()) % 7)
-        except (TypeError, ValueError):
-            pass
-    return start.isoformat() if start != heute else ""
+    return start_iso(w)

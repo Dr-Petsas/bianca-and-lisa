@@ -37,6 +37,7 @@ VORSORGE = {
 @pytest.fixture(autouse=True)
 def _kein_hintergrund(monkeypatch):
     monkeypatch.setattr(flow.hintergrund, "anstossen", lambda *a, **k: None)
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _tenant() -> dict:
@@ -175,7 +176,7 @@ def test_ruether_fragt_nachnamen_direkt_buchstabe_fuer_buchstabe():
     sit = _namen_sitzung()
     fid, frage = gehirn.naechste_frage(sit)
 
-    assert fid == "nachname"
+    assert fid == "buchstabieren"
     assert "Buchstabe für Buchstabe" in frage
     assert frage.endswith("?")
     assert gespraechsruhe.saeubern(frage) == (frage, [])
@@ -209,8 +210,17 @@ def test_ruether_geht_erst_nach_buchstabierung_und_readback_zum_vornamen():
 
 
 @pytest.mark.parametrize("mandant", ["meddent", "thaler", "blessing"])
-def test_andere_mandanten_behalten_ihre_bisherige_nachnamenfrage(mandant):
+def test_live_mandanten_buchstabieren_den_nachnamen_zuerst(mandant):
     sit = _namen_sitzung(mandant)
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "buchstabieren"
+    assert "Buchstabe für Buchstabe" in frage
+    assert "Wie lautet die genaue Schreibweise?" in frage
+
+
+def test_ohne_client_id_bleibt_die_gesprochene_nachnamenfrage():
+    sit = _namen_sitzung("meddent")
+    sit["tenant"] = {"praxisName": "Testpraxis"}
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "buchstabieren"
     assert "Wie lautet der Nachname?" in frage

@@ -68,7 +68,10 @@ def test_erste_nennung_ist_keine_korrektur():
     neu = gehirn.einsammeln(sit, "Mein Nachname ist Thannes.")
     assert s["nachname"] == "Thannes"
     assert "hatte" not in flow._quittung(s, neu)
-    assert gehirn.naechste_frage(sit)[0] == "vorname", "keine Buchstabier-Schleife"
+    frage, text = gehirn.naechste_frage(sit)
+    assert frage == "buchstabieren"
+    assert "Buchstabe für Buchstabe" in text
+    assert "hatte" not in text
 
 
 def test_ausdrueckliche_zuweisung_ist_keine_buchstabierkette():
@@ -92,6 +95,8 @@ def test_buchstabierter_nachname_beendet_die_klaerung():
     gehirn.einsammeln(sit, "T-Z-A-N-N-I-S.")
     assert s["nachname"] == "Tzannis"
     assert s["buchstabiert"]
+    assert gehirn.naechste_frage(sit)[0] == "nachname_check"
+    s["nachnameCheck"] = "ja"
     assert gehirn.naechste_frage(sit)[0] == "vorname"
 
 

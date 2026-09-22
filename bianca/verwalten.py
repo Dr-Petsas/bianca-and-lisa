@@ -46,11 +46,15 @@ from kern.sitzung import merke_tool
 from kern.slots import (
     WEEKDAYS,
     _weekday_of,
+    angebot_engen,
+    angebot_kern,
     parse_slot_wish,
     pick_slots,
     slot_wunsch_hart,
+    slots_mit_abstand,
     spoken_offer,
     spoken_slot,
+    will_neu_suchen,
 )
 
 Melde = Callable[[str], None] | None
@@ -134,6 +138,18 @@ def _richtung_merken(sit: dict, t: str) -> None:
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
+
+
+def _ablehnte_slots_sperren(sit: dict) -> None:
+    """Abgelehntes Angebot nie wieder vorlesen — die nächste Suche startet frisch."""
+    alt = [_s(o.get("iso")) for o in sit.get("offered") or [] if _s(o.get("iso"))]
+    if not alt:
+        return
+    gesperrt = list(sit.get("slotGesperrt") or [])
+    for iso in alt:
+        if iso not in gesperrt:
+            gesperrt.append(iso)
+    sit["slotGesperrt"] = gesperrt
 
 
 def _ctx(sit: dict) -> dict:
@@ -316,6 +332,11 @@ def _finden(sit: dict, melde: Melde) -> dict:
             if isinstance(a, dict)
             and _s(a.get("id")) not in ausgeschlossene_termine
             and _s(a.get("patientId")) not in ausgeschlossene_patienten
+        ]
+    if isinstance(res.get("candidates"), list):
+        sit["kandidaten"] = [
+            c for c in res["candidates"]
+            if isinstance(c, dict) and _s(c.get("id"))
         ]
     merke_tool(
         sit,
@@ -749,6 +770,48 @@ def _filtern(sit: dict, termine: list[dict]) -> list[dict]:
     return out
 
 
+def _schreibweise_zuerst(sit: dict) -> dict:
+    """Gesprochener Nachname ohne Tafel: erst buchstabieren, dann suchen."""
+    s = gehirn.sammler(sit)
+    paar = gehirn._nachname_vor_vorname_absichern(sit, s)
+    if not paar:
+        paar = gehirn._buchstabier_frage(
+            s,
+            "Bitte nennen Sie den Nachnamen Buchstabe für Buchstabe. "
+            "Wie lautet die genaue Schreibweise?",
+        )
+    fid, frage = paar
+    s["frage"] = fid
+    return {"text": frage}
+
+
+def _qwen_name_zug(sit: dict, text: str, melde: Melde) -> dict:
+    """Zweite Lesart nur nach Ja in den Nachnamen übernehmen."""
+    s = gehirn.sammler(sit)
+    vorschlag = _s(sit.get("qwenNameVorschlag"))
+    if gehirn.ist_ja(text) and vorschlag and not gehirn.ist_nein(text):
+        s["nachname"] = vorschlag
+        s["name"] = f"{s.get('vorname') or ''} {vorschlag}".strip()
+        s["buchstabiert"] = True
+        s["nachnameCheck"] = "ja"
+        s["frage"] = ""
+        sit["qwenNameVerbraucht"] = True
+        sit.pop("qwenNameVorschlag", None)
+        return _dispatch(sit, melde)
+    if gehirn.ist_nein(text):
+        sit["qwenNameVerbraucht"] = True
+        sit.pop("qwenNameVorschlag", None)
+        return _korrektur_frage(sit)
+    tafel = ""
+    if vorschlag:
+        from bianca import buchstaben
+        tafel = buchstaben.vorlesen(vorschlag)
+    gelesen = f"{vorschlag}: {tafel}" if tafel else vorschlag
+    return {"text": (
+        f"Ich habe auch {gelesen} verstanden. Ist das richtig?"
+    )}
+
+
 def _korrektur_frage(sit: dict) -> dict:
     """W-NAMESKORREKTUR (Chef 31.08.2026, Zannes-Anruf 10:33: "der gibt zu
     schnell auf"): beim ERSTEN 'Patient nicht gefunden' nicht gleich die
@@ -757,6 +820,20 @@ def _korrektur_frage(sit: dict) -> dict:
     korrigieren oder zu buchstabieren; erst der zweite Fehlschlag geht den
     ehrlichen Notiz-Weg."""
     s = gehirn.sammler(sit)
+    if not sit.get("qwenNameVerbraucht"):
+        from kern import qwen_korrektor
+        from bianca import buchstaben
+        vorschlag = qwen_korrektor.namens_vorschlag(sit, s.get("nachname") or "")
+        if vorschlag:
+            sit["qwenNameVorschlag"] = vorschlag
+            s["frage"] = "qwen_name"
+            tafel = buchstaben.vorlesen(vorschlag)
+            wer = f"{s['vorname']} {s['nachname']}".strip() or "diesem Namen"
+            gelesen = f"{vorschlag}: {tafel}" if tafel else vorschlag
+            return {"text": (
+                f"Unter {wer} finde ich gerade keinen Termin. "
+                f"Ich habe auch {gelesen} verstanden. Ist das richtig?"
+            )}
     sit["verwKorrektur"] = True
     # Schnappschuss: nennt die Korrektur nur den Nachnamen, fliegt ein
     # Vorname aus derselben (verhoerten) Aeusserung mit raus.
@@ -778,6 +855,29 @@ def _vorname_frage(sit: dict) -> dict:
         # Auch MIT Vornamen noch mehrdeutig: nicht raten — ehrlich + Notiz.
         return _kein_termin(sit, s["modus"])
     s["frage"] = "vorname"
+    namen = []
+    gesehen: set[str] = set()
+    for c in sit.get("kandidaten") or []:
+        if not isinstance(c, dict):
+            continue
+        vor = _s(c.get("firstName"))
+        nach = _s(c.get("lastName")) or _s(s.get("nachname"))
+        label = f"{vor} {nach}".strip()
+        key = label.casefold()
+        if not vor or key in gesehen:
+            continue
+        gesehen.add(key)
+        namen.append(label)
+        if len(namen) >= 3:
+            break
+    if len(namen) >= 2:
+        if len(namen) == 2:
+            wer = f"{namen[0]} oder {namen[1]}"
+        else:
+            wer = f"{namen[0]}, {namen[1]} oder {namen[2]}"
+        return {"text": (
+            f"Da habe ich {wer}. Wie ist denn Ihr Vorname?"
+        )}
     wer = f"dem Nachnamen {s['nachname']}" if s["nachname"] else "diesem Nachnamen"
     return {"text": (
         f"Da haben wir mehrere Patienten mit {wer}. "
@@ -1325,6 +1425,8 @@ def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
 def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     """Freie Zeiten im Kalender des Bestandstermins suchen, Wunsch beachten."""
     s = gehirn.sammler(sit)
+    if s.get("phase") == "verschieb_angebot":
+        _ablehnte_slots_sperren(sit)
     termin = _gewaehlt(sit)
     if not termin:
         return _kein_termin(sit, "verschieben")
@@ -1388,6 +1490,8 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             hinweis = f"Am selben Tag ist {wort} leider nichts mehr frei. "
 
     picked = pick_slots(isos, wish=s["wunsch"])
+    if picked["slots"]:
+        picked = {**picked, "slots": slots_mit_abstand(picked["slots"])}
     if not picked["slots"] and s["wunsch"] and not slot_wunsch_hart(s["wunsch"]):
         # Wunsch (z. B. konkrete Uhrzeit) passt nirgends: naechstliegende
         # Zeiten zeigen statt in der Wunsch-Schleife zu haengen. Ausdrücklich
@@ -1395,6 +1499,7 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
         # Verschiebe-Fallback nie wieder erscheinen.
         picked = pick_slots(isos)
         if picked["slots"]:
+            picked = {**picked, "slots": slots_mit_abstand(picked["slots"])}
             hinweis = hinweis or "Genau zu dieser Zeit ist nichts frei. "
     if not picked["slots"]:
         s["phase"] = "verschieb_wunsch"
@@ -1412,8 +1517,8 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     if offered and zuletzt == [o["iso"] for o in offered]:
         # Wiederhol-Wache (wie in flow._angebot): gleiches Ergebnis ehrlich
         # ansagen statt die Liste wortgleich zu wiederholen.
-        liste = "; oder ".join(_s(o["spoken"]) for o in offered)
-        return {"text": hinweis + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {liste}. Passt davon einer?"}
+        kern = angebot_kern(offered)
+        return {"text": hinweis + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {kern}. Was passt Ihnen besser?"}
     return {"text": hinweis + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
@@ -1949,8 +2054,8 @@ def _kandidat_verwerfen(sit: dict, melde: Melde) -> dict:
 
 def _nachname_frage(sit: dict, vorsatz: str = "") -> dict:
     s = gehirn.sammler(sit)
-    s["frage"] = "nachname"
-    _, frage = gehirn._nachname_start_frage(sit, "")
+    fid, frage = gehirn._nachname_start_frage(sit, "")
+    s["frage"] = fid
     return {"text": _s(f"{vorsatz} {frage}")}
 
 
@@ -2147,10 +2252,19 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
     if res.get("notFound"):
         if not sit.get("verwKorrektur"):
             return _korrektur_frage(sit)
+        from kern import namenslink
+        aus = namenslink.starten(sit)
+        if aus is not None:
+            return aus
         return _kein_termin(sit, s["modus"])
     if res.get("mehrdeutig"):
         if res.get("vornameVerworfen"):
             s["vorname"] = ""  # der gespeicherte Vorname passte nachweislich nicht
+        if s.get("vorname"):
+            from kern import namenslink
+            aus = namenslink.starten(sit)
+            if aus is not None:
+                return aus
         return _vorname_frage(sit)
     termine = sit.get("gefunden") or []
     if not termine:
@@ -2445,6 +2559,8 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         sit["verwZeitUnbekannt"] = True
 
     # Antworten auf offene Fragen auswerten.
+    if s["frage"] == "qwen_name":
+        return _qwen_name_zug(sit, t, melde)
     if s["frage"] == "wann":
         if _UNKLAR_RE.search(t):
             sit["verwZeitUnbekannt"] = True
@@ -2590,11 +2706,13 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
         # Nachname ist die haeufigste Ursache fuer die Fehlsuche (Zannes).
         return _nachname_frage(sit, f"{was}:")
 
+    if not gehirn.name_suche_frei(sit):
+        return _schreibweise_zuerst(sit)
+
     quittung = ""
     if (("name" in neu or "nachname" in neu)
             and "anruferCheck" not in neu and s["nachname"]):
-        voll = f"{s['vorname']} {s['nachname']}".strip()
-        quittung = f"Danke, {voll}. "
+        quittung = gehirn.name_quittung(s)
     aus = _dispatch(sit, melde)
     if aus and quittung and _s(aus.get("text")):
         aus["text"] = quittung + aus["text"]
@@ -2647,8 +2765,7 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
             "Welchen Termin meinen Sie?"
         )}
     if phase == "verschieb_angebot" and sit.get("offered"):
-        liste = _fuegen([_s(a.get("spoken")) for a in sit["offered"]])
-        return {"text": f"Frei wären {liste}. Welcher Termin passt Ihnen?"}
+        return {"text": spoken_offer(sit["offered"])}
     if phase == "verschieb_wunsch" or frage == "wunsch":
         return {"text": "Wann passt es Ihnen für den neuen Termin besser?"}
 
@@ -2734,6 +2851,12 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     #    None = Frage geschlossen, normale Kette (Modus-Wechsel, Modell).
     if s["frage"] in _ANSAGE_FRAGEN:
         aus = _termin_ok_zug(sit, t, neu)
+        if aus is not None:
+            return aus
+
+    if s["frage"] == "namenslink":
+        from kern import namenslink
+        aus = namenslink.zug(sit, t, neu, melde)
         if aus is not None:
             return aus
 
@@ -2862,15 +2985,30 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
 
     # 3) Neuer Zeitpunkt beim Verschieben
     if s["phase"] == "verschieb_angebot" and sit.get("offered"):
+        if will_neu_suchen(t, sit["offered"]):
+            return _verschieb_angebot(sit, melde)
         iso = _slot_wahl(t, sit["offered"])
+        if not iso:
+            eng = angebot_engen(t, sit["offered"])
+            if eng:
+                if len(eng) == 1:
+                    iso = _s(eng[0].get("iso"))
+                else:
+                    sit["offered"] = [
+                        {"iso": _s(o.get("iso")), "spoken": spoken_slot(_s(o.get("iso")))}
+                        for o in eng if _s(o.get("iso"))
+                    ]
+                    return {"text": spoken_offer(sit["offered"])}
         if iso:
             return _verschieb_readback(sit, iso)
         if "wunsch" in neu:
             return _verschieb_angebot(sit, melde)
         if gehirn.ist_nein(t):
+            _ablehnte_slots_sperren(sit)
             s["phase"] = "verschieb_wunsch"
             s["frage"] = "wunsch"
-            return {"text": "Wann würde es Ihnen denn besser passen — eher vormittags oder nachmittags?"}
+            sit["offered"] = []
+            return {"text": "Wann würde es Ihnen denn besser passen — welcher Tag, und eher vormittags oder nachmittags?"}
         return None
 
     if s["phase"] == "verschieb_wunsch":
@@ -3001,8 +3139,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         quittung = ""
         if (("name" in neu or "nachname" in neu)
                 and "anruferCheck" not in neu and s["nachname"]):
-            voll = f"{s['vorname']} {s['nachname']}".strip()
-            quittung = f"Danke, {voll}. "
+            quittung = gehirn.name_quittung(s)
         aus = _dispatch(sit, melde)
         if aus and quittung and _s(aus.get("text")):
             aus["text"] = quittung + aus["text"]

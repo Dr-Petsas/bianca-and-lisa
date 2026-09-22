@@ -102,9 +102,10 @@ def _mit_ablage(tenant: dict[str, Any]) -> dict[str, Any]:
     sehr vielen Stellen sehr frueh geladen, und die Ablage ist optional.
     """
     try:
-        from kern import policy_ablage
+        from kern import anliegen_ablage, policy_ablage
 
-        return policy_ablage.anreichern(tenant)
+        tenant = policy_ablage.anreichern(tenant)
+        return anliegen_ablage.anreichern(tenant)
     except Exception:
         return tenant
 
@@ -195,6 +196,32 @@ def praxis_von(tenant: dict[str, Any]) -> str:
         return von
     p = _sauber(tenant.get("praxisName"))
     return f"der {p}" if p else ""
+
+
+_NAMENS_SICHERUNG = (
+    "namensUnklarOhneEcho",
+    "buchstabierSegmenteTrennen",
+    "nachnameReadbackNachBuchstabieren",
+    "nachnameDirektBuchstabieren",
+)
+
+
+def namens_sicherung(tenant: Any, key: str) -> bool:
+    """Gemeinsamer Namensstand: Segment-Parser, Tafel-Readback, kein Unklar-Echo.
+
+    An, sobald das Flag gesetzt ist oder der Mandant eine clientId trägt
+    (CF-only Praxen ohne lokale Datei). Ausdrücklich ``False`` bleibt der
+    Notaus. Test-Tenants ohne clientId und ohne Flag bleiben beim Kurzpfad.
+    ``nachnameDirektBuchstabieren`` gilt damit in jeder Live-Praxis: unbekannte
+    Anrufer buchstabieren den Nachnamen, bevor gesucht wird.
+    """
+    if key not in _NAMENS_SICHERUNG:
+        return bool(isinstance(tenant, dict) and tenant.get(key) is True)
+    if not isinstance(tenant, dict):
+        return False
+    if key in tenant:
+        return tenant.get(key) is True
+    return bool(_sauber(tenant.get("clientId")))
 
 
 def stt_keywords(tenant: dict[str, Any]) -> list[str]:

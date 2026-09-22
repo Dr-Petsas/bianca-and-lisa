@@ -693,3 +693,62 @@ def prompt_hinweis(sit: dict) -> str:
 
 def anzeige(sit: dict | None = None) -> str:
     return "an" if an() else "aus (QWEN_KORREKTOR=0)"
+
+
+# Sätze wie „Da sagt Gott.“ sind keine Nachnamen. Ein einzelnes Inhaltswort
+# oder eine echte Buchstabierkette darf als zweite Rückfrage vorgelesen werden.
+_NAME_FUELL = frozenset({
+    "der", "die", "das", "den", "dem", "ein", "eine", "einer", "ich", "bin",
+    "mir", "da", "sagt", "sag", "sagen", "gott", "hallo", "ja", "nein", "und",
+    "oder", "mit", "mein", "meine", "name", "nachname", "heisst", "heiße",
+    "ist", "nicht", "auch", "habe", "haben",
+})
+
+
+def namens_vorschlag(sit: dict, aktuell: str = "") -> str:
+    """Ein Qwen-Nachname aus einem gesperrten Namenszug, sonst leer.
+
+    Wird nie live übernommen und nie ins Wörterbuch gelernt. Der Aufrufer
+    liest den Vorschlag vor; gespeichert wird er erst nach einem Ja.
+    """
+    if not an() or not isinstance(sit, dict):
+        return ""
+    spaet = sit.get("qwenSpaet")
+    if not isinstance(spaet, list):
+        return ""
+    aktuell_norm = _s(aktuell).casefold()
+    for eintrag in reversed(spaet):
+        if not isinstance(eintrag, dict):
+            continue
+        grund = _s(eintrag.get("gesperrt"))
+        if not grund.startswith("namensfrage"):
+            continue
+        name = _ein_nachname(_s(eintrag.get("qwen")))
+        if not name or name.casefold() == aktuell_norm:
+            continue
+        return name
+    return ""
+
+
+def _ein_nachname(text: str) -> str:
+    """Genau ein Nachname. Sätze und zwei Personen bleiben leer."""
+    roh = _s(text)
+    if not roh:
+        return ""
+    buchstabiert = "-" in roh or " wie " in f" {roh.casefold()} "
+    if buchstabiert:
+        try:
+            from bianca.buchstaben import deute
+            d = deute(roh)
+        except Exception:
+            d = None
+        if isinstance(d, dict):
+            name = _s(d.get("name"))
+            if name and " " not in name and len(name) >= 3:
+                return name
+    woerter = re.findall(r"[A-Za-zÄÖÜäöüß]+", roh)
+    inhalt = [w for w in woerter if w.casefold() not in _NAME_FUELL and len(w) >= 3]
+    if len(inhalt) != 1:
+        return ""
+    wort = inhalt[0]
+    return wort[:1].upper() + wort[1:]

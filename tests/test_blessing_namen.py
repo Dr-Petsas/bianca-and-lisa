@@ -61,24 +61,21 @@ def _kein_llm(*_args, **_kwargs):
     raise AssertionError("Eine offene Namensfrage darf kein LLM brauchen")
 
 
-def test_blessing_namensschutz_ist_explizit_und_mandantenscharf():
-    assert laden("blessing")["namensUnklarOhneEcho"] is True
-    assert laden("blessing")["buchstabierSegmenteTrennen"] is True
-    assert laden("blessing")["nachnameReadbackNachBuchstabieren"] is True
-    assert "namensUnklarOhneEcho" not in laden("meddent")
-    assert "buchstabierSegmenteTrennen" not in laden("meddent")
-    assert "nachnameReadbackNachBuchstabieren" not in laden("meddent")
-    assert "namensUnklarOhneEcho" not in laden("thaler")
-    assert "buchstabierSegmenteTrennen" not in laden("thaler")
-    assert "nachnameReadbackNachBuchstabieren" not in laden("thaler")
-    assert "namensUnklarOhneEcho" not in laden("ruether")
-    # Rüther verlangt seit dem Live-Anruf 008a9f2c dieselbe sichere
-    # Buchstabier-Auswertung samt Readback, aber nicht Blessings besonderen
-    # Unklar-Dialog.
-    assert laden("ruether")["buchstabierSegmenteTrennen"] is True
-    assert laden("ruether")["nachnameReadbackNachBuchstabieren"] is True
+def test_namensschutz_gilt_fuer_alle_live_mandanten():
+    from kern.tenants import namens_sicherung
+
+    for mandant in ("blessing", "meddent", "thaler", "ruether", "demo"):
+        t = laden(mandant)
+        assert namens_sicherung(t, "namensUnklarOhneEcho") is True
+        assert namens_sicherung(t, "buchstabierSegmenteTrennen") is True
+        assert namens_sicherung(t, "nachnameReadbackNachBuchstabieren") is True
+    assert laden("ruether")["nachnameDirektBuchstabieren"] is True
+    assert "nachnameDirektBuchstabieren" not in laden("meddent")
+    assert "nachnameDirektBuchstabieren" not in laden("thaler")
+    assert "nachnameDirektBuchstabieren" not in laden("blessing")
     # Live kommt Blessing aus der Cloud Function und wird auf die lokale
-    # Fachbasis gemerged. Der Opt-in muss auch auf genau diesem Weg ankommen.
+    # Fachbasis gemerged. Der gemeinsame Stand muss auch auf genau diesem
+    # Weg ankommen.
     live_tenant = agentprofil.tenant_von_pre({
         "enabled": True,
         "clientId": "UUJnPzoYPa4yYyzcaGlm",
@@ -89,9 +86,9 @@ def test_blessing_namensschutz_ist_explizit_und_mandantenscharf():
             "firstMessage": "Hautarztpraxis Doktor Blessing.",
         },
     }, did="+4921154244120")
-    assert live_tenant and live_tenant["namensUnklarOhneEcho"] is True
-    assert live_tenant["buchstabierSegmenteTrennen"] is True
-    assert live_tenant["nachnameReadbackNachBuchstabieren"] is True
+    assert live_tenant and namens_sicherung(live_tenant, "namensUnklarOhneEcho")
+    assert namens_sicherung(live_tenant, "buchstabierSegmenteTrennen")
+    assert namens_sicherung(live_tenant, "nachnameReadbackNachBuchstabieren")
 
 
 def test_blessing_aqu_bleibt_bei_der_namensfrage_statt_unklar_doppelsatz(
@@ -110,7 +107,7 @@ def test_blessing_aqu_bleibt_bei_der_namensfrage_statt_unklar_doppelsatz(
     assert "Aqu" not in aus["text"], "unsicheren STT-Text nicht zurückspiegeln"
     assert "Was meinen Sie damit" not in aus["text"]
     assert "Meinen Sie vielleicht etwas anderes" not in aus["text"]
-    assert sit["sammler"]["frage"] == "buchstabieren"
+    assert sit["sammler"]["frage"] in {"buchstabieren", "nachname"}
     assert not sit.get("unklarFolge")
 
 
@@ -143,17 +140,20 @@ def test_blessing_alle_namensfragen_fallen_ohne_echo_zurueck(
     assert "Was meinen Sie damit" not in aus["text"]
 
 
-def test_meddent_unklar_verhalten_bleibt_byte_identisch(monkeypatch):
-    """Gegenprobe: ohne Tenant-Schalter bleibt der bisherige Doppelsatz."""
+def test_meddent_unklar_verhalten_bleibt_bei_der_namensfrage(monkeypatch):
+    """Gemeinsamer Stand: unsicheren STT-Text nicht zurückspiegeln."""
     sit = _sit("meddent")
     monkeypatch.setenv("INTENT_NACHZUG", "0")
     monkeypatch.setattr(agent.flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(agent.llm, "chat", _kein_llm)
+    monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
 
     aus = agent.user_turn(sit, "Aqu.")
 
-    assert "Aqu" in aus["text"]
-    assert "Was meinen Sie damit?" in aus["text"]
-    assert "Meinen Sie vielleicht etwas anderes?" in aus["text"]
+    assert "Nachnamen" in aus["text"]
+    assert "Aqu" not in aus["text"]
+    assert "Was meinen Sie damit" not in aus["text"]
+    assert sit["sammler"]["frage"] in {"buchstabieren", "nachname"}
 
 
 def test_blessing_gueltiger_nachname_wird_weiter_normal_geerntet(monkeypatch):
@@ -164,7 +164,9 @@ def test_blessing_gueltiger_nachname_wird_weiter_normal_geerntet(monkeypatch):
     aus = agent.user_turn(sit, "Mülhausen.")
 
     assert sit["sammler"]["nachname"] == "Mülhausen"
-    assert "Vorname" in aus["text"]
+    assert sit["sammler"]["buchstabiert"] is False
+    assert "Buchstabe für Buchstabe" in aus["text"]
+    assert "Vorname" not in aus["text"]
     assert "Was meinen Sie damit" not in aus["text"]
 
 
@@ -213,18 +215,19 @@ def test_blessing_schlusswort_fertig_wird_nie_teil_des_nachnamens():
     assert "fertig" not in sit["sammler"]["nachname"].lower()
 
 
-def test_standard_parser_und_meddent_bleiben_byte_identisch():
-    """Ohne Blessing-Opt-in bleibt die bestehende Parser-Wirkung unverändert."""
+def test_standard_parser_klebt_weiter_zwei_ketten_der_segmentparser_nicht():
+    """deute() bleibt der alte Kurzpfad; Live-Mandanten nutzen das Segment."""
     live = "H-A-L-L-W-A-C-H-S, T-Mia, T-A-M-I-A."
     assert buchstaben.deute(live) == {
         "name": "Hallwachstmiatamia",
         "sicher": False,
     }
+    assert buchstaben.deute_feldsegment(live)["name"] == "Hallwachs"
     sit = _sit("meddent", frage="nachname")
 
     gehirn.einsammeln(sit, live)
 
-    assert sit["sammler"]["nachname"] == "Hallwachstmiatamia"
+    assert sit["sammler"]["nachname"] == "Hallwachs"
 
 
 def test_blessing_buchstabierter_nachname_wird_vor_der_naechsten_frage_vorgelesen(
@@ -449,14 +452,15 @@ def test_blessing_nachname_readback_sperrt_bestandssuche_bis_zum_ja(
     assert aufrufe == [("", {"nachnameCheck"})]
 
 
-def test_meddent_buchstabieren_bleibt_ohne_zusaetzlichen_readback(monkeypatch):
-    """Gegenprobe: A3 ist Blessing-Opt-in, kein Prozess-weites Extra-Turn."""
+def test_meddent_buchstabieren_liest_die_schreibweise_zurueck(monkeypatch):
+    """Gemeinsamer Stand: Tafel-Readback vor der Suche, auch bei MedDent."""
     sit = _sit("meddent", frage="nachname")
     monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
 
     aus = flow.zug(sit, "P-U-S-C-H.")
 
     assert sit["sammler"]["nachname"] == "Pusch"
-    assert not sit["sammler"].get("nachnameCheck")
-    assert sit["sammler"]["frage"] == "vorname"
-    assert "Vorname" in aus["text"]
+    assert sit["sammler"].get("nachnameCheck") == "offen"
+    assert sit["sammler"]["frage"] == "nachname_check"
+    assert "P wie Paula" in aus["text"]
+    assert "Vorname" not in aus["text"]

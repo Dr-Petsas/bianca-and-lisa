@@ -1,8 +1,18 @@
 """Unbekannte Anrufer: Name und Nummer über lange Sprechpausen retten."""
 
+import pytest
+
 from bianca import agent, buchstaben, flow, gehirn
 from kern import hirn, task_router
 from kern.tenants import laden
+
+
+@pytest.fixture(autouse=True)
+def _namens_am_telefon(monkeypatch):
+    # Diese Datei prüft den Telefon-Namenspfad. Die SMS-Stammdaten bleiben
+    # produktiv an; hier darf der Platzhalter „Reservierung SMS“ die
+    # Buchstabier-Kette nicht überschreiben.
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit() -> dict:
@@ -62,6 +72,9 @@ def test_einzelne_buchstabenfragmente_werden_eindeutig_erkannt():
     assert buchstaben.teil("Es wie Samuel fertig.") == "s"
     assert buchstaben.teil("N'Winopol") == "n"
     assert buchstaben.teil("Ich heiße Müller") == ""
+    # „Berger“ liegt nah an der Tafel „Ärger“ und darf kein stummes Ä werden.
+    assert buchstaben.teil("Berger.") == ""
+    assert buchstaben.teil("Bertha.") == ""
 
 
 def test_ein_eindeutiger_vorname_wird_nicht_zum_nachnamen():
@@ -323,12 +336,21 @@ def test_nachname_wird_nicht_nach_vor_und_nachname_erneut_gefragt():
     fid, frage = gehirn.naechste_frage(sit)
     assert fid == "buchstabieren"
     assert "Nachname" in frage
+    assert "Buchstabe für Buchstabe" in frage
     assert "Vor- und Nachname" not in frage
 
     s["frage"] = fid
     neu = gehirn.einsammeln(sit, "Papagrigorius")
     assert "nachname" in neu
-    assert s["buchstabiert"] is True
+    assert s["buchstabiert"] is False
+    fid2, frage2 = gehirn.naechste_frage(sit)
+    assert fid2 == "buchstabieren"
+    assert "Buchstabe für Buchstabe" in frage2
+    s["frage"] = fid2
+    gehirn.einsammeln(sit, "P-A-P-A-G-R-I-G-O-R-I-U-S, fertig.")
+    assert s["nachnameCheck"] == "offen"
+    s["nachnameCheck"] = "ja"
+    s["frage"] = ""
     fid2, frage2 = gehirn.naechste_frage(sit)
     assert fid2 == "vorname"
     assert "Vorname" in frage2
@@ -402,7 +424,10 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
             z = flow.zug(sit, text)
             assert z and z.get("warte") is True and not z["text"]
         z7 = flow.zug(sit, "S wie Samuel, fertig.")
-        assert z7 and "Vorname" in z7["text"]
+        assert z7 and "Ist das richtig?" in z7["text"]
+        assert "Vorname" not in z7["text"]
+        z7a = flow.zug(sit, "Ja.")
+        assert z7a and "Vorname" in z7a["text"]
         # W-TELEFON-ZULETZT (Chef 14.09.2026): nach dem Namen KEINE Nummer —
         # erst Versicherung, dann steht der Termin, dann (als Letztes vor der
         # SMS) die Handynummer.
@@ -417,9 +442,10 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
         assert z7d and "halte ich fest" in z7d["text"].lower()
         assert "Handynummer" not in z7d["text"]
         z7e = flow.zug(sit, "Ja, passt.")
-        assert z7e and "notiz" in z7e["text"].lower()  # PZR war schon durch
-        z7f = flow.zug(sit, "Nein.")
-        assert z7f and "Handynummer" in z7f["text"]
+        # PZR war schon durch. Den Grund hat der Anrufer selbst gesagt
+        # (Kontrolle) — dann keine Doktor-Notiz, direkt die Handynummer
+        # (W-TELEFON-ZULETZT + grundSelbstGesagt).
+        assert z7e and "Handynummer" in z7e["text"]
 
         for text in (
             "null eins sieben sieben",

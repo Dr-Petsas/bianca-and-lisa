@@ -172,18 +172,17 @@ def _s(v: Any) -> str:
 
 
 def unklar_antwort(text: str) -> str:
-    """Unverständliches Gehörtes wörtlich spiegeln statt Bedeutung erfinden."""
-    gehoert = _s(text).strip(" \t\r\n.!?…")
-    if not gehoert:
+    """Unverständliches nicht zurücksprechen.
+
+    Der Verhörer wird sonst zur Tatsache: Bianca liest den Müll vor, und
+    der Anrufer muss ihn korrigieren. Eine kurze offene Frage zum Anliegen
+    reicht. Der gehörte Text bleibt nur im Protokoll.
+    """
+    if not _s(text).strip(" \t\r\n.!?…"):
         return UNKLAR_ANTWORT
-    # Kein langer STT-Absatz im Mund; die Unklar-Wache liefert regulär nur
-    # kurze Schnipsel. Der Deckel ist das Sicherheitsnetz für Alt-Sitzungen.
-    if len(gehoert) > 70:
-        gehoert = gehoert[:67].rstrip() + "…"
-    gehoert = gehoert.replace("„", "").replace("“", "").replace('"', "")
     return (
-        f"Ich habe „{gehoert}“ verstanden. Was meinen Sie damit? "
-        "Meinen Sie vielleicht etwas anderes?"
+        "Das habe ich akustisch nicht sicher mitbekommen. "
+        "Wobei darf ich Ihnen helfen?"
     )
 
 

@@ -50,13 +50,13 @@ def test_stt_muell_wird_unklar_nicht_talk():
         assert gespraech.wirkt_unklar(satz), satz
 
 
-def test_unklares_wort_wird_woertlich_rueckgefragt():
+def test_unklares_wort_wird_nicht_zurueckgesprochen():
     for gehoert in ("Spress.", "Brent Campbellt."):
         assert gespraech.wirkt_unklar(gehoert)
         text = gespraech.unklar_antwort(gehoert)
-        assert gehoert.rstrip(".") in text
-        assert "Was meinen Sie damit?" in text
-        assert "Meinen Sie vielleicht etwas anderes?" in text
+        assert gehoert.rstrip(".") not in text
+        assert "verstanden" not in text.lower()
+        assert "Wobei darf ich Ihnen helfen?" in text
 
 
 def test_unklare_auswahl_respektiert_mitarbeitersperre():

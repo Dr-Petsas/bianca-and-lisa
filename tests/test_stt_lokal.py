@@ -234,6 +234,87 @@ def test_winzige_blobs_gehen_gar_nicht_erst_raus():
     _mit_lokal(fake, lauf)
 
 
+def test_namenszug_bekommt_nur_tafel_hotwords():
+    from bianca import buchstaben
+
+    tafel = set(buchstaben.stt_hotwords())
+    assert "Cäsar" in tafel or "Caesar" in tafel or "Anton" in tafel
+    sit = {
+        "tenant": {
+            "clientId": "MEe4ZQHEzOPzLcexyhdT",
+            "behandler": "Dr. Petsas",
+            "calendars": [{"id": "1", "name": "Dr. Petsas"}],
+        },
+        "sammler": {"frage": "buchstabieren"},
+        "qwenHotwords": ["Röntgenbild"],
+    }
+    kw = stt.keywords_fuer_sitzung(sit)
+    woerter = {w.strip() for w in kw.split(",") if w.strip()}
+    assert "Petsas" not in woerter
+    assert "Röntgenbild" not in woerter
+    assert woerter <= tafel
+    assert "Anton" in woerter
+
+    sit["sammler"]["frage"] = "wunsch"
+    kw = stt.keywords_fuer_sitzung(sit)
+    woerter = {w.strip() for w in kw.split(",") if w.strip()}
+    assert "Petsas" in woerter
+    assert "Röntgenbild" in woerter
+    assert "Uhr" in woerter and "dreißig" in woerter
+
+
+def test_nummernzug_bekommt_nur_ziffern_hotwords():
+    from bianca import telefon as tel
+
+    sit = {
+        "tenant": {
+            "clientId": "MEe4ZQHEzOPzLcexyhdT",
+            "behandler": "Dr. Petsas",
+            "calendars": [{"id": "1", "name": "Dr. Petsas"}],
+        },
+        "sammler": {"frage": "telefon"},
+        "qwenHotwords": ["Röntgenbild"],
+    }
+    kw = stt.keywords_fuer_sitzung(sit)
+    woerter = {w.strip() for w in kw.split(",") if w.strip()}
+    assert "Petsas" not in woerter
+    assert "Röntgenbild" not in woerter
+    assert "null" in woerter and "neun" in woerter
+    assert "nein" not in woerter
+
+    sit["sammler"]["frage"] = "telefon_check"
+    kw = stt.keywords_fuer_sitzung(sit)
+    check = [w.strip() for w in kw.split(",") if w.strip()]
+    assert check[0] == "ja"
+    assert "nein" in check and "neun" in check
+    assert "nine" not in check
+    assert "Petsas" not in check
+    assert set(check) == set(tel.stt_hotwords(check=True))
+
+    sit["sammler"] = {"frage": "wunsch", "telefonTeil": "0177"}
+    kw = stt.keywords_fuer_sitzung(sit)
+    woerter = {w.strip() for w in kw.split(",") if w.strip()}
+    assert "Petsas" not in woerter
+    assert "null" in woerter
+
+
+def test_namens_sicherung_default_nur_mit_client_id():
+    from kern.tenants import namens_sicherung
+
+    assert namens_sicherung({}, "buchstabierSegmenteTrennen") is False
+    assert namens_sicherung(
+        {"clientId": "abc"}, "buchstabierSegmenteTrennen"
+    ) is True
+    assert namens_sicherung(
+        {"clientId": "abc", "buchstabierSegmenteTrennen": False},
+        "buchstabierSegmenteTrennen",
+    ) is False
+    assert namens_sicherung(
+        {"buchstabierSegmenteTrennen": True},
+        "buchstabierSegmenteTrennen",
+    ) is True
+
+
 def test_bereit_mit_stt_base_auch_ohne_key():
     alt = (stt.STT_BASE, stt.ELEVENLABS_API_KEY)
     try:
@@ -259,5 +340,8 @@ if __name__ == "__main__":
     test_lokal_fehler_wirft_statt_zurueckzufallen()
     test_kyrillische_halluzination_wird_verworfen()
     test_winzige_blobs_gehen_gar_nicht_erst_raus()
+    test_namenszug_bekommt_nur_tafel_hotwords()
+    test_nummernzug_bekommt_nur_ziffern_hotwords()
+    test_namens_sicherung_default_nur_mit_client_id()
     test_bereit_mit_stt_base_auch_ohne_key()
     print("test_stt_lokal: alle Faelle bestanden")

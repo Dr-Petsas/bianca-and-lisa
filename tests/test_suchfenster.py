@@ -100,8 +100,13 @@ def test_relativer_abstand_in_wochen_monaten_tagen():
     assert _k(parse_slot_wish("in vierzehn Tagen")) == {"minDaysAhead": 14}
     assert _k(parse_slot_wish("in einer Woche")) == {"minDaysAhead": 7}
     assert _k(parse_slot_wish("in etwa 6 Wochen")) == {"minDaysAhead": 42}
-    # gedeckelt auf das 6-Monats-Fenster
-    assert parse_slot_wish("in 12 Monaten")["minDaysAhead"] == sl.FENSTER_TAGE
+    # Ausgesprochener Abstand geht bis 12 Monate, auch über den Praxis-Default.
+    assert parse_slot_wish("in 7 Monaten")["minDaysAhead"] == 210
+    assert parse_slot_wish("in 12 Monaten")["minDaysAhead"] == 360
+    assert parse_slot_wish("in 8 Monaten")["minDaysAhead"] == 240
+    assert parse_slot_wish("in 8 Monaten", fenster=sl.FENSTER_TAGE_NEUN)["minDaysAhead"] == 240
+    assert parse_slot_wish("in 9 Monaten", fenster=sl.FENSTER_TAGE_NEUN)["minDaysAhead"] == 270
+    assert parse_slot_wish("in 12 Monaten", fenster=sl.FENSTER_TAGE_NEUN)["minDaysAhead"] == 360
 
 
 def test_uhrzeit_ohne_uhr_halb_zwei_ist_dreizehn():
@@ -114,6 +119,44 @@ def test_uhrzeit_ohne_uhr_halb_zwei_ist_dreizehn():
     assert _k(parse_slot_wish("um neun")) == {"hour": 9}
     # explizites "Uhr" gewinnt weiter
     assert _k(parse_slot_wish("heute um halb zwei oder 14 Uhr")) == {"hour": 14}
+
+
+def test_uhr_dreissig_alle_stunden_und_gequetscht():
+    """STT klebt 'X Uhr dreißig' zu 'Xunddreißig' — alle Stunden 1–9.
+
+    Nackte 39 ohne um/gegen bleibt Alter; 'Ich bin neununddreißig Jahre' auch.
+    """
+    from kern.slots import gequetscht_dreissig, minute_von
+
+    assert minute_von("dreißig") == 30
+    assert minute_von("dreissig") == 30
+    assert minute_von("dreisssig") == 30
+    assert _k(parse_slot_wish("9 Uhr dreißig")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("neun Uhr dreißig")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("9 Uhr 30")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("9;30 Uhr")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("um 9;30")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("neununddreißig")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("neun und dreißig")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("um neununddreißig bitte")) == {"hour": 9, "minute": 30}
+    assert _k(parse_slot_wish("um 39")) == {"hour": 9, "minute": 30}
+    # 1–8: gequetscht + Praxisstunde (ein/zwei < 7 → Nachmittag)
+    assert gequetscht_dreissig("einunddreißig") == (1, 30)
+    assert _k(parse_slot_wish("einunddreißig")) == {"hour": 13, "minute": 30}
+    assert _k(parse_slot_wish("zweiunddreißig")) == {"hour": 14, "minute": 30}
+    assert _k(parse_slot_wish("dreiunddreißig")) == {"hour": 15, "minute": 30}
+    assert _k(parse_slot_wish("vierunddreißig")) == {"hour": 16, "minute": 30}
+    assert _k(parse_slot_wish("fünfunddreißig")) == {"hour": 17, "minute": 30}
+    assert _k(parse_slot_wish("sechsunddreißig")) == {"hour": 18, "minute": 30}
+    assert _k(parse_slot_wish("siebenunddreißig")) == {"hour": 7, "minute": 30}
+    assert _k(parse_slot_wish("achtunddreißig")) == {"hour": 8, "minute": 30}
+    # Alter und nackte 39 ohne Cue
+    assert parse_slot_wish("Ich bin neununddreißig Jahre") is None or (
+        parse_slot_wish("Ich bin neununddreißig Jahre") or {}
+    ).get("hour") is None
+    assert parse_slot_wish("Ich bin neununddreißig")["hour"] is None
+    assert gequetscht_dreissig("39") is None
+    assert gequetscht_dreissig("Ich bin 39 Jahre alt") is None
 
 
 def test_uhrzeit_ohne_uhr_gegenproben():
@@ -301,6 +344,19 @@ def test_find_slots_ohne_wunsch_genau_ein_aufruf(monkeypatch):
     assert protokoll == [""]
 
 
+def test_find_slots_leere_erste_seite_sucht_weiter_im_sechs_monats_fenster(monkeypatch):
+    """Ohne Treffer in 30+90 Tagen: einmal +120, damit das Fenster 6 Monate ist."""
+    heute = _heute()
+    start2 = (heute + timedelta(days=120)).isoformat()
+    spaet = heute + timedelta(days=150)
+    protokoll: list[str] = []
+    monkeypatch.setattr(kal, "_find_slots_seite",
+                        _seiten_fake({"": [], start2: [_iso(spaet, 9)]}, protokoll))
+    found = kal.find_slots({"clientId": "c"}, {"calendarId": "k"})
+    assert protokoll == ["", start2], protokoll
+    assert any(x.startswith(spaet.isoformat()) for x in kal._iso_liste(found["slots"]))
+
+
 def test_find_slots_blaettert_bis_der_wunsch_gedeckt_ist(monkeypatch):
     """Erste Seite (20 Slots) endet vor dem Wunschtag -> Folgeseite ab dem letzten Tag."""
     heute = _heute()
@@ -370,6 +426,52 @@ def test_find_slots_bleibt_im_sechs_monats_fenster(monkeypatch):
     assert len(found["slots"]) == 20
 
 
+def test_blessing_hat_neun_monate_suchfenster():
+    blessing = laden("blessing")
+    meddent = laden("meddent")
+    thaler = laden("thaler")
+    ruether = laden("ruether")
+    assert blessing.get("suchFensterTage") == sl.FENSTER_TAGE_NEUN
+    assert sl.such_fenster_tage(blessing) == sl.FENSTER_TAGE_NEUN
+    assert sl.such_fenster_tage(meddent) == sl.FENSTER_TAGE
+    assert sl.such_fenster_tage(thaler) == sl.FENSTER_TAGE
+    assert sl.such_fenster_tage(ruether) == sl.FENSTER_TAGE
+    assert sl.such_fenster_tage({}) == sl.FENSTER_TAGE
+    assert sl.such_fenster_tage({"suchFensterTage": 12}) == sl.FENSTER_TAGE
+    assert sl.such_fenster_tage({"suchFensterTage": "x"}) == sl.FENSTER_TAGE
+    assert sl.such_fenster_tage({
+        "suchFensterTage": 183,
+        "anliegenPolicy": {"suchFensterMonate": 9},
+    }) == sl.FENSTER_TAGE_NEUN
+    assert sl.such_fenster_tage({
+        "anliegenPolicy": {"suchFensterMonate": 3},
+    }) == 92
+    acht = gehirn._wunsch_deuten("in acht Monaten", blessing)
+    assert acht and acht["minDaysAhead"] == 240
+    sechs = gehirn._wunsch_deuten("in acht Monaten", meddent)
+    assert sechs and sechs["minDaysAhead"] == 240
+
+
+def test_blessing_blaettert_bis_neun_monate(monkeypatch):
+    """Folgeseiten dürfen bei Blessing hinter dem 6-Monats-Horizont liegen."""
+    heute = _heute()
+    protokoll: list[str] = []
+    sechs = (heute + timedelta(days=kal.FENSTER_TAGE)).isoformat()
+    neun = (heute + timedelta(days=sl.FENSTER_TAGE_NEUN)).isoformat()
+
+    def fake(tenant, ctx, *, start_date="", egal=False, source=""):
+        protokoll.append(start_date)
+        basis = date.fromisoformat(start_date) if start_date else heute
+        return {"ok": True, "slots": [_iso(basis + timedelta(days=10 * i), 9) for i in range(20)],
+                "calendar": None, "motive": None, "doctorName": "", "dispatch": {}}
+
+    monkeypatch.setattr(kal, "_find_slots_seite", fake)
+    kal.find_slots({"clientId": "c", "suchFensterTage": sl.FENSTER_TAGE_NEUN},
+                   {"calendarId": "k"}, wish={"date": "2099-01-01"})
+    assert any(p and p > sechs for p in protokoll)
+    assert all(not p or p <= neun for p in protokoll)
+
+
 def test_find_slots_seitenstarts_bleiben_im_fenster(monkeypatch):
     heute = _heute()
     protokoll: list[str] = []
@@ -431,7 +533,7 @@ def test_naechste_seite_regeln():
     voll = [f"2026-09-{15 + i // 2:02d}T09:00:00" for i in range(20)]  # 20 Slots, letzter Tag 24.09.
     assert kal._naechste_seite("", voll, heute) == "2026-09-24"
     assert kal._naechste_seite("2026-09-14", ["2026-09-20T09:00:00"], heute) == "2026-10-14"
-    assert kal._naechste_seite("2026-09-14", [], heute) == ""
+    assert kal._naechste_seite("2026-09-14", [], heute) == "2027-01-12"
     # alle 20 Slots am Starttag -> einen Tag weiter
     assert kal._naechste_seite("2026-09-14", [f"2026-09-14T{8 + i % 10:02d}:00:00" for i in range(20)], heute) == "2026-09-15"
     # < 20 Slots, letzter HINTER Tag 30 -> die Plattform lief den 90-Tage-Weg
@@ -627,3 +729,92 @@ def test_behandler_und_zimmer_weg_senden_startdatum(monkeypatch):
     for eintrag in protokoll:
         assert eintrag["route"] == "getFreeTimeSlots"
         assert eintrag["body"].get("startDate") == heute_iso, eintrag["body"]
+
+
+def test_ab_uhr_und_mittags_und_danach():
+    w = parse_slot_wish("donnerstags ab 13 Uhr")
+    assert w["weekday"] == 4 and w["hour"] is None
+    assert w["hourMin"] == 13 and w["hourMax"] == 21
+    w = parse_slot_wish("ich arbeite immer bis 12 Uhr, danach bitte")
+    assert w["hour"] is None and w["hourMin"] == 12
+    w = parse_slot_wish("am 23.10. mittags wenn es geht")
+    assert w["date"] and w["date"].endswith("-10-23")
+    assert (w["hourMin"], w["hourMax"]) == (11, 14)
+    w = parse_slot_wish("donnerstags ab 13")
+    assert w["weekday"] == 4 and w["hour"] is None and w["hourMin"] == 13
+    w = parse_slot_wish("ich kann nur nachmittags")
+    assert (w["hourMin"], w["hourMax"]) == (12, 18)
+
+
+def test_start_iso_wochentag_springt_auf_naechsten_dienstag():
+    from kern.slots import start_iso
+    sonntag = date(2026, 9, 20)
+    assert start_iso({"weekday": 2}, sonntag) == "2026-09-22"
+    assert start_iso({"weekday": 2}, date(2026, 9, 22)) == ""
+    assert start_iso({"date": "2026-10-05", "weekday": 2}, sonntag) == "2026-10-05"
+
+
+def test_pick_slots_dienstag_dreizehn_dreissig_streut_keinen_montag():
+    """Live 9f984dfe: Wish 'Dienstag 13:30', erste Seite voller Montag."""
+    montag = date(2026, 9, 21)
+    dienstag = date(2026, 9, 22)
+    pool = [
+        _iso(montag, 9, 15), _iso(montag, 9, 45), _iso(montag, 11, 45),
+        _iso(montag, 12, 15), _iso(montag, 12, 45),
+        _iso(dienstag, 11, 15), _iso(dienstag, 12, 0),
+    ]
+    now_ms = int(datetime(2026, 9, 20, 13, 0, tzinfo=TZ).timestamp() * 1000)
+    picked = pick_slots(
+        pool, wish={"weekday": 2, "hour": 13, "minute": 30}, now_ms=now_ms,
+    )
+    assert picked["wishMatched"] is False
+    assert picked["slots"]
+    assert all(x["date"] == "2026-09-22" for x in picked["slots"]), picked
+    assert picked["slots"][0]["time"] == "12:00"
+    assert "Genau dann ist leider nichts frei" in sl.spoken_offer(
+        picked["slots"], wish_matched=False,
+    )
+
+
+def test_pick_slots_dienstag_dreizehn_dreissig_exakt_gewinnt():
+    dienstag = date(2026, 9, 22)
+    montag = date(2026, 9, 21)
+    pool = [
+        _iso(montag, 9, 15), _iso(dienstag, 12, 0), _iso(dienstag, 13, 30),
+    ]
+    now_ms = int(datetime(2026, 9, 20, 13, 0, tzinfo=TZ).timestamp() * 1000)
+    picked = pick_slots(
+        pool, wish={"weekday": 2, "hour": 13, "minute": 30}, now_ms=now_ms,
+    )
+    assert picked["wishMatched"] is True
+    assert picked["slots"][0]["time"] == "13:30"
+    assert all(x["date"] == "2026-09-22" for x in picked["slots"])
+
+
+def test_pick_slots_zwoelf_uhr_zaehlt_elf_nicht_als_treffer():
+    """Live c1c619e6: 'um 12 Uhr' ist nicht 11:15/11:30/11:45."""
+    dienstag = date(2026, 9, 22)
+    w = parse_slot_wish("Dienstag 12 Uhr")
+    assert w and w.get("hour") == 12 and w.get("minute") is None
+    pool = [
+        _iso(dienstag, 11, 15), _iso(dienstag, 11, 30), _iso(dienstag, 11, 45),
+    ]
+    now_ms = int(datetime(2026, 9, 20, 16, 0, tzinfo=TZ).timestamp() * 1000)
+    picked = pick_slots(pool, wish=w, now_ms=now_ms)
+    assert picked["wishMatched"] is False
+    assert picked["slots"]
+    assert all(x["time"].startswith("11:") for x in picked["slots"])
+    assert "Genau dann ist leider nichts frei" in sl.spoken_offer(
+        picked["slots"], wish_matched=False,
+    )
+
+
+def test_pick_slots_zwoelf_uhr_exakt_gewinnt():
+    dienstag = date(2026, 9, 22)
+    pool = [
+        _iso(dienstag, 11, 15), _iso(dienstag, 12, 0), _iso(dienstag, 12, 30),
+    ]
+    now_ms = int(datetime(2026, 9, 20, 16, 0, tzinfo=TZ).timestamp() * 1000)
+    picked = pick_slots(pool, wish={"weekday": 2, "hour": 12}, now_ms=now_ms)
+    assert picked["wishMatched"] is True
+    assert all(x["time"].startswith("12:") for x in picked["slots"])
