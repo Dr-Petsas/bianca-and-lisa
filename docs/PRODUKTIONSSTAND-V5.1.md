@@ -13,8 +13,9 @@ V5-Image `987fbaa5152d`.
 Live-Container `telefonki-bianca-1` (Port 8096) zum Zeitpunkt des
 `docker commit` am 23.09.2026:
 
-- Start-Image bleibt `telefonki:v1` = `364f53dd89c9`. Der Prozess lief
-  weiter aus diesem Start-Image.
+- Start-Image des laufenden Containers war `65878e03fc32`. Der Tag
+  `telefonki:v1` zeigte beim Freeze schon auf `9f69ba905f44`
+  (Studio/Test). Der Prozess lief weiter aus `65878e03fc32`.
 - Dateisystem im laufenden Container trägt die bis dahin nachgeladenen
   Patches. Deshalb `docker commit` → eigenes Image `c73476b7e3e8`.
 
@@ -36,7 +37,8 @@ Nicht Teil von V5.1 (bewusst unverändert im Freeze):
 | Was | Wert |
 | --- | --- |
 | Live-8096 Container | `telefonki-bianca-1`, healthy |
-| Start-Image (vor dem späteren Retag) | `364f53dd89c9` = `telefonki:v1` |
+| Start-Image des Containers beim Freeze | `65878e03fc32` |
+| `telefonki:v1` beim Freeze | `9f69ba905f44` (Studio/Test, nicht der Live-Mund) |
 | V5.1-Commit (Dateisystem vor den 9057-Korrekturen) | **`c73476b7e3e8`** |
 | Tags auf den Commit | `telefonki:produktionsstand-v5.1-20260923` · `telefonki:produktionsstand-v5.1` · `telefonki:v5.1` |
 | Ladbares Tar | `image-bianca-v5.1.tar.gz` (229 MB) |
@@ -69,6 +71,10 @@ Falls das Image-Tag fehlt, zuerst laden:
 ```bash
 docker load -i /home/cursor/telefonki-backups/produktionsstand-v5.1-20260923/image-bianca-v5.1.tar.gz
 ```
+
+Nach den Korrekturen aus Anruf `9057eb03` (nicht Teil dieses Freeze)
+zeigt `telefonki:v1` auf `dba6c39b682b` (`telefonki:v5.2`). Der Tag
+`telefonki:v5.1` bleibt `c73476b7e3e8`.
 
 Zurück auf **V5** (21.09., vor diesem Freeze):
 
