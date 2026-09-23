@@ -153,7 +153,10 @@ def pruefen(sit: dict, text: str, *, frueher: list[str], frage_id: str = "",
     t = _s(text)
     if not t:
         return t
-    if frage_id == "telefon_check":
+    if frage_id in {"telefon_check", "telefon"}:
+        # Nummernfrage nie streichen: "Wie lautet sie?" ist oft der einzige
+        # Satz mit Fragezeichen. Weg damit klingt der Zug fertig, obwohl die
+        # Nummer noch fehlt (Anruf 9057eb03).
         return t
     if not frueher and not (sit.get("waechterGesagt") or []):
         return t
