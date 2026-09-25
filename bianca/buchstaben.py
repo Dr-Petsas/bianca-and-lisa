@@ -96,6 +96,26 @@ _ENDE_RE = re.compile(
     r"(?:[\s,.;:!?-]*\b(?:fertig|ende|gewesen|danke|das\s+war(?:'s|s|\s+es)?|"
     r"mehr\s+nicht|war\s+es)\b)+[\s,.;:!?-]*$", re.I)
 
+# Blessing-Liveketten 15.09.2026:
+# - „C wie Cäsar, O“ kam bei Parakeet als C-V-C-S-A-O bzw. C-B-C-S-A-O.
+# - „R-E-N-C-O“ kam als R-EN-C-O; das zusammengeklebte EN wurde danach als
+#   gesprochener Buchstabenname N gelesen und das E ging verloren.
+# Diese Normalisierung wird NUR über ``deute_feldsegment`` verwendet. Der
+# bisherige Standardparser bleibt für alle anderen Mandanten byte-identisch.
+_ZERHACKTES_CAESAR_RE = re.compile(
+    r"\bC(?:\s*-\s*|\s+)[BV](?:\s*-\s*|\s+)C"
+    r"(?:\s*-\s*|\s+)S(?:\s*-\s*|\s+)A"
+    r"(?=(?:\s*-\s*|\s+)O\b)",
+    re.I,
+)
+_EXPLIZITE_KETTE_RE = re.compile(
+    r"\b(?:[A-ZÄÖÜ](?:\s*-\s*[A-ZÄÖÜ]{1,4}){2,})\b"
+)
+_NEUES_WORT_RE = re.compile(
+    r"\b(?:neues?|nächstes?|naechstes?|weiteres?)\s+wort\b",
+    re.I,
+)
+
 
 def _ende_ab(text: str) -> str:
     """Diktat-Schlusswort am Satzende abschneiden ("… E, fertig." -> "… E")."""
@@ -103,6 +123,11 @@ def _ende_ab(text: str) -> str:
     # Nur das Schlusswort allein ("Fertig.") darf nicht zu einem leeren Satz
     # werden — dann bliebe die Kette ohne Bezug und `deute` liefe auf None.
     return gekappt if gekappt else _s(text)
+
+
+def ohne_schlusswort(text: str) -> str:
+    """Öffentliche Form für Name plus Diktat-Ende („Gavranides, fertig“)."""
+    return _ende_ab(text)
 
 
 def _s(v: Any) -> str:
@@ -161,7 +186,7 @@ def _name_anker_vor_also(toks: list[str], kandidat: str) -> bool:
 _TAFEL_KEYS = sorted(_TAFEL)
 
 
-def _tafel_anlaute(toks: list[str]) -> list[str]:
+def _tafel_anlaute(toks: list[str], *, fuzzy: bool = True) -> list[str]:
     """Buchstabiertafel-Woerter im Satz (auch verhoert: "Nordpool", "Bertha")
     -> ihre Anlaute in Sprechreihenfolge.
 
@@ -175,7 +200,7 @@ def _tafel_anlaute(toks: list[str]) -> list[str]:
         if tok in _TAFEL:
             anlaute.append(_TAFEL[tok])
             continue
-        if len(tok) >= 4:
+        if fuzzy and len(tok) >= 4:
             m = difflib.get_close_matches(tok, _TAFEL_KEYS, n=1, cutoff=0.8)
             if m:
                 anlaute.append(_TAFEL[m[0]])
@@ -195,11 +220,14 @@ def _fuzzy_tafel_fragment(toks: list[str]) -> str:
         return ""
     pro_buchstabe: dict[str, float] = {}
     for wort, letter in _TAFEL.items():
+        # Das nackte Tafelwort nicht gegen einen ähnlichen Nachnamen
+        # halten: „Berger“ lag bei 0,83 auf „Ärger“ und wurde zum
+        # Buchstaben Ä. Verschliffenes „Z wie Zacharias“ trifft die
+        # geklebten Formen weiter.
         for soll in (
             f"{letter}wie{wort}",
             f"{letter}vi{wort}",
             f"wie{wort}",
-            wort,
         ):
             score = difflib.SequenceMatcher(None, gehoert, soll).ratio()
             pro_buchstabe[letter] = max(pro_buchstabe.get(letter, 0.0), score)
@@ -386,6 +414,81 @@ def deute(text: str) -> dict[str, Any] | None:
     return {"name": name, "sicher": sicher}
 
 
+def _explizite_cluster_trennen(text: str) -> str:
+    """Groß geschriebene Hyphen-Cluster innerhalb einer Kette entfalten.
+
+    ``R-EN-C-O`` bedeutet im Buchstabierkontext R-E-N-C-O, nicht R-(gespro-
+    chenes EN=N)-C-O. Normale Wörter und ``T-Mia`` bleiben unangetastet.
+    """
+    def _entfalten(m: re.Match[str]) -> str:
+        teile = re.split(r"\s*-\s*", m.group(0))
+        return "-".join(ch for teil in teile for ch in teil)
+
+    return _EXPLIZITE_KETTE_RE.sub(_entfalten, text)
+
+
+def _feldsegment_vorbereiten(text: str) -> str:
+    raw = ohne_schlusswort(text)
+    # Das zerhackte „C wie Cäsar“ zuerst auf das gemeinte C reduzieren; das O
+    # bleibt durch den Lookahead als nächster Buchstabe erhalten.
+    raw = _ZERHACKTES_CAESAR_RE.sub("C", raw)
+    return _explizite_cluster_trennen(raw)
+
+
+def _hat_explizite_kette(text: str) -> bool:
+    return bool(re.search(
+        r"(?<!\w)[A-Za-zÄÖÜäöüß]"
+        r"(?:\s*-\s*[A-Za-zÄÖÜäöüß]){1,}(?!\w)",
+        text,
+    ))
+
+
+def deute_feldsegment(text: str) -> dict[str, Any] | None:
+    """Buchstabierung für EIN gerade erfragtes Namensfeld.
+
+    Explizites „neues Wort“ bewahrt zusammengesetzte Nachnamen als getrennte
+    Wörter. Ohne diesen Marker endet das aktuelle Feld an einer bereits
+    vollständigen ersten Kette, wenn danach eine zweite vollständige Kette
+    folgt — so wird der Kindesname in „H-A-L-L-W-A-C-H-S, T-A-M-I-A“ nicht
+    an den Nachnamen der Anruferin geklebt.
+
+    Dieser strengere Pfad ist opt-in; ``deute`` selbst bleibt unverändert.
+    """
+    raw = _feldsegment_vorbereiten(text)
+
+    wortteile = [
+        teil.strip(" ,.;:!?-")
+        for teil in _NEUES_WORT_RE.split(raw)
+    ]
+    if len(wortteile) >= 2 and all(_hat_explizite_kette(t) for t in wortteile):
+        gedeutet = [deute(t) for t in wortteile]
+        if all(gedeutet):
+            namen = [str(d["name"]).strip() for d in gedeutet if d]
+            if len(namen) == len(wortteile):
+                return {
+                    "name": " ".join(namen),
+                    "sicher": all(bool(d.get("sicher")) for d in gedeutet if d),
+                }
+
+    # Ein Komma zwischen einzelnen Buchstaben („M, Ü, L, L, E, R“) ist keine
+    # Feldgrenze. Nur eine schon vollständige ERSTE Kette (mindestens vier
+    # Zeichen) wird abgetrennt, wenn später eine weitere vollständige Kette
+    # folgt. „L-O-U, R-EN-C-O“ bleibt deshalb eine einzige Kette.
+    abschnitte = [t.strip() for t in re.split(r"[,;]", raw) if t.strip()]
+    if len(abschnitte) >= 2 and _hat_explizite_kette(abschnitte[0]):
+        erste = deute(abschnitte[0])
+        erste_name = str((erste or {}).get("name") or "")
+        spaetere_kette = any(
+            _hat_explizite_kette(t) and deute(t)
+            for t in abschnitte[1:]
+        )
+        if erste and len(re.sub(r"\W", "", erste_name, flags=re.UNICODE)) >= 4 \
+                and spaetere_kette:
+            return erste
+
+    return deute(raw)
+
+
 def teil(text: str) -> str:
     """Eindeutiges Buchstabier-Fragment, auch nur EIN Buchstabe.
 
@@ -399,7 +502,10 @@ def teil(text: str) -> str:
     # Das Tafelwort ist im Telefon-ASR stabiler als der davor gesprochene
     # Einzelbuchstabe: „I wie Ida“ kam als „E wie Ida“, „Z wie Zacharias“
     # als „Zwesacharias“. Die bestehende fuzzy Tafelrettung löst beides.
-    tafel = _tafel_anlaute(toks)
+    # Fuzzy nur, wenn der Satz schon buchstabiert („wie“, Einzelbuchstabe).
+    # Sonst wird „Berger“ über „Ärger“ zum Fragment Ä und Bianca wartet stumm.
+    signal = "wie" in toks or any(_als_buchstabe(t) for t in toks)
+    tafel = _tafel_anlaute(toks, fuzzy=signal)
     if tafel:
         return "".join(tafel)
     fuzzy = _fuzzy_tafel_fragment(toks)
@@ -472,6 +578,23 @@ def teil(text: str) -> str:
 
 def ist_buchstabierung(text: str) -> bool:
     return deute(text) is not None
+
+
+def stt_hotwords() -> list[str]:
+    """DIN-Tafel und Vorlesewörter als Parakeet-Hotwords im Namensdiktat.
+
+    Behandler-Namen bleiben in diesem Zug bewusst draußen — sonst zieht die
+    Fuzzy-Nachkorrektur einen fremden Nachnamen auf Petsas/Thaler.
+    """
+    out: list[str] = []
+    for w in list(_TAFEL) + list(_VORLESE.values()) + list(_LAUT):
+        t = _s(w)
+        if len(t) < 4:
+            continue
+        form = t[0].upper() + t[1:]
+        if form not in out:
+            out.append(form)
+    return out
 
 
 def vorlesen(name: str) -> str:

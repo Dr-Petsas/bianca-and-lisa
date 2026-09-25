@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import array
+import contextlib
+import contextvars
 import hashlib
 import re
 import struct
@@ -121,6 +123,50 @@ def set_voice(voice_id: str, name: str = "") -> None:
     sauber_name = " ".join(str(name or "").split()).strip().lower()
     if sauber_name:
         _VOICE_NAME = sauber_name
+
+
+# Stimme pro ANRUF (W-STIMME-MANDANT 15.09.2026): die Praxis Ruether spricht
+# maennlich ("ben"), MedDent/Thaler/Blessing weiter "bianca" — ein Prozess,
+# zwei Stimmen. Contextvar statt Parameter, weil TTS aus rund 40 Stellen
+# gerufen wird (Fueller, Vorab-Saetze, Readbacks, Warm-Lauf) und die meisten
+# den Mandanten nicht kennen. Feeder-/Hintergrund-FAEDEN muessen mit
+# contextvars.copy_context().run(...) starten, sonst sprechen sie den
+# Prozess-Default.
+#
+# NICHT gesetzt => leer => Prozess-Default: byte-identisches Verhalten von
+# vor dem 15.09.2026 (und damit fuer alle drei Live-Praxen).
+_STIMME_JETZT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "tts_stimme", default="",
+)
+
+
+def stimme_jetzt() -> str:
+    """Der lokale Stimmname, der GERADE gilt (Anruf-Stimme oder Prozess)."""
+    return _STIMME_JETZT.get() or _VOICE_NAME
+
+
+def stimme_setzen(name: str) -> object:
+    """Stimme fuer diesen Kontext setzen; gibt das Token zum Zuruecksetzen.
+
+    Leerer Name = Prozess-Default (kein Override)."""
+    return _STIMME_JETZT.set(" ".join(str(name or "").split()).strip().lower())
+
+
+def stimme_zuruecksetzen(token: object) -> None:
+    try:
+        _STIMME_JETZT.reset(token)  # type: ignore[arg-type]
+    except Exception:
+        pass
+
+
+@contextlib.contextmanager
+def stimme(name: str):
+    """``with tts.stimme("ben"): ...`` — fuer Warm-Lauf und Proben."""
+    token = stimme_setzen(name)
+    try:
+        yield
+    finally:
+        stimme_zuruecksetzen(token)
 
 
 def _client() -> httpx.Client:
@@ -255,7 +301,9 @@ def _lokal_schluessel(sauber: str) -> str:
     # TTS_BASE gehoert in den Schluessel: Chatterbox (:8210) und CosyVoice
     # (:8211) sind beide "lokal" — ohne Basis im Key wuerde ein Engine-Wechsel
     # alte Fueller aus dem Cache der anderen Stimme abspielen.
-    return f"lokal|{TTS_BASE}|{_VOICE_NAME}|{sauber}"
+    # Der Stimmname steht IM Schluessel: Ben und Bianca teilen denselben
+    # RAM-/Platten-Cache, duerfen sich aber nie hoeren (Chef-Abnahme 28.08.).
+    return f"lokal|{TTS_BASE}|{stimme_jetzt()}|{sauber}"
 
 
 def _gain_oder_none(samples: "array.array") -> float | None:
@@ -500,7 +548,7 @@ class LokalTts:
         for versuch in range(_ZIFFERN_VERSUCHE if soll else 1):
             r = _lokal_client().post(
                 f"{TTS_BASE}/speak",
-                json={"text": payload, "voice": _VOICE_NAME},
+                json={"text": payload, "voice": stimme_jetzt()},
             )
             if r.status_code != 200:
                 raise RuntimeError(f"tts_lokal_http_{r.status_code}")
@@ -545,7 +593,7 @@ class LokalTts:
         rest = b""
         with _lokal_client().stream(
             "POST", f"{TTS_BASE}/speak-stream",
-            json={"text": payload, "voice": _VOICE_NAME},
+            json={"text": payload, "voice": stimme_jetzt()},
         ) as r:
             if r.status_code != 200:
                 raise RuntimeError(f"tts_lokal_http_{r.status_code}")

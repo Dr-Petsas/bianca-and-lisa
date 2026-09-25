@@ -57,10 +57,17 @@ _BESCHWERDE_RE = re.compile(
     re.I,
 )
 _AKUT_RE = re.compile(
-    r"\bnotfall\b|\bakut\w*|"
+    # Auch zusammengesprochene Praxisformulierungen wie „Notfalltermin“
+    # und „Hautnotfall“ sind ein Notfall. Das alte ``\bnotfall\b`` erkannte
+    # nur das alleinstehende Wort und liess solche Anrufer in die normale
+    # Terminaufnahme fallen.
+    r"\b(?:haut)?notfall\w*\b|\bakut\w*|"
     r"pl(?:ö|oe)tzlich[^.!?]{0,50}(?:haut|ausschlag|fleck|ver(?:ä|ae)nder)|"
     r"schnell[^.!?]{0,30}(?:schlimmer|ausbreit)|"
     r"starke?\s+(?:schmerz|brennen|juckreiz)|nicht\s+aus(?:zu)?halten|"
+    r"\b(?:stark|heftig|massiv)\w*[^.!?]{0,60}"
+    r"(?:entz(?:ü|ue)nd\w*|schmerz\w*|brenn\w*|juck\w*|"
+    r"blut\w*|eiter\w*|n(?:ä|ae)ssend\w*|geschwollen|schwell\w*)|"
     r"(?:gesicht|lippe|augenlid|hals)[^.!?]{0,30}(?:schwell|geschwollen)|"
     r"\bblasen\b|n(?:ä|ae)ssende?\s+fl(?:ä|ae)che|offene?\s+stelle|eitrig|"
     r"hautausschlag[^.!?]{0,40}(?:fieber|kreislauf|krankheitsgef(?:ü|ue)hl)|"
@@ -70,7 +77,9 @@ _AKUT_RE = re.compile(
     re.I,
 )
 _VERNEINT_RE = re.compile(
-    r"\b(?:kein|keine|nicht)\s+(?:akut\w*|notfall|dringend)\b", re.I)
+    r"\b(?:kein|keine|nicht)\s+(?:akut\w*|(?:haut)?notfall\w*|dringend)\b",
+    re.I,
+)
 _UHRFRAGE_RE = re.compile(
     r"\bwann\b|welche\s+uhrzeit|um\s+wie\s+viel\s+uhr|feste?\s+uhrzeit",
     re.I,
@@ -277,6 +286,18 @@ def notfall_antwort(
             "Die Praxis ist gerade geschlossen. Wenden Sie sich bitte an den "
             "ärztlichen Bereitschaftsdienst unter 116 117. Bei Atemnot oder "
             "Kreislaufproblemen wählen Sie sofort die 112."
+        )
+    if offen is None:
+        # W-NOTFALL-ZEITEN-SICHER (18.09.2026): Fehlende Standortzeiten
+        # duerfen nie als "geoeffnet" gelten. Sonst schickt ein kurzzeitiger
+        # Firestore-/Standortausfall Akutpatienten vor eine geschlossene
+        # Praxis. Keine falsche Schliessungsbehauptung, aber konservativ zum
+        # Bereitschaftsdienst.
+        return (
+            "Ich kann gerade nicht sicher feststellen, ob die Praxis geöffnet "
+            "ist. Wenden Sie sich bitte an den ärztlichen Bereitschaftsdienst "
+            "unter 116 117. Bei Atemnot oder Kreislaufproblemen wählen Sie "
+            "sofort die 112."
         )
     return (
         "Das klingt akut. Kommen Sie bitte jetzt direkt in die Praxis. "

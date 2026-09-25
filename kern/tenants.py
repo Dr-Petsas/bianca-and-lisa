@@ -13,6 +13,16 @@ _SAFE_NAME_RE = re.compile(
     r"besprechung|beratung|untersuchung|recall",
     re.I,
 )
+# Als AUSWEICH fuer ein leeres Spezialfenster taugt nur ein GENERISCHER
+# Kontroll-/Vorsorge-Termin. _SAFE_NAME_RE ist dafuer absichtlich zu weit: sie
+# waehlt auch das stille Default-Motiv und kennt "Besprechung"/"Beratung" —
+# bei Ruether (Gynaekologie, kein Kontroll-Motiv) griff darueber
+# "GYN Endometriose Erstberatung" (45 min) als Ersatz fuer eine gewuenschte
+# Krebsvorsorge. Siehe W-ERSATZ-MOTIV (15.09.2026).
+_ERSATZ_NAME_RE = re.compile(
+    r"kontroll|vorsorge|check.?up|nachsorge|recall|untersuchung",
+    re.I,
+)
 
 # Kalender, die KEINE Person sind: Zimmer/Prophylaxe, nicht Behandler.
 # Thaler 08.09.2026: "Prophylaxe" stand als Behandler in der Arztwahl.
@@ -82,7 +92,22 @@ def laden(tenant_id: str = "") -> dict[str, Any]:
             return fach_fallback("allgemein")
     raw = json.loads(pfad.read_text(encoding="utf-8"))
     raw["_id"] = pfad.stem
-    return raw
+    return _mit_ablage(raw)
+
+
+def _mit_ablage(tenant: dict[str, Any]) -> dict[str, Any]:
+    """Veroeffentlichten Praxis-Layer dazulegen (``.data/dialogpolicy``).
+
+    Der Import liegt absichtlich in der Funktion: ``kern.tenants`` wird von
+    sehr vielen Stellen sehr frueh geladen, und die Ablage ist optional.
+    """
+    try:
+        from kern import anliegen_ablage, policy_ablage
+
+        tenant = policy_ablage.anreichern(tenant)
+        return anliegen_ablage.anreichern(tenant)
+    except Exception:
+        return tenant
 
 
 def nummer_norm(roh: Any) -> str:
@@ -171,6 +196,32 @@ def praxis_von(tenant: dict[str, Any]) -> str:
         return von
     p = _sauber(tenant.get("praxisName"))
     return f"der {p}" if p else ""
+
+
+_NAMENS_SICHERUNG = (
+    "namensUnklarOhneEcho",
+    "buchstabierSegmenteTrennen",
+    "nachnameReadbackNachBuchstabieren",
+    "nachnameDirektBuchstabieren",
+)
+
+
+def namens_sicherung(tenant: Any, key: str) -> bool:
+    """Gemeinsamer Namensstand: Segment-Parser, Tafel-Readback, kein Unklar-Echo.
+
+    An, sobald das Flag gesetzt ist oder der Mandant eine clientId trägt
+    (CF-only Praxen ohne lokale Datei). Ausdrücklich ``False`` bleibt der
+    Notaus. Test-Tenants ohne clientId und ohne Flag bleiben beim Kurzpfad.
+    ``nachnameDirektBuchstabieren`` gilt damit in jeder Live-Praxis: unbekannte
+    Anrufer buchstabieren den Nachnamen, bevor gesucht wird.
+    """
+    if key not in _NAMENS_SICHERUNG:
+        return bool(isinstance(tenant, dict) and tenant.get(key) is True)
+    if not isinstance(tenant, dict):
+        return False
+    if key in tenant:
+        return tenant.get(key) is True
+    return bool(_sauber(tenant.get("clientId")))
 
 
 def stt_keywords(tenant: dict[str, Any]) -> list[str]:
@@ -404,6 +455,21 @@ def ist_akut_motiv(vm: dict[str, Any] | None) -> bool:
         return False
     text = f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))} {_sauber(vm.get('id'))}"
     return bool(_AKUT_NAME_RE.search(text))
+
+
+def taugt_als_ersatz(vm: dict[str, Any] | None) -> bool:
+    """Darf dieses Motiv fuer ein leeres Spezialfenster einspringen?
+
+    JA nur bei einem generischen Kontroll-/Vorsorge-Termin. Eine fachliche
+    Erstberatung, eine Besprechung oder eine Zahnreinigung ist KEIN Ersatz
+    fuer eine Krebsvorsorge — der Anrufer bekaeme eine andere Leistung in
+    einer anderen Dauer. Ohne Ersatz sagt die Slotsuche ehrlich, dass diese
+    Terminart telefonisch nicht vergeben wird (W-ERSATZ-MOTIV).
+    """
+    if not isinstance(vm, dict) or ist_akut_motiv(vm) or ist_pzr_motiv(vm):
+        return False
+    text = f"{_sauber(vm.get('name'))} {_sauber(vm.get('nameForPatient'))}"
+    return bool(_ERSATZ_NAME_RE.search(text))
 
 
 def _sicheres_default(vms: list[dict[str, Any]]) -> dict[str, Any] | None:

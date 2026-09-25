@@ -1,11 +1,18 @@
 """Spracheingabe.
 
 STT_BASE-Parakeet auf der 5090 ist das schnelle lokale Haupt-Ohr. Ist Qwen
-konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel: plausible
-Parakeet-Texte warten exakt null Sekunden; nur auffaellige Texte duerfen
-kurz auf ein rechtzeitig fertiges Qwen-Final warten. Partials steuern Bianca
-nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der schnellere direkte
-Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide unterstuetzt.
+konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel.
+
+Rollen (Chef 18.09.2026): standardmaessig ist Qwen NUR noch Korrektor
+(QWEN_LIVE_OHR=0). Parakeet ist IMMER der gesprochene Zug — kein Grace-Warten,
+kein Live-Override; jeder Qwen-Lauf geht asynchron an den Korrektor
+(`kern/qwen_korrektor.py`, verbessert Woerterbuch/Hotwords/Verlauf der
+Folgezuege). Mit QWEN_LIVE_OHR=1 gilt wieder das alte Zweit-Ohr-Verhalten:
+plausible Parakeet-Texte warten null Sekunden, nur auffaellige Texte duerfen
+kurz auf ein rechtzeitig fertiges Qwen-Final warten und es ggf. uebernehmen.
+Partials steuern Bianca nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der
+schnellere direkte Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide
+unterstuetzt.
 
 Ohne Qwen-Konfiguration bleibt der fruehere STT_WHISPER_BASE-Pfad
 abwaertskompatibel. ``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen)
@@ -22,7 +29,7 @@ import subprocess
 import threading
 import time
 import wave
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -34,6 +41,7 @@ from kern.config import (
     STT_QWEN_GRACE_S,
     STT_QWEN_KEY,
     STT_QWEN_PARALLEL,
+    QWEN_LIVE_OHR,
     STT_WHISPER_BASE,
     STT_WHISPER_BUDGET_S,
     STT_WHISPER_KEY,
@@ -110,6 +118,85 @@ def _woerter(text: str) -> list[str]:
     return re.findall(r"[^\W\d_]+", str(text or "").casefold(), re.UNICODE)
 
 
+_NAMENS_STT_FRAGEN = frozenset({
+    "name", "nachname", "vorname", "buchstabieren",
+    "nachname_korr", "nachname_check", "vorname_check",
+})
+_TELEFON_STT_FRAGEN = frozenset({"telefon"})
+_TELEFON_CHECK_FRAGEN = frozenset({
+    "telefon_check", "sms_empfaenger", "telefon_alt",
+})
+_ZEIT_STT_FRAGEN = frozenset({
+    "wunsch", "slotwahl", "termin_ok", "termin_aendern",
+})
+
+
+def keywords_fuer_sitzung(sit: dict[str, Any] | None) -> str:
+    """Hotwords je Zug: Name = DIN-Tafel, Nummer = Ziffern, sonst Praxis + Qwen.
+
+    Behandler-Namen im Buchstabier-Zug würden fremde Nachnamen auf
+    Petsas/Thaler ziehen; dieselben Namen im Nummernzug machen aus
+    Ziffern Praxisvokabular. Vorab-Ohr und echter Zug müssen dieselbe
+    Liste sehen, sonst weicht das Vorab-Transkript vom Final ab.
+    """
+    sit = sit if isinstance(sit, dict) else {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    frage = str((s or {}).get("frage") or "")
+    if frage in _NAMENS_STT_FRAGEN or (s or {}).get("buchstabenTeil") or (s or {}).get("vornameTeil"):
+        try:
+            from bianca import buchstaben
+            namen = list(buchstaben.stt_hotwords())
+        except Exception:
+            namen = []
+        extra = _bestaetigter_nachname(sit)
+        if extra and extra not in namen:
+            namen.append(extra)
+        return ",".join(namen)
+    check = frage in _TELEFON_CHECK_FRAGEN
+    diktat = frage in _TELEFON_STT_FRAGEN or bool((s or {}).get("telefonTeil"))
+    if check or diktat:
+        try:
+            from bianca import telefon as tel
+            return ",".join(tel.stt_hotwords(check=check))
+        except Exception:
+            return ""
+    from kern import qwen_korrektor
+    from kern import tenants
+    kw = list(tenants.stt_keywords(sit.get("tenant") or {}))
+    for w in qwen_korrektor.hotwords(sit):
+        if w not in kw:
+            kw.append(w)
+    if frage in _ZEIT_STT_FRAGEN:
+        from kern.slots import zeit_stt_hotwords
+        for w in zeit_stt_hotwords():
+            if w not in kw:
+                kw.append(w)
+    extra = _bestaetigter_nachname(sit)
+    if extra and extra not in kw:
+        kw.append(extra)
+    return ",".join(kw)
+
+
+def _bestaetigter_nachname(sit: dict[str, Any]) -> str:
+    """Genau EIN bestätigter Kartei-Nachname als Hotword, nie die ganze Kartei.
+
+    Erst nach dem Ja auf die erkannte Rufnummer. Ein Dritttermin (fuerWen)
+    gehört einer anderen Person — deren Name darf nicht auf die Anrufer-Akte
+    gezogen werden.
+    """
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if (s or {}).get("fuerWen"):
+        return ""
+    if str((s or {}).get("anruferCheck") or "") != "ja":
+        return ""
+    anrufer = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    name = str(anrufer.get("nachname") or "").strip()
+    teile = [t for t in name.split() if t]
+    if len(teile) != 1 or len(teile[0]) < 4:
+        return ""
+    return teile[0]
+
+
 def _qwen_konfiguriert() -> bool:
     return bool(STT_QWEN_FINAL_BASE or STT_QWEN_BASE)
 
@@ -149,6 +236,11 @@ def _vergleich(text: str) -> str:
 
 
 def _qwen_darf_uebernehmen(lokal: str, kandidat: dict, auffaellig: bool) -> bool:
+    # W-QWEN-SICHER (14.09.2026): der Aufrufer hat den Zug gesperrt (offene
+    # Namensfrage, Diktat, erwartete Antwort schon bei Parakeet) — Qwen
+    # bleibt Zweit-Ohr, sein Text geht nur in den Nachtrag.
+    if kandidat.get("live_sperre"):
+        return False
     qwen = _sauber(kandidat.get("text"))
     if not qwen or not kandidat.get("authoritative"):
         return False
@@ -571,6 +663,8 @@ def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | Non
 
 
 Nachtrag = Callable[[dict], None]
+# W-QWEN-SICHER: bekommt Parakeets Text, liefert einen Sperr-Grund oder "".
+Sperre = Callable[[str], str]
 
 
 def _nachtrag_anmelden(qwen: Future, lokal: str, kandidat: dict | None,
@@ -617,6 +711,7 @@ def _parallel_transcribe(
     name: str,
     keywords: str,
     nachtrag: Nachtrag | None = None,
+    qwen_sperre: Sperre | None = None,
 ) -> str:
     """Parakeet sofort; nur auffaellige Texte warten gedeckelt auf Qwen."""
     t0 = time.perf_counter()
@@ -637,11 +732,33 @@ def _parallel_transcribe(
     if qwen is None:
         return lokal
 
+    # Qwen NUR noch Korrektor (Chef 18.09.2026, QWEN_LIVE_OHR=0): Parakeet ist
+    # IMMER der gesprochene Zug — kein Grace-Warten, kein Live-Override. Der
+    # Qwen-Lauf wird dem asynchronen Korrektor nachgereicht (Woerterbuch/
+    # Hotwords/Verlauf der Folgezuege). Ist Qwen schon fertig, geht sein
+    # Ergebnis sofort mit; sonst haengt der done-Callback dran (kein Warten).
+    if not QWEN_LIVE_OHR:
+        if nachtrag is not None:
+            kandidat = qwen.result() if qwen.done() else None
+            _nachtrag_anmelden(qwen, lokal, kandidat, nachtrag, t0)
+        return lokal
+
     auffaellig = _parakeet_braucht_qwen(lokal, keywords)
+    # W-QWEN-SICHER (14.09.2026): der Aufrufer weiss, worauf der Anrufer
+    # gerade antwortet. Bei Namensfrage/Diktat oder wenn Parakeet die
+    # erwartete Antwort schon traegt, darf Qwen nicht live gewinnen — und
+    # es wird auch nicht auf Qwen gewartet (kein Grace-Deckel umsonst).
+    sperre = ""
+    if qwen_sperre is not None:
+        try:
+            sperre = str(qwen_sperre(lokal) or "")
+        except Exception as exc:  # die Sperre darf das Ohr nie stoeren
+            print(f"stt-qwen-sperre fail {type(exc).__name__}: {exc}", flush=True)
+            sperre = ""
     kandidat: dict | None = None
     if qwen.done():
         kandidat = qwen.result()
-    elif auffaellig and STT_QWEN_GRACE_S > 0:
+    elif auffaellig and not sperre and STT_QWEN_GRACE_S > 0:
         try:
             kandidat = qwen.result(timeout=max(0.0, STT_QWEN_GRACE_S))
         except FutureTimeout:
@@ -650,6 +767,11 @@ def _parallel_transcribe(
                 f"{STT_QWEN_GRACE_S:.2f}s Zusatzdeckel",
                 flush=True,
             )
+    if kandidat and sperre:
+        kandidat = dict(kandidat)
+        kandidat["live_sperre"] = sperre
+        kandidat["reason"] = f"live_gesperrt:{sperre}"
+        print(f"stt-qwen-parallel: live gesperrt ({sperre}), parakeet bleibt", flush=True)
 
     if kandidat and _qwen_darf_uebernehmen(lokal, kandidat, auffaellig):
         print(
@@ -666,10 +788,13 @@ def _parallel_transcribe(
 # ------------------------------------------------------------------ Einstieg
 
 def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
-               keywords: str = "", nachtrag: Nachtrag | None = None) -> str:
+               keywords: str = "", nachtrag: Nachtrag | None = None,
+               qwen_sperre: Sperre | None = None) -> str:
     """`nachtrag` (optional): bekommt ein Qwen-Ergebnis nachgereicht, das
-    NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). Ohne den
-    Parameter verhaelt sich alles byte-identisch wie zuvor."""
+    NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). `qwen_sperre`
+    (optional, W-QWEN-SICHER): Parakeets Text -> Sperr-Grund oder "" — bei
+    Grund uebernimmt Qwen diesen Zug nie live. Ohne die Parameter verhaelt
+    sich alles byte-identisch wie zuvor."""
     if not audio or len(audio) < 800:
         return ""
     if _qwen_konfiguriert():
@@ -680,6 +805,7 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
                 name=name,
                 keywords=keywords,
                 nachtrag=nachtrag,
+                qwen_sperre=qwen_sperre,
             )
         if _qwen_aktiv():
             try:
@@ -746,6 +872,8 @@ def engine_anzeige() -> str:
         if not _qwen_aktiv() and STT_BASE:
             return "Parakeet (lokal, Qwen pausiert)"
         if STT_BASE:
+            if not QWEN_LIVE_OHR:
+                return "Parakeet (lokal) + Qwen3-ASR Korrektor (3060, offline)"
             return "Parakeet (lokal) + Qwen3-ASR parallel (3060)"
         return "Qwen3-ASR 1.7B (3060)"
     if STT_WHISPER_BASE:

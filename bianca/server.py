@@ -13,14 +13,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from bianca import agent, gehirn, rueckkehr, session, weiterleiten
+from bianca.controller import shadow as _ctrl_shadow
 from bianca.greeting import begruessung
 from kern import (
     agentprofil,
     anrufaudio,
+    assistent,
     gedaechtnis,
     halbsatz,
     llm,
     mitschnitt,
+    qwen_korrektor,
     sprech,
     standort,
     stt,
@@ -38,7 +41,7 @@ from kern.config import (
     LLM_MODEL,
     WRITE_LIVE,
 )
-from kern.dienst import Dienst, ndjson
+from kern.dienst import Dienst, ndjson, stimme_aus_sitzung
 
 # tempo.py fehlt auf aelteren Images — soft, sonst Crash-Loop beim Deploy
 # (06.09.2026: Full-Copy von lokaler server.py ohne tempo-Modul).
@@ -65,7 +68,11 @@ def _stille_ms(sit: dict) -> int:
 DIENST = Dienst(
     name="bianca",
     start_fn=agent.start_reply,
-    turn_fn=agent.user_turn,
+    # DIALOG_CONTROLLER: der Shadow-Beobachter laeuft NUR bei
+    # CONTROLLER_SHADOW=1 mit (Kern still parallel + Protokoll). Ohne den
+    # Schalter gibt `umhuellen` agent.user_turn UNVERAENDERT zurueck — der
+    # Live-Pfad ist dann byte-identisch.
+    turn_fn=_ctrl_shadow.umhuellen(agent.user_turn),
     # Neutraler Haenger-Füller nur, wenn Slot/Buchung/Ziffern wirklich
     # haengen können — NICHT den ganzen Anruf (Live 08.09.: bei jedem
     # Satz „Einen Moment bitte.", weil phase bis gebucht immer „schnell" war).
@@ -257,17 +264,34 @@ def api_weiter(body: WeiterIn):
     return out
 
 
+def _sit_optional(session_id: str) -> dict | None:
+    """Sitzung ohne Anlegen — nur um die Stimme des Anrufs zu erfahren."""
+    sid = " ".join(str(session_id or "").split()).strip()
+    if not sid:
+        return None
+    try:
+        return session.holen(sid)
+    except Exception:
+        return None
+
+
 @app.get("/api/quittung")
-def api_quittung():
-    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock."""
-    return {"ok": True, "urls": DIENST.quittung_urls if unterbrechung.enabled() else []}
+def api_quittung(sessionId: str = ""):
+    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock.
+
+    W-STIMME-MANDANT: die Brücke holt sie PRO ANRUF und schickt ihre
+    sessionId mit — dann kommen sie in der Stimme dieses Mandanten. Ohne
+    sessionId (Dock-Boot) bleibt es die Prozess-Stimme wie bisher."""
+    if not unterbrechung.enabled():
+        return {"ok": True, "urls": []}
+    return {"ok": True, "urls": DIENST.quittungen_fuer(_sit_optional(sessionId))}
 
 
 @app.get("/api/notfall")
-def api_notfall():
+def api_notfall(sessionId: str = ""):
     """W-STILLE: Warte-Ansagen, die das Dock beim Boot als Blob vorlädt und
     LOKAL spielt, wenn ~1,4 s nach dem Sprechende kein Ton lief."""
-    return {"ok": True, "urls": DIENST.notfall_urls}
+    return {"ok": True, "urls": DIENST.notfall_fuer(_sit_optional(sessionId))}
 
 
 @app.post("/api/stille")
@@ -278,6 +302,10 @@ def api_stille(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    # W-STIMME-MANDANT: der Stups spricht ueber DIENST.stimme() direkt, also
+    # am json_antwort-Pfad vorbei — ohne diese Zeile stupst Biancas Stimme
+    # mitten in Bens Anruf.
+    stimme_aus_sitzung(sit)
     # W-HALBSATZ: haengt ein gehaltenes Satz-Fragment in der Sitzung, hat der
     # Anrufer den Satz nicht fortgesetzt — dann wird ER beantwortet, kein Stups.
     rest = halbsatz.abholen(sit)
@@ -350,8 +378,12 @@ async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
     blob = await audio.read()
     try:
         kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+        # W-QWEN-SICHER: dieselbe Live-Sperre wie der echte Zug — sonst
+        # koennte Qwen im Vorab-Ohr bei offener Namensfrage gewinnen und der
+        # Zug kaeme als TEXT mit Qwens Lesart an /api/listen.
         gesagt = stt.transcribe(blob, mime=audio.content_type or "application/octet-stream",
-                                name=audio.filename or "vorab.webm", keywords=kw)
+                                name=audio.filename or "vorab.webm", keywords=kw,
+                                qwen_sperre=lambda lokal: qwen_korrektor.live_sperre(sit, lokal))
     except RuntimeError as e:
         return {"ok": False, "text": "", "error": str(e)}
     print(f"bianca-vorab-stt bytes={len(blob)} text={gesagt!r}", flush=True)
@@ -369,17 +401,8 @@ _MITSCHNITT_STIMME = "bianca"
 
 @app.get("/api/anrufe")
 def api_anrufe(tenant: str = ""):
-    items = mitschnitt.liste(_MITSCHNITT_STIMME)
-    if tenant:
-        info = next((x for x in tenants.liste() if x.get("id") == tenant), {})
-        erlaubt = {
-            tenant,
-            str(info.get("clientId") or ""),
-            str(info.get("locationId") or ""),
-            *(str(x) for x in (info.get("aliases") or [])),
-        }
-        items = [x for x in items if str(x.get("tenantId") or "") in erlaubt]
-    return {"ok": True, "anrufe": items}
+    return {"ok": True, "anrufe": mitschnitt.liste(
+        _MITSCHNITT_STIMME, erlaubt=mitschnitt.erlaubt_von(tenant))}
 
 
 @app.get("/api/anrufe/{sid}")
@@ -474,7 +497,11 @@ def _warm_start():
         # W-BEHANDLER-SPERRE: gewaermt wird die Arztwahl-Frage OHNE die
         # gesperrten Behandler — genau die Form, die live gesprochen wird.
         t = behandler_sperre.anwenden(tenants.laden(DEFAULT_TENANT))
-        tts.warm(begruessung(tenants.praxis_melde(t)))
+        # W-STIMME-MANDANT: gewaermt wird in der Stimme DIESES Mandanten —
+        # der Cache-Schluessel traegt sie, ein Warm-Lauf in Biancas Stimme
+        # waere fuer Ben wertlos (und er zahlte live die Synthese).
+        tts.stimme_setzen(assistent.stimme(t))
+        tts.warm(begruessung(tenants.praxis_melde(t), t))
         # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
         # aus dem Platten-Cache fragt die Maschine in ~0,2 s statt ~1,2 s
         # lokaler Synthese. Gewarmt wird die SANITIZE-Form — genau die
@@ -502,7 +529,8 @@ def _warm_start():
                 continue
             try:
                 andere = behandler_sperre.anwenden(tenants.laden(info["id"]))
-                tts.warm(begruessung(tenants.praxis_melde(andere)))
+                tts.stimme_setzen(assistent.stimme(andere))
+                tts.warm(begruessung(tenants.praxis_melde(andere), andere))
                 for satz in gehirn.feste_saetze(andere):
                     tts.warm(sprech.sanitize(satz))
                 print(f"bianca-warm: tenant {info['id']} im Cache", flush=True)
@@ -588,9 +616,19 @@ def studio_uebergabe(request: Request):
     return _studio_seite("uebergabe.html", request)
 
 
+@app.get("/studio/dialogkern")
+@app.get("/studio/dialogkern/")
+def studio_dialogkern(request: Request):
+    """Chat gegen den reinen Dialogkern (W-KERN-STUDIO). Ohne diese Route
+    zeigte der Link im Studio-Kopf hinter der Durchreiche auf 404 — die
+    Seite lag da, war aber nur auf Port 8097 direkt erreichbar."""
+    return _studio_seite("dialogkern.html", request)
+
+
 @app.get("/studio/web/{name}")
 def studio_web(name: str):
-    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js"}
+    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js",
+               "dialogkern.js"}
     if name not in erlaubt:
         raise HTTPException(404)
     return _studio_seite(name)

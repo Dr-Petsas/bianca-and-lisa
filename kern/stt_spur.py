@@ -83,18 +83,21 @@ def transcribe(
     name: str = "turn.webm",
     keywords: str = "",
     nachtrag=None,
+    qwen_sperre=None,
 ) -> tuple[str, dict[str, Any]]:
     """Ein echter Decode plus dessen beobachtete Engine-Entscheidung.
 
-    `nachtrag` wird unveraendert an `stt.transcribe` durchgereicht
-    (W-QWEN-KORREKTOR: spaetes Qwen-Ergebnis fuer den asynchronen Korrektor)."""
+    `nachtrag` und `qwen_sperre` werden unveraendert an `stt.transcribe`
+    durchgereicht (W-QWEN-KORREKTOR: spaetes Qwen-Ergebnis fuer den
+    asynchronen Korrektor; W-QWEN-SICHER: Live-Sperre je Frage-Kontext)."""
     _reset()
     vorher = _qwen_futur()
+    extra: dict[str, Any] = {}
     if nachtrag is not None:
-        text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords,
-                              nachtrag=nachtrag)
-    else:
-        text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords)
+        extra["nachtrag"] = nachtrag
+    if qwen_sperre is not None:
+        extra["qwen_sperre"] = qwen_sperre
+    text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords, **extra)
     nachher = _qwen_futur()
 
     qwen_an = _qwen_konfiguriert()

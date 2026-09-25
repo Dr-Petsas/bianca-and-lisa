@@ -48,7 +48,17 @@ Melde = Callable[[str], None] | None
 JINGLE_NAME = "verbinden"
 JINGLE_EVENT = f"audio:{JINGLE_NAME}"
 
+# W-ANMELDUNG-KURZ (17.09.2026, Befund C2 aus 432 Anrufen): die lange
+# Rollen-Erklaerung ("... stark belastet ... Bitte haben Sie Verstaendnis ...
+# Ich verbessere mich mit jedem Anruf ...") lief bei JEDEM Mandanten als
+# ~15-s-Sermon, bevor Bianca ueberhaupt fragte, worum es geht. Jetzt gilt
+# fuer alle: ein Satz + Anliegen-Frage. Der alte Text bleibt als
+# `ENTLASTUNG_AUSFUEHRLICH` (Opt-in `anmeldungAusfuehrlich: true` im Mandanten).
 ENTLASTUNG = (
+    "Ich helfe Ihnen hier direkt — eine menschliche Verbindung ist nicht "
+    "eingerichtet. Worum geht es?"
+)
+ENTLASTUNG_AUSFUEHRLICH = (
     "Ich bin die KI-Telefonassistentin der Praxis und entlaste die Anmeldung. "
     "Eine direkte menschliche "
     "Telefonannahme ist leider nicht möglich, weil "
@@ -58,9 +68,50 @@ ENTLASTUNG = (
     "Ich verbessere mich mit jedem Anruf und jedem gemeldeten Problem. "
     "Worum geht es? Ich helfe Ihnen gern direkt."
 )
+# W-BLESSING-KNAPP (15.09.2026) fuehrte die Kurzform zuerst fuer Blessing ein
+# (`anmeldungKurz`); seit W-ANMELDUNG-KURZ ist sie der Standard.
+ENTLASTUNG_KURZ = ENTLASTUNG
 # Rückwärtskompatibler Name für bestehende Importe; die alte Behauptung
 # „niemand geht ran“ darf nirgends mehr gesprochen werden.
 WAHRHEIT = ENTLASTUNG
+
+
+def _entlastung(sit: dict) -> str:
+    from kern import assistent
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("anmeldungAusfuehrlich") is True and tenant.get("anmeldungKurz") is not True:
+        return assistent.formen(ENTLASTUNG_AUSFUEHRLICH, tenant)
+    return assistent.formen(ENTLASTUNG, tenant)
+
+
+# W-VERBINDEN-ZIEL (17.09.2026, Befund A3): "Zu welchem unserer Ärzte darf ich
+# Sie verbinden?" wurde auch in Praxen gefragt, die telefonisch NIE
+# durchstellen (Thaler, Blessing, Ruether — keine `verbindenErlaubt`-Liste).
+# Blessing 15.09.: "mit der Arzthelferin sprechen" -> Arzt-Frage -> "Frau
+# Doktor Blessing" -> "eine direkte Verbindung ist gerade nicht moeglich" ->
+# Anrufer legt auf. Drei Zuege verschenkt, nichts geloest. Ohne Verbinde-Ziel
+# gibt es die Arzt-Frage nicht mehr: ehrlich sagen + Anliegen uebernehmen.
+KEIN_VERBINDEN = (
+    "Durchstellen kann ich in dieser Praxis leider nicht — aber ich kümmere "
+    "mich direkt um Ihr Anliegen. Worum geht es?"
+)
+
+
+def kann_verbinden(tenant: dict | None) -> bool:
+    """Darf in dieser Praxis ueberhaupt durchgestellt werden?
+
+    Wahr nur mit `verbindenErlaubt`-Whitelist (Chef 13.09.2026: Weiterleitung
+    NUR an gelistete Behandler). Ohne Liste stellt Bianca die Arzt-Rueckfrage
+    nicht — sie fuehrte immer nur in den Platzhalter."""
+    return bool(verbinden_erlaubt(tenant or {}))
+
+
+def _kein_verbinden(sit: dict) -> dict:
+    """Ehrliche Antwort statt Arzt-Rueckfrage; das Anliegen wird uebernommen."""
+    from kern import assistent
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    sit["weiterleiten"] = {"frage": "anliegen"}
+    return {"text": assistent.formen(KEIN_VERBINDEN, tenant)}
 
 SELBST_HILFE = "Ja, gern. Sagen Sie mir einfach, worum es geht."
 RUECKRUF_ANGEBOT = (
@@ -94,9 +145,26 @@ ANSAGE_PLATZHALTER = (
 
 _MENSCH_WORT = (
     r"(?:mensch(?:en)?|person(?:en)?|mitarbeiter\w*|angestellte\w*|personal\b|empfang|rezeption|"
-    r"sekretariat|sekretär\w*|sekretaer\w*|sprechstundenhilfe|kolleg\w*|"
+    r"sekretariat|sekretär\w*|sekretaer\w*|sprechstundenh(?:ilfe|elfer\w*)|kolleg\w*|"
     r"buchhaltung|patientenannahme|annahme|anmeldung|verwaltung|abrechnung|"
-    r"chef\w*|inhaber\w*|praxisleitung|boss)"
+    r"chef\w*|inhaber\w*|praxisleitung|boss|"
+    # W-VERBINDEN-ZIEL (17.09.2026): das Praxispersonal in seinen Berufs-
+    # bezeichnungen — Blessing 15.09. "mit der Arzthelferin sprechen" fiel
+    # durch die Liste und landete in der Arzt-Rueckfrage. Bewusst NICHT:
+    # "Schwester" (Dritt-Termin: "fuer meine Schwester") und "Assistentin"
+    # (die Anruferin meint oft Bianca selbst).
+    r"(?:zahn)?arzthelfer\w*|praxishelfer\w*|helferin\b|\bmfa\b|\bzfa\b|"
+    r"fachangestellte\w*|praxisteam|praxispersonal|praxismanag\w*)"
+)
+
+# "Kann ich mit jemandem sprechen?" — kein Berufs-/Abteilungs-Wort, aber ein
+# klarer Menschen-Wunsch. NICHT "Ist da jemand?" (Praesenz-Frage in der
+# Stille) und nicht "jemand hat mir gesagt".
+_JEMAND_RE = re.compile(
+    r"\bmit\s+jemand\w*\s+(?:[\wäöüß]+\s+){0,3}?(?:sprechen|reden)\b|"
+    r"\bjemand\w*\s+(?:persönlich\s+|persoenlich\s+)?(?:sprechen|erreichen)\b|"
+    r"\bjemand\w*\s+ans?\s+(?:telefon|apparat)\b",
+    re.I,
 )
 
 # Klassifikation: kommt im Satz ueberhaupt ein Mitarbeiter-/Abteilungs-Wort vor?
@@ -191,9 +259,93 @@ _SPRECH_VERB_RE = re.compile(
 # gefragt, zaehlt der blosse Behandler-Name im naechsten Zug als Zielangabe.
 _RUECKFRAGE_RE = re.compile(r"(?:verbind|durchstell)\w*[^.!?]*\?", re.I)
 
+# W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): ein Verbinde-ANGEBOT des
+# Modells ("Darf ich Sie zu Doktor Petsas durchstellen?", "Soll ich Sie
+# verbinden?", "Ich kann Sie gern weiterleiten") mitten in einer laufenden
+# Aufgabe. Nur Angebots-/Frage-Saetze mit Verbinde-Verb; die ehrliche
+# Absage ("verbinden kann ich Sie nicht") und die Anmeldungs-Wahrheit
+# bleiben stehen (Negations-Wache).
+_ANGEBOT_RE = re.compile(
+    r"(?:\b(?:darf|soll|kann|könnte|koennte|möchten|moechten|wollen)\b[^.!?]*"
+    r"(?:verbind|durchstell|weiterleit)\w*[^.!?]*\?"
+    r"|\bich\s+(?:kann|könnte|koennte|würde|wuerde)\s+sie\s+(?:gern[e]?\s+)?"
+    r"[^.!?]*(?:verbind|durchstell|weiterleit)\w*[^.!?]*[.!?])",
+    re.I,
+)
+_ANGEBOT_NEGATION_RE = re.compile(
+    r"\b(?:nicht|kein\w*|leider|nie)\b[^.!?]{0,40}(?:verbind|durchstell|weiterleit)"
+    r"|(?:verbind|durchstell|weiterleit)\w*[^.!?]{0,30}\b(?:nicht|leider|nie)\b",
+    re.I,
+)
+_SATZ_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
+
+
+def maschine_beschaeftigt(sit: dict) -> bool:
+    """Fuehrt die deterministische Maschine gerade eine Aufgabe (Buchung,
+    Absage, Verschieben, Auskunft) mit offener Frage oder laufendem
+    Angebot? Dann ist eine Verbinde-Rueckfrage des Modells KEIN Beweis fuer
+    einen Anrufer-Wunsch — der Anrufer beantwortet gerade die Maschine.
+    Das Session-Hirn zaehlt mit: ein aktives Anliegen, das nicht ERREICHEN
+    ist, heisst ebenfalls beschaeftigt."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    # Eine offene Maschinen-Frage zaehlt IMMER — der Anrufer antwortet gerade
+    # ihr, egal ob der Modus schon gesetzt ist (anrufer_check, telefon ...).
+    if _s(s.get("frage")):
+        return True
+    if _s(s.get("modus")):
+        if _s(s.get("phase")) in {"angebot", "bestaetigen"}:
+            return True
+        if sit.get("buchIntent") and _s(s.get("slotIso")):
+            return True
+    try:
+        a = session_hirn.aktiv(sit)
+    except Exception:
+        a = None
+    if a and _s(a.get("handlung")) not in {"", "ERREICHEN", "KEINE"} \
+            and _s(a.get("status")) not in {"erledigt", "fertig"}:
+        return True
+    return False
+
+
+def angebot_saeubern(sit: dict, text: str, gesagt: str = "") -> tuple[str, bool]:
+    """Verbinde-Angebote des Modells streichen, wenn der Anrufer nie verbunden
+    werden wollte (W-VERBINDEN-BEWEIS, Anruf 984282e3).
+
+    Live sagte der Anrufer "Ja." auf die Behandler-Frage der Buchung; das
+    Modell antwortete "Darf ich Sie zu Doktor Petsas, Patrikis oder Nikolaou
+    durchstellen?" — und der naechste Zug wurde ein Transfer. Gestrichen
+    wird NUR, wenn (1) der aktuelle Anrufersatz keinen Verbinde-Wunsch traegt,
+    (2) das Hirn keinen ERREICHEN-Zettel haelt und (3) die Maschine gerade
+    beschaeftigt ist. Ist die Maschine frei, bleibt die Rueckfrage der
+    Prompt-Leitplanke ("Zu welchem unserer Ärzte …?") erlaubt — sie ist dann
+    der Backstop fuer Verbinde-Saetze, die die Regex nicht fasst.
+    Rueckgabe: (Text, gestrichen?)."""
+    t = _s(text)
+    if not t or not _ANGEBOT_RE.search(t):
+        return text, False
+    if gesagt and erkannt(gesagt):
+        return text, False
+    if isinstance(sit.get("hirnVerbinden"), dict):
+        return text, False
+    if not maschine_beschaeftigt(sit):
+        return text, False
+    behalten: list[str] = []
+    gestrichen = False
+    for satz in _SATZ_SPLIT_RE.split(t):
+        st = _s(satz)
+        if not st:
+            continue
+        if _ANGEBOT_RE.search(st) and not _ANGEBOT_NEGATION_RE.search(st):
+            gestrichen = True
+            continue
+        behalten.append(st)
+    if not gestrichen:
+        return text, False
+    return " ".join(behalten).strip(), True
 
 
 def erkannt(text: str) -> bool:
@@ -207,10 +359,78 @@ def erkannt(text: str) -> bool:
         return False
     return bool(
         _VERBINDEN_RE.search(t)
-        or _MENSCH_RE.search(t)
-        or _MENSCH_NUR_RE.search(t)
         or _ARZT_SPRECHEN_RE.search(t)
+        or mensch_gewuenscht(t)
     )
+
+
+# Wunsch-Verben, mit denen ein Abteilungs-/Personal-Wort zum Verbinde-Wunsch
+# wird ("Ich haette gern die Anmeldung", "Geben Sie mir die Rezeption").
+_MENSCH_WUNSCH_RE = re.compile(
+    r"\b(?:hätte|haette|möchte|moechte|will|wollen|brauche|bräuchte|braeuchte|"
+    r"geben|gib|holen|hol|verlang\w*|wünsche|wuensche|bitte|gern|gerne)\b",
+    re.I,
+)
+# "Sind Sie eine echte Person?" / "Spreche ich mit einem Menschen?" fragt nach
+# Biancas NATUR — das beantwortet die Talk-Schicht, es ist kein Verbinde-Wunsch.
+_IDENTITAETSFRAGE_RE = re.compile(
+    r"\b(?:sind\s+sie|bist\s+du|spreche\s+ich\s+(?:gerade\s+)?mit|ist\s+das|"
+    r"seid\s+ihr)\s+(?:hier\s+|da\s+|jetzt\s+|denn\s+|überhaupt\s+|ueberhaupt\s+)?"
+    r"(?:ein[e]?\s+|eine[rm]?\s+)?(?:echte[rn]?\s+|richtige[rn]?\s+|"
+    r"wirkliche[rn]?\s+)?(?:mensch(?:en)?|person)\b",
+    re.I,
+)
+
+
+def mensch_gewuenscht(text: str) -> bool:
+    """Verlangt der Satz einen MENSCHEN (Personal, Abteilung, 'jemand') —
+    im Unterschied zum blossen 'verbinden Sie mich' ohne Ziel?
+
+    W-VERBINDEN-ZIEL (17.09.2026): das nackte Abteilungs-Wort irgendwo im
+    Satz reicht NICHT mehr ("Ich brauche einen Termin fuer eine andere
+    Person", "Die Anmeldung hat mir gesagt, ich soll anrufen", "Ich bin die
+    Kollegin von Frau X" — alle liefen live in die Personal-Erklaerung).
+    Zaehlt: Sprech-/Erreich-Form (`_MENSCH_RE`), 'jemand' (`_JEMAND_RE`),
+    Bestehen (`_MENSCH_BESTEHT_RE`), Abteilungs-Wort + Verbinde-Verb, ein
+    kurzer Zuruf ("Anmeldung.", "Mitarbeiter, bitte") oder Abteilungs-Wort
+    mit Wunsch-Verb OHNE Termin-Bezug ("Ich haette gern die Anmeldung").
+    Identitaetsfragen ("Sind Sie ein echter Mensch?") zaehlen nie."""
+    t = _s(text)
+    if not t:
+        return False
+    if _IDENTITAETSFRAGE_RE.search(t):
+        return False
+    if _MENSCH_RE.search(t) or _JEMAND_RE.search(t) or _MENSCH_BESTEHT_RE.search(t):
+        return True
+    if not _MENSCH_NUR_RE.search(t):
+        return False
+    if _VERBINDEN_RE.search(t) or _SPRECH_VERB_RE.search(t):
+        return True
+    woerter = len(t.split())
+    if woerter <= 4:
+        return True
+    if "termin" in t.lower():
+        return False
+    return bool(_MENSCH_WUNSCH_RE.search(t))
+
+
+def arzt_verlangt(text: str, tenant: dict | None) -> bool:
+    """Nennt der Satz einen BEHANDLER namentlich und will der Anrufer ihn
+    sprechen bzw. verbunden werden? (W-RECHNUNG 14.09.2026: "Ich möchte mit
+    Doktor Petsas über die Rechnung sprechen" bleibt Weiterleitung — die
+    Rechnungs-Erklaerung greift nur ohne konkreten Behandler-Wunsch.)
+    Info-/Bestandsfragen ("Gibt es Doktor Petsas bei euch?") zaehlen nicht."""
+    t = _s(text)
+    if not t or _INFOFRAGE_RE.search(t):
+        return False
+    if not (_SPRECH_VERB_RE.search(t) or _VERBINDEN_RE.search(t)
+            or _ARZT_SPRECHEN_RE.search(t)):
+        return False
+    try:
+        d = arztmod.deute(t, tenant or {})
+    except Exception:
+        return False
+    return bool(d and d.get("typ") in {"genannt", "gesperrt"})
 
 
 def _mensch_frueher_verlangt(sit: dict) -> bool:
@@ -225,7 +445,7 @@ def _mensch_frueher_verlangt(sit: dict) -> bool:
         if not isinstance(m, dict) or m.get("role") != "user":
             continue
         text = _s(m.get("content"))
-        if _MENSCH_NUR_RE.search(text) and erkannt(text):
+        if mensch_gewuenscht(text) and erkannt(text):
             return True
     return False
 
@@ -345,6 +565,50 @@ def verbinden_erlaubt(tenant: dict | None) -> set[str]:
             if len(w) >= 3 and w not in _TITEL_WORTE:
                 out.add(w)
     return out
+
+
+def verbinden_zeile(tenant: dict | None) -> str:
+    """Prompt-Zeile fuer das Modell (W-VERBINDEN-BEWEIS, Anruf 984282e3):
+    WOHIN in dieser Praxis ueberhaupt durchgestellt werden kann — und wer
+    NICHT genannt werden darf. Live bot das Modell "Doktor Petsas, Patrikis
+    oder Nikolaou" zur Weiterleitung an: die Namen kannte es aus dem
+    PRAXIS-PROFIL der DB, die Sperre (W-BEHANDLER-SPERRE) und die Whitelist
+    (W-VERBINDEN-WHITELIST) kannte es nicht. Leer/kein Ziel = ehrliche
+    Ansage, dass telefonisch nicht durchgestellt wird."""
+    from kern import behandler_sperre
+
+    t = tenant or {}
+    erlaubt = verbinden_erlaubt(t)
+    ziele: list[str] = []
+    if erlaubt:
+        for k in (t.get("calendars") or []):
+            name = _s((k or {}).get("name"))
+            toks = [w for w in re.split(r"[^\wäöüß]+", name.lower())
+                    if len(w) >= 3 and w not in _TITEL_WORTE]
+            if any(tok in erlaubt for tok in toks):
+                sn = arzt_sprechname(name, t) or name
+                if sn and sn not in ziele:
+                    ziele.append(sn)
+    gesperrt: list[str] = []
+    try:
+        for k in behandler_sperre.gesperrte_kalender(t):
+            name = _s((k or {}).get("name"))
+            sn = arzt_sprechname(name, t) or name
+            if sn and sn not in gesperrt and sn not in ziele:
+                gesperrt.append(sn)
+    except Exception:
+        gesperrt = []
+    teile: list[str] = []
+    if ziele:
+        teile.append("Durchgestellt werden kann NUR zu: " + ", ".join(ziele) + ".")
+    else:
+        teile.append("In dieser Praxis wird telefonisch NICHT durchgestellt — "
+                     "biete es nie an; das Anliegen übernimmst du selbst.")
+    if gesperrt:
+        teile.append(
+            "Telefonisch weder erreichbar noch buchbar: " + ", ".join(gesperrt)
+            + " — nenne diesen Namen nie als Möglichkeit.")
+    return " ".join(teile)
 
 
 def weiterleitungs_ziel(tenant: dict, ziel: dict) -> dict:
@@ -485,8 +749,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             }
             _arzt_merken(s, ziel)
             return zaluma_weiterleitung(sit, ziel, melde)
-        if _MENSCH_NUR_RE.search(t) and (
-            erkannt(t) or _MENSCH_BESTEHT_RE.search(t)
+        # Erneutes Bestehen auf einem Menschen — oder (W-VERBINDEN-ZIEL) ein
+        # nackter Verbinde-Wunsch in einer Praxis, die nie durchstellt: der
+        # Rueckruf ist dort der einzige Weg zu einem Menschen.
+        if mensch_gewuenscht(t) or _MENSCH_BESTEHT_RE.search(t) or (
+            erkannt(t) and not kann_verbinden(sit.get("tenant"))
         ):
             sit["weiterleiten"] = {
                 "frage": "rueckruf",
@@ -618,8 +885,15 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # (b) Rueckweg der Prompt-Leitplanke: das LLM hat "Zu welchem
             #     unserer Ärzte darf ich Sie verbinden?" gefragt — der blosse
             #     Name ist die Zielangabe (die Maschine war nicht bewaffnet).
+            #     W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): NUR wenn
+            #     die Maschine wirklich frei war. Live lief eine Buchung
+            #     ("Wissen Sie noch, bei welchem Behandler Sie zuletzt
+            #     waren?" -> "Ja."), das Modell erfand daraus die Verbinde-
+            #     Rueckfrage, und "Patrikis" wurde zum Transfer — der Anrufer
+            #     wollte einen Termin und landete im Jingle.
             letzte = wiederholung.letzte_antworten(sit.get("messages") or [], 1)
-            if letzte and _RUECKFRAGE_RE.search(letzte[0]):
+            if (letzte and _RUECKFRAGE_RE.search(letzte[0])
+                    and not maschine_beschaeftigt(sit)):
                 _arzt_merken(s, ziel0)
                 return zaluma_weiterleitung(sit, ziel0, melde)
         return None
@@ -642,7 +916,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     # Patientenannahme ...). Steht im selben Satz bereits ein konkretes
     # Termin-Anliegen, hat das Session-Hirn dessen sicheren Flow freigegeben;
     # dann darf die vermeintliche Wunsch-Abteilung die Aufgabe nicht überholen.
-    mensch = bool(_MENSCH_NUR_RE.search(t))
+    mensch = mensch_gewuenscht(t)
     if mensch:
         if _s(s.get("modus")) in {"buchen", "absagen", "verschieben", "auskunft"} \
                 and sit.get("hirnModusNeu"):
@@ -652,10 +926,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit["weiterleiten"] = {"frage": "rueckruf", "rolle": t[:80]}
             return {"text": RUECKRUF_ANGEBOT}
         sit["weiterleiten"] = {"frage": "anliegen", "rolle": t[:80]}
-        return {"text": ENTLASTUNG}
+        return {"text": _entlastung(sit)}
     # Fall 3: Verbinde-Wunsch ohne Namen und ohne Mitarbeiter-Wort
     # ("Können Sie mich bitte weiterleiten?"): bekannten Behandler anbieten,
     # sonst wie bisher nach dem Arzt fragen.
+    # W-VERBINDEN-ZIEL (17.09.2026): ohne Verbinde-Whitelist gibt es weder
+    # Angebot noch Arzt-Frage — beide endeten nur im Platzhalter.
+    if not kann_verbinden(sit.get("tenant")):
+        return _kein_verbinden(sit)
     ziel = _ziel_finden(sit, melde)
     if ziel:
         _arzt_merken(s, ziel)

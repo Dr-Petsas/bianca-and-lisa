@@ -57,9 +57,23 @@ def _oeffnungszeiten_thema(text: str) -> bool:
     dürfen nicht versehentlich als Öffnungszeiten gelten.
     """
     low = _norm(text)
-    if re.search(r"\b(?:offnungs?zeiten?|oeffnungs?zeiten?|sprechzeiten?)\b", low):
+    if re.search(r"\b(?:offnungs?zeit\w*|oeffnungs?zeit\w*|sprechzeit\w*"
+                 r"|sprechstunde\w*|praxiszeit\w*)\b", low):
         return True
-    if re.search(r"\bwann\b.{0,30}\b(?:offen|geoffnet)\b", low):
+    if re.search(r"\bwann\b.{0,30}\b(?:offen|geoffnet|geoeffnet)\b", low):
+        return True
+    # „Wann habt ihr auf?“ / „Haben Sie am Freitag offen?“ liefen bis
+    # 15.09.2026 am deterministischen Weg vorbei und landeten beim Modell —
+    # bei Ruether (keine belegten Zeiten) erfand es einen Zeitplan.
+    # „offen/auf“ zaehlt nur direkt hinter einem Praxis-Subjekt und nie mit
+    # Termin-Bezug („haben Sie den Termin noch offen“).
+    if re.search(
+        r"\b(?:haben|habt|hat|sind|ist|macht|machen)\s+"
+        r"(?:sie|ihr|wir|die\s+praxis)\b"
+        r"(?:\s+(?!termin|platz|slot)\w+){0,4}\s+"
+        r"(?:offen|geoffnet|geoeffnet|auf)\b",
+        low,
+    ):
         return True
     for token in low.split():
         if len(token) >= 9 and SequenceMatcher(None, token, "offnungszeiten").ratio() >= 0.78:

@@ -270,6 +270,25 @@ def zusammenfassung(sit: dict) -> str:
     text = kopf + "; ".join(teile) + "."
     for zeile in notes.besondere_zeilen(sit):
         text += f" {zeile}."
+    # W-WARTESCHLEIFE: hat die Anlage den Anrufer zurueckgeholt, steht das
+    # im Report — die Praxis sieht so, warum der Anruf ohne Abschied endete.
+    try:
+        from kern import warteschleife
+        ws = warteschleife.zusammenfassung_zeile(sit)
+        if ws:
+            text += f" {ws}."
+    except Exception:
+        pass
+    # W-RECHNUNG: ein angesprochenes Rechnungsthema steht auch dann im Report,
+    # wenn kein Rueckruf gewuenscht war — sonst saehe die Praxis nur
+    # "Gespraech ohne Kalenderaenderung".
+    try:
+        from kern import rechnung
+        rz = rechnung.zusammenfassung_zeile(sit)
+        if rz:
+            text += f" {rz}."
+    except Exception:
+        pass
     return text[:600]
 
 

@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from kern import assistent
+
 BESONDERS = re.compile(
     r"\b("
     r"angst|ängst|aengst|nervös|nervoes|panik|weint|weinen|"
@@ -156,8 +158,21 @@ def braucht_notiz(sit: dict[str, Any]) -> bool:
 
 
 def stimme_von(sit: dict[str, Any]) -> str:
-    """Welche Stimme führt diese Sitzung? Lisa (Default) oder Bianca."""
-    return _s(sit.get("stimme")) or "Lisa"
+    """Name der Assistenz fuer Notizen und Berichte.
+
+    ``sit["stimme"]`` bleibt bei eingehenden Anrufen absichtlich
+    ``"Bianca"``: daran haengen Prozess-Routing, Mitschnitt-Ordner und
+    Sicherheits-Gates. Der nach aussen sichtbare Herkunftsstempel kommt
+    dagegen aus dem Mandanten. So schreibt die Ruether-Sitzung ``// Ben``,
+    ohne intern aus dem Bianca-Pfad zu fallen.
+    """
+    intern = _s(sit.get("stimme"))
+    tenant = sit.get("tenant")
+    if intern.casefold() == "bianca" or (
+        not intern and isinstance(tenant, dict) and tenant
+    ):
+        return assistent.name(tenant if isinstance(tenant, dict) else None)
+    return intern or "Lisa"
 
 
 def termin_notiz(sit: dict[str, Any]) -> str:

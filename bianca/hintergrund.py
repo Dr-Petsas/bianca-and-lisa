@@ -56,8 +56,13 @@ def kartei_von_anrufer(sit: dict) -> None:
             # gesperrten Behandler kommt OHNE calendarId (nie binden, nie
             # buchen) — Besuch/Grund bleiben fuer Rueckblick und die
             # ehrliche Behandler-Frage (gehirn._arzt_gesperrt_frage).
+            # W-KALENDER-TOT: zeigte der letzte Termin auf einen geloeschten
+            # Kalender, bleibt die Kartei (Besuch/Grund fuer den Rueckblick)
+            # — nur ohne calendarId, damit der Fluss den Behandler erfragt
+            # statt in den toten Kalender zu suchen.
             if info.get("ok") and info.get("war") and (
-                    _s(info.get("calendarId")) or info.get("gesperrt")):
+                    _s(info.get("calendarId")) or info.get("gesperrt")
+                    or info.get("kalenderTot")):
                 sit["anruferKartei"] = {
                     "letzterBesuch": _s(info.get("lastIso")),
                     "letzterGrund": _s(info.get("grund")),
@@ -369,21 +374,31 @@ def vorrat_anstossen(sit: dict) -> None:
             }
             from kern import zimmer_map
             raeume = zimmer_map.raeume_am(sit)
+            # W-SUCHFENSTER (14.09.2026): steht der Wunsch schon, blaettert
+            # die Vorrat-Suche wie das Angebot ueber die Plattform-Seiten.
+            wunsch = s.get("wunsch") if isinstance(s.get("wunsch"), dict) else None
             if raeume:
                 found = calendar.find_slots_raeume(
                     tenant, ctx, raeume,
                     start_date=gehirn.start_datum(s),
                     source="pickadoc-bianca",
+                    wish=wunsch,
                 )
                 win = found.get("calendar") if isinstance(found.get("calendar"), dict) else None
                 if win and _s(win.get("id")):
                     sit["slotKalender"] = win
                     a["calendarId"] = win["id"]
+                    # Wie in flow._angebot: der Ersatz-Motiv-Pin (unten) muss
+                    # am GEWINNER-Zimmer haengen, sonst passt der Schluessel
+                    # spaeter nicht und _angebot laedt synchron nach.
+                    ctx["calendarId"] = win["id"]
+                    ctx["calendarName"] = _s(a.get("calendarName")) or _s(win.get("name"))
             elif a.get("calendarId"):
                 found = calendar.find_slots_behandler(
                     tenant, ctx,
                     start_date=gehirn.start_datum(s),
                     source="pickadoc-bianca",
+                    wish=wunsch,
                 )
             else:
                 found = calendar.find_slots(
@@ -391,6 +406,7 @@ def vorrat_anstossen(sit: dict) -> None:
                     start_date=gehirn.start_datum(s),
                     egal=egal,
                     source="pickadoc-bianca",
+                    wish=wunsch,
                 )
             # Nur speichern, wenn der Rahmen noch stimmt — sonst würde eine
             # überholte Suche (alter Arzt/Tag) das frische Ziel überschreiben.

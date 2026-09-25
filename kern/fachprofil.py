@@ -273,6 +273,48 @@ def nicht_buchbar_antwort(quelle: Any) -> str:
     )
 
 
+# B2 (17.09.2026, Blessing-Anrufe 66913eb8/a467367e): "Diese Leistung wird
+# nicht angeboten" kam sofort auf JEDEN Grund, den der Katalog nicht kannte —
+# auch auf einen Verhoerer ("Matzenbehandlung") oder eine echte Hautbeschwerde.
+# Stufe 1 ist eine EINMALIGE, fachsichere Nachfrage: was genau soll die Aerztin
+# ansehen? Ohne Katalog-Begriffe, ohne "nicht angeboten".
+_GRUND_KLAERUNG_FRAGEN: dict[str, str] = {
+    "zahnmedizin": (
+        "Da bin ich mir nicht sicher, was Sie meinen. Worum geht es genau — "
+        "Schmerzen, eine Kontrolle, Zahnreinigung oder etwas anderes?"
+    ),
+    "dermatologie": (
+        "Da bin ich mir nicht sicher, was Sie meinen. Was genau soll sich die "
+        "Ärztin ansehen — zum Beispiel Haut, Nägel oder eine Hautveränderung?"
+    ),
+    "gynaekologie": (
+        "Da bin ich mir nicht sicher, was Sie meinen. Worum geht es genau — "
+        "Vorsorge, Beschwerden oder eine Beratung?"
+    ),
+    "allgemein": (
+        "Da bin ich mir nicht sicher, was Sie meinen. Worum geht es bei dem "
+        "Termin genau?"
+    ),
+}
+
+
+def grund_klaerungsfrage(quelle: Any) -> str:
+    """Einmalige Nachfrage zu einem unbekannten Besuchsgrund (B2, Stufe 1)."""
+    return _GRUND_KLAERUNG_FRAGEN.get(
+        fach_id(quelle), _GRUND_KLAERUNG_FRAGEN["allgemein"])
+
+
+def grund_unbekannt_absage(quelle: Any) -> str:
+    """Ehrliche Absage ohne Termin (B2, Stufe 3): der Grund passt ins Fach, aber
+    die Praxis fuehrt dafuer telefonisch kein Motiv und keine allgemeine
+    Sprechstunde — dann uebernimmt die Praxis, nicht das Modell."""
+    arzt = "das Praxisteam"
+    return (
+        "Dafür kann ich am Telefon leider keinen passenden Termin eintragen. "
+        f"Ich gebe Ihr Anliegen an {arzt} weiter, und man meldet sich bei Ihnen."
+    )
+
+
 def fallback_tenant(fach: Any = "allgemein", *, did: Any = "") -> dict[str, Any]:
     """Nicht buchendes Fachprofil, wenn keine Mandantenkonfiguration vorliegt.
 

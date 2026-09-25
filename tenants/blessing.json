@@ -10,6 +10,24 @@
   "telefon": "",
   "sprache": "de",
   "fachgebiet": "dermatologie",
+  "namensUnklarOhneEcho": true,
+  "buchstabierSegmenteTrennen": true,
+  "nachnameReadbackNachBuchstabieren": true,
+  "bestandsauskunftErweitert": true,
+  "bestandsVerschiebenErweitert": true,
+  "dermaMotivKlarheit": true,
+  "einArztOhneBehandlerfrage": true,
+  "gespraechKompakt": true,
+  "halloKompakt": true,
+  "anmeldungKurz": true,
+  "arztNotizFrageText": "Möchten Sie der Ärztin für den Termin noch eine Nachricht zur Vorbereitung mitgeben?",
+  "arztNotizDiktatText": "Welche Nachricht möchten Sie der Ärztin für den Termin mitgeben?",
+  "terminNotizNachBuchung": true,
+  "buchungAbschlussKompakt": true,
+  "selbstCheckNurBeiSignal": true,
+  "sonstNochNurNachErfolg": true,
+  "presenceEinmal": true,
+  "slotPraeferenzenFesthalten": true,
   "sttHotwords": [
     "Blessing",
     "Hautkrebsscreening",
@@ -27,7 +45,7 @@
       "name": "Doktor Charlotte Blessing"
     }
   ],
-  "begruessungText": "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit Bianca, der Telefonassistentin der Praxis. Wie kann ich Ihnen helfen?",
+  "begruessungText": "Hallo, Hautarztpraxis Doktor Blessing, Sie sprechen mit der digitalen Assistentin Bianca ...Wie kann ich helfen?",
   "dbPrompt": "NOTFALL-SOFORTREGEL: Akute dermatologische Notfälle werden nach den festen Praxisregeln behandelt. DOKUMENT-VORSPRACHEREGEL: Rezepte, Überweisungen und Krankmeldungen werden telefonisch nicht bestellt oder zur Abholung zugesagt; dafür ist eine persönliche Vorsprache erforderlich.",
   "weiterleitungen": [],
   "visitMotives": [

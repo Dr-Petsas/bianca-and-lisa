@@ -215,12 +215,37 @@ def handy_ok(raw: str) -> bool:
     return 11 <= len(d) <= 14
 
 
+def ist_handy_de(raw: str) -> bool:
+    """Wirklich eine deutsche MOBILnummer (015x/016x/017x)?
+
+    `handy_ok` prueft nur die Laenge — eine Festnetznummer kommt da durch.
+    Wo eine SMS ankommen MUSS (Bestaetigung, Akten-Nachtrag), reicht das
+    nicht: eine Nummer ohne Mobilfunk-Vorwahl gehoert nie als Handy in die
+    Kartei."""
+    d = _digits(handy_e164(raw))
+    return handy_ok(raw) and d.startswith(("4915", "4916", "4917"))
+
+
 def ist_testname(first: str, last: str, name: str = "") -> bool:
     blob = " ".join(x for x in (_s(first), _s(last), _s(name)) if x).lower()
     if blob in {"anna test", "max mustermann", "erika mustermann"}:
         return True
     last_l = _s(last).lower()
     return last_l in {"test", "demo", "mustermann"}
+
+
+PLATZHALTER_VORNAME = "Reservierung"
+PLATZHALTER_NACHNAME = "SMS"
+
+
+def ist_platzhalter_name(first: str, last: str = "", name: str = "") -> bool:
+    """Canary-Platzhalterakte — später mit NAMENS_LINK_UNBEKANNT wieder raus."""
+    f, l = _s(first), _s(last)
+    if (f.casefold() == PLATZHALTER_VORNAME.casefold()
+            and l.casefold() == PLATZHALTER_NACHNAME.casefold()):
+        return True
+    blob = _s(name) or f"{f} {l}".strip()
+    return blob.casefold() == f"{PLATZHALTER_VORNAME} {PLATZHALTER_NACHNAME}".casefold()
 
 
 # Seed-/Fixture-Datensaetze, die in der echten Kartei liegen (CampaignR-Test,
@@ -454,7 +479,7 @@ def akte_anlegen(
             "ok": False,
             "spoken": "Vor- und Nachname brauche ich, um die Akte anzulegen.",
         }
-    vorhanden = _suche_eindeutig(tenant, first, last)
+    vorhanden = None if ist_platzhalter_name(first, last, name) else _suche_eindeutig(tenant, first, last)
     if vorhanden:
         karte = karten_patient(vorhanden)
         return {
@@ -464,7 +489,7 @@ def akte_anlegen(
             "patient": karte,
             "spoken": f"Die Akte von {karte['name']} ist schon da.",
         }
-    if ist_dev_handy(phone):
+    if ist_dev_handy(phone) and not ist_platzhalter_name(first, last, name):
         return {
             "ok": False,
             "spoken": (
@@ -600,6 +625,49 @@ def telefon_aktualisieren(tenant: dict, patient_id: str, phone: str) -> dict[str
             "previous": _s(data.get("previous")),
         }
     return {"ok": False, "error": _s(data.get("message")) or f"http_{r.status_code}"}
+
+
+def geschlecht_aktualisieren(tenant: dict, patient_id: str, gender: str) -> dict[str, Any]:
+    """Geschlecht einer BESTEHENDEN Akte setzen (masUpdatePatientGender).
+
+    Chef 21.09.2026: Wenn Bianca Herr/Frau falsch wählt und der Anrufer
+    das korrigiert, gilt die Korrektur sofort im Gespräch und wird in die
+    Kartei geschrieben. WRITE_LIVE=0 => Trockenlauf (ok+dryRun)."""
+    pid = _s(patient_id)
+    g = _s(gender).lower()
+    if g in {"male", "herr", "mann", "männlich", "maennlich"}:
+        g = "m"
+    elif g in {"female", "frau", "weiblich", "w"}:
+        g = "f"
+    if not pid or g not in {"m", "f"}:
+        return {"ok": False, "error": "patientId oder Geschlecht fehlt"}
+    if not WRITE_LIVE or tenant.get("_testNoWrite"):
+        return {"ok": True, "dryRun": True, "patientId": pid, "gender": g, "previous": ""}
+    try:
+        r = httpx.post(
+            f"{CF_BASE}/masUpdatePatientGender",
+            json={
+                "clientId": _s(tenant.get("clientId")),
+                "locationId": _s(tenant.get("locationId")),
+                "updates": [{"patientId": pid, "gender": g}],
+            },
+            timeout=12.0,
+        )
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    except httpx.HTTPError as e:
+        return {"ok": False, "error": str(e)}
+    if r.status_code == 200 and isinstance(data, dict) and data.get("status") == "success":
+        treffer = next(
+            (x for x in (data.get("results") or []) if _s((x or {}).get("patientId")) == pid),
+            {},
+        )
+        return {
+            "ok": True,
+            "patientId": pid,
+            "gender": _s(treffer.get("gender")) or g,
+            "previous": _s(treffer.get("previous")),
+        }
+    return {"ok": False, "error": _s(data.get("message")) if isinstance(data, dict) else f"http_{r.status_code}"}
 
 
 def versicherung_aktualisieren(tenant: dict, patient_id: str, privat: bool) -> dict[str, Any]:

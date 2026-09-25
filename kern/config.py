@@ -86,6 +86,16 @@ STT_QWEN_GRACE_S = float(_s("STT_QWEN_GRACE_S", "0.25") or "0.25")
 # rechnete (Kaltstart 2-5 s) — der asynchrone Korrektor braucht aber JEDEN
 # Zug. 2 = ein laufender + ein nachrueckender; aeltere werden nie aufgestaut.
 STT_QWEN_PARALLEL = max(1, int(_s("STT_QWEN_PARALLEL", "2") or "2"))
+# Qwen als LIVE-Ohr (Chef 18.09.2026 — Default AUS): Diagnose ueber 5.743
+# echte STT-Zuege ergab, dass Qwen nur 4 % der Live-Zuege gewinnt, aber in
+# 58 % zu spaet fuer die laufende Antwort ist — als zeitkritisches Zweit-Ohr
+# ist es Ballast (Grace-Warten kostet Latenz, seltene Live-Overrides sind das
+# Risiko nicht wert). AUS = Qwen wartet nie, uebernimmt nie live; Parakeet ist
+# IMMER der gesprochene Zug. Der asynchrone Korrektor (W-QWEN-KORREKTOR,
+# `kern/qwen_korrektor.py`) bekommt aber WEITER jeden Qwen-Lauf nachgereicht
+# und verbessert Woerterbuch/Hotwords/Verlauf der Folgezuege. AN
+# (QWEN_LIVE_OHR=1) = altes Verhalten (Grace-Warten + Live-Override).
+QWEN_LIVE_OHR = _b("QWEN_LIVE_OHR", False)
 # Whisper-GPU-STT auf dem Dev-Rechner (W-STT-WHISPER 30.08.2026): GESETZT =
 # Transkription laeuft ZUERST ueber den Whisper-Stream-Container (WebSocket,
 # pickadoc-stt, large-v3 auf der Dev-GPU, via Tailscale). Ist er nicht
