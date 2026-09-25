@@ -31,7 +31,7 @@ lennart leo leon leonard leonid leonhard levi liam linus lorenz lothar ludwig lu
 lutz magnus maik malte manfred manuel marcel marco marcus mario mark marko
 markus martin marvin mathias matthias mats max maximilian mehmet michael
 mika milan mirko moritz mustafa nick niclas nico nicolas niels niklas nils
-noah norbert norman ole oliver olaf oskar oswald otto pascal patrick paul
+niko noah norbert norman ole oliver olaf oskar oswald otto pascal patrick paul
 peter phil philip philipp pierre rafael raik rainer ralf ralph raphael
 reiner reinhard rene renee ricardo richard robert roland rolf roman ronald
 ronny ruben rudi rudolf ruediger rüdiger rupert sam samuel sebastian
@@ -48,6 +48,8 @@ petros piotr sergej spiros stavros stefanos taner tarik theodoros vassilis
 vasilis yannis yusuf
 hamza illia idrissa kiriakos kyriakos musa
 efthymios eythymios efthymis aethymius aethymios itemius
+carlos mohammed mohamed muhammad diego pablo antonio giovanni juan jose
+pedro miguel luis fernando alejandro andres enzo carlo marcos
 """.split())
 
 _F = frozenset("""
@@ -136,6 +138,10 @@ def geschlecht(vorname: str) -> str:
     # Ungelistete griechisch/lateinische -ios/-ius-Namen sind männlich
     # (live 30.08.2026: Eythymios/Aethymius → Default Frau Gregoriu).
     if len(n) >= 5 and (n.endswith("ios") or n.endswith("ius")):
+        return "m"
+    if len(n) >= 5 and n.endswith("os"):
+        return "m"
+    if len(n) >= 4 and n.endswith("o"):
         return "m"
     return ""
 

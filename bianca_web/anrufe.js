@@ -8,12 +8,14 @@ const $ = (id) => document.getElementById(id);
 const spieler = $("spieler");
 const ART_KEY = "pickadoc.anrufe.art";
 const DATUM_KEY = "pickadoc.anrufe.tag";
+const ANLIEGEN_KEY = "pickadoc.anrufe.anliegen";
 let anrufe = [];
 let aktivId = "";
 let laufKnopf = null;
 let kette = [];
 let artFilter = "alle";
 let datumFilter = "";
+let anliegenFilter = "";
 let tenantAliase = {};
 
 function artLesen() {
@@ -73,6 +75,34 @@ function datumSchreiben(v) {
 function imDatum(a) {
   if (!datumFilter) return true;
   return anrufTag(a) === datumFilter;
+}
+
+function anliegenLesen() {
+  try {
+    return String(localStorage.getItem(ANLIEGEN_KEY) || "");
+  } catch { return ""; }
+}
+
+function anliegenSchreiben(v) {
+  anliegenFilter = String(v || "");
+  try { localStorage.setItem(ANLIEGEN_KEY, anliegenFilter); } catch { /* */ }
+}
+
+function anliegenVon(a) {
+  const roh = (a && a.anliegen) || [];
+  return roh.map((x) => {
+    if (x && typeof x === "object") {
+      return { id: String(x.id || ""), titel: String(x.titel || x.id || "") };
+    }
+    return { id: String(x || ""), titel: String(x || "") };
+  }).filter((x) => x.id);
+}
+
+function hatAnliegen(a, id) {
+  if (!id) return true;
+  const ids = anliegenVon(a);
+  if (id === "sonstiges" && !ids.length) return true;
+  return ids.some((x) => x.id === id);
 }
 
 function istTest(a) {
@@ -146,10 +176,33 @@ function kopierKnopf(text, label) {
   return b;
 }
 
-function anruferName(a) {
+function erkannteNummer(a) {
+  const roh = String((a && a.callerPhone) || "").trim();
+  if (!roh || /^anonymous$/i.test(roh)) return "";
+  const ziffern = roh.replace(/\D/g, "");
+  return ziffern.length >= 5 ? roh : "";
+}
+
+function anruferKopf(a) {
   const name = String(a.patientName || a.testName || "").trim();
-  if (istTest(a)) return name ? `Test · ${name}` : "Testanruf";
-  return name || "Unbekannter Anrufer";
+  let titel = "";
+  let unter = "";
+  if (istTest(a)) titel = name ? `Test · ${name}` : "Testanruf";
+  else if (name) titel = name;
+  else {
+    const nr = erkannteNummer(a);
+    if (nr) { titel = nr; unter = "unbekannte Rufnummer"; }
+    else titel = "Unbekannter Anrufer";
+  }
+  if (a && a.reservierung) {
+    const nackt = titel.replace(/^reservierung\s*[·-]?\s*/i, "").replace(/^sms$/i, "").trim();
+    titel = nackt && nackt !== "Unbekannter Anrufer" ? `Reservierung · ${nackt}` : "Reservierung";
+  }
+  return { titel, unter };
+}
+
+function anruferName(a) {
+  return anruferKopf(a).titel;
 }
 
 function ergebnis(a) {
@@ -226,7 +279,7 @@ const OHR_NAME = {
   parakeet: "Parakeet STT",
   qwen: "Qwen STT",
   whisper_oder_parakeet: "Whisper/Parakeet STT",
-  elevenlabs: "ElevenLabs STT",
+  elevenlabs: "ElevenLabs Scribe 2",
 };
 
 function ohrChips(st) {
@@ -235,7 +288,7 @@ function ohrChips(st) {
   const winner = String(st.winner || "");
   if (winner) {
     const cls = winner === "parakeet" ? "ohr-parakeet" : winner === "qwen" ? "ohr-qwen" : "ohr-sonst";
-    const c = chip(OHR_NAME[winner] || `${winner} STT`);
+    const c = chip(st.engine || OHR_NAME[winner] || `${winner} STT`);
     c.className = `chip ${cls}`;
     const q = st.qwen || {};
     const tipp = [];
@@ -823,8 +876,12 @@ function maleDetail(a) {
   zeiten.className = "zeiten";
   const dauer = a.dauerMs != null ? mmss(a.dauerMs) + " min" : "läuft / offen";
   const art = istTest(a) ? "Testanruf" : "Praxis-Live";
+  const kopfName = anruferKopf(a);
+  const unter = kopfName.unter
+    ? `<br><span class="e-unter">${escapeHtml(kopfName.unter)}</span>`
+    : "";
   zeiten.innerHTML =
-    `<b>${anruferName(a)}</b> — ${art} · ${a.zuege ? a.zuege.length : 0} Züge<br>` +
+    `<b>${escapeHtml(kopfName.titel)}</b> — ${art} · ${a.zuege ? a.zuege.length : 0} Züge${unter}<br>` +
     `Beginn: <b>${zeit(a.startedAt)}</b> · Ende: <b>${a.endedAt ? zeit(a.endedAt) : "—"}</b> · Dauer: <b>${dauer}</b>`;
   const uidZeile = document.createElement("div");
   uidZeile.className = "uid-zeile";
@@ -988,13 +1045,14 @@ async function oeffne(sid) {
   }
 }
 
+function nachArt(a) {
+  if (artFilter === "test") return istTest(a);
+  if (artFilter === "live") return !istTest(a);
+  return true;
+}
+
 function sichtbare() {
-  return anrufe.filter((a) => {
-    if (!imDatum(a)) return false;
-    if (artFilter === "test") return istTest(a);
-    if (artFilter === "live") return !istTest(a);
-    return true;
-  });
+  return anrufe.filter((a) => imDatum(a) && nachArt(a) && hatAnliegen(a, anliegenFilter));
 }
 
 function tagEingabeSync() {
@@ -1020,10 +1078,72 @@ function filterZeichnen() {
   if ($("tag-heute")) $("tag-heute").classList.toggle("an", datumFilter === heute);
   if ($("tag-alle")) $("tag-alle").classList.toggle("an", !datumFilter);
   tagEingabeSync();
+  anliegenFilterZeichnen();
+}
+
+function anliegenFilterZeichnen() {
+  const wurzel = $("anliegen-filter");
+  if (!wurzel) return;
+  const basis = anrufe.filter((a) => imDatum(a) && nachArt(a));
+  const zaehl = new Map();
+  for (const a of basis) {
+    const ids = anliegenVon(a);
+    if (!ids.length) {
+      zaehl.set("sonstiges", (zaehl.get("sonstiges") || 0) + 1);
+      continue;
+    }
+    for (const x of ids) zaehl.set(x.id, (zaehl.get(x.id) || 0) + 1);
+  }
+  if (anliegenFilter && !zaehl.has(anliegenFilter) && anliegenFilter !== "") {
+    anliegenSchreiben("");
+  }
+  const titelVon = (id) => {
+    for (const a of basis) {
+      const treffer = anliegenVon(a).find((x) => x.id === id);
+      if (treffer) return treffer.titel;
+    }
+    return id === "sonstiges" ? "Sonstiges" : id;
+  };
+  const knoepfe = [["", "Alle", basis.length]];
+  const ordnung = ["buchen", "absagen", "verschieben", "auskunft", "rezept",
+    "au", "ueberweisung", "attest", "befund", "unterlagen", "medikament",
+    "arzt_sprechen", "mitarbeiter_sprechen", "notfall", "rechnung", "kosten",
+    "neupatient", "beschwerde", "rueckruf", "oeffnungszeiten", "sonstiges"];
+  for (const id of ordnung) {
+    const n = zaehl.get(id) || 0;
+    if (!n) continue;
+    knoepfe.push([id, titelVon(id), n]);
+  }
+  for (const [id, n] of zaehl.entries()) {
+    if (ordnung.includes(id)) continue;
+    knoepfe.push([id, titelVon(id), n]);
+  }
+  wurzel.innerHTML = "";
+  for (const [id, titel, n] of knoepfe) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("data-anliegen", id);
+    if ((id || "") === (anliegenFilter || "")) b.classList.add("an");
+    b.appendChild(document.createTextNode(titel + " "));
+    const span = document.createElement("span");
+    span.className = "n";
+    span.textContent = n ? `(${n})` : "";
+    b.appendChild(span);
+    b.addEventListener("click", () => {
+      anliegenSchreiben(id);
+      maleListe();
+    });
+    wurzel.appendChild(b);
+  }
 }
 
 function leerText() {
   const wo = datumFilter ? ` am ${tagSprechbar(datumFilter)}` : "";
+  if (anliegenFilter) {
+    const titel = document.querySelector(`#anliegen-filter [data-anliegen="${anliegenFilter}"]`);
+    const name = titel ? titel.childNodes[0] && titel.childNodes[0].textContent.trim() : anliegenFilter;
+    return `keine Anrufe zu „${name || anliegenFilter}“${wo}`;
+  }
   if (artFilter === "test") return `keine Testanrufe${wo || " in dieser Praxis"}`;
   if (artFilter === "live") return `keine Praxis-Live-Anrufe${wo || " in dieser Praxis"}`;
   if (wo) return `keine Mitschnitte${wo}`;
@@ -1046,9 +1166,19 @@ function maleListe() {
     const [text, farbe] = ergebnis(a);
     const kopf = document.createElement("div");
     kopf.className = "e-kopf";
+    const nameBlock = document.createElement("span");
+    nameBlock.className = "e-nameblock";
     const name = document.createElement("span");
+    const kopfName = anruferKopf(a);
     name.className = test ? "name-test" : "";
-    name.textContent = anruferName(a);
+    name.textContent = kopfName.titel;
+    nameBlock.appendChild(name);
+    if (kopfName.unter) {
+      const unter = document.createElement("span");
+      unter.className = "e-unter";
+      unter.textContent = kopfName.unter;
+      nameBlock.appendChild(unter);
+    }
     const marken = document.createElement("span");
     marken.className = "e-marken";
     const artMarke = document.createElement("span");
@@ -1059,6 +1189,12 @@ function maleListe() {
     marke.className = `marke ${farbe}`;
     marke.textContent = text;
     marken.appendChild(marke);
+    for (const anl of anliegenVon(a)) {
+      const am = document.createElement("span");
+      am.className = "marke grau";
+      am.textContent = anl.titel;
+      marken.appendChild(am);
+    }
     if (a.warteschleife && a.warteschleife.n) {
       // W-WARTESCHLEIFE: die Praxis-Anlage hat den Anrufer zurueckgeholt —
       // Bianca hoerte Ansagen statt eines Menschen (und legte ggf. auf).
@@ -1070,7 +1206,7 @@ function maleListe() {
         : `Warteschleife (${a.warteschleife.n})`;
       marken.appendChild(ws);
     }
-    kopf.appendChild(name);
+    kopf.appendChild(nameBlock);
     kopf.appendChild(marken);
     const meta = document.createElement("div");
     meta.className = "e-meta";
@@ -1153,6 +1289,7 @@ function adresseFolgen() {
   const sid = sidAusAdresse();
   if (!sid || sid === aktivId) return;
   if (artFilter !== "alle") { artSchreiben("alle"); }
+  if (anliegenFilter) anliegenSchreiben("");
   const a = anrufe.find((x) => String(x.id || "").replace(/-/g, "").toLowerCase() === sid);
   if (a) {
     const tag = anrufTag(a);
@@ -1163,9 +1300,22 @@ function adresseFolgen() {
   oeffne(sid);
 }
 
-$("neuLaden").onclick = () => { ladeListe(); if (aktivId) oeffne(aktivId); };
+async function ohrAktivZeigen() {
+  const ziel = $("ohrAktiv");
+  if (!ziel) return;
+  try {
+    const h = await (await fetch("api/ohr", { cache: "no-store" })).json();
+    ziel.textContent = h && h.stt ? `Ohr aktiv: ${h.stt}` : "Ohr aktiv: unbekannt";
+  } catch {
+    ziel.textContent = "Ohr aktiv: nicht erreichbar";
+  }
+}
+
+$("neuLaden").onclick = () => { ladeListe(); ohrAktivZeigen(); if (aktivId) oeffne(aktivId); };
+ohrAktivZeigen();
 artFilter = artLesen();
 datumFilter = datumLesen();
+anliegenFilter = anliegenLesen();
 filterBinden();
 window.addEventListener("hashchange", adresseFolgen);
 if (typeof praxisSeiteStart === "function") {

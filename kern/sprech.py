@@ -113,29 +113,6 @@ _ABK = (
     (re.compile(r"\bggf\.\s*", re.I), "gegebenenfalls "),
 )
 
-# Interne Motiv-Kuerzel nie vorsprechen (Chef 20.09.2026): "KCH Kontrolle"
-# -> "Kontrolle", "ZE Eingliederung" -> "Eingliederung".
-_MOTIV_KUERZEL_RE = re.compile(
-    r"\b(?:KCH|KFO|ZE|IMP|PAR|PRO|SLM|KB)(?:\s*\d)?[\s\-]+",
-    re.I,
-)
-
-
-def motiv_kuerzel_raus(name: str, *, kurz: bool = False) -> str:
-    """'KCH Kontrolluntersuchung' -> 'Kontrolluntersuchung'.
-
-    ``kurz=True`` nimmt bei Schraegstrich nur den ersten Teil
-    ('akute Beschwerden/Notfall' -> 'akute Beschwerden'), wie die alte
-    Bianca. Am ganzen Satz bleibt der Schraegstrich stehen.
-    """
-    text = _s(name)
-    if not text:
-        return ""
-    text = _MOTIV_KUERZEL_RE.sub("", text).strip()
-    if kurz and "/" in text:
-        text = text.split("/", 1)[0].strip()
-    return text or _s(name)
-
 
 def _s(v: Any) -> str:
     return " ".join(str(v or "").split()).strip()
@@ -269,48 +246,6 @@ def _betrag_gesprochen(n: int) -> str:
     return "ein" if n == 1 else betrag_wort(n)
 
 
-_ZIF_WORT = (
-    "null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun",
-)
-# Rohziffern an Qwen3 = Kauderwelsch (06.09.2026). Gesprochen wird
-# Ziffer fuer Ziffer in Gruppen, wie bianca.telefon.sprechbar.
-_RUF_RE = re.compile(
-    r"(?<![\d])(?:\+ ?49[\s/-]*|0049[\s/-]*)?"
-    r"0?[1-9]\d(?:[\s/-]?\d){7,12}(?![\d])"
-)
-
-
-def _ruf_worte(nummer: str) -> str:
-    d = "".join(c for c in nummer if c.isdigit())
-    if d.startswith("49") and len(d) >= 11:
-        d = "0" + d[2:]
-    if not (d.startswith("0") and 10 <= len(d) <= 13):
-        return nummer
-    try:
-        from bianca import telefon as tel
-        return tel.sprechbar(d)
-    except Exception:
-        kopf = 4 if d.startswith("01") and len(d) >= 11 else min(4, len(d))
-        teile = [d[:kopf]]
-        rest = d[kopf:]
-        while rest:
-            n = 3 if len(rest) % 2 == 1 else 2
-            teile.append(rest[:n])
-            rest = rest[n:]
-        return ", ".join(" ".join(_ZIF_WORT[int(c)] for c in g) for g in teile if g)
-
-
-def _ersetze_rufnummern(text: str) -> str:
-    def _eins(m: re.Match[str]) -> str:
-        worte = _ruf_worte(m.group(0))
-        if worte == m.group(0):
-            return m.group(0)
-        if m.start() > 0 and text[m.start() - 1] not in " \n\t([":
-            return " " + worte
-        return worte
-    return _RUF_RE.sub(_eins, text)
-
-
 def _ersetze_euro(text: str) -> str:
     def spanne(mo: re.Match) -> str:
         a = int(mo.group(1).replace(".", ""))
@@ -368,38 +303,6 @@ def _mit_praeposition(kern: str, praep: str) -> str:
     return f"{praep or 'am'} {kern}"
 
 
-def ansage_woche(iso: str, *, heute: date | None = None) -> str:
-    """Chef 20.09.2026: ohne 1./2./3., Woche statt morgen/übermorgen.
-
-    dieselbe Woche  -> 'diesen Mittwoch um zehn Uhr zehn'
-    nächste Woche   -> 'nächsten Montag um neun Uhr fünfzehn'
-    später          -> 'Montag, den fünften Oktober um neun Uhr'
-    heute           -> 'heute um …' (klarer als 'diesen Sonntag')
-    """
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})", _s(iso))
-    if not m:
-        return slot_wort(iso, heute=heute)
-    d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    uhr = zeit_wort(int(m.group(4)), int(m.group(5)))
-    ref = heute or datetime.now(TZ).date()
-    wt = _WOCHENTAG[d.weekday()]
-    if d == ref:
-        return f"heute um {uhr}"
-    diese_mo = ref - timedelta(days=ref.weekday())
-    slot_mo = d - timedelta(days=d.weekday())
-    wochen = (slot_mo - diese_mo).days // 7
-    if wochen <= 0:
-        return f"diesen {wt} um {uhr}"
-    if wochen == 1:
-        return f"nächsten {wt} um {uhr}"
-    # Schon gesprochen — nie "Montag den 12.10.", sonst verdoppelt sanitize
-    # den Wochentag und klebt "Oktoberum" (Live 41352183).
-    kern = f"{wt}, den {_ORDINAL.get(d.day, str(d.day))} {_MONAT[d.month]}"
-    if d.year != ref.year:
-        kern += f" {d.year}"
-    return f"{kern} um {uhr}"
-
-
 def slot_wort(iso: str, *, heute: date | None = None) -> str:
     """'2026-08-27T09:15' -> 'morgen um neun Uhr fünfzehn'."""
     m = re.match(r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})", _s(iso))
@@ -451,59 +354,23 @@ def _ersetze_zeiten(text: str, heute: date | None = None) -> str:
     def stunde(mo: re.Match) -> str:
         return zeit_wort(int(mo.group(1)), 0)
 
-    def wt_den_d(mo: re.Match) -> str:
-        jahr = mo.group(4) or str((heute or datetime.now(TZ).date()).year)
-        tag = tag_wort(jahr, mo.group(3), mo.group(2), heute=heute)
-        if not tag:
-            return mo.group(0)
-        wt = mo.group(1)
-        # tag_wort liefert "Donnerstag, den zehnten September" oder "morgen".
-        if "," in tag:
-            return tag
-        return f"{wt}, {tag}" if tag not in {"heute", "morgen", "übermorgen"} else tag
-
     out = text
     out = re.sub(r"\b(am\s+|vom\s+|zum\s+|f(?:ü|ue)r\s+den\s+)?(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::\d{2})?(?:[+-]\d{2}:?\d{2}|Z)?", iso_dt, out)
     out = re.sub(r"\b(am\s+|vom\s+|zum\s+|f(?:ü|ue)r\s+den\s+)?(\d{4})-(\d{2})-(\d{2})\b", iso_d, out)
     # "9.30 Uhr" (Punkt-Schreibweise) MUSS vor der Datums-Regel laufen,
     # sonst würde "9.12 Uhr" als 9. Dezember gelesen.
-    out = re.sub(r"\b(\d{1,2})\.(\d{2})\s*uhr\b", punkt_zeit, out, flags=re.I)
-    # "Montag den 12.10." / "Dienstag 22.09." ist EIN Datum —
-    # nicht noch einmal "am Montag" davorsetzen.
-    out = re.sub(
-        r"\b(Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag)"
-        r",?\s+(?:den\s+)?(\d{1,2})\.\s?(\d{1,2})\.(?:\s?(\d{4}))?",
-        wt_den_d,
-        out,
-        flags=re.I,
-    )
-    # \s? nur zusammen mit der Jahreszahl, sonst frisst es das Leerzeichen
-    # vor "um" ("Oktoberum neun Uhr", Live 41352183).
-    out = re.sub(
-        r"\b(am\s+|vom\s+|zum\s+)?(\d{1,2})\.\s?(\d{1,2})\.(?!\s*uhr\b)(?:\s?(\d{4}))?",
-        de_d,
-        out,
-        flags=re.I,
-    )
+    out = re.sub(r"\b(\d{1,2})\.(\d{2})\s*Uhr\b", punkt_zeit, out)
+    out = re.sub(r"\b(am\s+|vom\s+|zum\s+)?(\d{1,2})\.\s?(\d{1,2})\.(?!\s*Uhr\b)\s?(\d{4})?", de_d, out)
     # "14. November" -> "vierzehnten November" (Ziffer vor Monatsnamen)
     out = re.sub(
         r"\b(\d{1,2})\.\s*(Januar|Februar|März|Maerz|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\b",
         monat_datum, out,
     )
-    # "09:15 Uhr" und "09:15" — Semikolon wie Parakeet 9;30
-    out = re.sub(r"\b(\d{1,2})[:;](\d{2})\s*uhr\b", uhrzeit, out, flags=re.I)
-    out = re.sub(r"\b(\d{1,2})[:;](\d{2})\b", uhrzeit, out)
+    # "09:15 Uhr" und "09:15"
+    out = re.sub(r"\b(\d{1,2}):(\d{2})\s*Uhr\b", uhrzeit, out)
+    out = re.sub(r"\b(\d{1,2}):(\d{2})\b", uhrzeit, out)
     # "15 Uhr" -> "fünfzehn Uhr"
-    out = re.sub(r"\b(\d{1,2})\s*uhr\b", stunde, out, flags=re.I)
-
-    def uhr_minute_wort(mo: re.Match) -> str:
-        mm = int(mo.group(1))
-        if 0 <= mm <= 59:
-            return f"Uhr {_zahl(mm)}"
-        return mo.group(0)
-
-    # "neun Uhr 30" nach der Stunden-Umwandlung → "neun Uhr dreißig"
-    out = re.sub(r"\buhr\s+(\d{1,2})\b", uhr_minute_wort, out, flags=re.I)
+    out = re.sub(r"\b(\d{1,2})\s*Uhr\b", stunde, out)
     return out
 
 
@@ -512,32 +379,16 @@ def _scrub_tech(text: str) -> str:
     return _s(out.replace("()", "").replace("( )", ""))
 
 
-# Chef 08.09.2026: Das Wort "Krebs" wird am Telefon nicht gesagt.
-# Live Blessing 15.09.2026 zeigte aber die teure Nebenwirkung der pauschalen
-# Ersetzung: "Hautkrebs-Screening" wurde als "Kontrolle" vorgelesen. Der
-# Anrufer widersprach, obwohl intern bereits das richtige Screening-Motiv
-# gewählt war. Spezifische Haut-Vorsorge bleibt deshalb spezifisch, nur das
-# belastete Wort fällt: Hautscreening/Hautvorsorge statt Kontrolle.
+# Chef 08.09.2026: Krebs wird am Telefon nie gesagt — immer Kontrolle.
 _KREBS_TOKEN_RE = re.compile(r"[A-Za-zÄÖÜäöüß\-]*[Kk]rebs[A-Za-zÄÖÜäöüß\-]*")
-_HAUTKREBS_SPEZIFISCH = (
-    (re.compile(r"\bHautkrebs[\s-]*Screening\b", re.I), "Hautscreening"),
-    (re.compile(r"\bHautkrebsscreening\b", re.I), "Hautscreening"),
-    (re.compile(r"\bHautkrebs[\s-]*Vorsorge\b", re.I), "Hautvorsorge"),
-    (re.compile(r"\bHautkrebsvorsorge\b", re.I), "Hautvorsorge"),
-    (re.compile(r"\bHautkrebs[\s-]*Untersuchung\b", re.I), "Hautuntersuchung"),
-    (re.compile(r"\bHautkrebsuntersuchung\b", re.I), "Hautuntersuchung"),
-)
 
 
 def ohne_krebs(text: str) -> str:
-    """Krebswort entfernen, ohne ein konkretes Hautscreening umzubenennen."""
+    """Hautkrebsscreening / Krebs → Kontrolle. Interner Motivname darf bleiben."""
     roh = _s(text)
     if not roh or "krebs" not in roh.lower():
         return roh
-    out = roh
-    for cre, ersatz in _HAUTKREBS_SPEZIFISCH:
-        out = cre.sub(ersatz, out)
-    out = _KREBS_TOKEN_RE.sub("Kontrolle", out)
+    out = _KREBS_TOKEN_RE.sub("Kontrolle", roh)
     out = re.sub(r"\bzum\s+Kontrolle\b", "zur Kontrolle", out, flags=re.I)
     out = re.sub(r"\bden\s+Kontrolle\b", "die Kontrolle", out, flags=re.I)
     out = re.sub(r"\bein\s+Kontrolle\b", "eine Kontrolle", out, flags=re.I)
@@ -552,7 +403,6 @@ def sanitize(text: str, *, heute: date | None = None) -> str:
         return ""
     for cre, ersatz in _ABK:
         roh = cre.sub(ersatz, roh)
-    roh = motiv_kuerzel_raus(roh)
     roh = _s(roh)
     saetze = [_s(s) for s in _SATZ.split(roh) if _s(s)]
     ohne_tech = [s for s in saetze if not _TECH.search(s)]
@@ -566,7 +416,6 @@ def sanitize(text: str, *, heute: date | None = None) -> str:
     # Euro VOR den Zeit-/Datumsregeln: danach sind die Ziffern schon Worte
     # und keine Datumsregel kann einen Preis mehr zerlegen.
     out = _ersetze_euro(out)
-    out = _ersetze_rufnummern(out)
     out = _ersetze_zeiten(out, heute)
     out = re.sub(r"\s+([.,;:!?])", r"\1", out)
     out = re.sub(r"\(\s*\)", "", out)

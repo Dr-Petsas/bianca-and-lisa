@@ -68,24 +68,15 @@ def _token_ziffern(tok: str) -> str:
 # Parakeet-Salat auf Zahlwörter (Chef 30.08.2026: Diktat kam oft ohne
 # eine einzige erkennbare Ziffer an). Nur eindeutige Hörfehler — "oh ja"
 # bleibt ein einzelnes "null" und wird ohne 10 Stellen nie zur Nummer.
-# "nein" wird NIE zu "neun" — das ist auf dem Readback ein Nein.
 _STT_TAUSCH = (
     (re.compile(r"\bnol+\b", re.I), "null"),
     (re.compile(r"\bnoll\b", re.I), "null"),
-    (re.compile(r"\bnohl\b", re.I), "null"),
-    (re.compile(r"\bohh+\b", re.I), "null"),
     (re.compile(r"\boh\b", re.I), "null"),
     (re.compile(r"\bo\b", re.I), "null"),
-    (re.compile(r"\bzero\b", re.I), "null"),
     (re.compile(r"\bseven\b", re.I), "sieben"),
     (re.compile(r"\beight\b", re.I), "acht"),
     (re.compile(r"\bnine\b", re.I), "neun"),
     (re.compile(r"\bfive\b", re.I), "fünf"),
-    (re.compile(r"\bone\b", re.I), "eins"),
-    (re.compile(r"\btwo\b", re.I), "zwei"),
-    (re.compile(r"\bthree\b", re.I), "drei"),
-    (re.compile(r"\bfour\b", re.I), "vier"),
-    (re.compile(r"\bsix\b", re.I), "sechs"),
 )
 
 
@@ -177,25 +168,6 @@ def plausibel(nummer: str) -> bool:
     return d.startswith("0") and 10 <= len(d) <= 13
 
 
-def plausibel_kurz(nummer: str) -> bool:
-    """Wie `plausibel`, laesst aber auch neunstellige Festnetznummern zu
-    (kleine Ortsnetze: 07129 5316). Nur fuer ein AUSDRUECKLICH beendetes
-    Diktat ("fertig", "ja, das war's") — Replay 53986f42 z19-z21: neun
-    Ziffern lagen im Fragment, der Anrufer sagte "Ja.", die Nummer fiel weg
-    und die Praxis konnte nicht zurueckrufen."""
-    d = mit_fuehrender_null(nummer)
-    return d.startswith("0") and 9 <= len(d) <= 13
-
-
-def ist_handy(nummer: str) -> bool:
-    """Deutsche Mobilfunknummer? (015x/016x/017x, auch als +49…)
-
-    Gebraucht fuer die Akten-Nummer: eine Bestaetigungs-SMS ans Festnetz
-    kommt nie an, und die Plattform verlangt zum Buchen ein Handy."""
-    d = mit_fuehrender_null(nummer)
-    return d.startswith(("015", "016", "017")) and 10 <= len(d) <= 13
-
-
 def aus_satz(text: str) -> str:
     """Beste Telefonnummer aus dem Satz — '' wenn nichts Plausibles."""
     kette = ziffern(text)
@@ -230,34 +202,3 @@ def sprechbar(nummer: str) -> str:
     for g in _gruppen(d):
         gruppen.append(" ".join(_ZIFFER_WORT[int(c)] for c in g))
     return ", ".join(gruppen)
-
-
-# Parakeet-Hotwords nur auf der Nummernfrage. Behandler-Namen würden
-# "Petsas" in die Ziffernkette ziehen; "nine" auf dem Readback würde
-# "nein" verschlucken. TTS bleibt bei "zwei", nie "zwo".
-_STT_ZIFFER = (
-    "null", "eins", "zwei", "zwo", "drei", "vier", "fünf", "fuenf",
-    "sechs", "sieben", "acht", "neun",
-    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
-    "doppel", "hundert", "sechshundert", "fertig",
-)
-_STT_CHECK = (
-    "ja", "nein", "nee", "jawohl", "genau", "richtig", "stimmt",
-    "korrekt", "passt", "falsch",
-)
-# Nacktes "neun"/"nine" auf dem Readback ist ein verhörtes Nein, keine
-# Ziffer. Eine echte Neun-Korrektur braucht mehr Satz
-# ("die letzte war eine neun").
-_CHECK_NUR_NEUN_RE = re.compile(r"^\W*(?:neun|nine)\W*$", re.I)
-
-
-def stt_hotwords(*, check: bool = False) -> list[str]:
-    """Vokabular für Parakeet: Diktat nur Ziffern, Readback Ja/Nein zuerst."""
-    if check:
-        return list(_STT_CHECK) + [w for w in _STT_ZIFFER if w != "nine"]
-    return list(_STT_ZIFFER) + ["nine"]
-
-
-def check_ist_nein(text: str) -> bool:
-    """Readback: nacktes 'neun'/'nine' zählt als Nein, nicht als Ziffer 9."""
-    return bool(_CHECK_NUR_NEUN_RE.match(_s(text)))

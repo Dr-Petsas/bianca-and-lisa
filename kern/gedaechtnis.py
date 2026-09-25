@@ -504,6 +504,11 @@ def zeile_inhaltlich(text: Any) -> bool:
         return False
     if _KONTEXT_MUELL_RE.search(zeile):
         return False
+    # Team-Notiz: der Kalender schreibt freie Texte (Sprache, Behandler,
+    # Besonderheit). Die stehen als "(noch offen)" im Rückrufer-Kontext und
+    # dürfen nicht am Stichwortfilter hängen bleiben.
+    if "(noch offen)" in zeile.casefold():
+        return True
     return bool(_KONTEXT_INHALT_RE.search(zeile))
 
 
@@ -597,6 +602,19 @@ def ereignisse_holen(telefon: str, name: str, client_id: str = "") -> list[dict[
     return out
 
 
+def _innerhalb_themafenster(e: dict) -> bool:
+    try:
+        ts = float(e.get("ts") or 0)
+    except (TypeError, ValueError):
+        return False
+    if ts <= 0:
+        return False
+    if ts < 1e12:
+        ts *= 1000.0
+    age = time.time() * 1000.0 - ts
+    return 0 <= age <= _THEMA_TAGE_MS
+
+
 def _event_ist_themenotiz(e: dict) -> bool:
     """Offen ODER frische Empfangs-/Lisa-Notiz mit Rückruf-Thema."""
     if not isinstance(e, dict):
@@ -619,20 +637,15 @@ def _event_ist_themenotiz(e: dict) -> bool:
         )
     if st not in {"", "none"}:
         return False
+    # Kalender-Team-Notiz ohne Schalter (status=none). Freitext zählt,
+    # auch ohne Rückruf-Stichwort. Andere Kanäle bleiben bei der engen Regel.
+    if kanal == "frontdesk" and summ and _innerhalb_themafenster(e):
+        return True
     if not summ or not _THEMA_RE.search(summ):
         return False
     if kanal and kanal not in _THEMA_KANAL:
         return False
-    try:
-        ts = float(e.get("ts") or 0)
-    except (TypeError, ValueError):
-        return False
-    if ts <= 0:
-        return False
-    if ts < 1e12:
-        ts *= 1000.0
-    age = time.time() * 1000.0 - ts
-    return 0 <= age <= _THEMA_TAGE_MS
+    return _innerhalb_themafenster(e)
 
 
 def _kontext_stand(telefon: str, name: str, client_id: str = "") -> tuple[str, list[str]]:
@@ -879,7 +892,11 @@ def kontext_block(sit: dict) -> str:
     text = _s_mehrzeilig(sit.get("gedaechtnis"))
     if not text:
         return ""
-    return f"\nPRAXISGEDÄCHTNIS (frühere Kontakte)\n{text}\n"
+    return (
+        f"\nPRAXISGEDÄCHTNIS (frühere Kontakte)\n{text}\n"
+        "Das sind Notizen des Praxisteams. Wende sie in diesem Gespräch an "
+        "(Sprache, Behandler, Besonderheiten). Erfinde nichts darüber hinaus.\n"
+    )
 
 
 def _s_mehrzeilig(v: Any) -> str:

@@ -136,10 +136,6 @@ UNKLAR_AUSWAHL_ANTWORT = (
 UNKLAR_AUSWAHL_OHNE_MITARBEITER = (
     "Geht es um einen Termin oder um eine Auskunft zur Praxis?"
 )
-KOMPAKT_JOBFRAGE = (
-    "Geht es um einen Termin, eine Absage, eine Verschiebung oder eine "
-    "Terminauskunft?"
-)
 
 _STOP = frozenset((
     "nicht", "haben", "hatte", "hatten", "haette", "hätte", "haetten", "hätten",
@@ -154,7 +150,6 @@ _STOP = frozenset((
     "natuerlich", "irgendwie", "jedenfalls", "übrigens", "uebrigens",
     "sowieso", "genau", "richtig", "stimmt", "danke", "gerne", "bitte",
     "hallo", "super", "prima", "klasse", "perfekt", "wunderbar", "passt",
-    "passen", "gepasst", "passend",
     "alles", "nichts", "etwas", "okay", "wiederhören", "wiederhoeren",
     "tschüss", "tschuess", "entschuldigung", "verzeihung", "moment",
     "sekunde", "augenblick", "sonst", "trotzdem", "sicher", "bisschen",
@@ -172,17 +167,18 @@ def _s(v: Any) -> str:
 
 
 def unklar_antwort(text: str) -> str:
-    """Unverständliches nicht zurücksprechen.
-
-    Der Verhörer wird sonst zur Tatsache: Bianca liest den Müll vor, und
-    der Anrufer muss ihn korrigieren. Eine kurze offene Frage zum Anliegen
-    reicht. Der gehörte Text bleibt nur im Protokoll.
-    """
-    if not _s(text).strip(" \t\r\n.!?…"):
+    """Unverständliches Gehörtes wörtlich spiegeln statt Bedeutung erfinden."""
+    gehoert = _s(text).strip(" \t\r\n.!?…")
+    if not gehoert:
         return UNKLAR_ANTWORT
+    # Kein langer STT-Absatz im Mund; die Unklar-Wache liefert regulär nur
+    # kurze Schnipsel. Der Deckel ist das Sicherheitsnetz für Alt-Sitzungen.
+    if len(gehoert) > 70:
+        gehoert = gehoert[:67].rstrip() + "…"
+    gehoert = gehoert.replace("„", "").replace("“", "").replace('"', "")
     return (
-        "Das habe ich akustisch nicht sicher mitbekommen. "
-        "Wobei darf ich Ihnen helfen?"
+        f"Ich habe „{gehoert}“ verstanden. Was meinen Sie damit? "
+        "Meinen Sie vielleicht etwas anderes?"
     )
 
 
@@ -193,71 +189,10 @@ def unklar_auswahl_antwort(tenant: dict | None = None) -> str:
     return UNKLAR_AUSWAHL_ANTWORT
 
 
-def kompakt_aktiv(sit: dict) -> bool:
-    """Mandantenschalter: freies Talk-Geschwätz durch eine Jobfrage ersetzen."""
-    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-    return tenant.get("gespraechKompakt") is True
-
-
-def _eine_frage(text: str) -> str:
-    """Eine offene Maschinenfrage nie als Zwei-Fragen-Sermon ausgeben."""
-    text = _s(text)
-    if not text:
-        return ""
-    if "?" in text:
-        return text.split("?", 1)[0].rstrip() + "?"
-    return text.rstrip(".! ") + "?"
-
-
-def kompakt_unklar(sit: dict, *, offene_frage: str = "") -> str:
-    """Kurzer STT-Schnipsel: eine zielgerichtete Frage, kein Echo des Mülls."""
-    if not kompakt_aktiv(sit):
-        return ""
-    return _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
-
-
-def gruss_passend(text: str) -> str:
-    """Der Gruss, den der Anrufer selbst gewaehlt hat, kommt zurueck —
-    "Guten Morgen!" auf "guten Morgen" (Replay 53986f42 z01: Bianca sagte
-    um acht Uhr frueh "Guten Tag."); sonst "Guten Tag."."""
-    low = _s(text).lower()
-    if "morgen" in low:
-        return "Guten Morgen."
-    if "abend" in low:
-        return "Guten Abend."
-    return "Guten Tag."
-
-
-def kompakt_jobfrage(
-    sit: dict,
-    *,
-    offene_frage: str = "",
-    begruessen: bool = False,
-    gesagt: str = "",
-) -> str:
-    """Talk ist für diesen Mandanten aus; der Auftrag bekommt sofort den Floor."""
-    frage = _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
-    return f"{gruss_passend(gesagt)} {frage}" if begruessen else frage
-
-
-# Zahlwoerter sind nie Gespraechsstoff: "Fünf, drei, eins, sechs." ist ein
-# Nummern-Diktat (Replay 53986f42 z20 — "sechs" galt als Inhaltswort, der Zug
-# lief als Talk-Thema ans Modell statt in den Nummern-Schritt).
-_ZAHLWORT_RE = re.compile(
-    r"^(?:"
-    r"(?:ein|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun)?(?:und)?"
-    r"(?:zwanzig|drei(?:ß|ss)ig|vierzig|f(?:ü|ue)nfzig|sechzig|siebzig|achtzig|neunzig)"
-    r"|elf|zw(?:ö|oe)lf|dreizehn|vierzehn|f(?:ü|ue)nfzehn|sechzehn|siebzehn|achtzehn|neunzehn"
-    r"|null|eins|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun|zehn|hundert|tausend"
-    r")$"
-)
-
-
 def _inhaltsworte(low: str) -> set[str]:
-    """Inhaltswoerter (>= 5 Zeichen) ohne Fuell-, Zahl- und Job-Vokabular."""
+    """Inhaltswoerter (>= 5 Zeichen) ohne Fuell- und Job-Vokabular."""
     worte = re.findall(r"[a-zäöüß]{5,}", low)
-    return {w for w in worte
-            if w not in _STOP and not _JOB_RE.fullmatch(w) and not _ZAHLWORT_RE.match(w)}
+    return {w for w in worte if w not in _STOP and not _JOB_RE.fullmatch(w)}
 
 
 def ist_user_pull(text: str) -> bool:
@@ -543,6 +478,69 @@ _SCHUTZ = (
     "du ruhig erklaeren. Keine Werkzeugnamen, keine Regieanweisungen."
 )
 
+# Bianca und Ben: Smalltalk nur als Reaktion. Kein Vortrag aus einem Namen.
+_SCHUTZ_REAKTION = (
+    "Dabei gilt: nichts erfinden — keine Termine, freien Zeiten, Zusagen oder "
+    "Erledigungen aus dem Kopf, Preise NUR aus ZAHNMEDIZIN UND PREISE. Keine "
+    "Diagnosen und keine individuellen Heilaussagen. Kein eigenes Thema, "
+    "kein Film, keine Geschichte, kein Witz und keine berühmte Person. "
+    "Keine Werkzeugnamen, keine Regieanweisungen."
+)
+
+_UNGEFRAGT_RE = re.compile(
+    r"\b(?:"
+    r"kinofilm\w*|spielfilm\w*|horrorfilm\w*|filme?|"
+    r"kino|verfilm\w*|hollywood|netflix|"
+    r"schl[aä]chter\w*|schaechter\w*|lecter|"
+    r"kannibal\w*|kanibal\w*|feldherr\w*|karthago|"
+    r"movies?|butchers?"
+    r")\b",
+    re.I,
+)
+
+
+def nur_reaktion() -> bool:
+    """Bianca/Ben plaudern nicht aus eigenem Antrieb. Notaus: SMALLTALK_BREMSE=0."""
+    return os.environ.get("SMALLTALK_BREMSE", "1").strip().lower() not in (
+        "0", "false", "no",
+    )
+
+
+def _ungefragt_familie(token: str) -> str:
+    t = token.casefold()
+    if "film" in t or t in {"kino", "hollywood", "netflix", "movie", "movies"} or t.startswith("verfilm"):
+        return "film"
+    if t.startswith(("schlächter", "schlaechter", "schlachter", "schaechter", "butcher")):
+        return "schlaechter"
+    if "kannibal" in t or "kanibal" in t or t == "lecter" or t.startswith("feldherr") or t == "karthago":
+        return "figur"
+    return t
+
+
+def ungefragt_streichen(antwort: str, nutzer: str) -> tuple[str, list[str]]:
+    """Film, Schlächter, berühmte Figur: nur stehen lassen, wenn der Anrufer
+    dasselbe selbst gesagt hat. Ein gehörter Name ist keine Einladung."""
+    text = _s(antwort)
+    if not text or not nur_reaktion():
+        return text, []
+    erlaubt = {_ungefragt_familie(m.group(0)) for m in _UNGEFRAGT_RE.finditer(_s(nutzer))}
+    behalten: list[str] = []
+    weg: list[str] = []
+    for satz in re.split(r"(?<=[.!?])\s+", text):
+        familien = {_ungefragt_familie(m.group(0)) for m in _UNGEFRAGT_RE.finditer(satz)}
+        if familien - erlaubt:
+            weg.append(satz.strip())
+        elif satz.strip():
+            behalten.append(satz.strip())
+    return _s(" ".join(behalten)), weg
+
+
+def reaktion_budget(floor_name: str) -> dict[str, Any]:
+    """Kurze Reaktion statt Vortrag. {} auf dem Job-Floor und bei Notaus."""
+    if not nur_reaktion() or floor_name not in (TALK, BLENDED, ZURUECK):
+        return {}
+    return {"max_tokens": 80, "temperature": 0.3}
+
 
 def plan_block(route: dict, *, offene_frage: str = "", stimme: str = "bianca") -> str:
     """GESPRAECHSLAGE-Block fuer den Systemprompt — '' auf dem Job-Floor."""
@@ -554,7 +552,17 @@ def plan_block(route: dict, *, offene_frage: str = "", stimme: str = "bianca") -
         ziel_satz = "deinem Auftrag"
     else:
         ziel_satz = "der Frage, was du sonst noch fuer den Anrufer tun kannst"
+    reaktion = stimme != "lisa" and nur_reaktion()
+    schutz = _SCHUTZ_REAKTION if reaktion else _SCHUTZ
     if f == TALK and thema:
+        if reaktion:
+            return (
+                "GESPRÄCHSLAGE (dieser Block geht der Zwei-Satz-Regel vor): "
+                f"\u201e{thema}\u201c hat der Anrufer gesagt. Reagiere nur darauf, "
+                "in einem kurzen Satz. Du eröffnest nichts darüber hinaus. "
+                "KEINE Terminfrage in diesem Zug. "
+                + schutz
+            )
         return (
             "GESPRÄCHSLAGE (dieser Block geht der Zwei-Satz-Regel vor): "
             f"Der Gespraechspartner hat \u201e{thema}\u201c auf den Tisch gelegt — geh JETZT "
@@ -567,22 +575,29 @@ def plan_block(route: dict, *, offene_frage: str = "", stimme: str = "bianca") -
             "fuenf Saetze, gern eine echte Rueckfrage zum Thema. "
             + ("Der Auftrag bleibt bestehen: wiederhole ihn nicht, vergiss ihn nicht. "
                if stimme == "lisa" else "")
-            + _SCHUTZ
+            + schutz
         )
     if f == BLENDED and thema:
+        if reaktion:
+            return (
+                "GESPRÄCHSLAGE: "
+                f"\u201e{thema}\u201c kam vom Anrufer. Höchstens ein kurzer Satz "
+                "als Reaktion, ohne ein neues Thema. Danach im selben Zug "
+                f"weiter mit {ziel_satz}. " + schutz
+            )
         return (
             "GESPRÄCHSLAGE: Der Gespraechspartner hat nebenbei "
             f"\u201e{thema}\u201c erwaehnt — wuerdige das ZUERST in ein bis zwei warmen, "
             "konkreten Saetzen (nicht nachplappern, nicht abbuegeln). Danach im "
             f"SELBEN Zug natuerlich weiter mit {ziel_satz} — neu formuliert, "
-            "nie wortgleich wie zuvor. " + _SCHUTZ
+            "nie wortgleich wie zuvor. " + schutz
         )
     if f == ZURUECK and thema:
         return (
             f"GESPRÄCHSLAGE: Das Thema \u201e{thema}\u201c ist besprochen. Verbinde es in "
             f"EINEM Halbsatz mit {ziel_satz} — ueber Nutzen oder Zeitbezug, nie "
             "\u201eSo, zurueck zu\u201c. Danach stellst du genau diese offene Frage, "
-            "freundlich und in NEUEN Worten. " + _SCHUTZ
+            "freundlich und in NEUEN Worten. " + schutz
         )
     return ""
 

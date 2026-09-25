@@ -125,30 +125,18 @@ def set_voice(voice_id: str, name: str = "") -> None:
         _VOICE_NAME = sauber_name
 
 
-# Stimme pro ANRUF (W-STIMME-MANDANT 15.09.2026): die Praxis Ruether spricht
-# maennlich ("ben"), MedDent/Thaler/Blessing weiter "bianca" — ein Prozess,
-# zwei Stimmen. Contextvar statt Parameter, weil TTS aus rund 40 Stellen
-# gerufen wird (Fueller, Vorab-Saetze, Readbacks, Warm-Lauf) und die meisten
-# den Mandanten nicht kennen. Feeder-/Hintergrund-FAEDEN muessen mit
-# contextvars.copy_context().run(...) starten, sonst sprechen sie den
-# Prozess-Default.
-#
-# NICHT gesetzt => leer => Prozess-Default: byte-identisches Verhalten von
-# vor dem 15.09.2026 (und damit fuer alle drei Live-Praxen).
+# Stimme pro ANRUF (W-STIMME-MANDANT): Ruether spricht "ben",
+# MedDent/Thaler/Blessing bleiben beim Prozess-Default "bianca".
 _STIMME_JETZT: contextvars.ContextVar[str] = contextvars.ContextVar(
     "tts_stimme", default="",
 )
 
 
 def stimme_jetzt() -> str:
-    """Der lokale Stimmname, der GERADE gilt (Anruf-Stimme oder Prozess)."""
     return _STIMME_JETZT.get() or _VOICE_NAME
 
 
 def stimme_setzen(name: str) -> object:
-    """Stimme fuer diesen Kontext setzen; gibt das Token zum Zuruecksetzen.
-
-    Leerer Name = Prozess-Default (kein Override)."""
     return _STIMME_JETZT.set(" ".join(str(name or "").split()).strip().lower())
 
 
@@ -161,7 +149,6 @@ def stimme_zuruecksetzen(token: object) -> None:
 
 @contextlib.contextmanager
 def stimme(name: str):
-    """``with tts.stimme("ben"): ...`` — fuer Warm-Lauf und Proben."""
     token = stimme_setzen(name)
     try:
         yield
@@ -301,8 +288,6 @@ def _lokal_schluessel(sauber: str) -> str:
     # TTS_BASE gehoert in den Schluessel: Chatterbox (:8210) und CosyVoice
     # (:8211) sind beide "lokal" — ohne Basis im Key wuerde ein Engine-Wechsel
     # alte Fueller aus dem Cache der anderen Stimme abspielen.
-    # Der Stimmname steht IM Schluessel: Ben und Bianca teilen denselben
-    # RAM-/Platten-Cache, duerfen sich aber nie hoeren (Chef-Abnahme 28.08.).
     return f"lokal|{TTS_BASE}|{stimme_jetzt()}|{sauber}"
 
 

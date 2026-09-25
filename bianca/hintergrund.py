@@ -213,7 +213,9 @@ def kartei_anstossen(sit: dict) -> None:
                         s["vornameQuelle"] = "akte"
                         s["vornameCheck"] = ""
                 # Kartei-Geschlecht schlaegt die Vornamen-Schaetzung (29.08.2026).
-                if _s(pat.get("gender")):
+                # Eine ausgesprochene Korrektur im laufenden Anruf bleibt stehen
+                # und wird nicht von der alten Akte zurueckgeschrieben.
+                if _s(pat.get("gender")) and s.get("geschlechtQuelle") != "gesagt":
                     s["geschlecht"] = _s(pat.get("gender")).lower()
                     s["geschlechtQuelle"] = "akte"
                     s["geschlechtUnklar"] = False

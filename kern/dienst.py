@@ -27,23 +27,13 @@ from kern.config import WRITE_LIVE
 
 
 def faden(ziel: Callable, *a, **kw) -> threading.Thread:
-    """Daemon-Faden, der den KONTEXT mitnimmt (W-STIMME-MANDANT 15.09.2026).
-
-    Ein frischer ``threading.Thread`` startet mit LEEREM Contextvar-Kontext —
-    die Anruf-Stimme (``tts.stimme_jetzt()``) waere dort der Prozess-Default.
-    Live hiesse das: Ben begruesst maennlich, und der erste Vorab-Satz,
-    Fueller oder Stream-Feeder antwortet mit Biancas Stimme. Deshalb laufen
-    ALLE sprechenden Faeden dieses Moduls hierdurch.
-    """
+    """Daemon-Faden, der den TTS-Kontext mitnimmt (W-STIMME-MANDANT)."""
     ctx = contextvars.copy_context()
     return threading.Thread(target=lambda: ctx.run(ziel, *a, **kw), daemon=True)
 
 
 def stimme_aus_sitzung(sit: dict | None) -> object:
-    """Anruf-Stimme aus dem Mandanten setzen; gibt das Reset-Token.
-
-    Ohne Mandanten-Feld ``stimme`` passiert nichts Sichtbares (leerer
-    Override = Prozess-Default) — die drei Live-Praxen bleiben unberuehrt."""
+    """Anruf-Stimme aus dem Mandanten setzen; gibt das Reset-Token."""
     return tts.stimme_setzen(assistent.stimme((sit or {}).get("tenant")))
 
 
@@ -128,10 +118,6 @@ class Dienst:
         # None = Feld fehlt in den Antworten, Dock bleibt bei seinem Default.
         self.stille_fn = stille_fn
         self.audio: dict[str, bytes] = {}
-        # W-STIMME-MANDANT (15.09.2026): die vorgerenderten Saetze liegen JE
-        # STIMME (Schluessel "<stimme>|<text>"). Ein Fueller aus Biancas
-        # Stimme mitten in Bens Anruf war der peinlichste Fall — die
-        # Vorrender-Ablage kannte die Stimme nicht.
         self.filler_urls: dict[str, str] = {}
         self.feste_urls: dict[str, str] = {}
         # Barge-Quittungen (W-BARGE): vorgewärmte "Hm."/"Okay."-URLs, die das
@@ -386,11 +372,8 @@ class Dienst:
     # Die Audios kommen aus dem Platten-Cache (.data/tts-cache) — nur beim
     # allerersten Start (oder nach Stimmen-/Engine-Wechsel) wird synthetisiert.
 
-    # ---- Vorgerenderte Saetze je Stimme ------------------------------------
-
     def stimmen_im_haus(self) -> list[str]:
-        """Alle Stimmen, die dieser Prozess sprechen kann: Prozess-Default
-        (leerer Schluessel) plus jede Mandanten-Stimme aus tenants/*.json."""
+        """Prozess-Default plus jede Mandanten-Stimme (z. B. ben)."""
         raus = [""]
         try:
             for info in tenants.liste():
@@ -402,15 +385,12 @@ class Dienst:
         return raus
 
     def vorab_ablegen(self, text: str, url: str) -> None:
-        """Vorgerenderte URL fuer ``text`` in der GERADE gesetzten Stimme."""
         self.filler_urls[f"{tts.stimme_jetzt()}|{text}"] = url
 
     def vorab_url(self, text: str) -> str:
-        """Vorgerenderte URL fuer ``text`` in der GERADE gesetzten Stimme."""
         return self.filler_urls.get(f"{tts.stimme_jetzt()}|{text}") or ""
 
     def _vorrendern(self, texte, *, ablegen: bool = False) -> list[str]:
-        """Saetze in der GERADE gesetzten Stimme rendern und ablegen."""
         urls: list[str] = []
         for text in texte:
             try:
@@ -460,7 +440,6 @@ class Dienst:
               flush=True)
 
     def quittungen_fuer(self, sit: dict | None = None) -> list[str]:
-        """Quittungs-URLs in der Stimme DIESES Anrufs (Fallback: Prozess)."""
         st = assistent.stimme((sit or {}).get("tenant"))
         return self.quittung_urls.get(st) or self.quittung_urls.get("") or []
 
@@ -503,7 +482,7 @@ class Dienst:
             self._fueller_merken(sit, satz)
             return url
         fallback = filler.satz("allgemein", nr)
-        url = self.vorab_url(fallback)
+        url = self.vorab_url(fallback) or ""
         if url:
             self._fueller_merken(sit, fallback)
         return url
@@ -512,12 +491,8 @@ class Dienst:
 
     def json_antwort(self, sit: dict, *, art: str, text_in: str = "",
                      extra: dict | None = None, melde=None, vorab=None) -> dict[str, Any]:
-        # W-STIMME-MANDANT: ab hier spricht der Mandant mit SEINER Stimme.
-        # Kein try/finally-Reset: die Antwort verlaesst den Kontext ohnehin,
-        # und ein Reset waehrend noch laufender Satz-Faeden koennte ihnen die
-        # Stimme unter den Fuessen wegziehen.
-        stimme_aus_sitzung(sit)
         extra = extra or {}
+        stimme_aus_sitzung(sit)
         sit.pop("_vorabText", None)
         sit.pop("_vorabUrl", None)
         sit.pop("_vorabFifo", None)
@@ -674,7 +649,6 @@ class Dienst:
         Unterbrechungsstelle weitersprechen — deterministisch, ohne LLM.
         None = keine Unterbrechung offen (Aufrufer faellt auf sein
         normales Leer-Verhalten zurueck)."""
-        stimme_aus_sitzung(sit)  # W-STIMME-MANDANT
         text = unterbrechung.wiederaufnahme(sit)
         if not text:
             return None
@@ -733,13 +707,10 @@ class Dienst:
                    stt_blob: bytes | None = None, stt_mime: str = "", stt_name: str = "",
                    barge_url: str = "", barge_ms: float = 0.0, ohr: bool = False):
         """NDJSON: Überbrückungssatz sofort raus, Antwort folgt — nie Stille."""
-        # W-STIMME-MANDANT: VOR allem anderen — Fueller, Vorab-Saetze und der
-        # Stream-Feeder laufen in eigenen Faeden (faden() nimmt den Kontext
-        # mit) und wuerden sonst den Prozess-Default sprechen.
-        stimme_aus_sitzung(sit)
         # Waechter-Spur: frisch je Zug — jeder Waechter meldet sich hinein,
         # die Antwort traegt die Liste additiv als "waechter" (W-BK-3).
         spur.neu(sit)
+        stimme_aus_sitzung(sit)
         sit["_fuellerSaetze"] = []
         # W-BARGE: das Dock meldet, WO es der Stimme ins Wort gefallen ist —
         # daraus entstehen Rest + gestutztes Protokoll, BEVOR der Zug laeuft.
@@ -828,31 +799,36 @@ class Dienst:
                         # Parakeet-Nachkorrektur ("Betsas" -> "Petsas") — plus
                         # die Woerter, die Qwen in frueheren Zuegen dieses Anrufs
                         # richtig hatte (W-QWEN-KORREKTOR: "Röntgenbild").
-                        kw_liste = list(tenants.stt_keywords(sit.get("tenant") or {}))
-                        kw_liste += [w for w in qwen_korrektor.hotwords(sit) if w not in kw_liste]
+                        from kern import ohr
+                        basis = list(tenants.stt_keywords(sit.get("tenant") or {}))
+                        basis += [w for w in qwen_korrektor.hotwords(sit) if w not in basis]
+                        kw_liste = ohr.keywords(sit, basis)
                         kw = ",".join(kw_liste)
 
                         def _qwen_nachtrag(info: dict, _n: int = zug_n) -> None:
+                            info = ohr.lernen_sperren(info, sit)
                             qwen_korrektor.nachtrag(sit, _n, info)
-
-                        # W-QWEN-SICHER: Namensfrage/Diktat/erwartete Antwort
-                        # -> Qwen darf diesen Zug nicht live ueberstimmen.
-                        sperr_grund: list[str] = []
+                            ohr.jobwoerter_vergessen(sit)
 
                         def _qwen_sperre(lokal: str) -> str:
-                            g = qwen_korrektor.live_sperre(sit, lokal)
-                            if g:
-                                sperr_grund.append(g)
-                            return g
+                            return ohr.qwen_live_sperre(sit, lokal)
 
-                        gesagt, stt_info = stt_spur.transcribe(
-                            stt_blob, mime=stt_mime, name=stt_name, keywords=kw,
-                            nachtrag=_qwen_nachtrag, qwen_sperre=_qwen_sperre,
-                        )
+                        _stt_kw = {
+                            "mime": stt_mime,
+                            "name": stt_name,
+                            "keywords": kw,
+                            "nachtrag": _qwen_nachtrag,
+                            "qwen_sperre": _qwen_sperre,
+                        }
+                        try:
+                            gesagt, stt_info = stt_spur.transcribe(stt_blob, **_stt_kw)
+                        except TypeError as exc:
+                            if "qwen_sperre" not in str(exc):
+                                raise
+                            _stt_kw.pop("qwen_sperre", None)
+                            gesagt, stt_info = stt_spur.transcribe(stt_blob, **_stt_kw)
+                        gesagt = ohr.klartext(gesagt)
                         stt_info["zug"] = zug_n
-                        if sperr_grund and isinstance(stt_info.get("qwen"), dict):
-                            stt_info["qwen"]["sperre"] = sperr_grund[0]
-                            spur.merken(sit, "qwen-live-sperre", sperr_grund[0])
                         teile = sit.pop("_sttZugTeile", None)
                         if teile:
                             # W-HALBSATZ: gehaltene Fragmente hatten eigene

@@ -15,8 +15,7 @@
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 /* Unten bleibt Platz fuer die fixe Anruf-Leiste — Inhalt verschwindet NIE
    dahinter (Chef 27.08.: Button darf nichts verdecken, iOS safe-area). */
-/* 132px = zwei Leisten-Zeilen (Chatzeile + Knoepfe) samt Abstaenden. */
-body { min-height: 100dvh; padding-bottom: calc(132px + env(safe-area-inset-bottom)); }
+body { min-height: 100dvh; padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 14px 24px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .header-status { text-align: right; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
@@ -102,7 +101,7 @@ select {
 .status { font-size: 13px; color: var(--muted); margin-top: 8px; }
 .status.bad { color: var(--strike); }
 .toast {
-  position: fixed; left: 12px; right: 12px; bottom: calc(132px + env(safe-area-inset-bottom));
+  position: fixed; left: 12px; right: 12px; bottom: calc(88px + env(safe-area-inset-bottom));
   z-index: 50; background: #3a2018; color: #f0c4b8; border: 1px solid #c45c26;
   border-radius: 12px; padding: 12px 14px; font-size: 15px;
 }
@@ -114,24 +113,8 @@ select {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   background: #1a1216; border-top: 1px solid var(--line);
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex; gap: 8px; align-items: center;
 }
-/* Chatzeile ueber den Knoepfen: tippen statt sprechen (19.09.2026). */
-.dock-chat, .dock-knoepfe { display: flex; gap: 8px; align-items: center; }
-.dock-chat input {
-  flex: 1; min-width: 0; min-height: 46px; background: #171114; color: var(--text);
-  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
-  font: inherit; font-size: 16px;
-}
-.dock-chat input:disabled { opacity: .45; }
-.chat-opt { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; font-size: 13px; }
-.chat-opt input { width: 18px; height: 18px; accent-color: var(--accent); }
-.chat-regie { display: flex; flex-wrap: wrap; gap: 8px 18px; }
-.chat-opt select {
-  background: #171114; color: var(--text); border: 1px solid var(--line);
-  border-radius: 10px; padding: 6px 8px; font: inherit; font-size: 13px;
-}
-.chat-opt select:disabled { opacity: .45; }
 .dock .btn { flex: 1; min-height: 46px; }
 .dock .btn.neben { flex: 0 0 auto; background: #211a20; border: 1px solid var(--line); color: var(--text); font-weight: 600; }
 /* "Das kann ich" (Chef 29.08.2026): Schaufenster-Overlay mit zwei Reitern —

@@ -1,11 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Bianca — Patiententelefon</title>
-  <link rel="stylesheet" href="styles.css?v=b16" />
+  <link rel="stylesheet" href="styles.css?v=b14" />
 </head>
 <body>
   <div class="wrap">
@@ -24,30 +24,6 @@
       <section class="card">
         <h2>Stand</h2>
         <div class="sub" id="stand">noch kein Anruf</div>
-      </section>
-      <!-- Dock-Chat (19.09.2026): tippen statt sprechen — gleicher Weg wie
-           der Anruf (api/start + api/turn), nur ohne Mikrofon und ohne Ton.
-           Reiner Dialogkern samt Praxis-Maske: Link unten ins Teststudio. -->
-      <section class="card">
-        <h2>Chat — tippen statt sprechen</h2>
-        <div class="sub" id="chatStand">Unten in der Leiste tippen, Enter schickt.</div>
-        <div class="chat-regie">
-          <label class="chat-opt">Gegen
-            <select id="chatZiel">
-              <option value="kern" selected>Dialogkern (neu)</option>
-              <option value="live">Live-Bianca (alt)</option>
-            </select>
-          </label>
-          <label class="chat-opt" id="chatLageBox" hidden>Lage
-            <select id="chatSzenario"></select>
-          </label>
-        </div>
-        <div class="live" id="chatLive"></div>
-        <label class="chat-opt"><input type="checkbox" id="chatTon"> Antwort auch anhören</label>
-        <label class="chat-opt"><input type="checkbox" id="chatEcht"> echt buchen (Kalender + SMS)</label>
-        <div class="studio-links" style="justify-content:flex-start;margin-top:10px">
-          <a class="studio-link" href="studio/dialogkern">Kern mit Praxis-Maske (Teststudio) &rarr;</a>
-        </div>
       </section>
     </div>
     <div class="status" id="status"></div>
@@ -86,18 +62,11 @@
   </div>
 
   <div class="dock" id="dock">
-    <div class="dock-chat">
-      <input id="chatIn" type="text" placeholder="Was sagt der Anrufer? (Enter schickt)" autocomplete="off" />
-      <button class="btn neben" id="chatSend" type="button">Sagen</button>
-      <button class="btn neben" id="chatEnd" type="button" hidden>Chat beenden</button>
-    </div>
-    <div class="dock-knoepfe">
-      <button class="btn neben" id="koennenBtn" type="button">Das kann ich</button>
-      <button class="btn" id="start" type="button">Bei Bianca anrufen</button>
-    </div>
+    <button class="btn neben" id="koennenBtn" type="button">Das kann ich</button>
+    <button class="btn" id="start" type="button">Bei Bianca anrufen</button>
   </div>
   <audio id="speaker" playsinline webkit-playsinline hidden></audio>
   <script src="praxis.js?v=5"></script>
-  <script src="app.js?v=b107"></script>
+  <script src="app.js?v=b86"></script>
 </body>
 </html>

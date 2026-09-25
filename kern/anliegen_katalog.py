@@ -60,8 +60,17 @@ PROSA_MAX = 600
 # Die Terminverwaltung steht bewusst NICHT im Katalog. Diese Kennungen sind
 # reserviert: taucht eine davon in einem Praxis-Eintrag auf, wird sie
 # verworfen und gewarnt (eine Praxis darf den Terminweg nicht umschreiben).
-FEST_VERANKERT = ("buchen", "absagen", "verschieben", "auskunft", "termin",
-                  "terminverwaltung")
+# Alles, was ein Termin IST: Buchung, Absage, Verschieben, Bestandsauskunft
+# und jeder Besuchsgrund (Kontrolle, PZR, Schmerz, …). Die Maske darf das
+# weder abschalten noch umformulieren — der V4-Weg bleibt fuer alle Kunden gleich.
+FEST_VERANKERT = (
+    "buchen", "absagen", "verschieben", "auskunft", "auskunft_bestand",
+    "auskunft_wort", "termin", "terminverwaltung",
+    "kontrolle", "pzr", "schmerzen", "fuellung", "implantat", "wurzel",
+    "kfo", "bleaching", "beratung", "blutabnahme", "fusspflege",
+    "schwangerschaft", "akne", "warzen", "atherom", "muttermal",
+    "allergie", "impfung", "botox", "etwas_anderes",
+)
 
 
 class Folge(str, Enum):
@@ -131,17 +140,24 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "vorstellung",
-                "Nie ohne Vorstellung — der Patient muss in die Praxis kommen",
+                "Nur persönliche Ausstellung in der Praxis",
                 Folge.TERMIN,
-                "Ein Rezept stellen wir nicht am Telefon aus. Dafür braucht es "
-                "eine kurze Vorstellung in der Praxis.",
+                "Ein Rezept stellen wir nicht am Telefon aus. Dafür müssen Sie "
+                "persönlich in die Praxis kommen.",
             ),
             Option(
                 "notiz",
-                "Wunsch aufnehmen — die Praxis prüft und meldet sich",
+                "Rückruf anbieten — die Praxis prüft und ruft zurück",
                 Folge.NOTIZ,
-                "Ich kann Ihren Rezeptwunsch aufnehmen. Ob das Rezept "
-                "ausgestellt wird, entscheidet die Praxis.",
+                "Ich nehme Ihren Rezeptwunsch auf. Die Praxis prüft das und "
+                "ruft Sie zurück.",
+            ),
+            Option(
+                "versand",
+                "Online / zuschicken, wenn im selben Quartal schon ein Termin war",
+                Folge.NOTIZ,
+                "Wenn Sie in diesem Quartal schon bei uns waren, können wir das "
+                "Rezept zuschicken. Ich nehme Ihren Wunsch auf.",
             ),
             Option(
                 "abholung",
@@ -149,13 +165,6 @@ KATALOG: tuple[Anliegen, ...] = (
                 Folge.NOTIZ,
                 "Ich nehme Ihren Rezeptwunsch auf. Das Rezept liegt dann zur "
                 "Abholung in der Praxis bereit.",
-            ),
-            Option(
-                "versand",
-                "Wiederholungsrezept auf Anfrage — wird zugeschickt",
-                Folge.NOTIZ,
-                "Ein Wiederholungsrezept können wir Ihnen zuschicken. Ich nehme "
-                "Ihren Wunsch dafür auf.",
             ),
         ),
         haken=(
@@ -179,24 +188,24 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "untersuchung",
-                "Nie ohne Untersuchung — Vorstellung nötig",
+                "Nur nach Untersuchung in der Praxis",
                 Folge.TERMIN,
                 "Eine Krankschreibung gibt es nicht ohne Untersuchung. Dafür "
-                "müssen wir Sie sehen.",
+                "müssen wir Sie in der Praxis sehen.",
             ),
             Option(
                 "notiz",
-                "Wunsch aufnehmen — die Praxis entscheidet und meldet sich",
+                "Rückruf anbieten — die Praxis entscheidet und ruft zurück",
                 Folge.NOTIZ,
-                "Ich nehme das auf. Ob wir ohne Termin krankschreiben können, "
-                "entscheidet die Praxis und meldet sich bei Ihnen.",
+                "Ich nehme das auf. Die Praxis prüft, ob wir krankschreiben "
+                "können, und ruft Sie zurück.",
             ),
             Option(
                 "nachtrag",
-                "Nur als Nachtrag zu einem Besuch, der schon war",
+                "Nachtrag, wenn der Besuch in diesem Quartal schon war",
                 Folge.NOTIZ,
-                "Nachträglich zu einem Besuch, der schon war, können wir das "
-                "prüfen. Ich notiere es für die Praxis.",
+                "Wenn Sie in diesem Quartal schon bei uns waren, können wir "
+                "das prüfen. Ich notiere es für die Praxis.",
             ),
             Option(
                 "automatisch",
@@ -223,21 +232,21 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "vorstellung",
-                "Nur nach Vorstellung in der Praxis",
+                "Nur persönliche Ausstellung in der Praxis",
                 Folge.TERMIN,
-                "Eine Überweisung stellen wir nach einer kurzen Vorstellung in "
-                "der Praxis aus.",
+                "Eine Überweisung stellen wir nur nach einer kurzen "
+                "Vorstellung in der Praxis aus.",
             ),
             Option(
                 "notiz",
-                "Wunsch aufnehmen — die Praxis bereitet sie vor",
+                "Rückruf anbieten — die Praxis bereitet sie vor und ruft zurück",
                 Folge.NOTIZ,
                 "Ich nehme Ihren Wunsch auf. Die Praxis bereitet die "
-                "Überweisung vor und meldet sich.",
+                "Überweisung vor und ruft Sie zurück.",
             ),
             Option(
                 "abholung",
-                "Liegt zur Abholung bereit",
+                "Wunsch aufnehmen, Abholung in der Praxis",
                 Folge.NOTIZ,
                 "Ich notiere das. Die Überweisung liegt dann zur Abholung in "
                 "der Praxis bereit.",
@@ -258,17 +267,16 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "vorstellung",
-                "Nur nach Vorstellung",
+                "Nur persönliche Ausstellung in der Praxis",
                 Folge.TERMIN,
                 "Eine Bescheinigung können wir erst nach einer Vorstellung "
                 "ausstellen.",
             ),
             Option(
                 "notiz",
-                "Wunsch aufnehmen — die Praxis meldet sich",
+                "Rückruf anbieten — die Praxis prüft und ruft zurück",
                 Folge.NOTIZ,
-                "Ich nehme das auf. Die Praxis prüft es und meldet sich bei "
-                "Ihnen.",
+                "Ich nehme das auf. Die Praxis prüft es und ruft Sie zurück.",
             ),
         ),
         haken=(
@@ -283,7 +291,7 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "nie",
-                "Nie am Telefon — nur beim Arzt",
+                "Nur persönlich beim Arzt — am Telefon keine Werte",
                 Folge.NIE,
                 "Befunde und Werte darf ich am Telefon nicht mitteilen. Das "
                 "besprechen Sie bitte mit dem Arzt.",
@@ -297,10 +305,10 @@ KATALOG: tuple[Anliegen, ...] = (
             ),
             Option(
                 "notiz",
-                "Rückruf durch die Praxis notieren",
+                "Rückruf anbieten — die Praxis ruft zurück",
                 Folge.NOTIZ,
-                "Am Telefon darf ich dazu nichts sagen. Ich notiere einen "
-                "Rückruf, dann bespricht die Praxis das mit Ihnen.",
+                "Am Telefon darf ich dazu nichts sagen. Ich richte einen "
+                "Rückruf ein, dann bespricht die Praxis das mit Ihnen.",
             ),
         ),
         haken=(
@@ -323,14 +331,14 @@ KATALOG: tuple[Anliegen, ...] = (
             ),
             Option(
                 "notiz",
-                "Anfrage aufnehmen — die Praxis bereitet es vor",
+                "Rückruf anbieten — die Praxis bereitet es vor",
                 Folge.NOTIZ,
                 "Ich nehme die Anfrage auf. Die Praxis bereitet die Unterlagen "
-                "vor und meldet sich.",
+                "vor und ruft Sie zurück.",
             ),
             Option(
                 "abholung",
-                "Persönliche Abholung in der Praxis",
+                "Nur persönliche Abholung in der Praxis",
                 Folge.NOTIZ,
                 "Die Unterlagen können Sie persönlich in der Praxis abholen. "
                 "Ich notiere Ihre Anfrage.",
@@ -350,21 +358,21 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "nie",
-                "Nie am Telefon beantworten",
+                "Nur persönlich beim Arzt — am Telefon keine Auskunft",
                 Folge.NIE,
                 "Zu Medikamenten darf ich am Telefon nichts sagen. Das "
                 "beantwortet Ihnen der Arzt.",
             ),
             Option(
                 "notiz",
-                "Rückruf durch die Praxis notieren",
+                "Rückruf anbieten — die Praxis ruft zurück",
                 Folge.NOTIZ,
-                "Dazu darf ich nichts sagen. Ich notiere einen Rückruf, dann "
-                "meldet sich die Praxis bei Ihnen.",
+                "Dazu darf ich nichts sagen. Ich richte einen Rückruf ein, "
+                "dann meldet sich die Praxis bei Ihnen.",
             ),
             Option(
                 "termin",
-                "Vorstellung in der Praxis",
+                "Termin in der Praxis anbieten",
                 Folge.TERMIN,
                 "Das klären wir am besten in der Praxis. Dafür gebe ich Ihnen "
                 "einen Termin.",
@@ -384,20 +392,20 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "nie",
-                "Nicht durchstellen — Rückruf notieren",
+                "Nicht durchstellen — Rückruf anbieten",
                 Folge.NOTIZ,
                 "Die Ärzte sind in der Behandlung und gehen nicht ans Telefon. "
-                "Ich notiere Ihr Anliegen für einen Rückruf.",
+                "Ich richte einen Rückruf ein.",
             ),
             Option(
                 "verbinden",
-                "Durchstellen, wenn erreichbar",
+                "Durchstellen, wenn der Arzt erreichbar ist",
                 Folge.VERBINDEN,
                 "",
             ),
             Option(
                 "termin",
-                "Kein Telefonat — Termin anbieten",
+                "Kein Telefonat — Termin in der Praxis anbieten",
                 Folge.TERMIN,
                 "Am Telefon berät der Arzt nicht. Dafür gebe ich Ihnen einen "
                 "Termin.",
@@ -418,21 +426,21 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "selbst",
-                "Ich übernehme das Anliegen selbst",
+                "Bianca übernimmt das Anliegen selbst",
                 Folge.INFO,
                 "Ich bin die Telefonassistentin der Praxis und entlaste die "
                 "Anmeldung. Sagen Sie mir einfach, worum es geht.",
             ),
             Option(
                 "notiz",
-                "Rückruf durch die Anmeldung notieren",
+                "Rückruf anbieten — die Anmeldung ruft zurück",
                 Folge.NOTIZ,
-                "Die Anmeldung ist gerade bei den Patienten. Ich notiere einen "
-                "Rückruf für Sie.",
+                "Die Anmeldung ist gerade bei den Patienten. Ich richte einen "
+                "Rückruf für Sie ein.",
             ),
             Option(
                 "verbinden",
-                "Durchstellen, wenn erreichbar",
+                "Durchstellen, wenn jemand erreichbar ist",
                 Folge.VERBINDEN,
                 "",
             ),
@@ -441,17 +449,26 @@ KATALOG: tuple[Anliegen, ...] = (
     Anliegen(
         id="notfall",
         titel="Notfall / akute Beschwerden",
-        hinweis="Lebensgefahr führt immer zur 112 — das ist fest verdrahtet. "
-                "Hier legen Sie den Weg für akute, aber nicht lebensbedrohliche "
-                "Fälle fest.",
+        hinweis="Bei Lebensgefahr (Atemnot, Bewusstlosigkeit, schwere Reaktion) "
+                "sagt Bianca immer: sofort 112. Das bleibt fest und ist nicht "
+                "abschaltbar. Hier legen Sie den Weg für akute, aber nicht "
+                "lebensbedrohliche Fälle fest.",
         optionen=(
             Option(
                 "sofort",
                 "Sofort in die Praxis kommen, Wartezeit mitbringen",
                 Folge.SOFORT,
-                "Das klingt akut. Kommen Sie bitte direkt in die Praxis. Eine "
-                "feste Uhrzeit gibt es dafür nicht, bringen Sie bitte Wartezeit "
-                "mit.",
+                "Das klingt akut. Kommen Sie bitte jetzt direkt in die Praxis. "
+                "Eine feste Uhrzeit gibt es dafür nicht — bringen Sie bitte "
+                "Wartezeit mit. Sie werden so schnell wie möglich gesehen.",
+            ),
+            Option(
+                "bereitschaft",
+                "Sofort 116 117 anrufen (ärztlicher Bereitschaftsdienst)",
+                Folge.SOFORT,
+                "Wenden Sie sich bitte jetzt an den ärztlichen "
+                "Bereitschaftsdienst unter 116 117. Bei Atemnot oder "
+                "Kreislaufproblemen wählen Sie sofort die 112.",
             ),
             Option(
                 "akuttermin",
@@ -462,15 +479,15 @@ KATALOG: tuple[Anliegen, ...] = (
             ),
             Option(
                 "rueckruf",
-                "Rückruf der Praxis notieren",
+                "Rückruf anbieten — die Praxis ruft schnell zurück",
                 Folge.NOTIZ,
                 "Ich notiere das als akut. Die Praxis ruft Sie schnellstmöglich "
                 "zurück.",
             ),
         ),
         haken=(
-            Haken("bereitschaft",
-                  "Außerhalb der Sprechzeit auf 116 117 verweisen",
+            Haken("bereitschaft_ausserhalb",
+                  "Außerhalb der Sprechzeit zusätzlich auf 116 117 verweisen",
                   "Außerhalb unserer Sprechzeiten wenden Sie sich bitte an den "
                   "ärztlichen Bereitschaftsdienst unter 116 117."),
         ),
@@ -489,7 +506,7 @@ KATALOG: tuple[Anliegen, ...] = (
             ),
             Option(
                 "rueckruf",
-                "Rückruf der Buchhaltung notieren",
+                "Rückruf anbieten — die Buchhaltung ruft zurück",
                 Folge.NOTIZ,
                 "Zu Rechnungen darf ich am Telefon nichts sagen. Ich richte "
                 "Ihnen einen Rückruf ein.",
@@ -503,23 +520,23 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "keine_auskunft",
-                "Keine Preisauskunft am Telefon",
+                "Keine Preisauskunft am Telefon — nur in der Praxis",
                 Folge.NIE,
                 "Zu Kosten kann ich am Telefon keine verbindliche Auskunft "
                 "geben. Das besprechen wir in der Praxis.",
             ),
             Option(
                 "eigene_auskunft",
-                "Meine hinterlegte Auskunft vorlesen",
+                "Eigenen Text eintragen — Bianca spricht ihn wörtlich",
                 Folge.INFO,
                 "",
             ),
             Option(
                 "notiz",
-                "Rückruf zur Kostenfrage notieren",
+                "Rückruf anbieten — die Praxis erklärt die Kosten",
                 Folge.NOTIZ,
-                "Ich notiere Ihre Frage zu den Kosten, die Praxis meldet sich "
-                "bei Ihnen.",
+                "Ich notiere Ihre Frage zu den Kosten. Die Praxis ruft Sie "
+                "zurück.",
             ),
         ),
         haken=(
@@ -534,20 +551,20 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "ja",
-                "Ja, wir nehmen neue Patienten auf",
+                "Ja — neue Patienten aufnehmen und Termin anbieten",
                 Folge.TERMIN,
                 "Neue Patienten nehmen wir gerne auf.",
             ),
             Option(
                 "warteliste",
-                "Nur auf die Warteliste",
+                "Nur auf die Warteliste — Rückruf, wenn ein Platz frei wird",
                 Folge.NOTIZ,
                 "Neue Patienten nehmen wir derzeit nur auf die Warteliste. Ich "
                 "notiere Sie gerne.",
             ),
             Option(
                 "nein",
-                "Nein, aktuell keine neuen Patienten",
+                "Nein — aktuell keine neuen Patienten",
                 Folge.NIE,
                 "Aktuell können wir leider keine neuen Patienten aufnehmen.",
             ),
@@ -566,17 +583,58 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "notiz",
-                "Beschwerde aufnehmen, Rückruf der Praxisleitung",
+                "Rückruf anbieten — die Praxisleitung ruft zurück",
                 Folge.NOTIZ,
                 "Das tut mir leid. Ich nehme das auf, damit sich die "
                 "Praxisleitung bei Ihnen melden kann.",
             ),
             Option(
                 "persoenlich",
-                "Nur persönlich oder schriftlich",
+                "Nur persönlich in der Praxis oder schriftlich",
                 Folge.NIE,
                 "Das tut mir leid. Am Telefon kann ich das nicht klären — "
                 "sprechen Sie es bitte in der Praxis an oder schreiben Sie uns.",
+            ),
+        ),
+    ),
+    Anliegen(
+        id="rueckruf",
+        titel="Rückruf / Nachricht hinterlassen",
+        hinweis="Der Anrufer will keinen Termin, sondern dass sich die Praxis meldet.",
+        optionen=(
+            Option(
+                "notiz",
+                "Rückruf aufnehmen — Name und Nummer, echte Notiz",
+                Folge.NOTIZ,
+                "Gerne richte ich einen Rückruf ein.",
+            ),
+            Option(
+                "nie",
+                "Kein Rückruf — bitte in der Praxis oder schriftlich",
+                Folge.NIE,
+                "Einen Rückruf kann ich so nicht einrichten. Bitte kommen Sie "
+                "in die Praxis oder schreiben Sie uns.",
+            ),
+        ),
+    ),
+    Anliegen(
+        id="oeffnungszeiten",
+        titel="Öffnungszeiten / Anfahrt",
+        hinweis="Entweder liest Bianca die Zeiten und den Weg aus dem "
+                "Praxisprofil (Standort / hinterlegte Öffnungszeiten), oder "
+                "Sie tragen hier den Satz ein, den sie wörtlich sagt.",
+        optionen=(
+            Option(
+                "standort",
+                "Aus dem Praxisprofil vorlesen (Standort und hinterlegte Zeiten)",
+                Folge.INFO,
+                "",
+            ),
+            Option(
+                "eigene_auskunft",
+                "Eigenen Text eintragen — Bianca spricht ihn wörtlich",
+                Folge.INFO,
+                "",
             ),
         ),
     ),
@@ -588,13 +646,13 @@ KATALOG: tuple[Anliegen, ...] = (
         optionen=(
             Option(
                 "notiz",
-                "Anliegen aufnehmen und weitergeben",
+                "Rückruf anbieten — Anliegen aufnehmen und weitergeben",
                 Folge.NOTIZ,
                 "Ich nehme das für die Praxis auf.",
             ),
             Option(
                 "info",
-                "Nur meine hinterlegte Auskunft geben",
+                "Eigenen Text eintragen — Bianca spricht ihn wörtlich",
                 Folge.INFO,
                 "",
             ),
@@ -723,11 +781,10 @@ def parse(roh: Any) -> tuple[dict[str, Regel], list[str]]:
                 warn.append(f"{key}: unbekannter Haken {_s(g)!r} — ignoriert.")
         prosa = _prosa_klemmen(wert.get("prosa") or wert.get("text"))
         if not prosa and not opt.satz:
-            # Optionen ohne Standardsatz ("meine hinterlegte Auskunft",
-            # "durchstellen") brauchen entweder Prosa oder die Folge traegt
-            # den Satz. Ohne beides waere der Zug stumm — dann lieber die
-            # konservative Option.
-            if opt.folge in (Folge.INFO, Folge.NIE):
+            # Optionen ohne Standardsatz brauchen Prosa. Ausnahme:
+            # Oeffnungszeiten aus dem Praxisprofil — der Satz kommt live.
+            profil_ok = key == "oeffnungszeiten" and opt.id == "standort"
+            if opt.folge in (Folge.INFO, Folge.NIE) and not profil_ok:
                 warn.append(
                     f"{key}: „{opt.text}“ braucht einen eigenen Antworttext — "
                     f"es gilt „{spec.standard.text}“."
@@ -758,16 +815,29 @@ def regel(tenant: dict | None, anliegen_id: str) -> Regel | None:
     return aus_tenant(tenant).get(_s(anliegen_id).lower())
 
 
-def antwort(r: Regel | None) -> str:
+def antwort(r: Regel | None, tenant: dict | None = None) -> str:
     """Der WOERTLICH zu sprechende Satz: Prosa gewinnt, sonst der Standard.
 
     Die Haken-Saetze haengen hinten dran — sie sind Bedingungen, keine
     eigenen Themen, und stehen deshalb nie vor der Hauptaussage.
+    Oeffnungszeiten mit Wahl ``standort`` kommen live aus dem Praxisprofil.
     """
     if r is None:
         return ""
     spec = NACH_ID.get(r.id)
-    teile = [r.prosa or r.satz]
+    kern = r.prosa or r.satz
+    if (
+        r.id == "oeffnungszeiten"
+        and r.wahl == "standort"
+        and not r.prosa
+    ):
+        from kern import wissen
+        profil = wissen.profil_auskunft(tenant)
+        kern = _s(profil.get("satz")) or (
+            "Die genauen Öffnungszeiten habe ich hier leider nicht vorliegen "
+            "— einen Termin kann ich Ihnen aber gern direkt geben."
+        )
+    teile = [kern]
     if spec is not None:
         for h in spec.haken:
             if h.id in r.haken and h.satz:
@@ -775,25 +845,97 @@ def antwort(r: Regel | None) -> str:
     return _s(" ".join(t for t in teile if _s(t)))
 
 
+def leer_policy() -> dict[str, Any]:
+    """Alle Anliegen auf der ersten (konservativen) Option — fuer die Maske."""
+    return as_dict({
+        a.id: Regel(
+            id=a.id,
+            wahl=a.standard.id,
+            folge=a.standard.folge,
+            satz=a.standard.satz,
+            prosa="",
+            haken=(),
+        )
+        for a in KATALOG
+    })
+
+
 # --------------------------------------------------------------------------
 # Maske (Studio + Superuser-Portal)
 # --------------------------------------------------------------------------
 TERMIN_FEST_TEXT = (
-    "Termine buchen, absagen, verschieben und Terminauskunft laufen in jeder "
-    "Praxis über den geprüften Weg mit Rückbestätigung und Kalender-Nachweis. "
-    "Das ist bewusst nicht einstellbar."
+    "Termine buchen, absagen, verschieben und nach einem bestehenden Termin "
+    "fragen — inklusive aller Besuchsgründe (Kontrolle, Reinigung, Schmerz, "
+    "Füllung, Implantat …) — laufen in jeder Praxis über denselben geprüften "
+    "Weg. Das ist nicht einstellbar und gilt für jeden Kunden gleich."
 )
 
+# Die Beispiele in der Maske muessen zur Fachrichtung passen: Blessing sieht
+# keine Zahnreinigung, Ruether kein Melanom. Quelle ist das Kundenkonto
+# (fachgebiet / fachtemplate / specialty), sonst der Motivkatalog.
+FEST_BEISPIELE = {
+    "zahnmedizin": "Kontrolle, Zahnreinigung, Schmerz, Füllung, Implantat",
+    "dermatologie": "Kontrolle, Hautscreening, Akne, Muttermal, Warzen",
+    "gynaekologie": "Vorsorge, Schwangerschaft, Krebsvorsorge",
+    "orthopaedie": "Kontrolle, Schmerz, Nachsorge",
+    "allgemein": "Kontrolle, Beratung, Schmerz",
+}
 
-def maske() -> dict[str, Any]:
+
+def fest_text(fach: str = "") -> str:
+    beispiele = FEST_BEISPIELE.get(_s(fach)) or FEST_BEISPIELE["allgemein"]
+    if _s(fach) in ("", "zahnmedizin"):
+        return TERMIN_FEST_TEXT
+    return (
+        "Termine buchen, absagen, verschieben und nach einem bestehenden Termin "
+        "fragen — inklusive der Besuchsgründe dieser Fachrichtung "
+        f"({beispiele}) — laufen über denselben geprüften Weg. Das ist nicht "
+        "einstellbar. Eine andere Fachrichtung (Zahnreinigung, Melanom, …) "
+        "wird hier weder angeboten noch besprochen."
+    )
+
+
+def _fach_block(tenant: Any) -> dict[str, Any]:
+    if not isinstance(tenant, dict) or not tenant:
+        return {}
+    try:
+        from kern import fachprofil
+        tmpl = fachprofil.template(tenant)
+    except Exception:
+        return {}
+    quelle = ""
+    for key in ("fachtemplate", "fachgebiet", "specialty", "speciality"):
+        if _s(tenant.get(key)):
+            quelle = key
+            break
+    return {
+        "id": tmpl.get("id") or "allgemein",
+        "name": tmpl.get("name") or "Allgemeine Praxis",
+        "quelle": quelle or "motivkatalog",
+        "schutz": list(tmpl.get("schutz") or []),
+    }
+
+
+def maske(tenant: Any = None) -> dict[str, Any]:
     """Formular-Bauplan fuer die Praxis-Maske (Studio und Portal)."""
+    fach = _fach_block(tenant)
+    try:
+        from kern import wissen
+        profil = wissen.profil_auskunft(tenant if isinstance(tenant, dict) else {})
+    except Exception:
+        profil = {"zeiten": "", "anfahrt": "", "quelle": "fehlt", "satz": "",
+                  "fehlt": True}
     return {
         "schemaVersion": SCHEMA_VERSION,
+        "fach": fach,
+        "profil": profil,
         "fest": {
             "titel": "Terminverwaltung",
-            "text": TERMIN_FEST_TEXT,
+            "text": fest_text(fach.get("id") if fach else ""),
             "anliegen": ["Termin buchen", "Termin absagen", "Termin verschieben",
                          "Terminauskunft"],
+            "beispiele": FEST_BEISPIELE.get(
+                (fach or {}).get("id") or "", FEST_BEISPIELE["allgemein"]),
         },
         "prosaMax": PROSA_MAX,
         "anliegen": [
@@ -840,5 +982,6 @@ def as_dict(regeln: dict[str, Regel]) -> dict[str, Any]:
 __all__ = [
     "Anliegen", "FEST_VERANKERT", "Folge", "Haken", "KATALOG", "NACH_ID",
     "Option", "PROSA_MAX", "Regel", "SCHEMA_VERSION", "TERMIN_FEST_TEXT",
-    "an", "antwort", "as_dict", "aus_tenant", "maske", "parse", "regel",
+    "an", "antwort", "as_dict", "aus_tenant", "fest_text", "leer_policy",
+    "maske", "parse", "regel",
 ]

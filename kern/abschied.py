@@ -62,6 +62,7 @@ _KURZ_RE = re.compile(
     rf"^(?:(?:dann|denn|na|tja|ach)\s+)?(?:"
     rf"bis\s+(?:denn|dann|bald|sp{_AE}ter|demn{_AE}chst|nachher)|"
     rf"ciao|tschau|servus|"
+    rf"gute\s+nacht|"
     rf"mach(?:en\s+sie)?(?:\s+es)?\s+gut|"
     rf"sch{_OE}nen\s+(?:tag|abend|feierabend|sonntag)(?:\s+noch)?|"
     rf"sch{_OE}nes\s+wochenende|"

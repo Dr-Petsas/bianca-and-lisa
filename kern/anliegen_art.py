@@ -33,7 +33,9 @@ _NOTFALL_RE = re.compile(
     re.I,
 )
 _BESCHWERDE_RE = re.compile(
-    r"\bbeschwer\w*|\breklamat\w*|\bunversch(?:ä|ae)mt\w*|\bfrech\w*|"
+    r"\bbeschweren\b|\bbeschwere\b|"
+    r"\b(?:eine|die|meine|ihre|diese)\s+beschwerde\b|"
+    r"\breklamat\w*|\bunversch(?:ä|ae)mt\w*|\bfrech\w*|"
     r"\bunfreundlich\w*|\bunh(?:ö|oe)flich\w*|zu\s+lange\s+(?:ge)?wart\w*|"
     r"ewig\s+(?:ge)?wart\w*|stunden?\s+(?:ge)?wart\w*|schlecht\s+behandelt|"
     r"falsch\s+behandelt|\bunzufrieden\w*|ver(?:ä|ae)rgert|\b(?:ä|ae)rgerlich\w*|"
@@ -43,7 +45,7 @@ _BESCHWERDE_RE = re.compile(
 )
 _KLINISCH_RE = re.compile(
     r"\bschmerz\w*|zahnweh|\bweh\b|\bpocht\b|\bzieht\b|empfindlich|"
-    r"\bentz(?:ü|ue)nd\w*|\beiter\w*",
+    r"\bentz(?:ü|ue)nd\w*|\beiter\w*|\bbeschwerden\b",
     re.I,
 )
 

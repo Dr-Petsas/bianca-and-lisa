@@ -98,26 +98,22 @@ function wachtNot() {
   try { new Audio(notfall[notfall.length - 1]).play().catch(() => {}); } catch { /* */ }
 }
 
-function bubble(role, text, ziel) {
+function bubble(role, text) {
   if (!text) return;
-  // ziel: Anruf-Overlay (Default) oder die Chat-Karte im Dock.
-  const box = ziel || $("live");
-  if (!box) return;
   const el = document.createElement("div");
   el.className = `bubble ${role}`;
   el.textContent = text;
-  box.appendChild(el);
-  box.scrollTop = box.scrollHeight;
+  $("live").appendChild(el);
+  $("live").scrollTop = $("live").scrollHeight;
 }
 
 function jsonText(v) {
   try { return JSON.stringify(v, null, 2); } catch { return String(v ?? ""); }
 }
 
-function zeigeTools(tools, ziel) {
+function zeigeTools(tools) {
   if (!tools || !tools.length) return;
-  const live = ziel || $("live");
-  if (!live) return;
+  const live = $("live");
   for (const t of tools) {
     const d = t.dispatch || {};
     const name = d.route || t.cf || t.name || "tool";
@@ -991,13 +987,13 @@ $("start").onclick = () => starteAnruf();
 
 $("hang").onclick = auflegen;
 
-function zeigeBuch(book, writeLive, ziel) {
+function zeigeBuch(book, writeLive) {
   if (!book) return;
   if (book.dryRun || !book.booked) {
-    bubble("sys", writeLive ? "Buchung nicht fest." : "Test: nicht in den Kalender geschrieben, keine SMS.", ziel);
+    bubble("sys", writeLive ? "Buchung nicht fest." : "Test: nicht in den Kalender geschrieben, keine SMS.");
     return;
   }
-  bubble("sys", "Fest im Kalender: " + (book.slotIso || "Termin"), ziel);
+  bubble("sys", "Fest im Kalender: " + (book.slotIso || "Termin"));
 }
 
 function zeigeStand(call) {
@@ -1074,7 +1070,6 @@ const KOENNEN = [
     "<b>Terminnotiz im Termin:</b> „telefonisch Termin vereinbart wegen … // Bianca“ — direkt im Terminpopup sichtbar.",
     "<b>Besonderes automatisch heraushören</b> und notieren: Angst, Allergie, Begleitung, „bitte nur vormittags“ …",
     "<b>Offene Anliegen als Vorgang:</b> nicht gefundene Termine oder Rückruf-Wünsche landen als offenes Ticket bei der Praxis.",
-    "<b>Rechnungsthemen (Reklamation, Mahnung, Abrechnungsfehler, Buchhaltung):</b> keine Autorisation am Telefon — Bianca verweist auf die persönliche Klärung in der Praxis und richtet auf Wunsch einen Rückruf ein (Name, Nummer, Notiz mit Grund); das Modell darf nichts zur Rechnung behaupten.",
     "<b>Anrufliste mit Mitschnitt:</b> jedes Gespräch liegt unter „Anrufe“ im Browser — Transkript als Blasen, Audio je Zug (Anrufer UND Bianca), alle Zeiten (Uhrzeit, Offset, stt/llm/tts je Zug), Anruf-UID (uuid4) in der Detailansicht, Buchungs-Ergebnis und Praxis-Notiz.",
   ]},
   { t: "Gesprächsführung", p: [
@@ -1271,32 +1266,6 @@ const PATCHES = [
   ["W-MOTIV-KONSISTENT (gesucht = gebucht)", "14.09.", "Kalender", "MedDent-Anruf 06:0x: „Ich hab Schmerzen“ landete auf dem Terminal-Pseudo-Motiv „Notfall (Selbst-Check-in)“ (nicht buchbar), die Suche fiel auf Kontrolle zurück und fand Zeiten, gebucht wurde aber mit dem Pseudo-Motiv → „The slot is not available.“ → der Anrufer hörte nach seinem Ja nur „Termin ist gerade weg“. Drei Wachen: das Terminal-Motiv steht nie im Telefon-Katalog; das Mapping bevorzugt über die ganze Kette buchbare Motive (Schmerzen → „KCH akute Beschwerden/Notfall“); fand erst das Ersatz-Motiv Zeiten, wird GENAU damit gebucht — der Wunsch steht als Notiz am Termin („Gewünscht: … — telefonisch nichts buchbar, eingetragen als Kontrolluntersuchung“). Wechselt der Anrufer Grund oder Behandler, verfällt der Pin."],
   ["W-TELEFON-ZULETZT (Nummer als letzter Schritt)", "14.09.", "Gespräch", "Chef nach Anruf e7191c7e: „sie fragt zu früh nach der Handynummer, bevor der Termin überhaupt steht“ — live kam „Soll ich die SMS an die 0177 … schicken?“ direkt nach dem Zeitwunsch, vor jedem Slot. Jetzt steht die Nummer NICHT mehr im Fragenfaden: erst Grund, Wunschzeit, Name, Versicherung, dann Slots, Ja, Zahnreinigung/Notiz — und unmittelbar vor dem Eintragen (= vor der Bestätigungs-SMS) die Nummer bzw. „SMS an die hinterlegte Nummer?“. Danach wird direkt gebucht, ohne neues Angebot. Verlangt die Plattform die Nummer (Akte ohne Handy) und der Anrufer nennt sie zweimal nicht, endet der Vorgang ehrlich mit einer Notiz statt in der Schleife."],
   ["Kein Eisbrecher vor dem Anliegen (Anruf e7191c7e)", "14.09.", "Gespräch", "„Hallo, ich habe gerne einen Termin.“ (Parakeets „hätte gerne“) traf keinen Buchungs-Zweig: Bianca fragte „wie geht es Ihnen?“, begrüßte danach ein zweites Mal („Guten Tag, hier ist Bianca …“) und stellte den Identitätscheck erst im vierten Zug. Jetzt: Steht „Termin“ im ersten Satz, entfällt die Wohlseinsfrage (Feststellung statt Frage); die Buchungs-Erkennung kennt die Hörfehler-Formen („habe gern“, „bräuchte“, „wollte“, „Termin bekommen“); und ein Re-Greeting des Modells wird über Wortstämme erkannt und samt „Wie kann ich Ihnen helfen?“ gestrichen — auch im Streaming, bevor es den Mund erreicht. Dazu fängt das Frage-Gate die Nebensatz-Zeitfrage („Vorstellung, wann es Ihnen passt?“), die live einen Zug später doppelt kam."],
-  ["W-SUCHFENSTER (sechs Monate statt laufender Monat)", "14.09.", "Kalender", "Chef: „Bianca macht nur im laufenden Monat Termine.“ Ursache: die Plattform liefert je Aufruf höchstens 20 Zeiten ab dem Startdatum — bei vollem Kalender sind das vier Tage (MedDent live: 14.–17.09.). „Im Oktober“, „Ende November“, „in drei Wochen“ oder „am Donnerstag nachmittags“ lagen nie im Vorrat → „kein freier Termin“ bei freiem Kalender (Anrufe da746a65/5aa87268). Jetzt: Monats-, Zeitraum- und Relativwünsche werden verstanden („Anfang Oktober“, „nächsten Monat“, „ab November“, „in vierzehn Tagen“, „heute um halb zwei“) und setzen das Suchstartdatum; deckt die erste Seite den Wunsch nicht, blättert die Suche vorwärts (bis 6 Monate, höchstens 3 weitere Seiten); passt genau dann nichts, kommt das Nächstbeste ab dem Wunschzeitpunkt („Genau dann ist leider nichts frei. Frei wäre …“) statt „kein Termin“. Der Zimmer-Weg (Thaler) fällt wie der Behandler-Weg auf Kontrolle zurück, wenn das Wunsch-Motiv keine Zeiten hat (Notiz am Termin). In der Anrufliste zeigt die Slot-Karte den Blätter-Weg („Suchfenster: N Seiten“). Notaus Blättern: SLOT_SEITEN=0."],
-  ["W-VERBINDEN-BEWEIS / W-ARZT-JANEIN (kein Durchstellen ohne Wunsch)", "14.09.", "Gespräch", "MedDent-Anruf 984282e3: der Anrufer wollte einen Termin und landete im Jingle. Kette: „Wissen Sie noch, bei welchem Behandler Sie zuletzt waren?“ → „Ja.“ → die Maschine erntete nichts (kein Ja-Zweig), der Zug fiel ans Modell, das daraus ein Durchstellen zu „Petsas, Patrikis oder Nikolaou“ anbot; „Patrikis“ zählte dann als Verbinde-Ziel. Jetzt: Ja/Nein auf die Behandler-Frage sind deterministisch (Ja → „Bei wem denn — Doktor Petsas oder Doktor Patrikis?“, Nein/zweites Ja → Standard-Behandler, Widerspruch bleibt beim Einwand-Weg); eine Verbinde-Rückfrage des Modells zählt nur als Zielangabe, wenn die Maschine wirklich frei war; erfundene Angebote („Darf ich Sie … durchstellen?“) ohne Anrufer-Wunsch werden vor dem Mund gestrichen — auch im Streaming; der Prompt nennt, wohin überhaupt durchgestellt werden kann, und dass der gesperrte Behandler nie zur Wahl steht."],
-  ["W-QWEN-SICHER (Zweit-Ohr kennt die offene Frage)", "14.09.", "Ohr", "Anrufe 3baead87/48d3ac3f/9dd61a59: das Zweit-Ohr lernte aus Verhörern Unsinn („Terminabfrage“ → „Termin Absage“, „interessiert“ → „versichert“) und übernahm bei der Namensfrage live eine Halluzination („Casacop“ → „Da sagt Gott“). Jetzt weiß der Korrektor je Zug, welche Frage offen ist: bei Namensfrage, Buchstabieren und Nummern-Diktat übernimmt Qwen nie live, lernt nichts und pausiert das Wörterbuch; Job-, Antwort- und Zeitwörter (Termin, Absage, privat, gesetzlich, egal, Montag, vormittags …) sind nie Lernstoff; und trägt Parakeets Text die erwartete Antwort der offenen Frage („privat“ auf die Versicherungsfrage, „ja“ auf eine Ja/Nein-Frage), bleibt sie geschützt — Qwen wartet dann auch nicht auf sein langsameres Ergebnis. In der Anrufliste und im Studio steht je Zug, warum Qwen gesperrt war („Qwen live gesperrt: namensfrage:nachname“). Notaus: QWEN_LIVE_SPERRE=0."],
-  ["W-BESTAND-ANSAGE (Bestandsauskunft mit Folgefrage)", "14.09.", "Gespräch", "MedDent-Anruf 9dd61a59: „Ich habe meinen Termin vergessen … habe ich da einen Termin?“ wurde erst im dritten Anlauf als Frage nach dem bestehenden Termin erkannt; die Ansage nannte den Grund nicht und endete ohne Frage, „Alles gut, alles gut.“ fiel ans Modell, und auf „im Oktober“ (Termin lag im Dezember) strich die Fakten-Wache den ehrlichen Satz „Im Oktober sehe ich keinen Termin“. Jetzt: „Termin vergessen/verschwitzt“ und „habe ich da einen Termin“ sind Bestandsfragen; die Ansage nennt Grund und Behandler, sagt bei Zeitraum-Wunsch ehrlich „Im Oktober sehe ich keinen Termin für Sie — Ihr nächster Termin ist …“ und fragt deterministisch „Passt der so, oder möchten Sie ihn verschieben oder absagen?“; „alles gut“/„passt“ (auch mit dem genannten Datum) bestätigt, „verschieben“/„absagen“ schaltet ohne Modell um, „Nein danke“ lässt den Termin stehen. Die Fakten-Wache erkennt eine verneinte Zeitraum-Aussage als belegt, wenn die Terminsuche lief und kein Termin in diesem Zeitraum liegt."],
-  ["W-WARTESCHLEIFE (Ansagen der Praxis-Anlage)", "14.09.", "Gespräch", "Thaler-Anrufe e2badc4c/9311a9e2/14d91fb9/08f4995c: die Telefonanlage der Praxis holte den Anrufer in ihre Warteschleife zurück — Bianca hörte deren Ansagen („Einen kleinen Augenblick noch bitte, wir sind gleich persönlich für Sie da“, „online finden Sie uns … unter www.…“) als Anrufer-Sätze: das Modell bedankte sich für den „Hinweis“, die Buchungsmaschine startete auf eine Ansage, und der Anruf lief bis zu fünf Minuten mit „Sind Sie noch dran?“ gegen die Schleife. Jetzt erkennt Bianca Anlagen-Ansagen an ihrer Perspektive (Praxis spricht ZUM Anrufer), bleibt bei einer reinen Ansage still (kein Ton, kein Modell, nichts im Verlauf), verarbeitet bei gemischten Zügen nur den echten Anrufer-Teil und legt ab der zweiten reinen Ansage sauber auf. Ein „Einen Moment bitte, ich hole den Kalender“ des Anrufers bleibt ein Mensch (Sweep über alle 583 Live-Züge: kein Fehlalarm). Die Anrufliste zeigt die Marke „Warteschleife (N Ansagen, aufgelegt)“ samt gehörten Ansagen; der Praxis-Report nennt den Grund. Notaus: WARTESCHLEIFE=0."],
-  ["W-KURZLAUT (Luftholen ist kein Schweigen)", "14.09.", "Gespräch", "Anrufe 9dd61a59 („Oh.“ → sofort „Sind Sie noch dran?“) und 5aa87268 („Puff.“ → fiel ans Modell): ein Ausruf heißt „ich bin dran und hole gerade Luft“ — er wurde wie Funkstille behandelt oder löste eine Grundsatzrede aus. Jetzt bleibt Bianca bei den ersten Ausrufen in Folge (Oh, Puff, Uff, Hoppla, Boah, Aha, Ach so, Hm, Ähm …) still und hört weiter — kein Ton, kein Modell, die Brücke hält den Stups acht Sekunden zurück. Erst eine Serie ohne Inhalt (Leitungs-Artefakt „Hm. Hm. Hm.“) läuft wie bisher auf den gedeckelten Stille-Stups. Ja/Nein/Okay/Stopp bleiben echte Antworten."],
-  ["W-SCHONMAL-DOPPELT (doppelte Verneinung = Bestand)", "14.09.", "Gespräch", "Thaler-Anruf 5aa87268: auf „Waren Sie schon einmal bei uns?“ kam „Nein, noch nicht das erste Mal.“ — die Nein-Regel sah nur „das erste Mal“ und machte einen Neupatienten daraus (Behandler-Wahl statt Karteisuche). Jetzt gelten „nicht das/zum ersten Mal“ und „kein Neupatient“ als Bestand und werden vor der Nein-Regel geprüft; ein einfaches „Nein, das erste Mal“ bleibt Neupatient."],
-  ["W-RUECKRUF-NUMMER (Rückruf-Notiz nie ohne Nummer)", "14.09.", "Gespräch", "Anrufe 5aa87268/da746a65: fand die Suche nichts, versprach Bianca „die Praxis meldet sich“ — die Notiz trug aber keine Rufnummer (Nummer kommt seit W-TELEFON-ZULETZT erst am Ende, die Suche scheiterte davor; Anrufer ohne übermittelte Nummer). Die Praxis konnte gar nicht zurückrufen. Jetzt fragt Bianca nach der Notiz deterministisch nach der Nummer (kein Modell): Ziffern → Rückbestätigung Ziffer für Ziffer → Ja → Nummer in Notiz, Dock und Report nachgetragen („Tel: 0151…“); Nein auf das Readback → neu erfragen; eine übermittelte oder bestätigte Nummer wird ohne Frage übernommen; „Meine Nummer haben Sie doch“ ohne Anrufer-ID wird ehrlich beantwortet; Ablehnung/„das war’s“ oder zwei unklare Antworten schließen ohne Nummer ab — ehrlich, nie eine Schleife; ein anderes Anliegen („noch einen Termin für meine Frau“) bricht die Nummernfrage ab. Gilt am Ende der Slotsuche und beim gescheiterten Eintragen."],
-  ["W-RECHNUNG (Rechnungsthemen nur persönlich — oder Rückruf)", "14.09.", "Gespräch", "Thaler-Anruf 3ad3b6d3: „Rechnungsreklamation.“ und „Fehlerhafte Rechnung.“ bekamen zweimal „Das habe ich nicht verstanden“ — zwei verschenkte Züge. Bianca hat keine Autorisation, über Rechnungen zu sprechen. Jetzt erkennt sie Rechnungsthemen deterministisch (Rechnung, Reklamation, Abrechnungsfehler, Mahnung, doppelt abgebucht, zu viel bezahlt, „Buchhaltung“ …; Preisfragen zur PZR und Termine sind keins, ein namentlich verlangter Arzt bleibt Weiterleitung, mitten im Nummern-/Buchstabier-Diktat nie) und sagt fest: „Über Rechnungen darf ich als Telefonassistentin leider nicht sprechen — Rechnungsthemen klärt die Praxis nur persönlich vor Ort. Soll ich Ihnen dafür einen Rückruf einrichten?“ Ja → Name, Nummer — Bianca liest sie Ziffer für Ziffer vor, erst das Ja macht sie fest und schreibt die echte Notiz mit Grund und Nummer (Nein/„die letzte war eine neun“ → noch einmal erfragen; bleibt sie unsicher, Notiz mit Namen und dem Hinweis auf die Kartei); danach „Kann ich sonst noch etwas für Sie tun?“ als offene Frage (Nein/Danke → freundlich auflegen). Nein/„ich komme vorbei“ → ehrlich abschließen; unklar → eine Nachfrage, dann gilt Nein. Mitten in einer Buchung wird diese geparkt und kommt danach zurück — mit den beim Rückruf diktierten Kontaktdaten. Das Modell darf nichts zur Rechnung behaupten (Betrag, Zahlungsstand, „ich kümmere mich“ fallen vor dem Mund). Das Thema steht im Gedächtnis-Report, auch ohne Rückruf. Notaus: RECHNUNG=0, Wache RECHNUNG_WACHE=off|shadow|enforce."],
-  ["W-BUCHUNG-BEWEIS (Rücklese ohne Namensraten)", "15.09.", "Kalender", "Thaler-Anruf 831c8b6b: perfektes Gespräch, der Termin (16.09. 13:00, IMP Besprechung) stand danach sauber im Kalender — die Anruferin hörte trotzdem „Die Buchungsantwort ist nicht eindeutig im Kalender angekommen“. Der Schreibweg war grün; gestolpert ist die Read-after-write-Prüfung: die Plattform löst den Patienten über Namens-Ähnlichkeit auf und liest eine mitgeschickte patientId nicht — bei DREI Akten „Eva Thaler“ traf die Rücklese eine fremde samt deren PZR am 21.10. Jetzt beweist ein zweiter, namensfreier Weg über die patientId (masPatientLastDoctor) denselben Vierfach-Beweis (Akte, Startminute, Kalender, echte Termin-ID), und die Anrufernummer geht in die Rücklese mit. Streng bleibt es: der zweite Weg läuft NUR, wenn die Namenssuche die richtige Akte nie erreicht hat — traf sie die Akte und der Termin passte nicht (fremde/recycelte ID), bleibt der Termin unbestätigt. Auf dem guten Pfad kostet der Beweis keinen Aufruf. In der Gesprächsansicht steht, wer bewiesen hat („namensliste“ oder „akte“). Notaus: BOOK_VERIFY_AKTE=0."],
-  ["W-AKTE-HANDY (Handynummer in die Akte, sonst kein Termin)", "15.09.", "Kalender", "Blessing-Anruf a8fcbcb4: In der Akte stand nur eine Festnetznummer. Die Anruferin nannte ihr Handy und bestätigte es Ziffer für Ziffer — die Plattform lehnte die Buchung trotzdem viermal ab („Handynummer fehlt“), weil niemand die Nummer in die Kartei schrieb. Bianca fragte dieselbe Nummer wieder und wieder ab, sagte dann „die Nummer ist gespeichert, dann ist alles für Sie eingetragen“ (im Kalender stand nichts) und beendete mit dreizehnmal „Kann ich sonst noch etwas für Sie tun?“. Jetzt: verlangt die Plattform eine Handynummer, schreibt Bianca die RÜCKBESTÄTIGTE Mobilnummer in die Akte und bucht genau einmal neu (nur eine echte 015x/016x/017x-Nummer, nie eine bloß gehörte); die Wahlfrage „alte Nummer löschen oder SMS an die alte?“ kommt nicht mehr, wenn in der Akte ein Festnetz steht (dort kommt keine SMS an — live führte genau diese Wahl in die Sackgasse), die neue Nummer wird still nachgetragen und am Termin vermerkt; die Abschlussfrage ist eine echte Frage geworden (Nein/Danke legt auf, Ja lädt ein, sie kommt nie zweimal); und die Fakten-Wache lässt weder „ist alles für Sie eingetragen“ ohne Buchung noch „Ihre Nummer ist gespeichert“ ohne Schreibvorgang durch („Ihre Nummer steht noch nicht in der Akte“). Notaus: BOOK_FIX_PHONE=0."],
-  ["W-STIMME-MANDANT (ein Prozess, mehrere Stimmen und Namen)", "15.09.", "Technik", "Neue Praxis Doktor Rüther (Gynäkologie): dort heißt die Telefonassistenz Ben und spricht männlich. Bis dahin war beides prozessweit fest — eine Stimme aus der .env und der Name „Bianca“ hart im Code, samt weiblicher Grammatik („Empfangsassistentin“, „Ich bin die Neue!“, „Sie sprechen mit Bianca, der Telefonassistentin“). Jetzt kommen Name, Genus und Stimmklon aus dem Mandanten: der Prompt, die Begrüßung und die Selbstvorstellung werden gebeugt (auch im Dativ: „dem Telefonassistenten“), die Stimme gilt pro ANRUF — Füller, Vorab-Sätze, Barge-Quittungen, Notfall-Ansagen und der Stille-Stups sprechen in der Stimme dieses Mandanten, und die vorgerenderten Sätze liegen je Stimme im Cache (Bens Warm-Lauf wärmt die männlichen Formen). Praxis-Fakten bleiben unberührt: „Frau Doktor“, Behandlerinnen-Namen und die Anrede der Anruferin dreht niemand. MedDent, Thaler und Blessing verhalten sich byte-identisch — ohne Mandanten-Angabe bewegt sich kein Zeichen."],
-  ["W-BLESSING-NAME-UNKLAR (Namensfrage ohne Doppelschleife)", "15.09.", "Gespräch", "Blessing-Livefälle: leicht verhörte oder kurze Namen wie „Mülhausen“, „Said“, „Aqu“ und „Manuela“ bekamen den allgemeinen Doppelsatz „Was meinen Sie damit? Meinen Sie vielleicht etwas anderes?“ — obwohl Bianca gerade nach Name, Nachname, Vorname oder Buchstabierung gefragt hatte. Jetzt bleibt sie in diesem Formular knapp beim fehlenden Namensfeld und spiegelt den unsicheren STT-Text nicht zurück. Der freie LLM-Pfad bleibt aus, der allgemeine Unklar-Zähler startet nicht; gültige Namen werden unverändert geerntet. Seit 22.09. gilt `namensUnklarOhneEcho` für alle Live-Praxen."],
-  ["W-BLESSING-BUCHSTABIER-SEGMENTE (Namen nicht zusammenkleben)", "15.09.", "Ohr", "Blessing-Anrufe a97bc81a/c7470b98: Aus „L-O-U-R-E-N-C, wie Cäsar, O“ wurde `Lourencbcsao`, aus „R-EN-C-O“ wurde `Lournco`, Wortgrenzen aus „neues Wort“ verschwanden, und Hallwachs plus der Kindesname Tamia wurde zu `Hallwachstmiatamia`. Jetzt entfaltet der Segment-Parser zusammengehörige Hyphen-Cluster, erkennt die zwei beobachteten Parakeet-Zerlegungen von „C wie Cäsar“, bewahrt ausdrücklich diktierte Wortgrenzen und beendet das gerade erfragte Namensfeld vor einer zweiten vollständigen Personenkette. „fertig“ beendet auch einen gesprochenen Namen und landet nie im Nachnamen. Seit 22.09. gilt `buchstabierSegmenteTrennen` für alle Live-Praxen; `deute()` bleibt der alte Kurzpfad für Tests ohne Mandant."],
-  ["W-BLESSING-NACHNAME-READBACK (Schreibweise vor Suche bestätigen)", "15.09.", "Gespräch", "Nach einer Buchstabierung suchte Blessing bisher sofort mit dem erkannten Nachnamen. Ein einzelner STT-/Parserfehler konnte dadurch die falsche Akte treffen oder eine Termin-Auskunft, Absage beziehungsweise Buchung scheitern lassen. Jetzt liest Bianca den aufgenommenen Nachnamen genau einmal samt Buchstabiertafel vor („Pusch: P wie Paula … Ist das richtig?“). Erst ein klares Ja gibt Patienten- und Bestandssuche frei. Nein oder eine direkt genannte neue Schreibweise korrigiert nur den Nachnamen und führt erneut durch denselben Sicherheitszug; Vorname und Terminangaben bleiben erhalten. Zwei unklare Antworten starten die Buchstabierung neu, statt eine Ja/Nein-Schleife oder das LLM zu öffnen. Seit 22.09. gilt `nachnameReadbackNachBuchstabieren` für alle Live-Praxen."],
-  ["W-NUMMER-OHR (Telefonnummer ansagen und erkennen)", "22.09.", "Ohr", "Auf der Handynummer-Frage bekommt Parakeet nur Ziffernwörter, nicht mehr Petsas/Thaler. Auf dem Readback stehen Ja/Nein vor den Ziffern, damit „nein“ nicht zu „neun“ wird; ein nacktes „Neun.“ zählt dort als Nein, „die letzte war eine neun“ bleibt Korrektur. Die Ansage bleibt in Gruppen (null eins sieben sieben, sechs null null, …), TTS sagt weiter „zwei“, nie „zwo“. SMS-Stammdatenweg unverändert."],
-  ["W-ZEIT-DREISSIG (alle X-Uhr-dreißig-Formen)", "22.09.", "Ohr", "„9 Uhr dreißig“, „neun Uhr 30“, „9;30“ und das geklebte STT „neununddreißig“ / „um 39“ sind 9:30 — dasselbe für einunddreißig bis achtunddreißig. Nackte 39 und „Ich bin neununddreißig Jahre“ bleiben Alter. Auf der Wunsch- und Slotfrage bekommt Parakeet zusätzlich Uhr/dreißig, Behandlernamen bleiben. Ansage: „Uhr 30“ wird zu „Uhr dreißig“."],
-  ["W-NAME-VOR-SUCHE (Buchstabieren vor der Kartei)", "22.09.", "Ohr", "Unbekannte Anrufer buchstabieren den Nachnamen in jeder Live-Praxis, Bianca liest die Tafel vor, und erst das Ja startet die Suche. Eine bestätigte Rufnummer überspringt das. Als Hörhilfe kommt höchstens dieser eine Kartei-Nachname dazu, nie die ganze Kartei. Qwen bleibt auf dem Namenszug stumm und darf nach einer leeren Suche nur eine zweite Schreibweise vorlesen — gespeichert wird sie erst nach Ja."],
-  ["W-NAME-SMS-PREFILL (Gehörtes nicht vorsprechen)", "22.09.", "Ohr", "Unklarer Hörschrott wird nicht mehr vorgesprochen. Neupatienten mit Handy sagen Vor- und Nachname, Bianca liest ihn nicht als Tatsache vor und schickt ihn vorausgefüllt in die Namens-SMS zur Korrektur. Im Kalender bleibt der Platzhalter. Absage, Verschieben und Auskunft buchstabieren weiter."],
-  ["W-BLESSING-BESTANDSAUSKUNFT (bestehenden Termin sicher erkennen und ansagen)", "15.09.", "Gespräch", "Drei Gescheidle-Anrufe fragten nach einem schon vereinbarten Termin: „Meinen Termin nächste Woche, wann ist der?“, „ich habe einen Termin … und weiß den Tag nicht mehr“. Weil „Termin“ vor „wann“ stand und kein Wort wie „gebucht“ fiel, blieb der synchrone Intent bisher leer; nach einer Fehlsuche kippte das Gespräch in eine Neubuchung mit Besuchsgrund- und Versicherungsfragen. Jetzt deutet Blessing diese beobachteten Termin-vor-Wann-, Vergessen-/Uhrzeit- und Statusformen sofort als Bestandsauskunft und geht in den echten Kalenderpfad — auch aus einer bereits angelaufenen Neubuchung heraus. Bekannte Anrufer bekommen nach der Identitätsbestätigung Datum, Uhrzeit, Grund und Behandler direkt angesagt. Unbekannte Anrufer bestätigen erst den buchstabierten Nachnamen; vor diesem Ja läuft keine Suche. Das Schlusswort „fertig“ bleibt dabei Teil des Blessing-Namensformulars und darf die Auskunft nicht mehr ans freie LLM oder in `WISSEN × REGEL` abbiegen. Freie/neue Termine bleiben Neubuchung; eine Statusfrage während eines noch ungeschriebenen Slots startet keine zweite Suche. Die Schalter sind nur bei Blessing aktiv; MedDent, Thaler und Rüther behalten ihre bisherige Deutung."],
-  ["W-BLESSING-MOTIVKLARHEIT (Hautgrund konkret statt Notfall oder Ablehnung)", "15.09.", "Gespräch", "Blessing bot selbst „eine Beratung oder etwas anderes“ an und antwortete danach auf genau diese Auswahl „Diese Leistung wird nicht angeboten“. Zusätzlich traf das alte Zahn-Muster `eiter` mitten in „WEITERbehandlung“ und „WEITERE Medikamentenkontrolle“ — beide wurden zum Notfall-Motiv. Jetzt konkretisiert Bianca eine offene Beratung aus den wirklich buchbaren Blessing-Motiven und fragt bei „etwas anderes“ gezielt nach, ohne schon einen Grund zu raten. Rosacea, Neurodermitis, Allergie, Hautkrebs-Screening, Nagelpilz, Venen, Wunden/Hautprobleme sowie Atherom/Grützbeutel werden vor dem alten Zahn-Muster auf den echten Hautarzt-Katalog gemappt; `eiter` zählt nur noch als eigenes Akutwort. Weil Blessing genau eine Ärztin hat, entfällt außerdem bei Neu- und Bestandspatienten die inhaltslose Behandlerfrage; ein zweiter Kalender würde sie automatisch wieder aktivieren. Beide Schalter gelten nur für Blessing — MedDent, Thaler und Rüther behalten den bisherigen Pfad."],
-  ["W-BLESSING-KNAPP (Aufgabe statt Gesprächsschleife)", "15.09.", "Gespräch", "Blessing antwortet bei unklaren Schnipseln mit genau einer kurzen Aufgabenfrage, lässt „Ich bin die Neue“, Wohlseinsfrage, Behandlerfrage und den langen KI-Erklärtext weg und hängt eine offene „Sonst noch?“-Frage nur an einen belegten Erfolg. Ein reiner Gruß führt direkt zur Aufgabenfrage. Nach einmal Presence und einmal offener Jobfrage beendet Bianca eine weitere Stille sauber; ein offenes Anliegen wird vorher als Rückrufnotiz gesichert. Alle Kürzungen sind ausschließlich über Blessing-Schalter aktiv."],
-  ["W-BLESSING-SLOTPRÄFERENZ (abgelehnte Zeiten bleiben gesperrt)", "15.09.", "Kalender", "Der Live-Anruf 50563be8 lehnte Donnerstag mehrfach ab und verlangte Nachmittag; Bianca bot trotzdem wieder Donnerstag und 11:15 Uhr an. Im laufenden Blessing-Angebot werden ausgeschlossene Wochentage, Stunden und Tageszeiten jetzt kumulativ festgehalten. Die Terminauswahl und auch der Verschiebe-Fallback dürfen diese harten Grenzen nie verlassen; bei keinem passenden Platz fragt Bianca gezielt neu, statt den verbotenen Slot erneut zu nennen."],
-  ["W-BLESSING-VERSCHIEBEZIEL (Bestandsdatum und Zielmonat trennen)", "15.09.", "Kalender", "Im Bächle-Live-Satz „Termin am 21. Oktober … bis Mitte November enthalten“ wurde der Punkt nach 21 als Satzende gelesen. Dadurch blieb Oktober fälschlich als Ziel stehen. Blessing erkennt den beobachteten STT-Verhörer jetzt als Verschiebewunsch, trennt den Bestandstermin am 21. Oktober vom Ziel Mitte November und öffnet deterministisch die Bestands-Verschiebestrecke. Andere Mandanten und ein alleinstehendes „enthalten“ bleiben unverändert."],
-  ["W-BLESSING-RUHE (ein Thema pro Zug, relative Wahl bleibt erhalten)", "15.09.", "Gespräch", "Live-Anruf 89daafaa: „den frühestmöglichen“ hatte den richtigen Slot gewählt; eine ungenaue Motivansage löschte ihn wieder. Nach der Buchung kamen zu viele Informationen am Stück, und vier ausdrückliche Notizwünsche liefen in derselben „Sonst noch?“-Schleife. Jetzt bleibt eine relative Slotwahl erhalten, wenn sich die Motiv-ID tatsächlich nicht ändert; Hautkrebs-Screening wird sprechbar als Hautscreening benannt. Die Vorbereitungsnachricht für die Ärztin ist ein eigener Ja/Nein-Schritt vor dem Schreiben. Ein später Notizwunsch wird separat erfragt, rückgelesen und erst nach Ja geschrieben. Nach erfolgreicher Buchung folgen nur die kurze Bestätigung, SMS-/Unterlagenhinweis und Abschied. Task-Auswahl und Formular-Grüße dürfen keine zusätzliche LLM-Ansage vor die gerade offene Aufgabe setzen. Der Notiz- und Abschlussweg ist mandantenscharf nur bei Blessing aktiv."],
-  ["W-RUECKRUFGRUND-ENDE (fehlender Anrufgrund ohne Schleife)", "17.09.", "Gespräch", "Live-Anruf a8536585: Ohne gespeicherten Rückrufgrund fiel Bianca ins Termin-Menü und danach in eine Wiederholungsschleife; wegen eines falschen Akten-Geschlechts blieb schließlich „Herr Rauscher“ übrig. Jetzt sagt sie einmal ehrlich, dass der Grund nicht vorliegt, verwendet auf diesem Weg keine unsichere Anrede und beendet den Anruf. Kein Praxisrückruf, kein Menü, kein LLM-Fallthrough."],
 ];
 
 let kTab = "faehig";
@@ -1351,282 +1320,5 @@ $("koennenZu").onclick = () => { $("koennen").hidden = true; };
 for (const b of document.querySelectorAll(".k-tab")) {
   b.onclick = () => { kTab = b.dataset.tab; kRender(); };
 }
-
-// ---------------------------------------------------------------------------
-// Dock-Chat (19.09.2026): tippen statt sprechen. ZWEI Ziele, ein Fenster —
-// der Anruf oben bleibt von beiden unberuehrt:
-//
-//   "kern"  DEFAULT. Der neue Dialogkern, mandantenscharf ueber die
-//           Studio-Strecke (studio/api/kern/*). Werkzeuge sind SIMULIERT
-//           (gateway_sim): kein Kalender, keine SMS, kein Mitschnitt. Dafuer
-//           zeigt jeder Zug seine Entscheidung (Grund, naechster Schritt,
-//           Werkzeug, Uebergabe) — das ist der Sinn der Probe.
-//   "live"  Der bisherige Weg (api/start + api/turn): echte Waechter, echte
-//           Nacharbeit, Gespraech landet in /anrufe. Schreibt nur mit Haken.
-// ---------------------------------------------------------------------------
-let chatSid = "";
-let chatBusy = false;
-let chatKopf = null;
-// Zu welchem Ziel die LAUFENDE Sitzung gehoert: das Auswahlfeld darf nach dem
-// Start nicht mehr entscheiden, sonst endet eine Kern-Probe auf api/hangup.
-let chatSidKern = false;
-
-function chatStand(text) {
-  const el = $("chatStand");
-  if (el) el.textContent = text;
-}
-
-function chatIstKern() {
-  const s = $("chatZiel");
-  return !s || s.value === "kern";
-}
-
-// Ton und echtes Schreiben gibt es nur im Live-Pfad — der Kern rendert Text
-// und simuliert Werkzeuge. Die Haken werden darum sichtbar stillgelegt,
-// statt etwas zu versprechen, das der Kern nicht tut.
-function chatRegie() {
-  const kern = chatIstKern();
-  const lage = $("chatLageBox");
-  if (lage) lage.hidden = !kern || !($("chatSzenario") && $("chatSzenario").options.length);
-  for (const id of ["chatTon", "chatEcht"]) {
-    const el = $(id);
-    if (!el) continue;
-    el.disabled = kern || (id === "chatEcht" && !!chatSid);
-    if (kern) el.checked = false;
-    const lbl = el.closest(".chat-opt");
-    if (lbl) lbl.style.opacity = kern ? "0.45" : "1";
-  }
-  if (chatSid) return;
-  chatStand(kern
-    ? "Dialogkern — Werkzeuge simuliert, kein Kalender, kein Mitschnitt."
-    : "Live-Bianca — echte Wächter und Nacharbeit, ohne Haken kein Kalender-Schreiben.");
-}
-
-async function chatSzenarienLaden() {
-  const s = $("chatSzenario");
-  if (!s) return;
-  try {
-    const d = await (await fetch("studio/api/kern/maske")).json();
-    for (const sz of d.szenarien || []) {
-      const o = document.createElement("option");
-      o.value = sz.id;
-      o.textContent = sz.text;
-      s.appendChild(o);
-    }
-  } catch { /* Studio nicht erreichbar — Kern startet mit Standard-Lage */ }
-  chatRegie();
-}
-
-// Eine Zeile je Kern-Zug: warum er so entschieden hat. Ohne die Zeile ist die
-// Probe nur ein Chat; mit ihr sieht man Schleifen-Aufsicht und Uebergaben.
-function chatMeta(z) {
-  const teile = [];
-  if (z.grund) teile.push(z.grund);
-  if (z.naechste) teile.push("→ " + z.naechste);
-  if (z.tool) teile.push("Werkzeug " + z.tool);
-  const zu = z.zustand || {};
-  if (zu.task) teile.push("Anliegen " + zu.task + (zu.phase ? "/" + zu.phase : ""));
-  if (zu.stockZahl) teile.push("Frage " + zu.stockZahl + "×/" + (zu.stockBudget || "?"));
-  if (z.uebergeben) teile.push("ÜBERGABE an den alten Pfad");
-  if (teile.length) bubble("sys", teile.join(" · "), $("chatLive"));
-}
-
-async function chatStartKern() {
-  const sz = $("chatSzenario");
-  const r = await fetch("studio/api/kern/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tenant: $("tenant").value, szenario: (sz && sz.value) || "" }),
-  });
-  const d = await r.json();
-  if (!d.ok) throw new Error(d.fehler || "Kern-Start fehlgeschlagen");
-  chatKopf = d.kopf || null;
-  chatSid = (d.zug && d.zug.sid) || (chatKopf && chatKopf.sid) || "";
-  if (!chatSid) throw new Error("keine Kern-Probe");
-  chatSidKern = true;
-  if ($("chatZiel")) $("chatZiel").disabled = true;
-  if (d.zug && d.zug.antwort) bubble("ki", d.zug.antwort, $("chatLive"));
-  const k = chatKopf || {};
-  chatStand([
-    "Dialogkern · " + (k.praxis || $("tenant").value),
-    "Policy " + (k.quelle || "?") + " r" + (k.revision || "?"),
-    k.hirn ? "Verstehen: Modell" : "Verstehen: Regeln (LLM nicht erreichbar)",
-    "Werkzeuge simuliert",
-  ].join(" · "));
-  $("chatEnd").hidden = false;
-}
-
-async function chatZugKern(text) {
-  const r = await fetch("studio/api/kern/zug", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sid: chatSid, text }),
-  });
-  const d = await r.json();
-  if (!d.ok) {
-    // Abgelaufene Probe (TTL/Neustart) ist kein Fehler des Anrufers:
-    // nächste Zeile startet einfach eine neue.
-    chatSid = "";
-    throw new Error(d.fehler || "Kern-Zug fehlgeschlagen");
-  }
-  const z = d.zug || {};
-  if (z.antwort) bubble("ki", z.antwort, $("chatLive"));
-  chatMeta(z);
-  if (z.hangup) {
-    bubble("ki", "— aufgelegt —", $("chatLive"));
-    await chatBeenden(true);
-  }
-}
-
-async function chatHoeren(url) {
-  // Eigener Abspielweg: playUrl haengt an callOn/Barge/Mikro-Wache und wuerde
-  // im Chat sofort aussteigen. Hier reicht abspielen und zuhoeren.
-  if (!url || !($("chatTon") && $("chatTon").checked)) return;
-  try {
-    await unlockAudio();
-    const a = lautsprecher();
-    try { a.pause(); } catch { /* */ }
-    a.volume = 1;
-    a.src = apiUrl(url);
-    await new Promise((done) => {
-      const fertig = () => { a.onended = null; a.onerror = null; done(); };
-      a.onended = fertig;
-      a.onerror = fertig;
-      a.play().catch(fertig);
-      setTimeout(fertig, 30000);
-    });
-  } catch { /* */ }
-}
-
-async function chatStart() {
-  if (chatIstKern()) return chatStartKern();
-  return chatStartLive();
-}
-
-async function chatStartLive() {
-  const echt = $("chatEcht") && $("chatEcht").checked;
-  chatStand(echt ? "Sitzung startet — ECHTE Buchung …" : "Sitzung startet …");
-  const r = await fetch("api/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      tenant: $("tenant").value,
-      test: true,
-      testName: "Dock-Chat",
-      // Standard: nichts schreiben. Erst der Haken schaltet echte
-      // Kalender-/SMS-Wege frei — sonst legt jeder Tippversuch Termine an.
-      testNoWrite: !echt,
-    }),
-  });
-  if (!r.ok) {
-    let msg = "start fehlgeschlagen";
-    try { const err = await r.json(); if (typeof err.detail === "string") msg = err.detail; } catch { /* */ }
-    throw new Error(msg);
-  }
-  const d = await leseZug(r);
-  chatSid = d.sessionId || "";
-  if (!chatSid) throw new Error("keine Sitzung");
-  chatSidKern = false;
-  if ($("chatZiel")) $("chatZiel").disabled = true;
-  if (d.text) bubble("ki", d.text, $("chatLive"));
-  await chatHoeren(d.audioUrl);
-  chatStand((echt ? "ECHTE Buchung · " : "Testmodus (kein Kalender-Schreiben) · ") + "Sitzung " + chatSid.slice(0, 8));
-  $("chatEnd").hidden = false;
-  if ($("chatEcht")) $("chatEcht").disabled = true;
-}
-
-async function chatSenden() {
-  if (chatBusy) return;
-  const feld = $("chatIn");
-  const text = (feld.value || "").trim();
-  if (!text) return;
-  if (callOn) {
-    // Zwei Sitzungen gleichzeitig wuerden sich im Mitschnitt ueberlagern.
-    bubble("sys", "Erst auflegen — waehrend des Anrufs laeuft der Chat nicht.", $("chatLive"));
-    return;
-  }
-  chatBusy = true;
-  feld.disabled = true;
-  $("chatSend").disabled = true;
-  try {
-    if (!chatSid) await chatStart();
-    bubble("user", text, $("chatLive"));
-    feld.value = "";
-    if (chatIstKern()) {
-      await chatZugKern(text);
-      return;
-    }
-    const r = await fetch("api/turn", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: chatSid, text }),
-    });
-    const d = await leseZug(r);
-    if (d.warte) {
-      // Halbsatz-Wache: der Satz klingt unfertig — Bianca schweigt und
-      // wartet auf den Rest. Im Chat heisst das: einfach weitertippen.
-      bubble("ki", "… (hört weiter zu — Satz klingt unfertig)", $("chatLive"));
-    } else {
-      if (d.text) bubble("ki", d.text, $("chatLive"));
-      if (d.tools) zeigeTools(d.tools, $("chatLive"));
-      // writeLive nur melden, wenn der Haken echtes Schreiben freigegeben hat —
-      // sonst behauptet der Testmodus "Buchung nicht fest" statt "Trockenlauf".
-      const echt = !!($("chatEcht") && $("chatEcht").checked);
-      if (d.book) zeigeBuch(d.book, d.writeLive && echt, $("chatLive"));
-      await chatHoeren(d.audioUrl);
-    }
-    if (d.hangup) {
-      bubble("ki", "— aufgelegt —", $("chatLive"));
-      await chatBeenden(true);
-    }
-  } catch (e) {
-    bubble("ki", "Fehler: " + String(e.message || e), $("chatLive"));
-  } finally {
-    chatBusy = false;
-    feld.disabled = false;
-    $("chatSend").disabled = false;
-    if (!callOn) feld.focus();
-  }
-}
-
-async function chatBeenden(schonAufgelegt) {
-  const sid = chatSid;
-  const warKern = chatSidKern;
-  chatSid = "";
-  chatKopf = null;
-  $("chatEnd").hidden = true;
-  if ($("chatZiel")) $("chatZiel").disabled = false;
-  if ($("chatEcht")) $("chatEcht").disabled = false;
-  chatRegie();
-  if (!sid) return;
-  if (warKern) {
-    // Kern-Probe: keine Nacharbeit, kein Mitschnitt — die Probe verfaellt
-    // im Studio von selbst (TTL).
-    chatStand("Kern-Probe beendet. Nächste Zeile startet eine neue.");
-    return;
-  }
-  if (!schonAufgelegt) {
-    // Wie im Anruf: Nacharbeit (Mitschnitt, Gedaechtnis-Report) laeuft ueber
-    // api/hangup — ohne den Aufruf fehlt das Gespraech in /anrufe.
-    try {
-      const d = await (await fetch("api/hangup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: sid }),
-      })).json();
-      zeigeLetzten(d.call);
-      zeigeStand(d.call);
-    } catch { /* */ }
-  }
-  chatStand("Chat beendet. Nächste Zeile startet eine neue Sitzung.");
-}
-
-$("chatSend").onclick = () => chatSenden();
-$("chatEnd").onclick = () => chatBeenden(false);
-$("chatIn").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); chatSenden(); }
-});
-if ($("chatZiel")) $("chatZiel").onchange = () => chatRegie();
-chatSzenarienLaden();
 
 boot();
