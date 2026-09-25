@@ -22,6 +22,7 @@ from kern import (
     halbsatz,
     llm,
     mitschnitt,
+    qwen_korrektor,
     sprech,
     standort,
     stt,
@@ -30,7 +31,6 @@ from kern import (
     unterbrechung,
     webpfad,
 )
-from kern.dienst import stimme_aus_sitzung
 from kern.config import (
     BIANCA_PORT,
     BIANCA_VOICE_ID,
@@ -40,7 +40,7 @@ from kern.config import (
     LLM_MODEL,
     WRITE_LIVE,
 )
-from kern.dienst import Dienst, ndjson
+from kern.dienst import Dienst, ndjson, stimme_aus_sitzung
 
 # tempo.py fehlt auf aelteren Images — soft, sonst Crash-Loop beim Deploy
 # (06.09.2026: Full-Copy von lokaler server.py ohne tempo-Modul).
@@ -67,6 +67,8 @@ def _stille_ms(sit: dict) -> int:
 DIENST = Dienst(
     name="bianca",
     start_fn=agent.start_reply,
+    # Der verworfene V3.x-Dialogkern bleibt vollständig isoliert.
+    # Alle bewährten Wächter laufen im deterministischen Agentenpfad.
     turn_fn=agent.user_turn,
     # Neutraler Haenger-Füller nur, wenn Slot/Buchung/Ziffern wirklich
     # haengen können — NICHT den ganzen Anruf (Live 08.09.: bei jedem
@@ -260,6 +262,7 @@ def api_weiter(body: WeiterIn):
 
 
 def _sit_optional(session_id: str) -> dict | None:
+    """Sitzung ohne Anlegen — nur um die Stimme des Anrufs zu erfahren."""
     sid = " ".join(str(session_id or "").split()).strip()
     if not sid:
         return None
@@ -271,7 +274,11 @@ def _sit_optional(session_id: str) -> dict | None:
 
 @app.get("/api/quittung")
 def api_quittung(sessionId: str = ""):
-    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock."""
+    """W-BARGE: vorgewärmte Sofort-Quittungen ("Hm.", "Okay.") fürs Dock.
+
+    W-STIMME-MANDANT: die Brücke holt sie PRO ANRUF und schickt ihre
+    sessionId mit — dann kommen sie in der Stimme dieses Mandanten. Ohne
+    sessionId (Dock-Boot) bleibt es die Prozess-Stimme wie bisher."""
     if not unterbrechung.enabled():
         return {"ok": True, "urls": []}
     return {"ok": True, "urls": DIENST.quittungen_fuer(_sit_optional(sessionId))}
@@ -292,6 +299,10 @@ def api_stille(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    # W-STIMME-MANDANT: der Stups spricht ueber DIENST.stimme() direkt, also
+    # am json_antwort-Pfad vorbei — ohne diese Zeile stupst Biancas Stimme
+    # mitten in Bens Anruf.
+    stimme_aus_sitzung(sit)
     # W-HALBSATZ: haengt ein gehaltenes Satz-Fragment in der Sitzung, hat der
     # Anrufer den Satz nicht fortgesetzt — dann wird ER beantwortet, kein Stups.
     rest = halbsatz.abholen(sit)
@@ -303,7 +314,6 @@ def api_stille(body: HangupIn):
     text = sprech.sanitize(reply.get("text") or "")
     if not text:
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
-    stimme_aus_sitzung(sit)
     url, tts_s = DIENST.stimme(text)
     timings: dict = {"tts": tts_s}
     session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)
@@ -316,34 +326,6 @@ def api_stille(body: HangupIn):
           f"{' [hangup]' if auflegen else ''}", flush=True)
     return {"ok": True, "empty": False, "text": text, "audioUrl": url,
             "hangup": auflegen, "writeLive": WRITE_LIVE}
-
-
-
-class StromIn(BaseModel):
-    sessionId: str = ""
-
-
-@app.post("/api/stt-strom/start")
-def api_stt_strom_start(body: StromIn):
-    sit = session.holen(body.sessionId)
-    if not sit or not stt.scribe_strom_moeglich():
-        return {"ok": False}
-    return {"ok": stt.strom_start(body.sessionId, stt.keywords_fuer_sitzung(sit))}
-
-
-@app.post("/api/stt-strom/chunk")
-async def api_stt_strom_chunk(sessionId: str, request: Request):
-    stt.strom_schieben(sessionId, await request.body())
-    return {"ok": True}
-
-
-@app.post("/api/stt-strom/commit")
-def api_stt_strom_commit(body: StromIn):
-    import time as _zeit
-    t0 = _zeit.perf_counter()
-    text = stt.strom_commit(body.sessionId)
-    print(f"stt-strom sek={_zeit.perf_counter() - t0:.2f} zeichen={len(text)}", flush=True)
-    return {"ok": True, "text": text}
 
 
 @app.post("/api/listen")
@@ -392,17 +374,13 @@ async def api_hoeren(sessionId: str = Form(""), audio: UploadFile = File(...)):
         raise HTTPException(404, "sitzung unbekannt")
     blob = await audio.read()
     try:
-        from kern import ohr
-        basis = list(tenants.stt_keywords(sit.get("tenant") or {}))
-        kw = ",".join(ohr.keywords(sit, basis))
-
-        def _qwen_sperre(lokal: str) -> str:
-            return ohr.qwen_live_sperre(sit, lokal)
-
+        kw = ",".join(tenants.stt_keywords(sit.get("tenant") or {}))
+        # W-QWEN-SICHER: dieselbe Live-Sperre wie der echte Zug — sonst
+        # koennte Qwen im Vorab-Ohr bei offener Namensfrage gewinnen und der
+        # Zug kaeme als TEXT mit Qwens Lesart an /api/listen.
         gesagt = stt.transcribe(blob, mime=audio.content_type or "application/octet-stream",
                                 name=audio.filename or "vorab.webm", keywords=kw,
-                                qwen_sperre=_qwen_sperre)
-        gesagt = ohr.klartext(gesagt)
+                                qwen_sperre=lambda lokal: qwen_korrektor.live_sperre(sit, lokal))
     except RuntimeError as e:
         return {"ok": False, "text": "", "error": str(e)}
     print(f"bianca-vorab-stt bytes={len(blob)} text={gesagt!r}", flush=True)
@@ -414,29 +392,14 @@ def api_last_call():
     return {"ok": True, "writeLive": WRITE_LIVE, "call": session.last_call()}
 
 
-@app.get("/api/ohr")
-def api_ohr():
-    """Aktives Ohr ohne Last-Call. Die Anrufliste zeigt genau diesen Namen."""
-    return {"ok": True, "stt": stt.engine_anzeige() if stt.bereit() else "live"}
-
-
 # --- Anrufliste (W-MITSCHNITT): Unterhaltungen mit Audio + Transkript ---------
 _MITSCHNITT_STIMME = "bianca"
 
 
 @app.get("/api/anrufe")
 def api_anrufe(tenant: str = ""):
-    items = mitschnitt.liste(_MITSCHNITT_STIMME)
-    if tenant:
-        info = next((x for x in tenants.liste() if x.get("id") == tenant), {})
-        erlaubt = {
-            tenant,
-            str(info.get("clientId") or ""),
-            str(info.get("locationId") or ""),
-            *(str(x) for x in (info.get("aliases") or [])),
-        }
-        items = [x for x in items if str(x.get("tenantId") or "") in erlaubt]
-    return {"ok": True, "anrufe": items}
+    return {"ok": True, "anrufe": mitschnitt.liste(
+        _MITSCHNITT_STIMME, erlaubt=mitschnitt.erlaubt_von(tenant))}
 
 
 @app.get("/api/anrufe/{sid}")
@@ -531,6 +494,9 @@ def _warm_start():
         # W-BEHANDLER-SPERRE: gewaermt wird die Arztwahl-Frage OHNE die
         # gesperrten Behandler — genau die Form, die live gesprochen wird.
         t = behandler_sperre.anwenden(tenants.laden(DEFAULT_TENANT))
+        # W-STIMME-MANDANT: gewaermt wird in der Stimme DIESES Mandanten —
+        # der Cache-Schluessel traegt sie, ein Warm-Lauf in Biancas Stimme
+        # waere fuer Ben wertlos (und er zahlte live die Synthese).
         tts.stimme_setzen(assistent.stimme(t))
         tts.warm(begruessung(tenants.praxis_melde(t), t))
         # Feste Maschinen-Fragen dauerhaft vorwärmen (kein Patientenbezug):
@@ -647,16 +613,19 @@ def studio_uebergabe(request: Request):
     return _studio_seite("uebergabe.html", request)
 
 
-
-@app.get("/studio/anliegen")
-@app.get("/studio/anliegen/")
-def studio_anliegen(request: Request):
-    return _studio_seite("anliegen.html", request)
+@app.get("/studio/dialogkern")
+@app.get("/studio/dialogkern/")
+def studio_dialogkern(request: Request):
+    """Chat gegen den reinen Dialogkern (W-KERN-STUDIO). Ohne diese Route
+    zeigte der Link im Studio-Kopf hinter der Durchreiche auf 404 — die
+    Seite lag da, war aber nur auf Port 8097 direkt erreichbar."""
+    return _studio_seite("dialogkern.html", request)
 
 
 @app.get("/studio/web/{name}")
 def studio_web(name: str):
-    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js", "anliegen.js"}
+    erlaubt = {"app.js", "stil.css", "ergebnisse.js", "uebergabe.js",
+               "dialogkern.js"}
     if name not in erlaubt:
         raise HTTPException(404)
     return _studio_seite(name)

@@ -56,21 +56,6 @@ _BESCHWERDE_RE = re.compile(
     r"breitet\s+sich\s+aus|ausgebreitet",
     re.I,
 )
-# Zahn-/Schmerz-Akut, NUR wenn die Praxis eine Notfall-Regel veroeffentlicht
-# hat. Ohne Regel bleibt ``akut()`` bewusst haut-/Blessing-scharf, damit
-# MedDent bei „Zahnschmerzen" weiter den normalen Buchungsweg geht.
-_ZAHN_AKUT_RE = re.compile(
-    r"zahnschmerz|zahnweh|(?:dicke?|geschwollen)\s+backe|"
-    r"backe\s+(?:dick|geschwollen)|"
-    r"(?:zahn|schneidezahn)\s+(?:abgebrochen|ausgeschlagen|rausgefallen|locker)",
-    re.I,
-)
-_SCHMERZ_WORT_RE = re.compile(r"\bschmerz(?:en|e)?\b|\bzahnweh\b", re.I)
-_LEICHT_SCHMERZ_RE = re.compile(
-    r"\b(?:leicht|manchmal|gelegentlich|selten|empfindliche?|"
-    r"ein\s+bisschen|ein\s+wenig)\w*",
-    re.I,
-)
 _AKUT_RE = re.compile(
     # Auch zusammengesprochene Praxisformulierungen wie „Notfalltermin“
     # und „Hautnotfall“ sind ein Notfall. Das alte ``\bnotfall\b`` erkannte
@@ -189,19 +174,8 @@ _NOTDIENST_RE = re.compile(r"\b116\s?117\b|\b1\s?1\s?6\s+1\s?1\s?7\b", re.I)
 
 
 def notdienst_erlaubt(tenant: dict | None) -> bool:
-    """Darf die 116 117 in dieser Praxis fallen?
-
-    Blessing-DB-Marker wie bisher, ODER die Praxis hat auf der Anliegen-
-    Seite ausdrücklich „116 117 anrufen“ gewählt.
-    """
-    if notfall_sofort_aktiv(tenant):
-        return True
-    try:
-        from kern import anliegen_zug
-        r = anliegen_zug.regel_fuer(tenant, "notfall")
-    except Exception:
-        r = None
-    return bool(r is not None and r.wahl == "bereitschaft")
+    """Darf die 116 117 in dieser Praxis ueberhaupt fallen? Nur mit Marker."""
+    return notfall_sofort_aktiv(tenant)
 
 
 def notdienst_saeubern(tenant: dict | None, text: str) -> tuple[str, bool]:
@@ -237,31 +211,6 @@ def akut(text: str) -> bool:
         return True
     # Fix 3: Dringlichkeit allein ist kein Notfall — nur mit Beschwerde-Wort.
     return bool(_DRINGLICHKEIT_RE.search(t) and _BESCHWERDE_RE.search(t))
-
-
-def _policy_akut(text: str) -> bool:
-    """Akut fuer eine veroeffentlichte Notfall-Regel (Zahnschmerzen zaehlen).
-
-    Die Anliegen-Seite legt den Weg fuer „akute, aber nicht lebensbedrohliche
-    Faelle" fest. In der Zahnarztpraxis ist „Ich habe Zahnschmerzen" genau
-    dieser Fall — ``akut()`` allein trifft das nicht (das Muster ist
-    haut-/Blessing-scharf). Ohne veroeffentlichte Regel bleibt alles wie
-    bisher: nur ``akut()``.
-    """
-    if akut(text):
-        return True
-    t = _s(text)
-    if not t or _VERNEINT_RE.search(t):
-        return False
-    try:
-        from kern import anliegen_art
-        if anliegen_art.art(t) == "notfall":
-            return True
-    except Exception:
-        pass
-    if _ZAHN_AKUT_RE.search(t):
-        return True
-    return bool(_SCHMERZ_WORT_RE.search(t) and not _LEICHT_SCHMERZ_RE.search(t))
 
 
 def praxis_offen(tenant: dict | None, jetzt: datetime | None = None) -> bool | None:
@@ -321,33 +270,14 @@ def notfall_antwort(
     bereits_akut: bool = False,
 ) -> str:
     """Feste, kurze Notfallantwort oder ""."""
+    if not notfall_sofort_aktiv(tenant):
+        return ""
     t = _s(text)
-    # Lebensgefahr ist fest und nicht abschaltbar — auch ohne Marker/Policy.
     if lebensgefahr(t):
         return (
             "Das ist ein medizinischer Notfall. Wählen Sie bitte jetzt die "
             "112."
         )
-    try:
-        from kern import anliegen_zug
-        regel = anliegen_zug.regel_fuer(tenant, "notfall")
-    except Exception:
-        regel = None
-    if not notfall_sofort_aktiv(tenant) and regel is None:
-        return ""
-    if regel is not None:
-        if not (_policy_akut(t) or (bereits_akut and _UHRFRAGE_RE.search(t))):
-            return ""
-        if regel.wahl == "akuttermin":
-            return ""
-        satz = anliegen_zug.satz(regel, tenant)
-        if regel.wahl == "bereitschaft" and not satz:
-            satz = (
-                "Wenden Sie sich bitte jetzt an den ärztlichen "
-                "Bereitschaftsdienst unter 116 117. Bei Atemnot oder "
-                "Kreislaufproblemen wählen Sie sofort die 112."
-            )
-        return satz
     if not (akut(t) or (bereits_akut and _UHRFRAGE_RE.search(t))):
         return ""
     offen = praxis_offen(tenant, jetzt)
@@ -376,86 +306,14 @@ def notfall_antwort(
     )
 
 
-_DOKUMENT_LABEL = {
-    "rezept": "Rezepte",
-    "ueberweisung": "Überweisungen",
-    "krankmeldung": "Krankmeldungen",
-    "rechnung": "Rechnungen",
-    "plan": "Behandlungspläne",
-    "akte": "Akten",
-    "befund": "Befunde",
-    "unterlagen": "Behandlungsunterlagen",
-    "dokument": "Solche Unterlagen",
-}
-
-
-def dokument_art(text: str) -> str:
-    t = _s(text)
-    if re.search(r"\brezept(?!ion)", t, re.I):
-        return "rezept"
-    if re.search(r"(?:ü|ue)berweis", t, re.I):
-        return "ueberweisung"
-    if re.search(r"krankmeldung|arbeitsunf|attest", t, re.I):
-        return "krankmeldung"
-    if re.search(r"\brechnung|\babrechnung", t, re.I):
-        return "rechnung"
-    if re.search(r"behandlungsplan|kostenplan|heil-?\s*und\s*kosten|\bhkp\b", t, re.I):
-        return "plan"
-    if re.search(r"patientenakte|krankenakte|\bakten\b|\bakte\b", t, re.I):
-        return "akte"
-    if re.search(r"befund", t, re.I):
-        return "befund"
-    if re.search(r"unterlagen", t, re.I):
-        return "unterlagen"
-    return "dokument"
-
-
-def behandler_fuer_dokument(tenant: dict | None, sit: dict | None = None) -> str:
-    """Letzter bekannter Behandler, sonst der Standardkalender, sonst leer."""
-    from kern.patients import arzt_sprechname
-
-    sit = sit if isinstance(sit, dict) else {}
-    k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
-    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    for src in (k.get("doctorName"), k.get("calendarName"), s.get("arzt")):
-        name = arzt_sprechname(src, tenant or {})
-        if name:
-            return name
-    default_id = _s((tenant or {}).get("defaultCalendarId"))
-    for c in (tenant or {}).get("calendars") or []:
-        if not isinstance(c, dict):
-            continue
-        if default_id and _s(c.get("id")) != default_id:
-            continue
-        name = arzt_sprechname(c.get("name"), tenant or {})
-        if name:
-            return name
-        break
-    return ""
-
-
-def dokument_antwort(behandler: str = "", art: str = "") -> str:
-    if not art:
-        return (
-            "Rezepte und Überweisungen werden nur nach einer Kontrolle oder kurzen "
-            "Besprechung mit dem Arzt bereitgestellt. Dafür müssen Sie persönlich "
-            "in die Praxis kommen und die Unterlagen persönlich abholen. Eine "
-            "dritte Person kann sie grundsätzlich nicht abholen. Bei "
-            "schwerwiegenden Umständen, zum Beispiel fehlender Mobilität, muss "
-            "die Praxis den Einzelfall vorher prüfen."
-        )
-    wer = _s(behandler) or "der Behandler"
-    if art == "rezept":
-        return (
-            f"Rezepte können nur in der Praxis abgeholt werden. "
-            f"{wer} stellt sie nur nach persönlicher Rücksprache aus."
-        )
-    if art == "ueberweisung":
-        return "Überweisungen werden nur persönlich in der Praxis ausgestellt."
-    label = _DOKUMENT_LABEL.get(art, "Solche Unterlagen")
+def dokument_antwort() -> str:
     return (
-        f"{label} gebe ich am Telefon nicht heraus. "
-        f"Das geht nur persönlich in der Praxis, nach Rücksprache mit {wer}."
+        "Rezepte und Überweisungen werden nur nach einer Kontrolle oder kurzen "
+        "Besprechung mit dem Arzt bereitgestellt. Dafür müssen Sie persönlich "
+        "in die Praxis kommen und die Unterlagen persönlich abholen. Eine "
+        "dritte Person kann sie grundsätzlich nicht abholen. Bei "
+        "schwerwiegenden Umständen, zum Beispiel fehlender Mobilität, muss "
+        "die Praxis den Einzelfall vorher prüfen."
     )
 
 
@@ -476,7 +334,7 @@ def dokument_anforderung(text: str) -> bool:
     return bool(_ANFORDERUNG_RE.search(t))
 
 
-def unterlagen_antwort(tenant: dict | None, text: str, sit: dict | None = None) -> str:
+def unterlagen_antwort(tenant: dict | None, text: str) -> str:
     """Fachsichere Dokumentauskunft; Zahnregeln nie in Derma ausgeben.
 
     Fix 1 (13.09.2026, Feldtest-Analyse): Vor dem Fix feuerte diese Antwort
@@ -499,18 +357,6 @@ def unterlagen_antwort(tenant: dict | None, text: str, sit: dict | None = None) 
     t = _s(text)
     if not t:
         return ""
-    try:
-        from kern import anliegen_zug
-
-        r = anliegen_zug.dokument_regel(tenant, t)
-        if r is not None:
-            if getattr(getattr(r, "folge", None), "value", "") in ("notiz", "termin"):
-                return ""
-            satz = anliegen_zug.satz(r)
-            if satz:
-                return satz
-    except Exception:
-        pass
     if _REZEPT_UEBERWEISUNG_RE.search(t):
         if dokument_vorsprache_aktiv(tenant) and dokument_anforderung(t):
             return dokument_antwort()

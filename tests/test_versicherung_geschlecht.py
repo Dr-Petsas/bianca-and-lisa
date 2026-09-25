@@ -8,10 +8,18 @@ Geschlecht für die Anrede; unklare Vornamen: Default weiblich + Notiz.
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from bianca import flow, gehirn
 from kern import vornamen
 from kern.tenants import laden
 from lisa import greeting
+
+
+@pytest.fixture(autouse=True)
+def _versicherung_ohne_namenslink(monkeypatch):
+    """Versicherungslogik isoliert vom separaten Reservierungs-SMS-Pfad."""
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit() -> dict:

@@ -112,6 +112,8 @@ def _ctx(*, phone: str = "01516780764") -> dict:
     }
     if phone:
         ctx["phone"] = phone
+        ctx["phoneConfirmed"] = phone
+        ctx["phoneInChart"] = phone
     calendar.patients.patient_id_bindung_setzen(ctx, PID, "Eva", "Thaler")
     return ctx
 
@@ -169,8 +171,8 @@ def test_ruecklese_schickt_die_anrufernummer_mit():
     assert verify["patientId"] == PID  # bleibt drin, auch wenn die CF ihn ignoriert
 
 
-def test_ohne_nummer_bleibt_der_verify_body_wie_vorher():
-    _, _, calls = _lauf(
+def test_ohne_bestaetigte_nummer_schreibt_und_verifiziert_nichts():
+    r, _, calls = _lauf(
         {
             "masBookAppointment": _antwort_buchen(),
             "agentFindPatientAppointments": _antwort_fremde_akte(),
@@ -178,9 +180,9 @@ def test_ohne_nummer_bleibt_der_verify_body_wie_vorher():
         },
         ctx=_ctx(phone=""),
     )
-    verify = [body for route, body in calls
-              if route == "agentFindPatientAppointments"][0]
-    assert "callerPhone" not in verify
+    assert not r["ok"] and not r["booked"]
+    assert r["phonePreflightFailed"] and not r["writeAttempted"]
+    assert calls == []
 
 
 def test_namensliste_traf_die_akte_kein_zweiter_weg():

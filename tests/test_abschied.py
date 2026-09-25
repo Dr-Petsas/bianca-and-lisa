@@ -161,16 +161,19 @@ def test_notleine_beendet_endlose_stups_schleife():
               "nachname": "Meier", "testNoWrite": True})
     sit["testNoWrite"] = True
     texte = []
-    # So viele Stille-Phasen mit je MAX_STUPSE Stupsen, bis GESAMT_MAX
-    # erreicht ist (Fix 5, 13.09.2026: aus den Konstanten abgeleitet statt
-    # fest „3 x 2“ — die Notleine bleibt, nur die Schwelle wanderte auf 8).
-    phasen = stille.GESAMT_MAX // stille.MAX_STUPSE
-    for _ in range(phasen):
+    # Die allgemeine Notleine und der engere Feld-Schleifenwächter dürfen
+    # beide früher beenden. Entscheidend ist: begrenzt und mit Auflegen.
+    letzte = {}
+    for _ in range(stille.GESAMT_MAX):
         for _ in range(stille.MAX_STUPSE):
-            texte.append(bianca_agent.stille_zug(sit))
+            letzte = bianca_agent.stille_zug(sit)
+            texte.append(letzte)
+            if letzte.get("hangup"):
+                break
+        if letzte.get("hangup"):
+            break
         stille.reset(sit)       # der Anrufer hat dazwischen gesprochen
-    assert stille.gesamt(sit) == stille.GESAMT_MAX
-    letzte = texte[-1]
+    assert 0 < stille.gesamt(sit) <= stille.GESAMT_MAX
     assert letzte.get("hangup") is True, "irgendwann ist Auflegen freundlicher"
     assert "Wiederhören" in letzte["text"]
     presence = [t["text"] for t in texte if "noch dran" in t["text"].casefold()]
@@ -184,9 +187,14 @@ def test_notleine_sagt_ihren_schlusssatz_nur_einmal():
     verpasst, wird derselbe Satz nie wiederholt."""
     sit = _sit()
     gehirn.sammler(sit).update({"modus": "", "phase": "fertig"})
-    for _ in range(stille.GESAMT_MAX // stille.MAX_STUPSE):
+    letzte = {}
+    for _ in range(stille.GESAMT_MAX):
         for _ in range(stille.MAX_STUPSE):
             letzte = bianca_agent.stille_zug(sit)
+            if letzte.get("hangup"):
+                break
+        if letzte.get("hangup"):
+            break
         stille.reset(sit)
     assert letzte.get("hangup") is True
     nochmal = bianca_agent.stille_zug(sit)

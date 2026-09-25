@@ -158,7 +158,14 @@ def braucht_notiz(sit: dict[str, Any]) -> bool:
 
 
 def stimme_von(sit: dict[str, Any]) -> str:
-    """Name der Assistenz fuer Notizen. Intern bleibt sit['stimme'] Bianca."""
+    """Name der Assistenz fuer Notizen und Berichte.
+
+    ``sit["stimme"]`` bleibt bei eingehenden Anrufen absichtlich
+    ``"Bianca"``: daran haengen Prozess-Routing, Mitschnitt-Ordner und
+    Sicherheits-Gates. Der nach aussen sichtbare Herkunftsstempel kommt
+    dagegen aus dem Mandanten. So schreibt die Ruether-Sitzung ``// Ben``,
+    ohne intern aus dem Bianca-Pfad zu fallen.
+    """
     intern = _s(sit.get("stimme"))
     tenant = sit.get("tenant")
     if intern.casefold() == "bianca" or (

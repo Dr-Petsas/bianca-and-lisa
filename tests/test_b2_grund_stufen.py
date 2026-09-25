@@ -1,4 +1,4 @@
-"""B2 (17.09.2026): "Leistung nicht angeboten" NUR bei klar Fachfremdem.
+"""V5.5-Fachfallback: "Leistung nicht angeboten" NUR bei klar Fachfremdem.
 
 Blessing-Anrufe 66913eb8 / a467367e: "Dornwarzen am Fuß" landete über den
 Fuzzy-Katalog bei "Beratung Behandlung Botox / Filler", der Verhörer
@@ -7,12 +7,10 @@ sofort "Diese Leistung wird in dieser Praxis nicht angeboten" plus dieselbe
 Grund-Frage — bis der Wiederholungs-Wächter strich und die Presence-Schleife
 lief. Kein Anruf wurde gelöst.
 
-Seitdem drei Stufen für einen Grund, den der Katalog einer Nicht-Zahn-Praxis
-nicht kennt:
-1. EINMAL fachsicher nachfragen (ohne "nicht angeboten").
-2. Erkennbare Hautbeschwerde ODER zweiter unklarer Anlauf -> allgemeine
-   Sprechstunde/Kontrolle mit dem O-Ton in der Terminnotiz.
-3. Ohne solches Motiv: ehrlich absagen + echte Rückruf-Notiz (Name, Nummer).
+Der kanonische V5.5-Vertrag konvergiert unbekannte, nicht fachfremde Gründe
+sofort auf das sichere Kontrollmotiv und hält den O-Ton für die Terminnotiz.
+Erkennbare Hautbeschwerden dürfen auf die allgemeine Sprechstunde. Eine
+separate B2-Nachfrage-/Rückrufmaschine gehört nicht zum V5.5-Produktionspfad.
 
 Die Absage "nicht angeboten" bleibt für klar Fachfremdes (Zahnwunsch beim
 Hautarzt). MedDent/Thaler (Zahn) laufen byte-identisch weiter.
@@ -38,6 +36,7 @@ BLESSING_KAL = "8krcWh7AuXEfgWc1blzQ"
 @pytest.fixture(autouse=True)
 def _kein_intent_nachzug(monkeypatch):
     monkeypatch.setenv("INTENT_NACHZUG", "0")
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 @pytest.fixture(autouse=True)
@@ -125,36 +124,27 @@ def test_ist_derma_beschwerde_nur_mit_opt_in():
     assert not besuchsgrund.ist_derma_beschwerde(laden("meddent"), "Meine Haut juckt.")
 
 
-# --- Stufe 1 + 2: Nachfrage, dann Sprechstunde mit O-Ton ----------------------
+# --- Sicherer V5.5-Fallback mit O-Ton ----------------------------------------
 
-def test_stufe1_nachfrage_dann_stufe2_sprechstunde_mit_o_ton():
+def test_unbekannter_grund_konvergiert_sofort_auf_kontrolle_mit_o_ton():
     sit = _sit()
     s = gehirn.sammler(sit)
 
     z1 = flow.zug(sit, "Matzenbehandlung.")
     assert z1 and "nicht angeboten" not in z1["text"].lower()
-    assert "nicht sicher" in z1["text"].lower()
-    assert "ärztin" in z1["text"].lower()
-    assert s["frage"] == "grund" and not s["grund"] and not s["motivId"]
-    assert sit.get("grundKlaerungen") == 1
-
-    z2 = flow.zug(sit, "Matzenbehandlung.")
-    assert z2 and "nicht angeboten" not in z2["text"].lower()
-    assert "sprechstunde" in z2["text"].lower()
-    assert s["motivId"] == SPRECHSTUNDE
+    assert "nicht sicher" not in z1["text"].lower()
+    assert "kontroll" in s["motivName"].lower()
     assert s["grundGenerisch"] is True
     assert s["grundWortlaut"] == "Matzenbehandlung."
     assert "grundKlaerungen" not in sit
-    # die Kette laeuft weiter (naechste Pflichtfrage), keine Grund-Schleife
-    assert s["frage"] != "grund", (s["frage"], z2["text"])
+    assert s["frage"] != "grund", (s["frage"], z1["text"])
 
 
-def test_nachfrage_kommt_nur_einmal_pro_grund():
+def test_unbekannter_grund_oeffnet_keine_nachfrageschleife():
     sit = _sit()
-    frage1 = flow.zug(sit, "Matzenbehandlung.")["text"]
-    frage2 = flow.zug(sit, "Matzenbehandlung.")["text"]
-    assert frage1 != frage2
-    assert "nicht sicher" not in frage2.lower()
+    frage1 = flow.zug(sit, "Matzenbehandlung.")
+    assert frage1 and gehirn.sammler(sit)["frage"] != "grund"
+    assert "grundKlaerungen" not in sit
 
 
 def test_direkte_hautbeschwerde_ohne_umweg():
@@ -189,124 +179,45 @@ def test_grund_ist_frage_kennt_die_typischen_formen():
     assert not gehirn._grund_ist_frage("Ja.")
 
 
-# --- Stufe 3: kein Auffang-Motiv -> ehrlich + Rueckruf-Notiz ------------------
+# --- Kein fremder B2-Rückrufpfad im kanonischen V5.5-Fluss ------------------
 
-def test_stufe3_ohne_auffangmotiv_ehrlich_plus_rueckruf(tmp_path, monkeypatch):
+def test_unbekannter_grund_oeffnet_keinen_abgeben_oder_notizpfad(tmp_path, monkeypatch):
     monkeypatch.setattr(flow.verwalten, "DATA_DIR", tmp_path)
     sit = _sit(_ohne_auffang())
     s = gehirn.sammler(sit)
 
     z1 = flow.zug(sit, "Matzenbehandlung.")
-    assert z1 and "nicht sicher" in z1["text"].lower()
-
-    z2 = flow.zug(sit, "Matzenbehandlung.")
-    assert z2 and "nicht angeboten" not in z2["text"].lower()
-    assert "keinen passenden termin" in z2["text"].lower()
-    assert "praxisteam" in z2["text"].lower()
-    assert z2["text"].rstrip().endswith("Wie ist Ihr Name?")
-    assert s["frage"] == "name"
-    assert not s["grund"] and not s["motivId"]
-    assert (sit.get("hirnAbgeben") or {}).get("offen") is True
-    assert "Matzenbehandlung" in (sit.get("hirnAbgeben") or {}).get("was", "")
-    a = hirn.aktiv(sit)
-    assert a and a["handlung"] == "ABGEBEN", a
-
-    z3 = flow.zug(sit, "Müller.")
-    assert z3 and "nummer" in z3["text"].lower()
-    assert s["frage"] == "telefon"
-
-    z4 = flow.zug(sit, "Null eins sieben sieben eins zwei drei vier fünf sechs sieben.")
-    assert z4 and "notiert" in z4["text"].lower()
-    assert sit.get("praxisNotiz"), "die Rueckruf-Notiz muss ECHT geschrieben sein"
-    assert "Matzenbehandlung" in str(sit.get("praxisNotiz"))
-    # Blessing (sonstNochNurNachErfolg): kurz abschliessen und auflegen
-    assert z4.get("hangup") is True
-    assert not (sit.get("hirnAbgeben") or {}).get("offen")
+    assert z1 and "nicht angeboten" not in z1["text"].lower()
+    assert not s["motivId"] and s["grundGenerisch"] is True
+    assert s["grundWortlaut"] == "Matzenbehandlung."
+    assert not sit.get("hirnAbgeben")
+    assert not sit.get("praxisNotiz")
 
 
-def test_stufe3_erkannter_anrufer_notiz_sofort_und_kein_termin_menue(tmp_path, monkeypatch):
+def test_unbekannter_grund_bleibt_auch_mit_bekannten_kontaktdaten_im_terminpfad(
+        tmp_path, monkeypatch):
     monkeypatch.setattr(flow.verwalten, "DATA_DIR", tmp_path)
     sit = _sit(_ohne_auffang())
     s = gehirn.sammler(sit)
     s.update({"nachname": "Müller", "vorname": "Anna", "buchstabiert": True,
               "telefon": "01771234567", "telefonOk": True})
 
-    flow.zug(sit, "Matzenbehandlung.")
-    z2 = flow.zug(sit, "Matzenbehandlung.")
-    assert z2 and "keinen passenden termin" in z2["text"].lower()
-    assert "notiert" in z2["text"].lower()
-    assert "wie ist ihr name" not in z2["text"].lower()
-    assert sit.get("praxisNotiz")
-    assert s["phase"] == "fertig" and sit.get("keinSlotFertig") is True
-    assert z2.get("hangup") is True  # Blessing schliesst kurz
-
-
-def test_stufe3_ohne_blessing_kompakt_stellt_registrierte_abschlussfrage(tmp_path, monkeypatch):
-    """Ohne sonstNochNurNachErfolg: 'Sonst noch etwas?' ist eine ECHTE
-    Formular-Frage — 'Nein, danke.' legt auf, faellt nie ans Modell."""
-    monkeypatch.setattr(flow.verwalten, "DATA_DIR", tmp_path)
-    t = _ohne_auffang()
-    for k in ("sonstNochNurNachErfolg", "gespraechKompakt", "buchungAbschlussKompakt"):
-        t.pop(k, None)
-    sit = _sit(t)
-    s = gehirn.sammler(sit)
-    s.update({"nachname": "Müller", "vorname": "Anna", "buchstabiert": True,
-              "telefon": "01771234567", "telefonOk": True})
-
-    flow.zug(sit, "Matzenbehandlung.")
-    z2 = flow.zug(sit, "Matzenbehandlung.")
-    assert z2 and "sonst noch etwas" in z2["text"].lower()
-    assert s["frage"] == "sonst_noch"
-    z3 = flow.zug(sit, "Nein, danke.")
-    assert z3 and z3.get("hangup") is True
-
-
-def test_stufe3_abgeben_weg_ohne_kompakt_registriert_abschlussfrage(tmp_path, monkeypatch):
-    """Der allgemeine ABGEBEN-Weg (Name -> Nummer -> Notiz) haengte die
-    Abschluss-Frage frueher von Hand an — 'Nein.' fiel ans Modell."""
-    monkeypatch.setattr(flow.verwalten, "DATA_DIR", tmp_path)
-    t = _ohne_auffang()
-    for k in ("sonstNochNurNachErfolg", "gespraechKompakt", "buchungAbschlussKompakt"):
-        t.pop(k, None)
-    sit = _sit(t)
-    s = gehirn.sammler(sit)
-    flow.zug(sit, "Matzenbehandlung.")
-    flow.zug(sit, "Matzenbehandlung.")
-    flow.zug(sit, "Müller.")
-    z4 = flow.zug(sit, "Null eins sieben sieben eins zwei drei vier fünf sechs sieben.")
-    assert z4 and "sonst noch etwas" in z4["text"].lower()
-    assert s["frage"] == "sonst_noch" and sit.get("abgebenSonstNoch") is True
-    z5 = flow.zug(sit, "Nein, das war's.")
-    assert z5 and z5.get("hangup") is True
-    assert "abgebenSonstNoch" not in sit
-
-
-def test_stufe3_abschlussfrage_ja_laedt_ein_und_raeumt(tmp_path, monkeypatch):
-    monkeypatch.setattr(flow.verwalten, "DATA_DIR", tmp_path)
-    t = _ohne_auffang()
-    for k in ("sonstNochNurNachErfolg", "gespraechKompakt", "buchungAbschlussKompakt"):
-        t.pop(k, None)
-    sit = _sit(t)
-    s = gehirn.sammler(sit)
-    flow.zug(sit, "Matzenbehandlung.")
-    flow.zug(sit, "Matzenbehandlung.")
-    flow.zug(sit, "Müller.")
-    flow.zug(sit, "Null eins sieben sieben eins zwei drei vier fünf sechs sieben.")
-    z5 = flow.zug(sit, "Ja.")
-    assert z5 and "was kann ich noch" in z5["text"].lower()
-    assert s["frage"] == ""
-    assert "abgebenSonstNoch" not in sit
+    z1 = flow.zug(sit, "Matzenbehandlung.")
+    assert z1 and s["frage"] != "grund"
+    assert not s["motivId"] and s["grundGenerisch"] is True
+    assert not sit.get("praxisNotiz")
+    assert not z1.get("hangup")
 
 
 # --- Eskalation (zweimal unklar) konvergiert statt zu wiederholen ------------
 
-def test_eskalation_grund_landet_in_der_sprechstunde_statt_derselben_frage():
+def test_eskalation_grund_landet_in_der_kontrolle_statt_derselben_frage():
     sit = _sit()
     s = gehirn.sammler(sit)
     sit["grundKlaerungText"] = "Matzenbehandlung."
     uebergang = flow._eskalieren(sit, "grund")
-    assert "sprechstunde" in uebergang.lower()
-    assert s["motivId"] == SPRECHSTUNDE and s["grundGenerisch"] is True
+    assert "kontrolle" in uebergang.lower()
+    assert "kontroll" in s["motivName"].lower() and s["grundGenerisch"] is True
     assert s["grundWortlaut"] == "Matzenbehandlung."
     # zug() fragt nach der Eskalation die naechste Pflichtfrage — nie wieder
     # den Grund (die Schleife der Blessing-Anrufe).
@@ -314,14 +225,13 @@ def test_eskalation_grund_landet_in_der_sprechstunde_statt_derselben_frage():
     assert fid2 != "grund", fid2
 
 
-def test_eskalation_grund_ohne_auffangmotiv_geht_in_den_rueckruf(tmp_path, monkeypatch):
+def test_eskalation_grund_oeffnet_keinen_fremden_rueckrufpfad(tmp_path, monkeypatch):
     monkeypatch.setattr(flow.verwalten, "DATA_DIR", tmp_path)
     sit = _sit(_ohne_auffang())
     s = gehirn.sammler(sit)
     aus = flow._grund_eskalation_abgeben(sit, "Hm, äh.")
-    assert aus and "keinen passenden termin" in aus["text"].lower()
-    assert s["frage"] == "name"
-    # Zahnpraxis: alter Weg (None), die Eskalation setzt dort Kontrolle
+    assert aus is None
+    assert not sit.get("hirnAbgeben") and not sit.get("praxisNotiz")
     assert flow._grund_eskalation_abgeben(_sit(laden("meddent")), "Hm.") is None
 
 
@@ -344,7 +254,7 @@ def test_meddent_unbekannter_grund_bleibt_kontroll_fallback():
     assert "nicht angeboten" not in aus["text"].lower()
     assert s["grund"] == "Matzenbehandlung."
     assert "kontroll" in s["motivName"].lower()
-    assert not s.get("grundGenerisch")
+    assert s.get("grundGenerisch") is True
     assert "grundKlaerungen" not in sit
 
 
@@ -368,8 +278,8 @@ def test_motiv_fuer_kalender_haelt_generisches_motiv():
     flow.zug(sit, "Matzenbehandlung.")
     flow.zug(sit, "Matzenbehandlung.")
     vm = gehirn.motiv_fuer_kalender(sit, BLESSING_KAL)
-    assert vm and vm["id"] == SPRECHSTUNDE, vm
-    assert s["motivId"] == SPRECHSTUNDE
+    assert vm and "kontroll" in vm["name"].lower(), vm
+    assert s["motivId"] == vm["id"]
 
 
 # --- Buchung: O-Ton steht IMMER in der Terminnotiz ---------------------------
@@ -379,11 +289,13 @@ def test_buchung_mit_generischem_motiv_traegt_o_ton_als_notiz(monkeypatch):
     s = gehirn.sammler(sit)
     flow.zug(sit, "Matzenbehandlung.")
     flow.zug(sit, "Matzenbehandlung.")
-    assert s["motivId"] == SPRECHSTUNDE and s["grundGenerisch"] is True
+    assert "kontroll" in s["motivName"].lower() and s["grundGenerisch"] is True
+    kontroll_id = s["motivId"]
     s.update({
         "phase": "bestaetigen", "frage": "", "pzr": "nein",
         "nachname": "Müller", "vorname": "Anna", "buchstabiert": True,
         "telefon": "01771234567", "telefonOk": True,
+        "phoneConfirmed": "01771234567", "phoneInChart": "01771234567",
         "arzt": {"typ": "einzig", "calendarId": BLESSING_KAL,
                  "calendarName": "Doktor Charlotte Blessing"},
         "slotIso": _iso_in(3, 9),
@@ -406,6 +318,6 @@ def test_buchung_mit_generischem_motiv_traegt_o_ton_als_notiz(monkeypatch):
 
     aus = flow._buchen(sit)
     assert s["phase"] == "gebucht", aus
-    assert gebucht and gebucht[0]["visitMotiveId"] == SPRECHSTUNDE, gebucht
+    assert gebucht and gebucht[0]["visitMotiveId"] == kontroll_id, gebucht
     assert any("Matzenbehandlung" in n and "im Katalog nicht zuordenbar" in n
-               and "Sprechstunde" in n for n in notizen), notizen
+               and "Kontrolle" in n for n in notizen), notizen

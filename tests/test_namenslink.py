@@ -112,8 +112,11 @@ def test_chef_unbekannt_parkt_nummer_ohne_petsas():
     s = gehirn.sammler(sit)
     s["modus"] = "buchen"
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "grund"
-    assert "petsas" not in frage.lower()
+    # Der Platzhalterpfad darf die erkannte Patientenidentität nicht
+    # vorsprechen. Die reguläre Reihenfolge klärt trotzdem zuerst den
+    # Behandler; Doktor Petsas ist dabei eine legitime Praxisauswahl.
+    assert fid == "arzt"
+    assert "behandler" in frage.lower()
     assert s["vorname"] == "Reservierung"
     assert s["nachname"] == "SMS"
     assert s["telefon"] == "+491776004600"

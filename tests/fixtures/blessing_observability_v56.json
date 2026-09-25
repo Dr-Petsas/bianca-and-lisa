@@ -1,0 +1,75 @@
+[
+  {
+    "case": "neupatient_reservation_create",
+    "funnel": "reservation",
+    "phase": "create",
+    "routeClass": "name_confirm",
+    "outcome": "ok"
+  },
+  {
+    "case": "reservation_bind_after_booking",
+    "funnel": "reservation",
+    "phase": "bind",
+    "routeClass": "name_confirm",
+    "outcome": "ok"
+  },
+  {
+    "case": "typed_name_completes_reservation",
+    "funnel": "reservation",
+    "phase": "done",
+    "routeClass": "name_confirm",
+    "outcome": "done"
+  },
+  {
+    "case": "reservation_expires_without_name",
+    "funnel": "reservation",
+    "phase": "expired",
+    "routeClass": "name_confirm",
+    "outcome": "expired"
+  },
+  {
+    "case": "existing_appointment_by_patient",
+    "funnel": "verwaltung",
+    "phase": "found",
+    "routeClass": "calendar_day_read",
+    "outcome": "found",
+    "source": "patientId",
+    "candidateCount": 1
+  },
+  {
+    "case": "existing_appointment_by_confirmed_phone",
+    "funnel": "verwaltung",
+    "phase": "found",
+    "routeClass": "calendar_day_read",
+    "outcome": "found",
+    "source": "telefon",
+    "candidateCount": 1
+  },
+  {
+    "case": "fuzzy_name_requires_confirmation",
+    "funnel": "verwaltung",
+    "phase": "confirmed",
+    "routeClass": "none",
+    "outcome": "confirmed",
+    "source": "name60",
+    "candidateCount": 1
+  },
+  {
+    "case": "confirmed_cancellation_write",
+    "funnel": "verwaltung",
+    "phase": "write",
+    "routeClass": "cancel_write",
+    "outcome": "write_ok",
+    "source": "nameExact",
+    "candidateCount": 1
+  },
+  {
+    "case": "move_write_fails_honestly",
+    "funnel": "verwaltung",
+    "phase": "write",
+    "routeClass": "move_write",
+    "outcome": "write_error",
+    "source": "nameExact",
+    "candidateCount": 1
+  }
+]

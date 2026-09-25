@@ -53,6 +53,12 @@ def _bis_wahl(sit, monkeypatch, cancel):
         z1 = flow.zug(sit, "Den Behandler weiß ich auch nicht mehr.")
     assert z1 and "nachname" in z1["text"].lower()
     z2 = flow.zug(sit, "Berger.")
+    if gehirn.sammler(sit)["frage"] == "buchstabieren":
+        assert "buchstabe" in z2["text"].lower()
+        z2 = flow.zug(sit, "B E R G E R")
+    if gehirn.sammler(sit)["frage"] == "nachname_check":
+        assert "ist das richtig" in z2["text"].lower()
+        z2 = flow.zug(sit, "Ja.")
     assert z2 and "mehrere termine" in z2["text"].lower()
     assert gehirn.sammler(sit)["phase"] == "wahl"
     return z2
@@ -190,5 +196,6 @@ def test_mehrfach_absage_ueber_verschiedene_patienten_wird_gesperrt():
 
     antwort = verwalten._mehrfach_absage_start(sit, termine)
     assert antwort and "verschiedenen patienten" in antwort["text"].lower()
-    assert s["frage"] == "nachname"
+    assert s["frage"] == "buchstabieren"
+    assert "buchstabe für buchstabe" in antwort["text"].lower()
     assert not sit.get("mehrfachAbsage")

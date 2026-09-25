@@ -136,6 +136,10 @@ UNKLAR_AUSWAHL_ANTWORT = (
 UNKLAR_AUSWAHL_OHNE_MITARBEITER = (
     "Geht es um einen Termin oder um eine Auskunft zur Praxis?"
 )
+KOMPAKT_JOBFRAGE = (
+    "Geht es um einen Termin, eine Absage, eine Verschiebung oder eine "
+    "Terminauskunft?"
+)
 
 _STOP = frozenset((
     "nicht", "haben", "hatte", "hatten", "haette", "hätte", "haetten", "hätten",
@@ -150,6 +154,7 @@ _STOP = frozenset((
     "natuerlich", "irgendwie", "jedenfalls", "übrigens", "uebrigens",
     "sowieso", "genau", "richtig", "stimmt", "danke", "gerne", "bitte",
     "hallo", "super", "prima", "klasse", "perfekt", "wunderbar", "passt",
+    "passen", "gepasst", "passend",
     "alles", "nichts", "etwas", "okay", "wiederhören", "wiederhoeren",
     "tschüss", "tschuess", "entschuldigung", "verzeihung", "moment",
     "sekunde", "augenblick", "sonst", "trotzdem", "sicher", "bisschen",
@@ -167,18 +172,17 @@ def _s(v: Any) -> str:
 
 
 def unklar_antwort(text: str) -> str:
-    """Unverständliches Gehörtes wörtlich spiegeln statt Bedeutung erfinden."""
-    gehoert = _s(text).strip(" \t\r\n.!?…")
-    if not gehoert:
+    """Unverständliches nicht zurücksprechen.
+
+    Der Verhörer wird sonst zur Tatsache: Bianca liest den Müll vor, und
+    der Anrufer muss ihn korrigieren. Eine kurze offene Frage zum Anliegen
+    reicht. Der gehörte Text bleibt nur im Protokoll.
+    """
+    if not _s(text).strip(" \t\r\n.!?…"):
         return UNKLAR_ANTWORT
-    # Kein langer STT-Absatz im Mund; die Unklar-Wache liefert regulär nur
-    # kurze Schnipsel. Der Deckel ist das Sicherheitsnetz für Alt-Sitzungen.
-    if len(gehoert) > 70:
-        gehoert = gehoert[:67].rstrip() + "…"
-    gehoert = gehoert.replace("„", "").replace("“", "").replace('"', "")
     return (
-        f"Ich habe „{gehoert}“ verstanden. Was meinen Sie damit? "
-        "Meinen Sie vielleicht etwas anderes?"
+        "Das habe ich akustisch nicht sicher mitbekommen. "
+        "Wobei darf ich Ihnen helfen?"
     )
 
 
@@ -189,10 +193,71 @@ def unklar_auswahl_antwort(tenant: dict | None = None) -> str:
     return UNKLAR_AUSWAHL_ANTWORT
 
 
+def kompakt_aktiv(sit: dict) -> bool:
+    """Mandantenschalter: freies Talk-Geschwätz durch eine Jobfrage ersetzen."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    return tenant.get("gespraechKompakt") is True
+
+
+def _eine_frage(text: str) -> str:
+    """Eine offene Maschinenfrage nie als Zwei-Fragen-Sermon ausgeben."""
+    text = _s(text)
+    if not text:
+        return ""
+    if "?" in text:
+        return text.split("?", 1)[0].rstrip() + "?"
+    return text.rstrip(".! ") + "?"
+
+
+def kompakt_unklar(sit: dict, *, offene_frage: str = "") -> str:
+    """Kurzer STT-Schnipsel: eine zielgerichtete Frage, kein Echo des Mülls."""
+    if not kompakt_aktiv(sit):
+        return ""
+    return _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
+
+
+def gruss_passend(text: str) -> str:
+    """Der Gruss, den der Anrufer selbst gewaehlt hat, kommt zurueck —
+    "Guten Morgen!" auf "guten Morgen" (Replay 53986f42 z01: Bianca sagte
+    um acht Uhr frueh "Guten Tag."); sonst "Guten Tag."."""
+    low = _s(text).lower()
+    if "morgen" in low:
+        return "Guten Morgen."
+    if "abend" in low:
+        return "Guten Abend."
+    return "Guten Tag."
+
+
+def kompakt_jobfrage(
+    sit: dict,
+    *,
+    offene_frage: str = "",
+    begruessen: bool = False,
+    gesagt: str = "",
+) -> str:
+    """Talk ist für diesen Mandanten aus; der Auftrag bekommt sofort den Floor."""
+    frage = _eine_frage(offene_frage) or KOMPAKT_JOBFRAGE
+    return f"{gruss_passend(gesagt)} {frage}" if begruessen else frage
+
+
+# Zahlwoerter sind nie Gespraechsstoff: "Fünf, drei, eins, sechs." ist ein
+# Nummern-Diktat (Replay 53986f42 z20 — "sechs" galt als Inhaltswort, der Zug
+# lief als Talk-Thema ans Modell statt in den Nummern-Schritt).
+_ZAHLWORT_RE = re.compile(
+    r"^(?:"
+    r"(?:ein|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun)?(?:und)?"
+    r"(?:zwanzig|drei(?:ß|ss)ig|vierzig|f(?:ü|ue)nfzig|sechzig|siebzig|achtzig|neunzig)"
+    r"|elf|zw(?:ö|oe)lf|dreizehn|vierzehn|f(?:ü|ue)nfzehn|sechzehn|siebzehn|achtzehn|neunzehn"
+    r"|null|eins|zwei|drei|vier|f(?:ü|ue)nf|sechs|sieben|acht|neun|zehn|hundert|tausend"
+    r")$"
+)
+
+
 def _inhaltsworte(low: str) -> set[str]:
-    """Inhaltswoerter (>= 5 Zeichen) ohne Fuell- und Job-Vokabular."""
+    """Inhaltswoerter (>= 5 Zeichen) ohne Fuell-, Zahl- und Job-Vokabular."""
     worte = re.findall(r"[a-zäöüß]{5,}", low)
-    return {w for w in worte if w not in _STOP and not _JOB_RE.fullmatch(w)}
+    return {w for w in worte
+            if w not in _STOP and not _JOB_RE.fullmatch(w) and not _ZAHLWORT_RE.match(w)}
 
 
 def ist_user_pull(text: str) -> bool:

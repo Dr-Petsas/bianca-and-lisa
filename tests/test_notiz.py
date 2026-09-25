@@ -123,6 +123,8 @@ def test_book_slot_behaelt_termin_id():
             "lastName": "Schumann",
             "calendarId": "cal1",
             "visitMotiveId": "vm1",
+            "phoneConfirmed": "01516780764",
+            "phoneInChart": "01516780764",
         }
         calendar.patients.patient_id_bindung_setzen(
             ctx, "p1", "Tom", "Schumann")
@@ -198,6 +200,8 @@ def test_book_slot_http_200_ohne_passenden_readback_bleibt_unbestaetigt():
             "lastName": "Schumann",
             "calendarId": "cal1",
             "visitMotiveId": "vm1",
+            "phoneConfirmed": "01516780764",
+            "phoneInChart": "01516780764",
         }
         calendar.patients.patient_id_bindung_setzen(
             ctx, "p-tom", "Tom", "Schumann")

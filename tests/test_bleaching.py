@@ -34,6 +34,8 @@ def _pzr_sammler(sit: dict) -> dict:
     s = gehirn.sammler(sit)
     s.update({
         "modus": "buchen", "warSchonMal": True,
+        "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg",
+                 "calendarName": "Dr. Petsas"},
         "vorname": "Julia", "nachname": "Berger", "buchstabiert": True,
         "grund": "professionelle Zahnreinigung",
         "grundWortlaut": "einmal Zahnreinigung bitte",

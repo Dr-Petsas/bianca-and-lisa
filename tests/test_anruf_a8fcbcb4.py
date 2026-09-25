@@ -13,8 +13,9 @@ als eine falsch geschriebene Kartei oder ein verschluckter Satz):
 
 1. `telefon.ist_handy` / `patients.ist_handy_de` — Festnetz ist kein Handy.
 2. `gehirn.naechste_frage` bietet `telefon_alt` nur gegen ein echtes Handy an.
-3. `kern.calendar.book_slot` traegt bei `needs_phone` die RUECKBESTAETIGTE
-   Handynummer nach und bucht EINMAL neu (`BOOK_FIX_PHONE=0` = alt).
+3. `kern.calendar.book_slot` gleicht die RUECKBESTAETIGTE Handynummer VOR
+   dem ersten Buchungsaufruf ab und bucht danach hoechstens EINMAL
+   (`BOOK_FIX_PHONE=0` = alter Weg ohne Vorab-Abgleich).
 4. `fakten_wache` faengt "ist alles fuer Sie eingetragen" und
    "die Nummer ist gespeichert" ohne Schreib-Evidenz.
 """
@@ -71,9 +72,9 @@ def _sit_nummernkonflikt(akte_nummer: str) -> dict:
               "arzt": {"typ": "genannt", "calendarId": "cal-1", "calendarName": "Dr. Blessing"},
               "grund": "Kontrolle", "grundWortlaut": "zur Kontrolle",
               "motivId": "kontrolle", "motivName": "KCH Kontrolluntersuchung",
-              "versicherung": "gesetzlich", "telefon": "01776004600",
+              "versicherung": "gesetzlich", "telefon": "01771234567",
               "telefonOk": True, "aktePhone": akte_nummer,
-              "slotIso": "2026-09-22T09:15", "phase": "bestaetigen"})
+              "slotIso": "2026-10-22T09:15", "phase": "bestaetigen"})
     return sit
 
 
@@ -99,7 +100,7 @@ def test_buchen_traegt_gegen_festnetz_die_bestaetigte_nummer_nach(monkeypatch):
     monkeypatch.setattr(
         flow, "telefon_aktualisieren",
         lambda tenant, pid, phone: rufe.append((pid, phone)) or {
-            "ok": True, "patientId": pid, "mobilePhoneNumber": "+491776004600",
+            "ok": True, "patientId": pid, "mobilePhoneNumber": "+491771234567",
             "previous": "02131234567"},
     )
     monkeypatch.setattr(flow.kal, "book_slot", lambda tenant, ctx, slot_iso="": {
@@ -108,25 +109,56 @@ def test_buchen_traegt_gegen_festnetz_die_bestaetigte_nummer_nach(monkeypatch):
     monkeypatch.setattr(flow.kal, "note_appointment",
                         lambda tenant, ctx, sit=None, *, note="": {"ok": True})
     res = flow._buchen(sit)
-    assert rufe == [("Uz5O", "01776004600")]
-    assert s["telefonAlt"] == "neu" and s["aktePhone"] == "01776004600"
+    assert rufe == [("Uz5O", "01771234567")]
+    assert s["telefonAlt"] == "neu" and s["aktePhone"] == "01771234567"
     assert "Die Bestätigung kommt gleich per SMS." in res["text"]
+
+
+def test_buchen_update_fehler_wird_im_kalender_nicht_wiederholt(monkeypatch):
+    """Scheitert der Flow-Abgleich, darf `book_slot` weder erneut updaten
+    noch buchen. Ein zweiter Schreibversuch könnte einen unklaren ersten
+    Write duplizieren."""
+    sit = _sit_nummernkonflikt("02131234567")
+    s = gehirn.sammler(sit)
+    rufe: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        flow,
+        "telefon_aktualisieren",
+        lambda tenant, pid, phone: rufe.append((pid, phone)) or {
+            "ok": False,
+            "error": "timeout",
+        },
+    )
+    monkeypatch.setattr(
+        flow.kal,
+        "_cf_call",
+        lambda route, body, timeout=None: (_ for _ in ()).throw(
+            AssertionError(f"nach fehlgeschlagenem Handy-Write kein CF-Aufruf: {route}")
+        ),
+    )
+
+    res = flow._buchen(sit)
+
+    assert rufe == [("Uz5O", "01771234567")]
+    assert not (res.get("book") or {}).get("booked")
+    assert sit["phoneUpdateAttempted"] is True
+    assert sit["phoneUpdateOk"] is False
 
 
 def test_ctx_traegt_nur_die_rueckbestaetigte_nummer_als_phoneconfirmed():
     sit = _sit_nummernkonflikt("02131234567")
     s = gehirn.sammler(sit)
-    assert flow._ctx_bauen(sit).get("phoneConfirmed") == "01776004600"
+    assert flow._ctx_bauen(sit).get("phoneConfirmed") == "01771234567"
     s["telefonOk"] = False  # bloss gehoert — kommt nie in die Kartei
     assert "phoneConfirmed" not in flow._ctx_bauen(sit)
 
 
 # --- 3. needs_phone selbstheilend ------------------------------------------
 
-def _book_umgebung(monkeypatch, *, rufe: list, needs_phone_mal: int = 1,
+def _book_umgebung(monkeypatch, *, rufe: list, needs_phone_mal: int = 0,
                    update_ok: bool = True):
-    """masBookAppointment antwortet `needs_phone_mal` mal mit needs_phone,
-    danach success; masUpdatePatientPhone nach `update_ok`."""
+    """Nach dem Vorab-Update antwortet masBookAppointment optional noch mit
+    needs_phone; masUpdatePatientPhone folgt `update_ok`."""
     monkeypatch.setattr(kal, "WRITE_LIVE", True)
     zaehler = {"book": 0}
 
@@ -139,7 +171,7 @@ def _book_umgebung(monkeypatch, *, rufe: list, needs_phone_mal: int = 1,
             return 200, {"status": "success", "appointmentId": "apt-neu"}, {"route": route}
         if route == "masUpdatePatientPhone":
             if update_ok:
-                return 200, {"status": "success", "mobilePhoneNumber": "+491776004600",
+                return 200, {"status": "success", "mobilePhoneNumber": "+491771234567",
                              "previous": "02131234567"}, {"route": route}
             return 500, {"status": "error", "message": "boom"}, {"route": route}
         raise AssertionError(f"unerwartete Route {route}")
@@ -153,26 +185,27 @@ def _ctx(**extra) -> dict:
     ctx = {"patientId": "Uz5O", "patientName": "Annemarie Mack",
            "firstName": "Annemarie", "lastName": "Mack",
            "calendarId": "cal-1", "visitMotiveId": "mot-1",
-           "phone": "02131234567", "phoneConfirmed": "01776004600"}
+           "phone": "02131234567", "phoneConfirmed": "01771234567",
+           "phoneInChartKnown": True, "phoneInChart": "02131234567"}
     patients.patient_id_bindung_setzen(ctx, "Uz5O", "Annemarie", "Mack")
     ctx.update(extra)
     return ctx
 
 
-def test_needs_phone_traegt_nummer_nach_und_bucht_einmal_neu(monkeypatch):
+def test_preflight_traegt_nummer_nach_und_bucht_genau_einmal(monkeypatch):
     rufe: list[tuple[str, dict]] = []
     _book_umgebung(monkeypatch, rufe=rufe)
     ctx = _ctx()
     res = kal.book_slot({"clientId": "c1", "locationId": "l1"}, ctx,
-                        slot_iso="2026-09-22T09:15:00+02:00")
+                        slot_iso="2026-10-22T09:15:00+02:00")
     assert res["ok"] and res["booked"] and res["appointmentId"] == "apt-neu"
     assert [r[0] for r in rufe] == [
-        "masBookAppointment", "masUpdatePatientPhone", "masBookAppointment"]
-    assert rufe[1][1]["mobilePhoneNumber"] == "+491776004600"
-    assert rufe[1][1]["patientId"] == "Uz5O"
+        "masUpdatePatientPhone", "masBookAppointment"]
+    assert rufe[0][1]["mobilePhoneNumber"] == "+491771234567"
+    assert rufe[0][1]["patientId"] == "Uz5O"
     # Der Fluss erfaehrt vom Nachtrag (Sammler zieht nach, keine "Akte
     # aktualisieren"-Notiz an einem gerade korrigierten Termin).
-    assert ctx["aktePhoneNeu"] == "01776004600"
+    assert ctx["aktePhoneNeu"] == "01771234567"
     assert ctx["aktePhoneAlt"] == "02131234567"
 
 
@@ -183,39 +216,216 @@ def test_needs_phone_ohne_bestaetigte_handynummer_schreibt_nichts(monkeypatch):
         rufe: list[tuple[str, dict]] = []
         _book_umgebung(monkeypatch, rufe=rufe)
         res = kal.book_slot({"clientId": "c1", "locationId": "l1"}, ctx,
-                            slot_iso="2026-09-22T09:15:00+02:00")
+                            slot_iso="2026-10-22T09:15:00+02:00")
         assert not res["ok"] and "Handynummer" in res["spoken"]
-        assert [r[0] for r in rufe] == ["masBookAppointment"]
+        assert rufe == []
 
 
 def test_needs_phone_update_kaputt_behauptet_keine_buchung(monkeypatch):
     rufe: list[tuple[str, dict]] = []
     _book_umgebung(monkeypatch, rufe=rufe, update_ok=False)
     res = kal.book_slot({"clientId": "c1", "locationId": "l1"}, _ctx(),
-                        slot_iso="2026-09-22T09:15:00+02:00")
+                        slot_iso="2026-10-22T09:15:00+02:00")
     assert not res["ok"] and "Handynummer" in res["spoken"]
-    assert [r[0] for r in rufe] == ["masBookAppointment", "masUpdatePatientPhone"]
+    assert [r[0] for r in rufe] == ["masUpdatePatientPhone"]
+
+
+def test_frueherer_update_fehler_verhindert_jeden_weiteren_write(monkeypatch):
+    """Der Flow hat das Update bereits versucht und einen Fehler gesehen:
+    Calendar darf weder denselben Akten-Write wiederholen noch buchen."""
+    rufe: list[tuple[str, dict]] = []
+    _book_umgebung(monkeypatch, rufe=rufe)
+    ctx = _ctx(phoneUpdateAttempted=True, phoneUpdateOk=False)
+
+    res = kal.book_slot(
+        {"clientId": "c1", "locationId": "l1"},
+        ctx,
+        slot_iso="2026-10-22T09:15:00+02:00",
+    )
+
+    assert not res["ok"] and res["phonePreflightFailed"]
+    assert res["writeAttempted"] is False
+    assert rufe == []
 
 
 def test_needs_phone_bleibt_needs_phone_nur_ein_versuch(monkeypatch):
     """Sagt die Plattform auch NACH dem Nachtrag needs_phone, wird nicht
     endlos gewuerfelt (live viermal derselbe Fehlschlag)."""
     rufe: list[tuple[str, dict]] = []
-    _book_umgebung(monkeypatch, rufe=rufe, needs_phone_mal=2)
+    _book_umgebung(monkeypatch, rufe=rufe, needs_phone_mal=1)
     res = kal.book_slot({"clientId": "c1", "locationId": "l1"}, _ctx(),
-                        slot_iso="2026-09-22T09:15:00+02:00")
+                        slot_iso="2026-10-22T09:15:00+02:00")
     assert not res["ok"] and "Handynummer" in res["spoken"]
+    assert res["writeAttempted"] is True
     assert [r[0] for r in rufe] == [
-        "masBookAppointment", "masUpdatePatientPhone", "masBookAppointment"]
+        "masUpdatePatientPhone", "masBookAppointment"]
+
+
+def test_needs_phone_fluss_endet_nach_zwei_buchungswrites_mit_notiz(monkeypatch):
+    """Auch über mehrere Gesprächszüge darf needs_phone keinen dritten
+    masBookAppointment-Aufruf auslösen."""
+    sit = _sit_nummernkonflikt("01771234567")
+    s = gehirn.sammler(sit)
+    writes: list[str] = []
+    notizen: list[str] = []
+
+    def _book(_tenant, _ctx, slot_iso=""):
+        writes.append(slot_iso)
+        return {
+            "ok": False,
+            "writeAttempted": True,
+            "spoken": "In Ihrer Akte fehlt noch eine Handynummer. Wie lautet sie?",
+        }
+
+    def _notiz(sitzung, *, slot_iso="", grund_technisch=""):
+        notizen.append(grund_technisch)
+        sitzung["praxisNotiz"] = "Rückruf wegen fehlgeschlagener Buchung"
+
+    monkeypatch.setattr(flow.kal, "book_slot", _book)
+    monkeypatch.setattr(flow.verwalten, "buchung_fehler_notiz", _notiz)
+    monkeypatch.setattr(
+        flow,
+        "telefon_aktualisieren",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("identische bestätigte Mobilnummer braucht kein Update")
+        ),
+    )
+
+    first = flow._buchen(sit)
+    assert "Handynummer" in first["text"]
+    assert sit["bookFails"] == 1
+
+    # Der Anrufer bestätigt die Mobilnummer im nächsten Zug; die Plattform
+    # lehnt den zweiten tatsächlichen Buchungswrite trotzdem ab.
+    s["telefon"] = "01771234567"
+    s["telefonOk"] = True
+    s["frage"] = ""
+    second = flow._buchen(sit)
+    third = flow._buchen(sit)
+
+    assert len(writes) == 2
+    assert sit["bookFails"] == 2
+    assert notizen
+    assert s["phase"] == "fertig"
+    assert "Rückrufnotiz" in second["text"]
+    assert "Terminversuche" in third["text"]
+
+
+def test_bereits_gesperrter_slot_erhoeht_bookfails_nicht(monkeypatch):
+    """Eine lokale Sperre ist kein Write und verbraucht kein Retry-Budget."""
+    sit = _sit_nummernkonflikt("01771234567")
+    sit["bookFails"] = 1
+    s = gehirn.sammler(sit)
+    s["slotIso"] = "2026-10-22T09:15"
+    monkeypatch.setattr(flow.kal, "book_slot", lambda *a, **k: {
+        "ok": False,
+        "slotTaken": True,
+        "alreadyBlocked": True,
+        "writeAttempted": False,
+        "blockedIso": "2026-10-22T09:15",
+        "spoken": "Dieser Platz ist bereits vergeben.",
+    })
+    monkeypatch.setattr(
+        flow,
+        "_angebot",
+        lambda *a, **k: {"text": "Frei wäre morgen um zehn Uhr."},
+    )
+
+    res = flow._buchen(sit)
+
+    assert sit["bookFails"] == 1
+    assert "Frei wäre" in res["text"]
 
 
 def test_notaus_book_fix_phone(monkeypatch):
     rufe: list[tuple[str, dict]] = []
-    _book_umgebung(monkeypatch, rufe=rufe)
+    _book_umgebung(monkeypatch, rufe=rufe, needs_phone_mal=1)
     monkeypatch.setattr(kal, "BOOK_FIX_PHONE", False)
     res = kal.book_slot({"clientId": "c1", "locationId": "l1"}, _ctx(),
-                        slot_iso="2026-09-22T09:15:00+02:00")
+                        slot_iso="2026-10-22T09:15:00+02:00")
     assert not res["ok"] and [r[0] for r in rufe] == ["masBookAppointment"]
+
+
+@pytest.mark.parametrize("phone", ["", "02131234567"])
+def test_neupatient_kombiwrite_nur_mit_bestaetigtem_handy(monkeypatch, phone: str):
+    """Auch createAppointment (Akte + Termin in einem Write) liegt hinter
+    dem Handy-Tor. Ohne rückbestätigte Mobilnummer: null Schreibaufrufe."""
+    monkeypatch.setattr(kal, "WRITE_LIVE", True)
+    rufe: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        kal,
+        "_cf_call",
+        lambda route, body, timeout=None: rufe.append((route, dict(body))) or (
+            500,
+            {"status": "error"},
+            {"route": route},
+        ),
+    )
+    monkeypatch.setattr(
+        kal.patients,
+        "akte_anlegen",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("ohne bestätigtes Handy keine Akte anlegen")
+        ),
+    )
+    ctx = {
+        "firstName": "Anna",
+        "lastName": "Neu",
+        "patientName": "Anna Neu",
+        "phone": "01771234567",
+        "phoneConfirmed": phone,
+        "calendarId": "cal-1",
+        "visitMotiveId": "mot-1",
+    }
+
+    res = kal.book_slot(
+        {"clientId": "c1", "locationId": "l1"},
+        ctx,
+        slot_iso="2026-10-22T09:15:00+02:00",
+    )
+
+    assert not res["ok"] and res["phonePreflightFailed"]
+    assert res["writeAttempted"] is False
+    assert rufe == []
+
+
+def test_neupatient_kombiwrite_verwendet_exakt_bestaetigtes_handy(monkeypatch):
+    """Die kombinierte Fallback-Route darf nicht die bloß gehörte Nummer
+    verwenden; sie erhält ausschließlich die rückbestätigte Mobilnummer."""
+    monkeypatch.setattr(kal, "WRITE_LIVE", True)
+    seen: dict[str, str] = {}
+
+    def _akte(tenant, **kwargs):
+        seen["aktePhone"] = kwargs["phone"]
+        return {"ok": False, "spoken": "Akte derzeit nicht anlegbar."}
+
+    def _kombi(tenant, ctx, iso, first, last, phone):
+        seen["kombiPhone"] = phone
+        return {"ok": False, "spoken": "Write bewusst gestoppt."}
+
+    monkeypatch.setattr(kal.patients, "akte_anlegen", _akte)
+    monkeypatch.setattr(kal, "_buch_und_akte", _kombi)
+    ctx = {
+        "firstName": "Anna",
+        "lastName": "Neu",
+        "patientName": "Anna Neu",
+        "phone": "02131234567",
+        "phoneConfirmed": "01771234567",
+        "calendarId": "cal-1",
+        "visitMotiveId": "mot-1",
+    }
+
+    res = kal.book_slot(
+        {"clientId": "c1", "locationId": "l1"},
+        ctx,
+        slot_iso="2026-10-22T09:15:00+02:00",
+    )
+
+    assert not res["ok"]
+    assert seen == {
+        "aktePhone": "01771234567",
+        "kombiPhone": "01771234567",
+    }
 
 
 def test_buchen_zieht_den_sammler_nach_dem_nachtrag_nach(monkeypatch):
@@ -229,7 +439,7 @@ def test_buchen_zieht_den_sammler_nach_dem_nachtrag_nach(monkeypatch):
         _ for _ in ()).throw(AssertionError("kein Vorab-Update erwartet")))
 
     def _book(tenant, ctx, slot_iso=""):
-        ctx["aktePhoneNeu"] = "01776004600"
+        ctx["aktePhoneNeu"] = "01771234567"
         ctx["aktePhoneAlt"] = "02131234567"
         return {"ok": True, "booked": True, "slotIso": slot_iso,
                 "appointmentId": "a1", "spoken": "Der Termin ist fest eingetragen."}
@@ -239,7 +449,7 @@ def test_buchen_zieht_den_sammler_nach_dem_nachtrag_nach(monkeypatch):
     monkeypatch.setattr(flow.kal, "note_appointment",
                         lambda tenant, ctx, sit=None, *, note="": notizen.append(note) or {"ok": True})
     flow._buchen(sit)
-    assert s["aktePhone"] == "01776004600" and s["telefonAlt"] == "neu"
+    assert s["aktePhone"] == "01771234567" and s["telefonAlt"] == "neu"
     assert sit["telefonUpdateAlt"] == "02131234567"
     assert not [n for n in notizen if "aktualisier" in n.lower() and "Alte Nummer" not in n]
 

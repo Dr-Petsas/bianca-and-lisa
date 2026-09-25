@@ -138,7 +138,7 @@ _FELDER: list[tuple[str, re.Pattern[str], Callable[[dict], bool]]] = [
 # haengt genau diese Frage ans Zugende).
 _OFFEN_FELD: dict[str, str] = {
     "name": "name", "vorname": "name", "nachname": "name",
-    "vorname_check": "name",
+    "vorname_check": "name", "nachname_check": "name",
     "buchstabieren": "buchstabieren",
     "telefon": "telefon", "telefon_check": "telefon", "telefon_alt": "telefon",
     "arzt": "arzt", "arzt_check": "arzt",

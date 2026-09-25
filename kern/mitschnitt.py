@@ -30,50 +30,10 @@ from pathlib import Path
 from typing import Any
 
 from kern.config import DATA_DIR
+from kern import observability_manifest
 
 _LOCK = threading.Lock()
 _DATEI_RE = re.compile(r"^[a-z0-9_]+\.(wav|mp3|webm|m4a|ogg)$")
-_SID_RE = re.compile(r"^[0-9a-f]{8,32}$")
-
-
-def _nummer_text(roh: Any) -> str:
-    """Erkannte Leitungsnummer. Unterdrückt und zu kurz zählen nicht."""
-    text = str(roh or "").strip()
-    if not text or text.lower() == "anonymous":
-        return ""
-    if sum(c.isdigit() for c in text) < 5:
-        return ""
-    return text
-
-
-def _nummer_aus_sitzung(sid: str) -> str:
-    """Ältere Mitschnitte tragen die Nummer nur in der Sitzungsdatei."""
-    sid = str(sid or "").strip()
-    if not _SID_RE.fullmatch(sid):
-        return ""
-    pfad = DATA_DIR / "bianca_sessions" / f"{sid}.json"
-    try:
-        roh = json.loads(pfad.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeError):
-        return ""
-    if not isinstance(roh, dict):
-        return ""
-    nr = _nummer_text(roh.get("callerPhone"))
-    if nr:
-        return nr
-    anrufer = roh.get("anrufer")
-    if isinstance(anrufer, dict):
-        return _nummer_text(anrufer.get("telefon"))
-    return ""
-
-
-def _nummer_fuer_anzeige(manifest: dict[str, Any]) -> str:
-    nr = _nummer_text(manifest.get("callerPhone"))
-    if nr:
-        return nr
-    if str(manifest.get("patientName") or "").strip():
-        return ""
-    return _nummer_aus_sitzung(str(manifest.get("id") or ""))
 
 
 def an() -> bool:
@@ -177,15 +137,6 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
             manifest["testName"] = sit.get("testName")
         name = sit.get("testName") or name or ""
     manifest["patientName"] = name or ""
-    # Leitungsnummer, auch wenn kein Name in der Kartei steht. Die Anrufliste
-    # zeigt sie bei unbekannten Anrufern als Titel.
-    nr = _nummer_text(sit.get("callerPhone"))
-    if not nr:
-        anrufer = sit.get("anrufer")
-        if isinstance(anrufer, dict):
-            nr = _nummer_text(anrufer.get("telefon"))
-    if nr:
-        manifest["callerPhone"] = nr
     manifest["auftrag"] = sit.get("auftrag") or ""
     # id = Anruf-UID (session.neu: uuid4.hex). Portal-phoneCallId separat,
     # falls die CF einen Datensatz angelegt hat (CF-Mandanten).
@@ -201,6 +152,11 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
         manifest["praxisNotiz"] = sit["praxisNotiz"]
     if sit.get("tools"):
         manifest["tools"] = sit.get("tools")
+    beobachtung = observability_manifest.export(sit)
+    if beobachtung:
+        manifest["observability"] = beobachtung
+    else:
+        manifest.pop("observability", None)
     # W-WARTESCHLEIFE: Ansagen der Praxis-Anlage gehoert / deshalb aufgelegt —
     # in /anrufe sichtbar, sonst sieht die Liste nur "ohne Buchung".
     ws = sit.get("warteschleife")
@@ -306,8 +262,6 @@ def _stt_kompakt(stt: dict | None) -> dict[str, Any] | None:
     aus: dict[str, Any] = {}
     if stt.get("winner"):
         aus["winner"] = str(stt["winner"])
-    if stt.get("engine"):
-        aus["engine"] = str(stt["engine"])
     if stt.get("zug") is not None:
         aus["zug"] = int(stt["zug"])
     p = stt.get("parakeet") if isinstance(stt.get("parakeet"), dict) else {}
@@ -508,15 +462,6 @@ def ende(sit: dict, dienst, *, warte_s: float = 10.0) -> None:
 
 # ---- Lesen (API-Routen) -----------------------------------------------------
 
-def _anliegen_kopf(manifest: dict[str, Any]) -> list[dict[str, str]]:
-    """Anliegen fuer die Filterleiste — aus dem schon geladenen Manifest."""
-    try:
-        from kern import anruf_anliegen
-        return anruf_anliegen.von(manifest)
-    except Exception:
-        return []
-
-
 def erlaubt_von(tenant: str) -> list[str] | None:
     """Mandanten-IDs inkl. clientId/locationId/Aliase — oder None = alle."""
     tid = (tenant or "").strip()
@@ -530,20 +475,6 @@ def erlaubt_von(tenant: str) -> list[str] | None:
         str(info.get("locationId") or ""),
         *(str(x) for x in (info.get("aliases") or [])),
     ]
-
-
-def _ist_reservierung(m: dict) -> bool:
-    """Anruf lief über den Reservierungsweg — für die Markierung in /anrufe."""
-    name = str(m.get("patientName") or "").casefold()
-    if name.startswith("reservierung"):
-        return True
-    for z in m.get("zuege") or []:
-        if not isinstance(z, dict):
-            continue
-        t = str(z.get("text") or "").casefold()
-        if "zur reservierung" in t or "neunzig minuten" in t:
-            return True
-    return False
 
 
 def liste(stimme: str, limit: int = 2000, tenant_id: str = "",
@@ -571,18 +502,14 @@ def liste(stimme: str, limit: int = 2000, tenant_id: str = "",
         if erlaubt_ids and tid not in erlaubt_ids:
             continue
         zuege = m.get("zuege") or []
-        zeige = dict(m)
-        zeige["id"] = m.get("id") or d.name
         aus.append({
-            "id": zeige["id"],
+            "id": m.get("id") or d.name,
             "phoneCallId": m.get("phoneCallId") or "",
             "tenantId": tid,
             "startedAt": m.get("startedAt") or "",
             "endedAt": m.get("endedAt"),
             "dauerMs": m.get("dauerMs"),
             "patientName": m.get("patientName") or "",
-            "reservierung": _ist_reservierung(m),
-            "callerPhone": _nummer_fuer_anzeige(zeige),
             "testAnruf": bool(m.get("testAnruf")),
             "testName": m.get("testName") or "",
             "zuege": len(zuege),
@@ -592,7 +519,6 @@ def liste(stimme: str, limit: int = 2000, tenant_id: str = "",
             "praxisNotiz": m.get("praxisNotiz") or "",
             "offen": m.get("endedAt") is None,
             "warteschleife": m.get("warteschleife") or None,
-            "anliegen": _anliegen_kopf(m),
         })
     aus.sort(key=lambda e: e.get("startedAt") or "", reverse=True)
     return aus[:max(1, limit)]
@@ -600,18 +526,9 @@ def liste(stimme: str, limit: int = 2000, tenant_id: str = "",
 
 def laden(stimme: str, sid: str) -> dict[str, Any] | None:
     sid = (sid or "").strip()
-    if not _SID_RE.fullmatch(sid):
+    if not re.fullmatch(r"[0-9a-f]{8,32}", sid):
         return None
-    m = _laden(_wurzel() / (stimme or "").strip().lower() / sid)
-    if not m:
-        return None
-    if not _nummer_text(m.get("callerPhone")):
-        zeige = dict(m)
-        zeige["id"] = m.get("id") or sid
-        nr = _nummer_fuer_anzeige(zeige)
-        if nr:
-            m["callerPhone"] = nr
-    return m
+    return _laden(_wurzel() / (stimme or "").strip().lower() / sid)
 
 
 def audio_pfad(stimme: str, sid: str, datei: str) -> Path | None:

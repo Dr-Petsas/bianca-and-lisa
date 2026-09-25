@@ -148,48 +148,12 @@ def _sprechbare_zeiten(raw: str) -> str:
     return text
 
 
-def profil_auskunft(tenant: dict | None) -> dict[str, str | bool]:
-    """Zeiten und Weg roh aus dem Praxisprofil — nie geraten.
-
-    Quelle: DB-Prompt-Einzeiler > Standort-Text > lokales ``wissen``.
-    """
-    t = tenant if isinstance(tenant, dict) else {}
-    w = t.get("wissen") if isinstance(t.get("wissen"), dict) else {}
-    st = t.get("standort") if isinstance(t.get("standort"), dict) else {}
-    prompt = str(t.get("dbPrompt") or "")
-    prompt_zeiten = _prompt_oeffnungszeiten(prompt)
-    standort_text = _s(st.get("text"))
-    wissen_zeiten = _s(w.get("oeffnungszeiten")) or _s(t.get("oeffnungszeiten"))
-    anfahrt = _prompt_anfahrt(prompt) or _s(w.get("anfahrt")) or _s(t.get("anfahrt"))
-    if prompt_zeiten:
-        quelle = "praxisprofil"
-        zeiten = f"Unsere Öffnungszeiten sind {_sprechbare_zeiten(prompt_zeiten)}."
-    elif standort_text:
-        quelle = "standort"
-        zeiten = f"Unsere Öffnungszeiten: {standort_text}."
-    elif wissen_zeiten:
-        quelle = "wissen"
-        zeiten = f"Unsere Öffnungszeiten sind {_sprechbare_zeiten(wissen_zeiten)}."
-    else:
-        quelle = "fehlt"
-        zeiten = ""
-    weg = (anfahrt.rstrip(" .") + ".") if anfahrt else ""
-    satz = _s(" ".join(x for x in (zeiten, weg) if x))
-    return {
-        "zeiten": zeiten,
-        "anfahrt": weg,
-        "quelle": quelle,
-        "satz": satz,
-        "fehlt": not satz,
-    }
-
-
 def praxis_antwort(tenant: dict | None, text: str) -> tuple[str, set[str]]:
     """Öffnungszeiten/Weg ausschließlich aus Mandanten-Fakten beantworten.
 
-    Rangfolge Öffnungszeiten: veröffentlichte Anliegen-Prosa > ausdrückliche
-    Einzeiler-Angabe im DB-Prompt („Öffnungszeiten: …", MedDent) >
-    Standorteinstellungen aus dem Portal (``tenant["standort"]``) >
+    Rangfolge Öffnungszeiten: ausdrückliche Einzeiler-Angabe im DB-Prompt
+    („Öffnungszeiten: …", MedDent) > Standorteinstellungen aus dem Portal
+    (``tenant["standort"]``, W-STANDORT 13.09.2026 — Thaler/Blessing) >
     lokales ``wissen``. Fehlt ein Fakt, übernimmt weiterhin der normale
     Gesprächspfad, statt etwas zu erfinden.
     """
@@ -197,19 +161,6 @@ def praxis_antwort(tenant: dict | None, text: str) -> tuple[str, set[str]]:
     if not themen:
         return "", set()
     t = tenant if isinstance(tenant, dict) else {}
-    try:
-        from kern import anliegen_zug
-        regel = anliegen_zug.regel_fuer(t, "oeffnungszeiten")
-    except Exception:
-        regel = None
-    if regel is not None and regel.wahl == "eigene_auskunft":
-        satz = _s(regel.prosa or regel.satz)
-        if satz:
-            return satz, set(themen)
-    if regel is not None and regel.wahl == "standort":
-        profil = profil_auskunft(t)
-        if _s(profil.get("satz")):
-            return _s(profil.get("satz")), set(themen)
     w = t.get("wissen") if isinstance(t.get("wissen"), dict) else {}
     st = t.get("standort") if isinstance(t.get("standort"), dict) else {}
     prompt = str(t.get("dbPrompt") or "")

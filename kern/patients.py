@@ -234,6 +234,20 @@ def ist_testname(first: str, last: str, name: str = "") -> bool:
     return last_l in {"test", "demo", "mustermann"}
 
 
+PLATZHALTER_VORNAME = "Reservierung"
+PLATZHALTER_NACHNAME = "SMS"
+
+
+def ist_platzhalter_name(first: str, last: str = "", name: str = "") -> bool:
+    """Canary-Platzhalterakte — später mit NAMENS_LINK_UNBEKANNT wieder raus."""
+    f, l = _s(first), _s(last)
+    if (f.casefold() == PLATZHALTER_VORNAME.casefold()
+            and l.casefold() == PLATZHALTER_NACHNAME.casefold()):
+        return True
+    blob = _s(name) or f"{f} {l}".strip()
+    return blob.casefold() == f"{PLATZHALTER_VORNAME} {PLATZHALTER_NACHNAME}".casefold()
+
+
 # Seed-/Fixture-Datensaetze, die in der echten Kartei liegen (CampaignR-Test,
 # Demo-Seeds). Vorfall 27.08.2026: Lisa buchte auf "campaignr-test-dr-petsas"
 # (firstName "Dr.", lastName "Petsas") — der Termin stand mit Muell-Daten im
@@ -465,7 +479,7 @@ def akte_anlegen(
             "ok": False,
             "spoken": "Vor- und Nachname brauche ich, um die Akte anzulegen.",
         }
-    vorhanden = _suche_eindeutig(tenant, first, last)
+    vorhanden = None if ist_platzhalter_name(first, last, name) else _suche_eindeutig(tenant, first, last)
     if vorhanden:
         karte = karten_patient(vorhanden)
         return {
@@ -475,7 +489,7 @@ def akte_anlegen(
             "patient": karte,
             "spoken": f"Die Akte von {karte['name']} ist schon da.",
         }
-    if ist_dev_handy(phone):
+    if ist_dev_handy(phone) and not ist_platzhalter_name(first, last, name):
         return {
             "ok": False,
             "spoken": (

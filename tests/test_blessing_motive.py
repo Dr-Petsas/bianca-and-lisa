@@ -215,10 +215,16 @@ def test_c1_ohne_blessing_schalter_bleibt_der_alte_mapper_byte_identisch():
     assert vm and vm["id"] == "cluzt3EwHYgnTwt3i1z9"
 
 
-def test_c1_fachfremder_zahnwunsch_bleibt_abgelehnt():
+def test_c1_fachfremder_zahnwunsch_wird_ohne_falschmapping_abgelehnt():
     sit = _sit()
 
     aus = flow.zug(sit, "Ich möchte eine Zahnreinigung.")
+    s = gehirn.sammler(sit)
 
     assert aus and "nicht angeboten" in aus["text"].lower()
-    assert not gehirn.sammler(sit)["grund"]
+    assert "hautkontrolle" in aus["text"].lower()
+    assert s["motivName"] == ""
+    assert s["motivId"] == ""
+    assert s["grundWortlaut"] == ""
+    assert s["frage"] == "grund"
+    assert not sit.get("offered") and not sit.get("slotVorrat")

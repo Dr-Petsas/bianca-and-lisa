@@ -13,7 +13,7 @@ import json
 import pytest
 
 from bianca import agent, flow, gehirn, verwalten
-from kern import calendar
+from kern import calendar, observability_manifest
 from kern.tenants import laden
 
 
@@ -22,6 +22,10 @@ def _sit(tenant: str = "meddent") -> dict:
         "tenant": laden(tenant),
         "messages": [{"role": "system", "content": "x"}],
     }
+
+
+def _verwaltungs_obs(sit: dict) -> list[dict]:
+    return observability_manifest.export(sit).get("verwaltung", [])
 
 
 TERMIN = {
@@ -281,6 +285,28 @@ def test_absage_termindaten_grenzen_ein_aber_verraten_keinen_patienten(monkeypat
     fertig = verwalten.zug(sit, "Ja, bitte absagen.", set())
     assert calls == ["apt-1310"]
     assert "abgesagt" in fertig["text"].lower()
+    events = _verwaltungs_obs(sit)
+    assert [e["phase"] for e in events[-2:]] == ["confirmed", "write"]
+    assert events[-2]["outcome"] == "confirmed"
+    assert events[-1]["outcome"] == "write_ok"
+    assert events[-1]["routeClass"] == "cancel_write"
+    # Die Tageslese darf weder den Firestore-Pfad noch den Request oder
+    # Patientendaten in die Werkzeugspur übernehmen.
+    lesetool = next(
+        t for t in sit["tools"] if t["name"] == "find_appointment_by_details"
+    )
+    assert lesetool["dispatch"]["url"] == ""
+    assert lesetool["dispatch"]["request"] is None
+    assert lesetool["dispatch"]["response"] is None
+    spur = json.dumps(lesetool, ensure_ascii=False)
+    for geheim in (
+        "Elisabeth",
+        "Päsler",
+        "+491701234567",
+        "patient-paesler",
+        "apt-1310",
+    ):
+        assert geheim not in spur
 
 
 def test_exakter_name_braucht_nur_die_terminbestaetigung(monkeypatch):
@@ -299,6 +325,114 @@ def test_exakter_name_braucht_nur_die_terminbestaetigung(monkeypatch):
     assert s["frage"] == "absage_ok"
     assert "wirklich absagen" in antwort["text"].lower()
     assert "nichts verwechseln" not in antwort["text"].lower()
+
+
+def test_verwaltung_unterscheidet_technischen_fehler_von_leerem_tag(
+    monkeypatch,
+):
+    def vorbereitet() -> dict:
+        sit = _sit("blessing")
+        s = gehirn.sammler(sit)
+        s["modus"] = "absagen"
+        sit["verwAktiv"] = True
+        assert verwalten._hinweis_merken(
+            sit, "am 13. Oktober 2026 um 9:45 Uhr", relativ=True)
+        return sit
+
+    fehler_sit = vorbereitet()
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_appointments_by_date",
+        lambda *_a, **_k: {
+            "ok": False,
+            "appointments": [],
+            "dispatch": {
+                "url": "https://secret.invalid/calendar?patient=Mustermann",
+                "request": {"phone": "+491701234567", "patientId": "p-geheim"},
+                "httpStatus": 503,
+                "ms": 17,
+            },
+        },
+    )
+    assert verwalten._detail_kandidaten(fehler_sit, None) is None
+    fehler = _verwaltungs_obs(fehler_sit)[-1]
+    assert fehler["phase"] == "read"
+    assert fehler["outcome"] == "error"
+    assert fehler["errorClass"] == "upstream"
+    assert fehler["httpStatus"] == 503
+
+    leer_sit = vorbereitet()
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_appointments_by_date",
+        lambda *_a, **_k: {
+            "ok": True,
+            "appointments": [],
+            "dispatch": {
+                "url": "https://secret.invalid/calendar?patient=Mustermann",
+                "request": {"phone": "+491701234567", "patientId": "p-geheim"},
+                "httpStatus": 200,
+                "ms": 8,
+            },
+        },
+    )
+    result = verwalten._detail_kandidaten(leer_sit, None)
+    assert result and result["appointments"] == []
+    read = next(e for e in _verwaltungs_obs(leer_sit) if e["phase"] == "read")
+    assert read["outcome"] == "empty"
+    assert read["errorClass"] == "none"
+    assert read["httpStatus"] == 200
+
+    export = json.dumps(
+        {
+            "fehler": _verwaltungs_obs(fehler_sit),
+            "leer": _verwaltungs_obs(leer_sit),
+        },
+        ensure_ascii=False,
+    )
+    for geheim in (
+        "secret.invalid",
+        "Mustermann",
+        "+491701234567",
+        "p-geheim",
+    ):
+        assert geheim not in export
+
+
+def test_regulaeres_404_ist_not_found_und_kein_technikfehler(monkeypatch):
+    sit = _sit("blessing")
+    s = gehirn.sammler(sit)
+    s.update({"modus": "auskunft", "nachname": "Päsler"})
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda *_a, **_k: {
+            "ok": True,
+            "notFound": True,
+            "patient": {},
+            "appointments": [],
+            "dispatch": {
+                "route": "agentFindPatientAppointments",
+                "url": "https://secret.invalid/appointments",
+                "request": {"lastName": "Päsler", "phone": "+491701234567"},
+                "httpStatus": 404,
+                "response": {"status": "not_found"},
+            },
+        },
+    )
+    result = verwalten._finden(sit, None)
+    assert result["notFound"]
+    read = next(e for e in _verwaltungs_obs(sit) if e["phase"] == "read")
+    assert read["outcome"] == "not_found"
+    assert read["errorClass"] == "none"
+    assert read["httpStatus"] == 404
+    spur = json.dumps(sit["tools"][-1], ensure_ascii=False)
+    for geheim in (
+        "secret.invalid",
+        "Päsler",
+        "+491701234567",
+    ):
+        assert geheim not in spur
 
 
 def test_gleiche_uhrzeit_wird_vor_dem_namen_ueber_behandler_eingegrenzt(
@@ -404,6 +538,13 @@ def test_nein_zum_sechzig_prozent_kandidaten_fragt_namen_neu(monkeypatch):
     assert s["nachname"] == ""
     assert not s["bekannt"] and not s["patientId"]
     assert "Nachnamen" in antwort["text"]
+    event = next(
+        e for e in reversed(_verwaltungs_obs(sit))
+        if e["phase"] == "confirmed"
+    )
+    assert event["phase"] == "confirmed"
+    assert event["outcome"] == "rejected"
+    assert event["source"] == "name60"
 
 
 def test_sechzig_prozent_kandidat_gilt_mandantenuebergreifend(monkeypatch):
@@ -448,6 +589,10 @@ def test_auskunft_spricht_sechzig_prozent_kandidaten_erst_nach_ja(monkeypatch):
     assert ansage and "nächster termin" in ansage["text"].lower()
     assert s["frage"] == "termin_ok"
     assert s["bekannt"] and s["patientId"] == "patient-paesler"
+    events = _verwaltungs_obs(sit)
+    assert [e["phase"] for e in events[-2:]] == ["confirmed", "announced"]
+    assert events[-1]["outcome"] == "announced"
+    assert events[-1]["routeClass"] == "appointment_announcement"
 
 
 def test_auskunft_verwirft_fuzzy_patienten_nach_nein_vollstaendig(monkeypatch):

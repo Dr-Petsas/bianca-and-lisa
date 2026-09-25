@@ -12,14 +12,17 @@ import re
 import time
 from typing import Any
 
-from bianca import anstand, flow, gehirn, rueckkehr, session, tasks, telefon
+from bianca import anstand, besuchsgrund, flow, gehirn, metazug, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_gate, gedaechtnis, gespraech, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import fach_wache
+from kern import dringlichkeit
 from kern import qwen_korrektor
 from kern import spur
+from kern import warteschleife
 from kern import wissen as kern_wissen
+from kern import zeiten_wache
 from kern.calendar import slots_zeile
 from kern.patients import arzt_sprechname
 
@@ -40,6 +43,31 @@ _DENK_RE = re.compile(
     re.I,
 )
 _DENK_PAUSE_S = 7.0
+# Denk-Cue am SATZENDE ("Ja, mein Nachname, warte." — Replay 53986f42 z07:
+# der Zug ging ans Modell). Zaehlt nur, wenn der Vorspann keine Namens-/
+# Inhalts-Token traegt ("Busch, warte" bleibt eine Namensnennung).
+_DENK_ENDE_RE = re.compile(
+    r"^(?P<vor>.{0,40}?)[\s,;:-]*"
+    r"(?:warte(?:n)?(?:\s+(?:sie|mal|kurz|bitte))*|(?:einen?\s+)?moment(?:\s+bitte)?|"
+    r"(?:einen?\s+)?augenblick(?:\s+bitte)?|(?:eine\s+)?sekunde(?:\s+bitte)?)"
+    r"[\s.,!?…]*$",
+    re.I,
+)
+
+
+def _ist_denk_cue(text: str) -> bool:
+    if _DENK_RE.match(text):
+        return True
+    m = _DENK_ENDE_RE.match(text or "")
+    if not m:
+        return False
+    vor = m.group("vor") or ""
+    if re.search(r"\d", vor):
+        return False
+    try:
+        return not gehirn._name_tokens(vor)
+    except Exception:
+        return False
 
 # --- Wachen für den LLM-Pfad -------------------------------------------------
 # Live 27.08.2026: Das Modell ERFAND Terminangebote ("Mittwoch, den 24. Juli,
@@ -57,16 +85,24 @@ _ANGEBOT_VERB_RE = re.compile(
     re.I,
 )
 # Kurz-Laut ohne Inhalt ("Hm.", "Ähm", "Well." als STT-Artefakt): kein
-# Gesprächszug — statt einer langen LLM-Grundsatzrede kommt der Stille-Stups
-# (Stand + offene Frage, gedeckelt). Live 29.08.2026: zwei "Hm."/"Well."
+# Gesprächszug — keine LLM-Grundsatzrede. Live 29.08.2026: zwei "Hm."/"Well."
 # ergaben zwei fast identische ~4-s-Meta-Reden. "Ja"/"Nein"/"Okay" bleiben
 # echte Antworten und stehen hier bewusst NICHT drin.
+# W-KURZLAUT (14.09.2026, Anrufe 9dd61a59 z02/z07 "Oh." und 5aa87268 z02
+# "Puff."): ein Ausruf heisst "ich bin dran und hole gerade Luft" — er
+# bekam bisher SOFORT den Stups ("Sind Sie noch dran?") bzw. fiel ans
+# Modell. Jetzt: still weiterhoeren (warte, die Bruecke schont den Stups
+# 8 s); erst eine SERIE ohne Inhalt (_KURZLAUT_SERIE) laeuft wieder auf den
+# Stille-Stups, damit Leitungs-Artefakte das Gespraech nicht einfrieren.
 _NUR_LAUT_RE = re.compile(
-    r"^\s*(?:hm+|mhm+|hmm+|ähm*|aehm*|äh+|aeh+|ehm+|öhm*|oehm*|"
-    r"tja+|na\s*ja|well|puh+|hach+|oh(?:je)?)"
+    r"^\s*(?:hm+|mhm+|hmm+|mm+|ähm*|aehm*|äh+|aeh+|ehm+|öhm*|oehm*|"
+    r"tja+|na\s*ja|well|puh+|puff+|uff+|hach+|oh(?:\s*je)?|oha+|"
+    r"ups|hoppla|huch|boah+|ach\s*so|aha+)"
     r"[\s.,!?…]*$",
     re.I,
 )
+_KURZLAUT_SERIE = 2  # so viele Ausrufe in Folge bekommen den Warte-Zug
+_KURZLAUT_WARTE_MS = 900
 # Nach „Sind Sie noch dran?“: Ja / „ich bin noch dran“ ist KEIN Buchungs-Ja
 # (Thaler 08.09.2026: Presence-Schleife statt offener Änderungsfrage).
 _PRESENCE_ANTWORT_RE = re.compile(
@@ -134,6 +170,7 @@ _FRAGE_KERN = {
     # Erkannte Identität und Terminempfänger sind getrennte Ja/Nein-Schritte.
     "anrufer_check": r"erkannt|richtige\s+person",
     "vorname_check": r"vorname|richtig",
+    "nachname_check": r"nachname|schreibweise|richtig",
     "fuer_wen_check": r"selbst|persönlich|persoenlich",
     "arzt_check": r"zuletzt|behandler|arzt|zahnarzt|richtig",
     "telefon_alt": r"nummer|alte|akte|löschen",
@@ -146,7 +183,9 @@ _FRAGE_KERN = {
     "pzr_kasse": r"krankenkasse|versichert|kasse",
     "termin_anbieten": r"termin|zahnreinigung|brauchen",
     "arzt_notiz": r"notiz|doktor|besondere\s+frage|eingehen",
-    "arzt_notiz_diktat": r"doktor|mitgeben|notiz",
+    "arzt_notiz_diktat": r"doktor|mitgeben|notiz|behandelt|worauf",
+    "termin_notiz": r"notiz|nachricht|mitteilen|inhalt",
+    "termin_notiz_check": r"notiz|nachricht|termin|richtig|schreiben",
     # W-BLEACHING (Chef 03.09.2026): Aufhellungs-Angebot + Zahnersatz-Check.
     "bleaching": r"aufhell|bleach|zahnaufhellung",
     "bleaching_check": r"krone|brücke|bruecke|veneer|implantat|zahnersatz",
@@ -154,6 +193,14 @@ _FRAGE_KERN = {
     "folge_kontrolle": r"kontrolle\s+buch|kontrolle\s+eintrag",
     "frisch_absage_ok": r"absagen|stornier|wirklich",
     "absage_ok": r"absagen|stornier|wirklich",
+    # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen des Bestandstermins.
+    "termin_ok": r"passt|bleibt|verschieben|absagen",
+    "termin_aendern": r"verschieben|absagen",
+    "verw_patient_ok": r"richtig|patient|termin|gefunden",
+    "sonst_noch": r"sonst\s+noch|noch\s+etwas",
+    # W-RECHNUNG (14.09.2026): "Soll ich Ihnen dafuer einen Rueckruf einrichten?"
+    "rechnung_rueckruf": r"rückruf|rueckruf|zurückrufen|zurueckrufen",
+    "ersatz_check": r"ersatz|neuen?\s+termin|abgesagten?\s+termin|einen?\s+neuen",
 }
 _SATZ_ENDE_RE = re.compile(r"(?<=[.!?…])\s+")
 
@@ -208,6 +255,12 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         return f"Im Angebot sind: {angebote}. Welcher passt Ihnen?" if angebote else "Welcher der genannten Termine passt Ihnen?"
     if fid == "bestaetigung":
         return "Soll ich den Termin so fest eintragen?"
+    if fid == "arzt_notiz":
+        return gehirn.arzt_notiz_frage(sit.get("sammler") or {}, sit)
+    if fid == "arzt_notiz_diktat":
+        return gehirn.arzt_notiz_diktat_frage(sit.get("sammler") or {}, sit)
+    if fid in {"termin_notiz", "termin_notiz_check"}:
+        return (gehirn.FRAGE_VARIANTEN.get(fid) or ("",))[0]
     if fid == "pzr":
         # Weiche Zusatzfrage (30.08.2026) — naechste_frage kennt sie nicht,
         # der Anker soll sie nach einer LLM-Antwort trotzdem zurueckholen.
@@ -219,6 +272,11 @@ def _kanonische_frage(sit: dict, fid: str) -> str:
         return gehirn.folge_kontrolle_frage()
     if fid == "rueckblick":
         return gehirn.rueckblick_text(sit.get("sammler") or {}, sit)
+    if fid in {"termin_ok", "termin_aendern", "sonst_noch", "rechnung_rueckruf"}:
+        # W-BESTAND-ANSAGE: Folgefragen der Verwaltung — naechste_frage kennt
+        # sie nicht, der Anker holt sie nach einem Modell-Zug so zurueck.
+        # W-RECHNUNG: dito fuer die Rueckruf-Frage zur Rechnung.
+        return (gehirn.FRAGE_VARIANTEN.get(fid) or ("",))[0]
     fid2, frage = gehirn.naechste_frage(sit)
     return frage if fid2 == fid else ""
 
@@ -280,10 +338,47 @@ _FEHLT_WORT = {
     "versicherung_check": "ob sich Ihre Versicherung geändert hat",
     "anrufer_check": "ob ich Sie richtig erkannt habe",
     "vorname_check": "ob der Vorname aus der Kartei stimmt",
+    "nachname_check": "ob die vorgelesene Schreibweise des Nachnamens stimmt",
     "fuer_wen_check": "ob der Termin für Sie selbst ist",
     "rueckblick": "wie es nach dem letzten Besuch war",
     "folge_kontrolle": "ob eine Kontrolle gebucht werden soll",
 }
+
+
+def _frage_gestrichen(fid: str, vorher: str, nachher: str) -> bool:
+    """Hat der Wiederholungs-Wächter die offene Pflichtfrage aus dem Zug
+    entfernt? Erkannt am KERNWORT der Frage (`_FRAGE_KERN`), nicht am
+    Fragezeichen: die gestaffelten Namensfragen (W-NAME-STUFEN,
+    "Buchstabieren Sie mir den Vornamen bitte einmal …") sind Imperative
+    ohne "?" und fielen als Langsatz weg — Replay 53986f42 z09: gesprochen
+    blieb nur "Alles klar." Ohne Kernwort im Rest ist die Frage weg."""
+    kern = _FRAGE_KERN.get(fid, "")
+    if kern:
+        if not re.search(kern, _s(vorher), re.I):
+            return False
+        return not re.search(kern, _s(nachher), re.I)
+    return "?" in _s(vorher) and "?" not in _s(nachher)
+
+
+def _frage_budget_pruefen(
+    sit: dict,
+    text: str,
+    *,
+    explizite_wiederholung: bool = False,
+) -> dict[str, Any] | None:
+    """Offene Feldfrage anrufweit zaehlen, bevor sie gesprochen wird."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    fid = _s(s.get("frage"))
+    kern = _FRAGE_KERN.get(fid, "")
+    zaehlt = bool(
+        not explizite_wiederholung
+        and frage_budget.gilt(fid)
+        and kern
+        and re.search(kern, _s(text), re.I)
+    )
+    if frage_budget.vor_mund(sit, fid, zaehlt=zaehlt) == "erschoepft":
+        return _frage_budget_ausstieg(sit, fid=fid, grund="feld")
+    return None
 
 
 def _wiederholung_oder_presence(sit: dict, text: str) -> str:
@@ -294,7 +389,23 @@ def _wiederholung_oder_presence(sit: dict, text: str) -> str:
     """
     raus = _wiederholungs_wache(sit, text)
     if raus:
-        return antwort_wache.saeubern(sit, raus)
+        raus = antwort_wache.saeubern(sit, raus)
+        # W-FRAGE-BLEIBT (17.09.2026, Replay 53986f42 z10): der Wächter
+        # strich die verbrannte Pflichtfrage ("Wie ist Ihr Vorname?" — alle
+        # Varianten schon gehört), liess aber den Übergang stehen — gesprochen
+        # wurde nur "Entschuldigung, das habe ich nicht mitbekommen." Ohne
+        # Frage weiss der Anrufer nicht, was er sagen soll: Sackgasse. Ist
+        # eine Pflichtfrage offen und der Zug trug sie als Fragesatz, kommt
+        # sie mit Präfix zurück (nie wortgleich, W-REPEAT bleibt gewahrt).
+        fid = _s((sit.get("sammler") or {}).get("frage"))
+        if raus and fid and _frage_gestrichen(fid, text, raus):
+            # Die kanonische Pflichtfrage der Maschine, nicht irgendeine
+            # gestrichene Modell-Frage — die war zu Recht weg.
+            offen = _kanonische_frage(sit, fid) or stille.nur_fragesaetze(text)
+            if offen:
+                spur.merken(sit, "wiederholung-frage-bleibt", fid)
+                raus = (raus + " " + stille.frage_praefix(offen, sit)).strip()
+        return raus
     if not _s(text):
         return ""
     # Alles war Wiederholung und keine Variante frei. Presence ("Sind Sie
@@ -321,6 +432,132 @@ _DIKTAT_FRAGEN = {
     "telefon", "telefon_check", "telefon_alt", "buchstabieren",
     "nachname", "vorname", "geburtsdatum",
 }
+_NAMENS_UNKLAR_FRAGEN = {
+    "name", "nachname", "buchstabieren", "nachname_korr",
+    "vorname", "vorname_check", "nachname_check",
+}
+
+
+def _namens_unklar_antwort(sit: dict) -> str:
+    """Tenant-scharfer Rückfall für eine bereits offene Namensfrage.
+
+    Blessing-Live 15.09.2026: valide oder nur leicht verhörte Namen wie
+    „Mülhausen“, „Said“, „Aqu“ und „Manuela“ wurden mit dem allgemeinen
+    Zwei-Fragen-Satz („Was meinen Sie damit? Meinen Sie vielleicht …?“)
+    beantwortet. Das hilft der Namensaufnahme nicht und verdoppelt die
+    Gesprächsschleife. Opt-in-Mandanten bleiben deshalb knapp beim offenen
+    Feld; der unsichere STT-Text wird weder wiederholt noch ans LLM gegeben.
+    """
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if not tenants.namens_sicherung(tenant, "namensUnklarOhneEcho"):
+        return ""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    fid = _s(s.get("frage"))
+    if fid not in _NAMENS_UNKLAR_FRAGEN:
+        return ""
+    if fid == "vorname_check":
+        vor = _s(s.get("vorname"))
+        if vor:
+            return f"Ihr Vorname ist {vor}, richtig? Ein kurzes Ja oder Nein genügt."
+        return "Ist der Vorname richtig? Ein kurzes Ja oder Nein genügt."
+    if fid == "nachname_check":
+        unklar = int(sit.get("nachnameCheckUnklar") or 0) + 1
+        sit["nachnameCheckUnklar"] = unklar
+        if unklar >= 2:
+            gehirn.name_fuer_aenderung_leeren(sit, "nachname")
+            s["frage"] = "buchstabieren"
+            sit.pop("nachnameCheckUnklar", None)
+            spur.merken(sit, "nachname-readback", "unklar-neustart")
+            return (
+                "Dann gehen wir auf Nummer sicher. "
+                "Buchstabieren Sie den Nachnamen bitte noch einmal langsam."
+            )
+        return gehirn.nachname_check_frage(s) + " Ein kurzes Ja oder Nein genügt."
+    if fid == "vorname":
+        return "Bitte nennen Sie den Vornamen noch einmal."
+    if fid == "name":
+        return "Bitte nennen Sie Ihren Namen noch einmal."
+    if fid == "buchstabieren" and _s(s.get("buchstabenTeil")):
+        return (
+            "Bitte mit den restlichen Buchstaben des Nachnamens weiter; "
+            "am Ende sagen Sie fertig."
+        )
+    if fid == "nachname_korr":
+        return "Bitte sagen oder buchstabieren Sie den korrigierten Nachnamen noch einmal."
+    return "Bitte sagen oder buchstabieren Sie den Nachnamen noch einmal."
+
+
+def _kompakt_fachfrage(sit: dict, text: str) -> str:
+    """Ein echtes Blessing-Fachwort nie als allgemeinen STT-Müll behandeln.
+
+    Ausdruecklich an die dermatologische Motiv-Klarheit gebunden (nicht an die
+    allgemeine Ruhe-Regie): nur ein Mandant mit ``dermaMotivKlarheit`` bietet
+    auf ein erkanntes Fachwort direkt die Terminfrage an."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if tenant.get("dermaMotivKlarheit") is not True:
+        return ""
+    try:
+        grund, motiv = besuchsgrund.deute(
+            tenant,
+            text,
+            katalog=tenant.get("visitMotives") or [],
+        )
+    except Exception:
+        return ""
+    if grund and motiv:
+        return "Möchten Sie dafür einen Termin vereinbaren?"
+    return ""
+
+
+_KOMPAKT_GRUSS_RE = re.compile(
+    r"^\s*(?:hallo|hi|hey|guten\s+(?:tag|morgen|abend)|grüß\s+gott|"
+    r"gruess\s+gott)[\s.,!?…]*$",
+    re.I,
+)
+# Gruss + Namensnennung ohne Anliegen ("Hallo, Busch, guten Morgen!",
+# "Guten Tag, hier ist Frau Meier") — Replay 53986f42 z01: der Zug ging ans
+# Modell, obwohl nichts zu deuten war. Zaehlt fuer ALLE Mandanten; die
+# Antwort ist ein Gruss plus die offene bzw. die Auftrags-Frage.
+_GRUSS_TOKEN = frozenset({
+    "hallo", "hi", "hey", "guten", "tag", "morgen", "abend", "grüß", "gruess",
+    "gott", "servus", "moin", "schönen", "schoenen", "ja", "äh", "ähm", "ehm",
+    "hier", "ist", "spricht", "mein", "name", "frau", "herr", "und", "also",
+    "praxis", "bin", "ich", "der", "die", "das",
+})
+_GRUSS_KERN_RE = re.compile(
+    r"\b(?:hallo|hi|hey|guten\s+(?:tag|morgen|abend)|gr(?:ü|ue)(?:ß|ss)\s+gott|"
+    r"servus|moin)\b", re.I,
+)
+
+
+def _ist_gruss_mit_name(sit: dict, text: str) -> bool:
+    t = _s(text)
+    if not t or "?" in t or any(ch.isdigit() for ch in t):
+        return False
+    if not _GRUSS_KERN_RE.search(t):
+        return False
+    s = sit.get("sammler") or {}
+    namen: set[str] = set()
+    for k in ("nachname", "vorname", "name", "kontaktName"):
+        for teil in _s(s.get(k)).lower().replace("-", " ").split():
+            namen.add(teil)
+    toks = re.findall(r"[a-zäöüß]+", t.lower())
+    rest = [x for x in toks if x not in _GRUSS_TOKEN and x not in namen]
+    return not rest
+
+
+def _gruss_antwort(text: str, frage: str) -> str:
+    low = _s(text).lower()
+    if "morgen" in low:
+        gruss = "Guten Morgen!"
+    elif "abend" in low:
+        gruss = "Guten Abend!"
+    else:
+        gruss = "Guten Tag!"
+    f = _s(frage)
+    if f and "?" in f:
+        f = f.split("?", 1)[0].rstrip() + "?"
+    return f"{gruss} {f or 'Wie kann ich Ihnen helfen?'}"
 
 
 def _diktat_offen(sit: dict) -> bool:
@@ -414,7 +651,29 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         # noch einmal (live 12.09.2026 kam er zweimal).
         return {"text": "", "book": None}
 
+    # Während der Anrufer den Namen im SMS-Link bestätigt, ist Stille kein
+    # Gesprächsabbruch. Status pollen, ohne Presence-/Stups-Budget zu
+    # verbrauchen; done/expired werden von der bestehenden festen
+    # Namenslink-Maschine weitergeführt.
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("frage")) == "namenslink":
+        from kern import namenslink
+        aus = namenslink.zug(sit, "", set(), stille=True)
+        if aus is not None:
+            return aus
+
     n = stille.stups_zaehlen(sit)
+    if frage_budget.stall_erschoepft(sit):
+        return _frage_budget_stille_ausstieg(
+            sit,
+            fid=_s((sit.get("sammler") or {}).get("frage")),
+            grund="stille-unklar",
+        )
+    if stille.kompakt_fertig(sit):
+        # Ein drittes Schweigen nicht als endlose offene Leitung stehen
+        # lassen: einmal sauber abschließen; ein offenes Anliegen sichert
+        # _notleine vorher als echte Rückrufnotiz.
+        return _notleine(sit)
     if n > stille.MAX_STUPSE:
         return {"text": "", "book": None}
     if stille.gespraech_tot(sit):
@@ -484,6 +743,12 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         # 11.09.2026: „Sind Sie noch dran?" und dann gar nichts mehr).
         text = frage
         spur.merken(sit, "stups-nie-stumm", frage[:60])
+    budget_aus = _frage_budget_pruefen(sit, text)
+    if budget_aus is not None:
+        ende = _s(budget_aus.get("text"))
+        stille.anhaengen(sit, ende)
+        wiederholung.gesagt_merken(sit, ende)
+        return budget_aus
     stille.anhaengen(sit, text)
     return {"text": text, "book": None}
 
@@ -516,6 +781,58 @@ def _notleine(sit: dict) -> dict[str, Any]:
     if not abschied.an():
         return {"text": text, "book": None}
     return {"text": text, "book": None, "hangup": True}
+
+
+def _frage_budget_ausstieg(
+    sit: dict,
+    *,
+    fid: str = "",
+    grund: str = "feld",
+) -> dict[str, Any]:
+    """Nach ausgeschöpftem Budget mit Datenerhalt sauber beenden."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    frage_id = _s(fid) or _s(s.get("frage"))
+    notiz = False
+    if frage_budget.kontext_reicht(sit):
+        try:
+            from bianca import verwalten
+
+            verwalten.abgeben_notiz(
+                sit,
+                was=frage_budget.notiz_text(sit, frage_id),
+            )
+            # Nur ein wirklich persistierter Write erlaubt die Aussage
+            # "notiert". Ein In-Memory-Docktext ist keine Evidenz.
+            notiz = bool(sit.get("praxisNotizPersistiert"))
+        except Exception as exc:  # Abschluss darf an der Notiz nie scheitern
+            print(f"frage-budget-notiz fail {type(exc).__name__}", flush=True)
+    s["phase"] = "fertig"
+    s["frage"] = ""
+    sit["frageBudgetDone"] = True
+    sit["notleineGesagt"] = True
+    text = abschied.notbremse_satz(notiz=notiz)
+    spur.merken(
+        sit,
+        "frage-budget",
+        f"{grund}:{frage_id or 'ohne-feld'}:{frage_budget.stall_gesamt(sit)}",
+    )
+    aus: dict[str, Any] = {"text": text, "book": None}
+    if abschied.an():
+        aus["hangup"] = True
+    return aus
+
+
+def _frage_budget_stille_ausstieg(
+    sit: dict,
+    *,
+    fid: str = "",
+    grund: str = "feld",
+) -> dict[str, Any]:
+    aus = _frage_budget_ausstieg(sit, fid=fid, grund=grund)
+    text = _s(aus.get("text"))
+    stille.anhaengen(sit, text)
+    wiederholung.gesagt_merken(sit, text)
+    return aus
 
 
 def _nachbessern(sit: dict, text: str, melde=None, werkzeug_lief: bool = False,
@@ -726,6 +1043,9 @@ def system_prompt_aktuell(sit: dict, plan: str = "") -> str:
         praxis=_s(tenant.get("praxisName")),
         behandler=_s(tenant.get("behandler")),
         behandler_alle=_behandler_alle(tenant),
+        # W-VERBINDEN-BEWEIS: wohin ueberhaupt durchgestellt werden kann und
+        # wer nie genannt werden darf (Nikolaou stand live zur Wahl).
+        verbinden_zeile=weiterleiten.verbinden_zeile(tenant),
         sprache=_s(tenant.get("sprache")) or "de",
         status=flow.status_zeile(sit),
         termine_text=_termine_zeile(sit),
@@ -813,7 +1133,8 @@ def start_reply(sit: dict) -> dict[str, Any]:
         return _rueckkehr_reply(sit, rk)
     # W-MANDANT: CF-Mandanten ohne kuratierte Datei melden sich mit der in
     # der Pickadoc-DB gepflegten Begruessung (agent.firstMessage).
-    text = _s(tenant.get("begruessungText")) or begruessung(tenants.praxis_melde(tenant), tenant)
+    text = (_s(tenant.get("begruessungText"))
+            or begruessung(tenants.praxis_melde(tenant), tenant))
     # W-MEDDENT (04.09.2026): Live-Bug „Wem kann ich für Sie tun?“ — TTS/DB.
     text = gruss_saeubern(text)
     # Fast-Pfad: Name aus der Rufnummer ist oft schon da. Hallo waermen
@@ -910,6 +1231,71 @@ def _fach_wache_anwenden(sit: dict, text: str) -> str:
     return neu or text
 
 
+def _ruhe_wache_anwenden(sit: dict, text: str) -> str:
+    """W-RUHE (15.09.2026): hoechstens EINE Frage pro Zug, die Frage am Ende,
+    danach kein zweites Thema. Gemeinsame Regie fuer alle Mandanten (Chef:
+    "ein thema nach dem anderen abarbeiten").
+
+    Fail-safe: nur wenn eine Frage NICHT am Ende steht und HINTER ihr kein
+    Fakt (Ziffer/Datum/Uhrzeit/Notfall/SMS/Link) haengt. off: nichts.
+    shadow: nur Spur. enforce: Nachgeplauder hinter der Frage streichen."""
+    m = gespraechsruhe.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, weg = gespraechsruhe.saeubern(text)
+    if not weg:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "ruhe-wache-shadow", " | ".join(x[:40] for x in weg))
+        return text
+    spur.merken(sit, "ruhe-wache", " | ".join(x[:40] for x in weg))
+    return neu or text
+
+
+def _zeiten_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
+    """W-ZEITEN-WACHE (15.09.2026): Oeffnungszeiten nur, wenn sie belegt sind.
+
+    Live-Probe gegen den echten Ruether-Prompt (Ben, leerer Praxis-Prompt +
+    Portal-Default-Zeiten): drei Fragen, drei frei erfundene Zeitplaene
+    ("Wir sind heute von 8 bis 12 Uhr und von 14 bis 16 Uhr fuer Sie da").
+    Wer davor steht, steht vor verschlossener Tuer. Scharf NUR ohne belegte
+    Zeiten (Standorteinstellungen, Prompt-Zeile, lokales wissen); Saetze mit
+    Termin-Bezug bleiben immer (die hat die Fakten-Wache)."""
+    m = zeiten_wache.modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, weg = zeiten_wache.saeubern(
+        sit, text, gesagt, merken=(m != "shadow"))
+    if not weg:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "zeiten-wache-shadow", " | ".join(x[:60] for x in weg))
+        return text
+    spur.merken(sit, "zeiten-wache", " | ".join(x[:60] for x in weg))
+    # KEIN `neu or text`: leer heisst "die ehrliche Auskunft lief in diesem
+    # Zug schon" (P5-Satz davor). Der erfundene Zeitplan darf nie als
+    # Rueckfall zurueckkommen — am Zugende haengt `_nie_stumm` die offene
+    # Pflichtfrage an, im P5-Strom wird ein leerer Satz nicht gesprochen.
+    return neu
+
+
+def _verbinden_wache_anwenden(sit: dict, text: str, gesagt: str = "") -> str:
+    """W-VERBINDEN-BEWEIS (Anruf 984282e3, 14.09.2026): ein Verbinde-Angebot
+    des Modells ("Darf ich Sie zu Doktor Petsas, Patrikis oder Nikolaou
+    durchstellen?") mitten in einer laufenden Aufgabe, ohne dass der Anrufer
+    je verbunden werden wollte — der naechste Zug wurde live ein Transfer
+    (Jingle), der Terminwunsch war weg. Der Satz faellt; die Maschine stellt
+    ihre offene Frage danach selbst (_nie_stumm / W-FOKUS). Bei freier
+    Maschine bleibt die Rueckfrage der Prompt-Leitplanke erlaubt."""
+    if not _s(text):
+        return text
+    neu, gestrichen = weiterleiten.angebot_saeubern(sit, text, gesagt)
+    if not gestrichen:
+        return text
+    spur.merken(sit, "verbinden-wache", _s(text)[:60])
+    return neu
+
+
 def _notdienst_wache_anwenden(sit: dict, text: str) -> str:
     """Chef 13.09.2026 (Punkt 6): 116 117 nur in der Praxis mit der
     DB-Notfallregel (Blessing). In den Zahnpraxen darf das Modell den
@@ -922,6 +1308,27 @@ def _notdienst_wache_anwenden(sit: dict, text: str) -> str:
         spur.merken(sit, "notdienst-wache", "116117 gestrichen")
         return neu or text
     return text
+
+
+def _rechnung_wache_anwenden(sit: dict, text: str) -> str:
+    """W-RECHNUNG (14.09.2026): Bianca hat keine Autorisation, ueber
+    Rechnungen zu reden. Ein Modell-Satz mit Rechnungs-Vokabular, der weder
+    auf die Praxis verweist (persoenlich, vor Ort, Rueckruf) noch die eigene
+    Grenze nennt, ist eine erfundene Behauptung (Betrag, Zahlungsstand, "ich
+    pruefe das") und faellt; bleibt nichts, kommt die feste Erklaerung.
+    Preise (PZR, Bleaching) sind kein Rechnungs-Vokabular und bleiben."""
+    from kern import rechnung
+    m = rechnung.wache_modus()
+    if m == "off" or not _s(text):
+        return text
+    neu, weg = rechnung.saeubern(text)
+    if not weg:
+        return text
+    if m == "shadow":
+        spur.merken(sit, "rechnung-wache-shadow", " | ".join(x[:60] for x in weg))
+        return text
+    spur.merken(sit, "rechnung-wache", " | ".join(x[:60] for x in weg))
+    return neu
 
 
 def _fakten_wache_anwenden(
@@ -952,6 +1359,9 @@ def _fakten_wache_anwenden(
         "sms": "Eine Bestätigungs-SMS kann ich erst nach einer bestätigten Buchung zusagen.",
         "rueckruf": "Einen Rückruf habe ich noch nicht angelegt.",
         "transfer": "Eine Weiterleitung habe ich noch nicht gestartet.",
+        "nummer": "Ihre Nummer steht noch nicht in der Akte.",
+        "gefunden": "In der Kartei habe ich noch nicht nachgesehen.",
+        "wiedersehen": "Einen Termin habe ich noch nicht eingetragen.",
     }.get(
         unbelegt,
         "Da will ich nichts falsch machen — das ist noch nicht erledigt.",
@@ -1021,7 +1431,9 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
     """Einheitlicher Abschluss für direkten Flow und semantischen Handoff."""
     fl = _auto_resume_anhaengen(sit, fl)
     if _s(fl.get("text")):
-        if fl.pop("_wiederholungErlaubt", False):
+        fl["text"] = dringlichkeit.voranstellen(sit, fl["text"])
+        explizite_wiederholung = bool(fl.pop("_wiederholungErlaubt", False))
+        if explizite_wiederholung:
             # Explizite Nutzerbitte „Wiederhole den Termin“: Datum/Uhrzeit
             # muessen erneut hoerbar sein. Nur die allgemeinen Antwort-Wachen
             # bleiben aktiv; der Entdoppler darf diesen Inhalt nicht streichen.
@@ -1029,6 +1441,15 @@ def _maschinen_antwort(sit: dict, fl: dict, msgs: list[dict]) -> dict[str, Any]:
         else:
             fl["text"] = _wiederholung_oder_presence(sit, fl["text"])
         fl["text"] = _eingehen_anwenden(sit, fl["text"], _gehoert_aus(msgs))
+        fl["text"] = _ruhe_wache_anwenden(sit, fl["text"])
+        if not (fl.get("book") or fl.get("hangup") or fl.get("transfer") or fl.get("warte")):
+            budget_aus = _frage_budget_pruefen(
+                sit,
+                fl["text"],
+                explizite_wiederholung=explizite_wiederholung,
+            )
+            if budget_aus is not None:
+                fl = budget_aus
         if "?" in fl["text"]:
             sit["flussFrage"] = fl["text"].rsplit("?", 1)[0].split(". ")[-1].strip() + "?"
         msgs.append({"role": "assistant", "content": fl["text"]})
@@ -1090,26 +1511,70 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # faellt ans LLM. Deshalb hier absichern, nie ueberschreiben.
     sit.setdefault("stimme", "Bianca")
     text_in = _s(spoken)
-    if text_in and not _diktat_offen(sit):
-        from kern import ohr
-        text_in = ohr.klartext(text_in)
     if not text_in:
         return {"text": "", "book": None}
-    from kern import sofort
-    if sofort.ist_stille_halluzination(text_in):
-        # Ruhe klingt bei Parakeet wie "Thank you" / "Come on" / "Wow".
-        # Das ist keine Antwort. Nicht reden, die offene Frage stehen lassen.
-        return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
+    if sit.get("frageBudgetDone"):
+        # Der Abschluss wurde bereits gesprochen. Bei einer haengenden
+        # Leitung keine neue Aufgabe und keinen zweiten Abschied starten.
+        aus: dict[str, Any] = {"text": "", "book": None}
+        if abschied.an():
+            aus["hangup"] = True
+        return aus
+    # W-WARTESCHLEIFE (14.09.2026, Thaler 9311a9e2/e2badc4c): Ansagen der
+    # Praxis-Telefonanlage ("Einen kleinen Augenblick noch bitte, wir sind
+    # gleich persönlich für Sie da", "online finden Sie uns … unter www.…")
+    # kommen als Anrufer-Text an, wenn die Anlage den Anrufer in ihre
+    # Warteschleife zurückholt. Live bedankte sich das Modell für den
+    # "Hinweis", die Buchungsmaschine startete auf eine Ansage, und der
+    # Anruf lief minutenlang gegen die Schleife. Deshalb VOR stille.reset,
+    # Verlauf und Fluss: reine Ansage => still bleiben (kein Ton, kein
+    # Modell, nichts im Verlauf); Schleife => sauber auflegen. Anrufer-
+    # Sprache neben einer Ansage wird normal verarbeitet.
+    ws = warteschleife.bewerten(sit, text_in)
+    if ws.get("aktion") == "rest":
+        spur.merken(sit, "warteschleife-rest", (ws.get("ansage") or "")[:80])
+        text_in = _s(ws.get("text"))
+        if not text_in:
+            return {"text": "", "book": None}
+    elif ws.get("aktion") == "warte":
+        spur.merken(sit, "warteschleife", (ws.get("ansage") or "")[:80])
+        return {"text": "", "book": None, "warte": True,
+                "stilleMs": warteschleife.WARTE_MS}
+    elif ws.get("aktion") == "auflegen":
+        spur.merken(sit, "warteschleife-auflegen",
+                    f"n={warteschleife.stand(sit).get('n')}")
+        print(f"bianca-warteschleife auflegen: {(ws.get('ansage') or '')[:80]!r}",
+              flush=True)
+        if not abschied.an():
+            return {"text": "", "book": None, "warte": True,
+                    "stilleMs": warteschleife.WARTE_MS}
+        return {"text": "", "book": None, "hangup": True}
     if _NUR_LAUT_RE.match(text_in):
-        # Kurz-Laut ohne Inhalt: wie Funkstille behandeln (Stups statt
-        # LLM-Rede) — bewusst VOR stille.reset, damit der Stups-Deckel
-        # (MAX_STUPSE) auch eine "Hm."-Serie beendet.
+        # Kurz-Laut ohne Inhalt — bewusst VOR stille.reset, damit der
+        # Stups-Deckel (MAX_STUPSE) auch eine "Hm."-Serie beendet.
+        # W-KURZLAUT: die ersten Ausrufe in Folge sind ein Luftholen, kein
+        # Schweigen -> still weiterhoeren (warte); die Bruecke haelt den
+        # Stups 8 s zurueck, das Dock stoppt den Watchdog. Erst die Serie
+        # (Leitungs-Artefakt "Hm. Hm. Hm.") laeuft wie bisher auf den Stups.
+        serie = int(sit.get("kurzlautSerie") or 0) + 1
+        sit["kurzlautSerie"] = serie
+        if serie <= _KURZLAUT_SERIE:
+            spur.merken(sit, "kurzlaut-warte", f"{serie}:{text_in[:24]}")
+            return {"text": "", "book": None, "warte": True,
+                    "stilleMs": _KURZLAUT_WARTE_MS}
         return stille_zug(sit)
+    sit.pop("kurzlautSerie", None)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
-    if _DENK_RE.match(text_in):
+    if _ist_denk_cue(text_in):
         # phone_agent skip_turn: nachdenkende Anrufer nicht anstupsen.
+        # Als WARTE-Zug (17.09.2026, Replay 53986f42 z07): ein nacktes
+        # Leer-Reply liess Bruecke und Dock im Unklaren — der Dock-Watchdog
+        # (1,4 s ohne Ton) haette in die Denkpause hineingesprochen. `warte`
+        # ist der eine stille Vertrag (W-DATEN-FLOOR/W-KURZLAUT): Watchdog
+        # aus, Stups gehalten, laengere Ruhe-Schwelle fuer den Nachdenker.
         sit["denkPauseBis"] = time.time() + _DENK_PAUSE_S
-        return {"text": "", "book": None}
+        spur.merken(sit, "denk-cue-warte", text_in[:40])
+        return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
     sit.pop("denkPauseBis", None)
     # W-GEDAECHTNIS: falls inzwischen Name/Nummer bekannt sind, parallel im
     # Praxisgedaechtnis nachsehen (key-gesichert, no-op ohne neue Fakten).
@@ -1127,6 +1592,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # selbst auflegte (Live 11.09.2026: 23 Minuten).
     if abschied.an() and abschied.ist_abschied(text_in, streng=_diktat_offen(sit)):
         spur.merken(sit, "abschied-auflegen", text_in[:60])
+        # W-RECHNUNG: "Nein danke, auf Wiederhoeren" auf die Rueckruf-Frage —
+        # die Frage gilt als verneint (Report: kein Rueckruf gewuenscht),
+        # nicht als "ohne Antwort".
+        flow.rechnung_abbrechen(sit, "abschied")
         return _maschinen_antwort(
             sit,
             {
@@ -1148,6 +1617,25 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             {"text": fachprofil.fallback_antwort(sit), "book": None},
             msgs,
         )
+
+    # W-NOTFALL-VORRANG (18.09.2026): Ein Blessing-Notfall muss VOR
+    # Wohlseins-, Identitaets-, Intent- und Buchungsfragen in den festen
+    # Praxisweg. Im Live-Anruf e14366c6 wurde „Notfalltermin“ zuerst mit
+    # „Habe ich Sie richtig erkannt?“ beantwortet; danach suchte der Flow
+    # mehrfach Slots in einem alten Kalender. Der feste Flow raeumt den
+    # Buchungsstand und beendet den Anruf nach der Notfallansage.
+    from kern import praxisregeln
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    if praxisregeln.notfall_sofort_aktiv(tenant) and praxisregeln.akut(text_in):
+        akut_reply = tasks.zug(sit, text_in, melde)
+        if akut_reply is None:  # Fail-safe: ein Notfall darf nie ans LLM.
+            akut_reply = {
+                "text": praxisregeln.notfall_antwort(tenant, text_in),
+                "book": None,
+                "hangup": True,
+            }
+        spur.merken(sit, "notfall-vorrang", text_in[:80])
+        return _maschinen_antwort(sit, akut_reply, msgs)
 
     # W-HALLO-PAUSE (10.09.2026): Hat Bianca wirklich „Wie geht es Ihnen?“
     # gefragt, war der vorherige Zug absichtlich NUR diese Frage. Jetzt erst
@@ -1236,6 +1724,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         text_in,
     )
     if praxis_text:
+        # W-RECHNUNG: "Nein, wann haben Sie geöffnet?" auf die Rueckruf-Frage
+        # zur Rechnung — das Nein gilt (Frage weg, geparkte Buchung kommt
+        # zurueck), die Auskunft haengt dann DEREN offene Frage an, nicht
+        # noch einmal die Rueckruf-Frage.
+        s_pa = sit.get("sammler") or {}
+        if _s(s_pa.get("frage")) == "rechnung_rueckruf" and gehirn.ist_nein(text_in):
+            flow.rechnung_abbrechen(sit, "praxis-auskunft")
         offene = _offene_frage(sit)
         if offene:
             praxis_text = f"{praxis_text} {offene}"
@@ -1294,9 +1789,11 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             formen = gehirn.FRAGE_VARIANTEN.get(fid) or ()
             frage = formen[0] if formen else ""
         if frage:
-            msgs.append({"role": "assistant", "content": frage})
-            sit["messages"] = msgs
-            return {"text": frage, "book": None}
+            return _maschinen_antwort(
+                sit,
+                {"text": frage, "book": None},
+                msgs,
+            )
 
     # 0) Intent-Schicht (W-HIRN/W-INTENT 03.09.2026, Chef: "erst erkennen,
     #    dann handeln"): das Session-Hirn deutet JEDEN Satz, BEVOR eine
@@ -1309,15 +1806,18 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         if spaet is not None:
             hirn.anwenden(sit, spaet)
         deutung = intent.erkennen(sit, arbeits_text)
-        from kern import anliegen_hoeren
-        deutung = anliegen_hoeren.nachschaerfen(sit, arbeits_text, deutung)
         hirn.anwenden(sit, deutung)
 
     # W-ANRUFER-HALLO: den verspielten Satz SOFORT als Vorab-Füller
     # sprechen, während flow + Ziffern-TTS im Hintergrund laufen.
     # Seriell (Hallo, Stille, Nummer) war der hörbare Hänger.
     hallo_fragt = False
-    if vorab:
+    # Ein klarer Rückrufer fragt nach EINER Sache: warum die Praxis angerufen
+    # hat. Davor keine erkannte-Anrufer-Begrüßung ausspielen — sie verdoppelte
+    # live die Anrede und sprach bei a8536585 wegen eines falschen Akten-
+    # Geschlechts sogar „Herr Rauscher“, bevor der sichere Rückrufpfad
+    # antworten konnte.
+    if vorab and not gehirn.fragt_anrufgrund(arbeits_text, sit):
         hallo = gehirn.anrufer_hallo_jetzt(sit, text_in)
         if hallo:
             # Vorab ging am Wächter vorbei (Live 08.09.: Hallo jeden Zug).
@@ -1354,6 +1854,16 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return _maschinen_antwort(
             sit, {"text": einwort_frage, "book": None}, msgs,
         )
+
+    # W-META-LIVE (19.09.2026): "Wie bitte?", "Vergessen Sie's", "Muss das
+    # sein?" sind Bitten ans GESPRAECH, nicht an eine Aufgabe — im Dialogkern
+    # laengst gebaut, am Telefon liefen sie ins Modell (live wurde daraus ein
+    # Besuchsgrund). Deterministisch, ohne Werkzeug, ohne Schreibweg. Im
+    # Diktat nie: dort ist "nochmal die Sieben" eine Korrektur.
+    if not _diktat_offen(sit):
+        mz = metazug.zug(sit, arbeits_text, msgs, offene=_offene_frage(sit))
+        if mz is not None:
+            return _maschinen_antwort(sit, mz, msgs)
 
     # W-ABSCHWEIFEN (Chef 13.09.2026 zum Anruf 48673eca): „zähl mal von 1 bis
     # 4" / „buchstabiere meinen Namen Abdullah" ist der Talk-Floor — eine
@@ -1407,7 +1917,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # erlebt: "Zu welchem unserer Ärzte..." statt Durchstellen).
     job_sprach = bool(fl and (_s(fl.get("text")) or fl.get("hangup")
                               or fl.get("transfer") or fl.get("warte")))
-    if job_sprach and "Ich bin die Neue!" in _s(fl.get("text")):
+    # "Ich bin die Neue!" bzw. bei maennlichem Assistenten "der Neue" — auf
+    # den Artikel darf die Erkennung nicht hoeren, sonst merkt sich der
+    # Icebreaker bei Ben nichts und stellt sich zweimal vor.
+    if job_sprach and "Ich bin de" in _s(fl.get("text")) and "Neue!" in _s(fl.get("text")):
         gehirn.anrufer_hallo_merken(sit)
     # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am
     # Sammler/Fluss aendert sie nichts, sie entscheidet nur, wie frei das
@@ -1424,30 +1937,61 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit.pop("talkDrift", None)
         return _maschinen_antwort(sit, fl, msgs)
 
-    # Laufende Terminaufnahme bleibt bei der Maschine. Kurze oder unklare
-    # Antworten ("Egal", "Morgans") dürfen nicht ans Modell und nicht als
-    # "Was meinen Sie damit?" zurückkommen (Blessing 22.09.).
-    if _job_aktiv(sit) and (
-        sofort.ist_stille_halluzination(arbeits_text)
-        or gespraech.wirkt_unklar(text_in)
-    ):
-        return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
-    if _job_aktiv(sit):
-        woerter = re.findall(r"\w+", arbeits_text)
-        kurz = len(woerter) <= 4 and "?" not in arbeits_text
-        if kurz:
-            s_halt = gehirn.sammler(sit)
-            if s_halt.get("phase") in {"angebot", "bestaetigen"} and sit.get("offered"):
-                halt_fid, halt_frage = "slotwahl", "Welcher der genannten Termine passt Ihnen?"
-            else:
-                halt_fid, halt_frage = gehirn.naechste_frage(sit)
-            if halt_frage:
-                s_halt["frage"] = halt_fid
-                spur.merken(sit, "buchung-haelt", halt_fid or "frage")
-                return _maschinen_antwort(sit, {"text": halt_frage, "book": None}, msgs)
+    # Ein noch offenes, tenant-geschuetztes Namensformular darf nie wegen
+    # eines laengeren, fachlich klingenden Satzes an das freie Modell fallen.
+    # Flow liefert hier bewusst ``None``, wenn keine belastbare Schreibweise
+    # enthalten ist; die sichere Namensfrage bleibt dann deterministisch offen.
+    namens_text = _namens_unklar_antwort(sit)
+    if namens_text:
+        sit.pop("unklarFolge", None)
+        sit.pop("ganzsatzHinweisGegeben", None)
+        spur.merken(
+            sit,
+            "namensfrage-unklar",
+            f"{_s((sit.get('sammler') or {}).get('frage'))}:{text_in[:40]}",
+        )
+        return _maschinen_antwort(
+            sit,
+            {
+                "text": namens_text,
+                "book": None,
+                "_wiederholungErlaubt": True,
+            },
+            msgs,
+        )
 
     # W-MEDDENT (04.09.2026): kurzer STT-Muell → nachfragen, kein LLM-Plaudern.
     if route.get("unklar"):
+        if frage_budget.unklar_zaehlen(sit):
+            return _maschinen_antwort(
+                sit,
+                _frage_budget_ausstieg(
+                    sit,
+                    fid=_s((sit.get("sammler") or {}).get("frage")),
+                    grund="stille-unklar",
+                ),
+                msgs,
+            )
+        kompakt_text = (
+            _kompakt_fachfrage(sit, text_in)
+            or gespraech.kompakt_unklar(
+                sit,
+                offene_frage=_offene_frage(sit),
+            )
+        )
+        if kompakt_text:
+            sit.pop("unklarFolge", None)
+            sit.pop("ganzsatzHinweisGegeben", None)
+            spur.merken(sit, "blessing-knapp", "unklar")
+            return _maschinen_antwort(
+                sit,
+                {
+                    "text": kompakt_text,
+                    "book": None,
+                    "_wiederholungErlaubt": True,
+                },
+                msgs,
+            )
         unklar_folge = int(sit.get("unklarFolge") or 0) + 1
         sit["unklarFolge"] = unklar_folge
         if unklar_folge >= 2:
@@ -1495,6 +2039,44 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     sit.pop("unklarFolge", None)
     sit.pop("ganzsatzHinweisGegeben", None)
 
+    if gespraech.kompakt_aktiv(sit) and _KOMPAKT_GRUSS_RE.match(text_in):
+        offene = _offene_frage(sit)
+        text = gespraech.kompakt_jobfrage(
+            sit,
+            offene_frage=offene,
+            # Mitten in einem Formular ist "Guten Tag" ein neues Thema und
+            # wirkt hektisch. Dort nur ruhig die offene Frage halten.
+            begruessen=not bool(offene),
+            gesagt=text_in,
+        )
+        spur.merken(sit, "blessing-knapp", "gruss")
+        return _maschinen_antwort(
+            sit,
+            {"text": text, "book": None, "_wiederholungErlaubt": True},
+            msgs,
+        )
+    if _ist_gruss_mit_name(sit, text_in):
+        # Gruss (+ Name) ohne Anliegen — deterministisch fuer alle Mandanten:
+        # kein Modell, keine geratene Anrede (W-ANREDE), sofort die offene
+        # bzw. die Auftrags-Frage. Mitten in einem Formular nur die Frage.
+        offene = _offene_frage(sit)
+        if gespraech.kompakt_aktiv(sit):
+            text = gespraech.kompakt_jobfrage(
+                sit, offene_frage=offene, begruessen=not bool(offene),
+                gesagt=text_in)
+        elif offene:
+            text = _kanonische_frage(sit, _s((sit.get("sammler") or {}).get("frage"))) or offene
+            if "?" in text:
+                text = text.split("?", 1)[0].rstrip() + "?"
+        else:
+            text = _gruss_antwort(text_in, "Wie kann ich Ihnen helfen?")
+        spur.merken(sit, "gruss-deterministisch", text_in[:40])
+        return _maschinen_antwort(
+            sit,
+            {"text": text, "book": None, "_wiederholungErlaubt": True},
+            msgs,
+        )
+
     # W-FOKUS (12.09.2026, Chef: „auch bei live telefonaten verliert bianca
     # den fokus"): ein Nebenthema darf Züge kosten, aber nicht beliebig
     # viele, solange eine Pflichtfrage offen ist. Live 11.09.2026 lief der
@@ -1513,13 +2095,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                     "gravity": {}, "woerter": {}, "stack": [],
                     "floor": gespraech.JOB, "bruecke": "", "frisch": [],
                 })
-            text = stille.fokus_satz(offene_pflicht)
+            text = f"Damit ich das für Sie erledigen kann: {offene_pflicht}"
             spur.merken(sit, "fokus-rueckholung", f"{drift} freie Züge")
-            msgs.append({"role": "assistant", "content": text})
-            sit["messages"] = msgs
-            wiederholung.gesagt_merken(sit, text)
-            gespraech.nach_antwort(sit)
-            return {"text": text, "book": None}
+            return _maschinen_antwort(
+                sit,
+                {"text": text, "book": None},
+                msgs,
+            )
     else:
         sit.pop("talkDrift", None)
 
@@ -1547,7 +2129,18 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # gesprochener erster Satz waere dann falsch. Nur freies Geplauder streamt.
     s = sit.get("sammler") or {}
     mitten_drin = s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"} and s.get("phase") not in {"gebucht", "fertig"}
-    darf_vorab = vorab is not None and not mitten_drin
+    # W-RUHE: ein Task-Auswahl-Lauf darf bei KEINEM Mandanten frei aus dem
+    # Modell VORsprechen. Im Blessing-Livezug 89daafaa sagte das Modell erst
+    # "Das klingt nach einer wichtigen Angelegenheit", danach kam die sichere
+    # Jobfrage — zwei Themen direkt hintereinander. Erst Auswahl auswerten,
+    # dann genau einen deterministischen Satz sprechen. Frueher war das an
+    # gespraech.kompakt_aktiv (nur Blessing) gebunden; die ruhige Grundregie
+    # gilt jetzt ueberall.
+    darf_vorab = (
+        vorab is not None
+        and not mitten_drin
+        and not task_auswahl
+    )
     # Wurde schon ein Satz gesprochen, darf W-EINGEHEN unten NICHTS mehr
     # voranstellen: llm.rest_nach_vorab findet den Rest sonst nicht mehr und
     # der Satz kaeme ein zweites Mal (dieselbe Falle wie bei der Anrede-Wache).
@@ -1562,12 +2155,6 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             extra[k] = max(int(extra.get(k) or 0), int(v))
         else:
             extra[k] = v
-    if not kern_wissen.braucht_langtext(text_in):
-        for k, v in gespraech.reaktion_budget(route["floor"]).items():
-            if k == "max_tokens":
-                extra[k] = min(int(extra.get(k) or v), int(v))
-            else:
-                extra[k] = v
     llm_tools = task_router.werkzeuge_fuer(sit) if task_auswahl else TOOLS
     if darf_vorab:
         # P5 spricht Sätze bereits während der Generierung. Die finale Wache
@@ -1594,7 +2181,16 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             # W-FACH-WACHE: ein Zahn-Satz beim Hautarzt faellt ebenfalls HIER
             # — gesprochen waere er nicht mehr einzufangen.
             satz = _fach_wache_anwenden(sit, satz)
+            # W-ZEITEN-WACHE: erfundene Oeffnungszeiten ebenso HIER — danach
+            # steht die Patientin vor verschlossener Tuer.
+            satz = _zeiten_wache_anwenden(sit, satz, text_in)
             satz = _notdienst_wache_anwenden(sit, satz)
+            # W-RECHNUNG: eine erfundene Rechnungs-Auskunft ebenso HIER.
+            satz = _rechnung_wache_anwenden(sit, satz)
+            # W-VERBINDEN-BEWEIS: ein erfundenes Verbinde-Angebot darf nicht
+            # gesprochen werden — der Anrufer wuerde mit dem Namen antworten
+            # und der naechste Zug waere ein Transfer.
+            satz = _verbinden_wache_anwenden(sit, satz, text_in)
             # W-FRAGE-GATE: eine Daten-Frage darf auch hier nicht raus — sie
             # waere gesprochen, bevor die Wache am Zugende sie streichen kann,
             # und die Maschine wuerde sie danach ein zweites Mal stellen.
@@ -1607,9 +2203,6 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             if gesaeubert != satz:
                 spur.merken(sit, "regreeting-vorab", _s(satz)[:60])
                 satz = gesaeubert
-            satz, weg = gespraech.ungefragt_streichen(satz, text_in)
-            if weg:
-                spur.merken(sit, "smalltalk-bremse", " ".join(weg)[:60])
             if not _s(satz):
                 return
             vorab_gesagt = True
@@ -1638,6 +2231,17 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 "text": "Gerne. Erzählen Sie mir bitte noch kurz, worum es genau geht.",
                 "book": None,
             }
+        if gespraech.kompakt_aktiv(sit):
+            text = gespraech.kompakt_jobfrage(
+                sit,
+                offene_frage=_offene_frage(sit),
+            )
+            spur.merken(sit, "blessing-knapp", "talk")
+            return _maschinen_antwort(
+                sit,
+                {"text": text, "book": None, "_wiederholungErlaubt": True},
+                msgs,
+            )
     text, msgs, book = zuege.apply_tools(sit, msgs, out, melde=melde)
     gelaufen = [_s(w.get("name")) for w in (sit.get("tools") or [])[werkzeuge_vorher:]]
     werkzeug_lief = bool(gelaufen)
@@ -1647,7 +2251,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit, bewacht, nutzertext=text_in)
     bewacht = _anrede_wache_anwenden(sit, bewacht)
     bewacht = _fach_wache_anwenden(sit, bewacht)
+    bewacht = _zeiten_wache_anwenden(sit, bewacht, text_in)
     bewacht = _notdienst_wache_anwenden(sit, bewacht)
+    bewacht = _rechnung_wache_anwenden(sit, bewacht)
+    bewacht = _verbinden_wache_anwenden(sit, bewacht, text_in)
     bewacht = _frage_gate_anwenden(sit, bewacht)
     # Gleiche Re-Greeting-Wache wie am P5-Ausgang — sonst faende
     # llm.rest_nach_vorab den gestrichenen Satz im Endtext und spraeche ihn
@@ -1657,10 +2264,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     if ohne_gruss != bewacht:
         spur.merken(sit, "regreeting", _s(bewacht)[:60])
         bewacht = ohne_gruss
-    gekuerzt, weg = gespraech.ungefragt_streichen(bewacht, text_in)
-    if weg:
-        spur.merken(sit, "smalltalk-bremse", " ".join(weg)[:80])
-        bewacht = gekuerzt
+    bewacht = _ruhe_wache_anwenden(sit, bewacht)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht
@@ -1679,12 +2283,26 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             if msgs and msgs[-1].get("role") == "assistant":
                 msgs[-1]["content"] = text
             sit["messages"] = msgs
+    budget_hangup = False
+    if _s(text) and not book:
+        budget_aus = _frage_budget_pruefen(sit, text)
+        if budget_aus is not None:
+            text = _s(budget_aus.get("text"))
+            budget_hangup = bool(budget_aus.get("hangup"))
+            if msgs and msgs[-1].get("role") == "assistant":
+                msgs[-1]["content"] = text
+            else:
+                msgs.append({"role": "assistant", "content": text})
+            sit["messages"] = msgs
     if _s(text):
         wiederholung.gesagt_merken(sit, text)
     gespraech.nach_antwort(sit)
     # W-GEDAECHTNIS: auch LLM-Zuege koennen Fakten geerntet haben.
     gedaechtnis.kontext_anstossen(sit)
-    return {"text": text, "book": book}
+    aus: dict[str, Any] = {"text": text, "book": book}
+    if budget_hangup:
+        aus["hangup"] = True
+    return aus
 
 
 def hangup(sit: dict) -> dict[str, Any]:

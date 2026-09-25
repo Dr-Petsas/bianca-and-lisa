@@ -14,6 +14,8 @@ Vater. Diese Tests decken alle drei Loecher:
      "Was darf ich ändern…" ins Leere.
 """
 
+import pytest
+
 from bianca import agent, flow, gehirn, telefon
 from kern import hirn
 from kern.tenants import laden
@@ -23,6 +25,11 @@ KATALOG = [
     {"id": "kch-k", "name": "KCH Kontrolluntersuchung", "calendarIds": [],
      "allowOnlineBooking": True, "duration": 15},
 ]
+
+
+@pytest.fixture(autouse=True)
+def _ohne_namenslink(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit() -> dict:
@@ -449,7 +456,7 @@ def test_versicherungsfrage_fragt_nach_dem_dritten():
     assert fid == "versicherung" and "Ihr Sohn" in frage, frage
 
 
-def test_dritttermin_fragt_sms_ziel_vor_einer_fremden_nummer():
+def test_dritttermin_nutzt_die_uebermittelte_anrufernummer_nie_die_fremde_akte():
     sit = _sit_mit_anrufer()
     s = gehirn.sammler(sit)
     s.update({
@@ -469,11 +476,7 @@ def test_dritttermin_fragt_sms_ziel_vor_einer_fremden_nummer():
     fid, _ = gehirn.naechste_frage(sit)
     assert fid not in {"sms_empfaenger", "telefon", "telefon_check"}
     fid, frage = gehirn.telefon_frage(sit)
-    assert fid == "sms_empfaenger"
-    assert "Niko Tzannis oder an Sie" in frage
-
-    s["frage"] = fid
-    gehirn.einsammeln(sit, "An mich bitte.")
+    assert (fid, frage) == ("", "")
     assert s["smsEmpfaenger"] == "anrufer"
     assert s["telefonOk"] and s["telefon"] == "015253904756"
     assert gehirn.telefon_frage(sit) == ("", "")
@@ -529,17 +532,11 @@ def test_buchung_traegt_angehoerigen_notiz():
         flow.kal.note_appointment = (
             lambda tenant, ctx, sit2, note="": notes.append(note) or {"ok": True})
         try:
-            # W-TELEFON-ZULETZT: das Tor vor dem Eintragen klaert erst das
-            # SMS-Ziel (die Vater-Nummer wurde beim Loesen der Identitaet
-            # bewusst aus dem Patientenfeld genommen) — gebucht wird erst,
-            # wenn der Anrufer sie als Ziel bestaetigt hat.
+            # Die übermittelte Mobilnummer bleibt die Kontaktspur des
+            # Anrufers und darf nie als Nummer der Drittperson gelten.
             tor = flow._buchen(sit)
-            assert tor and "oder an Sie" in tor["text"], tor
-            assert not notes
-            assert s["frage"] == "sms_empfaenger"
-            gehirn.einsammeln(sit, "An mich bitte.")
+            assert tor and tor.get("book"), tor
             assert s["smsEmpfaenger"] == "anrufer" and s["telefonOk"]
-            flow._buchen(sit)
         finally:
             flow.kal.book_slot = echt_book
             flow.kal.note_appointment = echt_note

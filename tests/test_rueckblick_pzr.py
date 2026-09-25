@@ -158,6 +158,26 @@ def test_rueckblick_text_formen():
     assert "ist etwa sieben Monate her" in text2  # kein falscher Dativ ("vor ... Monate")
 
 
+def test_rueckblick_und_pzr_erst_nach_behandlerwahl():
+    """Zusatzgespräch und Zusatzangebot dürfen die primäre Kalenderwahl
+    nicht überholen. Sobald der Behandler feststeht, kommt der Rückblick."""
+    sit = _sit()
+    s = _bestand(sit, 900, "IMP OP Implantation")
+    assert gehirn.rueckblick_faellig(s)
+    assert gehirn.pzr_faellig(s)
+
+    assert flow._einschub(sit) is None
+    assert s["rueckblick"] == "" and s["pzr"] == ""
+
+    s["arzt"] = {
+        "typ": "genannt",
+        "calendarId": "kal-a",
+        "calendarName": "Doktor Petsas",
+    }
+    res = flow._einschub(sit)
+    assert res and s["frage"] == "rueckblick"
+
+
 # --- PZR: Bausteine ----------------------------------------------------------
 
 def test_pzr_faellig_grenzen():
@@ -284,7 +304,15 @@ def test_zug_erstes_mal_dann_besuch_2023_greift_vortermin():
         assert s["warSchonMal"] is True and s["besuchErzaehlt"]
         assert r3 and "Nachname" in r3["text"], r3
         r4 = flow.zug(sit, "Peter Berger.")
-        assert r4 and ("letzter Besuch" in r4["text"] or "Zahnreinigung" in r4["text"]), r4
+        # Der bewährte Namenswächter verlangt vor jeder Kartei-/Terminsuche
+        # erst die genaue Schreibweise und deren Ja/Nein-Rückbestätigung.
+        assert r4 and "Buchstabe für Buchstabe" in r4["text"], r4
+        r5 = flow.zug(sit, "B-E-R-G-E-R")
+        assert r5 and "Ist das richtig" in r5["text"], r5
+        r6 = flow.zug(sit, "Ja.")
+        assert r6 and (
+            "letzter Besuch" in r6["text"] or "Zahnreinigung" in r6["text"]
+        ), r6
         assert s["frage"] in {"rueckblick", "pzr"}
     finally:
         flow.hintergrund.anstossen = echt_anstossen
@@ -479,6 +507,11 @@ def test_zug_nach_kartei_fueller_fragt_nur_verlauf_und_merkt_antwort():
     (sonst stört er den Slot)."""
     sit = _sit()
     s = _bestand(sit, 200, "KCH Kontrolluntersuchung")
+    s["arzt"] = {
+        "typ": "genannt",
+        "calendarId": "kal-a",
+        "calendarName": "Doktor Petsas",
+    }
     s["karteiFuellerGesagt"] = True
     ein = flow._einschub(sit)
     assert ein and "?" in ein["text"]

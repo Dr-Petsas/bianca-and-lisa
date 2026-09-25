@@ -63,12 +63,10 @@ def nummer_still(sit: dict) -> bool:
     s = sit.setdefault("sammler", {})
     if not isinstance(s, dict):
         return False
-    # needs_phone an einer BESTANDSAKTE: die Leitung steht noch nicht in
-    # der Akte. Still erneut bestätigen bucht denselben Fehlschlag in einer
-    # Schleife (Anruf 9057eb03). Neupatient ohne Akte: die erkannte
-    # Handynummer IST das SMS-Ziel und wird nicht noch einmal abgefragt.
-    if (sit.get("needsPhoneOffen") and not s.get("telefonOk")
-            and _s(s.get("patientId"))):
+    # needs_phone: die Akte hat die Leitungsnummer noch nicht. Still
+    # erneut als bestätigt zu markieren bucht denselben Fehlschlag in
+    # einer Schleife (Anruf 9057eb03, siebenmal book_slot).
+    if sit.get("needsPhoneOffen") and not s.get("telefonOk"):
         return False
     schon = handy_e164(s.get("telefon") or "")
     if s.get("telefonOk") and schon and schon != nr and ist_handy_de(schon):
@@ -98,27 +96,6 @@ def gilt(sit: dict) -> bool:
     if not _neu_oder_unbekannter_dritter(sit):
         return False
     return bool(anrufer_handy(sit) or bestaetigtes_handy(sit))
-
-
-def kurzfrage(sit: dict) -> tuple[str, str] | None:
-    """Neupatient mit erkannter Handynummer: nur kurz den Namen, kein Verhör.
-
-    None = dieser Weg gilt nicht, die normale Kette fragt weiter.
-    ("", "") = Name reicht, Buchstabieren, Versicherung und Nummer entfallen.
-    """
-    if not gilt(sit):
-        return None
-    nummer_still(sit)
-    s = _sammler(sit)
-    if not _s(s.get("nachname")):
-        return "nachname", "Wie heißen Sie?"
-    if not _s(s.get("vorname")):
-        return "vorname", "Und der Vorname?"
-    s["buchstabiert"] = True
-    if not _s(s.get("versicherung")):
-        s["versicherung"] = "gesetzlich"
-        s["versicherungOk"] = True
-    return "", ""
 
 
 def _dritte_anrede(sit: dict) -> str:
@@ -162,8 +139,6 @@ def vormerken(sit: dict, ctx: dict) -> bool:
     s = _sammler(sit)
     first = _s(s.get("vorname"))
     last = _s(s.get("nachname"))
-    if sit.get("nameReservierung"):
-        first, last = "", ""
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     status, data, _dispatch = _cf_call("agentNameConfirm", {
         "action": "create",

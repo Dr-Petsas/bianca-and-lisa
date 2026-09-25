@@ -6,8 +6,15 @@ Der Name muss in die Terminnotiz, nie wieder ins Angebot.
 
 from __future__ import annotations
 
+import pytest
+
 from bianca import flow, gehirn
 from kern.tenants import laden
+
+
+@pytest.fixture(autouse=True)
+def _ohne_namenslink(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit_gebucht() -> dict:

@@ -68,8 +68,13 @@ def test_meine_nummer_uebernimmt_anrufernummer():
     assert s["telefonBekannt"].endswith("6004600")
     assert s["telefonOffen"] == s["telefonBekannt"]
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "telefon_check"
-    assert "Bestätigungs-SMS" in frage
+    # W-TELEFON-ZULETZT: Die Nummer bleibt geparkt, wird aber erst direkt
+    # vor dem Write rückbestätigt. Zuerst wird der Behandler geklärt.
+    assert fid == "arzt"
+    fid_t, frage_t = gehirn.telefon_frage(sit)
+    assert (fid_t, frage_t) == ("", "")
+    assert s["telefonOk"] is True
+    assert patients.handy_e164(s["telefon"]) == "+491776004600"
 
 
 def test_meine_nummer_ohne_bekannte_nummer_beharrt_nicht():

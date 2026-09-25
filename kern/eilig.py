@@ -100,38 +100,6 @@ def vergangene_absage_plus_neubuchung(text: str) -> bool:
     return bool(_ABSAGE_VERGANGEN_RE.search(t) and _NEU_TERMIN_RE.search(t))
 
 
-
-_NICHT_KOMMEN_RE = re.compile(r"\bnicht\s+kommen\b", re.I)
-_TERMIN_MACHEN_RE = re.compile(
-    r"\btermin\w*\b[^.!?]{0,48}\b(?:ausmachen|vereinbaren|buchen|machen)\b|"
-    r"\b(?:ausmachen|vereinbaren|buchen)\b[^.!?]{0,32}\btermin\w*\b",
-    re.I,
-)
-_ECHTE_ABSAGE_RE = re.compile(
-    r"\b(?:absag|stornier|abbestell|cancel)\w*",
-    re.I,
-)
-_NAECHSTER_SLOT_RE = re.compile(
-    r"so\s+bald|baldm(?:ö|oe)glichst|"
-    r"n(?:ä|ae)chstm(?:ö|oe)glich|"
-    r"sehr\s+sp(?:ä|ae)t|\bkeines\b|\bkeins\b|\bkeiner\b",
-    re.I,
-)
-
-
-def nicht_kommen_will_termin(text: str) -> bool:
-    """„Kann jetzt nicht kommen, einen Termin ausmachen“ ist eine Neubuchung."""
-    t = _s(text)
-    if not t or _ECHTE_ABSAGE_RE.search(t):
-        return False
-    return bool(_NICHT_KOMMEN_RE.search(t) and _TERMIN_MACHEN_RE.search(t))
-
-
-def will_naechsten_slot(text: str) -> bool:
-    """Angebot zu spät oder ausdrücklich der nächste freie Termin."""
-    return bool(_NAECHSTER_SLOT_RE.search(_s(text)))
-
-
 def _sofort_praxis(tenant: dict | None) -> bool:
     from kern import praxisregeln
     if praxisregeln.notfall_sofort_aktiv(tenant):

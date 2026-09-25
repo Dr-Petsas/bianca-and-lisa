@@ -73,11 +73,23 @@ def belegte_namen(sit: dict) -> set[str]:
     Bewusst grosszügig auf der Belegt-Seite: ein legitimer Name darf nie
     gestrichen werden, nur ein frei erfundener."""
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    # "Reservierung SMS" ist ausschließlich der technische Name eines
+    # kurzlebigen Platzhalter-Patienten. Er ist niemals eine belegte
+    # Personenanrede ("Frau SMS") und darf daher nicht in die Wache gelangen.
+    platzhalter = False
+    try:
+        from kern import namenslink
+        platzhalter = namenslink.ist_platzhalter_name(
+            s.get("vorname"), s.get("nachname"), s.get("name")
+        )
+    except Exception:  # Wache darf nie werfen
+        pass
     quellen: list[Any] = [
-        s.get("nachname"), s.get("vorname"), s.get("name"),
         s.get("kontaktName"), s.get("akteName"),
         s.get("arztName"), s.get("kalenderName"),
     ]
+    if not platzhalter:
+        quellen[:0] = [s.get("nachname"), s.get("vorname"), s.get("name")]
     anrufer = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
     quellen += [anrufer.get("vorname"), anrufer.get("nachname")]
     patient = sit.get("patient") if isinstance(sit.get("patient"), dict) else {}

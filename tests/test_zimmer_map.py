@@ -186,7 +186,7 @@ def test_thaler_pzr_ohne_sms_vertrag_wird_sicher_als_offen_notiert(monkeypatch):
     assert "PZR-Termin erwünscht, aber noch nicht gebucht; bitte nachholen" in notizen[0]
     assert not notizen[0].endswith("..")
     assert "nicht sicher zusammenlegen" in res["text"]
-    assert "Link" in res["text"] and "Unterlagen" in res["text"]
+    assert "Link" in res["text"] and "Dokumente" in res["text"]
 
 
 def test_live_prophylaxe_satz_bindet_prophylaxe_kalender():

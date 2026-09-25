@@ -3996,10 +3996,13 @@ def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
     sit = _buch_sit(iso1)
     notizen: list = []
     angebote: list = []
+    schreibversuche: list[str] = []
 
     def _fail_book(tenant, ctx, slot_iso=""):
+        schreibversuche.append(slot_iso)
         return {
             "ok": False, "slotTaken": True, "slotIso": slot_iso,
+            "writeAttempted": True,
             "spoken": "Der Termin ist gerade weg.",
             "slots": [{"iso": iso2, "spoken": "heute um elf"}],
         }
@@ -4008,11 +4011,20 @@ def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
     echt_notiz = flow.verwalten._notiz_schreiben
     echt_find = flow.kal.find_slots
     flow.kal.book_slot = _fail_book
-    flow.verwalten._notiz_schreiben = (
-        lambda sit, **kw: notizen.append(kw) or True
-    )
-    # _angebot soll aus dem lokalen Vorrat schöpfen, nicht die CF anrufen.
-    flow.kal.find_slots = lambda *a, **k: {"ok": False}
+    def _notiz_ok(sit, **kw):
+        notizen.append(kw)
+        sit["praxisNotiz"] = "Rueckruf wegen belegtem Terminwunsch"
+        return True
+
+    flow.verwalten._notiz_schreiben = _notiz_ok
+    # Nach einem Konflikt ist der alte Vorrat ungueltig. Die Alternative muss
+    # aus einer FRISCHEN Kalendersuche kommen, nie aus der Fehlerantwort oder
+    # dem stale Vorrat.
+    flow.kal.find_slots = lambda *a, **k: {
+        "ok": True,
+        "slots": [{"iso": iso2, "spoken": "heute um elf"}],
+        "doctorName": "Thaler",
+    }
 
     try:
         r1 = flow._buchen(sit)
@@ -4037,6 +4049,13 @@ def test_book_retry_sperrt_iso_und_deckelt_nach_zwei_fails():
         assert gehirn.sammler(sit)["phase"] == "fertig"
         assert notizen, "Rueckruf-Notiz muss geschrieben sein"
         assert "Dann halte ich fest" not in (r_pick.get("text") or "")
+        assert schreibversuche == [iso1, iso2]
+
+        # Selbst ein direkter Alt-Aufrufer darf nach dem Deckel keinen
+        # dritten Kalender-Write mehr auslösen.
+        r3 = flow._buchen(sit)
+        assert schreibversuche == [iso1, iso2]
+        assert r3 and "Praxis" in r3["text"]
     finally:
         flow.kal.book_slot = echt_book
         flow.verwalten._notiz_schreiben = echt_notiz

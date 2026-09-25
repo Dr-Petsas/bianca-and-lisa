@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
-from datetime import date, datetime, timedelta
+import unicodedata
+from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -13,42 +16,22 @@ import httpx
 
 from kern.config import CF_BASE, WRITE_LIVE
 from kern import notes, patients
-from kern.slots import REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer, spoken_slot
+from kern.slots import (
+    FENSTER_TAGE, REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer,
+    spoken_slot, start_iso, such_horizont_tage,
+)
 from kern.sprech import slot_wort
-from kern.tenants import ist_akut_motiv, kalender_von, motiv_von
+from kern.tenants import (
+    ist_akut_motiv, kalender_von, motiv_von, taugt_als_ersatz,
+)
 
 TZ = ZoneInfo("Europe/Berlin")
-FENSTER_TAGE = 183
-_FENSTER_MONATE = {3: 92, 6: 183, 9: 274, 12: 366}
 
-
-def _fenster_tage(tenant: dict | None) -> int:
-    """Anliegen-Monate, sonst suchFensterTage am Mandanten, sonst 6 Monate."""
-    if not isinstance(tenant, dict):
-        return FENSTER_TAGE
-    pol = tenant.get("anliegenPolicy")
-    if isinstance(pol, dict):
-        try:
-            monate = int(pol.get("suchFensterMonate"))
-        except (TypeError, ValueError):
-            monate = 0
-        if monate in _FENSTER_MONATE:
-            return _FENSTER_MONATE[monate]
-        try:
-            n = int(pol.get("suchFensterTage") or 0)
-        except (TypeError, ValueError):
-            n = 0
-        if 30 <= n <= 366:
-            return n
-    try:
-        n = int(tenant.get("suchFensterTage") or 0)
-    except (TypeError, ValueError):
-        n = 0
-    if 30 <= n <= 366:
-        return n
-    return FENSTER_TAGE
-
-
+# W-SUCHFENSTER (14.09.2026): Plattform-Vertrag getFreeTimeSlots — je Aufruf
+# hoechstens 20 Zeiten aus 30 Tagen ab startDate (Quelle: appointments.ts,
+# maxSlots=20 / firstDaysToSearch=30; ohne Treffer sucht sie selbst 90 Tage
+# weiter). Bei offenem Wunsch blaettert `find_slots` bis zu SEITEN_MAX
+# weitere Seiten vorwaerts, gedeckelt auf das mandantenscharfe Suchfenster.
 SEITE_MAX_SLOTS = 20
 try:
     SEITEN_MAX = max(0, int(os.getenv("SLOT_SEITEN", "3") or 3))
@@ -79,9 +62,24 @@ _SCHREIB_TIMEOUT = 25.0
 # Kartei steht. Kurze Nachlese-Retries fangen Replikationslatenz ab; der
 # Anrufer hört währenddessen bereits den Werkzeug-Füller.
 _BOOK_VERIFY_DELAYS = (0.0, 0.2, 0.45)
-# W-AKTE-HANDY (Anruf 9057eb03): needs_phone mit bekannter Mobilnummer
-# einmal in die Akte schreiben und genau einmal neu buchen.
+# W-BUCHUNG-BEWEIS (15.09.2026): erreicht die namensbasierte Ruecklese die
+# richtige Akte nicht, beweist ein zweiter Weg ueber die patientId. 0 =
+# byte-identisches Verhalten von vor dem 15.09.2026 (nur Namensliste).
+BOOK_VERIFY_AKTE = (os.getenv("BOOK_VERIFY_AKTE", "1") or "1").strip() != "0"
+# W-AKTE-HANDY (15.09.2026): sagt die Plattform needs_phone, obwohl Bianca eine
+# rueckbestaetigte Handynummer in der Hand hat, wird sie in die Akte geschrieben
+# und EINMAL neu gebucht. 0 = Verhalten von vor dem 15.09.2026 (nur nachfragen).
 BOOK_FIX_PHONE = (os.getenv("BOOK_FIX_PHONE", "1") or "1").strip() != "0"
+# W-ERSATZ-MOTIV (15.09.2026): als Ausweich fuer ein leeres Spezialfenster
+# taugt nur ein echter Kontroll-/Vorsorge-Termin. 0 = Verhalten von vor dem
+# 15.09.2026 (jedes harmlos klingende Motiv durfte einspringen).
+_ERSATZ_STRENG = (os.getenv("MOTIV_ERSATZ_STRENG", "1") or "1").strip() != "0"
+# W-VERWALTUNG-TERMIN-ZUERST (16.09.2026): Absagen/Verschieben duerfen einen
+# bekannten Bestandstermin nach Datum/Uhrzeit direkt im Standortkalender
+# suchen. Der Buchungsweg und die Terminauskunft benutzen diesen Pfad nicht.
+VERWALTUNG_TERMIN_DETAILS = (
+    os.getenv("VERWALTUNG_TERMIN_DETAILS", "1") or "1"
+).strip().lower() not in {"0", "false", "off", "no"}
 
 # W-TOOL-UI (02.09.2026): freie Slots in der Gespraechsansicht nicht
 # endlos speichern — erste N reichen zur Diagnose, Rest als total.
@@ -183,8 +181,69 @@ def _mit_dispatch(result: dict[str, Any], dispatch: dict | None) -> dict[str, An
     return result
 
 
+def _kontrolle_ersatz(tenant: dict, such: dict) -> dict | None:
+    """Ersatz-Suchkontext mit dem Kontroll-Motiv — oder None, wenn es keinen
+    sinnvollen Ersatz gibt (kein Kontroll-Motiv, schon Kontrolle, Akut)."""
+    vm = motiv_von(tenant, "Kontrolluntersuchung")
+    alt_id = _s((vm or {}).get("id"))
+    # Nie auf Notfall/Akut ausweichen, nur weil das Spezialfenster leer war
+    # (Blessing/Thaler: visitMotives[0] = Akutsprechstunde).
+    if not alt_id or alt_id == _s(such.get("visitMotiveId")) or ist_akut_motiv(vm):
+        return None
+    # W-ERSATZ-MOTIV (15.09.2026): fuehrt die Praxis gar kein Kontroll-Motiv,
+    # lieferte motiv_von den ersten harmlos KLINGENDEN Eintrag — bei Ruether
+    # "GYN Endometriose Erstberatung" (45 min) fuer eine Krebsvorsorge. Ein
+    # Ersatz muss wirklich ein Kontroll-/Vorsorge-Termin sein; sonst gibt es
+    # keinen, und der Anrufer hoert ehrlich, dass das telefonisch nicht geht.
+    if _ERSATZ_STRENG and not taugt_als_ersatz(vm):
+        return None
+    alt = dict(such)
+    alt["visitMotiveId"] = alt_id
+    alt["visitMotiveName"] = _s((vm or {}).get("name")) or "Kontrolluntersuchung"
+    return alt
+
+
+def _nicht_telefonisch(tenant: dict, such: dict) -> str:
+    """Name des Wunsch-Motivs, wenn es die Praxis NICHT online vergibt.
+
+    `allowOnlineBooking=false` sperrt in der Plattform auch den Telefon-Agenten
+    — die CF liefert dafuer nie Zeiten. Ohne tauglichen Ersatz (W-ERSATZ-MOTIV)
+    ist "im Moment leider kein freier Termin" die falsche Auskunft: es wird
+    nicht kurzfristig einer frei. Der Anrufer soll den echten Grund hoeren.
+    """
+    mid = _s(such.get("visitMotiveId"))
+    if not mid:
+        return ""
+    # Der Aufrufer kennt den frischen Sitzungs-Katalog (masVisitMotives) und
+    # sagt die Buchbarkeit ausdruecklich — tenant["visitMotives"] fuehrt oft
+    # nur einen Ausschnitt (Ruether: 10 von 31).
+    if such.get("visitMotiveOnline") is False:
+        return _s(such.get("visitMotiveName")) or "diese Terminart"
+    vms = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
+    for vm in vms:
+        if _s(vm.get("id")) != mid:
+            continue
+        # NUR ein ausdrueckliches False sperrt. Die lokalen tenants/*.json
+        # (MedDent, Thaler) fuehren das Feld gar nicht — ein fehlender Wert
+        # darf den Anrufer nie mit "vergebe ich telefonisch nicht" abweisen.
+        if vm.get("allowOnlineBooking") is not False:
+            return ""
+        return _s(vm.get("nameForPatient")) or _s(vm.get("name")) or _s(such.get("visitMotiveName"))
+    return ""
+
+
+def _mit_motiv_fallback(found: dict[str, Any], such: dict) -> dict[str, Any]:
+    found["motivFallback"] = "kontrolle"
+    found["motivOriginal"] = {
+        "id": _s(such.get("visitMotiveId")),
+        "name": _s(such.get("visitMotiveName")),
+    }
+    return found
+
+
 def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
-                         source: str = "", motiv_fallback: bool = True) -> dict[str, Any]:
+                         source: str = "", motiv_fallback: bool = True,
+                         wish: dict | None = None) -> dict[str, Any]:
     """Slots NUR in diesem Kalender. Leeres Motiv-Fenster → Kontrolle.
 
     Chef 08.09.2026 (Lülf): die Praxis war frei, PAR-AIT-geschlossen lieferte
@@ -204,7 +263,7 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
     im Sammler, der O-Ton landet in der Terminnotiz.
     """
     such = dict(ctx or {})
-    found = find_slots(tenant, such, start_date=start_date, egal=False, source=source)
+    found = find_slots(tenant, such, start_date=start_date, egal=False, source=source, wish=wish)
     if not found.get("ok"):
         return found
     slots = _iso_liste(found.get("slots") or [])
@@ -212,49 +271,65 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
         return found
     if not motiv_fallback:
         return found
-    vm = motiv_von(tenant, "Kontrolluntersuchung")
-    alt_id = _s((vm or {}).get("id"))
-    # Nie auf Notfall/Akut ausweichen, nur weil das Spezialfenster leer war
-    # (Blessing/Thaler: visitMotives[0] = Akutsprechstunde).
-    if not alt_id or alt_id == _s(such.get("visitMotiveId")) or ist_akut_motiv(vm):
+    alt = _kontrolle_ersatz(tenant, such)
+    if not alt:
+        gesperrt = _nicht_telefonisch(tenant, such)
+        if gesperrt:
+            found["motivNichtTelefonisch"] = gesperrt
         return found
-    alt = dict(such)
-    alt["visitMotiveId"] = alt_id
-    alt["visitMotiveName"] = _s((vm or {}).get("name")) or "Kontrolluntersuchung"
-    zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source)
+    zweit = find_slots(tenant, alt, start_date=start_date, egal=False, source=source, wish=wish)
     if zweit.get("ok") and _iso_liste(zweit.get("slots") or []):
-        zweit["motivFallback"] = "kontrolle"
-        zweit["motivOriginal"] = {
-            "id": _s(such.get("visitMotiveId")),
-            "name": _s(such.get("visitMotiveName")),
-        }
-        return zweit
+        return _mit_motiv_fallback(zweit, such)
     return found
 
 
 def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
-                      start_date: str = "", source: str = "") -> dict[str, Any]:
+                      start_date: str = "", source: str = "",
+                      motiv_fallback: bool = True,
+                      wish: dict | None = None) -> dict[str, Any]:
     """Slots nacheinander in den gegebenen Zimmern — erster Treffer gewinnt.
 
     Thaler: PZR Zimmer 3 dann 2, Notfall 1, Behandlung 4. Die Antwort
     traegt ``calendar``, damit die Buchung denselben Raum trifft.
+
+    W-SUCHFENSTER (14.09.2026, Anruf da746a65): liefert KEIN Zimmer Zeiten
+    fuer das Wunsch-Motiv, laeuft — wie bei `find_slots_behandler` — eine
+    zweite Runde mit dem Kontroll-Motiv ueber dieselben Zimmer (Antwort
+    traegt ``motivFallback`` + ``motivOriginal``, gebucht wird mit dem
+    Ersatz, der O-Ton landet in der Notiz). Vorher endete der Zimmer-Weg
+    still in "kein freier Termin" + Rueckruf, waehrend der Behandler-Weg
+    laengst Kontrolle angeboten haette.
     """
     letzter: dict[str, Any] = {"ok": False, "slots": []}
-    for cal in raeume or []:
-        if not isinstance(cal, dict) or not _s(cal.get("id")):
-            continue
-        such = dict(ctx or {})
-        such["calendarId"] = cal["id"]
-        such["calendarName"] = _s(cal.get("name"))
-        found = find_slots(
-            tenant, such, start_date=start_date, egal=False, source=source)
-        if found.get("ok") and _iso_liste(found.get("slots") or []):
-            found["calendar"] = {
-                "id": cal["id"],
-                "name": _s(cal.get("name")),
-            }
-            return found
-        letzter = found
+    kandidaten = [
+        cal for cal in (raeume or [])
+        if isinstance(cal, dict) and _s(cal.get("id"))
+    ]
+    runden: list[tuple[dict, bool]] = [(dict(ctx or {}), False)]
+    gesperrt = ""
+    if motiv_fallback:
+        alt = _kontrolle_ersatz(tenant, dict(ctx or {}))
+        if alt:
+            runden.append((alt, True))
+        else:
+            gesperrt = _nicht_telefonisch(tenant, dict(ctx or {}))
+    for basis, ersatz in runden:
+        for cal in kandidaten:
+            such = dict(basis)
+            such["calendarId"] = cal["id"]
+            such["calendarName"] = _s(cal.get("name"))
+            found = find_slots(
+                tenant, such, start_date=start_date, egal=False, source=source, wish=wish)
+            if found.get("ok") and _iso_liste(found.get("slots") or []):
+                found["calendar"] = {
+                    "id": cal["id"],
+                    "name": _s(cal.get("name")),
+                }
+                if ersatz:
+                    _mit_motiv_fallback(found, dict(ctx or {}))
+                return found
+            if not ersatz or not letzter.get("ok"):
+                letzter = found
     if letzter.get("ok") and not letzter.get("calendar"):
         erster = next(
             (c for c in (raeume or [])
@@ -266,10 +341,13 @@ def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
                 "id": erster["id"],
                 "name": _s(erster.get("name")),
             }
+    if gesperrt and not _iso_liste(letzter.get("slots") or []):
+        letzter["motivNichtTelefonisch"] = gesperrt
     return letzter
 
 
 def _wunsch_gedeckt(slots: list, wish: dict | None) -> bool:
+    """Deckt der Vorrat den Wunsch (Tag/Zeitraum/Wochentag/Uhrzeit) ab?"""
     isos = _iso_liste(slots or [])
     if not wish:
         return bool(isos)
@@ -283,6 +361,17 @@ def _tag_plus(iso_tag: str, tage: int) -> str:
 
 
 def _naechste_seite(page_start: str, slots: list[str], heute: str) -> str:
+    """Startdatum der Folgeseite — oder "" (Plattform-Fenster ausgeschoepft).
+
+    Plattform-Vertrag (getFreeTimeSlots, appointments.ts): eine Seite =
+    hoechstens ``SEITE_MAX_SLOTS`` Zeiten aus 30 Tagen ab startDate; ohne
+    Treffer sucht sie selbst die 90 Tage danach (Tag 30-120, wieder auf 20
+    gekappt). Kommen also 20 Zeiten, ist die Liste am letzten Tag gekappt
+    (dort weitermachen, Dubletten filtert der Aufrufer); kommen weniger,
+    ist das durchsuchte Fenster komplett — 30 Tage, oder 120 Tage, wenn die
+    letzte Zeit schon hinter Tag 30 liegt (dann lief der 90-Tage-Weg);
+    kommt nichts, hat die Plattform 120 Tage gesehen — Schluss.
+    """
     if not slots:
         basis = (page_start or heute)[:10]
         naechster = _tag_plus(basis, 120)
@@ -300,22 +389,43 @@ def _naechste_seite(page_start: str, slots: list[str], heute: str) -> str:
 
 def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
                source: str = "", wish: dict | None = None) -> dict[str, Any]:
-    """Freie Zeiten — leere erste Seite blaettert +120 Tage (6-Monats-Fenster)."""
+    """Freie Zeiten der Plattform — bei offenem Wunsch seitenweise vorwaerts.
+
+    W-SUCHFENSTER (14.09.2026, Anrufe da746a65/5aa87268): die Plattform
+    liefert je Aufruf hoechstens 20 Zeiten aus 30 Tagen — bei vollem
+    Kalender endete der Vorrat mitten im laufenden Monat, und "am Donnerstag
+    nachmittags" oder "Ende Oktober" hiess "kein freier Termin". Ist ein
+    ``wish`` uebergeben, das die erste Seite nicht deckt, holt die Suche bis
+    zu ``SEITEN_MAX`` weitere Seiten (Startdatum wandert vor), gedeckelt auf
+    das mandantenscharfe Suchfenster ab heute. Auch eine leere erste Seite
+    wird weitergeblättert, damit späte Termine nicht unsichtbar bleiben.
+    ``dispatch`` traegt die erste Seite plus ``seiten`` (Startdatum und
+    Trefferzahl je Seite) fuer die Gespraechsansicht.
+    """
     heute = datetime.now(TZ).date().isoformat()
     if start_date and start_date[:10] < heute:
         start_date = heute
+    if not start_date and wish:
+        auto = start_iso(wish)
+        # Relative Abstände dürfen die erste Kalenderseite direkt am
+        # gewünschten Vorlauf öffnen. Konkrete Datumswünsche bleiben beim
+        # bisherigen Seitenvertrag, damit vorhandene Slots mitkommen.
+        if auto and not wish.get("date") and not wish.get("tage") and not wish.get("von"):
+            start_date = auto
     erste = _find_slots_seite(tenant, ctx, start_date=start_date, egal=egal, source=source)
     if not erste.get("ok"):
         return erste
     if not wish and _iso_liste(erste.get("slots") or []):
         return erste
     slots = list(erste.get("slots") or [])
-    seite_slots = _iso_liste(slots)
+    seite_slots = _iso_liste(slots)  # Zeiten der zuletzt geladenen Seite
     seiten = [{"startDate": start_date or heute, "n": len(slots)}]
-    horizont = _tag_plus(heute, _fenster_tage(tenant))
+    horizont = _tag_plus(heute, such_horizont_tage(tenant, wish))
     page_start = start_date or heute
     ctx_seite = dict(ctx or {})
     if egal:
+        # "egal": die Plattform hat den schnellsten Arzt gewaehlt (doctor_name)
+        # — die Folgeseiten blaettern in DESSEN Kalender, statt neu zu wuerfeln.
         gewinner = kalender_von(tenant, _s(erste.get("doctorName")).split(",")[0].strip())
         if gewinner and _s(gewinner.get("id")):
             ctx_seite["calendarId"] = gewinner["id"]
@@ -377,10 +487,19 @@ def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bo
         body["visitMotiveName"] = _s(ctx.get("visitMotiveName"))
     elif vm and vm.get("name"):
         body["visitMotiveName"] = vm["name"]
+    # W-FENSTERENDE (17.09.2026, Befund A7): startDate IMMER senden. Ohne
+    # startDate rechnet die Plattform (appointmentsService.getFreeTimeSlots)
+    # das Fensterende als "jetzt + 30 Tage" MIT Uhrzeit: der Kalkulator
+    # erzeugt fuer Tag 30 den GANZEN Tag, geladen sind die Termine aber nur
+    # bis zur Anruf-Uhrzeit — alles danach ist ein Phantom, das
+    # isSlotAvailable beim Buchen verwirft ("The slot is not available.",
+    # 6 von 8 Buchungsfehlern lagen exakt auf Tag 30). Mit startDate rechnet
+    # die Plattform ab Berlin-Mitternacht, Tag 30 faellt komplett heraus.
     heute = datetime.now(TZ).date().isoformat()
-    if start_date and start_date[:10] < heute:
-        start_date = heute
-    body["startDate"] = start_date or heute
+    # Letzte harte Grenze direkt vor dem Cloud-Function-Aufruf. Aufrufer wie
+    # Hintergrund-Vorrat, Wiederangebot und Verschiebe-Alternative dürfen
+    # auch mit einem alten Sitzungsstand niemals in der Vergangenheit suchen.
+    body["startDate"] = max(_s(start_date)[:10] or heute, heute)
     status, data, dispatch = _cf_call("getFreeTimeSlots", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         nutz = data.get("data") or {}
@@ -465,7 +584,7 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
         if not any(str(iso).startswith(wish["date"]) for iso in vorrat):
             nachladen = True
     if nachladen:
-        start = _s(start_date) or (wish or {}).get("date") or ""
+        start = _s(start_date) or (wish or {}).get("date") or (wish or {}).get("von") or ""
         found = find_slots(tenant, ctx, start_date=start, wish=wish)
         if not found.get("ok") and not vorrat:
             return _mit_dispatch({
@@ -494,35 +613,43 @@ def offer_slots(tenant: dict, ctx: dict, *, wish_text: str = "", exclude_iso: st
     }
 
 
-def _handy_nachtragen(tenant: dict, ctx: dict, *, patient_id: str) -> dict[str, Any]:
-    """needs_phone: die rueckbestaetigte Handynummer einmal in die Akte schreiben."""
-    nummer = _s(ctx.get("phoneConfirmed"))
-    if not _s(patient_id) or not nummer or not patients.ist_handy_de(nummer):
-        return {"ok": False, "grund": "keine bestaetigte Handynummer"}
-    e164 = patients.handy_e164(nummer)
-    status, data, dispatch = _cf_call("masUpdatePatientPhone", {
-        "clientId": _s(tenant.get("clientId")),
-        "locationId": _s(tenant.get("locationId")),
-        "patientId": _s(patient_id),
-        "mobilePhoneNumber": e164,
+def _slot_key(value: Any) -> str:
+    return _s(value).replace(" ", "T")[:16]
+
+
+def _slot_gesperrt(ctx: dict, iso: str) -> bool:
+    key = _slot_key(iso)
+    return bool(key and key in {
+        _slot_key(value) for value in (ctx.get("slotGesperrt") or [])
+        if _slot_key(value)
     })
-    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
-        ctx["phone"] = nummer
-        ctx["aktePhoneNeu"] = nummer
-        ctx["aktePhoneAlt"] = _s(data.get("previous"))
-        return {
-            "ok": True,
-            "mobilePhoneNumber": _s(data.get("mobilePhoneNumber")) or e164,
-            "previous": _s(data.get("previous")),
-            "dispatch": dispatch,
-        }
-    print(
-        "book_slot needs_phone: Akten-Update fehlgeschlagen — "
-        f"status={status} message={_s((data or {}).get('message'))!r} "
-        f"patientId={_s(patient_id)!r}",
-        flush=True,
+
+
+def _slot_sperren(ctx: dict, iso: str) -> str:
+    """Konflikt-Slot sofort sperren und jeden alten Vorrat verwerfen."""
+    key = _slot_key(iso)
+    gesperrt = list(ctx.get("slotGesperrt") or [])
+    if key and key not in {_slot_key(value) for value in gesperrt}:
+        gesperrt.append(iso)
+    ctx["slotGesperrt"] = gesperrt
+    ctx["slotVorrat"] = []
+    return key
+
+
+def _frische_konflikt_slots(tenant: dict, ctx: dict, iso: str) -> dict[str, Any]:
+    """Alternativen nach einem Konflikt ausschließlich frisch nachladen."""
+    _slot_sperren(ctx, iso)
+    start = max(
+        _slot_key(iso)[:10] if len(_slot_key(iso)) >= 10 else "",
+        datetime.now(TZ).date().isoformat(),
     )
-    return {"ok": False, "grund": "update fehlgeschlagen", "dispatch": dispatch}
+    return offer_slots(
+        tenant,
+        ctx,
+        exclude_iso=iso,
+        exclude_isos=ctx.get("slotGesperrt") or [],
+        start_date=start,
+    )
 
 
 def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
@@ -537,6 +664,20 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     if auftrag and iso[:16] != auftrag[:16]:
         if iso[4:16] == auftrag[4:16]:
             iso = auftrag
+    if _slot_gesperrt(ctx, iso):
+        alt = _frische_konflikt_slots(tenant, ctx, iso)
+        return {
+            "ok": False,
+            "booked": False,
+            "slotTaken": True,
+            "alreadyBlocked": True,
+            "writeAttempted": False,
+            "blockedIso": iso,
+            "spoken": "Dieser Termin ist bereits vergeben. " + (alt.get("spoken") or ""),
+            "regie": REGIE_ANGEBOT,
+            "slots": alt.get("slots") or [],
+            "alternativeDispatch": alt.get("dispatch"),
+        }
     patient_id = _s(ctx.get("patientId"))
     created_patient = False
     if not patient_id:
@@ -575,6 +716,26 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
                 "noch nicht. Keine Bestätigungs-SMS."
             ),
         }
+    if BOOK_FIX_PHONE and not patient_id:
+        # Auch der kombinierte createAppointment-Rückfall ist bereits ein
+        # Buchungs-Write. Er darf deshalb ausschließlich die vom Anrufer
+        # rückbestätigte deutsche Mobilnummer verwenden. Ohne dieses Tor
+        # konnte ein fehlgeschlagenes akte_anlegen() mit einer bloß gehörten
+        # oder einer Festnetznummer direkt Akte UND Termin anlegen.
+        bestaetigt = _s(ctx.get("phoneConfirmed"))
+        if not bestaetigt or not patients.ist_handy_de(bestaetigt):
+            return {
+                "ok": False,
+                "booked": False,
+                "phonePreflightFailed": True,
+                "writeAttempted": False,
+                "spoken": (
+                    "Für die Terminbestätigung brauche ich zuerst eine "
+                    "rückbestätigte Handynummer. Wie lautet sie?"
+                ),
+                "regie": "Keine Akte und keinen Termin ohne bestätigte deutsche Mobilnummer schreiben.",
+            }
+        ctx["phone"] = bestaetigt
     if not patient_id:
         first, last = _name_teile(ctx)
         phone = _s(ctx.get("phone")) or _s((ctx.get("neueAkte") or {}).get("phone"))
@@ -598,6 +759,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             ctx["lastName"] = karte.get("lastName") or last
             ctx["patientName"] = karte.get("name") or f"{first} {last}".strip()
             ctx["phone"] = karte.get("phone") or phone
+            ctx["phoneInChartKnown"] = True
+            ctx["phoneInChart"] = karte.get("phone") or phone
             patients.patient_id_bindung_setzen(
                 ctx, patient_id, ctx.get("firstName"), ctx.get("lastName"))
         elif phone and first and last and not patients.ist_testname(first, last):
@@ -627,24 +790,63 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "visitMotiveId": _s(ctx.get("visitMotiveId") or (vm or {}).get("id")),
         "appointmentStartDate": iso,
     }
-    if ctx.get("skipConfirmation") is True:
-        body["skipConfirmation"] = True
-    status, data, dispatch = _cf_call("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
-    if (BOOK_FIX_PHONE and status == 200 and isinstance(data, dict)
-            and data.get("status") == "needs_phone"):
-        heilung = _handy_nachtragen(tenant, ctx, patient_id=patient_id)
-        if heilung.get("ok"):
-            erster = dispatch
-            status, data, dispatch = _cf_call(
-                "masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
-            if isinstance(dispatch, dict):
-                dispatch["phoneFix"] = {
-                    k: v for k, v in heilung.items() if k != "dispatch"
+    phone_fix: dict[str, Any] | None = None
+    phone_preflight = bool(BOOK_FIX_PHONE and patient_id)
+    if phone_preflight:
+        akte_phone = _s(ctx.get("phoneInChart"))
+        bestaetigt = _s(ctx.get("phoneConfirmed"))
+        bestaetigt_ok = bool(bestaetigt and patients.ist_handy_de(bestaetigt))
+        akte_ok = bool(akte_phone and patients.ist_handy_de(akte_phone))
+        gleich = bool(
+            bestaetigt_ok
+            and akte_ok
+            and patients.handy_e164(akte_phone) == patients.handy_e164(bestaetigt)
+        )
+        # Ein frueherer Fluss-Schritt darf das Akten-Update bereits versucht
+        # haben (telefon_alt). Nach einem Fehlschlag niemals ein zweites Mal
+        # schreiben und erst recht nicht trotzdem buchen.
+        update_schon_versucht = ctx.get("phoneUpdateAttempted") is True
+        update_schon_ok = ctx.get("phoneUpdateOk") is True
+        if update_schon_versucht:
+            if not update_schon_ok or not gleich:
+                phone_fix = {
+                    "ok": False,
+                    "attemptedEarlier": True,
+                    "error": (
+                        "phone_update_failed"
+                        if not update_schon_ok
+                        else "confirmed_mobile_changed_after_update"
+                    ),
                 }
-                if isinstance(heilung.get("dispatch"), dict):
-                    dispatch["phoneFixDispatch"] = heilung["dispatch"]
-                if isinstance(erster, dict):
-                    dispatch["needsPhoneVorher"] = erster.get("response")
+        elif not bestaetigt_ok:
+            phone_fix = {
+                "ok": False,
+                "attempted": False,
+                "error": "missing_confirmed_mobile",
+            }
+        elif not gleich:
+            phone_fix = _handy_nachtragen(tenant, ctx, patient_id=patient_id)
+        if phone_fix is not None and not phone_fix.get("ok"):
+            return {
+                "ok": False,
+                "booked": False,
+                "phonePreflightFailed": True,
+                "writeAttempted": False,
+                "spoken": (
+                    "Die bestätigte Handynummer konnte ich gerade nicht sicher "
+                    "in Ihrer Akte speichern. Deshalb trage ich den Termin noch "
+                    "nicht ein; die Praxis meldet sich bei Ihnen."
+                ),
+                "regie": "Handy-Aktenabgleich fehlgeschlagen. Keinen Buchungsaufruf senden.",
+                "dispatch": phone_fix.get("dispatch"),
+            }
+    status, data, dispatch = _cf_call("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
+    if isinstance(dispatch, dict) and phone_fix:
+        dispatch["phoneFix"] = {
+            k: v for k, v in phone_fix.items() if k != "dispatch"
+        }
+        if isinstance(phone_fix.get("dispatch"), dict):
+            dispatch["phoneFixDispatch"] = phone_fix["dispatch"]
     if status == 0:
         # Netzfehler/Timeout: die Buchung kann trotzdem gelandet sein —
         # NACHSCHAUEN statt raten (sonst bucht der Anrufer doppelt).
@@ -737,6 +939,9 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     if status == 200 and isinstance(data, dict) and data.get("status") == "needs_phone":
         return _mit_dispatch({
             "ok": False,
+            # masBookAppointment wurde bereits aufgerufen; der Fluss muss
+            # diesen Write beim globalen Zwei-Versuche-Deckel mitzählen.
+            "writeAttempted": True,
             "spoken": "In Ihrer Akte fehlt noch eine Handynummer. Wie lautet sie?",
             "regie": "Nummer erfragen, dann erneut buchen.",
         }, dispatch)
@@ -750,18 +955,18 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         flush=True,
     )
     if "not available" in meldung.lower():
-        # Der Kalender sagt WIRKLICH "belegt": Alternativen anbieten.
-        # slotGesperrt aus dem Kontext (Sitzung) + die gerade gescheiterte ISO.
-        alt = offer_slots(
-            tenant, ctx, exclude_iso=iso,
-            exclude_isos=ctx.get("slotGesperrt") or [],
-        )
+        # Der Kalender sagt WIRKLICH "belegt": sofort sperren, alten Vorrat
+        # verwerfen und Alternativen ausschließlich frisch nachladen.
+        alt = _frische_konflikt_slots(tenant, ctx, iso)
         return _mit_dispatch({
             "ok": False,
             "slotTaken": True,
+            "writeAttempted": True,
+            "blockedIso": iso,
             "spoken": "Der Termin ist gerade weg. " + (alt.get("spoken") or ""),
             "regie": REGIE_ANGEBOT,
             "slots": alt.get("slots") or [],
+            "alternativeDispatch": alt.get("dispatch"),
         }, dispatch)
     # Alles andere (Validierung, Patient/Kalender nicht gefunden, 500):
     # ehrlich bleiben statt "Termin ist weg" zu behaupten.
@@ -772,21 +977,98 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     }, dispatch)
 
 
-def _buchung_pruefen(tenant: dict, patient_id: str, iso: str) -> str:
-    """Nach einem Netzfehler: Ist die Buchung doch gelandet? -> appointmentId."""
-    try:
-        status, data = _cf_post("masPatientLastDoctor", {
-            "clientId": _s(tenant.get("clientId")),
-            "locationId": _s(tenant.get("locationId")),
-            "patientId": patient_id,
-        })
-        if status == 200 and isinstance(data, dict):
-            nxt = data.get("nextAppointment") or {}
-            if _s(nxt.get("startIso"))[:16] == _s(iso)[:16]:
-                return _s(nxt.get("appointmentId"))
-    except Exception as e:
-        print(f"buchung_pruefen fail {e}", flush=True)
-    return ""
+def _handy_nachtragen(tenant: dict, ctx: dict, *, patient_id: str) -> dict[str, Any]:
+    """needs_phone: die rueckbestaetigte Handynummer in die Akte schreiben.
+
+    Vorfall Blessing 15.09.2026 (Anruf a8fcbcb4): In der Akte stand nur eine
+    Festnetznummer. Die Anruferin nannte ihr Handy und bestaetigte es Ziffer
+    fuer Ziffer — die Plattform lehnte die Buchung trotzdem VIERMAL mit
+    `needs_phone` ab, weil niemand die Nummer in die Kartei schrieb. Bianca
+    sagte am Ende "dann ist alles fuer Sie eingetragen"; im Kalender stand
+    nichts.
+
+    Geschrieben wird NUR eine rueckbestaetigte deutsche MOBILnummer
+    (`ctx["phoneConfirmed"]`, gesetzt in flow._ctx_bauen aus telefon +
+    telefonOk): eine bloss gehoerte Nummer kommt nie in die Kartei, und eine
+    Festnetznummer als Handy einzutragen wuerde die SMS erneut ins Leere
+    schicken. `ctx["aktePhoneNeu"]`/`aktePhoneAlt` melden den Erfolg an den
+    Fluss zurueck, damit der Sammler nachzieht (sonst haengt die Erfolgs-
+    Ansage eine "Bitte Akte aktualisieren"-Notiz an einen Termin, dessen
+    Nummer gerade korrekt geschrieben wurde)."""
+    nummer = _s(ctx.get("phoneConfirmed"))
+    if not _s(patient_id) or not nummer or not patients.ist_handy_de(nummer):
+        return {"ok": False, "grund": "keine bestaetigte Handynummer"}
+    e164 = patients.handy_e164(nummer)
+    status, data, dispatch = _cf_call("masUpdatePatientPhone", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "patientId": _s(patient_id),
+        "mobilePhoneNumber": e164,
+    })
+    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
+        ctx["phone"] = nummer
+        ctx["phoneInChartKnown"] = True
+        ctx["phoneInChart"] = nummer
+        ctx["aktePhoneNeu"] = nummer
+        ctx["aktePhoneAlt"] = _s(data.get("previous"))
+        return {
+            "ok": True,
+            "mobilePhoneNumber": _s(data.get("mobilePhoneNumber")) or e164,
+            "previous": _s(data.get("previous")),
+            "dispatch": dispatch,
+        }
+    print(
+        "book_slot needs_phone: Akten-Update fehlgeschlagen — "
+        f"status={status} message={_s((data or {}).get('message'))!r} "
+        f"patientId={_s(patient_id)!r}",
+        flush=True,
+    )
+    return {"ok": False, "grund": "update fehlgeschlagen", "dispatch": dispatch}
+
+
+def _buchung_beweis_ueber_akte(
+    tenant: dict,
+    *,
+    patient_id: str,
+    iso: str,
+    calendar_id: str,
+) -> dict[str, Any]:
+    """Zweiter, NAMENSFREIER Beweisweg fuer eine frische Buchung.
+
+    Vorfall Thaler 15.09.2026 (Anruf 831c8b6b): der Termin stand sauber im
+    Kalender, die Ruecklese verweigerte ihn trotzdem. Ursache ist der
+    Plattform-Vertrag — `agentFindPatientAppointments` loest den Patienten
+    ueber Namens-Aehnlichkeit auf und liest eine mitgeschickte `patientId`
+    NICHT (functions/src/controllers/agentAppointments.ts). Bei drei Akten
+    "Eva Thaler" traf die Ruecklese eine fremde, `found_pid != patient_id`
+    schlug zu und die Anruferin hoerte "nicht eindeutig angekommen".
+
+    `masPatientLastDoctor` nimmt die `patientId` — damit ist derselbe
+    Vierfach-Beweis (Akte, Startminute, Kalender, echte Termin-ID) ohne
+    Namensraten moeglich. Bewusst nur `nextAppointment`: liegt ein
+    FRUEHERER Termin der Akte davor, beweist dieser Weg nichts und der
+    Termin bleibt unbestaetigt — lieber ehrlich als geraten.
+    """
+    expected_iso = _s(iso).replace(" ", "T")[:16]
+    expected_cal = _s(calendar_id)
+    if not _s(patient_id) or not expected_cal or len(expected_iso) < 16:
+        return {"ok": False}
+    status, data, dispatch = _cf_call("masPatientLastDoctor", {
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "patientId": _s(patient_id),
+    })
+    if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
+        return {"ok": False, "dispatch": dispatch}
+    nxt = data.get("nextAppointment")
+    if not isinstance(nxt, dict):
+        return {"ok": False, "dispatch": dispatch}
+    aid = _s(nxt.get("appointmentId"))
+    if (not aid
+            or _s(nxt.get("startIso")).replace(" ", "T")[:16] != expected_iso
+            or _s(nxt.get("calendarId")) != expected_cal):
+        return {"ok": False, "dispatch": dispatch}
+    return {"ok": True, "appointmentId": aid, "dispatch": dispatch}
 
 
 def _buchung_verifizieren(
@@ -823,9 +1105,20 @@ def _buchung_verifizieren(
         "firstName": _s(ctx.get("firstName")),
         "lastName": _s(ctx.get("lastName")),
         "patientName": _s(ctx.get("patientName")),
+        # Die CF sucht den Patienten ueber Namens-Aehnlichkeit; mit Nummer
+        # kandidiert sie ZUERST ueber das Telefon und nimmt sie sonst als
+        # Stichentscheid (patientsService.findClientLocationPatientUserBy
+        # Similarity). Findet die Nummer nichts, faellt sie selbst auf die
+        # Namenssuche zurueck — die Angabe kann also nur helfen.
+        "phone": _s(ctx.get("phone")),
     }
     letzter_dispatch: dict | None = None
     letzter_fehler = "Termin nach dem Schreiben nicht gefunden"
+    # Hat die Namenssuche ueberhaupt die RICHTIGE Akte erreicht? Nur wenn
+    # nicht, darf der namensfreie Beweisweg ran (s. unten) — traf sie die
+    # Akte und der Termin passte trotzdem nicht, ist das ein echter
+    # Widerspruch und bleibt unbestaetigt.
+    namenspfad_traf_akte = False
     for delay in _BOOK_VERIFY_DELAYS:
         if delay:
             time.sleep(delay)
@@ -839,6 +1132,7 @@ def _buchung_verifizieren(
         if found_pid != _s(patient_id):
             letzter_fehler = "Rücklese-Patient stimmt nicht"
             continue
+        namenspfad_traf_akte = True
         kandidaten = []
         for termin in found.get("appointments") or []:
             if not isinstance(termin, dict):
@@ -869,8 +1163,36 @@ def _buchung_verifizieren(
             "patientId": _s(patient_id),
             "slotIso": expected_iso,
             "calendarId": expected_cal,
+            "beweis": "namensliste",
             "dispatch": letzter_dispatch,
         }
+    if BOOK_VERIFY_AKTE and not namenspfad_traf_akte:
+        # Die Namenssuche hat die Akte nie erreicht (fremder Treffer,
+        # notFound, mehrdeutig, CF-Fehler) — also liegt KEIN Gegenbeweis
+        # vor, nur fehlende Evidenz. Zweiter Weg ueber die patientId.
+        akte = _buchung_beweis_ueber_akte(
+            tenant,
+            patient_id=patient_id,
+            iso=expected_iso,
+            calendar_id=expected_cal,
+        )
+        if isinstance(akte.get("dispatch"), dict):
+            letzter_dispatch = akte["dispatch"]
+        if akte.get("ok"):
+            wirklich = _s(akte.get("appointmentId"))
+            print(f"buchung-beweis akte pid={_s(patient_id)} aid={wirklich} "
+                  f"iso={expected_iso} (namensliste: {letzter_fehler})", flush=True)
+            return {
+                "ok": True,
+                "appointmentId": wirklich,
+                "idCorrected": bool(expected_aid and wirklich != expected_aid),
+                "patientId": _s(patient_id),
+                "slotIso": expected_iso,
+                "calendarId": expected_cal,
+                "beweis": "akte",
+                "namenslisteFehler": letzter_fehler,
+                "dispatch": letzter_dispatch,
+            }
     return {
         "ok": False,
         "appointmentId": "",
@@ -892,6 +1214,8 @@ def _bind_akte(ctx: dict, karte: dict) -> None:
     ctx["patientName"] = _s(karte.get("name")) or f"{ctx.get('firstName', '')} {ctx.get('lastName', '')}".strip()
     patients.patient_id_bindung_setzen(
         ctx, ctx.get("patientId"), ctx.get("firstName"), ctx.get("lastName"))
+    ctx["phoneInChartKnown"] = True
+    ctx["phoneInChart"] = _s(karte.get("phone"))
     if karte.get("phone"):
         ctx["phone"] = karte["phone"]
     if karte.get("birthDate"):
@@ -993,6 +1317,100 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
     return _mit_dispatch({"ok": False}, dispatch)
 
 
+def _name_norm(v: Any) -> str:
+    roh = unicodedata.normalize("NFKD", _s(v).casefold())
+    roh = "".join(c for c in roh if not unicodedata.combining(c))
+    return "".join(c for c in roh if c.isalnum()).replace("ß", "ss")
+
+
+def _patient_name_score(first: str, last: str, patient: dict) -> float:
+    """Gesprochenen Namen gegen eine Kartei bewerten (0..1)."""
+    gl, kl = _name_norm(last), _name_norm(patient.get("lastName"))
+    if not gl or not kl:
+        return 0.0
+    if not _s(first):
+        return SequenceMatcher(None, gl, kl).ratio()
+    gv = _name_norm(first)
+    kv = _name_norm(patient.get("firstName"))
+    if not gv or not kv:
+        return 0.0
+    return SequenceMatcher(None, gv + gl, kv + kl).ratio()
+
+
+def _patient_phone(patient: dict) -> str:
+    for key in ("mobilePhoneNumber", "mobilePhone", "phoneNumber", "phone", "telephone"):
+        wert = "".join(c for c in _s(patient.get(key)) if c.isdigit())
+        if wert:
+            return wert.removeprefix("00").removeprefix("49").lstrip("0")
+    return ""
+
+
+def _management_match_source(
+    *,
+    first: str,
+    last: str,
+    patient: dict,
+    patient_id: str,
+    phone: str,
+) -> str:
+    """Beweisstärke eines Patienten-Treffers für Absage/Verschieben.
+
+    Eine von der Cloud Function gewählte Akte wird nicht allein deshalb zum
+    exakten Treffer. Eine bestätigte ID beziehungsweise übereinstimmende
+    Rufnummer ist ein Beweis; ein nur ähnlicher Name bleibt ``name60`` und
+    muss vor jeder Auskunft oder Änderung rückbestätigt werden.
+    """
+    if patient_id:
+        # Eine bereits bestätigte Akten-ID ist eine harte Grenze. Liefert die
+        # Namens-CF eine andere Akte, darf selbst ein identischer Name diese
+        # Bindung nie ersetzen.
+        return (
+            "patientId"
+            if _s(patient.get("id")) == _s(patient_id)
+            else ""
+        )
+    tel = "".join(c for c in _s(phone) if c.isdigit())
+    tel = tel.removeprefix("00").removeprefix("49").lstrip("0")
+    if tel:
+        # Dasselbe gilt für eine rückbestätigte Patienten-Rufnummer.
+        return "telefon" if _patient_phone(patient) == tel else ""
+    score = _patient_name_score(first, last, patient)
+    if score >= 0.98:
+        return "exact"
+    if score >= 0.60:
+        return "name60"
+    return ""
+
+
+def _management_appointment_active(appointment: dict) -> bool:
+    """Defensive Statuswache für Verwaltungs-Treffer aus Cloud Functions."""
+    if appointment.get("isDeleted") is True or appointment.get("deletedAt"):
+        return False
+    status = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        _s(
+            appointment.get("status")
+            or appointment.get("appointmentStatus")
+        ).casefold(),
+    )
+    if status in {
+        "cancelled", "canceled", "deleted", "declined",
+        "needsconfirmation", "reserved",
+    }:
+        return False
+    patient_status = appointment.get("patientStatus")
+    if isinstance(patient_status, (int, float)) and patient_status != 0:
+        return False
+    if isinstance(patient_status, str):
+        ps = re.sub(r"[^a-z0-9]+", "", patient_status.casefold())
+        if (ps.isdigit() and int(ps) != 0) or ps in {
+            "cancelled", "canceled", "deleted", "declined",
+        }:
+            return False
+    return True
+
+
 def _patient_appointments_fallback(
     tenant: dict,
     *,
@@ -1000,6 +1418,9 @@ def _patient_appointments_fallback(
     last: str,
     vorname_verworfen: bool,
     primary_dispatch: dict | None,
+    patient_id: str = "",
+    phone: str = "",
+    min_similarity: float = 1.0,
 ) -> dict[str, Any] | None:
     """False-404-Rettung: Kartei-ID suchen, dann den nächsten Termin laden.
 
@@ -1019,54 +1440,59 @@ def _patient_appointments_fallback(
     if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
         return None
 
-    def gleich(a: Any, b: Any) -> bool:
-        return _s(a).casefold() == _s(b).casefold()
-
-    kandidaten = [
+    roh = [
         p for p in (data.get("patients") or [])
-        if isinstance(p, dict)
-        and _s(p.get("id"))
-        and gleich(p.get("lastName"), last)
-        and (not query_first or gleich(p.get("firstName"), query_first))
+        if isinstance(p, dict) and _s(p.get("id"))
     ]
-    if len(kandidaten) == 0:
-        from kern import phonetik
-        klang = phonetik.waehlen(data.get("patients") or [], last, query_first)
-        if len(klang) == 1:
-            kandidaten = klang
-        elif 1 < len(klang) <= 8:
-            return _mit_dispatch({
-                "ok": True,
-                "mehrdeutig": True,
-                "patient": {},
-                "appointments": [],
-                "vornameVerworfen": vorname_verworfen,
-                "fallbackUsed": True,
-                "phonetic": True,
-            }, search_dispatch)
-        elif len(_s(last)) >= 5:
-            stamm = _s(last)[:4]
-            status2, data2, dispatch2 = _cf_call("masSearchPatients", {
-                "clientId": _s(tenant.get("clientId")),
-                "locationId": _s(tenant.get("locationId")),
-                "query": stamm,
-            })
-            if status2 == 200 and isinstance(data2, dict):
-                klang = phonetik.waehlen(data2.get("patients") or [], last, query_first)
-                if isinstance(dispatch2, dict):
-                    search_dispatch = dispatch2
-                if len(klang) == 1:
-                    kandidaten = klang
-                elif 1 < len(klang) <= 8:
-                    return _mit_dispatch({
-                        "ok": True,
-                        "mehrdeutig": True,
-                        "patient": {},
-                        "appointments": [],
-                        "vornameVerworfen": vorname_verworfen,
-                        "fallbackUsed": True,
-                        "phonetic": True,
-                    }, search_dispatch)
+    pid = _s(patient_id)
+    tel = "".join(c for c in _s(phone) if c.isdigit())
+    tel = tel.removeprefix("00").removeprefix("49").lstrip("0")
+    match_source = "exact"
+    kandidaten: list[dict] = []
+    if pid:
+        kandidaten = [p for p in roh if _s(p.get("id")) == pid]
+        if not kandidaten:
+            # Eine bestätigte Akten-ID ist stärker als jeder ähnlich klingende
+            # Name und auch stärker als eine möglicherweise fremde
+            # Kontakt-Rufnummer. Nie auf eine andere Akte springen.
+            return None
+        match_source = "patientId"
+    elif tel:
+        kandidaten = [p for p in roh if _patient_phone(p) == tel]
+        if not kandidaten:
+            # Die bestätigte Patienten-Nummer ist ebenfalls eine harte
+            # Bindung; ein ähnlich klingender Name darf sie nicht ersetzen.
+            return None
+        match_source = "telefon"
+    if not kandidaten and min_similarity < 1.0:
+        bewertet = sorted(
+            ((_patient_name_score(query_first, last, p), p) for p in roh),
+            key=lambda x: (-x[0], _s(x[1].get("id"))),
+        )
+        passend = [(score, p) for score, p in bewertet if score >= min_similarity]
+        # Mit Vorname darf ein klar besserer Kandidat zur Rueckversicherung
+        # angeboten werden. Ohne Vorname bleiben gleiche Nachnamen mehrdeutig.
+        if query_first and passend and (
+                len(passend) == 1 or passend[0][0] - passend[1][0] >= 0.10):
+            kandidaten = [passend[0][1]]
+        else:
+            kandidaten = [p for _, p in passend]
+        # Ein wirklich identischer Name bleibt ein exakter Treffer. Der
+        # 60%-Rückversicherungsweg ist nur für tatsächlich unscharfe Namen
+        # gedacht (z. B. Päsla -> Päsler), nicht für Stallone -> Stallone.
+        match_source = (
+            "exact"
+            if len(kandidaten) == 1
+            and _patient_name_score(query_first, last, kandidaten[0]) >= 0.98
+            else "name60"
+        )
+    elif not kandidaten:
+        kandidaten = [
+            p for p in roh
+            if _name_norm(p.get("lastName")) == _name_norm(last)
+            and (not query_first
+                 or _name_norm(p.get("firstName")) == _name_norm(query_first))
+        ]
     if len(kandidaten) > 1:
         return _mit_dispatch({
             "ok": True,
@@ -1104,7 +1530,8 @@ def _patient_appointments_fallback(
 
     nxt = data.get("nextAppointment") or {}
     termine: list[dict[str, str]] = []
-    if isinstance(nxt, dict) and _s(nxt.get("appointmentId")):
+    if (isinstance(nxt, dict) and _s(nxt.get("appointmentId"))
+            and _management_appointment_active(nxt)):
         iso = _s(nxt.get("startIso")).replace(" ", "T")[:16]
         arzt = _s(nxt.get("calendarName") or nxt.get("doctorName")).split(",")[0].strip()
         motiv_name = _s(nxt.get("visitMotiveName"))
@@ -1122,18 +1549,16 @@ def _patient_appointments_fallback(
             "motivName": motiv_name,
             "spoken": gesprochen,
         })
-    print(
-        f"find_patient_appointments fallback patientId={patient['id']} "
-        f"appointments={len(termine)}",
-        flush=True,
-    )
     return _mit_dispatch({
         "ok": True,
         "patient": patient,
         "appointments": termine,
+        "notFound": bool(match_source == "name60" and not termine),
+        "nameMismatch": bool(match_source == "name60" and not termine),
         "vornameVerworfen": vorname_verworfen,
         "fallbackUsed": True,
-        "phonetic": not gleich(pat.get("lastName"), last),
+        "fuzzyName": min_similarity < 1.0,
+        "matchSource": match_source,
     }, termin_dispatch)
 
 
@@ -1158,11 +1583,13 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     phone = _s(ctx.get("phone"))
     if phone:
         body["callerPhone"] = phone
+    management_name_match = bool(ctx.get("managementNameMatch"))
     status, data, dispatch = _cf_call("agentFindPatientAppointments", body)
     if not isinstance(data, dict):
         data = {}
     vorname_verworfen = False
-    if status == 404 and _s(data.get("status")) != "no_upcoming" and body.get("firstName"):
+    if (status == 404 and _s(data.get("status")) != "no_upcoming"
+            and body.get("firstName") and not management_name_match):
         # W-NAMESKORREKTUR (31.08.2026): der Vorname kann selbst verhoert
         # sein ("Sannes" statt Georgios) und die Suche allein deshalb leer
         # ausgehen — einmal NUR mit dem Nachnamen nachfassen. Meldet die CF
@@ -1179,9 +1606,36 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
         "lastName": _s(pat.get("lastName")),
     }
     if status == 200 and data.get("status") == "success":
+        match_source = _management_match_source(
+            first=first,
+            last=last,
+            patient=pat,
+            patient_id=pid,
+            phone=phone,
+        ) if management_name_match else ""
+        if management_name_match and not match_source:
+            fallback = _patient_appointments_fallback(
+                tenant,
+                first=first,
+                last=last,
+                vorname_verworfen=False,
+                primary_dispatch=dispatch,
+                patient_id=pid,
+                phone=phone,
+                min_similarity=0.60,
+            )
+            if fallback is not None:
+                return fallback
+            return _mit_dispatch({
+                "ok": True,
+                "notFound": True,
+                "nameMismatch": True,
+                "patient": {},
+                "appointments": [],
+            }, dispatch)
         termine = []
         for a in data.get("appointments") or []:
-            if not isinstance(a, dict):
+            if not isinstance(a, dict) or not _management_appointment_active(a):
                 continue
             iso = _s(a.get("start")).replace(" ", "T")[:16]
             if len(iso) < 16:
@@ -1201,11 +1655,51 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
                 "motivName": _s(vm.get("name")),
                 "spoken": gesprochen,
             })
-        return _mit_dispatch({"ok": True, "patient": patient, "appointments": termine,
-                "vornameVerworfen": vorname_verworfen}, dispatch)
+        return _mit_dispatch({
+            "ok": True,
+            "patient": patient,
+            "appointments": termine,
+            "matchSource": match_source,
+            "vornameVerworfen": vorname_verworfen,
+        }, dispatch)
     if status == 404 and data.get("status") == "no_upcoming":
-        return _mit_dispatch({"ok": True, "patient": patient, "appointments": [],
-                "vornameVerworfen": vorname_verworfen}, dispatch)
+        match_source = _management_match_source(
+            first=first,
+            last=last,
+            patient=pat,
+            patient_id=pid,
+            phone=phone,
+        ) if management_name_match else ""
+        if management_name_match and not match_source:
+            fallback = _patient_appointments_fallback(
+                tenant,
+                first=first,
+                last=last,
+                vorname_verworfen=False,
+                primary_dispatch=dispatch,
+                patient_id=pid,
+                phone=phone,
+                min_similarity=0.60,
+            )
+            if fallback is not None:
+                return fallback
+            return _mit_dispatch({
+                "ok": True,
+                "notFound": True,
+                "nameMismatch": True,
+                "patient": {},
+                "appointments": [],
+            }, dispatch)
+        fuzzy = match_source == "name60"
+        return _mit_dispatch({
+            "ok": True,
+            "notFound": fuzzy,
+            "nameMismatch": fuzzy,
+            "patient": patient,
+            "appointments": [],
+            "matchSource": match_source,
+            "vornameVerworfen": vorname_verworfen,
+        }, dispatch)
     if status == 404:
         fallback = _patient_appointments_fallback(
             tenant,
@@ -1213,6 +1707,9 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
             last=last,
             vorname_verworfen=vorname_verworfen,
             primary_dispatch=dispatch,
+            patient_id=pid if management_name_match else "",
+            phone=phone if management_name_match else "",
+            min_similarity=0.60 if management_name_match else 1.0,
         )
         if fallback is not None:
             return fallback
@@ -1226,6 +1723,215 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
                 "vornameVerworfen": vorname_verworfen}, dispatch)
     msg = _s(data.get("message")) or f"http_{status}"
     return _mit_dispatch({"ok": False, "appointments": [], "error": msg}, dispatch)
+
+
+def _firestore_appointments_query(
+    tenant: dict,
+    von_utc: str,
+    bis_utc: str,
+) -> tuple[int, Any, dict]:
+    """Standort-Termine in einem UTC-Fenster lesen; niemals schreiben.
+
+    Der Dispatch enthaelt bewusst nur Datum und Trefferzahl, nicht die
+    Patientendaten aller Termine dieses Tages.
+    """
+    from kern import anrufaudio, standort
+    from kern.config import FIREBASE_CREDENTIALS
+
+    client_id = _s(tenant.get("clientId"))
+    location_id = _s(tenant.get("locationId"))
+    request_meta = {
+        "clientId": client_id,
+        "locationId": location_id,
+        "from": von_utc,
+        "to": bis_utc,
+    }
+    dispatch = {
+        "route": "firestoreAppointmentsByDate",
+        "method": "POST",
+        "request": request_meta,
+    }
+    if not FIREBASE_CREDENTIALS or not client_id or not location_id:
+        dispatch.update({"httpStatus": 0, "response": {"appointments": 0}})
+        return 0, {"message": "firestore_unavailable"}, dispatch
+    try:
+        token = anrufaudio._access_token(
+            "https://www.googleapis.com/auth/datastore")
+        projekt = standort._projekt()
+        url = (
+            "https://firestore.googleapis.com/v1/projects/"
+            f"{projekt}/databases/(default)/documents/clients/{client_id}/"
+            f"locations/{location_id}:runQuery"
+        )
+        body = {
+            "structuredQuery": {
+                "select": {"fields": [
+                    {"fieldPath": f} for f in (
+                        "start", "end", "status", "patientStatus",
+                        "isDeleted", "deletedAt",
+                        "patient", "calendar", "visitMotive",
+                    )
+                ]},
+                "from": [{"collectionId": "appointments"}],
+                "where": {"compositeFilter": {
+                    "op": "AND",
+                    "filters": [
+                        {"fieldFilter": {
+                            "field": {"fieldPath": "start"},
+                            "op": "GREATER_THAN_OR_EQUAL",
+                            "value": {"timestampValue": von_utc},
+                        }},
+                        {"fieldFilter": {
+                            "field": {"fieldPath": "start"},
+                            "op": "LESS_THAN",
+                            "value": {"timestampValue": bis_utc},
+                        }},
+                    ],
+                }},
+                "orderBy": [{
+                    "field": {"fieldPath": "start"},
+                    "direction": "ASCENDING",
+                }],
+                # Ein voller Praxistag liegt weit darunter. Wird der Deckel
+                # doch erreicht, gilt die Suche als unvollstaendig und darf
+                # keinen Termin automatisch bestimmen.
+                "limit": 500,
+            },
+        }
+        t0 = time.perf_counter()
+        r = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+            timeout=10.0,
+        )
+        ms = int(round((time.perf_counter() - t0) * 1000))
+        try:
+            data = r.json()
+        except ValueError:
+            data = {"message": r.text[:160]}
+        n = sum(
+            1 for row in data if isinstance(row, dict) and row.get("document")
+        ) if isinstance(data, list) else 0
+        dispatch.update({
+            "url": url,
+            "httpStatus": r.status_code,
+            "ms": ms,
+            "response": {"appointments": n},
+        })
+        return r.status_code, data, dispatch
+    except Exception as e:
+        dispatch.update({
+            "httpStatus": 0,
+            "response": {"appointments": 0, "error": type(e).__name__},
+        })
+        return 0, {"message": str(e)}, dispatch
+
+
+def find_appointments_by_date(tenant: dict, day: str) -> dict[str, Any]:
+    """Patiententermine eines Praxistags fuer sichere Verwaltung lesen.
+
+    Dieser Weg ist absichtlich unabhaengig vom Namen: Datum/Uhrzeit,
+    Behandler, Rufnummer beziehungsweise patientId und erst danach ein
+    mindestens sechzigprozentiger Namensabgleich bestimmen den Kandidaten
+    in ``bianca.verwalten``. Schreiben erfolgt weiterhin ausschliesslich
+    punktgenau per Termin-ID und erst nach ausdruecklicher Rueckfrage.
+    """
+    if not VERWALTUNG_TERMIN_DETAILS:
+        return {"ok": False, "unavailable": True, "appointments": [],
+                "error": "disabled"}
+    try:
+        d = date.fromisoformat(_s(day)[:10])
+    except ValueError:
+        return {"ok": False, "appointments": [], "error": "invalid_date"}
+    start = datetime(d.year, d.month, d.day, tzinfo=TZ)
+    ende = start + timedelta(days=1)
+
+    def utc_wert(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    status, data, dispatch = _firestore_appointments_query(
+        tenant, utc_wert(start), utc_wert(ende))
+    if status != 200 or not isinstance(data, list):
+        msg = _s(data.get("message")) if isinstance(data, dict) else f"http_{status}"
+        return _mit_dispatch({
+            "ok": False,
+            "unavailable": True,
+            "appointments": [],
+            "error": msg or f"http_{status}",
+        }, dispatch)
+
+    from kern import standort
+    termine: list[dict[str, Any]] = []
+    roh_dokumente = sum(
+        1 for row in data if isinstance(row, dict) and row.get("document"))
+    jetzt = datetime.now(TZ)
+    for row in data:
+        doc = row.get("document") if isinstance(row, dict) else None
+        if not isinstance(doc, dict):
+            continue
+        felder = doc.get("fields")
+        if not isinstance(felder, dict):
+            continue
+        f = {k: standort._decode(v) for k, v in felder.items()}
+        if f.get("isDeleted") is True or f.get("deletedAt"):
+            continue
+        if _s(f.get("status")).casefold() in {
+            "cancelled", "canceled", "deleted", "declined",
+            "needsconfirmation", "reserved",
+        }:
+            continue
+        if f.get("patientStatus") not in (None, "", 0, "0", "none"):
+            continue
+        patient = f.get("patient") if isinstance(f.get("patient"), dict) else {}
+        patient_id = _s(patient.get("id"))
+        first = _s(patient.get("firstName"))
+        last = _s(patient.get("lastName"))
+        if not patient_id and not last:
+            continue
+        cal = f.get("calendar") if isinstance(f.get("calendar"), dict) else {}
+        vm = f.get("visitMotive") if isinstance(f.get("visitMotive"), dict) else {}
+        roh_start = _s(f.get("start"))
+        try:
+            lokal = datetime.fromisoformat(roh_start.replace("Z", "+00:00")).astimezone(TZ)
+        except ValueError:
+            continue
+        if lokal.date() != d:
+            continue
+        if lokal < jetzt - timedelta(minutes=5):
+            continue
+        arzt = _s(cal.get("name")).split(",")[0].strip()
+        iso = lokal.isoformat(timespec="minutes")
+        gesprochen = spoken_slot(iso)
+        if arzt:
+            gesprochen += f" bei {arzt}"
+        phone = next((
+            _s(patient.get(k)) for k in (
+                "mobilePhoneNumber", "mobilePhone", "phoneNumber",
+                "phone", "telephone",
+            ) if _s(patient.get(k))
+        ), "")
+        termine.append({
+            "id": _s(doc.get("name")).rsplit("/", 1)[-1],
+            "iso": iso,
+            "date": iso[:10],
+            "calendarId": _s(cal.get("id")),
+            "doctorName": arzt,
+            "motivId": _s(vm.get("id")),
+            "motivName": _s(vm.get("name")),
+            "spoken": gesprochen,
+            "patientId": patient_id,
+            "patientFirstName": first,
+            "patientLastName": last,
+            "patientName": f"{first} {last}".strip(),
+            "patientPhone": phone,
+        })
+    termine.sort(key=lambda a: (_s(a.get("iso")), _s(a.get("id"))))
+    return _mit_dispatch({
+        "ok": True,
+        "appointments": termine,
+        "truncated": roh_dokumente >= 500,
+    }, dispatch)
 
 
 def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]:
@@ -1493,7 +2199,8 @@ def offer_move(tenant: dict, ctx: dict, *, date: str = "", wish: str = "") -> di
         if wish:
             parsed = parse_slot_wish(wish)
             if parsed and parsed.get("date"):
-                body["startSearchDate"] = parsed["date"]
+                heute = datetime.now(TZ).date().isoformat()
+                body["startSearchDate"] = max(_s(parsed["date"])[:10], heute)
         status, data, dispatch = _cf_update("find-for-postpone", body)
         if status == 200 and isinstance(data, dict) and data.get("success"):
             appt = data.get("appointment") or {}
@@ -1530,6 +2237,20 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
         if found.get("appointmentId"):
             ctx["appointmentId"] = found["appointmentId"]
         return found
+    if _slot_gesperrt(ctx, iso):
+        alt = _frische_konflikt_slots(tenant, ctx, iso)
+        return {
+            "ok": False,
+            "moved": False,
+            "slotTaken": True,
+            "alreadyBlocked": True,
+            "writeAttempted": False,
+            "blockedIso": iso,
+            "slotIso": iso,
+            "spoken": "Dieser Platz ist bereits vergeben. " + (alt.get("spoken") or ""),
+            "slots": alt.get("slots") or [],
+            "alternativeDispatch": alt.get("dispatch"),
+        }
     aid = _s(ctx.get("appointmentId"))
     if not aid:
         looked = offer_move(tenant, ctx, date=date)
@@ -1576,17 +2297,16 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
         # Ohne start_date sprang der Rueckfall live (Thaler 09.09.2026) von
         # Oktober zurueck auf September; ohne Motiv im ctx wurden ausserdem
         # unpassende Kontroll-Slots angeboten.
-        alt = offer_slots(
-            tenant, ctx,
-            exclude_iso=iso,
-            start_date=iso[:10],
-        )
+        alt = _frische_konflikt_slots(tenant, ctx, iso)
         return _mit_dispatch({
             "ok": False,
             "slotTaken": True,
+            "writeAttempted": True,
+            "blockedIso": iso,
             "slotIso": iso,
             "spoken": "Dieser Platz ist nicht mehr frei. " + (alt.get("spoken") or ""),
             "slots": alt.get("slots") or [],
+            "alternativeDispatch": alt.get("dispatch"),
         }, dispatch)
     return _mit_dispatch({"ok": False, "spoken": "Verschieben hat gerade nicht geklappt."}, dispatch)
 

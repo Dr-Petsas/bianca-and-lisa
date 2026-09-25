@@ -28,6 +28,7 @@
   "sonstNochNurNachErfolg": true,
   "presenceEinmal": true,
   "slotPraeferenzenFesthalten": true,
+  "suchFensterTage": 274,
   "sttHotwords": [
     "Blessing",
     "Hautkrebsscreening",

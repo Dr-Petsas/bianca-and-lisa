@@ -61,6 +61,8 @@ def _sit_mit_pzr(monkeypatch) -> dict:
     sit = {"stimme": "Bianca", "tenant": laden("meddent")}
     s = gehirn.sammler(sit)
     s.update({"modus": "buchen", "grund": "Kontrolle", "warSchonMal": True,
+              "arzt": {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg",
+                       "calendarName": "Dr. Petsas"},
               "pzr": "", "letzteReinigung": "2024-01-01"})
     return sit
 

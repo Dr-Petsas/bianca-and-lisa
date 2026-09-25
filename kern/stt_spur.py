@@ -135,7 +135,6 @@ def transcribe(
         "bytes": len(audio or b""),
         "mime": mime,
         "winner": gewinner,
-        "engine": stt.engine_anzeige(),
         "parakeet": {
             "text": parakeet_text,
             "error": str(getattr(_lokal, "parakeet_fehler", "") or ""),

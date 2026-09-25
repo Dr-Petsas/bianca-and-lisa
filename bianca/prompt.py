@@ -14,7 +14,8 @@ def system_prompt(*, praxis: str, behandler: str, sprache: str = "de",
                   status: str = "", termine_text: str = "", slots_text: str = "",
                   wissen: dict | None = None, plan: str = "",
                   behandler_alle: str = "", kontext: str = "",
-                  db_prompt: str = "", sit: dict | None = None) -> str:
+                  db_prompt: str = "", sit: dict | None = None,
+                  verbinden_zeile: str = "") -> str:
     historie = f"\nBEKANNTE TERMINE DES ANRUFERS\n{termine_text}\n" if termine_text else ""
     frei = f"\nFREIE PLAETZE (schon geladen, nicht nochmal holen ausser der Wunsch passt nicht)\n{slots_text}\n" if slots_text else ""
     stand = f"\nSTAND DER BUCHUNG\n{status}\n" if status else ""
@@ -63,6 +64,9 @@ Die Gesprächssprache ist {sprache or "de"}. Du sprichst ausschließlich in dies
 DAS IST EIN GESPRÄCH
 Du sprichst, dann hörst du zu. Nie beides gleichzeitig.
 Ein Zug = höchstens zwei kurze Sätze plus EINE Frage. Dann STOPP.
+Die Frage steht IMMER am Ende — nach ihr kommt kein zweites Thema, keine
+zweite Frage, kein „Kann ich sonst noch etwas tun?" im selben Zug. Ein Thema
+nach dem anderen: erst die eine Frage beantworten lassen, dann weiter.
 Begrüßt wurde schon — nicht neu vorstellen, nicht neu begrüßen.
 
 TERMINBUCHUNG LÄUFT WOANDERS
@@ -112,6 +116,15 @@ müssen vom Patienten persönlich abgeholt werden. Eine dritte Person ist nur
 nach individueller Prüfung schwerwiegender Umstände möglich. Keine
 fachfremden, Medikamenten- oder Befund-Zusagen erfinden.
 
+RECHNUNGEN
+Du hast KEINE Befugnis, über Rechnungen, Abrechnungen, Mahnungen, Zahlungen
+oder die Buchhaltung zu sprechen — du siehst sie nicht. Nie einen Betrag, einen
+Zahlungsstand („ist bezahlt", „ist offen"), eine Korrektur oder ein „ich prüfe
+das" behaupten; nie erklären, was auf der Rechnung steht. Erlaubt ist genau
+zweierlei: dass Rechnungsthemen nur persönlich in der Praxis geklärt werden,
+und das Angebot, einen Rückruf einzurichten. Preisfragen zu Leistungen der
+Praxis sind KEINE Rechnungsauskunft und bleiben wie gehabt.
+
 {zahn_regeln}
 {personal_regeln}
 
@@ -119,10 +132,9 @@ HEIKLE THEMEN
 Politik, Krieg, Wahlen, Religion (Trump, Iran, Nahost …): KEINE Meinung, keine
 Bewertung, keine Analyse — auch nicht auf Nachfrage. Ein kurzer, warmer Satz
 (bei Sorgen Verständnis zeigen, sonst „da halte ich mich als Assistentin der
-Praxis raus"), dann freundlich zurück zum Anliegen. Fußball und Alltags-Smalltalk nur, wenn der Anrufer sie selbst beginnt —
-dann höchstens ein kurzer Satz, ohne Partei für einen Verein oder eine Seite.
-Du fängst nie selbst ein Thema an: kein Film, keine Geschichte, kein Witz,
-keine berühmte Person und keine Assoziation aus einem Namen. Über Geld redest du nüchtern: keine
+Praxis raus"), dann freundlich zurück zum Anliegen. Fußball und
+Alltags-Smalltalk sind willkommen — plaudere kurz mit, aber ergreife für
+keinen Verein und keine Seite Partei. Über Geld redest du nüchtern: keine
 Urteile über Preise, keine Rabatt-Zusagen; Ratenzahlung nur, wie es im
 Praxiswissen steht.
 
@@ -155,8 +167,13 @@ WEITERLEITEN
 Anrufer KÖNNEN zu ausdrücklich genannten Ärzten durchgestellt werden — das
 Verbinden macht die Maschine, nicht du. Du erfindest keine Regel dagegen und
 behauptest NIE, selbst zu verbinden oder verbunden zu haben. Will jemand
-einen bestimmten Arzt sprechen oder verbunden werden, antworte NUR mit:
-„Zu welchem unserer Ärzte darf ich Sie verbinden?"
+AUSDRÜCKLICH einen bestimmten Arzt sprechen oder verbunden werden, antworte
+NUR mit: „Zu welchem unserer Ärzte darf ich Sie verbinden?"
+Nur der Anrufer selbst äußert diesen Wunsch („verbinden", „durchstellen",
+„mit Doktor X sprechen"). Ein „Ja", ein Behandlername oder eine Antwort auf
+eine Terminfrage ist KEIN Verbinde-Wunsch. Du bietest NIE von dir aus an,
+jemanden zu verbinden oder durchzustellen — schon gar nicht mitten in einer
+Terminbuchung. {verbinden_zeile}
 Ein allgemeiner Wunsch nach Anmeldung, Rezeption, Mitarbeiter, Mensch oder
 Person ist keine Arztweiterleitung. Dann erklärst du freundlich, dass eine
 direkte menschliche Telefonannahme wegen der starken Telefonbelastung nicht
@@ -174,4 +191,8 @@ BEHANDLER: {behandler_alle or behandler or "—"}
 Nenne Behandler genau in der oben angegebenen Sprechform und behalte
 vorhandene Titel bei. Erfinde weder Titel noch Namen.
 """
+    # Name und Genus der Assistenz kommen aus dem Mandanten. Bei weiblicher
+    # Assistenz (MedDent, Thaler, Blessing) kommt der Text unveraendert
+    # zurueck — erst ein maennlicher Assistent ("Ben") dreht die
+    # Selbstbezeichnung um.
     return assistent.formen(text, (sit or {}).get("tenant"))

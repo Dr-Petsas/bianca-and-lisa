@@ -76,28 +76,8 @@ ENTLASTUNG_KURZ = ENTLASTUNG
 WAHRHEIT = ENTLASTUNG
 
 
-# „Mit der Praxis verbinden“ ist die Anmeldung, nie ein Arzt.
-_PRAXIS_VERBINDEN_RE = re.compile(
-    r"\bmit\s+(?:der\s+|unserer\s+|ihrer\s+)?praxis\s+"
-    r"(?:verbinden|verbunden|durchstellen|durchgestellt)\b|"
-    r"\bpraxis\s+verbinden\b",
-    re.I,
-)
-
-
-def _policy_satz(sit: dict, anliegen_id: str) -> str:
-    """Wortlaut aus den Anliegen-Einstellungen, sonst leer."""
-    from kern import anliegen_zug
-    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-    regel = anliegen_zug.regel_fuer(tenant, anliegen_id)
-    return anliegen_zug.satz(regel, tenant) if regel is not None else ""
-
-
 def _entlastung(sit: dict) -> str:
     from kern import assistent
-    satz = _policy_satz(sit, "mitarbeiter_sprechen")
-    if satz:
-        return satz
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     if tenant.get("anmeldungAusfuehrlich") is True and tenant.get("anmeldungKurz") is not True:
         return assistent.formen(ENTLASTUNG_AUSFUEHRLICH, tenant)
@@ -118,31 +98,20 @@ KEIN_VERBINDEN = (
 
 
 def kann_verbinden(tenant: dict | None) -> bool:
-    """Darf in dieser Praxis zu einem Arzt durchgestellt werden?
+    """Darf in dieser Praxis ueberhaupt durchgestellt werden?
 
-    Die Anliegen-Einstellung „Arzt sprechen“ gewinnt. Steht sie auf
-    Rückruf oder Termin, gibt es keine Arztfrage — auch nicht ein zweites
-    Mal. Durchstellen nur mit echten Zielen (``verbindenErlaubt``, MedDent).
-    „Verbinden“ ohne Ziel startet die Frage nicht.
-    """
-    t = tenant or {}
-    try:
-        from kern import anliegen_zug
-        regel = anliegen_zug.regel_fuer(t, "arzt_sprechen")
-    except Exception:
-        regel = None
-    if regel is not None and regel.wahl != "verbinden":
-        return False
-    return bool(verbinden_erlaubt(t))
+    Wahr nur mit `verbindenErlaubt`-Whitelist (Chef 13.09.2026: Weiterleitung
+    NUR an gelistete Behandler). Ohne Liste stellt Bianca die Arzt-Rueckfrage
+    nicht — sie fuehrte immer nur in den Platzhalter."""
+    return bool(verbinden_erlaubt(tenant or {}))
 
 
 def _kein_verbinden(sit: dict) -> dict:
     """Ehrliche Antwort statt Arzt-Rueckfrage; das Anliegen wird uebernommen."""
     from kern import assistent
-    satz = _policy_satz(sit, "arzt_sprechen")
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     sit["weiterleiten"] = {"frage": "anliegen"}
-    return {"text": satz or assistent.formen(KEIN_VERBINDEN, tenant)}
+    return {"text": assistent.formen(KEIN_VERBINDEN, tenant)}
 
 SELBST_HILFE = "Ja, gern. Sagen Sie mir einfach, worum es geht."
 RUECKRUF_ANGEBOT = (
@@ -431,8 +400,6 @@ def mensch_gewuenscht(text: str) -> bool:
         return False
     if _IDENTITAETSFRAGE_RE.search(t):
         return False
-    if _PRAXIS_VERBINDEN_RE.search(t):
-        return True
     if _MENSCH_RE.search(t) or _JEMAND_RE.search(t) or _MENSCH_BESTEHT_RE.search(t):
         return True
     if not _MENSCH_NUR_RE.search(t):

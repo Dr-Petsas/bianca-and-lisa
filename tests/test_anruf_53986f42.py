@@ -15,6 +15,7 @@ Schleife (W-BUCHUNG-TECHNIK).
 """
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -134,14 +135,21 @@ def _keine_wortgleiche_schleife(texte: list[str], max_folge: int = 2) -> None:
 
 # --- 1) Ende-zu-Ende: die Live-Zuege + Fortsetzung bis zum Eintragen -------
 
-def test_53986f42_laeuft_ohne_modell_bis_zur_buchung(ohne_modell, monkeypatch):
+def test_53986f42_beendet_sicher_bei_ungeklaertem_vornamen(ohne_modell, monkeypatch):
     calls: list[dict] = []
+    notizen: list[dict] = []
 
     def _book(*a, **k):
         calls.append(k or {"args": a[1:]})
         return _book_ok(*a, **k)
 
+    def _notiz(sit, **kwargs):
+        notizen.append(kwargs)
+        sit["praxisNotiz"] = kwargs.get("dock_text", "")
+        return True
+
     monkeypatch.setattr(kal, "book_slot", _book)
+    monkeypatch.setattr(verwalten, "_notiz_schreiben", _notiz)
     sit = session.neu(tenant=laden("blessing"))
     agent.start_reply(sit)
     aus = _lauf(sit, LIVE_ZUEGE + FORTSETZUNG)
@@ -157,25 +165,22 @@ def test_53986f42_laeuft_ohne_modell_bis_zur_buchung(ohne_modell, monkeypatch):
     assert "Ja, mein Nachname, warte." in warte, warte
     _keine_wortgleiche_schleife([t for t in texte if t])
 
-    # Der Anrufer wurde erkannt, nichts Falsches wurde Name.
+    # Nach drei Antworten, die den offenen Vornamen nicht sicher liefern,
+    # beendet die P0-Schleifenwache den Vorgang mit echter Rueckrufnotiz.
+    # Sie darf weder einen Namen raten noch trotz Pflichtluecke buchen.
     assert s["nachname"] == "Busch"
-    assert s["vorname"] == "Jelto"
+    assert s["vorname"] == ""
     for falsch in ("Da", "Oder", "Schon", "Würde", "Was", "Yelto"):
         assert s["vorname"] != falsch and s["nachname"] != falsch
     assert s["warSchonMal"] is True
     assert s["modus"] == "buchen"
-
-    # Nummer: erst vorab diktiert (9 Stellen Festnetz), Ziffer fuer Ziffer
-    # bestaetigt, dann uebernommen.
-    assert s["telefon"].replace(" ", "") == "071295316"
-    assert s["telefonOk"] is True
-
-    # Gebucht wurde GENAU einmal, mit dem gewaehlten Donnerstag-Slot, und
-    # der Anruf endete mit dem Abschied.
-    assert len(calls) == 1, calls
-    assert s["slotIso"].startswith("2026-09-24")
+    assert s["phase"] == "fertig"
+    assert not calls
+    assert len(notizen) == 1
+    assert notizen[0].get("anliegen") == "rueckruf"
+    assert "Feld vorname blieb nach drei Versuchen unklar" in notizen[0].get("dock_text", "")
     assert aus[-1].get("hangup"), aus[-1]
-    assert any("eingetragen" in t.lower() for t in texte[-3:]), texte[-3:]
+    assert not any("eingetragen" in t.lower() for t in texte[-3:]), texte[-3:]
 
 
 def test_53986f42_keine_fuenffache_vornamensfrage(ohne_modell, monkeypatch):
@@ -193,37 +198,68 @@ def test_53986f42_keine_fuenffache_vornamensfrage(ohne_modell, monkeypatch):
 # --- 2) W-BUCHUNG-TECHNIK: Fehlschlag => Notiz, Nummer, KEINE Schleife ------
 
 def test_technischer_buchungsfehler_schreibt_notiz_und_schleift_nicht(ohne_modell, monkeypatch, tmp_path):
-    monkeypatch.setattr(kal, "book_slot", _book_kaputt)
+    buchungen: list[dict] = []
+
+    def _kaputt(*args, **kwargs):
+        buchungen.append(kwargs or {"args": args[1:]})
+        return _book_kaputt(*args, **kwargs)
+
+    monkeypatch.setattr(kal, "book_slot", _kaputt)
     notizen: list[dict] = []
-    monkeypatch.setattr(verwalten, "_notiz_schreiben",
-                        lambda sit, **k: notizen.append(k) or sit.__setitem__("praxisNotiz", k.get("dock_text", "")))
+
+    def _notiz(sit, **kwargs):
+        notizen.append(kwargs)
+        sit["praxisNotiz"] = kwargs.get("dock_text", "")
+        return True
+
+    monkeypatch.setattr(verwalten, "_notiz_schreiben", _notiz)
     sit = session.neu(tenant=laden("blessing"))
     agent.start_reply(sit)
-    # Bis zum Ja auf das Nummern-Readback ("Ja, richtig.") — dort bucht die
-    # Maschine und der Stub schlaegt fehl.
-    aus = _lauf(sit, LIVE_ZUEGE + FORTSETZUNG[:5])
     s = gehirn.sammler(sit)
+    slot_iso = (
+        datetime.now().astimezone() + timedelta(days=21)
+    ).replace(hour=10, minute=30, second=0, microsecond=0).isoformat(timespec="minutes")
+    s.update({
+        "modus": "buchen",
+        "phase": "bestaetigen",
+        "frage": "bestaetigung",
+        "warSchonMal": True,
+        "arzt": {
+            "typ": "einzig",
+            "calendarId": "cal-bl",
+            "calendarName": "Doktor Charlotte Blessing",
+        },
+        "grund": "Hautkontrolle",
+        "grundWortlaut": "Nachsicht meiner Haut",
+        "motivId": "motiv-haut",
+        "motivName": "Hautkontrolle",
+        "wunsch": {},
+        "slotIso": slot_iso,
+        "vorname": "Jelto",
+        "nachname": "Busch",
+        "buchstabiert": True,
+        "versicherung": "gesetzlich",
+        "versicherungOk": True,
+        "telefon": "015112345678",
+        "telefonOk": True,
+        "pzr": "nein",
+        "bleaching": "nein",
+        "arztNotizFrage": "nein",
+    })
+    sit["offered"] = [{"iso": slot_iso, "spoken": "in drei Wochen um zehn Uhr dreißig"}]
+    aus = flow._buchen(sit)
+
     # EIN Fehlschlag, echte Notiz mit dem bestaetigten Wunschtermin, Vorgang zu.
+    assert len(buchungen) == 1
     assert any(n.get("anliegen") == "buchung_fehler" for n in notizen), notizen
-    txt = " ".join(_texte(aus)).lower()
+    txt = (aus.get("text") or "").lower()
     assert "technisch nicht geklappt" in txt and "notiert" in txt, txt
     assert s["phase"] == "fertig"
     assert not sit.get("buchIntent")
-    # Die Nummer war schon bestaetigt -> keine Nummernfrage mehr, Abschied.
-    assert aus[-1].get("hangup"), aus[-1]
+    assert aus.get("hangup"), aus
     assert "buchung fehlgeschlagen (500)" in str(notizen[-1].get("status", "")).lower()
-    # Weitere Zuege duerfen NICHT erneut buchen (vorher: dieselbe Fehlermeldung
-    # in Schleife, weil slotIso + buchIntent stehen blieben).
-    n_vorher = len(notizen)
-    aufrufe: list = []
-    monkeypatch.setattr(kal, "book_slot", lambda *a, **k: aufrufe.append(1) or _book_kaputt())
-    for satz in ("Ja, richtig.", "Hm.", "Nein, danke."):
-        r = agent.user_turn(sit, satz)
-        assert r is not None
-        if r.get("hangup"):
-            break
-    assert not aufrufe, "book_slot lief nach dem technischen Fehlschlag erneut"
-    assert len(notizen) <= n_vorher + 1  # hoechstens die Nummern-Nachreichung
+    assert sit.get("offered") == []
+    assert sit.get("keinSlotFertig") is True
 
 
 def test_buchung_fehler_notiz_traegt_wunschtermin_und_grund():
@@ -388,11 +424,12 @@ def test_namens_rueckfrage_wessen_nennt_die_person():
     assert r2 and "eigenen nachnamen" in r2["text"].lower(), r2
 
 
-def test_namens_rueckfrage_auf_vorname():
+def test_namens_rueckfrage_sichert_zuerst_den_nachnamen():
     sit = _flow_sit("vorname", nachname="Busch")
     r = flow.zug(sit, "Was meinen Sie damit?")
-    assert r and "vorname" in r["text"].lower(), r
-    assert gehirn.sammler(sit)["frage"] == "vorname"
+    assert r and "nachname" in r["text"].lower(), r
+    assert "buchstab" in r["text"].lower(), r
+    assert gehirn.sammler(sit)["frage"] == "buchstabieren"
     assert gehirn.sammler(sit)["nachname"] == "Busch"
 
 
@@ -444,7 +481,7 @@ def test_blankes_ja_auf_zwei_slots_fragt_welcher_und_nimmt_beim_zweiten_den_erst
 def test_blankes_ja_im_fluss_stellt_die_welcher_frage():
     sit = _sit_angebot()
     r = flow.zug(sit, "Ja.")
-    assert r and "welcher" in r["text"].lower(), r
+    assert r and "passt ihnen" in r["text"].lower(), r
     assert r["text"].count("?") == 1
     assert not gehirn.sammler(sit)["slotIso"]
     r2 = flow.zug(sit, "Den Donnerstag.")

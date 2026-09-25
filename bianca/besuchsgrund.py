@@ -27,14 +27,7 @@ from kern import motive
 # Telefon bucht BESPRECHUNG/Kontrolle, nie direkt eine OP oder Eingliederung —
 # sonst gewann z. B. bei "Implantat" die 120-Minuten-OP ueber die klein-Regel.
 KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
-    (re.compile(
-        r"schmerz|zahnweh|\bweh\b|akut|notfall|dick[e]?\s+backe|geschwollen|"
-        r"entzünd|entzuend|pocht|eiter|"
-        r"\bmelanom\w*|\bmelanoma\w*|hautkrebsverdacht|"
-        r"verdacht\s+auf\s+(?:ein(?:en)?\s+)?(?:haut)?krebs|"
-        r"schwarzer?\s+hautkrebs",
-        re.I,
-     ),
+    (re.compile(r"schmerz|zahnweh|\bweh\b|akut|notfall|dick[e]?\s+backe|geschwollen|entzünd|entzuend|pocht|eiter", re.I),
      "akute Beschwerden/Notfall", [r"akut", r"notfall", r"schmerz"]),
     (re.compile(r"wurzelbehandlung|wurzelkanal|wurzelentzünd|wurzelentzuend|\bwurzel\b|endodont|\bendo\b", re.I),
      "Wurzelbehandlung", [r"\bwk\b", r"endo\s+klein", r"wurzel", r"\bendo\b"]),
@@ -147,6 +140,118 @@ _AKUT_WORT_RE = re.compile(
     re.I,
 )
 
+# W-BLESSING-MOTIVKLARHEIT (15.09.2026): Im allgemeinen Zahn-Konzept steht
+# historisch ``eiter`` ohne Wortgrenze. Dadurch wurden ausgerechnet
+# „WEITERbehandlung“ und „WEITERE Medikamentenkontrolle“ zum Notfall-Motiv.
+# Der engere Dermatologiepfad ist bewusst Tenant-Opt-in: andere Praxen
+# behalten bis zu einem eigenen Arbeitspaket ihr bisheriges Mapping.
+_DERMA_AKUT_RE = re.compile(
+    r"\bakut\w*|\bnotfall\w*|\bschmerz\w*|\bweh\b|"
+    r"\bblut(?:et|en|end|ung|ig)\w*|"
+    r"\bgeschwollen\w*|\bentz(?:ü|ue)nd\w*|\beiter\w*|\beitrig\w*",
+    re.I,
+)
+_DERMA_FOLGE_RE = re.compile(
+    r"\bweiter(?:e|er|es|en)?\s*(?:behand\w*|medikament\w*\s*kontroll\w*)|"
+    r"\bweiterbehand\w*|\bmedikament\w*\s*kontroll\w*|"
+    r"\bnachkontroll\w*|\bnachsorge\w*",
+    re.I,
+)
+_DERMA_BESCHWERDE_RE = re.compile(
+    r"\bhautproblem\w*|\bhautbeschwerd\w*|\bausschlag\w*|\bjuck\w*|"
+    r"\bwund\w*|\bn(?:ä|ae)gel\w*|\bnagel\w*|"
+    r"\bf(?:u(?:ß|ss)|ue(?:ß|ss))\w*|"
+    r"\bkopfhaut\w*|\bpustel\w*|\bpickel\w*|\bfleck\w*|"
+    r"\br(?:ö|oe)t\w*|\bschupp\w*|\bbl(?:ä|ae)s\w*|"
+    # B2 (17.09.2026, Anrufe 66913eb8/a467367e): "Dornwarzen am Fuss" und
+    # "Termin zum Vereisen" landeten ueber den Fuzzy-Katalog bei "Beratung
+    # Botox / Filler" bzw. gar nicht. Komposita (Dorn-/Alters-/Feig-/Stiel-
+    # warze) und die Vereisung sind Hautbeschwerden -> Sprechstunde.
+    r"\w*warze\w*|\bvereis\w*|\bverruca\w*|"
+    r"\bmuttermal\w*|\bleberfleck\w*|\bpigment\w*|"
+    r"\bhaarausfall\w*|\bhaarverlust\w*|\bpilz\w*|\bherpes\w*|"
+    r"\bg(?:ü|ue)rtelrose\w*|\bsonnenbrand\w*|\bschuppenflechte\w*|"
+    r"\bpsoriasis\w*|\bvitiligo\w*|\bnesselsucht\w*|\burtikaria\w*|"
+    r"\bknoten\w*|\bzyste\w*|\bnarbe\w*|\bfibrom\w*|\blipom\w*|"
+    r"\bhautanh(?:ä|ae)ngsel\w*|\bbeule\w*|\bhautkrankheit\w*|"
+    # "Haut" selbst (meine Haut juckt/ist trocken) — nicht Hautarzt/-krebs/
+    # -veraenderung (eigene Konzepte bzw. blosse Praxis-Nennung).
+    r"\bhaut(?!arzt|ärzt|aerzt|krebs|ver)\w*",
+    re.I,
+)
+_DERMA_KONZEPTE: list[tuple[re.Pattern, str, list[str]]] = [
+    (
+        re.compile(r"\bneurodermit\w*", re.I),
+        "Neurodermitis",
+        [r"^neurodermitis$"],
+    ),
+    (
+        re.compile(r"\brosacea\w*|\bakne\w*|\bekzem\w*", re.I),
+        "Akne / Rosacea / Ekzeme",
+        [r"akne.*rosacea.*ekzem", r"rosacea", r"akne", r"ekzem"],
+    ),
+    (
+        re.compile(r"\ballerg\w*", re.I),
+        "Beratung Allergie",
+        [r"beratung.*allerg", r"allerg"],
+    ),
+    (
+        re.compile(r"\bbotox\w*|\bfiller\w*", re.I),
+        "Beratung Botox / Filler",
+        [r"beratung.*botox.*filler", r"botox", r"filler"],
+    ),
+    (
+        re.compile(r"\bkosmetik\w*|\bfruchts(?:ä|ae)ure\w*|\bfußpflege\w*|"
+                   r"\bfusspflege\w*", re.I),
+        "Beratung Kosmetik",
+        [r"beratung.*kosmetik", r"kosmetik", r"fruchts", r"fußpflege", r"fusspflege"],
+    ),
+    (
+        re.compile(r"\bvene\w*|\bsklerotherap\w*", re.I),
+        "Venensprechstunde",
+        [r"venensprechstunde", r"vene", r"sklerotherap"],
+    ),
+    (
+        re.compile(r"\bnagelpilz\w*", re.I),
+        "Nagelpilz",
+        [r"^nagelpilz$"],
+    ),
+    (
+        re.compile(r"\bhautkrebs\w*|\bscreening\w*", re.I),
+        "Hautkrebs-Screening",
+        [r"hautkrebs.*screening", r"hautkrebs", r"screening"],
+    ),
+    (
+        re.compile(
+            r"\ba(?:t|tt|th)erom\w*|\bgr(?:ü|ue)tzbeutel\w*|"
+            r"\bhautver(?:ä|ae)nder\w*|"
+            r"\bstielwarze\w*|\bfibrom\w*|\blipom\w*|\bhautanh(?:ä|ae)ngsel\w*|"
+            r"\b(?:pustel|muttermal|leberfleck)\w*[^.!?]{0,28}\bentfern\w*",
+            re.I,
+        ),
+        "Beratung Entfernung einer Hautveränderung",
+        [r"beratung.*entfernung.*hautver", r"entfernung.*hautver"],
+    ),
+]
+_BERATUNG_PUR_RE = re.compile(
+    r"^\s*(?:(?:(?:ich\s+)?(?:m(?:ö|oe)chte|h(?:ä|ae)tte|brauche|will)"
+    r"(?:\s+gern(?:e)?)?|(?:das\s+)?w(?:ä|ae)re|"
+    r"es\s+geht\s+um|dann)\s+)?(?:(?:eine|die)\s+)?"
+    r"beratung(?:\s+bitte)?[\s.!?]*$",
+    re.I,
+)
+_ETWAS_ANDERES_PUR_RE = re.compile(
+    r"^\s*(?:(?:dann|es\s+ist|ich\s+habe)\s+)?"
+    r"(?:(?:et|irgend)?was|was)\s+ander(?:e|es|en)[\s.!?]*$",
+    re.I,
+)
+_BERATUNG_LABELS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"allerg", re.I), "Allergie"),
+    (re.compile(r"kosmetik|fruchts|fußpflege|fusspflege", re.I), "Kosmetik"),
+    (re.compile(r"botox|filler", re.I), "Botox/Filler"),
+    (re.compile(r"entfernung.*hautver", re.I), "eine störende Hautveränderung"),
+]
+
 
 def _ohne_verneintes(text: str) -> str:
     return _VERNEINT_RE.sub(" ", text or "")
@@ -187,6 +292,136 @@ def motiv_suchen(tenant: dict, muster: list[str], *, katalog: list[dict] | None 
     if len(buchbar) < len(vms):
         return _suche(buchbar) or _suche(vms)
     return _suche(vms)
+
+
+def grund_klaerungsfrage(
+    tenant: dict,
+    text: str,
+    *,
+    katalog: list[dict] | None = None,
+    calendar_id: str = "",
+) -> str:
+    """Offene Blessing-Menüoption konkretisieren, niemals als Leistung ablehnen."""
+    if tenant.get("dermaMotivKlarheit") is not True:
+        return ""
+    if _ETWAS_ANDERES_PUR_RE.match(text or ""):
+        return "Gern. Was genau soll sich die Ärztin ansehen?"
+    if not _BERATUNG_PUR_RE.match(text or ""):
+        return ""
+
+    kat = katalog
+    if kat is None:
+        kat = tenant.get("visitMotives") if isinstance(
+            tenant.get("visitMotives"), list) else []
+    namen = " ".join(
+        _s(vm.get("name"))
+        for vm in motive.fuer_kalender(kat or [], calendar_id)
+        if vm.get("allowOnlineBooking") is not False
+        and re.search(r"\bberatung\b", _s(vm.get("name")), re.I)
+    )
+    optionen = [label for muster, label in _BERATUNG_LABELS if muster.search(namen)]
+    if not optionen:
+        return "Gern. Worum geht es bei der Beratung genau?"
+    if len(optionen) == 1:
+        auswahl = optionen[0]
+    else:
+        auswahl = ", ".join(optionen[:-1]) + " oder " + optionen[-1]
+    return f"Gern. Welche Beratung ist gemeint: {auswahl}?"
+
+
+def _derma_deute(
+    tenant: dict,
+    text: str,
+    *,
+    katalog: list[dict],
+    calendar_id: str = "",
+) -> tuple[str, dict | None] | None:
+    """Blessing-Opt-in: echte Dermatologiegründe vor dem alten Dental-Muster."""
+    if tenant.get("dermaMotivKlarheit") is not True:
+        return None
+    bereinigt = _ohne_verneintes(text)
+    if _DENTAL_WUNSCH_RE.search(_DENTAL_VERNEINT_RE.sub(" ", bereinigt)):
+        return None
+    if _DERMA_AKUT_RE.search(bereinigt):
+        vm = motiv_suchen(
+            tenant,
+            [r"notfall.*akute.*beschwerden", r"akute.*beschwerden", r"notfall"],
+            katalog=katalog,
+            calendar_id=calendar_id,
+        )
+        return ("akute Beschwerden/Notfall", vm) if vm else None
+
+    for cre, kern, muster in _DERMA_KONZEPTE:
+        if cre.search(bereinigt):
+            vm = motiv_suchen(
+                tenant,
+                muster,
+                katalog=katalog,
+                calendar_id=calendar_id,
+            )
+            return (kern, vm) if vm else None
+
+    if _DERMA_FOLGE_RE.search(bereinigt):
+        vm = motiv_suchen(
+            tenant,
+            [r"^kontrolle$", r"^kontrolluntersuchung$"],
+            katalog=katalog,
+            calendar_id=calendar_id,
+        )
+        return ("Kontrolle", vm) if vm else None
+
+    if _DERMA_BESCHWERDE_RE.search(bereinigt):
+        vm = motiv_suchen(
+            tenant,
+            [r"^sprechstunde$"],
+            katalog=katalog,
+            calendar_id=calendar_id,
+        )
+        return ("Sprechstunde", vm) if vm else None
+    return None
+
+
+def derma_motiv(
+    tenant: dict,
+    text: str,
+    *,
+    katalog: list[dict],
+    calendar_id: str = "",
+) -> dict | None:
+    """Dermatologie-Motiv fuer einen Wortlaut (Blessing-Opt-in) — oder None.
+
+    B2 (17.09.2026): oeffentlicher Zugang fuer die behandlerscharfe
+    Aufloesung in `gehirn.motiv_fuer_kalender`, damit dort dieselbe Derma-
+    Deutung greift wie beim Ernten in `deute`. Ohne `dermaMotivKlarheit`
+    (MedDent/Thaler/Rüther) immer None — byte-identisches Alt-Verhalten.
+    """
+    if not (text or "").strip():
+        return None
+    try:
+        hit = _derma_deute(tenant, text, katalog=katalog or [], calendar_id=calendar_id)
+    except Exception:
+        return None
+    return hit[1] if hit and hit[1] else None
+
+
+def ist_derma_beschwerde(tenant: dict, text: str) -> bool:
+    """True, wenn der Wortlaut eine erkennbare Hautbeschwerde traegt
+    (Blessing-Opt-in). Dient B2 dazu, "Leistung nicht angeboten" NIE fuer
+    eine Hautbeschwerde zu sprechen, auch wenn der Katalog kein passendes
+    Motiv fuehrt — dann ist die Sprechstunde der ehrliche Weg."""
+    if tenant.get("dermaMotivKlarheit") is not True:
+        return False
+    bereinigt = _ohne_verneintes(text or "")
+    if not bereinigt.strip():
+        return False
+    if _DENTAL_WUNSCH_RE.search(_DENTAL_VERNEINT_RE.sub(" ", bereinigt)):
+        return False
+    return bool(
+        _DERMA_AKUT_RE.search(bereinigt)
+        or _DERMA_FOLGE_RE.search(bereinigt)
+        or _DERMA_BESCHWERDE_RE.search(bereinigt)
+        or any(cre.search(bereinigt) for cre, _k, _m in _DERMA_KONZEPTE)
+    )
 
 
 # Hoerfehler, die NUR in einer Zahnarztpraxis eindeutig sind (Chef 13.09.2026
@@ -234,6 +469,14 @@ def deute(tenant: dict, text: str, *, katalog: list[dict] | None = None,
     vm = katalog_exakt(text, katalog=kat, calendar_id=calendar_id)
     if vm is not None:
         return sprechname(vm), vm
+    derma = _derma_deute(
+        tenant,
+        text,
+        katalog=kat,
+        calendar_id=calendar_id,
+    )
+    if derma is not None:
+        return derma
     for cre, kern, muster in KONZEPTE:
         if not cre.search(text):
             continue
@@ -275,7 +518,9 @@ def fallback_motiv(tenant: dict, *, katalog: list[dict] | None = None,
     return vm
 
 
-# Goldene Regel 21.09.2026: unbekannter Grund = Kontrolle, nie ablehnen.
+# Kennt Bianca einen fachlich passenden Grund nicht, wird zuerst eine echte
+# Kontrolle und danach eine allgemeine Sprechstunde gesucht. Akut- und
+# PZR-Motive dürfen niemals als stiller Auffang dienen.
 _KONTROLLE_MUSTER = (
     r"^kontrolle$",
     r"^kontrolluntersuchung$",
@@ -290,14 +535,14 @@ _KONTROLLE_MUSTER = (
 def kontrolle_auffang(tenant: dict, *, katalog: list[dict] | None = None,
                       calendar_id: str = "") -> dict | None:
     """Kontrolle zuerst, dann Sprechstunde, zuletzt der alte Fallback."""
-    from kern.tenants import ist_akut_motiv
+    from kern.tenants import ist_akut_motiv, ist_pzr_motiv
     kat = katalog
     if kat is None:
         kat = tenant.get("visitMotives") if isinstance(
             tenant.get("visitMotives"), list) else []
     pool = [
         v for v in motive.fuer_kalender(kat or [], calendar_id)
-        if not ist_akut_motiv(v)
+        if not ist_akut_motiv(v) and not ist_pzr_motiv(v)
     ]
     if not pool:
         return fallback_motiv(tenant, katalog=katalog, calendar_id=calendar_id)
@@ -317,6 +562,46 @@ def kontrolle_auffang(tenant: dict, *, katalog: list[dict] | None = None,
             if hits:
                 return min(hits, key=lambda v: len(_s(v.get("name"))))
     return fallback_motiv(tenant, katalog=katalog, calendar_id=calendar_id)
+
+
+# B2 (17.09.2026): der EHRLICHE Auffang-Termin einer Nicht-Zahn-Praxis fuer
+# einen Grund, den der Katalog nicht kennt, der aber ins Fach passt. NUR die
+# allgemeine Sprechstunde bzw. eine echte Kontrolle (W-ERSATZ-MOTIV: nie
+# Beratung/Besprechung/Spezialmotiv, nie Akut) — und nur online-buchbar,
+# sonst liefert die Cloud Function keine Zeiten (W-MOTIV-KONSISTENT).
+_GENERISCH_MUSTER = (
+    r"^(?:allgemeine\s+)?sprechstunde$",
+    r"^kontrolle$",
+    r"^kontrolluntersuchung$",
+    r"\bsprechstunde\b",
+)
+
+
+def generisches_motiv(tenant: dict, *, katalog: list[dict] | None = None,
+                      calendar_id: str = "") -> dict | None:
+    """Sprechstunde/Kontrolle als Auffang fuer einen unbekannten Grund — oder None.
+
+    Kein Treffer, wenn die Praxis kein solches Motiv online-buchbar fuehrt:
+    dann bleibt nur die ehrliche Absage mit Notiz (B2, Stufe 3).
+    """
+    from kern.tenants import ist_akut_motiv, ist_pzr_motiv
+    kat = katalog
+    if kat is None:
+        kat = tenant.get("visitMotives") if isinstance(tenant.get("visitMotives"), list) else []
+    pool = [
+        v for v in motive.fuer_kalender(kat or [], calendar_id)
+        if v.get("allowOnlineBooking") is not False
+        and not ist_akut_motiv(v) and not ist_pzr_motiv(v)
+    ]
+    if not pool:
+        return None
+    for m in _GENERISCH_MUSTER:
+        cre = re.compile(m, re.I)
+        treffer = [v for v in pool if cre.search(_s(v.get("name")).strip())
+                   or cre.search(_s(v.get("nameForPatient")).strip())]
+        if treffer:
+            return min(treffer, key=lambda v: len(_s(v.get("name"))))
+    return None
 
 
 # =============================================================================
@@ -483,7 +768,15 @@ def katalog_treffer(text: str, *, katalog: list[dict],
             if w in name_toks:
                 score += 2 if w in _GENERIC_MOTIV_TOKENS else 5
             elif any(_token_passt(w, n) for n in name_toks):
-                score += 1 if w in _GENERIC_MOTIV_TOKENS else 3
+                # B2 (17.09.2026, Blessing-Anruf 66913eb8): "Matzenbehandlung"
+                # (STT fuer Warzenbehandlung) traf ueber das GENERISCHE
+                # Namens-Wort "Behandlung" mit 3 Punkten "Beratung Behandlung
+                # Botox / Filler" — der spezifische Teil des Kompositums blieb
+                # ungedeckt. Ein unscharfer Treffer, der NUR generische
+                # Katalogwoerter erreicht, zaehlt wie ein Text-Indiz (1).
+                getroffen = [n for n in name_toks if _token_passt(w, n)]
+                nur_generisch = all(n in _GENERIC_MOTIV_TOKENS for n in getroffen)
+                score += 1 if (w in _GENERIC_MOTIV_TOKENS or nur_generisch) else 3
             elif any(_token_passt(w, x) for x in text_toks):
                 score += 1
         if score > top:

@@ -1,11 +1,18 @@
 """Spracheingabe.
 
 STT_BASE-Parakeet auf der 5090 ist das schnelle lokale Haupt-Ohr. Ist Qwen
-konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel: plausible
-Parakeet-Texte warten exakt null Sekunden; nur auffaellige Texte duerfen
-kurz auf ein rechtzeitig fertiges Qwen-Final warten. Partials steuern Bianca
-nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der schnellere direkte
-Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide unterstuetzt.
+konfiguriert, startet Qwen3-ASR auf der separaten GPU parallel.
+
+Rollen (Chef 18.09.2026): standardmaessig ist Qwen NUR noch Korrektor
+(QWEN_LIVE_OHR=0). Parakeet ist IMMER der gesprochene Zug — kein Grace-Warten,
+kein Live-Override; jeder Qwen-Lauf geht asynchron an den Korrektor
+(`kern/qwen_korrektor.py`, verbessert Woerterbuch/Hotwords/Verlauf der
+Folgezuege). Mit QWEN_LIVE_OHR=1 gilt wieder das alte Zweit-Ohr-Verhalten:
+plausible Parakeet-Texte warten null Sekunden, nur auffaellige Texte duerfen
+kurz auf ein rechtzeitig fertiges Qwen-Final warten und es ggf. uebernehmen.
+Partials steuern Bianca nie. Der alte Gateway-Weg (STT_QWEN_BASE) und der
+schnellere direkte Qwen-only-Weg (STT_QWEN_FINAL_BASE) bleiben beide
+unterstuetzt.
 
 Ohne Qwen-Konfiguration bleibt der fruehere STT_WHISPER_BASE-Pfad
 abwaertskompatibel. ``keywords`` (Komma-Liste, z. B. Behandler-Nachnamen)
@@ -17,13 +24,12 @@ from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as Futur
 from difflib import SequenceMatcher
 import io
 import json
-import queue
 import re
 import subprocess
 import threading
 import time
 import wave
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 
@@ -35,6 +41,7 @@ from kern.config import (
     STT_QWEN_GRACE_S,
     STT_QWEN_KEY,
     STT_QWEN_PARALLEL,
+    QWEN_LIVE_OHR,
     STT_WHISPER_BASE,
     STT_WHISPER_BUDGET_S,
     STT_WHISPER_KEY,
@@ -111,6 +118,85 @@ def _woerter(text: str) -> list[str]:
     return re.findall(r"[^\W\d_]+", str(text or "").casefold(), re.UNICODE)
 
 
+_NAMENS_STT_FRAGEN = frozenset({
+    "name", "nachname", "vorname", "buchstabieren",
+    "nachname_korr", "nachname_check", "vorname_check",
+})
+_TELEFON_STT_FRAGEN = frozenset({"telefon"})
+_TELEFON_CHECK_FRAGEN = frozenset({
+    "telefon_check", "sms_empfaenger", "telefon_alt",
+})
+_ZEIT_STT_FRAGEN = frozenset({
+    "wunsch", "slotwahl", "termin_ok", "termin_aendern",
+})
+
+
+def keywords_fuer_sitzung(sit: dict[str, Any] | None) -> str:
+    """Hotwords je Zug: Name = DIN-Tafel, Nummer = Ziffern, sonst Praxis + Qwen.
+
+    Behandler-Namen im Buchstabier-Zug würden fremde Nachnamen auf
+    Petsas/Thaler ziehen; dieselben Namen im Nummernzug machen aus
+    Ziffern Praxisvokabular. Vorab-Ohr und echter Zug müssen dieselbe
+    Liste sehen, sonst weicht das Vorab-Transkript vom Final ab.
+    """
+    sit = sit if isinstance(sit, dict) else {}
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    frage = str((s or {}).get("frage") or "")
+    if frage in _NAMENS_STT_FRAGEN or (s or {}).get("buchstabenTeil") or (s or {}).get("vornameTeil"):
+        try:
+            from bianca import buchstaben
+            namen = list(buchstaben.stt_hotwords())
+        except Exception:
+            namen = []
+        extra = _bestaetigter_nachname(sit)
+        if extra and extra not in namen:
+            namen.append(extra)
+        return ",".join(namen)
+    check = frage in _TELEFON_CHECK_FRAGEN
+    diktat = frage in _TELEFON_STT_FRAGEN or bool((s or {}).get("telefonTeil"))
+    if check or diktat:
+        try:
+            from bianca import telefon as tel
+            return ",".join(tel.stt_hotwords(check=check))
+        except Exception:
+            return ""
+    from kern import qwen_korrektor
+    from kern import tenants
+    kw = list(tenants.stt_keywords(sit.get("tenant") or {}))
+    for w in qwen_korrektor.hotwords(sit):
+        if w not in kw:
+            kw.append(w)
+    if frage in _ZEIT_STT_FRAGEN:
+        from kern.slots import zeit_stt_hotwords
+        for w in zeit_stt_hotwords():
+            if w not in kw:
+                kw.append(w)
+    extra = _bestaetigter_nachname(sit)
+    if extra and extra not in kw:
+        kw.append(extra)
+    return ",".join(kw)
+
+
+def _bestaetigter_nachname(sit: dict[str, Any]) -> str:
+    """Genau EIN bestätigter Kartei-Nachname als Hotword, nie die ganze Kartei.
+
+    Erst nach dem Ja auf die erkannte Rufnummer. Ein Dritttermin (fuerWen)
+    gehört einer anderen Person — deren Name darf nicht auf die Anrufer-Akte
+    gezogen werden.
+    """
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if (s or {}).get("fuerWen"):
+        return ""
+    if str((s or {}).get("anruferCheck") or "") != "ja":
+        return ""
+    anrufer = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
+    name = str(anrufer.get("nachname") or "").strip()
+    teile = [t for t in name.split() if t]
+    if len(teile) != 1 or len(teile[0]) < 4:
+        return ""
+    return teile[0]
+
+
 def _qwen_konfiguriert() -> bool:
     return bool(STT_QWEN_FINAL_BASE or STT_QWEN_BASE)
 
@@ -150,6 +236,9 @@ def _vergleich(text: str) -> str:
 
 
 def _qwen_darf_uebernehmen(lokal: str, kandidat: dict, auffaellig: bool) -> bool:
+    # W-QWEN-SICHER (14.09.2026): der Aufrufer hat den Zug gesperrt (offene
+    # Namensfrage, Diktat, erwartete Antwort schon bei Parakeet) — Qwen
+    # bleibt Zweit-Ohr, sein Text geht nur in den Nachtrag.
     if kandidat.get("live_sperre"):
         return False
     qwen = _sauber(kandidat.get("text"))
@@ -574,6 +663,8 @@ def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | Non
 
 
 Nachtrag = Callable[[dict], None]
+# W-QWEN-SICHER: bekommt Parakeets Text, liefert einen Sperr-Grund oder "".
+Sperre = Callable[[str], str]
 
 
 def _nachtrag_anmelden(qwen: Future, lokal: str, kandidat: dict | None,
@@ -620,7 +711,7 @@ def _parallel_transcribe(
     name: str,
     keywords: str,
     nachtrag: Nachtrag | None = None,
-    qwen_sperre=None,
+    qwen_sperre: Sperre | None = None,
 ) -> str:
     """Parakeet sofort; nur auffaellige Texte warten gedeckelt auf Qwen."""
     t0 = time.perf_counter()
@@ -641,12 +732,27 @@ def _parallel_transcribe(
     if qwen is None:
         return lokal
 
+    # Qwen NUR noch Korrektor (Chef 18.09.2026, QWEN_LIVE_OHR=0): Parakeet ist
+    # IMMER der gesprochene Zug — kein Grace-Warten, kein Live-Override. Der
+    # Qwen-Lauf wird dem asynchronen Korrektor nachgereicht (Woerterbuch/
+    # Hotwords/Verlauf der Folgezuege). Ist Qwen schon fertig, geht sein
+    # Ergebnis sofort mit; sonst haengt der done-Callback dran (kein Warten).
+    if not QWEN_LIVE_OHR:
+        if nachtrag is not None:
+            kandidat = qwen.result() if qwen.done() else None
+            _nachtrag_anmelden(qwen, lokal, kandidat, nachtrag, t0)
+        return lokal
+
     auffaellig = _parakeet_braucht_qwen(lokal, keywords)
+    # W-QWEN-SICHER (14.09.2026): der Aufrufer weiss, worauf der Anrufer
+    # gerade antwortet. Bei Namensfrage/Diktat oder wenn Parakeet die
+    # erwartete Antwort schon traegt, darf Qwen nicht live gewinnen — und
+    # es wird auch nicht auf Qwen gewartet (kein Grace-Deckel umsonst).
     sperre = ""
     if qwen_sperre is not None:
         try:
             sperre = str(qwen_sperre(lokal) or "")
-        except Exception as exc:
+        except Exception as exc:  # die Sperre darf das Ohr nie stoeren
             print(f"stt-qwen-sperre fail {type(exc).__name__}: {exc}", flush=True)
             sperre = ""
     kandidat: dict | None = None
@@ -683,11 +789,12 @@ def _parallel_transcribe(
 
 def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
                keywords: str = "", nachtrag: Nachtrag | None = None,
-               qwen_sperre=None) -> str:
+               qwen_sperre: Sperre | None = None) -> str:
     """`nachtrag` (optional): bekommt ein Qwen-Ergebnis nachgereicht, das
     NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). `qwen_sperre`
-    (optional): Parakeets Text -> Sperr-Grund oder "" — bei Grund übernimmt
-    Qwen diesen Zug nie live. Ohne die Parameter bleibt das bisherige Ohr."""
+    (optional, W-QWEN-SICHER): Parakeets Text -> Sperr-Grund oder "" — bei
+    Grund uebernimmt Qwen diesen Zug nie live. Ohne die Parameter verhaelt
+    sich alles byte-identisch wie zuvor."""
     if not audio or len(audio) < 800:
         return ""
     if _qwen_konfiguriert():
@@ -733,10 +840,6 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
         raise RuntimeError("stt_whisper_pause_ohne_fallback")
     if not ELEVENLABS_API_KEY:
         return ""
-    try:
-        return _scribe_realtime(audio, mime, keywords)
-    except Exception as e:
-        print(f"stt-scribe-realtime: {type(e).__name__}", flush=True)
     r = httpx.post(
         "https://api.elevenlabs.io/v1/speech-to-text",
         headers={"xi-api-key": ELEVENLABS_API_KEY},
@@ -751,202 +854,6 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
     if r.status_code != 200:
         raise RuntimeError(f"stt_http_{r.status_code}")
     return _sauber(r.json().get("text"))
-
-
-def scribe_strom_moeglich() -> bool:
-    """Echtzeit-Strom nur, solange kein lokales Ohr davor steht."""
-    return bool(
-        ELEVENLABS_API_KEY
-        and not STT_BASE
-        and not STT_QWEN_BASE
-        and not STT_QWEN_FINAL_BASE
-        and not STT_WHISPER_BASE
-    )
-
-
-class _ScribeLeitung:
-    """Offene Scribe-Verbindung: Audio waehrend des Sprechens, Commit am Ende."""
-
-    def __init__(self, keywords: str) -> None:
-        self.keywords = keywords
-        self.q: queue.Queue = queue.Queue()
-        self.text = ""
-        self.fertig = threading.Event()
-        self.t = threading.Thread(target=self._lauf, name="scribe-strom", daemon=True)
-        self.t.start()
-
-    def _lauf(self) -> None:
-        import base64
-        from urllib.parse import urlencode
-        from websockets.sync.client import connect
-
-        params: list[tuple[str, str]] = [
-            ("model_id", "scribe_v2_realtime"),
-            ("language_code", "de"),
-            ("audio_format", "pcm_16000"),
-            ("commit_strategy", "manual"),
-        ]
-        for wort in (self.keywords or "").split(","):
-            wort = wort.strip()
-            if wort and len(params) < 16:
-                params.append(("keyterms", wort[:50]))
-        url = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?" + urlencode(params)
-        try:
-            with connect(
-                url,
-                additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
-                open_timeout=3,
-                close_timeout=1,
-                max_size=8 * 1024 * 1024,
-            ) as ws:
-                frist = time.monotonic() + 3
-                while True:
-                    rest = frist - time.monotonic()
-                    if rest <= 0:
-                        raise RuntimeError("stt_scribe_strom_timeout")
-                    roh = ws.recv(timeout=rest)
-                    if isinstance(roh, (bytes, bytearray)):
-                        roh = roh.decode("utf-8", "replace")
-                    if json.loads(roh).get("message_type") == "session_started":
-                        break
-                while True:
-                    art, daten = self.q.get()
-                    if art == "pcm" and daten:
-                        ws.send(json.dumps({
-                            "message_type": "input_audio_chunk",
-                            "audio_base_64": base64.b64encode(daten).decode("ascii"),
-                            "commit": False,
-                            "sample_rate": 16000,
-                        }))
-                        continue
-                    if art != "commit":
-                        continue
-                    stille = b"\x00" * 3200
-                    ws.send(json.dumps({
-                        "message_type": "input_audio_chunk",
-                        "audio_base_64": base64.b64encode(stille).decode("ascii"),
-                        "commit": True,
-                        "sample_rate": 16000,
-                    }))
-                    ende = time.monotonic() + 2.0
-                    while time.monotonic() < ende:
-                        rest = ende - time.monotonic()
-                        roh = ws.recv(timeout=max(0.05, rest))
-                        if isinstance(roh, (bytes, bytearray)):
-                            roh = roh.decode("utf-8", "replace")
-                        msg = json.loads(roh)
-                        typ = str(msg.get("message_type") or "")
-                        if typ in ("committed_transcript", "committed_transcript_with_timestamps"):
-                            self.text = _sauber(str(msg.get("text") or ""))
-                            return
-                        if typ in ("error", "auth_error", "input_error", "invalid_request"):
-                            raise RuntimeError("stt_scribe_strom_" + typ)
-        except Exception as e:
-            print(f"stt-strom: {type(e).__name__}", flush=True)
-        finally:
-            self.fertig.set()
-
-
-_STROM: dict[str, _ScribeLeitung] = {}
-_STROM_SCHLOSS = threading.Lock()
-
-
-def strom_start(sid: str, keywords: str = "") -> bool:
-    if not scribe_strom_moeglich() or not sid:
-        return False
-    leitung = _ScribeLeitung(keywords)
-    with _STROM_SCHLOSS:
-        alt = _STROM.pop(sid, None)
-        _STROM[sid] = leitung
-    if alt is not None:
-        alt.q.put(("commit", b""))
-    return True
-
-
-def strom_schieben(sid: str, pcm: bytes) -> None:
-    if not pcm:
-        return
-    with _STROM_SCHLOSS:
-        leitung = _STROM.get(sid)
-    if leitung is not None:
-        leitung.q.put(("pcm", pcm))
-
-
-def strom_commit(sid: str) -> str:
-    with _STROM_SCHLOSS:
-        leitung = _STROM.pop(sid, None)
-    if leitung is None:
-        return ""
-    leitung.q.put(("commit", b""))
-    leitung.fertig.wait(2.5)
-    return leitung.text or ""
-
-
-def _scribe_realtime(audio: bytes, mime: str, keywords: str) -> str:
-    """Scribe v2 Realtime: ein fertiger Telefonzug als PCM-Strom, ein Commit."""
-    import base64
-    from urllib.parse import urlencode
-    from websockets.sync.client import connect
-
-    pcm = _pcm16k(audio, mime or "")
-    if len(pcm) < 1600:
-        return ""
-    params = [
-        ("model_id", "scribe_v2_realtime"),
-        ("language_code", "de"),
-        ("audio_format", "pcm_16000"),
-        ("commit_strategy", "manual"),
-    ]
-    for wort in (keywords or "").split(","):
-        wort = wort.strip()
-        if wort and len(params) < 16:
-            params.append(("keyterms", wort[:50]))
-    url = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?" + urlencode(params)
-    fehler = {
-        "error", "auth_error", "quota_exceeded", "rate_limited",
-        "queue_overflow", "resource_exhausted", "session_time_limit_exceeded",
-        "input_error", "invalid_request", "chunk_size_exceeded",
-        "transcriber_error", "commit_throttled", "unaccepted_terms",
-    }
-    with connect(
-        url,
-        additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
-        open_timeout=3,
-        close_timeout=1,
-        max_size=8 * 1024 * 1024,
-    ) as ws:
-        frist = time.monotonic() + 8
-
-        def _lesen() -> dict:
-            rest = frist - time.monotonic()
-            if rest <= 0:
-                raise RuntimeError("stt_scribe_realtime_timeout")
-            roh = ws.recv(timeout=rest)
-            if isinstance(roh, (bytes, bytearray)):
-                roh = roh.decode("utf-8", "replace")
-            nachricht = json.loads(roh)
-            art = str(nachricht.get("message_type") or "")
-            if art in fehler:
-                raise RuntimeError("stt_scribe_realtime_" + art)
-            return nachricht
-
-        while str(_lesen().get("message_type") or "") != "session_started":
-            pass
-        for i in range(0, len(pcm), 8000):
-            stueck = pcm[i:i + 8000]
-            ws.send(json.dumps({
-                "message_type": "input_audio_chunk",
-                "audio_base_64": base64.b64encode(stueck).decode("ascii"),
-                "commit": i + 8000 >= len(pcm),
-                "sample_rate": 16000,
-            }))
-        while True:
-            nachricht = _lesen()
-            art = str(nachricht.get("message_type") or "")
-            if art == "insufficient_audio_activity":
-                return ""
-            if art in ("committed_transcript", "committed_transcript_with_timestamps"):
-                return _sauber(str(nachricht.get("text") or ""))
 
 
 def bereit() -> bool:
@@ -965,6 +872,8 @@ def engine_anzeige() -> str:
         if not _qwen_aktiv() and STT_BASE:
             return "Parakeet (lokal, Qwen pausiert)"
         if STT_BASE:
+            if not QWEN_LIVE_OHR:
+                return "Parakeet (lokal) + Qwen3-ASR Korrektor (3060, offline)"
             return "Parakeet (lokal) + Qwen3-ASR parallel (3060)"
         return "Qwen3-ASR 1.7B (3060)"
     if STT_WHISPER_BASE:
@@ -975,4 +884,4 @@ def engine_anzeige() -> str:
         )
     if STT_BASE:
         return "Parakeet (lokal)"
-    return "ElevenLabs Scribe 2 Realtime" if ELEVENLABS_API_KEY else "keine"
+    return "ElevenLabs Scribe" if ELEVENLABS_API_KEY else "keine"

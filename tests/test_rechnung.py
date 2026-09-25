@@ -43,6 +43,11 @@ def _s(v) -> str:
     return " ".join(str(v or "").split()).strip()
 
 
+@pytest.fixture(autouse=True)
+def _ohne_namenslink(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
+
+
 def _sit() -> dict:
     sit = {"tenant": laden("meddent"), "messages": [{"role": "system", "content": "x"}],
            "stimme": "bianca"}
@@ -526,10 +531,11 @@ def test_rechnungshofer_ist_ein_nachname(ohne_netz):
     _zug(sit, "Egal.")
     assert gehirn.sammler(sit)["frage"] == "buchstabieren"
     t = _zug(sit, "Rechnungshofer.")
-    assert "Rechnungshofer" in t and "Vorname" in t
+    assert "Rechnungshofer" in t and "Buchstabe" in t
+    assert gehirn.sammler(sit)["frage"] == "buchstabieren"
     assert rechnung.ERKLAERUNG not in t
     s = gehirn.sammler(sit)
-    assert s["nachname"] == "Rechnungshofer" and s["frage"] == "vorname"
+    assert s["nachname"] == "Rechnungshofer" and s["frage"] == "buchstabieren"
     assert not sit.get("rechnungStand")
 
 

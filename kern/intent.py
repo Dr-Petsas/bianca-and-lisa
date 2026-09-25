@@ -48,7 +48,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
-from kern import eilig, llm
+from kern import dringlichkeit, llm, rechnung, tenants
 from kern.leitung import ist_leitung_check
 
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="intent")
@@ -81,7 +81,8 @@ _WECHSEL_RE = re.compile(
     r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*|(?:ä|ae)nder\w*|"
     r"r(?:ü|ue)ckruf\w*|zur(?:ü|ue)ckruf\w*|"
-    r"rechnung\w*|abrechnung\w*|rezept(?!ion)\w*|(?:ü|ue)berweisung\w*|befund\w*|"
+    r"rechnung\w*|abrechnung\w*|mahn\w*|inkasso|lastschrift|quittung\w*|zahlung\w*|"
+    r"rezept(?!ion)\w*|(?:ü|ue)berweisung\w*|befund\w*|"
     r"heil\w*kostenplan|\bhkp\b|kostenvoranschlag|\bkva\b|"
     r"frage\b|fragen\b|wissen\b|fertig\b|urlaub\b|ge(?:ö|oe)ffnet|offen\b|"
     r"mitarbeiter\w*|anmeldung|empfang|buchhaltung|praxisleitung|"
@@ -99,6 +100,100 @@ _ABBRUCH_RE = re.compile(
     re.I,
 )
 
+_BESTANDS_VERSCHIEBEN_VERHOERER_RE = re.compile(
+    r"\btermin\w*\b.{0,100}\b(?:auf|bis|in|nach)\b.{0,55}\benthalten\b|"
+    r"\b(?:auf|bis|in|nach)\b.{0,55}\benthalten\b.{0,55}\btermin\w*\b",
+    re.I,
+)
+
+
+def _bestands_verschieben_verhoerer(sit: dict | None, text: str) -> bool:
+    """Blessing-STT: „Termin … bis Mitte November enthalten“ = verschieben.
+
+    ``enthalten`` allein bleibt unangetastet. Nur der mandantenscharfe
+    Live-Satz mit Bestandstermin UND Zielbezug darf die sichere
+    Verschiebe-Maschine öffnen.
+    """
+    tenant = (sit or {}).get("tenant")
+    return bool(
+        isinstance(tenant, dict)
+        and tenant.get("bestandsVerschiebenErweitert")
+        and _BESTANDS_VERSCHIEBEN_VERHOERER_RE.search(_s(text))
+    )
+
+
+# --- Diktat-Schlusswort "fertig" (W-FERTIG-DIKTAT 17.09.2026) -----------------
+#
+# Anruf 53986f42 (Blessing): auf die Buchstabier-Frage kam "B, U, S, C, H,
+# Busch, Fertig, Nachname." — das Schlusswort "fertig" steht in _WECHSEL_RE
+# (Wechsel-Verdacht) UND in _FB_AUSKUNFT_RE ("Ist mein Befund fertig?" =
+# WISSEN). Die Heuristik machte daraus WISSEN x REGEL, das Hirn parkte die
+# Buchung und leerte sammler["modus"] — ab da sprach 15 Zuege lang nur das
+# freie Modell (erfundene Termine, erfundene Buchung, Abschied "bis morgen").
+# Der Blessing-Opt-in (buchstabierSegmenteTrennen) fing nur die Form mit
+# "fertig" am SATZENDE. Jetzt gilt fuer JEDEN Mandanten: solange eine
+# Namens-/Nummernfrage offen ist oder ein Fragment gesammelt wird, ist
+# "fertig" das Schlusswort des Diktats (Bianca sagt es dem Anrufer selbst so
+# vor) und NIE ein Anliegen-Wechsel. Bewusst eng: nur ohne ein ZWEITES
+# Wechselwort im Satz, und der Rest muss wie Diktat aussehen (Buchstaben,
+# Ziffern, ein Name, Feldwoerter wie "Nachname").
+_DIKTAT_FRAGEN = {
+    "name", "nachname", "vorname", "buchstabieren", "nachname_check",
+    "vorname_check", "nachname_korr", "aenderung",
+    "telefon", "telefon_check", "telefon_alt", "geburtstag",
+}
+_DIKTAT_FERTIG_RE = re.compile(r"\bfertig\b", re.I)
+_DIKTAT_FELDWORT_RE = re.compile(
+    r"\b(?:mein|meine|meiner|meinen|der|die|das|ist|war|lautet|hei(?:ß|ss)e|"
+    r"nachname|vorname|name|familienname|nummer|telefonnummer|handynummer|"
+    r"buchstabiere|buchstabiert|ich|so|und|dann|jetzt|okay|ok|ja|also|"
+    r"war\W?s|das\s+war\W?s|ende|punkt|bitte|danke)\b",
+    re.I,
+)
+
+
+def _diktat_offen(sit: dict | None) -> bool:
+    """Namens-/Nummernfrage offen oder ein Fragment in Arbeit?"""
+    if not isinstance(sit, dict):
+        return False
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("frage")) in _DIKTAT_FRAGEN:
+        return True
+    return bool(s.get("buchstabenTeil") or s.get("telefonTeil") or s.get("vornameTeil"))
+
+
+def _ohne_diktat_fertig(sit: dict | None, t: str) -> str:
+    """Im offenen Diktat das Schlusswort 'fertig' aus dem Text nehmen, damit
+    Wechsel-/Auskunfts-Lexika es nicht als Anliegen lesen."""
+    if _diktat_offen(sit) and _DIKTAT_FERTIG_RE.search(t):
+        return _s(_DIKTAT_FERTIG_RE.sub(" ", t))
+    return t
+
+
+def _ist_diktat_fertig_zug(sit: dict | None, t: str) -> bool:
+    """'B, U, S, C, H, Busch, fertig, Nachname.' / 'Busch, fertig' /
+    'Null sieben eins, fertig' waehrend einer offenen Diktat-Frage: Ernte
+    fuer die Maschine, kein Wechsel. Gilt NUR mit 'fertig' im Satz und OHNE
+    weiteres Wechselwort; der Rest muss diktat-artig sein."""
+    if not _diktat_offen(sit) or not _DIKTAT_FERTIG_RE.search(t):
+        return False
+    rest = _DIKTAT_FERTIG_RE.sub(" ", t)
+    if _WECHSEL_RE.search(rest) or _ABBRUCH_RE.search(rest):
+        return False
+    kern = _DIKTAT_FELDWORT_RE.sub(" ", rest)
+    kern = _s(re.sub(r"[,.;:!?\-–—]+", " ", kern))
+    if not kern:
+        return True
+    if (_BUCHSTABIER_RE.match(kern) or _ZIFFERN_RE.match(kern)
+            or _ZAHLWORT_RE.match(kern)):
+        return True
+    # Buchstabenkette plus ausgesprochener Name ("B U S C H Busch"),
+    # Name plus Buchstabierung ("Jelto J E L T O") — Einzelbuchstaben und
+    # Zahlwoerter raus, uebrig bleiben hoechstens drei Namens-Token.
+    tokens = [w for w in kern.split()
+              if len(w) > 1 and not _ZAHLWORT_RE.match(w) and not w.isdigit()]
+    return len(tokens) <= 3
+
 
 def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> bool:
     """Koennte dieser Satz das Anliegen wechseln? Nur dann lohnt das LLM.
@@ -108,13 +203,22 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     KEINEN LLM-Aufschlag mehr. Das Lexikon deckt die Wechsel-Faelle aus der
     Meddent-/Blessing-Auswertung; was es faengt, entscheidet weiter das LLM.
     """
-    if _WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t):
+    # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" das Schlusswort.
+    t = _ohne_diktat_fertig(sit, t)
+    if (_WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t)
+            or _bestands_verschieben_verhoerer(sit, t)
+            or urlaubsfrage(t)):
+        return True
+    # W-RECHNUNG: auch die weichen Formen ("Der Betrag stimmt nicht") sind
+    # mitten in einer Buchung ein neues Fass — Rechnungsthemen gehoeren nie
+    # der laufenden Ernte.
+    if rechnung.erkannt(t, sit):
         return True
     # Frage nach einem BESTEHENDEN Termin ("habe ich noch einen anderen
     # Termin?") ist auch MITTEN in einer Buchung ein Wechsel-Verdacht — sonst
     # bleibt der Satz beim Buchen haengen und das Frei-LLM erfindet eine
     # Kalender-Auskunft (W-BESTANDSFRAGE 09.09.2026, Live Petsas 08.09.).
-    if (_BESTANDSFRAGE_RE.search(t) or _FREIER_TERMIN_RE.search(t)
+    if (ist_bestandsfrage(sit, t) or _FREIER_TERMIN_RE.search(t)
             or _BESTANDSABSAGE_IM_ANGEBOT_RE.search(t)):
         return True
     # "Termin" ist im Buchungs-/Aenderungs-Anliegen Alltagsvokabular der
@@ -147,6 +251,17 @@ _ZAHLWORT_RE = re.compile(
 _BUCHSTABIER_RE = re.compile(
     r"^\s*(?:[A-Za-zÄÖÜäöü](?:\s+wie\s+\w+)?(?:[\s,.\-]+|$)){2,}$"
 )
+_BUCHSTABIER_FERTIG_RE = re.compile(
+    r"(?:[\s,;:.\-]+)\bfertig\b[\s.!?]*$",
+    re.I,
+)
+_NAME_VOR_FERTIG_RE = re.compile(
+    r"^[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'’\-]{1,39}$",
+)
+_FERTIG_KEIN_NAME = {
+    "ich", "wir", "bin", "sind", "jetzt", "nun", "so", "ja", "nein",
+    "okay", "ok", "danke",
+}
 _SLOTWAHL_RE = re.compile(
     r"^\s*(?:de[rn]\s+)?(?:erste\w*|zweite\w*|dritte\w*|letzte\w*|"
     r"(?:um\s+)?\d{1,2}(?::\d{2})?\s*uhr\w*|vormittag\w*|nachmittag\w*|"
@@ -159,20 +274,29 @@ _SLOTWAHL_RE = re.compile(
 
 # Formular-Fragen der Maschine: Antworten darauf sind Ernte, kein Anliegen.
 _FORMULAR_FRAGEN = {
-    "name", "vorname", "nachname", "telefon", "telefon_check", "telefon_alt",
+    "name", "vorname", "nachname",
+    "telefon", "telefon_check", "telefon_alt",
     "buchstabieren", "schonmal", "versicherung", "anrufer_check",
-    "fuer_wen_check", "arzt_check", "vorname_check",
+    "fuer_wen_check", "arzt_check", "vorname_check", "nachname_check",
     "geburtstag",
     "wunsch", "terminwahl", "slotwahl", "bestaetigung", "absage_ok",
-    "frisch_absage_ok", "behandlung", "pzr", "termin_anbieten",
+    "frisch_absage_ok", "verw_patient_ok", "behandlung", "pzr", "termin_anbieten",
     "arzt_notiz",
+    # W-BESTAND-ANSAGE: Folgefragen nach dem Vorlesen ("Passt der so?",
+    # "Sonst noch etwas?") — "alles gut"/"nein danke" sind Ernte, kein Anliegen.
+    "termin_ok", "termin_aendern", "sonst_noch",
+    # W-RECHNUNG: "Soll ich Ihnen dafuer einen Rueckruf einrichten?" — Ja/Nein
+    # gehoert der Maschine (bianca/flow._rechnung_antwort), nie dem Modell.
+    "rechnung_rueckruf",
 }
 
 # Eine knappe Ja/Nein-Antwort kann im selben Atemzug ein zweites Anliegen
 # tragen. Nur bei nicht-destruktiven Identitäts-/Historienfragen darf der
 # sichere Präfix zuerst geerntet werden. Nummern-Readback, Slotwahl und
 # Buchungsbestätigung bleiben absichtlich unteilbar.
-_GEMISCHT_SICHERE_FRAGEN = {"anrufer_check", "schonmal", "arzt_check"}
+_GEMISCHT_SICHERE_FRAGEN = {
+    "anrufer_check", "schonmal", "arzt_check",
+}
 _GEMISCHT_RE = re.compile(
     r"^\s*(?P<antwort>ja|jawohl|genau|richtig|korrekt|nein|nee|n(?:ö|oe))"
     r"\s*[,;:—-]?\s*(?:aber|allerdings|jedoch|nur)\s+"
@@ -184,16 +308,57 @@ _GEMISCHT_RE = re.compile(
 def _ist_formular_antwort(sit: dict, text: str) -> bool:
     """True = sicher nur Ernte fuer die laufende Maschine (kein LLM noetig)."""
     t = _s(text)
-    if not t or _WECHSEL_RE.search(t):
+    if not t:
+        return False
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    frage = _s(s.get("frage"))
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    # A2/B2 Blessing: „G-E-S-C-H-E-I-D-L-E, fertig“ ist die Antwort auf die
+    # offene Namensfrage. Das globale Wechselwort „fertig“ machte daraus
+    # bisher WISSEN × REGEL, parkte die Terminauskunft und schickte die sauber
+    # erkannte Buchstabierung ans freie LLM. Nur der Blessing-Opt-in und eine
+    # offene Namensfrage dürfen diesen Vorrang erhalten.
+    if (
+        tenants.namens_sicherung(tenant, "buchstabierSegmenteTrennen")
+        and frage in {
+            "name", "nachname", "vorname", "buchstabieren", "nachname_check",
+        }
+    ):
+        ohne_fertig = _BUCHSTABIER_FERTIG_RE.sub("", t).strip()
+        if ohne_fertig != t:
+            ist_kette = bool(_BUCHSTABIER_RE.match(ohne_fertig))
+            ist_name = bool(
+                _NAME_VOR_FERTIG_RE.match(ohne_fertig)
+                and ohne_fertig.lower() not in _FERTIG_KEIN_NAME
+            )
+            if ist_kette or (frage == "buchstabieren" and ist_name):
+                return True
+    # W-FERTIG-DIKTAT (17.09.2026, alle Mandanten): "…, fertig, Nachname."
+    # im offenen Diktat ist die Antwort auf die Namens-/Nummernfrage.
+    if _ist_diktat_fertig_zug(sit, t):
+        return True
+    if _WECHSEL_RE.search(t) or urlaubsfrage(t):
+        return False
+    # B1 Blessing: „Wann ist mein Termin?“ darf auch auf eine gerade offene
+    # Ja/Nein-/Katalogfrage niemals als kurze Formularantwort geschluckt
+    # werden. Die mandantenscharfe Bestandsfrage wechselt in die echte
+    # Kalenderauskunft.
+    if _bestandsfrage_erweitert(sit, t):
         return False
     if _JA_NEIN_RE.match(t) or _ZIFFERN_RE.match(t) or _ZAHLWORT_RE.match(t) \
             or _BUCHSTABIER_RE.match(t):
         return True
-    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    frage = _s(s.get("frage"))
     phase = _s(s.get("phase"))
     if _SLOTWAHL_RE.match(t) and (phase in {"angebot", "bestaetigen"}
                                   or frage in {"wunsch", "terminwahl", "slotwahl"}):
+        return True
+    if (
+        frage in {"arzt", "wann"}
+        and _s(s.get("modus")) in {"absagen", "verschieben", "auskunft"}
+        and len(t.split()) <= 4
+    ):
+        # W-VERWALTUNG-TERMIN-ZUERST: diese zwei Fragen gehören nur im
+        # Bestandsweg zum Formular. Der Buchungsweg bleibt unverändert.
         return True
     if frage in _FORMULAR_FRAGEN and len(t.split()) <= 4:
         # Kurzantwort auf eine offene Formular-Frage ("Berger", "Kontrolle").
@@ -264,6 +429,13 @@ _FB_VERSCHIEBEN_RE = re.compile(
     r"verschieb\w*|umbuch\w*|verleg\w*|umleg\w*|vorverleg\w*|anderen\s+tag",
     re.I,
 )
+
+
+def _ist_verschieben(sit: dict | None, text: str) -> bool:
+    return bool(
+        _FB_VERSCHIEBEN_RE.search(_s(text))
+        or _bestands_verschieben_verhoerer(sit, text)
+    )
 _FB_RUECKRUF_KERN_RE = re.compile(
     r"r(?:ü|ue)ckruf|zur(?:ü|ue)ckruf\w*|ruft\s+mich|meldet\s+(?:sich|euch)|"
     r"nachricht\s+hinterlass\w*|ausricht\w*|call\s*back",
@@ -313,10 +485,36 @@ def _ueberwiesen(t: str) -> bool:
     """Ueberweisung HABEN ohne Dokumentwunsch = Terminbedarf (ANLEGEN)."""
     from kern import praxisregeln
     return praxisregeln.hat_ueberweisung(t) and not praxisregeln.dokument_anforderung(t)
+
+
+# Praxisurlaub ist eine Auskunftsfrage. Die eigene Abwesenheit des Anrufers
+# ("ich habe nächste Woche Urlaub") bleibt dagegen Teil des Terminwunschs.
+_URLAUB_FRAGE_RE = re.compile(
+    r"\bpraxisurlaub\b|"
+    r"\b(?:haben|habt)\s+(?:sie|ihr)\b[^?.!]{0,40}?\burlaub\b|"
+    r"\b(?:sind|seid)\s+(?:sie|ihr)\b[^?.!]{0,40}?\burlaub\b|"
+    r"\b(?:ist|macht|machen)\s+(?:die\s+)?praxis\b[^?.!]{0,40}?\burlaub\b|"
+    r"\bwann\b[^?.!]{0,40}?\burlaub\b|"
+    r"\burlaub\b[^?.!]{0,24}?\b(?:haben\s+sie|habt\s+ihr|sind\s+sie)\b",
+    re.I,
+)
+
+
+def urlaubsfrage(text: str) -> bool:
+    return bool(_URLAUB_FRAGE_RE.search(_s(text)))
+
+
+def _ist_auskunft(t: str, bestandsfrage: bool) -> bool:
+    return bool(
+        (_FB_AUSKUNFT_RE.search(t) or urlaubsfrage(t) or bestandsfrage)
+        and not _FREIER_TERMIN_RE.search(t)
+    )
+
+
 _FB_AUSKUNFT_RE = re.compile(
     r"wann\s+(?:ist|war|habe?\s+ich)\b.{0,30}termin|"
     r"habe?\s+ich\s+(?:noch\s+)?(?:irgend)?einen\s+termin|"
-    r"\bfertig\b|\burlaub\b|ge(?:ö|oe)ffnet|offen\s+heute|"
+    r"\bfertig\b|ge(?:ö|oe)ffnet|offen\s+heute|"
     r"was\s+kostet|wie\s+teuer|wo\s+(?:finde|ist|sind)|wie\s+komme?\s+ich",
     re.I,
 )
@@ -335,7 +533,6 @@ _BESTANDSFRAGE_RE = re.compile(
     r"[^?.!]{0,30}?\btermine?\b|"
     # "wann ist/war (mein|der) (andere) Termin"
     r"\bwann\s+(?:ist|war|wäre|waere)\b[^?.!]{0,30}?\btermine?\b|"
-    r"\bwann\s+mein(?:en|er|e)?\s+(?:nächste[nrs]?|nächster|kommende[nrs]?)\s+termine?\b|"
     # "welche(n) Termin(e) habe ich (noch)"
     r"\bwelche[nr]?\s+termine?\b|"
     # Feststellung eines BESTEHENDEN Termins mit Abschluss-Verb
@@ -346,9 +543,104 @@ _BESTANDSFRAGE_RE = re.compile(
     # Nebensatz-Wortstellung: „ich möchte wissen, OB ICH noch einen Termin
     # HABE“. Ohne diesen Zweig gewann irrtümlich _FB_NEU_RE („Termin haben“)
     # und das freie LLM fragte nach bestehend-vs-neu, statt nachzusehen.
-    r"\bob\s+ich\b[^?.!]{0,38}?\btermine?\b[^?.!]{0,16}?\bhab(?:e|')?\b",
+    r"\bob\s+ich\b[^?.!]{0,38}?\btermine?\b[^?.!]{0,16}?\bhab(?:e|')?\b|"
+    # W-TERMIN-VERGESSEN (Anruf 9dd61a59, 14.09.2026): „Ich habe meinen
+    # Termin vergessen“ / „ich habe einen Termin, aber ich habe ihn
+    # vergessen“ — der Anrufer will wissen, WANN sein bestehender Termin
+    # ist. Beide Saetze trafen keinen Zweig, das freie LLM begruesste ein
+    # zweites Mal und fragte nach bestehend-vs-neu, statt nachzusehen.
+    # „vergessen, einen Termin ZU MACHEN“ bleibt Neubuchung (Lookahead);
+    # „Termin verpasst“ bewusst nicht — das ist ein versaeumter, kein
+    # gesuchter Termin.
+    r"\btermine?\b(?![^?.!]{0,20}\bzu\s+(?:machen|vereinbaren|buchen|ausmachen)\b)"
+    r"[^?.!]{0,30}?\b(?:vergessen|verschwitzt|verpennt|verbummelt)\b|"
+    # „Habe ich DA/DENN/EVENTUELL einen Termin?“ — Frageform mit Fuellwort
+    # am TEILSATZ-Anfang (Verb zuerst). _FB_AUSKUNFT_RE kennt nur „habe ich
+    # (noch) einen Termin“ ohne Fuellwort. Bewusst am Teilsatz-Anfang
+    # verankert: „Wie schnell habe ich einen Termin?“ (Neubuchung) und „Da
+    # habe ich schon einen Termin“ (Konflikt im Slotangebot) sind kein
+    # Treffer dieses Zweigs.
+    r"(?:^|[.!?,;:]\s*|\b(?:und|oder|aber|also|denn)\s+)hab(?:e|')?\s+ich\s+"
+    r"(?:(?:da|dort|denn|eigentlich|vielleicht|eventuell|zufällig|zufaellig|"
+    r"überhaupt|ueberhaupt|noch|jetzt|momentan|aktuell|derzeit|schon|"
+    r"bei\s+(?:ihnen|euch))\s+){0,3}(?:irgend)?einen\s+termin\b",
     re.I,
 )
+
+# B1 Blessing (15.09.2026): Die drei Gescheidle-Anrufe formulierten dieselbe
+# Bestandsauskunft in der anderen Reihenfolge: „meinen Termin nächste Woche,
+# wann ist der?“, „ich habe einen Termin … und weiß den Tag nicht mehr“. Diese
+# Sätze enthalten weder die alte Wann-vor-Termin-Form noch ein Abschlussverb
+# wie „gebucht“ und liefen dadurch als KEINE bzw. später als Neubuchung.
+# „Charmin“/„Salmin“ sind ausschließlich die beobachteten Blessing-STT-Formen
+# von „Termin“ und greifen nur zusammen mit Besitz + Zeitfrage.
+_BESTANDS_WORT_ERWEITERT = r"(?:termin|charmin|salmin)"
+_BESTANDS_BEZUG_ERWEITERT_RE = re.compile(
+    rf"\bmein(?:en|em|er|e)?\s+{_BESTANDS_WORT_ERWEITERT}\b|"
+    rf"\b(?:der|dieser)\s+{_BESTANDS_WORT_ERWEITERT}\b|"
+    rf"\bich\s+hab(?:e|')?\b[^.!?]{{0,70}}\b"
+    rf"(?:einen|den|meinen)\s+{_BESTANDS_WORT_ERWEITERT}\b",
+    re.I,
+)
+_BESTANDS_ZEITFRAGE_ERWEITERT_RE = re.compile(
+    r"\bwann\b|\bum\s+wie\s+viel\s+uhr\b|"
+    r"\bwelche[nr]?\s+(?:uhrzeit|tag)\b|"
+    r"\b(?:weiß|weiss|wusste|wüsste|wuesste)\b[^.!?]{0,70}\bnicht\b|"
+    r"\bnicht\s+mehr\b[^.!?]{0,30}\b(?:weiß|weiss|wissen)\b",
+    re.I,
+)
+_BESTANDS_STATUS_ERWEITERT_RE = re.compile(
+    rf"\b(?:ist|wurde|steht)\b[^.!?]{{0,24}}\b"
+    rf"(?:mein(?:en|em|er|e)?|der|dieser)\s+{_BESTANDS_WORT_ERWEITERT}\b"
+    rf"[^.!?]{{0,28}}\b(?:eingetragen|gebucht|gespeichert|vermerkt|drin)\b|"
+    rf"\b(?:mein(?:en|em|er|e)?|der|dieser)\s+{_BESTANDS_WORT_ERWEITERT}\b"
+    rf"[^.!?]{{0,16}}\b(?:ist|wurde|steht)\b[^.!?]{{0,16}}"
+    rf"\b(?:eingetragen|gebucht|gespeichert|vermerkt|drin)\b",
+    re.I,
+)
+
+
+def _bestandsfrage_erweitert(sit: dict | None, text: str) -> bool:
+    """Blessing-Opt-in für die beobachteten Terminauskunfts-Sprechweisen."""
+    tenant = (
+        sit.get("tenant")
+        if isinstance(sit, dict) and isinstance(sit.get("tenant"), dict)
+        else {}
+    )
+    if tenant.get("bestandsauskunftErweitert") is not True:
+        return False
+    t = _s(text)
+    if not t or _FREIER_TERMIN_RE.search(t):
+        return False
+
+    status = bool(_BESTANDS_STATUS_ERWEITERT_RE.search(t))
+    if status:
+        s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+        # Während ein ausgewählter Slot noch auf Bestätigung/Schreiben wartet,
+        # bezieht sich „Ist der Termin eingetragen?“ auf DIESEN Vorgang. Dann
+        # darf keine zweite Bestandssuche die laufende Buchung parken.
+        if (
+            _s(s.get("modus")) == "buchen"
+            and (
+                _s(s.get("phase")) in {"angebot", "bestaetigen"}
+                or bool(sit.get("buchIntent"))
+            )
+        ):
+            return False
+        return True
+
+    return bool(
+        _BESTANDS_BEZUG_ERWEITERT_RE.search(t)
+        and _BESTANDS_ZEITFRAGE_ERWEITERT_RE.search(t)
+    )
+
+
+def ist_bestandsfrage(sit: dict | None, text: str) -> bool:
+    """Bestehenden Termin erfragen — generischer Vertrag plus Tenant-Opt-in."""
+    t = _s(text)
+    return bool(_BESTANDSFRAGE_RE.search(t) or _bestandsfrage_erweitert(sit, t))
+
+
 # Freie-Slot-Frage aus Anbietersicht: „Haben Sie noch einen Termin diese
 # Woche?“ fragt nach einer NEUEN Buchung. Das Subjekt „Sie“ ist der wichtige
 # Gegenpol zu _BESTANDSFRAGE_RE („habe ICH ...?“). Ohne diesen Fast-Path lief
@@ -445,7 +737,8 @@ def _motivkatalog_da(sit: dict) -> bool:
 def _fallback(sit: dict, text: str) -> dict[str, Any]:
     """Deterministische Not-Deutung. Buchen NUR bei ausdruecklichem
     Terminwunsch — nie als Default (Chef 03.09.2026)."""
-    t = _s(text)
+    # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" kein Auskunftswort.
+    t = _ohne_diktat_fertig(sit, _s(text))
     aus = {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
            "ersatz": None, "spiegel": t[:80], "quelle": "fallback"}
     if not t:
@@ -454,30 +747,32 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "WISSEN", "gegenstand": "REGEL"}
     if _FB_SCHIENE_ABHOL_RE.search(t):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-    if eilig.vergangene_absage_plus_neubuchung(t):
-        return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None
-    if eilig.erkannt(t, tenant):
-        return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
+    # W-RECHNUNG (14.09.2026, Anruf 3ad3b6d3): Rechnung/Mahnung/Buchhaltung
+    # ist ABGEBEN x SACHE — VOR dem Frontdesk-/ERREICHEN-Zweig, sonst wuerde
+    # "Kann ich mit der Buchhaltung sprechen?" zum Durchstell-Dialog. Ein
+    # NAMENTLICH verlangter Behandler bleibt ERREICHEN (rechnung.erkannt).
+    if rechnung.erkannt(t, sit):
+        return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     im_angebot = _s(s.get("phase")) in {"angebot", "bestaetigen"}
+    bestandsfrage = ist_bestandsfrage(sit, t)
     # Eine genannte Abteilung ist oft nur der vermeintliche Lösungsweg.
     # Steht das eigentliche Anliegen im selben Satz, gewinnt die Aufgabe:
     # „Anmeldung, ich möchte meinen Termin absagen“ => Absage-Flow, nicht
     # Personal-/Weiterleitungsdialog. Namentliche Ärzte bleiben unberührt.
     if _FB_FRONTDESK_RE.search(t) and not im_angebot:
-        if _FB_VERSCHIEBEN_RE.search(t):
+        if _ist_verschieben(sit, t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
-        if (_FB_ABSAGE_RE.search(t) and not eilig.vergangene_absage_plus_neubuchung(t)
-            and not eilig.nicht_kommen_will_termin(t)):
+        if _FB_ABSAGE_RE.search(t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
         if _rueckruf(t):
             return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-        if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
-                and not _FREIER_TERMIN_RE.search(t):
-            gg = "VORGANG" if "termin" in t.lower() else "REGEL"
+        if _ist_auskunft(t, bestandsfrage):
+            gg = "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-        if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+        if dringlichkeit.oeffnet_buchung(t, sit.get("tenant") or {}):
+            return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
+        if ((_FB_NEU_RE.search(t) and not bestandsfrage)
                 or _FREIER_TERMIN_RE.search(t)
                 or _ueberwiesen(t)
                 or (not _motivkatalog_da(sit)
@@ -495,25 +790,25 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             "gegenstand": "VORGANG",
             "ersatz": False,
         }
-    if im_angebot and (_FB_ABSAGE_RE.search(t) or _FB_VERSCHIEBEN_RE.search(t)):
+    if im_angebot and (_FB_ABSAGE_RE.search(t) or _ist_verschieben(sit, t)):
         # "Passt nicht / den nicht" mitten im Slot-Angebot meint das ANGEBOT,
         # keinen Bestandstermin — die Maschine verhandelt selbst weiter.
         return {**aus, "zug": "verfeinern", "handlung": "KEINE", "gegenstand": ""}
-    if _FB_VERSCHIEBEN_RE.search(t) or (
+    if _ist_verschieben(sit, t) or (
         _s(s.get("phase")) == "gebucht"
         and re.search(r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen", t, re.I)
     ):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
-    if (_FB_ABSAGE_RE.search(t) and not eilig.vergangene_absage_plus_neubuchung(t)
-            and not eilig.nicht_kommen_will_termin(t)):
+    if _FB_ABSAGE_RE.search(t):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
     if _rueckruf(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
-    if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
-            and not _FREIER_TERMIN_RE.search(t):
-        gg = "VORGANG" if "termin" in t.lower() else "REGEL"
+    if _ist_auskunft(t, bestandsfrage):
+        gg = "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
-    if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+    if dringlichkeit.oeffnet_buchung(t, sit.get("tenant") or {}):
+        return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
+    if ((_FB_NEU_RE.search(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
@@ -531,10 +826,20 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
 _NEGATION_RE = re.compile(r"\bnicht\b|\bkein\w*|\bniemals\b|\bnie\b", re.I)
 
 
-def _eindeutig(t: str) -> dict[str, Any] | None:
+def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
     """Genau EIN Kategorie-Treffer, keine Verneinung, kein Roman ->
     Deutung sofort (0 ms). Mehrdeutiges geht weiter ans LLM."""
-    if len(t.split()) > 18 or _NEGATION_RE.search(t):
+    # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" kein Auskunftswort.
+    t = _ohne_diktat_fertig(sit, t)
+    if len(t.split()) > 18:
+        return None
+    # W-RECHNUNG: VOR der Verneinungs-Sperre — "Die Rechnung stimmt nicht"
+    # traegt fast immer ein "nicht" und ist trotzdem eindeutig.
+    if rechnung.erkannt(t, sit):
+        return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
+                "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
+                "handlung": "ABGEBEN", "gegenstand": "SACHE"}
+    if _NEGATION_RE.search(t):
         return None
     if ist_leitung_check(t):
         return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
@@ -544,25 +849,20 @@ def _eindeutig(t: str) -> dict[str, Any] | None:
         return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
                 "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
                 "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-    if eilig.vergangene_absage_plus_neubuchung(t):
-        return {"kanal": "ok", "zug": "wechseln", "fuer": "selbst",
-                "ersatz": None, "spiegel": t[:80], "quelle": "schnell",
-                "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
     treffer: list[tuple[str, dict[str, Any]]] = []
+    bestandsfrage = ist_bestandsfrage(sit, t)
     if _FB_ERREICHEN_RE.search(t):
         treffer.append(("ERREICHEN", {"handlung": "ERREICHEN", "gegenstand": "PERSON"}))
-    if _FB_VERSCHIEBEN_RE.search(t):
+    if _ist_verschieben(sit, t):
         treffer.append(("VERSCHIEBEN", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}))
-    if (_FB_ABSAGE_RE.search(t) and not eilig.vergangene_absage_plus_neubuchung(t)
-            and not eilig.nicht_kommen_will_termin(t)):
+    if _FB_ABSAGE_RE.search(t):
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))
     if _rueckruf(t):
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))
-    if (_FB_AUSKUNFT_RE.search(t) or _BESTANDSFRAGE_RE.search(t)) \
-            and not _FREIER_TERMIN_RE.search(t):
+    if _ist_auskunft(t, bestandsfrage):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
-                                     "gegenstand": "VORGANG" if "termin" in t.lower() else "REGEL"}))
-    if ((_FB_NEU_RE.search(t) and not _BESTANDSFRAGE_RE.search(t))
+                                     "gegenstand": "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"}))
+    if ((_FB_NEU_RE.search(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))
@@ -764,7 +1064,7 @@ def erkennen(sit: dict, text: str, *, stimme: str = "bianca") -> dict[str, Any]:
             return {"kanal": "ok", "zug": "halten", "handlung": "KEINE",
                     "gegenstand": "", "quelle": "fastpath-still"}
     else:
-        schnell = _eindeutig(t)
+        schnell = _eindeutig(t, sit)
         if schnell is not None:
             return schnell
         # Nacktes "Zahnreinigung": die Maschine fragt nach dem Termin —

@@ -15,7 +15,14 @@ Die Doppelfragen des Live-Anrufs kamen von den beiden ANDEREN Wegen:
 Beide haben ihre eigenen Regressionen (`test_frage_gate`, `test_anruf_rateike`).
 """
 
+import pytest
+
 from bianca import gehirn
+
+
+@pytest.fixture(autouse=True)
+def _ohne_namenslink(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit(**felder):

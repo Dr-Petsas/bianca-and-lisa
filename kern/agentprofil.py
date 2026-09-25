@@ -308,6 +308,9 @@ def tenant_von_pre(pre: dict[str, Any], did: str = "") -> dict[str, Any] | None:
     if gruss:
         # W-MEDDENT (04.09.2026): DB-Tippfehler „Wem kann ich…“ abfangen.
         t["begruessungText"] = gruss.replace("Wem kann ich", "Was kann ich")
+    # Mandantenspezifischer Assistentenname (z. B. Ben). Die strenge
+    # Validierung in kern.assistent verhindert Praxisnamen als Selbstname.
+    t["agentName"] = _s(agent.get("name"))
     if not _s(t.get("praxisName")):
         t["praxisName"] = _s(pre.get("locationName")) or _s(agent.get("locationName"))
 

@@ -101,6 +101,8 @@ def test_blessing_keine_pzr_frage():
 def test_meddent_pzr_frage_bleibt():
     sit = _meddent_sit()
     s = _bestand(sit)
+    s["arzt"] = {"typ": "genannt", "calendarId": "zex5bmv5jfIHWVW6zHbg",
+                 "calendarName": "Dr. Petsas"}
     s["motivName"] = "KCH Kontrolluntersuchung"
     assert gehirn.pzr_faellig(s, sit)
     assert gehirn.pzr_noch_fragen(s, sit)
@@ -262,6 +264,8 @@ def test_blessing_rueckblick_fragt_noch_darum_ohne_krebs():
     sit = _blessing_sit()
     s = _bestand(sit)
     s.update({
+        "arzt": {"typ": "genannt", "calendarId": "cal-b",
+                 "calendarName": "Dr. Blessing"},
         "bekannt": True, "letzterGrund": "Hautkrebsscreening",
         "letzterBesuch": "2026-01-01", "rueckblick": "",
     })

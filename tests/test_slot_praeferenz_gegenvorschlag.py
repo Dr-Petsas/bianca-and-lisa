@@ -8,16 +8,29 @@ Gegenvorschlag ("nicht um elf, lieber um zwei") ging dabei ganz verloren.
 
 from __future__ import annotations
 
+from datetime import date, datetime, time, timedelta
+
 from bianca import agent, flow, gehirn, hintergrund, session
 from kern.slots import slot_praeferenz_aenderung, wunsch_mit_slot_praeferenz
 from kern.tenants import laden
 
 
-MONTAG_09 = "2026-09-21T09:00:00+02:00"
-DONNERSTAG_11 = "2026-09-24T11:00:00+02:00"
-DONNERSTAG_14 = "2026-09-24T14:40:00+02:00"
-DIENSTAG_10 = "2026-09-22T10:00:00+02:00"
-MITTWOCH_15 = "2026-09-23T15:00:00+02:00"
+_IN_ZWEI_WOCHEN = date.today() + timedelta(days=14)
+_MONTAG = _IN_ZWEI_WOCHEN - timedelta(days=_IN_ZWEI_WOCHEN.weekday())
+_DIENSTAG = _MONTAG + timedelta(days=1)
+_MITTWOCH = _MONTAG + timedelta(days=2)
+_DONNERSTAG = _MONTAG + timedelta(days=3)
+
+
+def _iso(tag: date, stunde: int, minute: int = 0) -> str:
+    return datetime.combine(tag, time(stunde, minute)).astimezone().isoformat(timespec="seconds")
+
+
+MONTAG_09 = _iso(_MONTAG, 9)
+DONNERSTAG_11 = _iso(_DONNERSTAG, 11)
+DONNERSTAG_14 = _iso(_DONNERSTAG, 14, 40)
+DIENSTAG_10 = _iso(_DIENSTAG, 10)
+MITTWOCH_15 = _iso(_MITTWOCH, 15)
 OFFERED = [MONTAG_09, DONNERSTAG_11, DONNERSTAG_14]
 
 
@@ -83,9 +96,11 @@ def test_gegenvorschlag_stunde_nie_wenn_selbst_abgelehnt():
 
 
 def test_tag_und_datum_desselben_tages_sind_eine_nennung():
-    # "Donnerstag, der 24." ist EINE Auswahl, keine zwei Alternativen.
-    assert slot_praeferenz_aenderung("Donnerstag, der 24.", offered_isos=OFFERED,
-                                     heute=__import__("datetime").date(2026, 9, 17)) is None
+    # "Donnerstag, der X." ist EINE Auswahl, keine zwei Alternativen.
+    text = f"Donnerstag, der {_DONNERSTAG.day}."
+    assert slot_praeferenz_aenderung(
+        text, offered_isos=OFFERED, heute=date.today()
+    ) is None
 
 
 def test_zwei_tage_ohne_ablehnung_sind_alternativen():
@@ -153,14 +168,15 @@ def test_fluss_nicht_elf_lieber_zwei_waehlt_donnerstag_vierzehn_direkt():
 
 def test_fluss_reine_auswahl_mit_datum_bleibt_slot_wahl():
     sit = _sit()
+    text = f"Donnerstag, der {_DONNERSTAG.day}."
     # Kein Praeferenz-Zug (keine Neusuche): das ist eine Auswahl fuer _slot_wahl.
-    assert flow._slot_praeferenz_zug(sit, "Donnerstag, der 24.") is None
+    assert flow._slot_praeferenz_zug(sit, text) is None
     # Zwei Donnerstage im Angebot: _slot_wahl bleibt ehrlich unklar ("") —
     # die Maschine fragt nach der Uhrzeit, statt zu raten.
-    assert flow._slot_wahl("Donnerstag, der 24.", sit["offered"]) == ""
+    assert flow._slot_wahl(text, sit["offered"]) == ""
     # Ein Donnerstag im Angebot: eindeutige Wahl.
     einer = [sit["offered"][0], sit["offered"][2]]
-    assert flow._slot_wahl("Donnerstag, der 24.", einer) == DONNERSTAG_14
+    assert flow._slot_wahl(text, einer) == DONNERSTAG_14
 
 
 def test_fluss_alternativtage_ohne_treffer_suchen_neu_mit_beiden_tagen():
@@ -169,7 +185,8 @@ def test_fluss_alternativtage_ohne_treffer_suchen_neu_mit_beiden_tagen():
     s = gehirn.sammler(sit)
     assert aus is not None
     assert s["wunsch"]["weekdays"] == [2, 3]
-    assert all(x["iso"][:10] in {"2026-09-22", "2026-09-23"} for x in sit["offered"])
+    erwartete_tage = {DIENSTAG_10[:10], MITTWOCH_15[:10]}
+    assert all(x["iso"][:10] in erwartete_tage for x in sit["offered"])
 
 
 def test_fluss_thaler_gleiches_verhalten():

@@ -492,7 +492,7 @@ def test_abgeben_nimmt_diktierte_nummer_sofort(tmp_path, monkeypatch):
     assert z and "notiert" in z["text"]
     assert "Handynummer" not in z["text"]
     assert "welche Nummer" not in z["text"].lower()
-    assert s["telefon"].startswith("0151")
+    assert s["telefon"] == "015129105931"
     assert s["telefonOk"] is True
 
 
@@ -513,7 +513,7 @@ def test_abgeben_kennt_anrufer_fragt_nicht_name_nummer(tmp_path, monkeypatch):
     assert "Wie ist Ihr Name" not in (z.get("text") or "")
     assert "Handynummer" not in (z.get("text") or "")
     assert s["nachname"] == "Berger"
-    assert s["telefon"].startswith("0151")
+    assert s["telefon"] == "+4915129105931"
 
 
 def test_rezept_abgeben_sagt_nicht_ausstellen(tmp_path, monkeypatch):

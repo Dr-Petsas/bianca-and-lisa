@@ -13,7 +13,7 @@ import os
 import re
 from typing import Any
 
-from kern import patients
+from kern import observability_manifest, patients
 from kern.calendar import _cf_call
 from kern.config import DEV_PHONE
 
@@ -299,6 +299,32 @@ def _stand(sit: dict) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def _beobachten(
+    sit: dict,
+    phase: str,
+    *,
+    status: int | None = None,
+    dispatch: dict | None = None,
+    outcome: str = "unknown",
+) -> None:
+    observability_manifest.emit(
+        sit,
+        "reservation",
+        phase,
+        http_status=status,
+        dispatch=dispatch,
+        route_class="name_confirm",
+        outcome=outcome,
+    )
+
+
+def _terminal_bereinigen(sit: dict, terminal: str) -> None:
+    """Token, URL, Rufnummer, Namens-Hinweise und Termin-IDs lokal verwerfen."""
+    sit["namenslink"] = {terminal: True}
+    sit.pop("_namenslinkSatz", None)
+    _beobachten(sit, "cleanup", outcome="cleanup_ok")
+
+
 def verifiziert(sit: dict) -> bool:
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     return bool(s.get("nameVerified") or _stand(sit).get("verified"))
@@ -378,12 +404,8 @@ def _anwenden(sit: dict, first: str, last: str) -> None:
     sit["gefunden"] = []
     sit["gefundenKey"] = ""
     sit["kandidaten"] = []
-    sit["namenslink"] = {
-        **_stand(sit),
-        "done": True,
-        "verified": True,
-        "source": "typed_by_patient",
-    }
+    _beobachten(sit, "done", outcome="done")
+    _terminal_bereinigen(sit, "done")
 
 
 def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict | None:
@@ -402,7 +424,7 @@ def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict
     last = _s(s.get("nachname"))
     if ist_platzhalter_name(first, last) or s.get("nameQuelle") == "platzhalter":
         first, last = gehoerte_namen(sit)
-    status, data, _dispatch = _cf_call("agentNameConfirm", {
+    status, data, dispatch = _cf_call("agentNameConfirm", {
         "action": "create",
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -415,6 +437,15 @@ def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict
         "start": _s(s.get("slotIso") or sit.get("lastBookIso")),
         "dryRun": bool(dry_run or tenant.get("_testNoWrite")),
     })
+    _beobachten(
+        sit,
+        "create",
+        status=status,
+        dispatch=dispatch,
+        outcome="ok" if (
+            status == 200 and isinstance(data, dict) and data.get("token")
+        ) else "error",
+    )
     if status != 200 or not isinstance(data, dict) or not data.get("token"):
         return None
     sit["namenslink"] = {
@@ -447,13 +478,20 @@ def termin_binden(sit: dict, appointment_id: str, patient_id: str = "") -> None:
     if not token or not aid:
         return
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    _cf_call("agentNameConfirm", {
+    status, _data, dispatch = _cf_call("agentNameConfirm", {
         "action": "bind",
         "token": token,
         "appointmentId": aid,
         "patientId": _s(patient_id),
         "start": _s(s.get("slotIso") or sit.get("lastBookIso")),
     })
+    _beobachten(
+        sit,
+        "bind",
+        status=status,
+        dispatch=dispatch,
+        outcome="ok" if status == 200 else "error",
+    )
     sit["namenslink"] = {**_stand(sit), "appointmentId": aid}
 
 
@@ -462,10 +500,21 @@ def status_holen(sit: dict) -> dict:
     token = _s(stand.get("token"))
     if not token:
         return {}
-    status, data, _dispatch = _cf_call("agentNameConfirm", {
+    status, data, dispatch = _cf_call("agentNameConfirm", {
         "action": "status",
         "token": token,
     })
+    remote = _s(data.get("status")) if isinstance(data, dict) else ""
+    outcome = remote if remote in {"open", "done", "expired"} else (
+        "error" if status != 200 else "unknown"
+    )
+    _beobachten(
+        sit,
+        "status",
+        status=status,
+        dispatch=dispatch,
+        outcome=outcome,
+    )
     return data if status == 200 and isinstance(data, dict) else {}
 
 
@@ -480,7 +529,8 @@ def einziehen(sit: dict) -> dict:
         _anwenden(sit, _s(data.get("firstName")), _s(data.get("lastName")))
         return data
     if data.get("status") == "expired":
-        sit["namenslink"] = {**_stand(sit), "expired": True}
+        _beobachten(sit, "expired", outcome="expired")
+        _terminal_bereinigen(sit, "expired")
     return data
 
 
@@ -513,6 +563,9 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None,
         from bianca import verwalten
         return verwalten._dispatch(sit, melde)
     if data.get("status") == "expired":
+        if not _stand(sit).get("expired"):
+            _beobachten(sit, "expired", outcome="expired")
+            _terminal_bereinigen(sit, "expired")
         s["frage"] = "nachname"
         return {"text": (
             "Der Link ist abgelaufen. Sagen Sie den Nachnamen bitte noch einmal."

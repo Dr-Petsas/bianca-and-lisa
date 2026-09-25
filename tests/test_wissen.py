@@ -320,6 +320,8 @@ def test_sanitize_euro_neben_zeit_und_telefon():
     s = sanitize("Die Kontrolle um 09:15 kostet 150 Euro.")
     assert "neun Uhr fünfzehn" in s and "einhundertfünfzig Euro" in s
     s = sanitize("Ihre Nummer 0177 6004600, der Preis ist 150 Euro.")
-    assert "0177 6004600" in s and "einhundertfünfzig Euro" in s
+    assert "null eins sieben sieben" in s
+    assert "sechs null null" in s
+    assert "einhundertfünfzig Euro" in s
     # Dezimalbeträge bleiben unangetastet (kein ',50' -> 'fünfzig'):
     assert "149,50" in sanitize("Das macht 149,50 Euro.")

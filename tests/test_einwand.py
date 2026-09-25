@@ -14,9 +14,16 @@ einen feststehenden Wert weg (genau die Katastrophe aus Anruf 1fbda5db).
 Deshalb steht unten hinter jedem Positiv-Fall ein Negativ-Fall.
 """
 
+import pytest
+
 from bianca import flow, gehirn
 from kern import einwand
 from kern.tenants import laden
+
+
+@pytest.fixture(autouse=True)
+def _ohne_namenslink(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit(**felder) -> dict:

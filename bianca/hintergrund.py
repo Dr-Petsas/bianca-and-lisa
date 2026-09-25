@@ -182,6 +182,8 @@ def hallo_waermen(sit: dict) -> None:
 def kartei_anstossen(sit: dict) -> None:
     """Patient auflösen, sobald ein Nachname da ist — parallel zum Gespräch."""
     s = gehirn.sammler(sit)
+    if not gehirn.name_suche_frei(sit):
+        return
     key = f"{s['vorname']}|{s['nachname']}".lower()
     # patientId allein reicht nicht: kommt sie aus agentFindPatientAppointments
     # (Termin-Verwaltung), fehlt noch das Akten-Handy fuer eine Folge-Buchung.
@@ -213,9 +215,7 @@ def kartei_anstossen(sit: dict) -> None:
                         s["vornameQuelle"] = "akte"
                         s["vornameCheck"] = ""
                 # Kartei-Geschlecht schlaegt die Vornamen-Schaetzung (29.08.2026).
-                # Eine ausgesprochene Korrektur im laufenden Anruf bleibt stehen
-                # und wird nicht von der alten Akte zurueckgeschrieben.
-                if _s(pat.get("gender")) and s.get("geschlechtQuelle") != "gesagt":
+                if _s(pat.get("gender")):
                     s["geschlecht"] = _s(pat.get("gender")).lower()
                     s["geschlechtQuelle"] = "akte"
                     s["geschlechtUnklar"] = False

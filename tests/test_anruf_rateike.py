@@ -12,7 +12,14 @@ True!), pzr="gefragt" (das "ja" war verloren), motivName="KCH
 Kontrolluntersuchung".
 """
 
+import pytest
+
 from bianca import besuchsgrund, buchstaben, flow, gehirn
+
+
+@pytest.fixture(autouse=True)
+def _ohne_namenslink(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "0")
 
 
 def _sit(**felder):
