@@ -30,7 +30,13 @@ def _wer(sit: dict) -> str:
 
 def run_tool(sit: dict, name: str, args: dict) -> dict[str, Any]:
     tenant = sit["tenant"]
-    ctx = sit.get("booking") or {}
+    # Sicherheits-Latches (z. B. Namensunsicherheit) müssen im
+    # Sitzungskontext landen. ``or {}`` erzeugte bei einem zunächst leeren
+    # Kontext ein wegwerfbares Dict.
+    ctx = sit.get("booking")
+    if not isinstance(ctx, dict):
+        ctx = {}
+        sit["booking"] = ctx
     if name == "list_appointments":
         return calendar.list_appointments(tenant, ctx, sit.get("upcoming") or [], sit=sit)
     if name == "offer_slots":
@@ -136,6 +142,12 @@ def apply_tools(sit: dict, msgs: list, first: dict, melde=None) -> tuple[str, li
                 "dryRun": bool(result.get("dryRun")),
                 "slotIso": result.get("slotIso") or "",
                 "spoken": result.get("spoken") or "",
+                "verificationFailed": bool(
+                    result.get("verificationFailed")),
+                "possiblyBooked": bool(result.get("possiblyBooked")),
+                "writeAttempted": bool(result.get("writeAttempted")),
+                "manualCheckRequired": bool(
+                    result.get("manualCheckRequired")),
             }
         merke_tool(sit, name, result, args=args if isinstance(args, dict) else None)
         if name != "note_appointment":
@@ -216,5 +228,9 @@ def buchungs_wache(sit: dict, text: str, melde=None) -> tuple[str, dict | None]:
         "dryRun": bool(result.get("dryRun")),
         "slotIso": result.get("slotIso") or iso,
         "spoken": result.get("spoken") or "",
+        "verificationFailed": bool(result.get("verificationFailed")),
+        "possiblyBooked": bool(result.get("possiblyBooked")),
+        "writeAttempted": bool(result.get("writeAttempted")),
+        "manualCheckRequired": bool(result.get("manualCheckRequired")),
     }
     return _s(result.get("spoken")), book

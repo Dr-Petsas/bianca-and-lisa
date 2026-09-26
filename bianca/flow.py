@@ -931,17 +931,32 @@ def _ctx_bauen(sit: dict) -> dict:
         ctx["platzhalterAkte"] = True
         s["patientId"] = ""
     if namenslink.skip_documents(sit) or ctx.get("platzhalterAkte"):
-        tel = namenslink.erkannte_nummer(sit)
-        if tel:
-            ctx["phone"] = tel
-            ctx["phoneConfirmed"] = tel
-            s["telefon"] = tel
-            s["telefonOk"] = True
+        # Eine von der Leitung/Akte erkannte Nummer ist nicht automatisch
+        # rückbestätigt. Sobald der Buchungsweg ausdrücklich ein Handy
+        # verlangt, darf nur der echte telefonOk-Wert die Reservierung
+        # schreiben; sonst würde needs_phone still umgangen.
+        if sit.get("needsPhoneOffen") is True:
+            bestaetigt = _s(s.get("telefon")) if s.get("telefonOk") else ""
+            if bestaetigt:
+                ctx["phone"] = bestaetigt
+                ctx["phoneConfirmed"] = bestaetigt
+            else:
+                ctx.pop("phone", None)
+                ctx.pop("phoneConfirmed", None)
+        else:
+            tel = namenslink.erkannte_nummer(sit)
+            if tel:
+                ctx["phone"] = tel
+                ctx["phoneConfirmed"] = tel
+                s["telefon"] = tel
+                s["telefonOk"] = True
         ctx["skipConfirmation"] = True
-    elif namenslink.skip_documents(sit):
-        ctx["skipConfirmation"] = True
+        ctx["nameConfirmToken"] = namenslink.reservierungs_token(sit)
+        ctx["nameConfirmSessionId"] = _s(sit.get("id"))
     else:
         ctx.pop("skipConfirmation", None)
+        ctx.pop("nameConfirmToken", None)
+        ctx.pop("nameConfirmSessionId", None)
     return ctx
 
 
@@ -1513,7 +1528,7 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 "habe Ihr Anliegen notiert — die Praxis meldet sich "
                 "kurzfristig bei Ihnen und stimmt den Termin mit Ihnen ab."
             )
-        if not sit.get("praxisNotiz"):
+        if not notiz_ok:
             ansage = (
                 "Dafür ist gerade kein Termin verfügbar, und die Rückrufnotiz "
                 "konnte ich technisch nicht speichern. Bitte rufen Sie die Praxis "
@@ -1897,15 +1912,21 @@ def _termin_notiz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
                 )
                 spur.merken(sit, "termin-notiz", "geschrieben")
                 return _termin_notiz_abschluss(sit, gesprochen)
-            verwalten.abgeben_notiz(
+            notiz_ok = verwalten.abgeben_notiz(
                 sit,
                 was=f"Nachricht zum gebuchten Termin nachtragen: {notiz}",
             )
             spur.merken(sit, "termin-notiz", "write-fehler")
             return _termin_notiz_abschluss(
                 sit,
-                "Die Nachricht konnte ich nicht sicher direkt am Termin speichern; "
-                "die Praxis erhält dafür einen Rückrufvermerk.",
+                (
+                    "Die Nachricht konnte ich nicht sicher direkt am Termin speichern; "
+                    "die Praxis erhält dafür einen Rückrufvermerk."
+                    if notiz_ok
+                    else
+                    "Die Nachricht und auch der Rückrufvermerk konnten technisch "
+                    "nicht sicher gespeichert werden. Bitte rufen Sie die Praxis an."
+                ),
             )
         if gehirn.ist_nein(text):
             stand["text"] = ""
@@ -1959,8 +1980,123 @@ def _telefon_tor(sit: dict) -> dict | None:
     return {"text": frage}
 
 
+def _reservierung_link_fehlgeschlagen(
+    sit: dict, res: dict, book: dict, *, created_patient: bool,
+) -> dict:
+    """Gebuchter Platzhalter ohne sicheren Link gilt nicht als Erfolg."""
+    from kern import namenslink
+    s = gehirn.sammler(sit)
+    aid = _s(res.get("appointmentId") or s.get("appointmentId"))
+    pid = _s(res.get("patientId") or s.get("patientId"))
+    stand = sit.get("namenslink") if isinstance(sit.get("namenslink"), dict) else {}
+    if aid and not stand.get("abort"):
+        stand["abort"] = namenslink.abbrechen(
+            sit,
+            appointment_id=aid,
+            patient_id=pid,
+            token=_s(stand.get("token")) or namenslink.reservierungs_token(sit),
+            reason="link_or_bind_failed",
+            created_patient=created_patient,
+        )
+        sit["namenslink"] = stand
+    abgebrochen = bool(stand.get("abort"))
+    s["phase"] = "fertig"
+    s["frage"] = ""
+    sit.pop("buchIntent", None)
+    sit["keinSlotFertig"] = True
+    sit["flussFrage"] = ""
+    book["booked"] = False
+    book["spoken"] = ""
+    book["reservationAborted"] = abgebrochen
+    book["reservationUnclear"] = not abgebrochen
+    booking = sit.get("booking") if isinstance(sit.get("booking"), dict) else {}
+    booking.pop("appointmentId", None)
+    booking.pop("appointmentDate", None)
+    letztes = sit.get("lastBook") if isinstance(sit.get("lastBook"), dict) else {}
+    sit["lastBook"] = {
+        **letztes,
+        "ok": False,
+        "booked": False,
+        "appointmentId": "",
+        "reservationAborted": abgebrochen,
+        "reservationUnclear": not abgebrochen,
+    }
+    for ein in reversed(sit.get("tools") or []):
+        if ein.get("name") != "book_slot":
+            continue
+        if aid and _s(ein.get("appointmentId")) not in {"", aid}:
+            continue
+        ein.update({
+            "ok": False,
+            "booked": False,
+            "appointmentId": "",
+            "reservationAborted": abgebrochen,
+            "reservationUnclear": not abgebrochen,
+        })
+        break
+    if created_patient:
+        alt_create = (
+            sit.get("lastCreate")
+            if isinstance(sit.get("lastCreate"), dict)
+            else {}
+        )
+        sit["lastCreate"] = {
+            **alt_create,
+            "ok": False,
+            "created": False,
+            "patientId": "",
+            "reservationAborted": abgebrochen,
+            "reservationUnclear": not abgebrochen,
+        }
+    notiz_ok = verwalten.abgeben_notiz(
+        sit,
+        was=(
+            "Platzhaltertermin nach fehlgeschlagenem Namenslink "
+            + (
+                "abgebrochen; Praxis muss den Patienten zurückrufen"
+                if abgebrochen
+                else
+                "technisch unklar; vor einer Neubuchung prüfen und "
+                "den Patienten zurückrufen"
+            )
+        ),
+    )
+    text = (
+        (
+            "Den Termin konnte ich technisch nicht sicher reservieren und "
+            "habe die Reservierung deshalb wieder freigegeben. "
+            if abgebrochen
+            else
+            "Den Reservierungszustand konnte ich technisch nicht sicher klären. "
+        )
+        + (
+            "Ich habe der Praxis dazu einen Rückrufvermerk hinterlassen."
+            if notiz_ok
+            else
+            "Auch der Rückrufvermerk ist fehlgeschlagen; bitte "
+            "rufen Sie die Praxis an."
+        )
+    )
+    return _notiz_abschluss(sit, text, book=book)
+
+
 def _buchen(sit: dict, melde: Melde = None) -> dict:
     s = gehirn.sammler(sit)
+    if sit.get("buchungUnklar"):
+        # Nach einer unklaren Schreibantwort kann derselbe Termin bereits
+        # existieren. In dieser Sitzung wird deshalb nie noch einmal
+        # geschrieben, auch wenn ein Folgesatz erneut Buchungs-Intent setzt.
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        s["slotIso"] = ""
+        sit.pop("buchIntent", None)
+        sit["offered"] = []
+        sit["slotVorrat"] = []
+        return _notiz_abschluss(
+            sit,
+            "Der Kalenderstand dieser Buchung muss zuerst von der Praxis "
+            "geprüft werden. Ich trage deshalb keinen zweiten Termin ein.",
+        )
     if int(sit.get("bookFails") or 0) >= 2:
         # Harte Schreibgrenze: Auch ein alter/direkter Aufrufer darf nach
         # zwei echten Buchungsversuchen keinen dritten Write auslösen.
@@ -2027,6 +2163,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         "dryRun": bool(res.get("dryRun")),
         "slotIso": res.get("slotIso") or "",
         "spoken": res.get("spoken") or "",
+        "verificationFailed": bool(res.get("verificationFailed")),
+        "possiblyBooked": bool(res.get("possiblyBooked")),
+        "writeAttempted": bool(res.get("writeAttempted")),
+        "manualCheckRequired": bool(res.get("manualCheckRequired")),
     }
     if res.get("ok") and (res.get("booked") or res.get("dryRun")):
         tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
@@ -2079,7 +2219,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                     if nummer_notiz.get("ok"):
                         text += " Ihre neue Handynummer habe ich der Praxis mitgegeben."
                     else:
-                        verwalten.abgeben_notiz(
+                        notiz_ok = verwalten.abgeben_notiz(
                             sit,
                             was=(
                                 f"Neue Handynummer {s['telefon']} statt "
@@ -2088,19 +2228,46 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                         )
                         text += (
                             " Die neue Handynummer konnte ich nicht sicher am Termin "
-                            "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                            + (
+                                "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                                if notiz_ok
+                                else
+                                "speichern, und auch der Rückrufvermerk ist technisch "
+                                "fehlgeschlagen. Bitte rufen Sie die Praxis an."
+                            )
                         )
             elif s["telefon"] or s["aktePhone"]:
                 if namenslink.skip_documents(sit):
                     schon_sms = namenslink.offen(sit)
-                    if not schon_sms:
-                        namenslink.starten(sit, parallel=True)
-                    namenslink.termin_binden(
-                        sit,
-                        _s(res.get("appointmentId") or s.get("appointmentId")),
-                        _s(res.get("patientId") or s.get("patientId")),
+                    create_ok = schon_sms or bool(
+                        namenslink.starten(
+                            sit,
+                            parallel=True,
+                            appointment_id=_s(
+                                res.get("appointmentId") or s.get("appointmentId")
+                            ),
+                            patient_id=_s(
+                                res.get("patientId") or s.get("patientId")
+                            ),
+                            created_patient=bool(res.get("createdPatient")),
+                        )
                     )
-                    text += " " + namenslink.abschluss_satz(sit)
+                    bind_ok = create_ok and (
+                        bool((sit.get("namenslink") or {}).get("bound"))
+                        or namenslink.termin_binden(
+                            sit,
+                            _s(res.get("appointmentId") or s.get("appointmentId")),
+                            _s(res.get("patientId") or s.get("patientId")),
+                            created_patient=bool(res.get("createdPatient")),
+                        )
+                    )
+                    abschluss = namenslink.abschluss_satz(sit) if bind_ok else ""
+                    if not abschluss:
+                        return _reservierung_link_fehlgeschlagen(
+                            sit, res, book,
+                            created_patient=bool(res.get("createdPatient")),
+                        )
+                    text += " " + abschluss
                 elif abschluss_kompakt:
                     text += _SMS_LINK_KOMPAKT
                 else:
@@ -2255,11 +2422,17 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 if notiz_res.get("ok"):
                     text += " " + " ".join(notiz_bestaetigungen)
                 else:
-                    verwalten.abgeben_notiz(
+                    notiz_ok = verwalten.abgeben_notiz(
                         sit, was="Zusatzhinweise zum gebuchten Termin prüfen")
                     text += (
                         " Die Zusatzhinweise konnte ich nicht sicher am Termin "
-                        "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                        + (
+                            "speichern; ich habe dafür einen Rückrufvermerk angelegt."
+                            if notiz_ok
+                            else
+                            "speichern, und auch der Rückrufvermerk ist technisch "
+                            "fehlgeschlagen. Bitte rufen Sie die Praxis an."
+                        )
                     )
             if abschluss_kompakt:
                 # Blessing: Nach Ergebnis, SMS-Link und bereits VORHER
@@ -2297,11 +2470,30 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
         # hinterlassen.
         s["phase"] = "fertig"
         s["frage"] = ""
+        unklar_iso = _s(res.get("slotIso") or s.get("slotIso"))
+        s["slotIso"] = ""
+        sit.pop("buchIntent", None)
+        sit["buchungUnklar"] = {
+            "slotIso": unklar_iso,
+            "appointmentId": _s(res.get("appointmentId")),
+        }
+        gesperrt = list(sit.get("slotGesperrt") or [])
+        if unklar_iso and unklar_iso not in gesperrt:
+            gesperrt.append(unklar_iso)
+        sit["slotGesperrt"] = gesperrt
         sit["keinSlotFertig"] = True
         sit["offered"] = []
-        verwalten.buchung_pruefen_notiz(
-            sit, slot_iso=_s(res.get("slotIso") or s.get("slotIso")))
-        return {"text": res.get("spoken"), "book": book}
+        sit["slotVorrat"] = []
+        notiz_ok = verwalten.buchung_pruefen_notiz(
+            sit, slot_iso=unklar_iso)
+        text = _s(res.get("spoken"))
+        if not notiz_ok:
+            text = (
+                "Die Buchungsantwort ist nicht eindeutig im Kalender angekommen. "
+                "Auch die Prüfnotiz konnte ich technisch nicht speichern. Bitte "
+                "rufen Sie die Praxis an, bevor ein zweiter Termin eingetragen wird."
+            )
+        return {"text": text, "book": book}
     if res.get("slotTaken"):
         # W-BOOK-RETRY 01.09.2026: phone_agent-Deckel — max. 2 slotTaken,
         # gescheiterte ISOs sperren, Intent merken (kein zweites Confirm).
@@ -2338,7 +2530,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 "klappen auch nicht zuverlässig. Keine Sorge — ich schreibe eine Notiz, "
                 "und die Praxis meldet sich gleich bei Ihnen mit einem Termin."
             )
-            if not sit.get("praxisNotiz"):
+            if not notiz_ok:
                 text = (
                     "Der Termin ist leider gerade nicht mehr frei, und die Alternativen "
                     "klappen auch nicht zuverlässig. Die Rückrufnotiz konnte ich technisch "
@@ -2366,7 +2558,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             sit["bookFails"] = fails
             if fails >= 2:
                 fail_iso = _s(s.get("slotIso")) or _s(res.get("slotIso"))
-                verwalten.buchung_fehler_notiz(
+                notiz_ok = verwalten.buchung_fehler_notiz(
                     sit,
                     slot_iso=fail_iso,
                     grund_technisch=(
@@ -2377,7 +2569,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 s["frage"] = ""
                 s["slotIso"] = ""
                 sit.pop("buchIntent", None)
-                if sit.get("praxisNotiz"):
+                if notiz_ok:
                     text = (
                         "Das Eintragen klappt trotz bestätigter Handynummer gerade nicht. "
                         "Ich habe der Praxis eine Rückrufnotiz hinterlassen."
@@ -2416,9 +2608,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     netz = "netzfehler" in regie.lower() or "antwortet gerade nicht" in gesagt.lower()
     if netz:
         # Die Buchung KANN gelandet sein — pruefen, nie doppelt eintragen.
-        verwalten.buchung_pruefen_notiz(sit, slot_iso=fail_iso)
+        notiz_ok = verwalten.buchung_pruefen_notiz(sit, slot_iso=fail_iso)
     else:
-        verwalten.buchung_fehler_notiz(sit, slot_iso=fail_iso, grund_technisch=regie[:80])
+        notiz_ok = verwalten.buchung_fehler_notiz(
+            sit, slot_iso=fail_iso, grund_technisch=regie[:80])
     s["phase"] = "fertig"
     s["frage"] = ""
     sit.pop("buchIntent", None)
@@ -2426,7 +2619,13 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
     sit["keinSlotFertig"] = True
     sit["flussFrage"] = ""
     spur.merken(sit, "buchung-technik", "notiz" + (":netz" if netz else ""))
-    if netz:
+    if not notiz_ok:
+        text = (
+            "Das Eintragen konnte ich technisch nicht sicher abschließen, und auch "
+            "die Prüfnotiz ließ sich nicht speichern. Bitte rufen Sie die Praxis an; "
+            "ich trage den Termin nicht noch einmal ein."
+        )
+    elif netz:
         text = (
             "Der Kalender antwortet gerade nicht — ich möchte nichts doppelt "
             "eintragen. Ich habe Ihren Wunschtermin notiert; die Praxis bestätigt "
@@ -2438,9 +2637,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             "ich habe Ihren Wunschtermin notiert, und die Praxis trägt ihn ein "
             "und meldet sich bei Ihnen."
         )
-    nummer_frage = _rueckruf_nummer_start(sit)
-    if nummer_frage:
-        return {"text": text + " " + nummer_frage, "book": book}
+    if notiz_ok:
+        nummer_frage = _rueckruf_nummer_start(sit)
+        if nummer_frage:
+            return {"text": text + " " + nummer_frage, "book": book}
     return _notiz_abschluss(sit, text, book=book)
 
 
@@ -2679,7 +2879,7 @@ def _name_ausstieg(sit: dict, s: dict, feld: str) -> str:
         teile.append(f"bei {beim}")
     was = (" ".join(teile) + f" — {feld} am Telefon auch nach Buchstabieren nicht "
            "verständlich, Termin NICHT eingetragen")
-    verwalten.abgeben_notiz(sit, was=was)
+    notiz_ok = verwalten.abgeben_notiz(sit, was=was)
     spur.merken(sit, "name-ausstieg", feld.lower())
     s["phase"] = "fertig"
     s["frage"] = ""
@@ -2688,15 +2888,22 @@ def _name_ausstieg(sit: dict, s: dict, feld: str) -> str:
     sit["keinSlotFertig"] = True
     text = (
         "Ich möchte nichts Falsches eintragen — den Namen habe ich leider "
-        "nicht sicher verstanden. Ich habe Ihren Terminwunsch für die Praxis "
-        "notiert, man ruft Sie zurück. "
+        "nicht sicher verstanden. "
+        + (
+            "Ich habe Ihren Terminwunsch für die Praxis notiert, man ruft Sie zurück. "
+            if notiz_ok
+            else
+            "Die Rückrufnotiz konnte ich technisch nicht speichern. Bitte rufen Sie "
+            "die Praxis noch einmal an. "
+        )
     )
-    nummer = _rueckruf_nummer_start(sit)
-    if nummer:
-        return text + nummer
-    tel = _s(verwalten.rueckruf_nummer(sit))
-    if tel:
-        return text + f"Die Praxis meldet sich unter der {telefon.sprechbar(tel)}. "
+    if notiz_ok:
+        nummer = _rueckruf_nummer_start(sit)
+        if nummer:
+            return text + nummer
+        tel = _s(verwalten.rueckruf_nummer(sit))
+        if tel:
+            return text + f"Die Praxis meldet sich unter der {telefon.sprechbar(tel)}. "
     return text
 
 
@@ -2920,7 +3127,7 @@ def _eskalieren(sit: dict, fid: str, t: str = "") -> str:
                 _s((s["arzt"] or {}).get("calendarName")),
                 sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
             )
-            verwalten.abgeben_notiz(
+            notiz_ok = verwalten.abgeben_notiz(
                 sit,
                 was=(
                     f"Terminwunsch {wann}" + (f" bei {beim}" if beim else "")
@@ -2933,8 +3140,14 @@ def _eskalieren(sit: dict, fid: str, t: str = "") -> str:
             sit["keinSlotFertig"] = True
             return (
                 "Ohne Handynummer kann ich den Termin leider nicht fest eintragen — "
-                "die Praxis braucht sie für Ihre Akte und die Bestätigung. Ich habe "
-                "Ihren Wunsch notiert. Wenn Sie die Nummer zur Hand haben, rufen Sie "
+                "die Praxis braucht sie für Ihre Akte und die Bestätigung. "
+                + (
+                    "Ich habe Ihren Wunsch notiert. "
+                    if notiz_ok
+                    else
+                    "Die Rückrufnotiz konnte ich technisch nicht speichern. "
+                )
+                + "Wenn Sie die Nummer zur Hand haben, rufen Sie "
                 "gern noch einmal an — oder Sie erreichen die Praxis direkt zu den "
                 "Sprechzeiten. "
             )
@@ -3108,16 +3321,22 @@ def _rechnung_nummer_aufgeben(sit: dict, s: dict, ab: dict, st: dict) -> dict:
     sit["flussFrage"] = ""
     ab["offen"] = False
     sit["hirnAbgeben"] = ab
-    st["status"] = "rueckruf"
-    sit["rechnungStand"] = st
     was = _s(ab.get("was")) or "Rechnung"
-    verwalten.abgeben_notiz(
+    notiz_ok = verwalten.abgeben_notiz(
         sit, was=f"{was} — Rückrufnummer am Telefon nicht sicher erfasst, bitte Kartei",
     )
+    st["status"] = "rueckruf" if notiz_ok else "fehler"
+    sit["rechnungStand"] = st
     spur.merken(sit, "rechnung", "nummer-aufgegeben")
     _abgeben_kontakt_weitergeben(sit)  # den Namen kennt die geparkte Buchung dann schon
     ruecksprung = _anliegen_abschliessen(sit)
-    text = rechnung.NUMMER_UNSICHER
+    text = (
+        rechnung.NUMMER_UNSICHER
+        if notiz_ok
+        else
+        "Die Nummer und auch den Rückrufvermerk konnte ich technisch nicht sicher "
+        "speichern. Bitte klären Sie die Rechnung direkt mit der Praxis."
+    )
     if not ruecksprung and not s.get("modus"):
         text = f"{text} {rechnung.SONST_NOCH}"
         s["frage"] = "sonst_noch"
@@ -3213,10 +3432,15 @@ def _grund_unbekannt_abgeben(sit: dict, wortlaut: str) -> dict:
     _abgeben_kontakt(sit, sofort=True)
     tel = s.get("telefon") or s.get("aktePhone")
     if s.get("nachname") and tel:
-        verwalten.abgeben_notiz(sit, was=was)
+        notiz_ok = verwalten.abgeben_notiz(sit, was=was)
         s["phase"] = "fertig"
         s["frage"] = ""
         sit["keinSlotFertig"] = True
+        if not notiz_ok:
+            return _notiz_abschluss(sit, (
+                f"{intro} Die Rückrufnotiz konnte ich technisch nicht speichern. "
+                "Bitte rufen Sie die Praxis noch einmal an."
+            ))
         return _notiz_abschluss(sit, (
             f"{intro} Ich habe es notiert — man meldet sich bei Ihnen unter der "
             f"{telefon.sprechbar(tel)}."
@@ -3371,12 +3595,12 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     was = _s(ab.get("was"))
     if dok and not _DOKUMENT_RE.search(was):
         was = (was + " " + t).strip() or "Rezept/Überweisung"
-    verwalten.abgeben_notiz(sit, was=was)
+    notiz_ok = verwalten.abgeben_notiz(sit, was=was)
     ab["offen"] = False
     sit["hirnAbgeben"] = ab
     if rech:
         st = sit.get("rechnungStand") if isinstance(sit.get("rechnungStand"), dict) else {}
-        st["status"] = "notiert"
+        st["status"] = "notiert" if notiz_ok else "fehler"
         sit["rechnungStand"] = st
     # Was der Rueckruf an Kontaktdaten eingesammelt hat, bekommt eine
     # geparkte Buchung mit (W-HIRN-GATE: nie erneut nach Belegtem fragen).
@@ -3385,6 +3609,12 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     # Folgt der Ruecksprung in eine geparkte Aufgabe, haengt DER die Frage an
     # — zwei Fragen hintereinander waeren ein Monolog (W-BESTAND-ANSAGE).
     sonst = "" if ruecksprung else " Kann ich sonst noch etwas für Sie tun?"
+    if not notiz_ok:
+        return {"text": (
+            "Die Rückrufnotiz konnte ich technisch nicht speichern. Bitte rufen Sie "
+            "die Praxis noch einmal an."
+            + sonst
+        )}
     if dok:
         return {"text": (
             f"Alles notiert — die Praxis prüft Ihren Wunsch und meldet sich "
@@ -4054,11 +4284,40 @@ def _nachname_korr_zug(sit: dict, t: str, melde: Melde = None) -> dict:
         )
         if melde:
             melde("note_appointment")
+        res: dict = {}
         try:
-            kal.note_appointment(sit.get("tenant") or {}, _ctx_bauen(sit), sit, note=note)
+            raw = kal.note_appointment(
+                sit.get("tenant") or {},
+                _ctx_bauen(sit),
+                sit,
+                note=note,
+            )
+            if isinstance(raw, dict):
+                res = raw
         except Exception as e:
             print(f"bianca-nachname-korr note fail {e}", flush=True)
+            res = {"ok": False, "error": f"{type(e).__name__}"}
+        merke_tool(sit, "note_appointment", res)
+        sit["lastNote"] = res
         an = gehirn.anrede(s) or neu
+        if not res.get("ok"):
+            from bianca import verwalten
+
+            notiz_ok = verwalten.abgeben_notiz(
+                sit,
+                was=f"Nachname zum gebuchten Termin korrigieren: {alt or 'unbekannt'} → {neu}",
+            )
+            return {"text": (
+                f"Den Nachnamen habe ich als {neu} verstanden. "
+                + (
+                    "Die Terminnotiz konnte ich nicht sicher speichern; "
+                    "die Praxis erhält dafür einen Rückrufvermerk. "
+                    if notiz_ok else
+                    "Die Terminnotiz und auch der Rückrufvermerk konnten technisch "
+                    "nicht sicher gespeichert werden. Bitte rufen Sie die Praxis an. "
+                )
+                + "Kann ich sonst noch etwas für Sie tun?"
+            )}
         return {"text": (
             f"Alles klar, {an} — der Nachname steht so in der Notiz für die Praxis. "
             "Kann ich sonst noch etwas für Sie tun?"
@@ -5286,6 +5545,16 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             s["phase"] = ""
             s["frage"] = "aenderung"
             return _aenderung_zug(sit, t, melde)
+        # Ohne ausdrueckliches Ja wird niemals geschrieben. Unklare Antworten
+        # bleiben in der festen Maschine und enden nach drei Versuchen sicher,
+        # statt an Talk/LLM oder in eine endlose Readback-Schleife zu fallen.
+        unklar = int(sit.get("bestaetigenUnklar") or 0) + 1
+        sit["bestaetigenUnklar"] = unklar
+        if unklar == 1:
+            return {"text": "Ein kurzes Ja oder Nein genügt."}
+        if unklar == 2:
+            return _termin_nochmal(sit, t)
+        return _buchung_abbrechen(sit, "unklar", t)
 
     if s["frage"] == "aenderung" or (
         s["frage"] == "bestaetigung" and s["phase"] != "bestaetigen"
@@ -5611,6 +5880,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             sit["bestaetigenUnklar"] = z
             if z <= 1:
                 return {"text": "Entschuldigung, das habe ich akustisch nicht verstanden — soll ich den Termin so eintragen? Ein kurzes Ja genügt."}
+            if z >= 3:
+                return _buchung_abbrechen(sit, "unklar", t)
             return _termin_nochmal(sit)
         else:
             return None  # Zwischenfrage — LLM antwortet, Status hält die Spur

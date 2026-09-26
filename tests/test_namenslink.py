@@ -129,7 +129,211 @@ def test_chef_unbekannt_parkt_nummer_ohne_petsas():
     assert ctx["phoneConfirmed"] == "+491776004600"
     assert ctx.get("patientId") in {None, ""}
     assert ctx.get("skipConfirmation") is True
+    assert len(ctx.get("nameConfirmToken") or "") == 32
+    assert ctx.get("nameConfirmSessionId") == sit["id"]
+    int(ctx["nameConfirmToken"], 16)
     assert ctx.get("platzhalterAkte") is True
+
+
+def test_reservierungs_token_bleibt_pro_slot_stabil_und_wechselt_danach():
+    sit = _handy_sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "slotIso": "2026-10-01T09:00:00+02:00",
+        "calendarId": "cal-1",
+        "motivId": "motiv-1",
+    })
+    erster = namenslink.reservierungs_token(sit)
+    assert namenslink.reservierungs_token(sit) == erster
+
+    s["slotIso"] = "2026-10-01T10:00:00+02:00"
+    zweiter = namenslink.reservierungs_token(sit)
+    assert zweiter != erster
+    assert len(zweiter) == 32
+
+
+def test_needs_phone_nummer_bleibt_unbestaetigt():
+    """Ein needs_phone darf nicht vom Platzhalterpfad still bestaetigt werden."""
+    sit = _handy_sit()
+    sit["needsPhoneOffen"] = True
+    s = gehirn.sammler(sit)
+
+    namenslink.nummer_parken(sit)
+
+    assert not s.get("telefonOk")
+    assert not s.get("telefon")
+    assert namenslink.erkannte_nummer(sit) == "+491776004600"
+
+
+def test_needs_phone_kann_ctx_nicht_ueber_leitungsnummer_umgehen():
+    sit = _handy_sit()
+    sit["needsPhoneOffen"] = True
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "warSchonMal": False,
+        "platzhalterName": True,
+        "vorname": "Reservierung",
+        "nachname": "SMS",
+    })
+
+    ctx = flow._ctx_bauen(sit)
+
+    assert ctx.get("skipConfirmation") is True
+    assert not ctx.get("phone")
+    assert not ctx.get("phoneConfirmed")
+    assert not s.get("telefonOk")
+
+
+def test_link_create_http_fehler_erzeugt_keinen_erfolg(monkeypatch):
+    monkeypatch.setattr(
+        namenslink,
+        "_cf_call",
+        lambda *a, **k: (500, {"status": "error"}, {}),
+    )
+    sit = _handy_sit()
+
+    assert namenslink.starten(sit, parallel=True) is None
+    assert not namenslink.offen(sit)
+    assert namenslink.abschluss_satz(sit) == ""
+    assert sit["namenslink"]["createFailed"] is True
+
+
+def test_link_create_sent_false_erzeugt_keinen_erfolg(monkeypatch):
+    monkeypatch.setattr(
+        namenslink,
+        "_cf_call",
+        lambda *a, **k: (
+            200,
+            {
+                "status": "ok",
+                "token": "tok-nicht-gesendet",
+                "url": "https://example.test/name",
+                "sent": False,
+                "dryRun": False,
+            },
+            {},
+        ),
+    )
+    sit = _handy_sit()
+
+    assert namenslink.starten(sit, parallel=True) is None
+    assert not namenslink.offen(sit)
+    assert namenslink.abschluss_satz(sit) == ""
+    assert "token" not in sit["namenslink"]
+
+
+def test_link_create_fehler_bricht_gebuchte_reservierung_mit_selbem_token_ab(
+    monkeypatch,
+):
+    calls = []
+
+    def cf(route, body, timeout=None):
+        calls.append(dict(body))
+        if body.get("action") == "abort":
+            return 200, {"status": "cancelled"}, {}
+        return 500, {"status": "error"}, {}
+
+    monkeypatch.setattr(namenslink, "_cf_call", cf)
+    sit = _handy_sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "slotIso": "2026-10-01T09:00:00+02:00",
+        "calendarId": "cal-1",
+        "motivId": "motiv-1",
+    })
+
+    assert namenslink.starten(
+        sit,
+        parallel=True,
+        appointment_id="appointment-1",
+        patient_id="patient-1",
+    ) is None
+
+    assert [call["action"] for call in calls] == ["create", "abort"]
+    assert calls[0]["token"] == calls[1]["token"]
+    assert len(calls[0]["token"]) == 32
+    assert sit["namenslink"]["abort"] is True
+
+
+def test_termin_bindet_mandant_ort_und_sitzung_strikt_mit(monkeypatch):
+    calls = []
+
+    def cf(route, body, timeout=None):
+        calls.append((route, dict(body)))
+        return 200, {"status": "ok"}, {"route": route}
+
+    monkeypatch.setattr(namenslink, "_cf_call", cf)
+    sit = _handy_sit()
+    sit["tenant"] = {
+        "clientId": "client-strikt",
+        "locationId": "location-strikt",
+    }
+    sit["sammler"] = {"slotIso": "2026-10-01T09:00:00+02:00"}
+    sit["namenslink"] = {
+        "token": "token-strikt",
+        "reservationToken": "token-strikt",
+        "reservationScope": namenslink.reservierungs_scope(sit),
+    }
+
+    assert namenslink.termin_binden(
+        sit,
+        "appointment-strikt",
+        "patient-strikt",
+        created_patient=True,
+    )
+
+    assert calls == [(
+        "agentNameConfirm",
+        {
+            "action": "bind",
+            "token": "token-strikt",
+            "clientId": "client-strikt",
+            "locationId": "location-strikt",
+            "sessionId": "sitzung-namenslink",
+            "appointmentId": "appointment-strikt",
+            "patientId": "patient-strikt",
+            "createdPatient": True,
+            "start": "2026-10-01T09:00:00+02:00",
+        },
+    )]
+
+
+def test_zwei_termine_einer_sitzung_verwenden_getrennte_links(monkeypatch):
+    creates = []
+
+    def cf(route, body, timeout=None):
+        assert route == "agentNameConfirm"
+        assert body["action"] == "create"
+        creates.append(dict(body))
+        return 200, {
+            "status": "ok",
+            "token": body["token"],
+            "url": f"https://example.test/n?t={body['token']}",
+            "sent": True,
+        }, {}
+
+    monkeypatch.setattr(namenslink, "_cf_call", cf)
+    sit = _handy_sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "slotIso": "2026-10-01T09:00:00+02:00",
+        "calendarId": "cal-1",
+        "motivId": "motiv-1",
+    })
+
+    assert namenslink.starten(sit, parallel=True) == {"text": ""}
+    erster = sit["namenslink"]["token"]
+    assert namenslink.offen(sit)
+
+    s["slotIso"] = "2026-10-01T10:00:00+02:00"
+    assert not namenslink.offen(sit)
+    assert namenslink.starten(sit, parallel=True) == {"text": ""}
+    zweiter = sit["namenslink"]["token"]
+
+    assert zweiter != erster
+    assert [c["token"] for c in creates] == [erster, zweiter]
+    assert sit["namenslink"]["reservationScope"] == namenslink.reservierungs_scope(sit)
 
 
 def test_unbekannt_flag_aus_erkennt_wieder(monkeypatch):
@@ -424,16 +628,18 @@ def test_platzhalter_bucht_ohne_zu_warten(monkeypatch):
             return 200, {"status": "ok"}, {}
         assert body.get("firstName") == "Konstantinos"
         assert body.get("lastName") == "Patrikis"
+        assert body.get("appointmentId") == "appt-canary"
+        assert body.get("patientId") == "pat-canary"
         return 200, {
             "status": "ok",
             "token": "tok-buch",
             "url": "https://example.test/n",
-            "dryRun": True,
+            "sent": True,
+            "bound": True,
         }, {}
 
     monkeypatch.setattr(namenslink, "_cf_call", cf)
     sit = _handy_sit()
-    sit["tenant"] = {**sit["tenant"], "_testNoWrite": True}
     s = gehirn.sammler(sit)
     s.update({
         "modus": "buchen",
@@ -471,12 +677,98 @@ def test_platzhalter_bucht_ohne_zu_warten(monkeypatch):
     assert "neunzig minuten" in aus["text"].lower()
     assert "warte" not in aus["text"].lower()
     assert gebucht and gebucht[0].get("skipConfirmation") is True
+    assert len(gebucht[0].get("nameConfirmToken") or "") == 32
+    assert gebucht[0].get("nameConfirmSessionId") == sit["id"]
     assert gebucht[0].get("phone") == "+491776004600"
     assert gebucht[0].get("phoneConfirmed") == "+491776004600"
     assert gebucht[0].get("firstName") == "Reservierung"
     assert gebucht[0].get("lastName") == "SMS"
     assert sit["namenslink"]["token"] == "tok-buch"
-    assert gebunden and gebunden[0]["appointmentId"] == "appt-canary"
+    assert sit["namenslink"]["bound"] is True
+    assert gebunden == []
+
+
+def test_bind_fehler_behauptet_keine_sms_reservierung(monkeypatch):
+    aufrufe = []
+    token = "0123456789abcdef0123456789abcdef"
+
+    def _book(tenant, ctx, slot_iso=""):
+        return {
+            "ok": True,
+            "booked": True,
+            "slotIso": slot_iso,
+            "appointmentId": "appt-bind-fehler",
+            "patientId": "pat-bind-fehler",
+            "createdPatient": True,
+            "spoken": "Der Termin ist fest eingetragen.",
+        }
+
+    def cf(route, body, timeout=None):
+        aufrufe.append(dict(body))
+        if body.get("action") == "bind":
+            return 500, {"status": "error"}, {}
+        if body.get("action") == "abort":
+            return 200, {"status": "cancelled"}, {}
+        return 200, {
+            "status": "ok",
+            "token": token,
+            "url": "https://example.test/n",
+            "sent": True,
+        }, {}
+
+    monkeypatch.setattr(namenslink, "_cf_call", cf)
+    monkeypatch.setattr(verwalten, "abgeben_notiz", lambda *a, **k: True)
+    sit = _handy_sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "warSchonMal": False,
+        "phase": "bestaetigen",
+        "arzt": {"typ": "genannt", "calendarId": "c", "calendarName": "Petsas"},
+        "grund": "Kontrolle",
+        "motivId": "m1",
+        "motivName": "Kontrolle",
+        "wunsch": {},
+        "vorname": "Konstantinos",
+        "nachname": "Patrikis",
+        "slotIso": "2026-09-22T09:00:00+02:00",
+        "telefon": "01776004600",
+        "telefonOk": True,
+        "versicherung": "gesetzlich",
+        "versicherungOk": True,
+        "pzr": "nein",
+        "arztNotizFrage": "nein",
+        "buchstabiert": False,
+        "bekannt": False,
+    })
+    sit["buchIntent"] = True
+    sit["angebotKalender"] = {"calendarId": "c", "calendarName": "Petsas"}
+    monkeypatch.setattr(flow.kal, "book_slot", _book)
+
+    aus = flow._buchen(sit)
+
+    text = aus["text"].lower()
+    assert "technisch nicht sicher reservieren" in text
+    assert "wieder freigegeben" in text
+    assert "fest eingetragen" not in text
+    assert "neunzig minuten" not in text
+    assert "kommt gleich per sms" not in text
+    assert aus["book"]["booked"] is False
+    assert aus["book"]["reservationAborted"] is True
+    assert s["phase"] == "fertig"
+    assert s["frage"] == "sonst_noch"
+    assert sit["keinSlotFertig"] is True
+    assert sit["lastBook"]["ok"] is False
+    assert sit["lastBook"]["appointmentId"] == ""
+    assert sit["lastCreate"]["ok"] is False
+    assert all(not (
+        tool.get("name") == "book_slot" and tool.get("ok")
+    ) for tool in sit["tools"])
+    assert sit["namenslink"]["bound"] is False
+    assert "appointmentId" not in sit["namenslink"]
+    assert [call["action"] for call in aufrufe] == ["create", "bind", "abort"]
+    assert all(call.get("createdPatient") is True for call in aufrufe)
+    assert aufrufe[-1]["token"] == token
 
 
 def _festnetz_sit():

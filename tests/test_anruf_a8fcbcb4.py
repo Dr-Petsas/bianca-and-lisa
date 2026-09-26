@@ -399,7 +399,7 @@ def test_neupatient_kombiwrite_verwendet_exakt_bestaetigtes_handy(monkeypatch):
         seen["aktePhone"] = kwargs["phone"]
         return {"ok": False, "spoken": "Akte derzeit nicht anlegbar."}
 
-    def _kombi(tenant, ctx, iso, first, last, phone):
+    def _kombi(tenant, ctx, iso, first, last, phone, **kwargs):
         seen["kombiPhone"] = phone
         return {"ok": False, "spoken": "Write bewusst gestoppt."}
 

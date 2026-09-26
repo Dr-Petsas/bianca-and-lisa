@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from bianca import flow, gehirn
+from bianca import flow, gehirn, verwalten
 from kern.tenants import laden
 
 
@@ -87,6 +87,28 @@ def test_gebucht_ja_allein_bucht_nicht_nochmal():
     z = flow.zug(sit, "Ja.")
     assert z is None
     assert gehirn.sammler(sit)["phase"] == "gebucht"
+
+
+def test_nachname_notizfehler_behauptet_keinen_erfolg(monkeypatch):
+    sit = _sit_gebucht()
+    flow.zug(sit, "Mein Nachname hat sich geändert.")
+    monkeypatch.setattr(
+        flow.kal,
+        "note_appointment",
+        lambda *_a, **_k: {"ok": False, "error": "write_failed"},
+    )
+    monkeypatch.setattr(
+        verwalten,
+        "abgeben_notiz",
+        lambda *_a, **_k: True,
+    )
+
+    aus = flow.zug(sit, "D E H R A N I")
+
+    assert aus
+    assert "konnte ich nicht sicher" in aus["text"].casefold()
+    assert "rückrufvermerk" in aus["text"].casefold()
+    assert "steht so in der notiz" not in aus["text"].casefold()
 
 
 def test_arzt_sprechname_eva_thaler_ist_frau():

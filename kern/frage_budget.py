@@ -40,6 +40,7 @@ FELDER = frozenset({
     "wann",
     "behandlung",
     "neubuchung",
+    "termin_anbieten",
     "buchstabieren",
     "telefon",
     "versicherung",

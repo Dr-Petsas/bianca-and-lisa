@@ -11,6 +11,7 @@ from datetime import datetime
 from bianca import flow, gehirn
 from kern import calendar as kal
 from kern import gespraech
+from kern import namenslink
 from kern import tenants as kern_tenants
 from kern import zimmer_map
 from kern.tenants import laden
@@ -174,8 +175,28 @@ def test_thaler_pzr_ohne_sms_vertrag_wird_sicher_als_offen_notiert(monkeypatch):
         "ok": True,
         "booked": True,
         "slotIso": s["slotIso"],
+        "appointmentId": "appt-thaler-pzr",
+        "patientId": "pat-1",
         "spoken": "Der Haupttermin ist eingetragen.",
     })
+    monkeypatch.setattr(
+        namenslink,
+        "_cf_call",
+        lambda _route, body, **_k: (
+            (
+                200,
+                {
+                    "status": "ok",
+                    "token": "tok-thaler-pzr",
+                    "url": "https://example.test/name",
+                    "sent": True,
+                },
+                {},
+            )
+            if body.get("action") == "create"
+            else (200, {"status": "ok"}, {})
+        ),
+    )
     monkeypatch.setattr(
         flow.kal,
         "note_appointment",

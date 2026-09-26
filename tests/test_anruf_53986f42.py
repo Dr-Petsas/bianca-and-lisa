@@ -300,8 +300,16 @@ def test_netzfehler_prueft_statt_doppelt_einzutragen(monkeypatch):
         "regie": "Netzfehler beim Buchen. Keinen anderen Slot anbieten, Rückruf zusagen."})
     pruef: list = []
     fehler: list = []
-    monkeypatch.setattr(verwalten, "buchung_pruefen_notiz", lambda sit, **k: pruef.append(k))
-    monkeypatch.setattr(verwalten, "buchung_fehler_notiz", lambda sit, **k: fehler.append(k))
+    monkeypatch.setattr(
+        verwalten,
+        "buchung_pruefen_notiz",
+        lambda sit, **k: pruef.append(k) or True,
+    )
+    monkeypatch.setattr(
+        verwalten,
+        "buchung_fehler_notiz",
+        lambda sit, **k: fehler.append(k) or True,
+    )
     r = flow._buchen(sit)
     assert pruef and not fehler
     assert "doppelt" in r["text"].lower() and "notiert" in r["text"].lower()

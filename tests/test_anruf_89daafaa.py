@@ -207,6 +207,9 @@ def test_blessing_fragt_vor_buchung_einmal_nach_doktor_nachricht(monkeypatch):
 
 
 def test_blessing_buchungsabschluss_ist_kurz_und_beendet_den_anruf(monkeypatch):
+    # Dieser Test prüft den normalen Bestandsweg. Die globale Chef-Handy-
+    # Canary darf ihn nicht künstlich in den Namenslink-Neupatientenweg ziehen.
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "0")
     sit = _angebot_sit()
     s = gehirn.sammler(sit)
     s.update({
@@ -240,8 +243,8 @@ def test_blessing_buchungsabschluss_ist_kurz_und_beendet_den_anruf(monkeypatch):
     assert "Anamnese" not in aus["text"]
     assert "Datenschutz" not in aus["text"]
     text = aus["text"].casefold()
-    assert "terminbestätigung" in text
-    assert "dokumente" in text
+    assert "bestätigung" in text
+    assert "unterlagen" in text
     assert "Auf Wiederhören" in aus["text"]
     assert "?" not in aus["text"]
     assert s["frage"] == ""

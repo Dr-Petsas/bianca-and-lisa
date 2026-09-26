@@ -25,7 +25,7 @@ def _sit() -> dict:
            "motivKatalog": list(KATALOG)}
     sit["anrufer"] = {
         "vorname": "Michael", "nachname": "Petsas", "patientId": "pat-1",
-        "geschlecht": "male", "telefon": "+491776004600",
+        "geschlecht": "male", "telefon": "+4915112345678",
     }
     return sit
 
@@ -64,17 +64,17 @@ def test_meine_nummer_uebernimmt_anrufernummer():
     neu = gehirn.einsammeln(sit, "Nehmen Sie einfach meine Nummer.")
     assert "telefonBekannt" in neu
     assert s["telefonOk"] is False
-    # +491776004600 -> normalisiert die volle, korrekte Nummer.
-    assert s["telefonBekannt"].endswith("6004600")
+    # +4915112345678 -> normalisiert die volle, korrekte Nummer.
+    assert s["telefonBekannt"].endswith("12345678")
     assert s["telefonOffen"] == s["telefonBekannt"]
     fid, frage = gehirn.naechste_frage(sit)
-    # W-TELEFON-ZULETZT: Die Nummer bleibt geparkt, wird aber erst direkt
-    # vor dem Write rückbestätigt. Zuerst wird der Behandler geklärt.
-    assert fid == "arzt"
+    # Die Nummer bleibt geparkt und wird erst direkt vor dem Write
+    # rückbestätigt. Ein erkannter Anrufer bestätigt zuvor seine Identität.
+    assert fid == "anrufer_check"
     fid_t, frage_t = gehirn.telefon_frage(sit)
     assert (fid_t, frage_t) == ("", "")
     assert s["telefonOk"] is True
-    assert patients.handy_e164(s["telefon"]) == "+491776004600"
+    assert patients.handy_e164(s["telefon"]) == "+4915112345678"
 
 
 def test_meine_nummer_ohne_bekannte_nummer_beharrt_nicht():
@@ -104,7 +104,7 @@ def test_fuer_wen_notiz_nennt_anrufer_und_beziehung():
     s = gehirn.sammler(sit)
     s.update({"modus": "buchen", "fuerWen": "nachbar",
               "vorname": "Peter", "nachname": "Schmattke", "buchstabiert": True,
-              "warSchonMal": False, "versicherungOk": True, "telefon": "+491776004600",
+              "warSchonMal": False, "versicherungOk": True, "telefon": "+4915112345678",
               # W-TELEFON-ZULETZT: Nummer und SMS-Ziel sind vor dem Eintragen
               # bestaetigt — sonst haelt das Tor die Buchung (richtig) an.
               "telefonOk": True, "smsEmpfaenger": "anrufer",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from typing import Any
 
 from kern import observability_manifest, patients
@@ -209,7 +210,10 @@ def nummer_parken(sit: dict) -> str:
         return ""
     sit["namenslink"] = {**_stand(sit), "phone": n, "leitung": n}
     e164 = erkannte_nummer(sit)
-    if e164:
+    # Die Plattform hat mit ``needs_phone`` ausdruecklich verlangt, dass
+    # diese Nummer noch einmal bestaetigt wird. Der Platzhalterpfad darf
+    # diesen Sicherheitsdialog nicht mit ``telefonOk=True`` umgehen.
+    if e164 and not sit.get("needsPhoneOffen"):
         s["telefonBekannt"] = e164
         if not s.get("telefonOk"):
             s["telefon"] = e164
@@ -321,6 +325,7 @@ def _beobachten(
 def _terminal_bereinigen(sit: dict, terminal: str) -> None:
     """Token, URL, Rufnummer, Namens-Hinweise und Termin-IDs lokal verwerfen."""
     sit["namenslink"] = {terminal: True}
+    sit.pop("namenslinkReservierung", None)
     sit.pop("_namenslinkSatz", None)
     _beobachten(sit, "cleanup", outcome="cleanup_ok")
 
@@ -330,9 +335,62 @@ def verifiziert(sit: dict) -> bool:
     return bool(s.get("nameVerified") or _stand(sit).get("verified"))
 
 
+def reservierungs_scope(sit: dict) -> str:
+    """Mandant + konkreter Terminrahmen eines Namenslinks."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    booking = sit.get("booking") if isinstance(sit.get("booking"), dict) else {}
+    last = sit.get("lastBook") if isinstance(sit.get("lastBook"), dict) else {}
+    return "|".join((
+        _s(tenant.get("clientId")),
+        _s(tenant.get("locationId")),
+        _s(
+            s.get("slotIso")
+            or booking.get("slotIso")
+            or sit.get("lastBookIso")
+            or last.get("slotIso")
+        ),
+        _s(s.get("calendarId") or booking.get("calendarId") or last.get("calendarId")),
+        _s(
+            s.get("motivId")
+            or s.get("visitMotiveId")
+            or booking.get("visitMotiveId")
+            or last.get("visitMotiveId")
+        ),
+    ))
+
+
+def _scope_passt(sit: dict, stand: dict | None = None) -> bool:
+    stand = stand if isinstance(stand, dict) else _stand(sit)
+    scope = _s(stand.get("reservationScope"))
+    token = _s(stand.get("reservationToken") or stand.get("token")).lower()
+    return bool(
+        scope
+        and scope == reservierungs_scope(sit)
+        and token
+    )
+
+
+def reservierungs_token(sit: dict) -> str:
+    """Stabiler, nicht erratbarer Token fuer genau einen Slot-Schreibversuch."""
+    scope = reservierungs_scope(sit)
+    state = sit.get("namenslinkReservierung")
+    if not isinstance(state, dict):
+        state = {}
+        sit["namenslinkReservierung"] = state
+    token = _s(state.get("token")).lower()
+    if state.get("scope") != scope or not re.fullmatch(r"[a-f0-9]{32}", token):
+        state.clear()
+        state.update({"scope": scope, "token": secrets.token_hex(16)})
+    return _s(state["token"])
+
+
 def offen(sit: dict) -> bool:
-    return bool(_stand(sit).get("token") and not verifiziert(sit)
-                and not _stand(sit).get("expired"))
+    return bool(
+        _scope_passt(sit)
+        and not verifiziert(sit)
+        and not _stand(sit).get("expired")
+    )
 
 
 def unsicher(sit: dict) -> bool:
@@ -376,12 +434,16 @@ def skip_documents(sit: dict) -> bool:
     return bool(
         s.get("platzhalterName")
         or ohne_stammdaten(sit)
-        or _stand(sit).get("token")
+        or _scope_passt(sit)
     )
 
 
 def abschluss_satz(sit: dict) -> str:
     if not skip_documents(sit):
+        return ""
+    # Erst nach nachweislich erzeugtem Link UND erfolgreicher Bindung an den
+    # gebuchten Termin darf Bianca SMS/Reservierung als erledigt ansagen.
+    if not _scope_passt(sit) or not _stand(sit).get("bound"):
         return ""
     if sit.get("_reservierungErklaert"):
         return ABSCHLUSS_NACH_ERKLAERUNG
@@ -408,12 +470,20 @@ def _anwenden(sit: dict, first: str, last: str) -> None:
     _terminal_bereinigen(sit, "done")
 
 
-def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict | None:
+def starten(
+    sit: dict,
+    *,
+    dry_run: bool = False,
+    parallel: bool = False,
+    appointment_id: str = "",
+    patient_id: str = "",
+    created_patient: bool = False,
+) -> dict | None:
     if not erlaubt(sit):
         return None
     if verifiziert(sit):
         return None
-    if _stand(sit).get("token"):
+    if _scope_passt(sit):
         return None if parallel else warten(sit)
     phone = handy(sit)
     if not phone:
@@ -424,16 +494,22 @@ def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict
     last = _s(s.get("nachname"))
     if ist_platzhalter_name(first, last) or s.get("nameQuelle") == "platzhalter":
         first, last = gehoerte_namen(sit)
+    reservation_token = reservierungs_token(sit)
+    appointment_id = _s(
+        appointment_id or s.get("appointmentId") or sit.get("lastBookId")
+    )
     status, data, dispatch = _cf_call("agentNameConfirm", {
         "action": "create",
+        "token": reservation_token,
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
         "sessionId": _s(sit.get("id") or sit.get("sessionId")),
         "phone": phone,
         "firstName": first,
         "lastName": last,
-        "appointmentId": _s(s.get("appointmentId") or sit.get("lastBookId")),
-        "patientId": _s(s.get("patientId")),
+        "appointmentId": appointment_id,
+        "patientId": _s(patient_id or s.get("patientId")),
+        "createdPatient": bool(created_patient),
         "start": _s(s.get("slotIso") or sit.get("lastBookIso")),
         "dryRun": bool(dry_run or tenant.get("_testNoWrite")),
     })
@@ -443,15 +519,43 @@ def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict
         status=status,
         dispatch=dispatch,
         outcome="ok" if (
-            status == 200 and isinstance(data, dict) and data.get("token")
+            status == 200
+            and isinstance(data, dict)
+            and data.get("token")
+            and (data.get("sent") or data.get("dryRun"))
         ) else "error",
     )
-    if status != 200 or not isinstance(data, dict) or not data.get("token"):
+    if (
+        status != 200
+        or not isinstance(data, dict)
+        or not data.get("token")
+        or not (data.get("sent") or data.get("dryRun"))
+    ):
+        # Teilantworten (insbesondere ``sent:false``) duerfen weder einen
+        # offenen Link markieren noch spaeter eine Erfolgsansage ausloesen.
+        sit["namenslink"] = {
+            "createFailed": True,
+            "sent": bool(data.get("sent")) if isinstance(data, dict) else False,
+            "dryRun": bool(data.get("dryRun")) if isinstance(data, dict) else False,
+            "httpStatus": status,
+            "abort": abbrechen(
+                sit,
+                appointment_id=appointment_id,
+                patient_id=_s(patient_id or s.get("patientId")),
+                token=reservation_token,
+                reason="create_failed",
+                created_patient=created_patient,
+            ) if appointment_id and not (dry_run or tenant.get("_testNoWrite")) else None,
+        }
         return None
     sit["namenslink"] = {
         "token": _s(data.get("token")),
+        "reservationToken": _s(data.get("token")),
+        "reservationScope": reservierungs_scope(sit),
         "url": _s(data.get("url")),
         "sent": bool(data.get("sent") or data.get("dryRun")),
+        "dryRun": bool(data.get("dryRun")),
+        "bound": bool(data.get("bound")),
         "parallel": bool(parallel),
         "firstNameHint": first,
         "lastNameHint": last,
@@ -469,36 +573,98 @@ def starten(sit: dict, *, dry_run: bool = False, parallel: bool = False) -> dict
     return {"text": text}
 
 
-def termin_binden(sit: dict, appointment_id: str, patient_id: str = "") -> None:
+def abbrechen(
+    sit: dict,
+    *,
+    appointment_id: str,
+    patient_id: str,
+    token: str,
+    reason: str,
+    created_patient: bool = False,
+) -> bool:
+    """Fail-closed: unklare Reservierung samt Link serverseitig verwerfen."""
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    token = _s(token).lower()
+    appointment_id = _s(appointment_id)
+    if not appointment_id or not re.fullmatch(r"[a-f0-9]{32}", token):
+        return False
+    status, data, dispatch = _cf_call("agentNameConfirm", {
+        "action": "abort",
+        "token": token,
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "sessionId": _s(sit.get("id") or sit.get("sessionId")),
+        "appointmentId": appointment_id,
+        "patientId": _s(patient_id),
+        "createdPatient": bool(created_patient),
+        "reason": _s(reason) or "aborted",
+    })
+    ok = (
+        status == 200
+        and isinstance(data, dict)
+        and _s(data.get("status")).lower() in {"ok", "success", "cancelled"}
+    )
+    _beobachten(
+        sit,
+        "abort",
+        status=status,
+        dispatch=dispatch,
+        outcome="ok" if ok else "error",
+    )
+    return ok
+
+
+def termin_binden(
+    sit: dict,
+    appointment_id: str,
+    patient_id: str = "",
+    *,
+    created_patient: bool = False,
+) -> bool:
     """Nach der Platzhalter-Buchung Termin und Link zusammenhängen."""
-    if not erlaubt(sit):
-        return
-    token = _s(_stand(sit).get("token"))
+    if not erlaubt(sit) or not _scope_passt(sit):
+        return False
+    token = _s(
+        _stand(sit).get("reservationToken") or _stand(sit).get("token")
+    )
     aid = _s(appointment_id)
     if not token or not aid:
-        return
+        return False
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    status, _data, dispatch = _cf_call("agentNameConfirm", {
+    status, data, dispatch = _cf_call("agentNameConfirm", {
         "action": "bind",
         "token": token,
+        "clientId": _s(tenant.get("clientId")),
+        "locationId": _s(tenant.get("locationId")),
+        "sessionId": _s(sit.get("id") or sit.get("sessionId")),
         "appointmentId": aid,
         "patientId": _s(patient_id),
+        "createdPatient": bool(created_patient),
         "start": _s(s.get("slotIso") or sit.get("lastBookIso")),
     })
+    data = data if isinstance(data, dict) else {}
+    ok = status == 200 and _s(data.get("status")).lower() in {"ok", "success"}
     _beobachten(
         sit,
         "bind",
         status=status,
         dispatch=dispatch,
-        outcome="ok" if status == 200 else "error",
+        outcome="ok" if ok else "error",
     )
-    sit["namenslink"] = {**_stand(sit), "appointmentId": aid}
+    neu = {**_stand(sit), "bound": ok, "bindFailed": not ok}
+    if ok:
+        neu["appointmentId"] = aid
+        if patient_id:
+            neu["patientId"] = _s(patient_id)
+    sit["namenslink"] = neu
+    return ok
 
 
 def status_holen(sit: dict) -> dict:
     stand = _stand(sit)
-    token = _s(stand.get("token"))
-    if not token:
+    token = _s(stand.get("reservationToken") or stand.get("token"))
+    if not token or not _scope_passt(sit, stand):
         return {}
     status, data, dispatch = _cf_call("agentNameConfirm", {
         "action": "status",
@@ -522,7 +688,11 @@ def einziehen(sit: dict) -> dict:
     nummer_parken(sit)
     if ohne_stammdaten(sit):
         stammdaten_parken(sit)
-    if not erlaubt(sit) or verifiziert(sit) or not _stand(sit).get("token"):
+    if (
+        not erlaubt(sit)
+        or verifiziert(sit)
+        or not _scope_passt(sit)
+    ):
         return {}
     data = status_holen(sit)
     if data.get("status") == "done" and _s(data.get("lastName")):

@@ -507,6 +507,7 @@ def _verw_reset(sit: dict) -> None:
     sit.pop("verwWunschAlt", None)
     sit.pop("verwWunschTextAlt", None)
     sit.pop("verwAbschlussOffen", None)
+    sit.pop("verwBestaetigungUnklar", None)
 
 
 def _hinweis_hat(w: dict | None) -> bool:
@@ -1146,17 +1147,31 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
         # W-RUECKRUF-NUMMER: die Praxis sieht im Dock/Report sofort, WO sie
         # anrufen kann — nicht nur in der JSONL-Zeile.
         dock_text = _s(dock_text) + f" Tel: {eintrag['telefon']}."
-    sit["praxisNotiz"] = _s(dock_text or (
+    notiz_text = _s(dock_text or (
         f"{name} wollte einen Termin {s['modus']} — im Kalender nicht gefunden"
         + (f" ({hinweise})" if hinweise else "") + ". Bitte pruefen und zurueckrufen."
     ))
     if dock_text and hinweise:
-        sit["praxisNotiz"] = _s(f"{dock_text} ({hinweise})")
-    sit["praxisNotizPersistiert"] = geschrieben
+        notiz_text = _s(f"{dock_text} ({hinweise})")
+    vorher_persistiert = bool(sit.get("praxisNotizPersistiert"))
+    sit["praxisNotizLetzterVersuchPersistiert"] = geschrieben
+    if geschrieben:
+        sit["praxisNotizPersistiert"] = True
+        sit["praxisNotiz"] = notiz_text
+        sit.pop("praxisNotizFehler", None)
+    else:
+        # Ein spaeter fehlgeschlagener Zusatz darf die Evidenz einer zuvor
+        # wirklich persistierten Notiz nicht aus der Sitzung radieren. Der
+        # aktuelle Aufrufer erhaelt trotzdem False und darf fuer DIESEN
+        # Versuch keinen Erfolg behaupten.
+        if not vorher_persistiert:
+            sit["praxisNotizPersistiert"] = False
+            sit.pop("praxisNotiz", None)
+        sit["praxisNotizFehler"] = notiz_text
     merke_tool(sit, "praxis_notiz", {
         "ok": geschrieben,
         "notiert": geschrieben,
-        "notiz": sit["praxisNotiz"],
+        "notiz": notiz_text,
         **({"error": fehler} if fehler else {}),
     })
     return geschrieben
@@ -1191,12 +1206,12 @@ def kalender_fehler_notiz(sit: dict) -> bool:
     )
 
 
-def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> None:
+def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> bool:
     """HTTP-200 ohne belastbaren Read-back wird zum echten Prüf-/Rückrufvorgang."""
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     wann = spoken_slot(slot_iso) if len(_s(slot_iso)) >= 16 else _s(slot_iso)
-    _notiz_schreiben(
+    return _notiz_schreiben(
         sit,
         anliegen="buchung_pruefen",
         status="Buchungsantwort nicht eindeutig rücklesbar — Termin und SMS prüfen, bitte zurückrufen",
@@ -1207,7 +1222,7 @@ def buchung_pruefen_notiz(sit: dict, *, slot_iso: str = "") -> None:
     )
 
 
-def buchung_fehler_notiz(sit: dict, *, slot_iso: str = "", grund_technisch: str = "") -> None:
+def buchung_fehler_notiz(sit: dict, *, slot_iso: str = "", grund_technisch: str = "") -> bool:
     """Eintragen technisch gescheitert (4xx/5xx, kein slotTaken, kein
     needs_phone): das gesprochene "die Praxis ruft Sie dazu zurück" MUSS eine
     Notiz mit dem bestaetigten Wunschtermin hinterlassen (W-BUCHUNG-TECHNIK
@@ -1218,7 +1233,7 @@ def buchung_fehler_notiz(sit: dict, *, slot_iso: str = "", grund_technisch: str 
     wann = spoken_slot(slot_iso) if len(_s(slot_iso)) >= 16 else _s(slot_iso)
     grund = _s(s.get("grundWortlaut") or s.get("grund")) or "Termin"
     technik = f" ({_s(grund_technisch)})" if _s(grund_technisch) else ""
-    _notiz_schreiben(
+    return _notiz_schreiben(
         sit,
         anliegen="buchung_fehler",
         status=("Eintragen technisch gescheitert — Termin bitte manuell eintragen "
@@ -1231,14 +1246,14 @@ def buchung_fehler_notiz(sit: dict, *, slot_iso: str = "", grund_technisch: str 
     )
 
 
-def abgeben_notiz(sit: dict, *, was: str = "") -> None:
+def abgeben_notiz(sit: dict, *, was: str = "") -> bool:
     """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf-/Nachricht-Notiz OHNE
     Termin-Bezug — frueher gab es die Spur nur, wenn zufaellig keine Slots
     frei waren. Jetzt ist 'die Praxis kuemmert sich' eine eigene Loesung."""
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
     anliegen_text = _s(was) or "Rueckruf erbeten"
-    _notiz_schreiben(
+    return _notiz_schreiben(
         sit, anliegen="rueckruf",
         status="Rueckruf erbeten — bitte melden",
         dock_text=f"{name} bittet um Rueckruf: {anliegen_text}.",
@@ -1255,7 +1270,7 @@ def _nicht_gefunden(sit: dict) -> dict:
         _s((s["arzt"] or {}).get("calendarName")),
         sit.get("tenant") if isinstance(sit.get("tenant"), dict) else None,
     ) or "dem Praxisteam"
-    _notiz_schreiben(sit)
+    notiz_ok = _notiz_schreiben(sit)
     s["phase"] = "fertig"
     # Ein gescheiterter Verwaltungsweg darf nicht automatisch in BUCHEN
     # kippen. Ein neuer Termin beginnt nur auf ausdruecklichen Wunsch.
@@ -1265,10 +1280,16 @@ def _nicht_gefunden(sit: dict) -> dict:
     # Ursache ist ein verhoerter Name (live 29.08.: "Peter Möbel" statt
     # Müller). Beim Neustart wird der Name dann frisch erfragt.
     sit["verwNotFound"] = True
+    if notiz_ok:
+        return {"text": (
+            f"Da bin ich ehrlich: Ich finde unter {wer} gerade keinen passenden Termin. "
+            f"Aber keine Sorge — ich schreibe eine Notiz, und die wird {behandler} vorgelegt. "
+            "Kann ich sonst noch etwas für Sie tun?"
+        )}
     return {"text": (
         f"Da bin ich ehrlich: Ich finde unter {wer} gerade keinen passenden Termin. "
-        f"Aber keine Sorge — ich schreibe eine Notiz, und die wird {behandler} vorgelegt. "
-        "Kann ich sonst noch etwas für Sie tun?"
+        "Die Rückrufnotiz konnte ich technisch nicht speichern. Bitte rufen Sie die "
+        "Praxis noch einmal an."
     )}
 
 
@@ -1333,9 +1354,12 @@ def _absagen(sit: dict, melde: Melde) -> dict:
     s = gehirn.sammler(sit)
     termin = _gewaehlt(sit)
     _kandidat_patient_uebernehmen(sit, termin)
+    ctx = _ctx(sit)
+    ctx["appointmentDate"] = _s(
+        termin.get("iso") or termin.get("startIso") or termin.get("date"))
     if melde:
         melde("cancel_appointment")
-    res = kal.cancel_by_id(sit["tenant"], _ctx(sit), _s(termin.get("id")))
+    res = kal.cancel_by_id(sit["tenant"], ctx, _s(termin.get("id")))
     merke_tool(sit, "cancel_appointment", res)
     _obs(
         sit,
@@ -1361,13 +1385,19 @@ def _absagen(sit: dict, melde: Melde) -> dict:
                     "Kann ich sonst noch etwas für Sie tun?",
             "book": {"cancelled": True, "spoken": res.get("spoken") or ""},
         }
-    _notiz_schreiben(
+    notiz_ok = _notiz_schreiben(
         sit,
         anliegen="absagen",
         status="Absage technisch fehlgeschlagen — bitte prüfen und zurückrufen",
         dock_text="Absage technisch fehlgeschlagen. Bitte prüfen und zurückrufen.",
     )
     _verwaltung_mit_abschlussfrage_schliessen(sit)
+    if not notiz_ok:
+        return {"text": (
+            "Die Absage hat gerade nicht geklappt, und auch die Rückrufnotiz "
+            "konnte ich technisch nicht speichern. Bitte rufen Sie die Praxis "
+            "noch einmal an."
+        )}
     return {"text": (
         (res.get("spoken") or
          "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum.")
@@ -1414,6 +1444,7 @@ def _mehrfach_absage_start(sit: dict, auswahl: list[dict]) -> dict:
     sit["mehrfachAbsage"] = [
         {
             "id": _s(a.get("id")),
+            "iso": _s(a.get("iso") or a.get("startIso") or a.get("date")),
             "spoken": _s(a.get("spoken")),
             "patientId": _s(a.get("patientId")),
             "patientName": _s(a.get("patientName")),
@@ -1457,7 +1488,9 @@ def _mehrfach_absagen(sit: dict, melde: Melde) -> dict:
             continue
         if melde:
             melde("cancel_appointment")
-        res = kal.cancel_by_id(sit["tenant"], _ctx(sit), aid)
+        ctx = _ctx(sit)
+        ctx["appointmentDate"] = _s(p.get("iso"))
+        res = kal.cancel_by_id(sit["tenant"], ctx, aid)
         merke_tool(sit, "cancel_appointment", res)
         _obs(
             sit,
@@ -1575,13 +1608,19 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     merke_tool(sit, "getFreeTimeSlots", found)
     if not found.get("ok"):
         sit["offered"] = []
-        _notiz_schreiben(
+        notiz_ok = _notiz_schreiben(
             sit,
             anliegen="verschieben",
             status="Terminkalender nicht erreichbar — bitte zum Verschieben zurückrufen",
             dock_text="Terminkalender beim Verschieben nicht erreichbar. Bitte zurückrufen.",
         )
         _verwaltung_mit_abschlussfrage_schliessen(sit)
+        if not notiz_ok:
+            return {"text": (
+                "Der Terminkalender antwortet gerade nicht, und die Rückrufnotiz "
+                "konnte ich technisch nicht speichern. Bitte rufen Sie die Praxis "
+                "noch einmal an."
+            )}
         return {"text": (
             "Der Terminkalender antwortet gerade nicht. "
             "Ich habe der Praxis dazu eine Rückrufnotiz hinterlassen. "
@@ -1666,8 +1705,9 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
     if int(sit.get("moveFails") or 0) >= 2:
         # Harte Schreibgrenze auch fuer alte/direkte Aufrufer: Nach zwei
         # echten Verschiebeversuchen niemals einen dritten Write senden.
+        notiz_ok = bool(sit.get("praxisNotizPersistiert"))
         if not sit.get("praxisNotiz"):
-            _notiz_schreiben(
+            notiz_ok = _notiz_schreiben(
                 sit,
                 anliegen="verschieben",
                 status=(
@@ -1680,6 +1720,12 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
                 ),
             )
         _verwaltung_mit_abschlussfrage_schliessen(sit)
+        if not notiz_ok:
+            return {"text": (
+                "Die beiden Verschiebeversuche waren leider nicht zuverlässig. "
+                "Die Rückrufnotiz konnte ich technisch nicht speichern; bitte rufen "
+                "Sie die Praxis noch einmal an."
+            )}
         return {"text": (
             "Die beiden Verschiebeversuche waren leider nicht zuverlässig. "
             "Die Praxis meldet sich bei Ihnen. Kann ich sonst noch etwas für "
@@ -1777,13 +1823,19 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
         s["phase"] = "verschieb_angebot"
         s["frage"] = "slotwahl"
         return {"text": res.get("spoken") or "Der Platz ist gerade weg — ich habe Alternativen."}
-    _notiz_schreiben(
+    notiz_ok = _notiz_schreiben(
         sit,
         anliegen="verschieben",
         status="Verschieben technisch fehlgeschlagen — bitte prüfen und zurückrufen",
         dock_text="Verschieben technisch fehlgeschlagen. Bitte prüfen und zurückrufen.",
     )
     _verwaltung_mit_abschlussfrage_schliessen(sit)
+    if not notiz_ok:
+        return {"text": (
+            "Das Verschieben hat gerade nicht geklappt, und auch die Rückrufnotiz "
+            "konnte ich technisch nicht speichern. Bitte rufen Sie die Praxis "
+            "noch einmal an."
+        )}
     return {"text": (
         (res.get("spoken") or
          "Das Verschieben hat gerade nicht geklappt. "
@@ -2011,7 +2063,39 @@ def _bestaetigung_eindeutig(text: str) -> bool:
 def _bestaetigung_unklar_text(aktion: str) -> dict:
     return {"text": (
         "Dann ändere ich noch nichts. "
-        f"Soll ich genau {aktion}? Bitte antworten Sie eindeutig mit Ja oder Nein."
+        f"Soll ich genau {aktion} — passt das so? "
+        "Bitte antworten Sie eindeutig mit Ja oder Nein."
+    )}
+
+
+def _bestaetigung_unklar(
+    sit: dict,
+    aktion: str,
+    *,
+    schluessel: str,
+) -> dict:
+    """Destruktive Bestätigungen bleiben endlich und schreiben niemals ohne Ja."""
+    stand = sit.get("verwBestaetigungUnklar")
+    if not isinstance(stand, dict):
+        stand = {}
+        sit["verwBestaetigungUnklar"] = stand
+    n = int(stand.get(schluessel) or 0) + 1
+    stand[schluessel] = n
+    if n < 2:
+        return _bestaetigung_unklar_text(aktion)
+
+    s = gehirn.sammler(sit)
+    s["slotIso"] = ""
+    sit["verwaltenTermin"] = ""
+    sit["mehrfachAbsage"] = []
+    sit["gefunden"] = []
+    sit["offered"] = []
+    _verw_reset(sit)
+    _verwaltung_mit_abschlussfrage_schliessen(sit)
+    return {"text": (
+        "Ohne ein klares Ja ändere ich keinen Termin. "
+        "Der bisherige Termin bleibt unverändert. "
+        "Kann ich sonst noch etwas für Sie tun?"
     )}
 
 
@@ -3102,7 +3186,13 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             if s["modus"] == "auskunft":
                 return _kandidat_verwerfen(sit, melde)
             return _kandidat_verwerfen(sit, melde)
-        return None
+        if "?" in t and gehirn.ist_zwischenfrage(t):
+            return None
+        return _bestaetigung_unklar(
+            sit,
+            "mit dieser Person fortfahren",
+            schluessel="patient",
+        )
 
     # 1) Offene Bestaetigungen zuerst — ein "ja" traegt sonst nichts Neues.
     if s["phase"] == "absage_bestaetigen":
@@ -3121,8 +3211,12 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             _verwaltung_mit_abschlussfrage_schliessen(sit)
             return {"text": "Alles klar, der Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
         if gehirn.ist_ja(t) and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t):
-            return _bestaetigung_unklar_text("diesen Termin absagen")
-        return None
+            return _bestaetigung_unklar(
+                sit, "diesen Termin absagen", schluessel="absagen")
+        if "?" in t and gehirn.ist_zwischenfrage(t):
+            return None
+        return _bestaetigung_unklar(
+            sit, "diesen Termin absagen", schluessel="absagen")
 
     if s["phase"] == "verschieb_bestaetigen":
         if "modus" in neu and s["modus"] == "absagen":
@@ -3140,9 +3234,18 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             s["frage"] = "wunsch"
             return {"text": "Kein Problem. Wann passt es Ihnen denn besser?"}
         if gehirn.ist_ja(t) and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t):
-            return _bestaetigung_unklar_text(
-                "den Termin auf die vorgelesene Zeit verschieben")
-        return None
+            return _bestaetigung_unklar(
+                sit,
+                "den Termin auf die vorgelesene Zeit verschieben",
+                schluessel="verschieben",
+            )
+        if "?" in t and gehirn.ist_zwischenfrage(t):
+            return None
+        return _bestaetigung_unklar(
+            sit,
+            "den Termin auf die vorgelesene Zeit verschieben",
+            schluessel="verschieben",
+        )
 
     # Mehrfach-Absage rueckbestaetigt? (W-MEHRFACH-ABSAGE)
     if s["phase"] == "mehrfach_bestaetigen":
@@ -3157,8 +3260,18 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 f"davon absagen? Zur Auswahl: {_liste_sprechbar(sit.get('gefunden') or [])}."
             )}
         if gehirn.ist_ja(t) and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t):
-            return _bestaetigung_unklar_text("alle vorgelesenen Termine absagen")
-        return None
+            return _bestaetigung_unklar(
+                sit,
+                "alle vorgelesenen Termine absagen",
+                schluessel="mehrfach-absagen",
+            )
+        if "?" in t and gehirn.ist_zwischenfrage(t):
+            return None
+        return _bestaetigung_unklar(
+            sit,
+            "alle vorgelesenen Termine absagen",
+            schluessel="mehrfach-absagen",
+        )
 
     # 2) Auswahl des Bestandstermins ("den am Donnerstag"). Hier NIE ans LLM
     #    abgeben: ein frei erfundenes "dann sage ich den ab" waere fatal.

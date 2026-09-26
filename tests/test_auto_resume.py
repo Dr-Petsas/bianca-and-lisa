@@ -159,3 +159,43 @@ def test_agent_kein_ruecksprung_bei_transfer(monkeypatch):
     fl = {"text": "", "transfer": {"nummer": "+49211302", "name": "Petsas"}}
     aus = agent._auto_resume_anhaengen(sit, fl)
     assert aus is fl  # unveraendert, kein Bruecken-Anhang mitten im Transfer
+
+
+def test_management_checkpoint_vermischt_termin_a_nicht_mit_termin_b(monkeypatch):
+    monkeypatch.setenv("HIRN_AUTO_RESUME", "enforce")
+    sit = _sit()
+    hirn.anwenden(
+        sit,
+        _deutung("AENDERN", ersatz=True, spiegel="Termin A verschieben"),
+    )
+    sit["sammler"].update({
+        "phase": "verschieb_bestaetigen",
+        "frage": "bestaetigung",
+        "slotIso": "2026-10-01T09:00",
+    })
+    sit["booking"] = {"appointmentId": "termin-a", "patientId": "patient-a"}
+    sit["gefunden"] = [{"id": "termin-a", "iso": "2026-09-28T09:00"}]
+    sit["verwaltenTermin"] = "termin-a"
+    sit["offered"] = [{"iso": "2026-10-01T09:00"}]
+    sit["moveFails"] = 1
+
+    hirn.anwenden(
+        sit,
+        _deutung("WISSEN", spiegel="Termin B nachsehen"),
+    )
+    sit["booking"] = {"appointmentId": "termin-b", "patientId": "patient-b"}
+    sit["gefunden"] = [{"id": "termin-b", "iso": "2026-10-02T10:00"}]
+    sit["verwaltenTermin"] = "termin-b"
+    sit["offered"] = [{"iso": "2026-10-03T11:00"}]
+    sit["moveFails"] = 99
+    sit["mehrfachAbsage"] = [{"id": "termin-b"}]
+    sit["sammler"]["phase"] = "fertig"
+
+    resumed = hirn.abschluss_ruecksprung_live(sit)
+    assert resumed and resumed["handlung"] == "AENDERN"
+    assert sit["booking"]["appointmentId"] == "termin-a"
+    assert sit["verwaltenTermin"] == "termin-a"
+    assert sit["gefunden"][0]["id"] == "termin-a"
+    assert sit["offered"][0]["iso"] == "2026-10-01T09:00"
+    assert sit["moveFails"] == 1
+    assert "mehrfachAbsage" not in sit

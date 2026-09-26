@@ -158,6 +158,7 @@ _FRAGE_KERN = {
     "name": r"\bnamen?\b|vorname|nachname",
     "vorname": r"vorname",
     "nachname": r"nachname",
+    "nachname_korr": r"nachname|schreibweise|korrigier",
     "grund": r"worum|grund|anliegen|kontrolle",
     "wunsch": r"\bwann\b|vormittag|nachmittag|uhrzeit",
     # Verwaltungs-Fragen (W-SAMMELN): Wann-/Behandlungs-Frage zum Bestandstermin.
@@ -765,12 +766,11 @@ def _notleine(sit: dict) -> dict[str, Any]:
     if offen:
         try:
             from bianca import verwalten
-            verwalten.abgeben_notiz(
+            notiz = bool(verwalten.abgeben_notiz(
                 sit,
                 was=_s(s.get("grundWortlaut")) or _s(s.get("grund"))
                 or "Anruf kam nicht zum Abschluss",
-            )
-            notiz = not sit.get("testNotizUnterdrueckt")
+            ))
         except Exception as e:  # Notiz darf den Abschied nie verhindern
             print(f"notleine-notiz fail {e}", flush=True)
     text = abschied.notbremse_satz(notiz=notiz)
@@ -936,6 +936,29 @@ def _fluss_sync(sit: dict, gelaufen: list[str], book: dict | None) -> None:
     if not gelaufen:
         return
     s = sit.get("sammler") or {}
+    if (
+        "book_slot" in gelaufen
+        and book
+        and (book.get("verificationFailed") or book.get("possiblyBooked"))
+    ):
+        # Defense in depth für den Notaus-Pfad TASK_ROUTER=0: Ein unklarer
+        # Write darf nie den bestätigten Buchungszustand setzen oder einen
+        # zweiten Schreibversuch auf denselben Slot auslösen.
+        slot_iso = _s(book.get("slotIso") or s.get("slotIso"))
+        sit["buchungUnklar"] = {
+            "slotIso": slot_iso,
+            "appointmentId": "",
+        }
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        s["slotIso"] = ""
+        sit.pop("buchIntent", None)
+        if slot_iso:
+            gesperrt = list(sit.get("slotGesperrt") or [])
+            if slot_iso not in gesperrt:
+                gesperrt.append(slot_iso)
+            sit["slotGesperrt"] = gesperrt
+        return
     if "book_slot" in gelaufen and book and (book.get("booked") or book.get("dryRun")):
         s["phase"] = "gebucht"
         s["frage"] = ""

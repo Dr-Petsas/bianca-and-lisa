@@ -146,3 +146,18 @@ def test_explizit_verlangte_wiederholung_verbraucht_kein_budget():
         )
         assert not aus.get("hangup")
     assert int((sit.get("frageBudget") or {}).get("versuche") or 0) == 0
+
+
+def test_nachname_korrektur_und_terminangebot_haben_ein_budget():
+    faelle = (
+        ("nachname_korr", "Wie lautet der Nachname jetzt?"),
+        ("termin_anbieten", "Brauchen Sie dafür einen Termin?"),
+    )
+    for fid, text in faelle:
+        sit = _sit(fid)
+        for _ in range(3):
+            aus = _frage(sit, text)
+            assert not aus.get("hangup")
+        aus = _frage(sit, text)
+        assert aus.get("hangup") is True
+        assert sit["frageBudgetDone"] is True

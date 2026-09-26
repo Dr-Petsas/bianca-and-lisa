@@ -200,6 +200,8 @@ def test_notiz_schreibfehler_wird_nicht_als_erfolg_verbucht(monkeypatch):
     assert len(notiz_tools) == 1
     assert notiz_tools[0].get("ok") is False
     assert sit.get("praxisNotizPersistiert") is False
+    assert not sit.get("praxisNotiz")
+    assert sit.get("praxisNotizFehler")
 
 
 def test_kalenderfehler_verspricht_bei_notiz_schreibfehler_nichts(monkeypatch):
@@ -220,3 +222,16 @@ def test_kalenderfehler_verspricht_bei_notiz_schreibfehler_nichts(monkeypatch):
     assert flow._RUECKRUF_NUMMER_FRAGE.lower() not in text
     assert any(t.get("name") == "praxis_notiz" and not t.get("ok")
                for t in sit.get("tools") or [])
+
+
+def test_namensausstieg_fragt_ohne_gespeicherte_notiz_keine_nummer(monkeypatch):
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    monkeypatch.setattr(verwalten, "abgeben_notiz", lambda *a, **k: False)
+
+    text = flow._name_ausstieg(sit, s, "Nachname")
+
+    assert "nicht speichern" in text
+    assert flow._RUECKRUF_NUMMER_FRAGE not in text
+    assert "meldet sich unter" not in text
+    assert "rueckrufNummer" not in sit

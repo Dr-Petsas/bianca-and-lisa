@@ -125,6 +125,9 @@ def test_book_slot_behaelt_termin_id():
             "visitMotiveId": "vm1",
             "phoneConfirmed": "01516780764",
             "phoneInChart": "01516780764",
+            "skipConfirmation": True,
+            "nameConfirmToken": "0123456789abcdef0123456789abcdef",
+                "nameConfirmSessionId": "test-session-neu99",
         }
         calendar.patients.patient_id_bindung_setzen(
             ctx, "p1", "Tom", "Schumann")
@@ -136,6 +139,9 @@ def test_book_slot_behaelt_termin_id():
         assert ctx["appointmentDate"] == "2026-08-31"
         assert [route for route, _ in calls] == [
             "masBookAppointment", "agentFindPatientAppointments"]
+        assert calls[0][1]["skipConfirmation"] is True
+        assert calls[0][1]["nameConfirmToken"] == (
+            "0123456789abcdef0123456789abcdef")
     finally:
         calendar._cf_post, calendar.WRITE_LIVE = alt_cf, alt_live
         calendar._BOOK_VERIFY_DELAYS = alt_delays
@@ -274,6 +280,8 @@ def test_readback_fehler_erzeugt_rueckruf_statt_sms_zusage():
     assert gerufen and gerufen[0]["slot_iso"].startswith("2026-10-07T11:30")
     assert not aus["book"]["booked"]
     assert "sms" not in aus["text"].lower()
+    assert "rufnummer" not in aus["text"].lower()
+    assert "rueckrufNummer" not in sit
 
 
 if __name__ == "__main__":

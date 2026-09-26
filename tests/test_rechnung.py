@@ -281,6 +281,21 @@ def test_nummer_dreimal_unklar_auf_readback_gibt_auf(ohne_netz):
     assert len(ohne_netz()) == 1 and not ohne_netz()[0]["telefon"]
 
 
+def test_nummer_aufgeben_ohne_notiz_bleibt_fehler(monkeypatch):
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"vorname": "Julia", "nachname": "Krause", "frage": "telefon"})
+    ab = {"offen": True, "was": "Fehlerhafte Rechnung"}
+    st = {"status": "offen"}
+    monkeypatch.setattr(verwalten, "abgeben_notiz", lambda *a, **k: False)
+
+    aus = flow._rechnung_nummer_aufgeben(sit, s, ab, st)
+
+    assert _stand(sit) == "fehler"
+    assert "nicht sicher speichern" in _s(aus.get("text"))
+    assert "rueckruf" not in _stand(sit)
+
+
 def test_sonst_noch_ja_und_danach_termin(ohne_netz):
     """'Ja.' auf 'Kann ich sonst noch etwas fuer Sie tun?' -> 'Gerne — was
     kann ich noch fuer Sie tun?'; der Terminwunsch danach eroeffnet die

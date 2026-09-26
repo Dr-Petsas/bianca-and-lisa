@@ -265,14 +265,17 @@ def _ev_transfer(sit: dict) -> bool:
 
 
 def _ev_notiz(sit: dict) -> bool:
-    if _ok(sit.get("lastNote")):
-        return True
-    return any(
-        isinstance(ein, dict)
-        and ein.get("name") in {"note_appointment", "praxis_notiz"}
-        and _ok(ein)
-        for ein in (sit.get("tools") or [])
-    )
+    namen = {"note_appointment", "praxis_notiz"}
+    # Ein neuer fehlgeschlagener Schreibversuch darf nie durch eine alte
+    # erfolgreiche Notiz derselben Sitzung "belegt" werden. Der laufende
+    # Zug ist die stärkste Evidenz, danach zählt nur der jüngste Versuch.
+    for ein in reversed(sit.get("_toolsZug") or []):
+        if isinstance(ein, dict) and ein.get("name") in namen:
+            return _ok(ein)
+    for ein in reversed(sit.get("tools") or []):
+        if isinstance(ein, dict) and ein.get("name") in namen:
+            return _ok(ein)
+    return _ok(sit.get("lastNote"))
 
 
 def _ev_anlegen(sit: dict) -> bool:

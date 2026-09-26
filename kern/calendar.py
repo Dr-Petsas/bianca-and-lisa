@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import time
@@ -14,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from kern.config import CF_BASE, WRITE_LIVE
+from kern.config import CF_BASE, PHONE_CALL_TOKEN, WRITE_LIVE
 from kern import notes, patients
 from kern.slots import (
     FENSTER_TAGE, REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer,
@@ -58,10 +59,28 @@ _CF_CLIENT = httpx.Client(timeout=10.0)
 # brauchte >10 s, der Client brach ab, die Buchung LANDETE trotzdem — und die
 # Ansage behauptete "Termin ist weg". Timeout-Budget: CF-Limit ist 30 s.
 _SCHREIB_TIMEOUT = 25.0
+# Buchungs-Write plus unabhängige Rücklese dürfen den Telefonzug nicht
+# minutenlang blockieren. Nach Ablauf dieses Gesamtbudgets bleibt der Slot
+# gesperrt und der Vorgang geht als "möglicherweise gebucht" in die manuelle
+# Prüfung — niemals in einen zweiten Schreibversuch.
+try:
+    _BOOK_TOTAL_BUDGET_S = max(
+        5.0, float(os.getenv("BOOK_TOTAL_BUDGET_S", "30") or 30)
+    )
+except ValueError:
+    _BOOK_TOTAL_BUDGET_S = 30.0
 # HTTP-200 ist noch kein Beweis, dass exakt der angeforderte Termin in der
 # Kartei steht. Kurze Nachlese-Retries fangen Replikationslatenz ab; der
 # Anrufer hört währenddessen bereits den Werkzeug-Füller.
 _BOOK_VERIFY_DELAYS = (0.0, 0.2, 0.45)
+# Schreibantworten koennen nach einem Timeout trotzdem im Kalender gelandet
+# sein. Bei Absage/Verschieben wird dann ueber die punktgenaue Termin-ID
+# nachgelesen, statt einen tatsaechlich ausgefuehrten Write als Fehler zu
+# melden. Der erste CF-Aufruf wird dabei niemals wiederholt.
+_MANAGEMENT_RECOVERY_DELAYS = (0.0, 0.4)
+MANAGEMENT_WRITE_RECOVERY = (
+    os.getenv("MANAGEMENT_WRITE_RECOVERY", "1") or "1"
+).strip().lower() not in {"0", "false", "off", "no"}
 # W-BUCHUNG-BEWEIS (15.09.2026): erreicht die namensbasierte Ruecklese die
 # richtige Akte nicht, beweist ein zweiter Weg ueber die patientId. 0 =
 # byte-identisches Verhalten von vor dem 15.09.2026 (nur Namensliste).
@@ -88,8 +107,26 @@ _SLOT_CAP = 40
 
 def _cf_post(route: str, body: dict, *, timeout: float | None = None) -> tuple[int, Any]:
     url = f"{CF_BASE}/{route.lstrip('/')}"
+    headers = None
+    route_name = route.strip("/")
+    name_confirm_write = (
+        route_name == "agentNameConfirm"
+        or (
+            route_name in {"masBookAppointment", "createAppointment"}
+            and body.get("skipConfirmation") is True
+        )
+    )
+    if name_confirm_write and PHONE_CALL_TOKEN:
+        # Jede Reservierungsoperation, die die normale Patientenbestaetigung
+        # bewusst ueberspringt, muss als TelefonKI-Maschine authentifiziert
+        # sein. Gewoehnliche Kalenderaufrufe erhalten den Secret nie.
+        headers = {
+            "Authorization": f"Bearer {PHONE_CALL_TOKEN}",
+            "x-pickadoc-phone-call-token": PHONE_CALL_TOKEN,
+        }
     try:
-        r = _CF_CLIENT.post(url, json=body, timeout=timeout or 10.0)
+        r = _CF_CLIENT.post(
+            url, json=body, timeout=timeout or 10.0, headers=headers)
         try:
             data = r.json()
         except Exception:
@@ -129,6 +166,35 @@ def _response_kappen(data: Any) -> Any:
     return out
 
 
+_DISPATCH_SECRET_KEYS = {
+    "authorization", "x-api-key", "x-pickadoc-phone-call-token",
+    "nameconfirmtoken", "token", "signature",
+}
+
+
+def _dispatch_saeubern(value: Any, *, key: str = "") -> Any:
+    """Secrets aus Diagnose-/Mitschnittdaten entfernen.
+
+    Der Namenslink-Token ist ein Bearer-Link und darf weder im Tool-Ledger
+    noch im Gesprächsmitschnitt landen. Die echte Anfrage bleibt davon
+    unberührt; nur die Diagnosekopie wird redigiert.
+    """
+    if key.casefold() in _DISPATCH_SECRET_KEYS:
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            str(k): _dispatch_saeubern(v, key=str(k))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_dispatch_saeubern(v, key=key) for v in value]
+    if isinstance(value, str) and "agentNameConfirm?t=" in value:
+        return re.sub(
+            r"([?&]t=)[^&#\s]+", r"\1[REDACTED]", value, flags=re.I
+        )
+    return value
+
+
 def _updates_von_antwort(data: Any) -> list[dict[str, Any]]:
     """Dynamic-Variable-Updates wie im Portal: gesetzte Antwort-Felder."""
     if not isinstance(data, dict):
@@ -161,12 +227,12 @@ def _cf_call(route: str, body: dict, *, timeout: float | None = None) -> tuple[i
     t0 = time.perf_counter()
     status, data = _cf_post(route, body, timeout=timeout)
     ms = int(round((time.perf_counter() - t0) * 1000))
-    gekappt = _response_kappen(data)
+    gekappt = _dispatch_saeubern(_response_kappen(data))
     dispatch = {
         "route": route,
         "url": url,
         "method": "POST",
-        "request": body,
+        "request": _dispatch_saeubern(body),
         "httpStatus": status,
         "ms": ms,
         "response": gekappt,
@@ -636,6 +702,90 @@ def _slot_sperren(ctx: dict, iso: str) -> str:
     return key
 
 
+def _book_deadline() -> float:
+    return time.monotonic() + _BOOK_TOTAL_BUDGET_S
+
+
+def _book_timeout(deadline: float, cap: float = 10.0) -> float:
+    return max(0.1, min(cap, deadline - time.monotonic()))
+
+
+def _book_budget_left(deadline: float, minimum: float = 0.15) -> bool:
+    return (deadline - time.monotonic()) >= minimum
+
+
+def _name_confirm_scoped_id(
+    prefix: str, tenant: dict, token: str
+) -> str:
+    """Derselbe stabile ID-Vertrag wie bookingReservationGuard.ts."""
+    scope = "\0".join((
+        prefix,
+        _s(tenant.get("clientId")),
+        _s(tenant.get("locationId")),
+        _s(token),
+    ))
+    digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:40]
+    return f"{prefix}_{digest}"
+
+
+def _booking_uncertain(
+    ctx: dict,
+    iso: str,
+    *,
+    dispatch: dict | None = None,
+    reason: str = "verification_inconclusive",
+) -> dict[str, Any]:
+    """Unklaren Write verriegeln — nie denselben oder einen anderen Slot schreiben."""
+    ctx["bookingUncertain"] = {
+        "iso": iso,
+        "reason": reason,
+        "at": datetime.now(TZ).isoformat(timespec="seconds"),
+    }
+    result: dict[str, Any] = {
+        "ok": False,
+        "booked": False,
+        "writeAttempted": True,
+        "verificationFailed": True,
+        "possiblyBooked": True,
+        "slotIso": iso,
+        "spoken": (
+            "Ich kann gerade nicht sicher bestätigen, ob der Termin "
+            "eingetragen wurde. Ich versuche keine zweite Buchung; "
+            "die Praxis prüft den Vorgang und meldet sich bei Ihnen."
+        ),
+        "regie": (
+            "Buchungsantwort unklar. Sitzung verriegelt; keinen weiteren "
+            "Buchungsversuch senden."
+        ),
+        "uncertaintyReason": reason,
+    }
+    return _mit_dispatch(result, dispatch)
+
+
+def _booking_uncertainty_guard(ctx: dict) -> dict[str, Any] | None:
+    pending = ctx.get("bookingUncertain")
+    if not isinstance(pending, dict):
+        return None
+    iso = _s(pending.get("iso"))
+    return {
+        "ok": False,
+        "booked": False,
+        "writeAttempted": False,
+        "verificationFailed": True,
+        "possiblyBooked": True,
+        "slotIso": iso,
+        "spoken": (
+            "Die vorherige Buchung wird bereits von der Praxis geprüft. "
+            "Ich starte keinen weiteren Buchungsversuch."
+        ),
+        "regie": "Sitzung nach unklarer Buchung verriegelt.",
+    }
+
+
+def _booking_uncertainty_clear(ctx: dict) -> None:
+    ctx.pop("bookingUncertain", None)
+
+
 def _frische_konflikt_slots(tenant: dict, ctx: dict, iso: str) -> dict[str, Any]:
     """Alternativen nach einem Konflikt ausschließlich frisch nachladen."""
     _slot_sperren(ctx, iso)
@@ -664,6 +814,9 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
     if auftrag and iso[:16] != auftrag[:16]:
         if iso[4:16] == auftrag[4:16]:
             iso = auftrag
+    uncertainty = _booking_uncertainty_guard(ctx)
+    if uncertainty:
+        return uncertainty
     if _slot_gesperrt(ctx, iso):
         alt = _frische_konflikt_slots(tenant, ctx, iso)
         return {
@@ -678,8 +831,58 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "slots": alt.get("slots") or [],
             "alternativeDispatch": alt.get("dispatch"),
         }
+    deadline = _book_deadline()
+    if not WRITE_LIVE or _test_no_write(tenant):
+        when = spoken_slot(iso)
+        return {
+            "ok": True,
+            "booked": False,
+            "dryRun": True,
+            "slotIso": iso,
+            "spoken": (
+                f"{when} hätte ich jetzt eingetragen — der Test schreibt den Kalender "
+                "noch nicht. Keine Bestätigungs-SMS."
+            ),
+        }
     patient_id = _s(ctx.get("patientId"))
     created_patient = False
+    if ctx.get("skipConfirmation") is True and not patient_id:
+        # Eine Link-Reservierung hat absichtlich noch keine belastbaren
+        # Patientendaten. Niemals nach dem Platzhalternamen suchen: sonst
+        # könnten zwei Anrufer dieselbe "Reservierung SMS"-Akte teilen.
+        token = _s(ctx.get("nameConfirmToken"))
+        confirmed_phone = _s(ctx.get("phoneConfirmed"))
+        if not token:
+            return {
+                "ok": False,
+                "booked": False,
+                "writeAttempted": False,
+                "spoken": "Der sichere Bestätigungslink fehlt. Ich buche noch nicht.",
+                "regie": "Namenslink-Reservierung ohne Token abgebrochen.",
+            }
+        if not confirmed_phone or not patients.ist_handy_de(confirmed_phone):
+            return {
+                "ok": False,
+                "booked": False,
+                "phonePreflightFailed": True,
+                "writeAttempted": False,
+                "spoken": (
+                    "Für die Terminbestätigung brauche ich zuerst eine "
+                    "rückbestätigte Handynummer. Wie lautet sie?"
+                ),
+                "regie": "Namenslink nie ohne bestätigte deutsche Mobilnummer reservieren.",
+            }
+        ctx["phone"] = confirmed_phone
+        first, last = _name_teile(ctx)
+        return _buch_und_akte(
+            tenant,
+            ctx,
+            iso,
+            first or "Reservierung",
+            last or "SMS",
+            confirmed_phone,
+            deadline=deadline,
+        )
     if not patient_id:
         auf = patients.patient_aufloesen(tenant, {
             "name": ctx.get("patientName"),
@@ -703,18 +906,6 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
                 "Wie lautet der Vor- und Nachname bitte noch einmal?"
             ),
             "regie": "Name und patientId widersprechen sich. Nicht buchen, Identität neu auflösen.",
-        }
-    if not WRITE_LIVE or _test_no_write(tenant):
-        when = spoken_slot(iso)
-        return {
-            "ok": True,
-            "booked": False,
-            "dryRun": True,
-            "slotIso": iso,
-            "spoken": (
-                f"{when} hätte ich jetzt eingetragen — der Test schreibt den Kalender "
-                "noch nicht. Keine Bestätigungs-SMS."
-            ),
         }
     if BOOK_FIX_PHONE and not patient_id:
         # Auch der kombinierte createAppointment-Rückfall ist bereits ein
@@ -764,8 +955,10 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             patients.patient_id_bindung_setzen(
                 ctx, patient_id, ctx.get("firstName"), ctx.get("lastName"))
         elif phone and first and last and not patients.ist_testname(first, last):
-            gebucht = _buch_und_akte(tenant, ctx, iso, first, last, phone)
-            if gebucht.get("ok"):
+            gebucht = _buch_und_akte(
+                tenant, ctx, iso, first, last, phone, deadline=deadline
+            )
+            if gebucht.get("ok") or gebucht.get("writeAttempted"):
                 return gebucht
         if not patient_id:
             return {
@@ -790,6 +983,23 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "visitMotiveId": _s(ctx.get("visitMotiveId") or (vm or {}).get("id")),
         "appointmentStartDate": iso,
     }
+    if ctx.get("skipConfirmation") is True:
+        session_id = _s(ctx.get("nameConfirmSessionId"))
+        if not session_id:
+            return {
+                "ok": False,
+                "booked": False,
+                "writeAttempted": False,
+                "spoken": (
+                    "Die sichere Reservierung ist gerade nicht vollständig. "
+                    "Ich trage den Termin noch nicht ein."
+                ),
+                "regie": "Namenslink-Reservierung ohne Sitzungsbindung abgebrochen.",
+            }
+        body["skipConfirmation"] = True
+        body["nameConfirmToken"] = _s(ctx.get("nameConfirmToken"))
+        body["nameConfirmSessionId"] = session_id
+        body["createdPatient"] = created_patient
     phone_fix: dict[str, Any] | None = None
     phone_preflight = bool(BOOK_FIX_PHONE and patient_id)
     if phone_preflight:
@@ -840,52 +1050,17 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
                 "regie": "Handy-Aktenabgleich fehlgeschlagen. Keinen Buchungsaufruf senden.",
                 "dispatch": phone_fix.get("dispatch"),
             }
-    status, data, dispatch = _cf_call("masBookAppointment", body, timeout=_SCHREIB_TIMEOUT)
+    status, data, dispatch = _cf_call(
+        "masBookAppointment",
+        body,
+        timeout=_book_timeout(deadline, _SCHREIB_TIMEOUT),
+    )
     if isinstance(dispatch, dict) and phone_fix:
         dispatch["phoneFix"] = {
             k: v for k, v in phone_fix.items() if k != "dispatch"
         }
         if isinstance(phone_fix.get("dispatch"), dict):
             dispatch["phoneFixDispatch"] = phone_fix["dispatch"]
-    if status == 0:
-        # Netzfehler/Timeout: die Buchung kann trotzdem gelandet sein —
-        # NACHSCHAUEN statt raten (sonst bucht der Anrufer doppelt).
-        pruefung = _buchung_verifizieren(
-            tenant,
-            ctx,
-            patient_id=patient_id,
-            appointment_id="",
-            iso=iso,
-            calendar_id=body["calendarId"],
-        )
-        if isinstance(dispatch, dict):
-            dispatch["verification"] = {
-                k: v for k, v in pruefung.items() if k != "dispatch"
-            }
-            if isinstance(pruefung.get("dispatch"), dict):
-                dispatch["verificationDispatch"] = pruefung["dispatch"]
-        landung = _s(pruefung.get("appointmentId"))
-        if pruefung.get("ok") and landung:
-            ctx["appointmentId"] = landung
-            ctx["appointmentDate"] = iso[:10]
-            return _mit_dispatch({
-                "ok": True,
-                "booked": True,
-                "verified": True,
-                "slotIso": iso,
-                "appointmentId": landung,
-                "patientId": patient_id,
-                "createdPatient": created_patient,
-                "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
-            }, dispatch)
-        return _mit_dispatch({
-            "ok": False,
-            "spoken": (
-                "Der Kalender antwortet gerade nicht — ich möchte nichts doppelt "
-                "eintragen. Die Praxis bestätigt Ihnen den Termin kurzfristig."
-            ),
-            "regie": "Netzfehler beim Buchen. Keinen anderen Slot anbieten, Rückruf zusagen.",
-        }, dispatch)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         # Read-after-write: Erst eine unabhängige Kalendersuche beweist, dass
         # Patient, Startzeit, Kalender und Termin-ID wirklich zusammengehören.
@@ -898,6 +1073,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             appointment_id=aid_cf,
             iso=iso,
             calendar_id=body["calendarId"],
+            deadline=deadline,
         )
         if isinstance(dispatch, dict):
             dispatch["verification"] = {
@@ -907,22 +1083,14 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
                 dispatch["verificationDispatch"] = pruefung["dispatch"]
         if not pruefung.get("ok"):
             ctx.pop("appointmentId", None)
-            return _mit_dispatch({
-                "ok": False,
-                "booked": False,
-                "verificationFailed": True,
-                "possiblyBooked": True,
-                "slotIso": iso,
-                "patientId": patient_id,
-                "appointmentId": "",
-                "spoken": (
-                    "Die Buchungsantwort ist nicht eindeutig im Kalender angekommen. "
-                    "Ich bestätige den Termin deshalb noch nicht; die Praxis prüft das "
-                    "und meldet sich bei Ihnen."
-                ),
-                "regie": "Read-after-write fehlgeschlagen. Keine Buchung und keine SMS behaupten.",
-            }, dispatch)
+            return _booking_uncertain(
+                ctx,
+                iso,
+                dispatch=dispatch,
+                reason="success_readback_inconclusive",
+            )
         aid = _s(pruefung.get("appointmentId"))
+        _booking_uncertainty_clear(ctx)
         ctx["appointmentId"] = aid
         ctx["appointmentDate"] = iso[:10]
         return _mit_dispatch({
@@ -945,6 +1113,51 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "spoken": "In Ihrer Akte fehlt noch eine Handynummer. Wie lautet sie?",
             "regie": "Nummer erfragen, dann erneut buchen.",
         }, dispatch)
+    if status == 0 or status >= 500 or 200 <= status < 300:
+        # Timeout, Serverfehler oder ein unbekannter 2xx-Vertrag können NACH
+        # dem Commit entstanden sein. Erst exakt nachlesen; ohne Beweis die
+        # Sitzung verriegeln und niemals einen zweiten Write senden.
+        pruefung = _buchung_verifizieren(
+            tenant,
+            ctx,
+            patient_id=patient_id,
+            appointment_id="",
+            iso=iso,
+            calendar_id=body["calendarId"],
+            deadline=deadline,
+        )
+        if isinstance(dispatch, dict):
+            dispatch["verification"] = {
+                k: v for k, v in pruefung.items() if k != "dispatch"
+            }
+            if isinstance(pruefung.get("dispatch"), dict):
+                dispatch["verificationDispatch"] = pruefung["dispatch"]
+        landung = _s(pruefung.get("appointmentId"))
+        if pruefung.get("ok") and landung:
+            _booking_uncertainty_clear(ctx)
+            ctx["appointmentId"] = landung
+            ctx["appointmentDate"] = iso[:10]
+            return _mit_dispatch({
+                "ok": True,
+                "booked": True,
+                "verified": True,
+                "recoveredBy": "calendar_readback",
+                "slotIso": iso,
+                "appointmentId": landung,
+                "patientId": patient_id,
+                "createdPatient": created_patient,
+                "spoken": f"Der Termin {spoken_slot(iso)} ist fest eingetragen.",
+            }, dispatch)
+        return _booking_uncertain(
+            ctx,
+            iso,
+            dispatch=dispatch,
+            reason=(
+                "write_timeout_readback_inconclusive"
+                if status == 0
+                else "write_response_readback_inconclusive"
+            ),
+        )
     meldung = _s((data or {}).get("message")) if isinstance(data, dict) else ""
     # Diagnose (W-BOOK-RETRY / Thaler 01.09.2026): calendarId/Motiv/ISO mitloggen,
     # damit "not available" trotz frischem Angebot nachvollziehbar bleibt.
@@ -1032,6 +1245,7 @@ def _buchung_beweis_ueber_akte(
     patient_id: str,
     iso: str,
     calendar_id: str,
+    timeout: float | None = None,
 ) -> dict[str, Any]:
     """Zweiter, NAMENSFREIER Beweisweg fuer eine frische Buchung.
 
@@ -1053,11 +1267,15 @@ def _buchung_beweis_ueber_akte(
     expected_cal = _s(calendar_id)
     if not _s(patient_id) or not expected_cal or len(expected_iso) < 16:
         return {"ok": False}
-    status, data, dispatch = _cf_call("masPatientLastDoctor", {
-        "clientId": _s(tenant.get("clientId")),
-        "locationId": _s(tenant.get("locationId")),
-        "patientId": _s(patient_id),
-    })
+    status, data, dispatch = _cf_call(
+        "masPatientLastDoctor",
+        {
+            "clientId": _s(tenant.get("clientId")),
+            "locationId": _s(tenant.get("locationId")),
+            "patientId": _s(patient_id),
+        },
+        timeout=timeout,
+    )
     if status != 200 or not isinstance(data, dict) or data.get("status") != "success":
         return {"ok": False, "dispatch": dispatch}
     nxt = data.get("nextAppointment")
@@ -1079,6 +1297,7 @@ def _buchung_verifizieren(
     appointment_id: str,
     iso: str,
     calendar_id: str,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Liest eine erfolgreiche Buchung unabhängig zurück.
 
@@ -1120,9 +1339,28 @@ def _buchung_verifizieren(
     # Widerspruch und bleibt unbestaetigt.
     namenspfad_traf_akte = False
     for delay in _BOOK_VERIFY_DELAYS:
+        if deadline is not None and not _book_budget_left(deadline):
+            letzter_fehler = "Zeitbudget der Rückleseprüfung ausgeschöpft"
+            break
         if delay:
-            time.sleep(delay)
-        found = find_patient_appointments(tenant, verify_ctx)
+            if deadline is None:
+                time.sleep(delay)
+            else:
+                sleep_for = min(delay, max(0.0, deadline - time.monotonic() - 0.15))
+                if sleep_for:
+                    time.sleep(sleep_for)
+                if not _book_budget_left(deadline):
+                    letzter_fehler = "Zeitbudget der Rückleseprüfung ausgeschöpft"
+                    break
+        found = find_patient_appointments(
+            tenant,
+            verify_ctx,
+            timeout=(
+                _book_timeout(deadline)
+                if deadline is not None
+                else None
+            ),
+        )
         if isinstance(found.get("dispatch"), dict):
             letzter_dispatch = found["dispatch"]
         if not found.get("ok"):
@@ -1166,7 +1404,9 @@ def _buchung_verifizieren(
             "beweis": "namensliste",
             "dispatch": letzter_dispatch,
         }
-    if BOOK_VERIFY_AKTE and not namenspfad_traf_akte:
+    if (BOOK_VERIFY_AKTE
+            and not namenspfad_traf_akte
+            and (deadline is None or _book_budget_left(deadline))):
         # Die Namenssuche hat die Akte nie erreicht (fremder Treffer,
         # notFound, mehrdeutig, CF-Fehler) — also liegt KEIN Gegenbeweis
         # vor, nur fehlende Evidenz. Zweiter Weg ueber die patientId.
@@ -1175,6 +1415,11 @@ def _buchung_verifizieren(
             patient_id=patient_id,
             iso=expected_iso,
             calendar_id=expected_cal,
+            timeout=(
+                _book_timeout(deadline)
+                if deadline is not None
+                else None
+            ),
         )
         if isinstance(akte.get("dispatch"), dict):
             letzter_dispatch = akte["dispatch"]
@@ -1260,8 +1505,89 @@ def create_patient(
     return result
 
 
-def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, phone: str) -> dict[str, Any]:
+def _held_booking_readback(
+    tenant: dict,
+    *,
+    token: str,
+    iso: str,
+    calendar_id: str,
+    visit_motive_id: str,
+    deadline: float,
+) -> dict[str, Any]:
+    """Tokengebundene Reservierung über ihre deterministischen IDs beweisen."""
+    patient_id = _name_confirm_scoped_id("ncp", tenant, token)
+    appointment_id = _name_confirm_scoped_id("nca", tenant, token)
+    error = "held_appointment_not_found"
+    for delay in _BOOK_VERIFY_DELAYS:
+        if not _book_budget_left(deadline):
+            error = "booking_deadline_exhausted"
+            break
+        if delay:
+            sleep_for = min(delay, max(0.0, deadline - time.monotonic() - 0.15))
+            if sleep_for:
+                time.sleep(sleep_for)
+            if not _book_budget_left(deadline):
+                error = "booking_deadline_exhausted"
+                break
+        found = _firestore_appointment_by_id(
+            tenant,
+            appointment_id,
+            timeout=_book_timeout(deadline, 2.0),
+            expected_name_confirm_token=token,
+        )
+        if not found.get("ok"):
+            error = _s(found.get("error")) or error
+            continue
+        appointment = found.get("appointment")
+        if (
+            found.get("missing")
+            or found.get("deleted")
+            or not isinstance(appointment, dict)
+        ):
+            error = "held_appointment_missing_or_inactive"
+            continue
+        if (
+            _s(appointment.get("id")) != appointment_id
+            or _s(appointment.get("patientId")) != patient_id
+            or _slot_key(appointment.get("iso")) != _slot_key(iso)
+            or _s(appointment.get("calendarId")) != _s(calendar_id)
+            or _s(appointment.get("visitMotiveId")) != _s(visit_motive_id)
+            or appointment.get("nameConfirmTokenMatches") is not True
+            or appointment.get("nameConfirmPending") is not True
+            or appointment.get("confirmationHeld") is not True
+            or not _management_appointment_active(appointment)
+        ):
+            error = "held_appointment_scope_mismatch"
+            continue
+        return {
+            "ok": True,
+            "appointmentId": appointment_id,
+            "patientId": patient_id,
+            "beweis": "deterministic_firestore_id",
+        }
+    return {
+        "ok": False,
+        "appointmentId": "",
+        "patientId": patient_id,
+        "error": error,
+    }
+
+
+def _buch_und_akte(
+    tenant: dict,
+    ctx: dict,
+    iso: str,
+    first: str,
+    last: str,
+    phone: str,
+    *,
+    deadline: float | None = None,
+) -> dict[str, Any]:
     """Fallback: createAppointment legt Akte an und bucht in einem Zug."""
+    uncertainty = _booking_uncertainty_guard(ctx)
+    if uncertainty:
+        return uncertainty
+    deadline = deadline if deadline is not None else _book_deadline()
     cal = kalender_von(tenant, _s(ctx.get("calendarName")))
     vm = None
     if _s(ctx.get("visitMotiveId")):
@@ -1287,34 +1613,126 @@ def _buch_und_akte(tenant: dict, ctx: dict, iso: str, first: str, last: str, pho
         "appointmentStartDate": iso,
         "source": "phone_agent",
     }
-    status, data, dispatch = _cf_call("createAppointment", body)
-    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
-        auf = patients.patient_aufloesen(tenant, {
-            "name": f"{first} {last}".strip(),
+    if ctx.get("skipConfirmation") is True:
+        session_id = _s(ctx.get("nameConfirmSessionId"))
+        if not session_id:
+            return {
+                "ok": False,
+                "booked": False,
+                "writeAttempted": False,
+                "spoken": (
+                    "Die sichere Reservierung ist gerade nicht vollständig. "
+                    "Ich trage den Termin noch nicht ein."
+                ),
+                "regie": "Namenslink-Reservierung ohne Sitzungsbindung abgebrochen.",
+            }
+        body["skipConfirmation"] = True
+        body["nameConfirmToken"] = _s(ctx.get("nameConfirmToken"))
+        body["nameConfirmSessionId"] = session_id
+    status, data, dispatch = _cf_call(
+        "createAppointment",
+        body,
+        timeout=_book_timeout(deadline, _SCHREIB_TIMEOUT),
+    )
+    success = (
+        status == 200
+        and isinstance(data, dict)
+        and data.get("status") == "success"
+    )
+    returned_patient_id = _s(data.get("patientId")) if success else ""
+    returned_appointment_id = _s(data.get("appointmentId")) if success else ""
+    skip_confirmation = body.get("skipConfirmation") is True
+    proof: dict[str, Any]
+    if skip_confirmation:
+        # Auch bei HTTP 200 ist die Function-Antwort kein Beweis. Die
+        # deterministische Dokument-ID erlaubt eine exakte, namensfreie
+        # Rücklese — ebenso nach Timeout/5xx.
+        proof = _held_booking_readback(
+            tenant,
+            token=_s(body.get("nameConfirmToken")),
+            iso=iso,
+            calendar_id=_s(body.get("calendarId")),
+            visit_motive_id=_s(body.get("visitMotiveId")),
+            deadline=deadline,
+        )
+    elif success and returned_patient_id and returned_appointment_id:
+        proof = _buchung_verifizieren(
+            tenant,
+            ctx,
+            patient_id=returned_patient_id,
+            appointment_id=returned_appointment_id,
+            iso=iso,
+            calendar_id=_s(body.get("calendarId")),
+            deadline=deadline,
+        )
+    else:
+        proof = {
+            "ok": False,
+            "error": (
+                "createAppointment_response_missing_ids"
+                if success
+                else "createAppointment_write_response_unclear"
+            ),
+        }
+    if isinstance(dispatch, dict):
+        dispatch["verification"] = {
+            k: v for k, v in proof.items() if k != "dispatch"
+        }
+        if isinstance(proof.get("dispatch"), dict):
+            dispatch["verificationDispatch"] = proof["dispatch"]
+    if proof.get("ok"):
+        patient_id = _s(proof.get("patientId")) or returned_patient_id
+        appointment_id = _s(proof.get("appointmentId"))
+        auf = {
+            "id": patient_id,
             "firstName": first,
             "lastName": last,
-        })
-        if auf.get("id"):
-            _bind_akte(ctx, auf)
-            # createAppointment kennt kein Versicherungs-Feld — den erfragten
-            # Status auf der frisch angelegten Akte nachtragen (29.08.2026).
-            if isinstance(ctx.get("privateInsurance"), bool):
-                patients.versicherung_aktualisieren(tenant, _s(auf.get("id")), ctx["privateInsurance"])
-        # createAppointment liefert keine Termin-ID — fuer die Gespraechsnotiz
-        # read-only nachschlagen (kein zweiter Buchungsversuch!).
-        aid = _termin_id_suchen(tenant, ctx, iso)
-        if aid:
-            ctx["appointmentId"] = aid
+            "name": f"{first} {last}".strip(),
+            "phone": phone,
+        }
+        _bind_akte(ctx, auf)
+        created_patient = (
+            bool(data.get("createdPatient"))
+            if success and "createdPatient" in data
+            else skip_confirmation
+        )
+        # createAppointment kennt kein Versicherungs-Feld — den erfragten
+        # Status auf einer normalen frisch angelegten Akte nachtragen.
+        if (
+            not skip_confirmation
+            and isinstance(ctx.get("privateInsurance"), bool)
+        ):
+            patients.versicherung_aktualisieren(
+                tenant, patient_id, ctx["privateInsurance"]
+            )
+        _booking_uncertainty_clear(ctx)
+        ctx["appointmentId"] = appointment_id
         ctx["appointmentDate"] = iso[:10]
         return _mit_dispatch({
             "ok": True,
             "booked": True,
-            "createdPatient": True,
+            "verified": True,
+            "verificationProof": _s(proof.get("beweis")),
+            "createdPatient": created_patient,
+            "patientId": patient_id,
             "slotIso": iso,
-            "appointmentId": aid,
+            "appointmentId": appointment_id,
             "spoken": f"Akte und Termin {spoken_slot(iso)} sind fest eingetragen.",
         }, dispatch)
-    return _mit_dispatch({"ok": False}, dispatch)
+    if success or status == 0 or status >= 500 or 200 <= status < 300:
+        return _booking_uncertain(
+            ctx,
+            iso,
+            dispatch=dispatch,
+            reason=_s(proof.get("error")) or "direct_create_readback_inconclusive",
+        )
+    return _mit_dispatch({
+        "ok": False,
+        "booked": False,
+        "writeAttempted": True,
+        "spoken": "Das hat gerade nicht geklappt. Die Praxis ruft Sie dazu zurück.",
+        "regie": "Akte-und-Termin-Schreibvorgang wurde eindeutig abgelehnt.",
+    }, dispatch)
 
 
 def _name_norm(v: Any) -> str:
@@ -1400,15 +1818,121 @@ def _management_appointment_active(appointment: dict) -> bool:
     }:
         return False
     patient_status = appointment.get("patientStatus")
-    if isinstance(patient_status, (int, float)) and patient_status != 0:
+    if isinstance(patient_status, (int, float)) and int(patient_status) in {4, 5}:
         return False
     if isinstance(patient_status, str):
         ps = re.sub(r"[^a-z0-9]+", "", patient_status.casefold())
-        if (ps.isdigit() and int(ps) != 0) or ps in {
+        if (ps.isdigit() and int(ps) in {4, 5}) or ps in {
             "cancelled", "canceled", "deleted", "declined",
         }:
             return False
     return True
+
+
+_MANAGEMENT_UNCERTAIN_KEY = "managementUncertain"
+
+
+def _management_uncertain_result(
+    *,
+    operation: str,
+    appointment_id: str,
+    slot_iso: str = "",
+    write_attempted: bool,
+    error: str,
+    dispatch: dict | None = None,
+    spoken: str = "",
+    regie: str = "",
+) -> dict[str, Any]:
+    """Einheitlicher Fail-closed-Vertrag für unklare Verwaltungs-Writes."""
+    result: dict[str, Any] = {
+        "ok": False,
+        "appointmentId": _s(appointment_id),
+        "writeAttempted": bool(write_attempted),
+        "verificationFailed": True,
+        "possiblyChanged": True,
+        "manualCheckRequired": True,
+        "error": _s(error),
+    }
+    if operation == "cancel":
+        result["cancelled"] = False
+    else:
+        result["moved"] = False
+    if _s(slot_iso):
+        result["slotIso"] = _s(slot_iso)
+    if isinstance(dispatch, dict):
+        result["dispatch"] = dispatch
+    if _s(spoken):
+        result["spoken"] = _s(spoken)
+    if _s(regie):
+        result["regie"] = _s(regie)
+    return result
+
+
+def _management_uncertain_mark(
+    ctx: dict,
+    *,
+    operation: str,
+    appointment_id: str,
+    slot_iso: str = "",
+    reason: str,
+    dispatch: dict | None = None,
+    spoken: str = "",
+    regie: str = "",
+) -> dict[str, Any]:
+    """Write wurde gesendet, sein Endzustand ist aber nicht beweisbar."""
+    ctx[_MANAGEMENT_UNCERTAIN_KEY] = {
+        "operation": _s(operation),
+        "appointmentId": _s(appointment_id),
+        "slotIso": _s(slot_iso),
+        "reason": _s(reason),
+        "writeAttempted": True,
+        "verificationFailed": True,
+        "possiblyChanged": True,
+        "manualCheckRequired": True,
+    }
+    return _management_uncertain_result(
+        operation=operation,
+        appointment_id=appointment_id,
+        slot_iso=slot_iso,
+        write_attempted=True,
+        error=f"{operation}_verification_inconclusive",
+        dispatch=dispatch,
+        spoken=spoken,
+        regie=regie,
+    )
+
+
+def _management_uncertain_guard(
+    ctx: dict,
+    *,
+    operation: str,
+    appointment_id: str,
+    slot_iso: str = "",
+) -> dict[str, Any] | None:
+    """Ein offenes Latch sperrt jeden weiteren destruktiven Verwaltungs-Write."""
+    latch = ctx.get(_MANAGEMENT_UNCERTAIN_KEY)
+    if not isinstance(latch, dict) or not latch.get("manualCheckRequired"):
+        return None
+    ist_absage = operation == "cancel"
+    return _management_uncertain_result(
+        operation=operation,
+        appointment_id=appointment_id,
+        slot_iso=slot_iso,
+        write_attempted=False,
+        error="management_write_blocked_by_uncertainty",
+        spoken=(
+            "Die Absage ist bereits zur Prüfung vorgemerkt. "
+            "Ich sende keinen zweiten Auftrag."
+            if ist_absage
+            else
+            "Die Verschiebung ist bereits zur Prüfung vorgemerkt. "
+            "Ich sende keinen zweiten Auftrag."
+        ),
+        regie=(
+            "Offenes Management-Uncertainty-Latch: kein weiterer "
+            "destruktiver Kalender-Write."
+        ),
+    )
 
 
 def _patient_appointments_fallback(
@@ -1562,7 +2086,12 @@ def _patient_appointments_fallback(
     }, termin_dispatch)
 
 
-def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
+def find_patient_appointments(
+    tenant: dict,
+    ctx: dict,
+    *,
+    timeout: float | None = None,
+) -> dict[str, Any]:
     """Kommende Termine zum NAMEN — ueber die warme Demo-Function
     agentFindPatientAppointments (Patient + Termine in EINEM Aufruf,
     inkl. Behandlername, Kalender-ID und Behandlungsgrund)."""
@@ -1584,7 +2113,9 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
     if phone:
         body["callerPhone"] = phone
     management_name_match = bool(ctx.get("managementNameMatch"))
-    status, data, dispatch = _cf_call("agentFindPatientAppointments", body)
+    status, data, dispatch = _cf_call(
+        "agentFindPatientAppointments", body, timeout=timeout
+    )
     if not isinstance(data, dict):
         data = {}
     vorname_verworfen = False
@@ -1595,7 +2126,9 @@ def find_patient_appointments(tenant: dict, ctx: dict) -> dict[str, Any]:
         # ausgehen — einmal NUR mit dem Nachnamen nachfassen. Meldet die CF
         # dann ambiguous, fragt die Prozedur den Vornamen ohnehin sauber nach.
         body = {k: v for k, v in body.items() if k != "firstName"}
-        status, data, dispatch = _cf_call("agentFindPatientAppointments", body)
+        status, data, dispatch = _cf_call(
+            "agentFindPatientAppointments", body, timeout=timeout
+        )
         if not isinstance(data, dict):
             data = {}
         vorname_verworfen = True
@@ -1948,24 +2481,228 @@ def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]
             "spoken": "Den Termin hätte ich jetzt abgesagt.",
             "regie": "Testmodus: der Kalender wurde nicht geändert.",
         }
+    blocked = _management_uncertain_guard(
+        ctx,
+        operation="cancel",
+        appointment_id=aid,
+    )
+    if blocked:
+        return blocked
     status, data, dispatch = _cf_call("agentCancelAppointmentById", {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
         "appointmentId": aid,
         "source": "telefonki-lisa",
     }, timeout=_SCHREIB_TIMEOUT)
-    if status == 200 and isinstance(data, dict) and data.get("status") == "success":
-        ctx["appointmentId"] = aid
-        return _mit_dispatch({
-            "ok": True, "cancelled": True, "appointmentId": aid,
-            "spoken": "Der Termin ist abgesagt.",
-        }, dispatch)
+    reported_success = (
+        status == 200
+        and isinstance(data, dict)
+        and data.get("status") == "success"
+    )
+    if reported_success or status == 0 or status >= 500:
+        complete, appointment = _management_readback_by_id(
+            tenant,
+            aid,
+            _s(ctx.get("appointmentDate") or ctx.get("slotIso")),
+            absent_ok=True,
+        )
+        if complete and appointment is None:
+            ctx["appointmentId"] = aid
+            return _mit_dispatch({
+                "ok": True,
+                "cancelled": True,
+                "appointmentId": aid,
+                "recoveredBy": "calendar_readback",
+                "verified": True,
+                "spoken": "Der Termin ist abgesagt.",
+            }, dispatch)
+        gesprochen = (
+            "Die Absage wurde technisch angenommen, ist im Kalender aber "
+            "noch nicht eindeutig bestätigt. Die Praxis prüft das."
+            if reported_success
+            else
+            "Ob die Absage durchgeführt wurde, ist im Kalender noch nicht "
+            "eindeutig. Die Praxis prüft das."
+        )
+        return _management_uncertain_mark(
+            ctx,
+            operation="cancel",
+            appointment_id=aid,
+            reason=(
+                "readback_active"
+                if complete and appointment is not None
+                else "readback_inconclusive"
+            ),
+            dispatch=dispatch,
+            spoken=gesprochen,
+            regie="Kein Erfolgssatz ohne exakte Rücklese der Termin-ID.",
+        )
     msg = (data or {}).get("message") if isinstance(data, dict) else f"http_{status}"
     return _mit_dispatch({
         "ok": False,
         "spoken": "Die Absage hat gerade nicht geklappt. Die Praxis kümmert sich darum.",
         "regie": f"Absage fehlgeschlagen: {msg}",
     }, dispatch)
+
+
+def _firestore_appointment_by_id(
+    tenant: dict,
+    appointment_id: str,
+    *,
+    timeout: float = 2.0,
+    expected_name_confirm_token: str = "",
+) -> dict[str, Any]:
+    """Einen Termin ohne Namens-/Tagesfilter direkt und datensparsam lesen."""
+    from kern import anrufaudio, standort
+    from kern.config import FIREBASE_CREDENTIALS
+
+    client_id = _s(tenant.get("clientId"))
+    location_id = _s(tenant.get("locationId"))
+    aid = _s(appointment_id)
+    if not FIREBASE_CREDENTIALS or not client_id or not location_id or not aid:
+        return {"ok": False, "error": "firestore_unavailable"}
+    try:
+        token = anrufaudio._access_token(
+            "https://www.googleapis.com/auth/datastore")
+        projekt = standort._projekt()
+        url = (
+            "https://firestore.googleapis.com/v1/projects/"
+            f"{projekt}/databases/(default)/documents/clients/{client_id}/"
+            f"locations/{location_id}/appointments/{aid}"
+        )
+        response = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "mask.fieldPaths": [
+                    "start", "status", "patientStatus", "isDeleted",
+                    "deletedAt", "patient", "calendar", "resourceId",
+                    "visitMotive", "nameConfirmToken",
+                    "nameConfirmPending", "confirmationHeld",
+                ],
+            },
+            timeout=timeout,
+        )
+        if response.status_code == 404:
+            # Anders als das Fehlen in einer gefilterten Tagesliste ist das
+            # exakte 404 derselben Dokument-ID ein belastbarer Löschbeweis.
+            return {"ok": True, "missing": True, "appointmentId": aid}
+        if response.status_code != 200:
+            return {"ok": False, "error": f"http_{response.status_code}"}
+        raw = response.json()
+        fields = raw.get("fields") if isinstance(raw, dict) else None
+        if not isinstance(fields, dict):
+            return {"ok": False, "error": "invalid_document"}
+        values = {k: standort._decode(v) for k, v in fields.items()}
+        state = _s(values.get("status")).casefold()
+        patient_status = values.get("patientStatus")
+        try:
+            patient_status_num = int(patient_status)
+        except (TypeError, ValueError):
+            patient_status_num = None
+        deleted = bool(
+            values.get("isDeleted") is True
+            or values.get("deletedAt")
+            or state in {"cancelled", "canceled", "deleted", "declined"}
+            or patient_status_num in {4, 5}
+        )
+        start = _s(values.get("start"))
+        if start:
+            try:
+                start = datetime.fromisoformat(
+                    start.replace("Z", "+00:00")).astimezone(TZ).isoformat(
+                        timespec="minutes")
+            except ValueError:
+                pass
+        patient = values.get("patient")
+        calendar = values.get("calendar")
+        visit_motive = values.get("visitMotive")
+        return {
+            "ok": True,
+            "deleted": deleted,
+            "appointment": {
+                "id": aid,
+                "iso": start,
+                "status": state,
+                "patientStatus": patient_status,
+                "patientId": (
+                    _s(patient.get("id"))
+                    if isinstance(patient, dict)
+                    else ""
+                ),
+                "calendarId": (
+                    _s(calendar.get("id"))
+                    if isinstance(calendar, dict)
+                    else _s(values.get("resourceId"))
+                ),
+                "visitMotiveId": (
+                    _s(visit_motive.get("id"))
+                    if isinstance(visit_motive, dict)
+                    else ""
+                ),
+                "nameConfirmTokenMatches": (
+                    not expected_name_confirm_token
+                    or _s(values.get("nameConfirmToken"))
+                    == _s(expected_name_confirm_token)
+                ),
+                "nameConfirmPending": values.get("nameConfirmPending"),
+                "confirmationHeld": values.get("confirmationHeld"),
+            },
+        }
+    except Exception as exc:
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def _management_readback_by_id(
+    tenant: dict,
+    appointment_id: str,
+    slot_iso: str,
+    *,
+    absent_ok: bool = False,
+    expected_iso: str = "",
+) -> tuple[bool, dict[str, Any] | None]:
+    """Exakte Termin-ID nach einem unklaren Write direkt nachlesen.
+
+    Eine gefilterte Tagesliste darf eine Absage nie beweisen: sie blendet
+    abgesagte/virtuelle Termine aus und kann gekappt sein. Der direkte
+    Firestore-GET ist punktgenau und stark konsistent. Erfolg bedeutet hier
+    deshalb entweder ein explizit als gelöscht/abgesagt markiertes Dokument
+    (beziehungsweise dessen exaktes 404) oder beim Verschieben dieselbe ID
+    mit exakt der erwarteten Startminute.
+    """
+    if (
+        not MANAGEMENT_WRITE_RECOVERY
+        or not _s(appointment_id)
+    ):
+        return False, None
+    last_complete = False
+    last_appointment: dict[str, Any] | None = None
+    for delay in _MANAGEMENT_RECOVERY_DELAYS:
+        if delay:
+            time.sleep(delay)
+        found = _firestore_appointment_by_id(
+            tenant, _s(appointment_id), timeout=2.0)
+        if not found.get("ok"):
+            continue
+        last_complete = True
+        if found.get("missing") or found.get("deleted"):
+            appointment = None
+        else:
+            appointment = found.get("appointment")
+        last_appointment = appointment
+        if absent_ok and appointment is None:
+            return True, None
+        if (
+            expected_iso
+            and appointment is not None
+            and _management_appointment_active(appointment)
+            and _s(appointment.get("iso")).replace(" ", "T")[:16]
+            == _s(expected_iso).replace(" ", "T")[:16]
+        ):
+            return True, appointment
+        # Ein noch aktives exaktes Dokument ist beim ersten Wurf kein
+        # Gegenbeweis: der Schreib-Timeout kann dem Commit knapp voraus sein.
+    return last_complete, last_appointment
 
 
 def _termin_id_suchen(tenant: dict, ctx: dict, iso: str) -> str:
@@ -2275,6 +3012,14 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
                 "der Test ändert den Kalender nicht."
             ),
         }
+    blocked = _management_uncertain_guard(
+        ctx,
+        operation="move",
+        appointment_id=aid,
+        slot_iso=iso,
+    )
+    if blocked:
+        return blocked
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -2283,14 +3028,52 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
         "source": "telefonki-lisa",
     }
     status, data, dispatch = _cf_update("postpone", body)
-    if status == 200 and isinstance(data, dict) and data.get("success"):
-        return _mit_dispatch({
-            "ok": True,
-            "moved": True,
-            "appointmentId": aid,
-            "slotIso": iso,
-            "spoken": f"Der Termin liegt jetzt {spoken_slot(iso)}.",
-        }, dispatch)
+    reported_success = (
+        status == 200
+        and isinstance(data, dict)
+        and data.get("success")
+    )
+    if reported_success or status == 0 or status >= 500:
+        complete, appointment = _management_readback_by_id(
+            tenant, aid, iso, expected_iso=iso)
+        if (
+            complete
+            and appointment is not None
+            and _management_appointment_active(appointment)
+            and _s(appointment.get("iso")).replace(" ", "T")[:16]
+            == iso.replace(" ", "T")[:16]
+        ):
+            return _mit_dispatch({
+                "ok": True,
+                "moved": True,
+                "appointmentId": aid,
+                "slotIso": iso,
+                "recoveredBy": "calendar_readback",
+                "verified": True,
+                "spoken": f"Der Termin liegt jetzt {spoken_slot(iso)}.",
+            }, dispatch)
+        gesprochen = (
+            "Die Verschiebung wurde technisch angenommen, ist im Kalender "
+            "aber noch nicht eindeutig bestätigt. Die Praxis prüft das."
+            if reported_success
+            else
+            "Ob die Verschiebung durchgeführt wurde, ist im Kalender noch "
+            "nicht eindeutig. Die Praxis prüft das."
+        )
+        return _management_uncertain_mark(
+            ctx,
+            operation="move",
+            appointment_id=aid,
+            slot_iso=iso,
+            reason=(
+                "readback_unexpected_state"
+                if complete and appointment is not None
+                else "readback_inconclusive"
+            ),
+            dispatch=dispatch,
+            spoken=gesprochen,
+            regie="Kein Erfolgssatz ohne exakte Rücklese der Termin-ID.",
+        )
     if status == 400:
         # Beim Verschieben muessen Alternativen im GLEICHEN Kalender und mit
         # dem GLEICHEN Besuchsgrund ab dem gewuenschten Tag gesucht werden.

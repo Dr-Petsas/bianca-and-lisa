@@ -47,8 +47,30 @@ ZUEGE = {"halten", "verfeinern", "wechseln", "zweites", "zurueck"}
 # geparkte Anliegen nach. Dreistufiger Notaus HIRN_AUTO_RESUME=off|shadow|
 # enforce (Default off = byte-identisches Alt-Verhalten).
 _CP_SIT_KEYS = (
-    "offered", "gefundenKey", "verschiebRichtung", "slotVorrat", "vorratFuer",
-    "upcoming", "past", "patient", "flussFrage", "slotGesperrt",
+    # Gemeinsamer Such-/Buchungszustand.
+    "booking", "offered", "gefunden", "gefundenKey", "kandidaten",
+    "angebotKalender", "angebotArzt", "angebotZuletzt", "angebotFestgefahren",
+    "slotVorrat", "slotGesperrt", "slotKalender", "slotAblehnungBlind",
+    "slotJaBlank", "slotNummerVorab", "vorratFuer", "vorratKey",
+    "vorratGemerkt", "vorratDispatch", "buchIntent", "bookFails",
+    "buchungUnklar", "keinSlotFertig", "motivNichtTelefonisch",
+    "needsPhoneOffen", "phoneUpdateAttempted", "phoneUpdateOk",
+    "telefonUpdateAlt",
+    # Verwaltung eines konkreten Bestandstermins.
+    "verwaltenTermin", "verschiebRichtung", "mehrfachAbsage", "moveFails",
+    "managementUncertain", "verwAktiv", "verwNotFound", "verwKorrektur",
+    "verwKorrekturVorname", "verwWann", "verwArztGefragt", "verwHinweis",
+    "verwHinweisText", "verwBehandlungGefragt", "verwBehandlung",
+    "verwZeitUnbekannt", "verwDetailQuelle", "verwKandidat",
+    "verwAusgeschlossen", "verwDrittpersonGeloest", "verwWunschAlt",
+    "verwWunschTextAlt", "verwAbschlussOffen", "verwBestaetigungUnklar",
+    "_verwDetailTag", "_verwDetailTermine", "_verwDetailDispatch",
+    "_verwDetailGeloggtKey", "_verwNameStrukturiert", "_verwNameGehoert",
+    "_verwName60Bestaetigt", "_verwName60Danach", "_obsVerwConfirmed",
+    "_verwAusgeschlosseneTermine", "_verwAusgeschlossenePatienten",
+    "_verwWannTeilGefragt",
+    # Tasklokale Patienten-/Kontextdaten.
+    "upcoming", "past", "patient", "flussFrage",
 )
 
 
@@ -93,6 +115,10 @@ def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
     for k in _CP_SIT_KEYS:
         if k in cp:
             sit[k] = copy.deepcopy(cp[k])
+        else:
+            # Zustand des eingeschobenen Tasks darf nicht in den
+            # reaktivierten Task durchsickern (Termin B -> Termin A).
+            sit.pop(k, None)
 
 
 # Fragen, deren Feld ein eingeschobenes Anliegen inzwischen gefuellt haben

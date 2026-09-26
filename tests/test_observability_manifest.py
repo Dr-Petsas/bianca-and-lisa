@@ -196,6 +196,7 @@ def test_reservierung_expired_bereinigt_lokalen_stand(monkeypatch):
             "firstNameHint": "Max",
         },
     }
+    sit["namenslink"]["reservationScope"] = namenslink.reservierungs_scope(sit)
     data = namenslink.einziehen(sit)
     assert data["status"] == "expired"
     assert sit["namenslink"] == {"expired": True}

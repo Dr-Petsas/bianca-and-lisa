@@ -264,7 +264,7 @@ def test_buchung_traegt_wunsch_als_notiz(monkeypatch):
     sit = _buch_sit()
     s = gehirn.sammler(sit)
     s.update({"modus": "buchen", "phase": "bestaetigen", "frage": "bestaetigung",
-              "pzr": "nein", "telefon": "01776004600", "telefonOk": True,
+              "pzr": "nein", "telefon": "015112345678", "telefonOk": True,
               "slotIso": _iso_in(3, 9)})
     s["motivFallback"] = {"calendarId": PETSAS, "von": "fuellung-klein",
                           "vonName": "KCH Füllung klein",

@@ -338,3 +338,26 @@ def test_blessing_schliesst_nach_abbruch_kurz():
     assert z and z.get("hangup"), z
     assert "sonst noch" not in z["text"].lower()
     _abgebrochen(sit, s, "kein_termin")
+
+
+def test_drei_unklare_bestaetigungen_schreiben_nie_und_beenden_den_vorgang(
+    monkeypatch,
+):
+    sit = _sit()
+    s = _bis_bestaetigen(sit)
+    writes = []
+    monkeypatch.setattr(
+        flow,
+        "_buchen",
+        lambda *_a, **_k: writes.append("write") or {"text": "unerwartet"},
+    )
+
+    z1 = flow.zug(sit, "Vielleicht.")
+    z2 = flow.zug(sit, "Ich weiß nicht.")
+    z3 = flow.zug(sit, "Keine Ahnung.")
+
+    assert z1 and "kurzes ja" in z1["text"].casefold()
+    assert z2 and "soll ich" in z2["text"].casefold()
+    assert z3 and "ohne ein klares ja" in z3["text"].casefold()
+    _abgebrochen(sit, s, "unklar")
+    assert not writes

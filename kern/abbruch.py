@@ -346,6 +346,7 @@ _SCHLUSS = {
     "online": "Alles klar — dann bleibt es bei der Online-Buchung, hier trage ich nichts ein.",
     "spaeter": "Alles klar — dann trage ich jetzt nichts ein. Melden Sie sich einfach wieder, wenn es passt.",
     "kein_termin": "Alles klar — dann trage ich nichts ein.",
+    "unklar": "Ohne ein klares Ja trage ich den Termin nicht ein.",
 }
 
 

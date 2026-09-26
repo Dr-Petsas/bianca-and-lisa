@@ -22,7 +22,8 @@ def _bereit(sit: dict) -> dict:
         "pzr": "nein",
         "motivName": "KCH Kontrolluntersuchung", "wunsch": {},
         "vorname": "Julia", "nachname": "Berger", "buchstabiert": True,
-        "telefon": "01776004600", "telefonOk": True,
+        "nameVerified": True,
+        "telefon": "015112345678", "telefonOk": True,
         "slotIso": "2026-09-10T09:00:00+02:00",
         "arzt": {"typ": "genannt", "calendarId": "cal-p", "calendarName": "Petsas"},
     })

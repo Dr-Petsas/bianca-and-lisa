@@ -71,6 +71,18 @@ def test_gescheiterte_notiz_ist_keine_evidenz():
     ) == "notiz"
 
 
+def test_neue_fehlgeschlagene_notiz_schlaegt_historischen_erfolg():
+    sit = _sit()
+    merke_tool(sit, "praxis_notiz", {"ok": True, "notiert": True})
+    # Der nächste Zug beginnt; die alte Notiz bleibt im Langzeit-Ledger.
+    sit.pop("_toolsZug", None)
+    merke_tool(sit, "praxis_notiz", {"ok": False, "notiert": False})
+
+    assert fakten_wache.unbelegte_behauptung(
+        sit, "Die Notiz für das Team habe ich geschrieben."
+    ) == "notiz"
+
+
 def test_kurzes_notiert_ist_nur_gespraechsbestaetigung():
     sit = _sit()
     for text in ("Alles klar, notiert.", "Ich habe Ihre Nummer vermerkt."):
