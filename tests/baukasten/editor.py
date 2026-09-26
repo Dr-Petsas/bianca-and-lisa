@@ -570,6 +570,31 @@ def api_statistik(tenant: str = "") -> dict[str, Any]:
     return statistik.aus_berichten(BERICHTE_DIR, tenant)
 
 
+@app.get("/api/ergebnisse")
+def api_ergebnisse(tenant: str = "") -> dict[str, Any]:
+    """Live-Mitschnitte: Anliegen, Cloud Functions, Auslastung, Tages-Fehlerquote."""
+    from kern import ergebnisse
+    ergebnisse.tag_schneiden()
+    return ergebnisse.aus_mitschnitten(tenant)
+
+
+@app.on_event("startup")
+def _ergebnisse_tag_starten() -> None:
+    """Um 20:00 den Tag fortschreiben, auch wenn niemand die Seite offen hat."""
+    import time
+
+    def _loop() -> None:
+        while True:
+            try:
+                from kern import ergebnisse
+                ergebnisse.tag_schneiden()
+            except Exception as exc:
+                print(f"ergebnisse-tag {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(60)
+
+    threading.Thread(target=_loop, name="ergebnisse-tag", daemon=True).start()
+
+
 @app.get("/api/lauf/{lauf_id}")
 def lauf_details(lauf_id: str) -> dict[str, Any]:
     import json as _json

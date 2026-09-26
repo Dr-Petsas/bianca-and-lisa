@@ -364,6 +364,8 @@ a.gross.leiste-link {
 }
 .stat-chart strong { display: block; font-size: 13px; margin-bottom: 6px; }
 .stat-chart canvas { display: block; width: 100%; height: 230px; }
+.fehler-legende { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--dim); }
+.fehler-legende i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
 .warnungen { display: grid; gap: 8px; }
 .warnung {
   padding: 9px 12px;
@@ -384,7 +386,24 @@ a.gross.leiste-link {
   vertical-align: top;
 }
 .stat-tabelle th { color: var(--dim); font-size: 11px; text-transform: uppercase; }
-.stat-tabelle td:nth-child(2) { font-weight: 700; color: var(--rot); }
+/* Nur die Problem-Tabelle: Spalte 2 ist die Anzahl. Zahlentabellen
+   (Anliegen, Cloud Functions) färben selbst über .ok / .bad. */
+.stat-tabelle:not(.zahl-tabelle) td:nth-child(2) { font-weight: 700; color: var(--rot); }
+.erg-tabs { display: flex; gap: 8px; margin: 0 0 12px; }
+.erg-tabs .chip.an { background: #24374e; border-color: #d862c8; }
+.zahl-tabelle td:nth-child(2),
+.zahl-tabelle td:nth-child(3),
+.zahl-tabelle td:nth-child(4),
+.zahl-tabelle td:nth-child(5),
+.zahl-tabelle td:nth-child(6) {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.zahl-tabelle td .ok { color: var(--gruen); }
+.zahl-tabelle td .bad { color: var(--rot); }
+.fail-gruende { display: grid; gap: 3px; font-size: 12px; }
+.fail-gruende .klein { color: var(--dim); }
 .analysen { display: grid; gap: 8px; }
 .analyse {
   padding: 10px 12px;

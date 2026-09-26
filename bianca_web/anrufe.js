@@ -107,9 +107,10 @@ function hatAnliegen(a, id) {
 
 function istTest(a) {
   if (!a) return false;
-  if (a.testAnruf) return true;
-  if (a.phoneCallId) return false;
-  return true;
+  // Nur ein ausdrueckliches Test-Flag ist ein Test. Ein fehlender
+  // phoneCallId (Dock-Anruf, CF hat keinen Datensatz angelegt) darf einen
+  // echten SIP-Anruf nicht mehr aus der Live-Ansicht verstecken.
+  return a.testAnruf === true;
 }
 
 function zeit(iso) {

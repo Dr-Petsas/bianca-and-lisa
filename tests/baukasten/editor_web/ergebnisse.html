@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Baukasten-Ergebnisse</title>
-<link rel="stylesheet" href="web/stil.css?v=16">
+<title>Ergebnisse — Bianca</title>
+<link rel="stylesheet" href="web/stil.css?v=23">
 </head>
 <body class="ergebnisse">
 <header class="kopf">
@@ -15,8 +15,138 @@
   <div class="rechts"><a href="./">&larr; Teststudio</a></div>
 </header>
 <main>
+  <div class="erg-tabs">
+    <button class="chip an" id="tab-heute" type="button">Heute</button>
+    <button class="chip" id="tab-gesamt" type="button">Gesamt</button>
+    <button class="chip" id="tab-archiv" type="button">Vorher und Studio</button>
+  </div>
+  <div id="sicht-heute">
   <div class="block">
-    <h2>Qualitätsentwicklung</h2>
+    <h2>Heute seit 20:00 Uhr</h2>
+    <div class="stat-kpis" id="live-kpis"></div>
+    <p class="klein" id="live-hinweis" style="margin-top:8px"></p>
+  </div>
+  <div class="block">
+    <h2>Anliegen erkannt und abgehandelt</h2>
+    <div class="stat-tabelle-wrap">
+      <table class="stat-tabelle zahl-tabelle">
+        <thead>
+          <tr>
+            <th>Anliegen</th>
+            <th>Erkannt</th>
+            <th>Erledigt</th>
+            <th>Offen</th>
+            <th>Quote</th>
+          </tr>
+        </thead>
+        <tbody id="live-anliegen"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="block" id="block-strategie">
+    <h2>Einstellungen, die Bianca benutzt</h2>
+    <p class="klein">Terminverwaltung ist fest. Darunter steht, was beim nächsten Anruf in dieser Praxis gilt: das Portal, sonst die veröffentlichte Datei aus Anliegen, sonst der bisherige Gesprächsweg. „Wie weit im Voraus“ ist die Suchgrenze für neue Termine.</p>
+    <div id="live-strategie"></div>
+  </div>
+  <div class="block">
+    <h2>Cloud Functions</h2>
+    <div class="stat-tabelle-wrap">
+      <table class="stat-tabelle zahl-tabelle">
+        <thead>
+          <tr>
+            <th>Funktion</th>
+            <th>Läufe</th>
+            <th>Ok</th>
+            <th>Kein Termin</th>
+            <th>Fail</th>
+            <th>Quote</th>
+            <th>Ø ms</th>
+            <th>Hinweise / Fail-Gründe</th>
+          </tr>
+        </thead>
+        <tbody id="live-cfs"></tbody>
+      </table>
+    </div>
+  </div>
+  </div>
+  <div id="sicht-gesamt" hidden>
+  <div class="block">
+    <h2>Anliegen-Quote je Praxis</h2>
+    <p class="klein" id="fehler-hinweis">Dieselbe Quote wie in den Karten: erledigte Anliegen von allen erkannten. Jeder Tag endet um 20:00 Uhr und wird dann ins Diagramm geschrieben. Die Summe darunter bleibt stehen.</p>
+    <div class="stat-chart">
+      <canvas id="chart-fehler" width="760" height="230"></canvas>
+    </div>
+    <div class="fehler-legende" id="fehler-legende"></div>
+  </div>
+  <div class="block">
+    <h2>Summe der Tage im Diagramm</h2>
+    <div class="stat-kpis" id="gesamt-kpis"></div>
+    <p class="klein" id="gesamt-hinweis" style="margin-top:8px"></p>
+  </div>
+  <div class="block">
+    <h2>Anliegen erkannt und abgehandelt</h2>
+    <div class="stat-tabelle-wrap">
+      <table class="stat-tabelle zahl-tabelle">
+        <thead>
+          <tr>
+            <th>Anliegen</th>
+            <th>Erkannt</th>
+            <th>Erledigt</th>
+            <th>Offen</th>
+            <th>Quote</th>
+          </tr>
+        </thead>
+        <tbody id="gesamt-anliegen"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="block">
+    <h2>Cloud Functions</h2>
+    <div class="stat-tabelle-wrap">
+      <table class="stat-tabelle zahl-tabelle">
+        <thead>
+          <tr>
+            <th>Funktion</th>
+            <th>Läufe</th>
+            <th>Ok</th>
+            <th>Kein Termin</th>
+            <th>Fail</th>
+            <th>Quote</th>
+            <th>Ø ms</th>
+            <th>Hinweise / Fail-Gründe</th>
+          </tr>
+        </thead>
+        <tbody id="gesamt-cfs"></tbody>
+      </table>
+    </div>
+  </div>
+  </div>
+  <div id="sicht-archiv" hidden>
+  <div class="block" id="vergleich-block" hidden>
+    <h2>Vorher — bis zur Namens-SMS</h2>
+    <p class="klein" id="vergleich-hinweis"></p>
+    <div class="stat-kpis" id="vorher-kpis"></div>
+  </div>
+  <div class="block">
+    <h2>Auslastung — wann welche Bianca lief</h2>
+    <p class="klein" id="last-spitze"></p>
+    <div class="stat-charts">
+      <div class="stat-chart">
+        <strong>Gleichzeitige Anrufe</strong>
+        <canvas id="chart-last" width="760" height="230"></canvas>
+      </div>
+      <div class="stat-chart">
+        <strong>Latenz nach Gleichzeitigkeit</strong>
+        <canvas id="chart-drift" width="760" height="230"></canvas>
+      </div>
+    </div>
+    <div class="stat-chart" style="margin-top:12px">
+      <strong>Bahnen je Praxis</strong>
+      <canvas id="chart-bahnen" width="760" height="220"></canvas>
+    </div>
+  </div>
+  <div class="block">
+    <h2>Studio-Testläufe</h2>
     <div class="stat-kpis" id="stat-kpis"></div>
     <div class="trend" id="stat-trend"></div>
     <div class="stat-charts">
@@ -66,7 +196,8 @@
     <div id="story-checks" style="margin-bottom:10px"></div>
     <div class="dialog" id="dialog"></div>
   </div>
+  </div>
 </main>
-<script src="web/ergebnisse.js?v=14"></script>
+<script src="web/ergebnisse.js?v=25"></script>
 </body>
 </html>
