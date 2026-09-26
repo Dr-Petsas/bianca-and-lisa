@@ -3824,6 +3824,10 @@ def anrufer_bekannt(sit: dict) -> dict:
     """DB-Patient zur Anrufernummer — {} wenn keiner da oder Notaus an."""
     if os.environ.get("ANRUFER_CHECK", "1").strip() == "0":
         return {}
+    if sit.get("anruferPruefungOffen"):
+        # Der CF-pre-Einzeltreffer wird intern schon gespiegelt, ist aber
+        # erst nach dem Shared-Phone-Abgleich gesprächssicher.
+        return {}
     from kern import namenslink
     namenslink.nummer_parken(sit)
     if namenslink.test_unbekannt(sit):

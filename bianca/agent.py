@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, besuchsgrund, flow, gehirn, metazug, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, agentprofil, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import fach_wache
 from kern import dringlichkeit
 from kern import online_fallback
@@ -1707,6 +1707,62 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             }
         spur.merken(sit, "notfall-vorrang", text_in[:80])
         return _maschinen_antwort(sit, akut_reply, msgs)
+
+    # W-SHARED-PHONE (26.09.2026): Eine Mobilnummer kann Ehepartnern,
+    # Eltern und Kindern gemeinsam gehören. Der CF-pre-Treffer darf dann
+    # niemals still eine Person binden. Erst freundlich unterscheiden,
+    # danach den ursprünglichen Auftrag weiterbearbeiten. Ein nacktes "Ja"
+    # ist ausdrücklich kein Identitätsbeweis.
+    if sit.get("callerPhone") and (
+            sit.get("anruferPruefungOffen")
+            or not (
+                sit.get("anrufer") or sit.get("anruferKandidaten")
+                or sit.get("anruferAuswahlVerworfen")
+            )):
+        agentprofil.anrufer_warten(sit)
+    if agentprofil.anrufer_auswahl_noetig(sit):
+        offen = _s(sit.get("anruferAuswahlOffenerText"))
+        status = agentprofil.anrufer_auswaehlen(sit, text_in)
+        if status == "selected":
+            gehirn.anrufer_daten_uebernehmen(sit)
+            ursprung = offen
+            sit.pop("anruferAuswahlOffenerText", None)
+            sit.pop("anruferAuswahlVersuche", None)
+            spur.merken(sit, "anrufer-auswahl", "eindeutig")
+            if ursprung:
+                sit["messages"] = msgs
+                return user_turn(sit, ursprung, melde=melde, vorab=None)
+            # Der erste Satz enthielt bereits Name UND Auftrag. Die Person
+            # ist gebunden; derselbe Satz darf nun normal weiterlaufen.
+        elif status == "discarded":
+            ursprung = offen or text_in
+            sit.pop("anruferAuswahlOffenerText", None)
+            spur.merken(sit, "anrufer-auswahl", "frisch-aufnehmen")
+            sit["messages"] = msgs
+            fortsetzung = user_turn(sit, ursprung, melde=melde, vorab=None)
+            return _antwort_mit_vorspann(
+                sit,
+                fortsetzung,
+                "Ich kann die Person nicht sicher zuordnen. "
+                "Ich nehme die Patientendaten frisch auf.",
+            )
+        else:
+            if not offen:
+                sit["anruferAuswahlOffenerText"] = text_in
+                # Der ursprüngliche Auftrag war noch keine Antwort auf die
+                # Identitätsfrage und verbraucht deshalb keinen Versuch.
+                sit["anruferAuswahlVersuche"] = 0
+            frage = agentprofil.anrufer_auswahl_frage(sit)
+            spur.merken(sit, "anrufer-auswahl", "frage")
+            return _maschinen_antwort(
+                sit,
+                {
+                    "text": frage,
+                    "book": None,
+                    "_wiederholungErlaubt": True,
+                },
+                msgs,
+            )
 
     online_antwort = _online_fallback_antwort(sit, text_in)
     if online_antwort is not None:

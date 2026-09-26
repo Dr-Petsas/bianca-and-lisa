@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 
 from bianca import session
-from kern import agentprofil, tenants
+from kern import agentprofil, patients, tenants
 
 # Beispiel-Antwort im Format des alten phone_agent (firestore_agent_profile).
 CF_PRE = {
@@ -450,6 +450,15 @@ def test_anrufer_landet_in_der_sitzung_nie_im_cache(monkeypatch):
     monkeypatch.setattr(agentprofil, "_cf_pre",
                         lambda did, caller="", lookup_only=False: copy.deepcopy(pre))
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
+    monkeypatch.setattr(agentprofil.threading, "Thread", _SofortThread)
+    monkeypatch.setattr(
+        patients,
+        "search_patients",
+        lambda tenant, query: {"ok": True, "patients": [{
+            **pre["patient"],
+            "mobilePhoneNumber": "+4915253904756",
+        }]},
+    )
     t = agentprofil.fuer_did("+4930111222", caller="015253904756")
     assert t["_anrufer"]["nachname"] == "Berger"
     sit = session.neu(tenant=t)
@@ -470,6 +479,16 @@ def test_anrufer_cache_hit_wird_nachgereicht(monkeypatch):
     den Patienten zur Anrufernummer nach — ohne echte Nummer nie."""
     monkeypatch.setattr(agentprofil, "enabled", lambda: True)
     monkeypatch.setattr(agentprofil.threading, "Thread", _SofortThread)
+    monkeypatch.setattr(
+        patients,
+        "search_patients",
+        lambda tenant, query: {"ok": True, "patients": [{
+            "id": "pat-9",
+            "firstName": "Peter",
+            "lastName": "Schmidt",
+            "mobilePhoneNumber": "+4915253904756",
+        }]},
+    )
     monkeypatch.setattr(agentprofil, "_cf_pre",
                         lambda did, caller="", lookup_only=False: {
         "phoneCallId": "pc-neu",

@@ -875,6 +875,26 @@ def _ctx_bauen(sit: dict) -> dict:
     else:
         ctx.pop("patientId", None)
         patients.patient_id_bindung_setzen(ctx, "", "", "")
+    dubletten = [
+        p for p in (sit.get("patientenDubletten") or [])
+        if isinstance(p, dict) and _s(p.get("id"))
+    ]
+    dubletten_ids = [_s(p.get("id")) for p in dubletten]
+    if (len(dubletten_ids) > 1
+            and (not s["patientId"] or s["patientId"] in dubletten_ids)
+            and all(
+                (not _s(p.get("firstName")) or
+                 _s(p.get("firstName")).casefold() == _s(s["vorname"]).casefold())
+                and
+                (not _s(p.get("lastName")) or
+                 _s(p.get("lastName")).casefold() == _s(s["nachname"]).casefold())
+                for p in dubletten
+            )):
+        ctx["patientDuplicateCount"] = len(dubletten_ids)
+        ctx["patientDuplicateIds"] = dubletten_ids
+    else:
+        ctx.pop("patientDuplicateCount", None)
+        ctx.pop("patientDuplicateIds", None)
     if s["vorname"]:
         ctx["firstName"] = s["vorname"]
     else:
@@ -2289,6 +2309,12 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
             # Wechsel gehoeren sichtbar in den Termin.
             hinweise = []
             notiz_bestaetigungen = []
+            duplicate_count = int(ctx.get("patientDuplicateCount") or 0)
+            if duplicate_count > 1:
+                hinweise.append(
+                    f"{duplicate_count} Patientendubletten gefunden — "
+                    "bitte Akten prüfen und zusammenführen."
+                )
             if _s(sit.get("telefonUpdateAlt")):
                 hinweise.append(
                     f"Alte Nummer {telefon.normaliert(sit['telefonUpdateAlt'])} "

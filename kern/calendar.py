@@ -888,6 +888,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             "name": ctx.get("patientName"),
             "firstName": ctx.get("firstName"),
             "lastName": ctx.get("lastName"),
+            "birthDate": ctx.get("birthDate"),
+            "phone": ctx.get("phoneConfirmed") or ctx.get("phone"),
         })
         patient_id = _s(auf.get("id"))
         if patient_id:
@@ -1465,6 +1467,14 @@ def _bind_akte(ctx: dict, karte: dict) -> None:
         ctx["phone"] = karte["phone"]
     if karte.get("birthDate"):
         ctx["birthDate"] = karte["birthDate"]
+    duplicate_count = int(karte.get("duplicateCount") or 0)
+    if duplicate_count > 1:
+        ctx["patientDuplicateCount"] = duplicate_count
+        ctx["patientDuplicateIds"] = [
+            _s(x) for x in (karte.get("duplicatePatientIds") or []) if _s(x)
+        ]
+        ctx["patientDuplicateNewestCertain"] = bool(
+            karte.get("duplicateNewestCertain"))
 
 
 def create_patient(
@@ -1829,6 +1839,201 @@ def _management_appointment_active(appointment: dict) -> bool:
     return True
 
 
+def _firestore_duplicate_patient_appointments(
+    tenant: dict,
+    patienten: list[dict],
+) -> dict[str, Any]:
+    """Alle kommenden Termine mehrerer gleichnamiger Akten lesen.
+
+    Der Namens-Endpunkt wählt bei Patientendubletten nur eine Akte. Dieser
+    read-only Firestore-Weg fragt deshalb jede konkrete patient.id ab und
+    vereinigt die aktiven Termine. Kein Write, kein Namensraten.
+    """
+    from kern import anrufaudio, standort
+    from kern.config import FIREBASE_CREDENTIALS
+
+    client_id = _s(tenant.get("clientId"))
+    location_id = _s(tenant.get("locationId"))
+    ids = list(dict.fromkeys(
+        _s(p.get("id")) for p in patienten
+        if isinstance(p, dict) and _s(p.get("id"))
+    ))
+    dispatch = {
+        "route": "firestoreAppointmentsForDuplicatePatients",
+        "method": "POST",
+        "request": {"patientRecords": len(ids)},
+        "response": {"appointments": 0},
+    }
+    if not FIREBASE_CREDENTIALS or not client_id or not location_id or len(ids) < 2:
+        dispatch["httpStatus"] = 0
+        return _mit_dispatch({
+            "ok": False,
+            "appointments": [],
+            "error": "duplicate_firestore_unavailable",
+        }, dispatch)
+    try:
+        token = anrufaudio._access_token(
+            "https://www.googleapis.com/auth/datastore")
+        projekt = standort._projekt()
+        url = (
+            "https://firestore.googleapis.com/v1/projects/"
+            f"{projekt}/databases/(default)/documents/clients/{client_id}/"
+            f"locations/{location_id}:runQuery"
+        )
+        rows: list[dict] = []
+        total_ms = 0
+        for patient_id in ids:
+            body = {
+                "structuredQuery": {
+                    "select": {"fields": [
+                        {"fieldPath": f} for f in (
+                            "start", "status", "patientStatus",
+                            "isDeleted", "deletedAt",
+                            "patient", "calendar", "visitMotive",
+                        )
+                    ]},
+                    "from": [{"collectionId": "appointments"}],
+                    "where": {"fieldFilter": {
+                        "field": {"fieldPath": "patient.id"},
+                        "op": "EQUAL",
+                        "value": {"stringValue": patient_id},
+                    }},
+                    "limit": 500,
+                },
+            }
+            t0 = time.perf_counter()
+            r = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+                timeout=10.0,
+            )
+            total_ms += int(round((time.perf_counter() - t0) * 1000))
+            if r.status_code != 200:
+                dispatch.update({"url": url, "httpStatus": r.status_code, "ms": total_ms})
+                return _mit_dispatch({
+                    "ok": False,
+                    "appointments": [],
+                    "error": f"duplicate_firestore_http_{r.status_code}",
+                }, dispatch)
+            data = r.json()
+            if not isinstance(data, list):
+                dispatch.update({"url": url, "httpStatus": 200, "ms": total_ms})
+                return _mit_dispatch({
+                    "ok": False,
+                    "appointments": [],
+                    "error": "duplicate_firestore_invalid",
+                }, dispatch)
+            docs = [
+                row for row in data
+                if isinstance(row, dict) and isinstance(row.get("document"), dict)
+            ]
+            if len(docs) >= 500:
+                dispatch.update({"url": url, "httpStatus": 200, "ms": total_ms})
+                return _mit_dispatch({
+                    "ok": False,
+                    "appointments": [],
+                    "error": "duplicate_firestore_truncated",
+                }, dispatch)
+            rows.extend(docs)
+    except Exception as exc:
+        dispatch.update({
+            "httpStatus": 0,
+            "response": {
+                "appointments": 0,
+                "error": type(exc).__name__,
+            },
+        })
+        return _mit_dispatch({
+            "ok": False,
+            "appointments": [],
+            "error": str(exc),
+        }, dispatch)
+
+    jetzt = datetime.now(TZ) - timedelta(minutes=5)
+    erlaubt = set(ids)
+    termine: list[dict[str, Any]] = []
+    for row in rows:
+        doc = row.get("document") or {}
+        felder = doc.get("fields")
+        if not isinstance(felder, dict):
+            continue
+        f = {k: standort._decode(v) for k, v in felder.items()}
+        if not _management_appointment_active(f):
+            continue
+        patient = f.get("patient") if isinstance(f.get("patient"), dict) else {}
+        patient_id = _s(patient.get("id"))
+        if patient_id not in erlaubt:
+            continue
+        roh_start = _s(f.get("start"))
+        try:
+            lokal = datetime.fromisoformat(
+                roh_start.replace("Z", "+00:00")).astimezone(TZ)
+        except ValueError:
+            continue
+        if lokal < jetzt:
+            continue
+        cal = f.get("calendar") if isinstance(f.get("calendar"), dict) else {}
+        vm = f.get("visitMotive") if isinstance(f.get("visitMotive"), dict) else {}
+        arzt = _s(cal.get("name")).split(",")[0].strip()
+        iso = lokal.isoformat(timespec="minutes")
+        gesprochen = spoken_slot(iso)
+        if arzt:
+            gesprochen += f" bei {arzt}"
+        first = _s(patient.get("firstName"))
+        last = _s(patient.get("lastName"))
+        termine.append({
+            "id": _s(doc.get("name")).rsplit("/", 1)[-1],
+            "iso": iso,
+            "date": iso[:10],
+            "calendarId": _s(cal.get("id")),
+            "doctorName": arzt,
+            "motivId": _s(vm.get("id")),
+            "motivName": _s(vm.get("name")),
+            "spoken": gesprochen,
+            "patientId": patient_id,
+            "patientFirstName": first,
+            "patientLastName": last,
+            "patientName": f"{first} {last}".strip(),
+            "patientPhone": _s(
+                patient.get("mobilePhoneNumber")
+                or patient.get("phoneNumber")
+                or patient.get("phone")
+            ),
+        })
+    # Dieselbe Termin-ID darf selbst bei einer unerwartet doppelt
+    # gelieferten Query-Antwort nur einmal angeboten werden.
+    termine = list({
+        (_s(a.get("id")), _s(a.get("patientId"))): a
+        for a in termine
+        if _s(a.get("id"))
+    }.values())
+    termine.sort(key=lambda a: (_s(a.get("iso")), _s(a.get("id"))))
+    newest, newest_certain = patients.neueste_akte(patienten)
+    patient = {
+        "id": _s(newest.get("id")),
+        "firstName": _s(newest.get("firstName")),
+        "lastName": _s(newest.get("lastName")),
+    }
+    dispatch.update({
+        "httpStatus": 200,
+        "ms": total_ms,
+        "response": {
+            "appointments": len(termine),
+            "patientRecords": len(ids),
+        },
+    })
+    return _mit_dispatch({
+        "ok": True,
+        "patient": patient,
+        "appointments": termine,
+        "matchSource": "duplicates",
+        "duplicateCount": len(ids),
+        "duplicatePatientIds": ids,
+        "duplicateNewestCertain": newest_certain,
+    }, dispatch)
+
+
 _MANAGEMENT_UNCERTAIN_KEY = "managementUncertain"
 
 
@@ -2018,6 +2223,23 @@ def _patient_appointments_fallback(
                  or _name_norm(p.get("firstName")) == _name_norm(query_first))
         ]
     if len(kandidaten) > 1:
+        namen = {
+            (
+                _name_norm(p.get("firstName")),
+                _name_norm(p.get("lastName")),
+            )
+            for p in kandidaten
+        }
+        geburtsdaten = {
+            _s(p.get("birthDate"))[:10] for p in kandidaten
+            if _s(p.get("birthDate"))
+        }
+        if len(namen) == 1 and all(namen.pop()) and len(geburtsdaten) <= 1:
+            resultat = _firestore_duplicate_patient_appointments(
+                tenant, kandidaten)
+            if isinstance(resultat.get("dispatch"), dict) and primary_dispatch:
+                resultat["dispatch"]["fallbackFrom"] = primary_dispatch
+            return resultat
         return _mit_dispatch({
             "ok": True,
             "mehrdeutig": True,
@@ -2098,6 +2320,25 @@ def find_patient_appointments(
     first, last = _name_teile(ctx)
     if not last:
         return {"ok": False, "appointments": [], "spoken": "Wie ist Ihr Nachname?"}
+    duplicate_ids = list(dict.fromkeys(
+        _s(x) for x in (ctx.get("duplicatePatientIds") or [])
+        if _s(x)
+    ))
+    duplicate_patients: list[dict] = []
+    if len(duplicate_ids) > 1:
+        duplicate_patients = [
+            {
+                "id": patient_id,
+                "firstName": first,
+                "lastName": last,
+                "createdAt": (ctx.get("duplicatePatientCreatedAt") or {}).get(
+                    patient_id),
+            }
+            for patient_id in duplicate_ids
+        ]
+    if len(duplicate_patients) > 1:
+        return _firestore_duplicate_patient_appointments(
+            tenant, duplicate_patients)
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -2252,6 +2493,23 @@ def find_patient_appointments(
         # phone_agent-Vorbild): der Anrufer muss den Vornamen nachliefern,
         # dann wird mit firstName erneut gesucht. vornameVerworfen sagt dem
         # Aufrufer: der GESPEICHERTE Vorname passte nicht — leeren und fragen.
+        # Sind Vor- UND Nachname bereits identisch, ist eine erneute
+        # Vornamenfrage dagegen sinnlos: alle gleichnamigen Dubletten lesen.
+        if first:
+            fallback = _patient_appointments_fallback(
+                tenant,
+                first=first,
+                last=last,
+                vorname_verworfen=False,
+                primary_dispatch=dispatch,
+                patient_id="",
+                phone="",
+                min_similarity=1.0,
+            )
+            if fallback is not None and (
+                    fallback.get("duplicateCount")
+                    or not fallback.get("mehrdeutig")):
+                return fallback
         return _mit_dispatch({"ok": True, "mehrdeutig": True, "patient": {}, "appointments": [],
                 "vornameVerworfen": vorname_verworfen}, dispatch)
     msg = _s(data.get("message")) or f"http_{status}"

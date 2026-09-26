@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 from typing import Any
 
@@ -57,6 +58,49 @@ def _phone_of(p: dict) -> str:
 
 def _digits(s: str) -> str:
     return "".join(c for c in s if c.isdigit())
+
+
+def _akten_zeitwert(patient: dict) -> float:
+    """Bestmöglicher Zeitwert einer Akte für die Dubletten-Auswahl.
+
+    ``createdAt`` entscheidet zuerst. Ältere Plattform-Antworten liefern
+    teilweise nur updatedAt/letzten Besuch; diese sind ein konservativer
+    Rückfall. Ohne Zeitstempel entscheidet die stabile Antwortreihenfolge.
+    """
+    for key in (
+        "createdAt", "created_at", "creationDate", "created",
+        "updatedAt", "updated_at", "lastUpdated",
+        "lastAppointmentDate", "lastVisit",
+    ):
+        raw = patient.get(key)
+        if isinstance(raw, datetime):
+            dt = raw
+        else:
+            text = _s(raw)
+            if not text:
+                continue
+            try:
+                dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    return 0.0
+
+
+def neueste_akte(patienten: list[dict]) -> tuple[dict, bool]:
+    """Neueste Akte und ob ein belastbarer Zeitstempel vorlag."""
+    kandidaten = [p for p in patienten if isinstance(p, dict) and _s(p.get("id"))]
+    if not kandidaten:
+        return {}, False
+    bewertet = [(_akten_zeitwert(p), i, p) for i, p in enumerate(kandidaten)]
+    hat_zeit = any(zeit > 0 for zeit, _, _ in bewertet)
+    # Bei alten Antworten ohne Zeitwert bleibt die letzte Akte der stabilen
+    # Backend-Reihenfolge der Rückfall; die Terminnotiz macht die Dublette
+    # in jedem Fall sichtbar, damit die Praxis sie prüfen kann.
+    _, _, gewaehlt = max(bewertet, key=lambda x: (x[0], x[1]))
+    return gewaehlt, hat_zeit
 
 
 def format_de_phone(raw: str) -> str:
@@ -734,6 +778,13 @@ def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
     qn = _name_norm(q)
     p_first = _name_norm(pat.get("firstName"))
     p_last = _name_norm(pat.get("lastName"))
+    p_birth = _s(pat.get("birthDate"))[:10]
+    p_phone = _digits(_s(pat.get("phone")))
+    if p_phone.startswith("00"):
+        p_phone = p_phone[2:]
+    if p_phone.startswith("49"):
+        p_phone = p_phone[2:]
+    p_phone = p_phone.lstrip("0")
     if not p_last:
         teile = ohne_titel(q).split()
         if len(teile) >= 2:
@@ -749,23 +800,55 @@ def patient_aufloesen(tenant: dict, patient: dict) -> dict[str, Any]:
             return False
         if p_first and k_first and k_first != p_first:
             return False
+        k_birth = _s(p.get("birthDate"))[:10]
+        if p_birth and k_birth and k_birth != p_birth:
+            return False
+        k_phone = _digits(_phone_of(p))
+        if k_phone.startswith("00"):
+            k_phone = k_phone[2:]
+        if k_phone.startswith("49"):
+            k_phone = k_phone[2:]
+        k_phone = k_phone.lstrip("0")
+        if p_phone and k_phone and k_phone != p_phone:
+            return False
         return bool(k_last or f"{k_first} {k_last}".strip() == qn)
 
     passende = [p for p in treffer if _passt(p)]
     gewaehlt = None
+    dubletten: list[dict] = []
+    dubletten_zeit_sicher = False
     if len(passende) == 1:
         gewaehlt = passende[0]
     else:
-        for p in passende:
-            kn = _name_norm(f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip())
-            if kn == qn:
-                gewaehlt = p
-                break
+        exakt = [
+            p for p in passende
+            if _name_norm(
+                f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip()
+            ) == qn
+        ]
+        if len(exakt) == 1:
+            gewaehlt = exakt[0]
+        elif len(exakt) > 1:
+            # Gleicher vollständiger Name mehrfach = Patientendublette.
+            # Für eine NEUBUCHUNG die neueste Akte nehmen; Verwaltungswege
+            # durchsuchen dagegen alle IDs in kern.calendar.
+            geburtsdaten = {
+                _s(p.get("birthDate"))[:10] for p in exakt
+                if _s(p.get("birthDate"))
+            }
+            if len(geburtsdaten) <= 1:
+                dubletten = exakt
+                gewaehlt, dubletten_zeit_sicher = neueste_akte(exakt)
     if not gewaehlt:
         if treffer and not passende:
             print(f"patients: Treffer verworfen (Name passt nicht) fuer {q!r}", flush=True)
         return pat
-    karte = karten_patient(gewaehlt)
+    roh = dict(gewaehlt)
+    if dubletten:
+        roh["_duplicateCount"] = len(dubletten)
+        roh["_duplicatePatientIds"] = [_s(p.get("id")) for p in dubletten]
+        roh["_duplicateNewestCertain"] = dubletten_zeit_sicher
+    karte = karten_patient(roh)
     for k in ("past", "upcoming", "devPhone", "devPhoneRaw"):
         if pat.get(k) and not karte.get(k):
             karte[k] = pat[k]
@@ -786,6 +869,11 @@ def karten_patient(p: dict) -> dict[str, Any]:
         "devPhone": format_de_phone(DEV_PHONE),
         "devPhoneRaw": DEV_PHONE,
         "test": ist_testakte(p),
+        "duplicateCount": int(p.get("_duplicateCount") or 0),
+        "duplicatePatientIds": [
+            _s(x) for x in (p.get("_duplicatePatientIds") or []) if _s(x)
+        ],
+        "duplicateNewestCertain": bool(p.get("_duplicateNewestCertain")),
         # None = Kartei-Stand unbekannt (aeltere CF ohne das Feld), sonst bool.
         "privateInsurance": (p.get("privateInsurance")
                              if isinstance(p.get("privateInsurance"), bool) else None),

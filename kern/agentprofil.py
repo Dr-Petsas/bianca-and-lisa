@@ -602,6 +602,256 @@ def anrufer_warten(sit: dict, timeout: float = _ANRUFER_WARTE_S) -> None:
         ev.wait(timeout)
 
 
+def _caller_phones(patient: dict) -> set[str]:
+    return {
+        norm
+        for key in (
+            "mobilePhoneNumber", "mobilePhone", "phoneNumber", "phone",
+            "telephone", "telephoneNumber",
+        )
+        if (norm := tenants.nummer_norm(patient.get(key)))
+    }
+
+
+def _anrufer_aus_roh(patient: dict) -> dict[str, Any]:
+    from kern import patients
+
+    karte = patients.karten_patient(patient)
+    return {
+        "patientId": _s(karte.get("id")),
+        "vorname": _s(karte.get("firstName")),
+        "nachname": _s(karte.get("lastName")),
+        "geschlecht": _s(karte.get("gender")),
+        "geburtsdatum": _s(karte.get("birthDate")),
+        "createdAt": _s(
+            patient.get("createdAt")
+            or patient.get("created_at")
+            or patient.get("created")
+        ),
+    }
+
+
+def _anrufer_mehrfach_aufloesen(
+    sit: dict,
+    basis: dict,
+    caller_norm: str,
+) -> None:
+    """Caller-ID gegen ALLE Akten prüfen.
+
+    Gleichnamige Akten sind Dubletten desselben Patienten: Neubuchung bindet
+    die neueste, Verwaltung behält alle IDs. Verschiedene Namen an derselben
+    Nummer werden niemals still gewählt, sondern im Dialog unterschieden.
+    """
+    from kern import patients
+
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    treffer: list[dict] = []
+    try:
+        suchergebnis = patients.search_patients(tenant, "+" + caller_norm)
+        roh = (
+            suchergebnis.get("patients") or []
+            if isinstance(suchergebnis, dict) and suchergebnis.get("ok")
+            else []
+        )
+        gesehen: set[str] = set()
+        for patient in roh:
+            if not isinstance(patient, dict):
+                continue
+            patient_id = _s(patient.get("id"))
+            if (not patient_id or patient_id in gesehen
+                    or caller_norm not in _caller_phones(patient)):
+                continue
+            gesehen.add(patient_id)
+            treffer.append(patient)
+    except Exception as exc:
+        print(
+            f"agentprofil anrufer-mehrfach fail: {type(exc).__name__}",
+            flush=True,
+        )
+
+    if not treffer:
+        if basis:
+            _anrufer_in_sitzung(sit, basis, caller_norm)
+        return
+    if len(treffer) == 1:
+        _anrufer_in_sitzung(
+            sit, _anrufer_aus_roh(treffer[0]), caller_norm)
+        return
+
+    def identitaet(patient: dict) -> tuple[str, str, str]:
+        return (
+            _s(patient.get("firstName")).casefold(),
+            _s(patient.get("lastName")).casefold(),
+            _s(patient.get("birthDate"))[:10],
+        )
+
+    identitaeten = {identitaet(p) for p in treffer}
+    namen = {(vor, nach) for vor, nach, _ in identitaeten}
+    geburtsdaten = {geb for _, _, geb in identitaeten if geb}
+    # Gleicher Name und kein widersprechendes Geburtsdatum = Akten-Dublette.
+    if len(namen) == 1 and len(geburtsdaten) <= 1:
+        neueste, _ = patients.neueste_akte(treffer)
+        sit["patientenDubletten"] = [
+            {
+                **_anrufer_aus_roh(p),
+                "id": _s(p.get("id")),
+                "firstName": _s(p.get("firstName")),
+                "lastName": _s(p.get("lastName")),
+            }
+            for p in treffer
+        ]
+        _anrufer_in_sitzung(
+            sit, _anrufer_aus_roh(neueste), caller_norm)
+        return
+
+    sit.pop("anrufer", None)
+    sit["patient"] = {}
+    sit.pop("patientenDubletten", None)
+    booking = sit.get("booking")
+    if isinstance(booking, dict):
+        for key in (
+            "patientId", "patientIdBound", "patientIdFirstName",
+            "patientIdLastName", "firstName", "lastName", "patientName",
+            "phone", "birthDate", "gender",
+        ):
+            booking.pop(key, None)
+    sit["anruferKandidaten"] = [
+        {
+            **_anrufer_aus_roh(p),
+            "id": _s(p.get("id")),
+            "firstName": _s(p.get("firstName")),
+            "lastName": _s(p.get("lastName")),
+            "phone": "+" + caller_norm,
+        }
+        for p in treffer
+    ][:8]
+
+
+def anrufer_auswahl_noetig(sit: dict) -> bool:
+    return len([
+        p for p in (sit.get("anruferKandidaten") or [])
+        if isinstance(p, dict) and _s(p.get("id"))
+    ]) > 1
+
+
+def anrufer_auswahl_frage(sit: dict) -> str:
+    kandidaten = [
+        p for p in (sit.get("anruferKandidaten") or [])
+        if isinstance(p, dict) and _s(p.get("id"))
+    ]
+    if len(kandidaten) <= 3:
+        namen = [
+            f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip()
+            for p in kandidaten
+        ]
+        if len(set(n.casefold() for n in namen)) < len(namen):
+            namen = [
+                (
+                    f"{name}, geboren {_s(p.get('geburtsdatum'))[:4]}"
+                    if _s(p.get("geburtsdatum"))[:4] else name
+                )
+                for name, p in zip(namen, kandidaten)
+            ]
+        if len(namen) == 2:
+            auswahl = f"{namen[0]} oder {namen[1]}"
+        else:
+            auswahl = ", ".join(namen[:-1]) + f" oder {namen[-1]}"
+        return (
+            "Zu dieser Handynummer finde ich mehrere Personen. "
+            f"Spreche ich mit {auswahl}?"
+        )
+    return (
+        "Zu dieser Handynummer finde ich mehrere Personen. "
+        "Mit wem spreche ich bitte? Nennen Sie mir Vor- und Nachnamen."
+    )
+
+
+def anrufer_auswaehlen(sit: dict, text: str) -> str:
+    """Shared-Phone-Auswahl: ``selected``, ``unclear`` oder ``discarded``."""
+    kandidaten = [
+        p for p in (sit.get("anruferKandidaten") or [])
+        if isinstance(p, dict) and _s(p.get("id"))
+    ]
+    if len(kandidaten) < 2:
+        return "discarded"
+    roh_text = _s(text).casefold()
+    wort = " ".join(re.findall(r"[a-zäöüß]+", roh_text))
+    if not wort or wort in {"ja", "jawohl", "richtig", "genau", "mhm"}:
+        passend: list[dict] = []
+    else:
+        passend = []
+        ordnungen = {
+            "erste": 0, "erster": 0, "erstes": 0,
+            "zweite": 1, "zweiter": 1, "zweites": 1,
+            "dritte": 2, "dritter": 2, "drittes": 2,
+        }
+        idx = next((i for token, i in ordnungen.items()
+                    if re.search(rf"\b{token}\b", wort)), None)
+        if idx is not None and idx < len(kandidaten):
+            passend = [kandidaten[idx]]
+        else:
+            jahre = re.findall(r"\b(?:19|20)\d{2}\b", roh_text)
+            nach_jahr = [
+                p for p in kandidaten
+                if jahre and _s(p.get("geburtsdatum"))[:4] in jahre
+            ]
+            voll = [
+                p for p in kandidaten
+                if (
+                    f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip()
+                    and
+                    f"{_s(p.get('firstName'))} {_s(p.get('lastName'))}".strip().casefold()
+                    in wort
+                )
+            ]
+            vornamen = [
+                p for p in kandidaten
+                if _s(p.get("firstName"))
+                and re.search(
+                    rf"\b{re.escape(_s(p.get('firstName')).casefold())}\b",
+                    wort,
+                )
+            ]
+            nachnamen = [
+                p for p in kandidaten
+                if _s(p.get("lastName"))
+                and re.search(
+                    rf"\b{re.escape(_s(p.get('lastName')).casefold())}\b",
+                    wort,
+                )
+            ]
+            # Stärkste eindeutige Form gewinnt. Ein gemeinsamer Nachname
+            # darf eine Familie niemals auf irgendeine Person reduzieren.
+            passend = (
+                nach_jahr if len(nach_jahr) == 1
+                else voll if len(voll) == 1
+                else vornamen if len(vornamen) == 1
+                else nachnamen if len(nachnamen) == 1
+                else []
+            )
+    if len(passend) == 1:
+        p = passend[0]
+        caller_norm = tenants.nummer_norm(
+            p.get("phone") or sit.get("callerPhone"))
+        _anrufer_in_sitzung(sit, {
+            "patientId": _s(p.get("patientId") or p.get("id")),
+            "vorname": _s(p.get("vorname") or p.get("firstName")),
+            "nachname": _s(p.get("nachname") or p.get("lastName")),
+            "geschlecht": _s(p.get("geschlecht")),
+            "geburtsdatum": _s(p.get("geburtsdatum")),
+        }, caller_norm)
+        sit.pop("anruferKandidaten", None)
+        sit["anruferAuswahlBestaetigt"] = True
+        return "selected"
+    versuche = int(sit.get("anruferAuswahlVersuche") or 0) + 1
+    sit["anruferAuswahlVersuche"] = versuche
+    if versuche >= 2:
+        sit.pop("anruferKandidaten", None)
+        sit["anruferAuswahlVerworfen"] = True
+        return "discarded"
+    return "unclear"
+
+
 def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
     """Beim Anrufstart: die phoneCallId dieses Anrufs in die Sitzung holen.
 
@@ -622,46 +872,57 @@ def call_erfassen(sit: dict, did: Any = "", caller: str = "") -> None:
     if caller_norm:
         sit["callerPhone"] = "+" + caller_norm
     pat = t.pop("_anrufer", None)
-    if isinstance(pat, dict) and pat and caller_norm:
+    if not isinstance(pat, dict):
+        pat = {}
+    if pat and caller_norm:
+        # Den bestehenden Ein-Patient-Vertrag sofort intern spiegeln
+        # (Kompatibilität für Hintergrund-/Listenwege), aber bis zum
+        # Mehrfachabgleich NICHT als gesicherte Gesprächsidentität nutzen.
         _anrufer_in_sitzung(sit, pat, caller_norm)
-        print(f"agentprofil anrufer erkannt: {pat.get('vorname','')} "
-              f"{pat.get('nachname','')}".strip() + f" id={pat.get('patientId','-')}",
-              flush=True)
+        sit["anruferPruefungOffen"] = True
     pcid = _s(t.pop("_phoneCallId", ""))
     if pcid:
         sit["phoneCallId"] = pcid
         # Identitaet schon da: kein Hintergrund-Lauf noetig. Fehlt der
         # Anrufer (Cache ohne _anrufer), trotzdem nachreichen — sonst
         # laeuft Auskunft ohne Rufnummer-Treffer ins LLM.
-        if sit.get("anrufer"):
+        if not caller_norm:
             ready.set()
             return
     if not enabled() or not str(t.get("_quelle") or "").startswith("cf"):
+        sit.pop("anruferPruefungOffen", None)
         ready.set()
         return  # kein DB-Agent zu dieser Nummer -> kein PhoneCall-Datensatz
     norm = tenants.nummer_norm(did)
     if not norm:
+        sit.pop("anruferPruefungOffen", None)
         ready.set()
         return
 
     def _lauf() -> None:
         try:
-            pre = _cf_pre(norm, caller)
+            pre = _cf_pre(norm, caller) if not pcid or not pat else {}
             neu = _s((pre or {}).get("phoneCallId"))
             if neu and not _s(sit.get("phoneCallId")):
                 sit["phoneCallId"] = neu
                 print(f"agentprofil call registriert phoneCallId={neu}", flush=True)
             # Cache-Treffer / fehlender Sync-Anrufer: frischen pre-Wurf
             # nachreichen (W-ANRUFER-CHECK).
-            pat2 = _anrufer_von_pre(pre)
-            if pat2 and caller_norm and not sit.get("anrufer"):
-                _anrufer_in_sitzung(sit, pat2, caller_norm)
-                print(f"agentprofil anrufer erkannt (nachgereicht): "
-                      f"{pat2.get('vorname','')} {pat2.get('nachname','')}".strip(),
-                      flush=True)
+            pat2 = pat or _anrufer_von_pre(pre)
+            if caller_norm:
+                _anrufer_mehrfach_aufloesen(sit, pat2, caller_norm)
+                if sit.get("anrufer"):
+                    erkannt = sit["anrufer"]
+                    print(
+                        "agentprofil anrufer erkannt: "
+                        f"{erkannt.get('vorname','')} "
+                        f"{erkannt.get('nachname','')}".strip(),
+                        flush=True,
+                    )
         except Exception as e:
             print(f"agentprofil call-registrierung fail: {type(e).__name__}: {e}", flush=True)
         finally:
+            sit.pop("anruferPruefungOffen", None)
             ready.set()
 
     threading.Thread(target=_lauf, daemon=True).start()

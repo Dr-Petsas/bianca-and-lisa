@@ -199,6 +199,20 @@ def _ctx(sit: dict) -> dict:
         ctx["phone"] = tel
     else:
         ctx.pop("phone", None)
+    dubletten = [
+        p for p in (sit.get("patientenDubletten") or [])
+        if isinstance(p, dict) and _s(p.get("id"))
+    ]
+    if len(dubletten) > 1:
+        ctx["duplicatePatientIds"] = [_s(p.get("id")) for p in dubletten]
+        ctx["duplicatePatientCreatedAt"] = {
+            _s(p.get("id")): _s(
+                p.get("createdAt") or p.get("created_at") or p.get("created"))
+            for p in dubletten
+        }
+    else:
+        ctx.pop("duplicatePatientIds", None)
+        ctx.pop("duplicatePatientCreatedAt", None)
     # Nur die Verwaltungs-Lesewege aktivieren den freien 60%-Namensabgleich.
     # Buchungs- und Read-after-write-Vertraege bleiben unveraendert.
     ctx["managementNameMatch"] = True
@@ -408,6 +422,16 @@ def _finden(sit: dict, melde: Melde) -> dict:
     fuzzy = res.get("matchSource") == "name60"
     if res.get("ok") and not res.get("notFound") and not res.get("mehrdeutig"):
         pat = res.get("patient") or {}
+        if int(res.get("duplicateCount") or 0) > 1:
+            sit["patientenDubletten"] = [
+                {
+                    "id": patient_id,
+                    "firstName": _s(pat.get("firstName")),
+                    "lastName": _s(pat.get("lastName")),
+                }
+                for patient_id in (res.get("duplicatePatientIds") or [])
+                if _s(patient_id)
+            ]
         if _s(pat.get("id")) and not fuzzy:
             s["patientId"] = _s(pat.get("id"))
             s["bekannt"] = True
