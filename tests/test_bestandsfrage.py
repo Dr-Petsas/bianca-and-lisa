@@ -188,7 +188,7 @@ def test_live_bestandsfrage_startet_sofort_kalenderpfad_ohne_llm():
         )
         s = gehirn.sammler(sit)
         assert s["modus"] == "auskunft" and s["frage"] == "anrufer_check"
-        assert "richtig erkannt" in aus1["text"]
+        assert aus1["text"] == "Spreche ich mit Herrn Petsas?"
         assert "neuen vereinbaren" not in aus1["text"]
 
         aus2 = agent.user_turn(sit, "Ja?")

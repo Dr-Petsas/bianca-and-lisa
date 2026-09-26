@@ -215,8 +215,7 @@ def test_b1_agent_startet_ohne_llm_den_kalenderpfad(monkeypatch):
     assert aus is not None
     assert s["modus"] == "auskunft"
     assert s["frage"] == "anrufer_check"
-    assert "Frau Gescheidle" in aus["text"]
-    assert "richtig erkannt" in aus["text"]
+    assert aus["text"] == "Spreche ich mit Frau Gescheidle?"
     assert "versichert" not in aus["text"].lower()
     assert "hautkontrolle" not in aus["text"].lower()
 
@@ -248,7 +247,7 @@ def test_b2_bekannter_gescheidle_anrufer_bekommt_den_termin_angesagt(monkeypatch
         sit,
         "Ich habe einen Termin Ende September und weiss nicht mehr wann.",
     )
-    assert "richtig erkannt" in aus1["text"]
+    assert aus1["text"].endswith("Spreche ich mit Frau Gescheidle?")
 
     aus2 = agent.user_turn(sit, "Ja, richtig.")
     s = gehirn.sammler(sit)

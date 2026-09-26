@@ -3718,7 +3718,7 @@ def test_auskunft_upgrade_nachname_zu_anrufer_check():
         }
         z2 = flow.zug(sit, "Äh, Moment.")
         assert z2 and "Frau Berger" in z2["text"]
-        assert "richtig erkannt" in z2["text"]
+        assert z2["text"] == "Spreche ich mit Frau Berger?"
         assert "Bianca" not in z2["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
@@ -3783,23 +3783,32 @@ def test_absage_mit_erkanntem_anrufer_sucht_direkt():
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
-def test_absage_nach_schnellem_hallo_stellt_keine_nackte_stimmt_das_frage():
-    """Live MedDent 09.09.: Der Name war im Vorab-Hallo schon genannt.
-    Beim später erkannten Absagewunsch kam deshalb nur „Stimmt das so?“ —
-    ohne hörbaren Bezug zur Identität oder Absage. Der sichere Check bleibt,
-    nennt aber Name und den folgenden Kalender-Schritt."""
+def test_absage_nach_schnellem_hallo_fragt_knapp_nach_identitaet():
+    """Erkannte Rufnummer: genau eine klare Identitätsfrage, keine zusätzliche
+    Erlaubnisfrage zum Nachsehen unter den hinterlegten Daten."""
     echt_anstossen = verwalten.hintergrund.anstossen
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit_mit_anrufer()
         sit["anruferHalloGesagt"] = True
         z = flow.zug(sit, "Ich möchte einen Termin absagen.")
-        assert z and z["text"] != "Stimmt das so?"
-        assert "hinterlegten Daten" in z["text"]
-        assert "absagen möchten" in z["text"]
+        assert z and z["text"] == "Spreche ich mit Frau Berger?"
+        assert "hinterlegten Daten" not in z["text"]
         assert gehirn.sammler(sit)["frage"] == "anrufer_check"
     finally:
         verwalten.hintergrund.anstossen = echt_anstossen
+
+
+def test_konkretes_anliegen_ueberspringt_namensgruss_vor_identitaetsfrage():
+    """Blessing 26.09.: nie „Guten Tag, Herr X. Spreche ich mit Herrn X?“."""
+    sit = _sit_mit_anrufer()
+    gehirn.sammler(sit)["modus"] = "auskunft"
+    hallo = gehirn.anrufer_hallo_jetzt(
+        sit,
+        "Ich würde gern wissen, wann mein nächster Termin ist.",
+    )
+    assert hallo == ""
+    assert gehirn.anrufer_check_frage(sit) == "Spreche ich mit Frau Berger?"
 
 
 def test_verhoertes_danke_nach_absage_beendet_sofort_ohne_schleife():
@@ -3926,8 +3935,7 @@ def test_auskunft_leert_stale_upcoming():
         sit = _sit_mit_anrufer()
         sit["upcoming"] = [{"id": "alt", "label": "gestern um zehn", "iso": "2020-01-01T10:00"}]
         z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
-        assert z1 and "Frau Berger" in z1["text"]
-        assert "richtig erkannt" in z1["text"]
+        assert z1 and z1["text"] == "Spreche ich mit Frau Berger?"
         assert sit.get("upcoming") == []
     finally:
         verwalten.kal.find_patient_appointments = echt_find

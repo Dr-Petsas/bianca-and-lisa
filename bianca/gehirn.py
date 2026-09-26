@@ -3435,7 +3435,7 @@ _ANRUFER_WOHL_RE = re.compile(
 )
 
 
-def anrufer_anrede(sit: dict) -> str:
+def anrufer_anrede(sit: dict, *, beugen: bool = False) -> str:
     """Kurze Anrede aus dem Rufnummer-Treffer — Herr/Frau + Nachname."""
     a = anrufer_bekannt(sit)
     if not a:
@@ -3444,12 +3444,12 @@ def anrufer_anrede(sit: dict) -> str:
     first = _s(a.get("vorname"))
     g = _s(a.get("geschlecht")).lower()
     if last and g in _HERR:
-        return f"Herr {last}"
+        return f"{'Herrn' if beugen else 'Herr'} {last}"
     if last and g in _FRAU:
         return f"Frau {last}"
     vg = vornamen.geschlecht(first)
     if last and vg == "m":
-        return f"Herr {last}"
+        return f"{'Herrn' if beugen else 'Herr'} {last}"
     if last and vg == "f":
         return f"Frau {last}"
     # Chef 21.09.2026: nie nackter Nachname, nie Vorname+Nachname ohne Titel.
@@ -3754,6 +3754,15 @@ def anrufer_hallo_jetzt(sit: dict, text: str = "") -> str:
         if sit.get("vorigesGespraech") is None or len(tel) < 7:
             return ""
         return _hallo_form(sit, text)
+    # W-ANRUFER-KLAR (26.09.2026): Bei einer Terminverwaltung nicht erst mit
+    # dem erkannten Namen begrüßen und ihn unmittelbar danach noch einmal
+    # bestätigen lassen ("Guten Tag, Herr X. Spreche ich mit Herrn X?").
+    # Der sichere Verwaltungsweg stellt stattdessen genau EINE klare
+    # Identitätsfrage. Der Buchungsweg behält seine getrennte Frage, ob der
+    # Termin für den Anrufer selbst ist.
+    if (anrufer_bekannt(sit)
+            and _s(sammler(sit).get("modus")) in {"absagen", "verschieben", "auskunft"}):
+        return ""
     if sit.get("hirnVerbinden"):
         return ""
     if text:
@@ -3937,6 +3946,13 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     hat immer genau eine Bedeutung."""
     schluss = anrufer_check_schluss(selbst=selbst)
     modus = _s(sammler(sit).get("modus"))
+    # Ein automatischer Rufnummer-Treffer ist noch keine bestätigte
+    # Identität. Bei Terminverwaltung einmal knapp und eindeutig fragen;
+    # nach dem Ja darf der Job ohne eine zweite Erlaubnisfrage weiterlaufen.
+    if modus in {"absagen", "verschieben", "auskunft"}:
+        wer = anrufer_anrede(sit, beugen=True)
+        if wer:
+            return f"Spreche ich mit {wer}?"
     if modus == "absagen":
         aktion = "den Termin suchen, den Sie absagen möchten"
     elif modus == "verschieben":
