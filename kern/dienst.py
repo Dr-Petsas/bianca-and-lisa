@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from kern import (
     assistent, filler, halbsatz, llm, mitschnitt, qwen_korrektor, sprech, spur,
-    stt_spur, tempo, tenants, tts, unterbrechung,
+    sofort, stt_spur, tempo, tenants, tts, unterbrechung,
 )
 from kern.config import WRITE_LIVE
 
@@ -859,6 +859,32 @@ class Dienst:
                             # STT-Zuege — deren spaete Qwen-Ergebnisse gehoeren
                             # zu diesem (zusammengefuegten) Zug.
                             stt_info["zuege"] = list(teile)
+                        # Verteidigung in der Tiefe: Tests/Adapter oder ein
+                        # spaeter anderer STT-Provider koennen `stt._sauber`
+                        # umgehen. Auch dann darf ein reiner englischer
+                        # Stille-Satz wie "I'm sorry." niemals Verlauf,
+                        # Intent, Maschine oder Frage-Budget erreichen.
+                        if gesagt and sofort.ist_stille_halluzination(gesagt):
+                            stand = sit.get("sttHalluzinationen")
+                            if not isinstance(stand, dict):
+                                stand = {"anzahl": 0}
+                                sit["sttHalluzinationen"] = stand
+                            stand["anzahl"] = int(stand.get("anzahl") or 0) + 1
+                            stt_info["filter"] = {
+                                "reason": "fremdsprache-oder-stille",
+                                "discarded": True,
+                            }
+                            spur.merken(
+                                sit,
+                                "stt-sprachwache",
+                                "fremdsprache-oder-stille",
+                            )
+                            print(
+                                f"{self.name}-stt-sprachwache verworfen "
+                                f"anzahl={stand['anzahl']}",
+                                flush=True,
+                            )
+                            gesagt = ""
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
                         q.put(("leer", str(e)))

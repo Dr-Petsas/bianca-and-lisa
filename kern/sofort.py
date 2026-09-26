@@ -73,20 +73,78 @@ def unterdruecken(text: str) -> bool:
 
 _STILLE_HALLU_RE = re.compile(
     r"^\s*(?:"
+    r"i(?:['’]m|\s+am)\s+sorry|im\s+sorry|sorry|"
     r"thank(?:s|\s+you)(?:\s+for\s+watching)?|"
     r"thanks(?:\s+for\s+watching)?|"
+    r"thanks?\s+for\s+(?:listening|joining)|"
+    r"see\s+you(?:\s+next\s+time)?|"
+    r"good\s+(?:morning|afternoon|evening|night)|"
     r"come\s+on|"
     r"wow|whoa|"
     r"bye+|goodbye|"
-    r"subscribe"
+    r"subscribe|"
+    r"please\s+subscribe|"
+    r"(?:music|applause|inaudible)|"
+    r"subtitles?\s+by.*|"
+    r"captions?\s+by.*"
     r")\s*[.!?]*\s*$",
     re.I,
 )
 
+_ENGLISH_WORDS = frozenset({
+    "a", "about", "all", "am", "an", "and", "appointment", "are", "at",
+    "back", "be", "because", "but", "call", "can", "could", "day", "do",
+    "for", "from", "good", "got", "had", "has", "have", "hello", "help",
+    "here", "i", "if", "in", "is", "it", "like", "me", "morning", "my",
+    "name", "need", "not", "of", "on", "or", "please", "question", "sorry",
+    "thank", "thanks", "that", "the", "there", "this", "time", "to", "want",
+    "was", "we", "what", "when", "with", "would", "you", "your",
+})
+_GERMAN_STRUCTURE = frozenset({
+    "aber", "also", "bitte", "brauche", "danke", "das", "dem", "den",
+    "der", "die", "doch", "ein", "eine", "einen", "für", "gerne", "habe",
+    "haben", "hat", "heute", "ich", "ist", "ja", "kann", "kein", "keine",
+    "mein", "meine", "möchte", "morgen", "nein", "nicht", "noch", "oder",
+    "sie", "sind", "termin", "uhr", "um", "und", "uns", "was", "wir", "zu",
+    "zum", "zur",
+})
+
+
+def _woerter(text: str) -> list[str]:
+    # Apostrophe trennen: "I'm sorry" -> ["i", "m", "sorry"]. Das
+    # Kontraktions-"m" wird unten neutral behandelt.
+    return re.findall(r"[a-zäöüß]+", _s(text).casefold())
+
 
 def ist_stille_halluzination(text: str) -> bool:
-    """Parakeet auf Ruhe/Echo: kein Anrufer-Satz, keine nächste Frage."""
-    return bool(_STILLE_HALLU_RE.match(_s(text)))
+    """Parakeet auf Ruhe/Echo oder reines Englisch: kein Anrufer-Satz.
+
+    Die Telefon-KI führt deutsche Gespräche. Reine englische Sätze ohne
+    einen einzigen deutschen Strukturanker sind bei Parakeet/Qwen auf
+    Stille und Leitungsrauschen ein wiederkehrendes Halluzinationsmuster.
+    Gemischte deutsche Sätze ("Sorry, ich brauche einen Termin") und
+    Eigennamen bleiben bewusst erhalten.
+    """
+    t = _s(text)
+    if not t:
+        return False
+    if _STILLE_HALLU_RE.match(t):
+        return True
+    if any(ch.isdigit() for ch in t):
+        return False
+    woerter = _woerter(t)
+    if not woerter or any(w in _GERMAN_STRUCTURE for w in woerter):
+        return False
+    relevant = [w for w in woerter if w not in {"m", "s", "re", "ve", "ll", "d"}]
+    if len(relevant) < 2:
+        return False
+    englisch = sum(w in _ENGLISH_WORDS for w in relevant)
+    englischer_anfang = relevant[0] in {
+        "i", "we", "you", "my", "your", "the", "good",
+    }
+    return englisch >= 2 and (
+        englisch / len(relevant) >= 0.75 or englischer_anfang
+    )
 
 
 def transfer_ueberspringen(text: str) -> bool:

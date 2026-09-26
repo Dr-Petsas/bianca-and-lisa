@@ -96,6 +96,17 @@ def _sauber(text) -> str:
         return "Nein."
     if kurz in {"hello"}:
         return "Hallo."
+    # W-STT-SPRACHWACHE (26.09.2026): Parakeet halluzinierte auf reine
+    # Stille "I'm sorry." und brachte damit den sicheren Dialogpfad aus
+    # dem Tritt. Reine englische/Schnitt- und Outro-Halluzinationen werden
+    # schon am Ohr verworfen, bevor sie Verlauf, Intent oder Frage-Budget
+    # erreichen. Die kurzen phonetischen Ja/Nein/Hallo-Formen oben bleiben
+    # absichtlich erhalten; gemischte deutsche Sätze ebenfalls.
+    from kern import sofort
+    if sofort.ist_stille_halluzination(text):
+        print("stt-sprachwache: fremdsprachen/stille-halluzination verworfen",
+              flush=True)
+        return ""
     return text
 
 

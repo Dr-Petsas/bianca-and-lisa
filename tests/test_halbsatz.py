@@ -172,6 +172,36 @@ def test_audio_halbsatz_warte_traegt_stt_gewinner(monkeypatch):
     assert gesehen == []
 
 
+def test_audio_englische_stille_halluzination_erreicht_dialog_nicht(monkeypatch):
+    """Live Blessing 26.09.: Stille -> "I'm sorry." darf keinen Zug auslösen."""
+    d, gesehen = _dienst()
+    sit = {
+        "sammler": {"modus": "buchen", "frage": "nachname"},
+        "frageBudget": {"fid": "nachname", "versuche": 1, "unklar": 0},
+        "messages": [{"role": "system", "content": "s"}],
+    }
+    monkeypatch.setattr(
+        dienst_mod.stt_spur,
+        "transcribe",
+        lambda *a, **k: (
+            "I'm sorry.",
+            {"pipeline": "audio", "winner": "parakeet"},
+        ),
+    )
+
+    z = _zeilen(
+        d, sit, art="listen", stt_blob=b"x" * 4000,
+        stt_mime="audio/wav", stt_name="stille.wav",
+    )
+
+    assert [x["type"] for x in z] == ["empty"]
+    assert gesehen == []
+    assert sit["messages"] == [{"role": "system", "content": "s"}]
+    assert sit["sammler"]["frage"] == "nachname"
+    assert sit["frageBudget"]["versuche"] == 1
+    assert sit["sttHalluzinationen"]["anzahl"] == 1
+
+
 def test_dienst_reicht_stilles_diktat_warten_ohne_reply_audio_durch():
     """Live 08.09.: gespeicherte Ziffern/Buchstaben dürfen keine Ansage starten."""
     d, _ = _dienst()

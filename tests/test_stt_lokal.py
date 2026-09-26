@@ -94,6 +94,44 @@ def test_kurze_englische_parakeet_formen_werden_deutsch_normalisiert():
         _mit_lokal(fake, lauf)
 
 
+def test_englische_stille_halluzinationen_werden_verworfen():
+    faelle = (
+        "I'm sorry.",
+        "I am sorry.",
+        "Sorry.",
+        "Thank you.",
+        "Thanks for watching.",
+        "Please subscribe.",
+        "I would like an appointment.",
+        "I am Michael.",
+        "My name is Michael.",
+        "Good morning, Mister Smith.",
+    )
+    for gehoert in faelle:
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def lauf():
+            assert stt.transcribe(BLOB) == ""
+
+        _mit_lokal(fake, lauf)
+
+
+def test_sprachwache_behaelt_deutsche_saetze_und_eigennamen():
+    faelle = (
+        "Sorry, ich brauche einen Termin.",
+        "Ich möchte online einen Termin buchen.",
+        "Mein Nachname ist Smith.",
+        "Okay, danke.",
+    )
+    for gehoert in faelle:
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def lauf():
+            assert stt.transcribe(BLOB) == gehoert
+
+        _mit_lokal(fake, lauf)
+
+
 def test_tenant_keywords_sind_behandler_nachnamen():
     tenant = {
         "behandler": "Dr. Petsas",

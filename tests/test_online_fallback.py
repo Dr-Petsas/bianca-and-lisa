@@ -94,6 +94,33 @@ def test_budget_bietet_nur_an_und_sendet_noch_nicht(monkeypatch):
     assert aufrufe == []
 
 
+def test_online_fallback_erst_nach_drei_namensversuchen(monkeypatch):
+    """Drei echte Fragen bleiben beim Namen; erst die vierte wird ersetzt."""
+    aufrufe = []
+    monkeypatch.setattr(
+        online_fallback,
+        "_cf_call",
+        lambda *args, **kwargs: aufrufe.append((args, kwargs)),
+    )
+    sit = _sit()
+    sit["sammler"]["frage"] = "nachname"
+    frage = "Wie lautet Ihr Nachname?"
+
+    for versuch in range(1, 4):
+        aus = agent._frage_budget_pruefen(sit, frage)
+        assert aus is None
+        assert sit["frageBudget"]["versuche"] == versuch
+        assert not online_fallback.zustimmung_offen(sit)
+        assert aufrufe == []
+
+    aus = agent._frage_budget_pruefen(sit, frage)
+    assert aus is not None
+    assert aus["zustimmung"] is True
+    assert online_fallback.zustimmung_offen(sit)
+    assert sit["frageBudget"]["versuche"] == 3
+    assert aufrufe == []
+
+
 def test_klares_ja_sendet_danach_und_beendet(monkeypatch):
     aufrufe = []
 
