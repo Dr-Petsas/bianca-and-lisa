@@ -38,6 +38,20 @@ ZWEI = {
     ],
 }
 
+VIER = [
+    {
+        "id": f"apt-{i}",
+        "iso": f"2026-10-{i:02d}T{8 + i:02d}:00",
+        "date": f"2026-10-{i:02d}",
+        "calendarId": "cal-1",
+        "doctorName": "Dr. Petsas",
+        "motivId": "vm-1",
+        "motivName": "Kontrolluntersuchung",
+        "spoken": f"am {i}. Oktober um {8 + i} Uhr",
+    }
+    for i in range(1, 5)
+]
+
 
 def _bis_wahl(sit, monkeypatch, cancel):
     """Fluss bis zur Termin-Wahl mit zwei gefundenen Terminen treiben."""
@@ -74,6 +88,12 @@ def test_mehrfach_auswahl_erkennung():
     assert verwalten._mehrfach_auswahl("den zweiten bitte", zwei) == []
     # Nur ein Termin: nie Mehrfach.
     assert verwalten._mehrfach_auswahl("beide", zwei[:1]) == []
+    # Bei vier Terminen ist "beide" mehrdeutig und darf nie still die ersten
+    # beiden löschen. "Alle" bleibt dagegen ausdrücklich und eindeutig.
+    assert verwalten._mehrfach_auswahl("beide", VIER) == []
+    assert [a["id"] for a in verwalten._mehrfach_auswahl("alle", VIER)] == [
+        "apt-1", "apt-2", "apt-3", "apt-4",
+    ]
 
 
 def test_beide_absagen_sammelbestaetigung_und_beide_weg(monkeypatch):
@@ -175,6 +195,134 @@ def test_einzelwahl_bleibt_einzelweg(monkeypatch):
     # Einzelbestaetigung (kein Mehrfach): "wirklich absagen … ?"
     assert gehirn.sammler(sit)["phase"] == "absage_bestaetigen"
     assert "absagen" in z["text"].lower()
+
+
+def test_vier_termine_werden_alle_vorgelesen_und_vierter_ist_waehlbar(monkeypatch):
+    aufrufe = []
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "phase": "wahl", "frage": "terminwahl"})
+    sit["gefunden"] = list(VIER)
+    monkeypatch.setattr(
+        verwalten.kal,
+        "cancel_by_id",
+        lambda _t, _c, aid: (
+            aufrufe.append(aid)
+            or {"ok": True, "cancelled": True, "appointmentId": aid}
+        ),
+    )
+
+    liste = verwalten._liste_sprechbar(VIER)
+    for termin in VIER:
+        assert termin["spoken"] in liste
+    assert "Viertens" in liste
+
+    antwort = verwalten.zug(sit, "Den vierten Termin bitte.", set())
+    assert antwort and "wirklich absagen" in antwort["text"].lower()
+    assert sit["verwaltenTermin"] == "apt-4"
+    assert s["phase"] == "absage_bestaetigen"
+    assert aufrufe == [], "die Auswahl allein darf noch nichts absagen"
+
+    verwalten.zug(sit, "Ja, bitte.", set())
+    assert aufrufe == ["apt-4"], "nur der ausdrücklich gewählte Termin darf weg"
+
+
+def test_vierter_termin_wird_gezielt_verschoben(monkeypatch):
+    aufrufe = []
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "verschieben", "phase": "wahl", "frage": "terminwahl"})
+    sit["gefunden"] = list(VIER)
+
+    antwort = verwalten.zug(sit, "Den vierten.", set())
+    assert antwort and "wann passt" in antwort["text"].lower()
+    assert sit["verwaltenTermin"] == "apt-4"
+    assert s["phase"] == "verschieb_wunsch"
+
+    s.update({
+        "slotIso": "2026-11-20T15:00",
+        "phase": "verschieb_bestaetigen",
+        "frage": "verschieb_ok",
+    })
+
+    def _move(_tenant, ctx, slot_iso):
+        aufrufe.append((ctx.get("appointmentId"), slot_iso))
+        return {"ok": True, "moved": True, "appointmentId": ctx.get("appointmentId")}
+
+    monkeypatch.setattr(verwalten.kal, "move_appointment", _move)
+    verwalten.zug(sit, "Ja, das passt.", set())
+    assert aufrufe == [("apt-4", "2026-11-20T15:00")]
+
+
+def test_beide_bei_vier_termine_fuehrt_nicht_zu_einem_write(monkeypatch):
+    aufrufe = []
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "phase": "wahl", "frage": "terminwahl"})
+    sit["gefunden"] = list(VIER)
+    monkeypatch.setattr(
+        verwalten.kal,
+        "cancel_by_id",
+        lambda _t, _c, aid: aufrufe.append(aid) or {"ok": True},
+    )
+
+    antwort = verwalten.zug(sit, "Beide bitte.", set())
+    assert antwort and "da will ich nichts falsches erwischen" in antwort["text"].lower()
+    assert "vierten" in antwort["text"].lower()
+    assert s["phase"] == "wahl"
+    assert aufrufe == []
+
+
+def test_folgeanliegen_erbt_keine_alte_terminauswahl(monkeypatch):
+    """Nach einer erledigten Absage startet Verschieben mit einem sauberen
+    Verwaltungszustand und kann einen anderen Termin gezielt binden."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({"modus": "absagen", "phase": "fertig", "frage": "sonst_noch"})
+    sit.update({
+        "gefunden": list(VIER),
+        "gefundenKey": "alt",
+        "verwaltenTermin": "apt-2",
+        "mehrfachAbsage": [{"id": "apt-1"}, {"id": "apt-2"}],
+        "offered": [{"iso": "2026-10-30T09:00"}],
+        "verschiebRichtung": "später",
+        "verwAbschlussOffen": True,
+    })
+
+    verwalten._verw_reset(sit)
+    assert sit["gefunden"] == []
+    assert sit["gefundenKey"] == ""
+    assert sit["verwaltenTermin"] == ""
+    assert sit["mehrfachAbsage"] == []
+    assert sit["offered"] == []
+    assert sit["verschiebRichtung"] == ""
+    assert "verwAbschlussOffen" not in sit
+
+    # Das zweite Anliegen bekommt seine eigene, aktuelle Trefferliste. Nach
+    # der vorherigen Absage sind nur noch drei Termine vorhanden.
+    aktuell = [VIER[0], VIER[2], VIER[3]]
+    s.update({"modus": "verschieben", "phase": "wahl", "frage": "terminwahl"})
+    sit["gefunden"] = aktuell
+    antwort = verwalten.zug(sit, "Den dritten davon.", set())
+    assert antwort and "wann passt" in antwort["text"].lower()
+    assert sit["verwaltenTermin"] == "apt-4"
+
+    aufrufe = []
+    s.update({
+        "slotIso": "2026-11-24T15:00",
+        "phase": "verschieb_bestaetigen",
+        "frage": "verschieb_ok",
+    })
+    monkeypatch.setattr(
+        verwalten.kal,
+        "move_appointment",
+        lambda _t, ctx, slot_iso: (
+            aufrufe.append((ctx.get("appointmentId"), slot_iso))
+            or {"ok": True, "moved": True}
+        ),
+    )
+    verwalten.zug(sit, "Ja.", set())
+    assert aufrufe == [("apt-4", "2026-11-24T15:00")]
 
 
 def test_mehrfach_absage_ueber_verschiedene_patienten_wird_gesperrt():

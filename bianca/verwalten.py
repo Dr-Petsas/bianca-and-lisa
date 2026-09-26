@@ -459,10 +459,40 @@ def _arzt_uebernehmen(sit: dict, termin: dict, *, fest: bool = False) -> None:
 
 
 def _liste_sprechbar(termine: list[dict]) -> str:
-    teile = [_s(a.get("spoken")) for a in termine[:3] if _s(a.get("spoken"))]
+    teile = [_s(a.get("spoken")) for a in termine if _s(a.get("spoken"))]
+    if len(teile) >= 4:
+        labels = ("Erstens", "Zweitens", "Drittens", "Viertens", "Fünftens", "Sechstens")
+        sichtbar = teile[:len(labels)]
+        text = "; ".join(
+            f"{labels[i]}: {gesprochen}" for i, gesprochen in enumerate(sichtbar)
+        )
+        if len(teile) > len(sichtbar):
+            text += f"; außerdem {len(teile) - len(sichtbar)} weitere Termine"
+        return text
     if len(teile) > 1:
         return "; ".join(teile[:-1]) + "; und " + teile[-1]
     return teile[0] if teile else ""
+
+
+def _auswahl_anweisung(termine: list[dict]) -> str:
+    """Sprechbare, zur wirklich vorgelesenen Terminmenge passende Auswahlhilfe."""
+    formen = ("ersten", "zweiten", "dritten", "vierten", "fünften", "sechsten")
+    n = min(
+        len([a for a in termine if _s(a.get("spoken"))]),
+        len(formen),
+    )
+    if n <= 0:
+        return "Nennen Sie bitte Datum und Uhrzeit."
+    if n == 1:
+        auswahl = f"den {formen[0]}"
+    elif n == 2:
+        auswahl = f"den {formen[0]} oder {formen[1]}"
+    else:
+        auswahl = (
+            ", ".join(f"den {f}" for f in formen[:n - 1])
+            + f" oder den {formen[n - 1]}"
+        )
+    return f"Sagen Sie {auswahl} Termin – oder nennen Sie Datum und Uhrzeit."
 
 
 # --- Hinweis-Sammlung (Chef 29.08.2026: erst Daten, dann suchen) -----------
@@ -470,6 +500,15 @@ def _liste_sprechbar(termine: list[dict]) -> str:
 
 def _verw_reset(sit: dict) -> None:
     """Sammel-Stand raeumen (neues Anliegen bzw. Anliegen erledigt)."""
+    # Ein Folgeanliegen darf niemals Termin-ID, Auswahl oder Slot-Angebote
+    # des vorherigen Verwaltungsjobs erben. Besonders kritisch: erst einen
+    # von mehreren Terminen absagen, danach einen anderen verschieben.
+    sit["gefunden"] = []
+    sit["gefundenKey"] = ""
+    sit["verwaltenTermin"] = ""
+    sit["mehrfachAbsage"] = []
+    sit["offered"] = []
+    sit["verschiebRichtung"] = ""
     sit.pop("verwAnruferDirekt", None)
     sit.pop("verwNotFound", None)
     sit.pop("verwKorrektur", None)        # W-NAMESKORREKTUR: frische Chance
@@ -1425,7 +1464,7 @@ def _mehrfach_auswahl(t: str, termine: list[dict]) -> list[dict]:
         return echte[:2]
     if _BEIDE_RE.search(t):
         # "beide" meint genau zwei — bei mehr als zweien nicht raten.
-        return echte if len(echte) == 2 else echte[:2]
+        return echte if len(echte) == 2 else []
     return []
 
 
@@ -3350,7 +3389,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             return None
         return {"text": (
             f"Da will ich nichts Falsches erwischen. Zur Auswahl: {_liste_sprechbar(sit['gefunden'])}. "
-            "Sagen Sie einfach 'den ersten' oder 'den zweiten' — oder nennen Sie die Uhrzeit."
+            + _auswahl_anweisung(sit["gefunden"])
         )}
 
     # 3) Neuer Zeitpunkt beim Verschieben

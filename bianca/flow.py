@@ -389,6 +389,12 @@ def _slot_vorlesen(text: str, offered: list[dict]) -> str:
         ziel, label = offered[0], "Der erste Termin"
     elif re.search(r"\b(dritte[rns]?)\b", t) and len(offered) > 2:
         ziel, label = offered[2], "Der dritte Termin"
+    elif re.search(r"\b(vierte[rns]?)\b", t) and len(offered) > 3:
+        ziel, label = offered[3], "Der vierte Termin"
+    elif re.search(r"\b(fünfte[rns]?|fuenfte[rns]?)\b", t) and len(offered) > 4:
+        ziel, label = offered[4], "Der fünfte Termin"
+    elif re.search(r"\b(sechste[rns]?)\b", t) and len(offered) > 5:
+        ziel, label = offered[5], "Der sechste Termin"
     elif re.search(r"\b(letzte[rns]?)\b", t):
         ziel, label = offered[-1], "Der letzte Termin"
     if ziel:
@@ -491,6 +497,12 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         return offered[1]["iso"]
     if re.search(r"\b(dritte[rns]?)\b", t) and len(offered) > 2:
         return offered[2]["iso"]
+    if re.search(r"\b(vierte[rns]?)\b", t) and len(offered) > 3:
+        return offered[3]["iso"]
+    if re.search(r"\b(fünfte[rns]?|fuenfte[rns]?)\b", t) and len(offered) > 4:
+        return offered[4]["iso"]
+    if re.search(r"\b(sechste[rns]?)\b", t) and len(offered) > 5:
+        return offered[5]["iso"]
     if re.search(r"\b(letzte[rns]?)\b", t):
         return offered[-1]["iso"]
 
