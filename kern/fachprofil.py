@@ -107,8 +107,8 @@ _BESUCHSGRUND_FRAGEN = {
         "oder etwas anderes?"
     ),
     "dermatologie": (
-        "Worum geht es denn — um eine Hautkontrolle, akute Hautbeschwerden, "
-        "eine Beratung oder etwas anderes?"
+        "Worum geht es denn — um eine Hautkontrolle, eine Beratung "
+        "oder etwas anderes?"
     ),
 }
 

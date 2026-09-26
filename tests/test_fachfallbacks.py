@@ -103,6 +103,16 @@ def test_blessing_prompt_und_warmcache_sind_frei_von_dental_und_meddent():
         assert fremd.lower() not in warm.lower(), fremd
 
 
+def test_blessing_besuchsgrundfrage_nennt_keinen_akutfall_als_terminbeispiel():
+    frage = fachprofil.besuchsgrund_frage(tenants.laden("blessing"))
+    assert frage == (
+        "Worum geht es denn — um eine Hautkontrolle, eine Beratung "
+        "oder etwas anderes?"
+    )
+    assert "akut" not in frage.lower()
+    assert "notfall" not in frage.lower()
+
+
 def test_blessing_exakte_und_spezifische_motivwahl():
     t = tenants.laden("blessing")
     kat = t["visitMotives"]
