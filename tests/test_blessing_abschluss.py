@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from bianca import agent, flow, gehirn, verwalten
-from kern import hirn, intent
+from kern import hirn, intent, namenslink
 from kern.slots import parse_slot_wish
 from kern.tenants import laden
 
@@ -533,6 +533,16 @@ def test_c3_bestaetigte_handynummer_bucht_ohne_zweite_sammelei(monkeypatch):
         }
 
     monkeypatch.setattr(flow.kal, "book_slot", _book)
+    # Seit dem Namenslink-Sicherheitsvertrag ist dieser Neupatientenfall erst
+    # dann erfolgreich, wenn Reservierungs-SMS und Terminbindung belegt sind.
+    # Der Test prüft die Fragenkette, nicht die Cloud Function; deshalb beide
+    # externen Schritte als erfolgreich nachbilden.
+    monkeypatch.setattr(namenslink, "starten", lambda *_a, **_kw: {"sent": True})
+    monkeypatch.setattr(namenslink, "termin_binden", lambda *_a, **_kw: True)
+    monkeypatch.setattr(
+        namenslink, "abschluss_satz",
+        lambda *_a, **_kw: "Gut, der Termin ist reserviert.",
+    )
 
     aus = flow._nach_ok_buchen(sit, "Ja, das würde passen.")
 
