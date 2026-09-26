@@ -150,6 +150,11 @@ def _zusammenfassung(manifest: dict, sit: dict) -> None:
             manifest[k] = sit.get(k)
     if sit.get("praxisNotiz"):
         manifest["praxisNotiz"] = sit["praxisNotiz"]
+    # Online-Buchungslink als Abschlussbeleg (W-ONLINE-FALLBACK): wenn Bianca
+    # nach zu vielen Namenskorrekturen den Buchungslink per SMS geschickt hat,
+    # ist das Anliegen belegt gelöst — kein "Patient nicht gefunden"-Fehler.
+    if sit.get("onlineBuchungslink") is not None:
+        manifest["onlineBuchungslink"] = sit.get("onlineBuchungslink")
     if sit.get("tools"):
         manifest["tools"] = sit.get("tools")
     beobachtung = observability_manifest.export(sit)

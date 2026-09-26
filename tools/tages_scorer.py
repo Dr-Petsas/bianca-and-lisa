@@ -7,9 +7,11 @@ Die Rubrik ist absichtlich streng und evidenzbasiert:
   ehrlicher Rueckruf-/Praxisnotiz-Abschluss.
 * ``durchwachsen``: echtes Gespraech, aber mehrere Reibungen oder kein klarer
   Abschluss nach einem laengeren Verlauf.
-* ``unvollstaendig``: Anliegen genannt, Gespraech frueh ohne Abschluss beendet.
+* ``unvollstaendig``: Anliegen genannt, Gespraech frueh ohne Abschluss beendet
+  (stilles Auflegen). Ein klarer Abschied des Anrufers bei sauberem Verlauf
+  ist ``gut``, auch ohne Write.
 * ``fehlerhaft``: harter Fehler (Write fehlgeschlagen, Erfolg ohne Beweis,
-  Phantom-Transfer, Fakten-/Unklar-/Presence-Schleife).
+  Phantom-Transfer, Fakten-/Unklar-/Presence-Schleife, Patient nicht gefunden).
 
 Aufleger sind NUR Anrufe ohne substanziellen Anrufersatz. Ein genanntes
 Anliegen bleibt auch dann in der Wertung, wenn der Anrufer danach auflegt.
@@ -321,6 +323,24 @@ def _praxis(manifest: dict) -> str:
     return "unbekannt"
 
 
+def _anrufer_abschluss_gut(manifest: dict) -> bool:
+    """Anrufer hat selbst geschlossen, Verlauf ohne Schleife/Missverständnis."""
+    try:
+        from kern import anruf_anliegen
+        return bool(anruf_anliegen.guter_anrufer_abschluss(manifest))
+    except Exception:
+        return False
+
+
+def _patient_nicht_gefunden(manifest: dict) -> bool:
+    """Kritischer Fehler: Suche lief ins Leere und das Anliegen blieb offen."""
+    try:
+        from kern import anruf_anliegen
+        return bool(anruf_anliegen.patient_nicht_gefunden(manifest))
+    except Exception:
+        return False
+
+
 def _deterministische_stichprobe(session_id: str, anteil: float = 0.10) -> bool:
     anteil = max(0.0, min(1.0, float(anteil)))
     wert = int(hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:8], 16)
@@ -373,6 +393,8 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
 
     for art in write_fails:
         hard.append(f"write_fehlgeschlagen:{art}")
+    if _patient_nicht_gefunden(manifest):
+        hard.append("patient_nicht_gefunden")
     for claim in sorted(claims):
         if not evidenz_map.get(claim, False):
             hard.append(f"erfolg_ohne_beweis:{claim}")
@@ -446,6 +468,8 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
             klasse, gruende = "gut", ["plausibel_geloeste_auskunft"]
         else:
             klasse, gruende = "durchwachsen", ["auskunft_aber_zaeh"]
+    elif _anrufer_abschluss_gut(manifest):
+        klasse, gruende = "gut", ["anrufer_abschluss_guter_verlauf"]
     elif len(substanziell) <= 2 and (dauer_ms <= 90_000 or len(inputs) <= 3):
         klasse, gruende = "unvollstaendig", ["anliegen_frueh_abgebrochen"]
     else:

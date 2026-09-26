@@ -615,3 +615,125 @@ def erledigt(manifest: dict[str, Any] | None, anliegen_id: str) -> bool:
     if _erledigt_beleg(m, kid):
         return True
     return guter_anrufer_abschluss(m)
+
+
+# ------------------------------------------------------------------ Failwertung
+# Chef 26.09.2026 (wörtlich): „ein fail ist nicht wenn der Misserfolg durch
+# Fehlverhalten auf Anruferseite entsteht. Auflegen, ablehnen etc. fails sind
+# nur dann fails, wenn ein nachweislicher Fehler im Gesprächsdialog entsteht,
+# der von Bianca initiiert wird … falscher Intent, nicht auf wunschtermine
+# eingegangen, Patient nicht gefunden … das letzte ist ganz kritisch.“
+# Eine Stelle für Ergebnisseite UND Tages-Scorer, damit beide dieselbe Wahrheit
+# sprechen. Anruferabbrüche (Auflegen, Ablehnen) sind NEUTRAL.
+
+_PATIENT_LESER = (
+    "findpatient", "agentfindpatient", "searchpatient", "massearchpatient",
+    "patientlastdoctor", "findappointmentsbydate",
+)
+
+
+def _online_link_belegt(m: dict[str, Any]) -> bool:
+    beleg = m.get("onlineBuchungslink")
+    if isinstance(beleg, dict):
+        return bool(beleg.get("ok") or beleg.get("gesendet"))
+    return bool(beleg)
+
+
+def patient_nicht_gefunden(manifest: dict[str, Any] | None) -> bool:
+    """Eine Patienten-/Terminsuche lief ins Leere UND das Anliegen wurde nicht
+    anderweitig gelöst (kein Termin, keine echte Buchung, kein Online-Link).
+
+    Chef: „Patient nicht gefunden … darf es nicht geben“ — deshalb ein eigener,
+    scharf belegter Fehlergrund. Ein bloßes ``no_upcoming`` (Patient gefunden,
+    nur ohne kommenden Termin) ist KEIN „nicht gefunden“. Eine reine
+    Rückrufnotiz räumt den Fehler bewusst NICHT weg (Rückruf ist die absolute
+    Ausnahme, nicht der Normalweg)."""
+    m = manifest if isinstance(manifest, dict) else {}
+    leergelaufen = False
+    for t in m.get("tools") or []:
+        if not isinstance(t, dict):
+            continue
+        name = _s(t.get("name") or t.get("cf")).lower()
+        if not any(x in name for x in _PATIENT_LESER):
+            continue
+        d = t.get("dispatch") if isinstance(t.get("dispatch"), dict) else {}
+        r = d.get("response") if isinstance(d.get("response"), dict) else {}
+        status = _s(r.get("status") or t.get("status")).lower()
+        if t.get("notFound") or status in {"not_found", "ambiguous"}:
+            leergelaufen = True
+    if not leergelaufen:
+        return False
+    if (_ok(m.get("lastBook")) or _ok(m.get("lastCancel"))
+            or _ok(m.get("lastMove")) or _ok(m.get("lastCreate"))):
+        return False
+    if _online_link_belegt(m):
+        return False
+    return True
+
+
+def bianca_fehler(manifest: dict[str, Any] | None) -> list[str]:
+    """Nachweisbare, von Bianca ausgelöste Dialogfehler (leere Liste = kein Fehler).
+
+    Bewusst schärfer als ``verlauf_stoerungen``: ein EINZELNES „das habe ich
+    nicht verstanden“, das danach korrigiert wird, ist kein Praxis-Fehler
+    (Chef: Fehler ist, „wenn Sie etwas nicht versteht, bzw NICHT korrigiert,
+    oder es unnötig viele Turns gibt“). Gezählt werden deshalb nur anhaltende
+    Probleme:
+
+    * ``missverstaendnis`` — mindestens ZWEI Unklar-Ausgaben (nicht korrigiert),
+    * ``wiederholungsschleife`` — dieselbe Frage ≥ 2× wortgleich,
+    * ``presence_schleife`` — ≥ 2× „Sind Sie noch dran?“,
+    * ``technik`` — echter Werkzeug-/HTTP-Fehler (kein designtes Leerergebnis),
+    * ``patient_nicht_gefunden`` — kritisch (Suche leer, Anliegen offen).
+
+    Anruferabbrüche (Auflegen, Ablehnen) stehen bewusst NICHT darin."""
+    m = manifest if isinstance(manifest, dict) else {}
+    outputs = _outputs(m)
+    gruende: list[str] = []
+    if sum(1 for t in outputs if _UNKLAR_RE.search(t)) >= 2:
+        gruende.append("missverstaendnis")
+    if _frage_wiederholt(outputs) >= 2:
+        gruende.append("wiederholungsschleife")
+    if sum(1 for t in outputs if _PRESENCE_RE.search(t)) >= 2:
+        gruende.append("presence_schleife")
+    for t in m.get("tools") or []:
+        if not isinstance(t, dict) or _designed_leer(t):
+            continue
+        if t.get("ok") is False or _http_status(t) >= 500:
+            gruende.append("technik")
+            break
+    lb = m.get("lastBook")
+    if isinstance(lb, dict) and lb.get("ok") is False:
+        if "technik" not in gruende:
+            gruende.append("technik")
+    if patient_nicht_gefunden(m):
+        gruende.append("patient_nicht_gefunden")
+    aus: list[str] = []
+    for g in gruende:
+        if g not in aus:
+            aus.append(g)
+    return aus
+
+
+def ist_bianca_fehler(manifest: dict[str, Any] | None) -> bool:
+    return bool(bianca_fehler(manifest))
+
+
+def anruf_wertung(manifest: dict[str, Any] | None) -> tuple[str, list[str]]:
+    """('fehler'|'ok'|'neutral', Gründe) — eine Wahrheit für alle Auswertungen.
+
+    * ``fehler``: Bianca hat einen nachweisbaren Dialogfehler gemacht.
+    * ``ok``: jedes erkannte Anliegen ist belegt oder sauber abgeschlossen.
+    * ``neutral``: kein Job erkannt ODER der Anrufer hat abgebrochen/abgelehnt,
+      ohne dass Bianca einen Fehler gemacht hat — zählt weder als Fehler noch
+      als Erfolg."""
+    m = manifest if isinstance(manifest, dict) else {}
+    gruende = bianca_fehler(m)
+    if gruende:
+        return "fehler", gruende
+    jobs = ids_von(m)
+    if not jobs:
+        return "neutral", []
+    if all(erledigt(m, i) for i in jobs):
+        return "ok", []
+    return "neutral", []

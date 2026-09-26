@@ -148,6 +148,57 @@ def test_mehrere_reibungen_machen_abschluss_durchwachsen():
     assert len(row.reibungen) == 2
 
 
+def test_anrufer_schluss_ohne_write_ist_gut():
+    # Chef 26.09.2026: ein sauberer Abschied des Anrufers ist kein Fehl-Anruf.
+    row = scorer.bewerten(
+        _m(
+            ("Ich hätte da mal eine allgemeine Frage gehabt.",
+             "Gerne, wie kann ich Ihnen helfen?"),
+            ("Ach, hat sich erledigt. Vielen Dank, auf Wiederhören.",
+             "Sehr gerne, auf Wiederhören."),
+        )
+    )
+    assert row.klasse == "gut"
+    assert row.gruende == ["anrufer_abschluss_guter_verlauf"]
+
+
+def test_anrufer_schluss_nach_unklar_bleibt_unvollstaendig():
+    row = scorer.bewerten(
+        _m(
+            ("Ich brauche einen Termin.", "Das habe ich leider nicht verstanden."),
+            ("Ach, ich probiere es später. Danke, tschüss.", "Auf Wiederhören."),
+            dauer=20_000,
+        )
+    )
+    assert row.klasse == "unvollstaendig"
+
+
+def test_patient_nicht_gefunden_ist_harter_fehler():
+    # „Patient nicht gefunden … ist ganz kritisch und darf es nicht geben.“
+    row = scorer.bewerten(
+        _m(
+            ("Ich möchte meinen Termin absagen.", "Wie ist Ihr Nachname?"),
+            ("Müller.", "Einen Moment, ich schaue nach."),
+            tools=[{"name": "agentFindPatientAppointments", "notFound": True}],
+        )
+    )
+    assert row.klasse == "fehlerhaft"
+    assert "patient_nicht_gefunden" in row.gruende
+
+
+def test_patient_nicht_gefunden_durch_online_link_ist_kein_fehler():
+    row = scorer.bewerten(
+        _m(
+            ("Ich möchte einen Termin.", "Wie ist Ihr Nachname?"),
+            ("Müller.", "Ich schicke Ihnen den Buchungslink per SMS."),
+            tools=[{"name": "agentFindPatientAppointments", "notFound": True}],
+            onlineBuchungslink={"ok": True, "an": "+4915100000000"},
+        )
+    )
+    assert row.klasse != "fehlerhaft"
+    assert "patient_nicht_gefunden" not in row.gruende
+
+
 def test_regelantwort_ist_gut_und_muss_manuell_geprueft_werden():
     row = scorer.bewerten(
         _m(

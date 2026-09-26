@@ -18,6 +18,7 @@ from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
 from kern import fach_wache
 from kern import dringlichkeit
+from kern import online_fallback
 from kern import qwen_korrektor
 from kern import spur
 from kern import warteschleife
@@ -792,6 +793,27 @@ def _frage_budget_ausstieg(
     """Nach ausgeschöpftem Budget mit Datenerhalt sauber beenden."""
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     frage_id = _s(fid) or _s(s.get("frage"))
+    # W-ONLINE-FALLBACK (26.09.2026): scheitert die Namensaufnahme bei einer
+    # BUCHUNG (zu viel Leitungsrauschen) und ist eine Mobilnummer ERKANNT,
+    # schickt Bianca den Online-Buchungslink per SMS statt eine Rückrufnotiz
+    # anzulegen — freundlich erklärt, Nummer nie erfragt.
+    if online_fallback.greift(sit, frage_id):
+        aus_online = online_fallback.senden(sit)
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        sit["frageBudgetDone"] = True
+        sit["notleineGesagt"] = True
+        text_online = _s(aus_online.get("text"))
+        spur.merken(
+            sit,
+            "frage-budget",
+            f"online-link:{frage_id or 'ohne-feld'}:"
+            f"{'ok' if aus_online.get('ok') else 'fehler'}",
+        )
+        aus: dict[str, Any] = {"text": text_online, "book": None}
+        if aus_online.get("hangup") and abschied.an():
+            aus["hangup"] = True
+        return aus
     notiz = False
     if frage_budget.kontext_reicht(sit):
         try:

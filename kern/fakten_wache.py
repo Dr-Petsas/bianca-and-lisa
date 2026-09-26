@@ -453,7 +453,14 @@ def _zeitraum_negativ_belegt(sit: dict, satz: str) -> bool:
 
 def _ev_sms(sit: dict) -> bool:
     buch = sit.get("lastBook")
-    return bool(_ok(buch) and not (buch or {}).get("verificationFailed"))
+    if _ok(buch) and not (buch or {}).get("verificationFailed"):
+        return True
+    # W-ONLINE-FALLBACK: ein erfolgreich per SMS verschickter
+    # Online-Buchungslink belegt die SMS-Zusage ebenfalls.
+    beleg = sit.get("onlineBuchungslink")
+    if isinstance(beleg, dict):
+        return bool(beleg.get("ok") or beleg.get("gesendet"))
+    return bool(beleg)
 
 
 # (Name, Behauptungs-Regex, Evidenz-Praedikat)

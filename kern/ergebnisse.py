@@ -827,34 +827,57 @@ def _im_fenster(m: dict[str, Any], von: datetime, bis: datetime) -> bool:
 
 
 def _fehler_je_praxis(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fehlerquote = offene erkannte Anliegen / alle erkannten Anliegen."""
-    erkannt: Counter[str] = Counter()
-    offen: Counter[str] = Counter()
+    """Fehlerquote je Praxis PRO ANRUF, evidenzbasiert (Chef 26.09.2026):
+
+    Ein Fehler ist NUR ein von Bianca ausgelöster Dialogfehler (Missverständnis
+    nicht korrigiert, Wiederholungs-/Presence-Schleife, Technikfehler,
+    „Patient nicht gefunden“). Anruferabbrüche (Auflegen, Ablehnen) sind neutral
+    und zählen weder als Fehler noch als Erfolg. Nenner = gewertete Job-Anrufe
+    (ok + Fehler)."""
+    ok: Counter[str] = Counter()
+    fehler: Counter[str] = Counter()
+    gruende: dict[str, Counter[str]] = defaultdict(Counter)
+    fails: dict[str, list[dict[str, str]]] = defaultdict(list)
     for m in anrufe:
         tid = _tenant_id(m)
-        for i in anruf_anliegen.ids_von(m):
-            erkannt[tid] += 1
-            if not anruf_anliegen.erledigt(m, i):
-                offen[tid] += 1
+        art, warum = anruf_anliegen.anruf_wertung(m)
+        if art == "fehler":
+            fehler[tid] += 1
+            for g in warum:
+                gruende[tid][g] += 1
+            liste = fails[tid]
+            if len(liste) < 24:
+                liste.append({
+                    "sid": _s(m.get("_sid") or m.get("id")),
+                    "tenant": tid,
+                    "zeit": _s(m.get("startedAt")),
+                    "grund": ", ".join(warum),
+                })
+        elif art == "ok":
+            ok[tid] += 1
+        # neutral: nicht werten
     ids = list(_PRAXIS_FEST)
-    for tid in sorted(erkannt):
+    for tid in sorted(set(ok) | set(fehler)):
         if tid not in ids:
             ids.append(tid)
     zeilen = []
     for tid in ids:
-        n = int(erkannt.get(tid, 0))
-        o = int(offen.get(tid, 0))
+        o = int(ok.get(tid, 0))
+        f = int(fehler.get(tid, 0))
+        n = o + f
         zeilen.append({
             "id": tid,
             "name": _praxis_name(tid),
-            "erkannt": n,
-            "erledigt": n - o,
-            "offen": o,
-            # Dieselbe Anliegen-Quote wie die Karten: erledigt / erkannt.
-            # Ohne erkanntes Anliegen bleibt der Punkt leer, sonst sähe ein
-            # stiller Tag wie 0 % Erfolg aus.
-            "quote": round(100.0 * (n - o) / n, 1) if n else None,
-            "fehlerquote": round(100.0 * o / n, 1) if n else 0.0,
+            "erkannt": n,          # gewertete Job-Anrufe
+            "erledigt": o,         # sauber gelöst
+            "offen": f,            # Bianca-Fehler
+            # Erfolgsquote der gewerteten Job-Anrufe. Ohne gewerteten Anruf
+            # bleibt der Punkt leer, sonst sähe ein stiller Tag wie 0 % aus.
+            "quote": round(100.0 * o / n, 1) if n else None,
+            "fehlerquote": round(100.0 * f / n, 1) if n else 0.0,
+            "gruende": [{"grund": g, "anzahl": c}
+                        for g, c in gruende.get(tid, Counter()).most_common()],
+            "fails": fails.get(tid, []),
         })
     return zeilen
 
