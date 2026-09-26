@@ -160,7 +160,7 @@ def test_agent_routet_freie_slotfrage_ohne_llm_in_sicheren_flow():
 def test_live_bestandsfrage_startet_sofort_kalenderpfad_ohne_llm():
     """Live MedDent 09.09. 21:26: Die Nebensatz-Wortstellung „ob ich ...
     einen Termin habe“ darf weder als Neubuchung noch als freie
-    Klärungsfrage enden. Bekannter Anrufer -> Identitätscheck -> echter
+    Klärungsfrage enden. Bekannter Anrufer -> sofortiger echter
     agentFindPatientAppointments-Lauf, ohne Haupt-LLM."""
     from kern import llm
 
@@ -187,12 +187,12 @@ def test_live_bestandsfrage_startet_sofort_kalenderpfad_ohne_llm():
             "Hallo, ich wollte ganz gerne wissen, ob ich noch einen Termin habe diese Woche?",
         )
         s = gehirn.sammler(sit)
-        assert s["modus"] == "auskunft" and s["frage"] == "anrufer_check"
-        assert aus1["text"] == "Spreche ich mit Herrn Petsas?"
+        assert s["modus"] == "auskunft" and s["frage"] == "termin_ok"
+        assert "Herr Petsas, ich habe Ihren Termin gefunden" in aus1["text"]
+        assert "halb zwölf" in aus1["text"]
+        assert "Spreche ich mit" not in aus1["text"]
         assert "neuen vereinbaren" not in aus1["text"]
 
-        aus2 = agent.user_turn(sit, "Ja?")
-        assert "halb zwölf" in aus2["text"]
         assert any(
             e.get("name") == "agentFindPatientAppointments" and e.get("ok")
             for e in (sit.get("tools") or [])

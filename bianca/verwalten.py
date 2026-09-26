@@ -470,6 +470,7 @@ def _liste_sprechbar(termine: list[dict]) -> str:
 
 def _verw_reset(sit: dict) -> None:
     """Sammel-Stand raeumen (neues Anliegen bzw. Anliegen erledigt)."""
+    sit.pop("verwAnruferDirekt", None)
     sit.pop("verwNotFound", None)
     sit.pop("verwKorrektur", None)        # W-NAMESKORREKTUR: frische Chance
     sit.pop("verwKorrekturVorname", None)
@@ -1328,6 +1329,13 @@ def _absage_frage(sit: dict, termin: dict) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "absage_bestaetigen"
     s["frage"] = "absage_ok"
+    if sit.get("verwAnruferDirekt"):
+        wer = gehirn.anrufer_anrede(sit)
+        vorsatz = f"{wer}, " if wer else ""
+        return {"text": (
+            f"{vorsatz}ich habe Ihren Termin {termin.get('spoken')} gefunden. "
+            "Soll ich ihn wirklich absagen?"
+        )}
     wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
@@ -1567,6 +1575,13 @@ def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "verschieb_wunsch"
     s["frage"] = "wunsch"
+    if sit.get("verwAnruferDirekt"):
+        wer = gehirn.anrufer_anrede(sit)
+        vorsatz = f"{wer}, " if wer else ""
+        return {"text": (
+            f"{vorsatz}ich habe Ihren Termin {termin.get('spoken')} gefunden. "
+            "Auf wann möchten Sie ihn verschieben — eher vormittags oder nachmittags?"
+        )}
     wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
     zusatz = f", {wer}" if wer else ""
     return {"text": (
@@ -1964,8 +1979,17 @@ def _ansagen(sit: dict) -> dict:
         # Gespraechsnotiz beim Auflegen an DIESEN Termin haengen.
         sit.setdefault("booking", {})["appointmentId"] = _s(termine[0].get("id"))
         wort = _termin_sprechbar(termine[0])
-        kern_text = (f"{vorsatz}{wort}." if vorsatz.endswith(": ")
-                     else f"{vorsatz}Ihr nächster Termin: {wort}.")
+        anrede = gehirn.anrufer_anrede(sit) if sit.get("verwAnruferDirekt") else ""
+        if anrede:
+            if vorsatz:
+                kern = (f"{vorsatz}{wort}." if vorsatz.endswith(": ")
+                        else f"{vorsatz}Ihr nächster Termin: {wort}.")
+                kern_text = f"{anrede}, {kern[:1].lower()}{kern[1:]}"
+            else:
+                kern_text = f"{anrede}, ich habe Ihren Termin gefunden: {wort}."
+        else:
+            kern_text = (f"{vorsatz}{wort}." if vorsatz.endswith(": ")
+                         else f"{vorsatz}Ihr nächster Termin: {wort}.")
         if geparkt:
             return {"text": kern_text}
         s["frage"] = "termin_ok"
@@ -2590,10 +2614,12 @@ def _dispatch(sit: dict, melde: Melde) -> dict | None:
 
 
 _VERW_DRITTE_RE = re.compile(
-    r"\b(?:mein|meine|meinen|meinem|meiner|unser|unsere|unseren)\s+"
+    r"\b(?:mein|meine|meinen|meinem|meiner|meines|"
+    r"unser|unsere|unseren|unserem|unserer|unseres)\s+"
     r"(mutter|vater|sohn|tochter|kind|bruder|schwester|ehemann|ehefrau|"
     r"mann|frau|partner|partnerin|freund|freundin|nachbar|nachbarin|"
-    r"kollege|kollegin|oma|opa|grossmutter|großmutter|grossvater|großvater)\b",
+    r"kollege|kollegin|oma|opa|grossmutter|großmutter|grossvater|großvater)"
+    r"(?:es|s|n)?\b",
     re.I,
 )
 _VERW_NAME_ENDE_RE = re.compile(
@@ -2702,6 +2728,7 @@ def _verw_detailname_aufnehmen(sit: dict, text: str, neu: set[str]) -> None:
     if s.get("patientId") and alt and neu_name and alt != neu_name:
         # Ein ausdrücklich anderer Patientenname schlägt den bloßen Treffer
         # der Anrufernummer. Sonst würde die Akte des Anrufers gewinnen.
+        sit.pop("verwAnruferDirekt", None)
         s["patientId"] = ""
         s["bekannt"] = False
         s["anruferCheck"] = "nein"
@@ -2726,6 +2753,7 @@ def _verw_drittperson_aufnehmen(sit: dict, text: str, neu: set[str]) -> None:
         wen = gehirn.fuer_wen_signal(f"für meine {m.group(1)}") or "andere"
     if not wen:
         return
+    sit.pop("verwAnruferDirekt", None)
     s["fuerWen"] = wen
     if not sit.get("verwDrittpersonGeloest"):
         gehirn.patient_von_kontakt_loesen(sit)
@@ -2790,6 +2818,28 @@ def _verw_name_zeitmuell_entfernen(sit: dict, text: str, neu: set[str]) -> None:
                 neu.discard(feld)
     if s["vorname"] or s["nachname"]:
         s["name"] = f"{s['vorname']} {s['nachname']}".strip()
+
+
+def _erkannten_anrufer_direkt_binden(sit: dict, text: str = "") -> bool:
+    """Eindeutige Caller-ID-Akte ohne vorgeschaltete Erlaubnisfrage binden.
+
+    Der Schnellweg liest nur Termine. Jeder destruktive Schritt bleibt an
+    der vorhandenen Absage-/Verschiebe-Bestaetigung. Drittpersonen und ein
+    ausdruecklicher Identitaetswiderspruch duerfen die Anruferakte nie erben.
+    """
+    s = gehirn.sammler(sit)
+    if s.get("fuerWen") or s.get("anruferCheck") == "nein":
+        return False
+    if text and gehirn.ist_anrufer_identitaet_nein(text):
+        return False
+    a = gehirn.anrufer_bekannt(sit)
+    if not _s(a.get("patientId")):
+        return False
+    if not gehirn.anrufer_daten_uebernehmen(sit):
+        return False
+    s["frage"] = ""
+    sit["verwAnruferDirekt"] = True
+    return True
 
 
 def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
@@ -2925,13 +2975,13 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
     if termin:
         return _bestaetigen(sit, termin, melde)
 
-    # Die bekannte Rufnummer zuerst vom Anrufer bestaetigen lassen. Ein
-    # Datumstreffer darf die bestehende Identitaetswache nicht umgehen.
+    # Eine per Rufnummer eindeutig erkannte Akte darf fuer die rein lesende
+    # Terminsuche sofort gebunden werden. Absage/Verschiebung bleiben hinter
+    # ihrer eigenen ausdruecklichen Bestaetigung; Drittpersonen gehen nie
+    # ueber diesen Schnellweg.
     if not s["nachname"] and not s["anruferCheck"] and not s["fuerWen"]:
         agentprofil.anrufer_warten(sit)
-        if gehirn.anrufer_bekannt(sit):
-            s["frage"] = "anrufer_check"
-            return {"text": gehirn.anrufer_check_frage(sit)}
+        _erkannten_anrufer_direkt_binden(sit, t)
 
     # Termin-zuerst: ein konkreter Tag wird direkt im Standortkalender nach
     # Uhrzeit, Behandler und Patient/Rufnummer eingegrenzt. Die alte Namens-CF
@@ -2947,24 +2997,24 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
             # list_appointments ohne Patient — Identitaet deterministisch halten.
             if s["frage"] == "anrufer_check" and gehirn.anrufer_bekannt(sit):
                 return {"text": gehirn.anrufer_check_frage(sit)}
-            # Async-Anrufer kam NACH der Nachnamen-Frage: auf Check upgraden.
+            # Async-Anrufer kam NACH der Nachnamen-Frage: direkt binden und
+            # noch in diesem Zug suchen.
             if (s["frage"] in {"name", "nachname"} and not s["anruferCheck"]
                     and not s["fuerWen"] and gehirn.anrufer_bekannt(sit)):
-                s["frage"] = "anrufer_check"
-                return {"text": gehirn.anrufer_check_frage(sit)}
+                if _erkannten_anrufer_direkt_binden(sit, t):
+                    return _dispatch(sit, melde)
             was = {
                 "absagen": "Damit ich den richtigen Termin absage",
                 "verschieben": "Damit ich den richtigen Termin finde",
             }.get(s["modus"], "Damit ich den richtigen Termin finde")
             return _nachname_frage(sit, f"{was}:")
-        # W-ANRUFER-CHECK: die Rufnummer hat einen Kartei-Patienten getroffen
-        # — Name + Nummer vorlesen statt den Nachnamen zu erfragen. Ein Ja
-        # (einsammeln) fuellt Name/patientId/Telefon, die Suche laeuft dann
-        # direkt; ein Nein faellt hierher zurueck auf die Nachnamen-Frage.
+        # Die Rufnummer hat einen Kartei-Patienten getroffen: fuer die
+        # lesende Verwaltungssuche sofort binden, statt eine ueberfluessige
+        # Erlaubnisfrage vorzuschalten.
         agentprofil.anrufer_warten(sit)
         if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
-            s["frage"] = "anrufer_check"
-            return {"text": gehirn.anrufer_check_frage(sit)}
+            if _erkannten_anrufer_direkt_binden(sit, t):
+                return _dispatch(sit, melde)
         if s["modus"] == "auskunft" and sit.get("verwZeitUnbekannt"):
             return _ohne_zeit_eingrenzen(sit)
         if s["modus"] in {"absagen", "verschieben"} and not _detail_tag(sit):
@@ -3415,24 +3465,27 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             s["frage"] = ""
         else:
             return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
+    if not s["nachname"] and not s["anruferCheck"] and not s["fuerWen"]:
+        agentprofil.anrufer_warten(sit)
+        _erkannten_anrufer_direkt_binden(sit, t)
     if not s["nachname"]:
         if s["frage"] in {"name", "nachname", "anrufer_check"} and not neu:
             # Live 06.09.2026 Petsas: LLM fragte "Wie lautet Ihr Name?" und
             # rief list_appointments ohne Patient — hier deterministisch bleiben.
             if s["frage"] == "anrufer_check" and gehirn.anrufer_bekannt(sit):
                 return {"text": gehirn.anrufer_check_frage(sit)}
-            # Async-Anrufer kam erst NACH der Nachnamen-Frage: upgraden.
+            # Async-Anrufer kam erst NACH der Nachnamen-Frage: direkt binden.
             if (s["frage"] in {"name", "nachname"} and not s["anruferCheck"]
                     and not s["fuerWen"] and gehirn.anrufer_bekannt(sit)):
-                s["frage"] = "anrufer_check"
-                return {"text": gehirn.anrufer_check_frage(sit)}
+                if _erkannten_anrufer_direkt_binden(sit, t):
+                    return _dispatch(sit, melde)
             return {"text": "Damit ich in den Kalender schauen kann: Wie ist Ihr Nachname?"}
-        # W-ANRUFER-CHECK: erkannten Anrufer vorlesen statt erfragen.
-        # Cache-Pfad: Anrufer kommt oft erst async — kurz warten (Petsas).
+        # Cache-Pfad: Anrufer kommt oft erst async — kurz warten und direkt
+        # binden, statt vor der rein lesenden Suche um Erlaubnis zu fragen.
         agentprofil.anrufer_warten(sit)
         if not s["anruferCheck"] and not s["fuerWen"] and gehirn.anrufer_bekannt(sit):
-            s["frage"] = "anrufer_check"
-            return {"text": gehirn.anrufer_check_frage(sit)}
+            if _erkannten_anrufer_direkt_binden(sit, t):
+                return _dispatch(sit, melde)
         if sit.get("verwZeitUnbekannt"):
             return _ohne_zeit_eingrenzen(sit)
         if _detail_tag(sit):

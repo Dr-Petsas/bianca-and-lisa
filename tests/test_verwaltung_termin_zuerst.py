@@ -1432,29 +1432,147 @@ def test_no_upcoming_der_bestaetigten_akte_wird_nicht_fuzzy_umgebogen(
     assert rufe == ["agentFindPatientAppointments"]
 
 
-def test_datumstreffer_umgeht_anrufer_identitaetscheck_nie(monkeypatch):
+def test_erkannten_anrufer_direkt_suchen_und_absage_erst_bestaetigen(monkeypatch):
     sit = _sit("blessing")
     sit["anrufer"] = {
         "patientId": "patient-paesler",
         "telefon": "+491701234567",
         "vorname": "Elisabeth",
         "nachname": "Päsler",
+        "geschlecht": "female",
     }
     s = gehirn.sammler(sit)
     s["modus"] = "absagen"
     sit["verwAktiv"] = True
     verwalten._hinweis_merken(sit, "13. Oktober 2026 um 9:45 Uhr", relativ=True)
-    monkeypatch.setattr(
-        calendar,
-        "find_appointments_by_date",
-        lambda *_a, **_k: (_ for _ in ()).throw(
-            AssertionError("vor dem Identitäts-Ja keine Tagesliste lesen")),
-    )
+    _details(monkeypatch, [TERMIN])
     antwort = verwalten._sammeln(
         sit, "Der Termin ist am 13. Oktober um 9:45 Uhr.", set(), None)
     assert antwort
-    assert s["frage"] == "anrufer_check"
-    assert "Päsler" in antwort["text"]
+    assert s["frage"] == "absage_ok"
+    assert s["phase"] == "absage_bestaetigen"
+    assert s["patientId"] == "patient-paesler"
+    assert "Frau Päsler, ich habe Ihren Termin" in antwort["text"]
+    assert "Soll ich ihn wirklich absagen?" in antwort["text"]
+    assert "unter Ihren hinterlegten Daten" not in antwort["text"]
+
+
+def test_erkannten_anrufer_direkt_suchen_und_verschiebewunsch_fragen(monkeypatch):
+    sit = _sit("blessing")
+    sit["anrufer"] = {
+        "patientId": "patient-paesler",
+        "telefon": "+491701234567",
+        "vorname": "Elisabeth",
+        "nachname": "Päsler",
+        "geschlecht": "female",
+    }
+    s = gehirn.sammler(sit)
+    s["modus"] = "verschieben"
+    sit["verwAktiv"] = True
+    verwalten._hinweis_merken(sit, "13. Oktober 2026 um 9:45 Uhr", relativ=True)
+    _details(monkeypatch, [TERMIN])
+
+    antwort = verwalten._sammeln(
+        sit, "Den Termin am 13. Oktober möchte ich verschieben.", set(), None)
+
+    assert antwort
+    assert s["frage"] == "wunsch"
+    assert s["phase"] == "verschieb_wunsch"
+    assert "Frau Päsler, ich habe Ihren Termin" in antwort["text"]
+    assert "Auf wann möchten Sie ihn verschieben" in antwort["text"]
+    assert "Spreche ich mit" not in antwort["text"]
+
+
+def test_erkannten_anrufer_bei_auskunft_sofort_suchen(monkeypatch):
+    sit = _sit("meddent")
+    sit["anrufer"] = {
+        "patientId": "patient-petsas",
+        "telefon": "+491771234567",
+        "vorname": "Michael",
+        "nachname": "Petsas",
+        "geschlecht": "male",
+    }
+    s = gehirn.sammler(sit)
+    s["modus"] = "auskunft"
+    termin = {
+        **TERMIN,
+        "patientId": "patient-petsas",
+        "patientFirstName": "Michael",
+        "patientLastName": "Petsas",
+        "patientName": "Michael Petsas",
+    }
+    aufrufe = []
+
+    def finden(_tenant, ctx):
+        aufrufe.append(dict(ctx))
+        return {
+            "ok": True,
+            "matchSource": "exact",
+            "patient": {
+                "id": "patient-petsas",
+                "firstName": "Michael",
+                "lastName": "Petsas",
+            },
+            "appointments": [termin],
+        }
+
+    monkeypatch.setattr(verwalten.kal, "find_patient_appointments", finden)
+    antwort = verwalten.zug(
+        sit, "Wann ist mein nächster Termin?", {"modus"}, None)
+
+    assert antwort
+    assert aufrufe and aufrufe[0]["patientId"] == "patient-petsas"
+    assert s["frage"] == "termin_ok"
+    assert "Herr Petsas, ich habe Ihren Termin gefunden" in antwort["text"]
+    assert "Spreche ich mit" not in antwort["text"]
+    assert "unter Ihren hinterlegten Daten" not in antwort["text"]
+
+
+def test_drittperson_und_identitaetswiderspruch_binden_anrufer_nicht():
+    for text, fuer_wen in (
+        ("Ich möchte den Termin meines Sohnes absagen.", "sohn"),
+        ("Ich bin nicht Elisabeth Päsler.", ""),
+    ):
+        sit = _sit("blessing")
+        sit["anrufer"] = {
+            "patientId": "patient-paesler",
+            "telefon": "+491701234567",
+            "vorname": "Elisabeth",
+            "nachname": "Päsler",
+            "geschlecht": "female",
+        }
+        s = gehirn.sammler(sit)
+        s["modus"] = "absagen"
+        s["fuerWen"] = fuer_wen
+
+        assert not verwalten._erkannten_anrufer_direkt_binden(sit, text)
+        assert not s["patientId"]
+        assert not s["anruferCheck"]
+
+
+def test_drittperson_und_neues_anliegen_raeumen_direktbindung():
+    sit = _sit("blessing")
+    sit["anrufer"] = {
+        "patientId": "patient-paesler",
+        "telefon": "+491701234567",
+        "vorname": "Elisabeth",
+        "nachname": "Päsler",
+        "geschlecht": "female",
+    }
+    s = gehirn.sammler(sit)
+    s["modus"] = "absagen"
+    assert verwalten._erkannten_anrufer_direkt_binden(sit)
+    assert sit["verwAnruferDirekt"]
+
+    neu = set()
+    verwalten._verw_drittperson_aufnehmen(
+        sit, "Ich möchte den Termin meines Sohnes absagen.", neu)
+    assert s["fuerWen"] == "sohn"
+    assert not sit.get("verwAnruferDirekt")
+
+    sit["verwAnruferDirekt"] = True
+    verwalten._verw_reset(sit)
+    assert not sit.get("verwAnruferDirekt")
 
 
 def test_drittperson_verwirft_anruferakte_und_oktober_ist_kein_name():

@@ -144,10 +144,10 @@ def test_ist_passt_nicht_bei_sachinhalt():
 
 def test_ansage_nennt_grund_und_stellt_folgefrage(ohne_netz):
     sit = _sit()
-    _zug(sit, "Ich habe meinen Termin vergessen, jetzt würde.")
+    aus = _zug(sit, "Ich habe meinen Termin vergessen, jetzt würde.")
     s = gehirn.sammler(sit)
-    assert s["modus"] == "auskunft" and s["frage"] == "anrufer_check"
-    aus = _zug(sit, "Ja.")
+    assert s["modus"] == "auskunft" and s["frage"] == "termin_ok"
+    assert "Frau Hösl, ich habe Ihren Termin gefunden" in aus["text"]
     assert "einundzwanzigsten Dezember" in aus["text"]
     assert "Zahnreinigung" in aus["text"]
     assert "(PZR)" not in aus["text"]          # Kuerzel nicht vorlesen
@@ -157,9 +157,9 @@ def test_ansage_nennt_grund_und_stellt_folgefrage(ohne_netz):
 
 def test_ansage_oktober_ehrlich_mit_naechstem_termin(ohne_netz):
     sit = _sit()
-    _zug(sit, "Oktober eventuell? Habe ich da einen Termin?")
-    aus = _zug(sit, "Ja.")
-    assert aus["text"].startswith("Im Oktober sehe ich keinen Termin für Sie")
+    aus = _zug(sit, "Oktober eventuell? Habe ich da einen Termin?")
+    assert aus["text"].startswith(
+        "Frau Hösl, im Oktober sehe ich keinen Termin für Sie")
     assert "einundzwanzigsten Dezember" in aus["text"]
     s = gehirn.sammler(sit)
     assert s["wunsch"] is None, "Oktober ist Bestands-Hinweis, kein Neubuchungs-Wunsch"
@@ -171,7 +171,6 @@ def test_ansage_oktober_ehrlich_mit_naechstem_termin(ohne_netz):
 def test_live_anruf_9dd61a59_laeuft_deterministisch(ohne_netz):
     sit = _sit()
     _zug(sit, "Ich habe meinen Termin vergessen, jetzt würde.")
-    _zug(sit, "Ja.")
     s = gehirn.sammler(sit)
 
     aus = _zug(sit, "Bis alles gut, alles gut.")
@@ -187,7 +186,6 @@ def test_live_anruf_9dd61a59_laeuft_deterministisch(ohne_netz):
 def test_wiederhoeren_auf_passt_frage_legt_auf(ohne_netz):
     sit = _sit()
     _zug(sit, "Habe ich da einen Termin?")
-    _zug(sit, "Ja.")
     aus = _zug(sit, "Alles gut, Dankeschön, Wiederhören.")
     assert aus.get("hangup") is True
 
@@ -195,7 +193,6 @@ def test_wiederhoeren_auf_passt_frage_legt_auf(ohne_netz):
 def test_nein_danke_heisst_nichts_aendern(ohne_netz):
     sit = _sit()
     _zug(sit, "Habe ich da einen Termin?")
-    _zug(sit, "Ja.")
     s = gehirn.sammler(sit)
     aus = _zug(sit, "Nein danke.")
     assert "bleibt bestehen" in aus["text"]
@@ -207,7 +204,6 @@ def test_nein_danke_heisst_nichts_aendern(ohne_netz):
 def test_nein_fuehrt_zu_verschieben_oder_absagen(ohne_netz):
     sit = _sit()
     _zug(sit, "Habe ich da einen Termin?")
-    _zug(sit, "Ja.")
     s = gehirn.sammler(sit)
     aus = _zug(sit, "Nein.")
     assert "verschieben oder absagen" in aus["text"]
@@ -219,7 +215,6 @@ def test_nein_fuehrt_zu_verschieben_oder_absagen(ohne_netz):
 def test_verschieben_wechselt_in_die_strecke(ohne_netz):
     sit = _sit()
     _zug(sit, "Habe ich da einen Termin?")
-    _zug(sit, "Ja.")
     aus = _zug(sit, "Den möchte ich verschieben.")
     s = gehirn.sammler(sit)
     assert s["modus"] == "verschieben"
@@ -230,13 +225,14 @@ def test_verschieben_wechselt_in_die_strecke(ohne_netz):
 def test_nachfrage_anderer_monat_bleibt_bestand(ohne_netz):
     sit = _sit()
     _zug(sit, "Habe ich da einen Termin?")
-    _zug(sit, "Ja.")
     s = gehirn.sammler(sit)
     aus = _zug(sit, "Und im November?")
-    assert aus["text"].startswith("Im November sehe ich keinen Termin")
+    assert aus["text"].startswith(
+        "Frau Hösl, im November sehe ich keinen Termin")
     assert s["wunsch"] is None
     aus = _zug(sit, "Und im Dezember?")
-    assert aus["text"].startswith("Im Dezember sehe ich einen Termin")
+    assert aus["text"].startswith(
+        "Frau Hösl, im Dezember sehe ich einen Termin")
     assert s["frage"] == "termin_ok"
 
 

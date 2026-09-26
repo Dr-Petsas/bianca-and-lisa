@@ -3850,7 +3850,7 @@ def patientenkontext_aktualisieren(sit: dict) -> dict:
 
 
 def anrufer_daten_uebernehmen(sit: dict) -> bool:
-    """Bestätigten Rufnummer-Treffer binden; SMS-Ziel separat bestätigen."""
+    """Eindeutigen Rufnummer-Treffer binden; SMS-Ziel separat bestätigen."""
     a = anrufer_bekannt(sit)
     if not a:
         return False
@@ -3861,9 +3861,9 @@ def anrufer_daten_uebernehmen(sit: dict) -> bool:
     s["nachname"] = _s(a.get("nachname")) or s["nachname"]
     s["buchstabiert"] = True
     s["bekannt"] = True
-    # W-HIRN-GATE: Die Identitaet war gerade Thema ("Habe ich Sie richtig
-    # erkannt?") — der Name ist damit bestaetigt und wird nicht ein zweites
-    # Mal rueckgefragt.
+    # W-HIRN-GATE: Die Akte ist über Caller-ID eindeutig gebunden (bei der
+    # Verwaltung direkt, bei der Buchung nach Identitätsfrage). Der Name
+    # wird deshalb nicht noch einmal als separates Formularfeld erfragt.
     s["vornameQuelle"] = "check"
     s["vornameCheck"] = "ja"
     s["patientId"] = _s(a.get("patientId")) or s["patientId"]

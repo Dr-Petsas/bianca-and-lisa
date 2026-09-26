@@ -3703,9 +3703,11 @@ def test_anrufer_check_nein_fragt_klassisch():
         flow.hintergrund.anstossen = echt_anstossen
 
 
-def test_auskunft_upgrade_nachname_zu_anrufer_check():
-    """Nachnamen-Frage schon offen, Anrufer kommt spaeter: auf Check upgraden."""
+def test_auskunft_upgrade_nachname_zu_direkter_anrufersuche():
+    """Nachnamen-Frage schon offen, Anrufer kommt spaeter: sofort suchen."""
+    echt_find = verwalten.kal.find_patient_appointments
     echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit()
@@ -3718,10 +3720,12 @@ def test_auskunft_upgrade_nachname_zu_anrufer_check():
         }
         z2 = flow.zug(sit, "Äh, Moment.")
         assert z2 and "Frau Berger" in z2["text"]
-        assert z2["text"] == "Spreche ich mit Frau Berger?"
+        assert "Ihr nächster Termin" in z2["text"]
+        assert "Spreche ich mit" not in z2["text"]
         assert "Bianca" not in z2["text"]
-        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+        assert gehirn.sammler(sit)["frage"] == "termin_ok"
     finally:
+        verwalten.kal.find_patient_appointments = echt_find
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
@@ -3751,9 +3755,7 @@ def test_anrufer_check_nicht_bei_neupatient_oder_drittem():
 
 
 def test_absage_mit_erkanntem_anrufer_sucht_direkt():
-    """Beim Absagen wird der erkannte Anrufer vorgelesen statt der
-    Nachnamen-Frage; ein Ja sucht SOFORT mit Kartei-Name, patientId und
-    Anrufernummer."""
+    """Beim Absagen sucht Caller-ID sofort; nur das Loeschen braucht ein Ja."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_anstossen = verwalten.hintergrund.anstossen
     gesucht: list[dict] = []
@@ -3769,12 +3771,9 @@ def test_absage_mit_erkanntem_anrufer_sucht_direkt():
         z1 = flow.zug(sit, "Guten Tag, ich muss leider meinen Termin absagen.")
         assert z1 and "Frau Berger" in z1["text"]
         assert "nachname" not in z1["text"].lower()  # NICHT nochmal erfragen
-        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
-
-        z2 = flow.zug(sit, "Ja.")
-        assert z2 and "wirklich absagen" in z2["text"].lower(), z2
-        assert "Frau Berger" not in z2["text"]  # danach nur noch Pronomen
-        assert "Julia Berger" not in z2["text"]
+        assert gehirn.sammler(sit)["frage"] == "absage_ok"
+        assert "wirklich absagen" in z1["text"].lower(), z1
+        assert "Spreche ich mit" not in z1["text"]
         assert gesucht[-1].get("lastName") == "Berger"
         assert gesucht[-1].get("patientId") == "pat-7"
         assert gesucht[-1].get("phone") == "015253904756"
@@ -3783,19 +3782,22 @@ def test_absage_mit_erkanntem_anrufer_sucht_direkt():
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
-def test_absage_nach_schnellem_hallo_fragt_knapp_nach_identitaet():
-    """Erkannte Rufnummer: genau eine klare Identitätsfrage, keine zusätzliche
-    Erlaubnisfrage zum Nachsehen unter den hinterlegten Daten."""
+def test_absage_nach_schnellem_hallo_sucht_ohne_identitaetsfrage():
+    """Erkannte Rufnummer: direkt suchen, keine Erlaubnis-/Identitätsfrage."""
+    echt_find = verwalten.kal.find_patient_appointments
     echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit_mit_anrufer()
         sit["anruferHalloGesagt"] = True
         z = flow.zug(sit, "Ich möchte einen Termin absagen.")
-        assert z and z["text"] == "Spreche ich mit Frau Berger?"
+        assert z and "Frau Berger, ich habe Ihren Termin" in z["text"]
+        assert "Spreche ich mit" not in z["text"]
         assert "hinterlegten Daten" not in z["text"]
-        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
+        assert gehirn.sammler(sit)["frage"] == "absage_ok"
     finally:
+        verwalten.kal.find_patient_appointments = echt_find
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
@@ -3823,24 +3825,30 @@ def test_verhoertes_danke_nach_absage_beendet_sofort_ohne_schleife():
         assert z and z["text"] == "Sehr gerne. Auf Wiederhören.", (satz, z)
 
 
-def test_absage_anrufer_check_nein_fragt_nachnamen():
-    """Nein auf den Rufnummerntreffer: danach greifen Termindaten als Prioritaet."""
+def test_absage_nein_laesst_den_gefundenen_termin_bestehen():
+    """Direktsuche ist lesend; ein Nein darf niemals den Termin loeschen."""
+    echt_find = verwalten.kal.find_patient_appointments
+    echt_cancel = verwalten.kal.cancel_by_id
     echt_anstossen = verwalten.hintergrund.anstossen
+    verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
+    verwalten.kal.cancel_by_id = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("Nein darf keine Absage ausloesen"))
     verwalten.hintergrund.anstossen = lambda sit: None
     try:
         sit = _sit_mit_anrufer()
         flow.zug(sit, "Ich möchte meinen Termin absagen.")
         z2 = flow.zug(sit, "Nein.")
-        assert z2 and "welchem tag" in z2["text"].lower()
+        assert z2 and "termin bleibt bestehen" in z2["text"].lower()
         s = gehirn.sammler(sit)
-        assert s["frage"] == "wann" and s["anruferCheck"] == "nein"
+        assert s["frage"] == "sonst_noch"
     finally:
+        verwalten.kal.find_patient_appointments = echt_find
+        verwalten.kal.cancel_by_id = echt_cancel
         verwalten.hintergrund.anstossen = echt_anstossen
 
 
 def test_auskunft_mit_erkanntem_anrufer():
-    """Auch die Termin-Auskunft liest den erkannten Anrufer vor, statt den
-    Nachnamen zu erfragen."""
+    """Auch die Termin-Auskunft sucht und antwortet im ersten Zug."""
     echt_find = verwalten.kal.find_patient_appointments
     echt_anstossen = verwalten.hintergrund.anstossen
     verwalten.kal.find_patient_appointments = lambda t, c: dict(GEFUNDEN)
@@ -3849,9 +3857,9 @@ def test_auskunft_mit_erkanntem_anrufer():
         sit = _sit_mit_anrufer()
         z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
         assert z1 and "Frau Berger" in z1["text"]
-        assert gehirn.sammler(sit)["frage"] == "anrufer_check"
-        z2 = flow.zug(sit, "Ja, richtig.")
-        assert z2 and "dritten September" in z2["text"]  # Termin wird vorgelesen
+        assert gehirn.sammler(sit)["frage"] == "termin_ok"
+        assert "dritten September" in z1["text"]
+        assert "Spreche ich mit" not in z1["text"]
     finally:
         verwalten.kal.find_patient_appointments = echt_find
         verwalten.hintergrund.anstossen = echt_anstossen
@@ -3935,7 +3943,7 @@ def test_auskunft_leert_stale_upcoming():
         sit = _sit_mit_anrufer()
         sit["upcoming"] = [{"id": "alt", "label": "gestern um zehn", "iso": "2020-01-01T10:00"}]
         z1 = flow.zug(sit, "Ich weiß nicht mehr, wann mein Termin ist.")
-        assert z1 and z1["text"] == "Spreche ich mit Frau Berger?"
+        assert z1 and "Frau Berger, ich habe Ihren Termin gefunden" in z1["text"]
         assert sit.get("upcoming") == []
     finally:
         verwalten.kal.find_patient_appointments = echt_find

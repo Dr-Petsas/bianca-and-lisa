@@ -199,6 +199,11 @@ def test_b1_agent_startet_ohne_llm_den_kalenderpfad(monkeypatch):
     monkeypatch.setattr(agent.llm, "chat", _kein_llm)
     monkeypatch.setattr(agent.llm, "chat_stream", _kein_llm)
     monkeypatch.setattr(flow.hintergrund, "anstossen", lambda _sit: None)
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_patient_appointments",
+        lambda _tenant, _ctx: dict(GESCHEIDLE_TERMIN),
+    )
 
     sit = _sit()
     sit["anrufer"] = {
@@ -214,8 +219,9 @@ def test_b1_agent_startet_ohne_llm_den_kalenderpfad(monkeypatch):
 
     assert aus is not None
     assert s["modus"] == "auskunft"
-    assert s["frage"] == "anrufer_check"
-    assert aus["text"] == "Spreche ich mit Frau Gescheidle?"
+    assert s["frage"] == "termin_ok"
+    assert aus["text"].startswith("Frau Gescheidle, zu dieser Zeit")
+    assert "Spreche ich mit" not in aus["text"]
     assert "versichert" not in aus["text"].lower()
     assert "hautkontrolle" not in aus["text"].lower()
 
@@ -247,17 +253,15 @@ def test_b2_bekannter_gescheidle_anrufer_bekommt_den_termin_angesagt(monkeypatch
         sit,
         "Ich habe einen Termin Ende September und weiss nicht mehr wann.",
     )
-    assert aus1["text"].endswith("Spreche ich mit Frau Gescheidle?")
-
-    aus2 = agent.user_turn(sit, "Ja, richtig.")
     s = gehirn.sammler(sit)
 
-    assert "vierundzwanzigsten September" in aus2["text"]
-    assert "neun Uhr dreißig" in aus2["text"]
-    assert "Kontrolle" in aus2["text"]
-    assert "Doktor Blessing" in aus2["text"]
-    assert "neuen Termin" not in aus2["text"]
-    assert "Hautkontrolle" not in aus2["text"]
+    assert "vierundzwanzigsten September" in aus1["text"]
+    assert "neun Uhr dreißig" in aus1["text"]
+    assert "Kontrolle" in aus1["text"]
+    assert "Doktor Blessing" in aus1["text"]
+    assert "neuen Termin" not in aus1["text"]
+    assert "Hautkontrolle" not in aus1["text"]
+    assert "Spreche ich mit" not in aus1["text"]
     assert s["modus"] == "auskunft"
     assert s["frage"] == "termin_ok"
 
