@@ -3941,10 +3941,10 @@ def anrufer_daten_verwerfen(sit: dict) -> None:
 def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     """Erkannten Anrufer einmal begrüßen, danach nur noch Pronomen verwenden.
 
-    Identität und „Termin für Sie selbst?“ sind getrennte Fragen. So nennt
-    Bianca den Namen nicht in drei aufeinanderfolgenden Sätzen, und ein Nein
-    hat immer genau eine Bedeutung."""
-    schluss = anrufer_check_schluss(selbst=selbst)
+    ``selbst`` bleibt nur für laufende Alt-Sitzungen signaturkompatibel. Ein
+    bestätigter Anrufer ist ohne ausdrückliches Drittperson-Signal immer der
+    Patient; eine zusätzliche Empfängerfrage gibt es nicht mehr."""
+    schluss = anrufer_check_schluss()
     modus = _s(sammler(sit).get("modus"))
     # Ein automatischer Rufnummer-Treffer ist noch keine bestätigte
     # Identität. Bei Terminverwaltung einmal knapp und eindeutig fragen;
@@ -3963,8 +3963,6 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
     # Der schnelle Hallo-Satz hat den Namen bereits genannt. Danach niemals
     # erneut „Michael Petsas … Michael Petsas …“, sondern „Sie/Ihre Daten“.
     if sit.get("anruferHalloGesagt"):
-        if selbst:
-            return schluss
         if modus in {"absagen", "verschieben", "auskunft"}:
             return f"Soll ich unter Ihren hinterlegten Daten {aktion}?"
         return schluss
@@ -3975,16 +3973,13 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
         # deshalb dort die Feststellungsvariante verwenden.
         if anrufer_hallo_fragt(hallo):
             hallo = _anrufer_hallo_feststellung(sit)
-        if not selbst:
-            return f"{hallo} {schluss}"
         return f"{hallo} {schluss}"
     return schluss
 
 
 def anrufer_check_schluss(*, selbst: bool = False) -> str:
     """Nur die Ja/Nein-Frage — nach einem Wohlsein-„Gut.“ ohne Hallo-Wiederholung."""
-    return ("Der Termin ist für Sie selbst, richtig?" if selbst
-            else "Habe ich Sie richtig erkannt?")
+    return "Habe ich Sie richtig erkannt?"
 
 
 _ANRUFGRUND_RE = re.compile(
@@ -4863,15 +4858,12 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
             and not s["fuerWenCheck"] and not s["fuerWen"]
             and s["frage"] in {"", "anrufer_check", "fuer_wen_check"}):
-        tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
-        if tenant.get("selbstCheckNurBeiSignal") is True:
-            # Blessing kompakt: Der Anrufer hat seine Rufnummern-Akte soeben
-            # bestätigt und nirgends eine dritte Person genannt. Ein späteres
-            # "für meinen Sohn" gewinnt weiterhin über fuer_wen_signal().
-            s["fuerWenCheck"] = "ja"
-            anrufer_behandler_uebernehmen(sit)
-        else:
-            return "fuer_wen_check", "Der Termin ist für Sie selbst, richtig?"
+        # Chef 26.09.2026: Ein Anrufer bucht standardmäßig für sich. Die
+        # Maschine fragt das nicht mehr vorsorglich in jedem Gespräch ab.
+        # Ein tatsächlich genannter Dritter gewinnt weiterhin jederzeit
+        # über fuer_wen_signal() und löst die Anruferakte vom Patienten.
+        s["fuerWenCheck"] = "ja"
+        anrufer_behandler_uebernehmen(sit)
 
     if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
             and s["fuerWenCheck"] == "ja" and not s["fuerWen"]):

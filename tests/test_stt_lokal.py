@@ -106,6 +106,8 @@ def test_englische_stille_halluzinationen_werden_verworfen():
         "I am Michael.",
         "My name is Michael.",
         "Good morning, Mister Smith.",
+        "Teen sucks.",
+        "Tuesday morning.",
     )
     for gehoert in faelle:
         fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
@@ -119,6 +121,7 @@ def test_englische_stille_halluzinationen_werden_verworfen():
 def test_sprachwache_behaelt_deutsche_saetze_und_eigennamen():
     faelle = (
         "Sorry, ich brauche einen Termin.",
+        "Dienstags nicht.",
         "Ich möchte online einen Termin buchen.",
         "Mein Nachname ist Smith.",
         "Okay, danke.",

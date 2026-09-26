@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from bianca import agent, flow, gehirn, hintergrund, session, verwalten
+from kern import slots as slotmod
+from kern.sprech import tag_wort
 from kern.slots import (
     pick_slots,
     slot_praeferenz_aenderung,
+    spoken_offer,
     wunsch_mit_slot_praeferenz,
 )
 from kern.tenants import laden
@@ -88,6 +93,40 @@ def test_live_saetze_sperren_donnerstag():
         aenderung = slot_praeferenz_aenderung(text)
         assert aenderung is not None, text
         assert 4 in aenderung["excludeWeekdays"], (text, aenderung)
+
+
+def test_nicht_dienstags_wird_im_laufenden_angebot_sofort_angewendet():
+    aenderung = slot_praeferenz_aenderung("Nicht dienstags.")
+    assert aenderung is not None
+    assert aenderung["excludeWeekdays"] == [2]
+
+    sit = _sit()
+    sit["offered"] = [
+        {"iso": MONTAG_11, "spoken": "Montag um elf Uhr fünfzehn"},
+        {"iso": DIENSTAG_15, "spoken": "Dienstag um fünfzehn Uhr"},
+    ]
+    aus = flow._slot_praeferenz_zug(sit, "Nicht dienstags.")
+
+    assert aus is not None
+    assert 2 in gehirn.sammler(sit)["wunsch"]["excludeWeekdays"]
+    assert all(datetime.fromisoformat(x["iso"]).isoweekday() != 2
+               for x in sit["offered"])
+    assert aus["text"].count("Dienstag") <= 1  # nur die Bestätigung, nie erneut angeboten
+
+
+def test_entferntes_mehrfachangebot_nennt_das_vollstaendige_datum():
+    heute = datetime.now(slotmod.TZ).date()
+    erster = heute + timedelta(days=70)
+    zweiter = erster + timedelta(days=1)
+    slots = [
+        f"{erster.isoformat()}T09:00:00+01:00",
+        f"{zweiter.isoformat()}T15:00:00+01:00",
+    ]
+
+    text = spoken_offer([{"iso": x} for x in slots])
+
+    for d in (erster, zweiter):
+        assert tag_wort(d.year, d.month, d.day, heute=heute) in text
 
 
 def test_live_mehrfachwahl_haelt_erlaubte_tage_und_nicht_donnerstag():

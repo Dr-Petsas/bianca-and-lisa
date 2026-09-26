@@ -94,11 +94,14 @@ _STILLE_HALLU_RE = re.compile(
 _ENGLISH_WORDS = frozenset({
     "a", "about", "all", "am", "an", "and", "appointment", "are", "at",
     "back", "be", "because", "but", "call", "can", "could", "day", "do",
+    "friday",
     "for", "from", "good", "got", "had", "has", "have", "hello", "help",
     "here", "i", "if", "in", "is", "it", "like", "me", "morning", "my",
+    "monday",
     "name", "need", "not", "of", "on", "or", "please", "question", "sorry",
-    "thank", "thanks", "that", "the", "there", "this", "time", "to", "want",
-    "was", "we", "what", "when", "with", "would", "you", "your",
+    "saturday", "suck", "sucks", "sunday", "teen", "thank", "thanks", "that",
+    "the", "there", "this", "thursday", "time", "to", "tuesday", "want",
+    "was", "wednesday", "we", "what", "when", "with", "would", "you", "your",
 })
 _GERMAN_STRUCTURE = frozenset({
     "aber", "also", "bitte", "brauche", "danke", "das", "dem", "den",

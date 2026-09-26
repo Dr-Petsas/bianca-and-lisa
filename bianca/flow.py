@@ -5497,26 +5497,26 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if _TERMIN_WIEDERHOLEN_RE.search(t) or _TERMIN_ABGLEICH_RE.search(t):
             sit.pop("bestaetigenUnklar", None)
             return _termin_nochmal(sit, t)
+        # Ein ausdrücklich genannter Dritter ist keine unklare Antwort und
+        # braucht kein vorangestelltes „Nein“. Besonders „Ja, aber für meinen
+        # Sohn“ darf nie als Buchungs-Ja für die Anruferakte durchrutschen.
+        if gehirn.fuer_wen_signal(t):
+            sit.pop("bestaetigenUnklar", None)
+            sit.pop("buchIntent", None)
+            neu = gehirn.einsammeln(sit, t)
+            sit["ernteZuletzt"] = sorted(neu)
+            s["phase"] = ""
+            fid2, frage2 = gehirn.naechste_frage(sit)
+            s["frage"] = fid2
+            if fid2:
+                return {"text": f"Ah, verstehe! {frage2}"}
+            return _readback(sit)
         if gehirn.ist_ja(t):
             sit.pop("bestaetigenUnklar", None)
             return _nach_ok_buchen(sit, t, melde)
         if gehirn.ist_nein(t):
             sit.pop("bestaetigenUnklar", None)
             sit.pop("buchIntent", None)
-            # W-FUER-WEN (Chef 03.09.2026): "Nein, der Termin ist nicht für
-            # mich, der ist für meinen Sohn" — NICHT den Slot verwerfen,
-            # sondern den Patienten umschreiben: einsammeln erntet fuerWen
-            # und loest die Kartei-Identitaet des Anrufers vom Patienten
-            # (Live-Fall: die Korrektur lief dreimal ins Leere).
-            if gehirn.fuer_wen_signal(t):
-                neu = gehirn.einsammeln(sit, t)
-                sit["ernteZuletzt"] = sorted(neu)
-                s["phase"] = ""
-                fid2, frage2 = gehirn.naechste_frage(sit)
-                s["frage"] = fid2
-                if fid2:
-                    return {"text": f"Ah, verstehe! {frage2}"}
-                return _readback(sit)
             # "Nein, den am 22.12. um 15:55" meint den anderen angebotenen
             # Slot (15:50), nicht eine neue Vormittag/Nachmittag-Frage.
             # Anruf 9057eb03.

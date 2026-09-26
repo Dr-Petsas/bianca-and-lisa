@@ -3111,11 +3111,8 @@ def test_anrufer_check_buchung_trennt_identitaet_terminempfaenger_und_sms():
         assert s["geschlecht"] == "f" and s["geschlechtQuelle"] == "akte"
         assert z2 and "Danke." in z2["text"]
         assert "Julia Berger" not in z2["text"]
-        assert "Der Termin ist für Sie selbst, richtig?" in z2["text"]
-        assert s["frage"] == "fuer_wen_check"
-
-        z3 = flow.zug(sit, "Ja.")
-        assert z3 and "Julia Berger" not in z3["text"]
+        assert "für Sie selbst" not in z2["text"]
+        assert s["fuerWenCheck"] == "ja"
         assert s["frage"] == "arzt"  # weiter im Bestand-Fluss
 
         # W-TELEFON-ZULETZT (Chef 14.09.2026): der Fragenfaden verlangt die
@@ -3161,12 +3158,10 @@ def test_erkannt_michael_petsas_wird_nach_hallo_nur_noch_mit_sie_angesprochen():
         assert "richtig erkannt" in z1["text"]
 
         z2 = flow.zug(sit, "Ja.")
-        assert z2 and "für Sie selbst" in z2["text"]
+        assert z2 and "für Sie selbst" not in z2["text"]
         assert "Petsas" not in z2["text"]
 
-        z3 = flow.zug(sit, "Ja.")
         s = gehirn.sammler(sit)
-        assert z3 and "selben Behandler" not in z3["text"]
         assert (s.get("arzt") or {}).get("calendarId") == "cal-petsas"
         s.update({
             "arzt": {"calendarId": "cal-petsas",
@@ -3203,7 +3198,7 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
     assert not any(tts.ziffern_satz(s) for s in saetze)
     assert "Ich bin die Neue!" in saetze
     assert "Bianca." not in saetze
-    assert saetze[-1] == "Der Termin ist für Sie selbst, richtig?"
+    assert saetze[-1] == "Habe ich Sie richtig erkannt?"
     assert gehirn.ist_anrufer_wohl("Gut.")
     assert gehirn.ist_anrufer_wohl("Danke, gut.")
     assert not gehirn.ist_anrufer_wohl("Ja, genau.")
@@ -3224,7 +3219,7 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
         assert "Bianca" not in z["text"]
         z2 = flow.zug(sit, "Ja, genau.")
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
-        assert z2 and "Der Termin ist für Sie selbst" in z2["text"]
+        assert z2 and "für Sie selbst" not in z2["text"]
         assert "Julia Berger" not in z2["text"]
     finally:
         flow.hintergrund.anstossen = echt_anstossen
@@ -3374,7 +3369,7 @@ def test_anrufer_hallo_frage_ist_eigener_zug_und_job_geht_danach_weiter():
         ]
         z2b = bianca_agent.user_turn(sit, "Ja, genau.", vorab=hits.append)
         assert gehirn.sammler(sit)["anruferCheck"] == "ja"
-        assert z2b and "Der Termin ist für Sie selbst, richtig?" in z2b["text"]
+        assert z2b and "für Sie selbst" not in z2b["text"]
         assert "Julia Berger" not in z2b["text"]
 
         # Anliegen im ERSTEN Satz: Feststellung statt Frage, auch wenn die
@@ -3519,16 +3514,16 @@ def test_anrufer_check_nach_hallo_ohne_eigenen_namen():
     sit["anruferHalloGesagt"] = True
     sit["vorigesGespraech"] = {"ts": 1, "wann": "gestern"}
     frage = gehirn.anrufer_check_frage(sit, selbst=True)
-    assert frage == "Der Termin ist für Sie selbst, richtig?"
+    assert frage == "Habe ich Sie richtig erkannt?"
     assert "Bianca" not in frage
 
 
 def test_anrufer_check_erstgespraech_kein_bianca_vorspann():
-    """Nach dem Hallo nur die Selbst-Frage — nie 'Bianca, der Termin…'."""
+    """Nach dem Hallo nur die Identitätsfrage — keine Empfängerfrage."""
     sit = _sit_mit_anrufer()
     sit["anruferHalloGesagt"] = True
     frage = gehirn.anrufer_check_frage(sit, selbst=True)
-    assert frage == "Der Termin ist für Sie selbst, richtig?"
+    assert frage == "Habe ich Sie richtig erkannt?"
     assert "Bianca" not in frage
     sit["vorigesGespraech"] = {}
     assert gehirn.anrufer_check_frage(sit, selbst=True) == frage
@@ -3538,7 +3533,7 @@ def test_anrufer_hallo_geht_als_vorab_nicht_seriell():
     """Hallo startet SOFORT als Vorab — nicht erst nach der Nummer-TTS.
 
     Der volle Antworttext behält den Hallo als Präfix, damit json_antwort
-    nur die Selbst-Frage vertont — die Naht ist die Pause
+    nur die Identitätsfrage vertont — die Naht ist die Pause
     nach „Ich bin die Neue!“."""
     from bianca import agent as bianca_agent
     from kern import sprech
@@ -3625,14 +3620,13 @@ def test_anrufer_kartei_setzt_behandler_nach_selbstbestaetigung():
         try:
             flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
             z_ident = flow.zug(sit, "Ja, genau.")
-            assert z_ident and "für Sie selbst" in z_ident["text"]
-            z = flow.zug(sit, "Ja.")
+            assert z_ident and "für Sie selbst" not in z_ident["text"]
             s = gehirn.sammler(sit)
             assert s["anruferCheck"] == "ja"
             assert s["letzterBesuch"].startswith("2026-03-01")
             assert (s.get("arzt") or {}).get("calendarId") == "cal-petsas"
             assert s["frage"] != "arzt_check"
-            assert z and "selben Behandler" not in z["text"]
+            assert "selben Behandler" not in z_ident["text"]
         finally:
             flow.hintergrund.anstossen = echt_anstossen
     finally:

@@ -1953,6 +1953,21 @@ def angebot_ist_grob(slots: list) -> bool:
     return len(tage) > 1 or len(baender) > 1
 
 
+ANGEBOT_DATUM_AB_TAGE = 35
+
+
+def _angebot_tag_name(iso_tag: str, *, heute: date | None = None) -> str:
+    """Nahe Angebote kurz, entfernte nie nur als mehrdeutigen Wochentag."""
+    try:
+        d = date.fromisoformat(iso_tag)
+    except (TypeError, ValueError):
+        return _s(iso_tag)
+    ref = heute or datetime.now(TZ).date()
+    if (d - ref).days >= ANGEBOT_DATUM_AB_TAGE:
+        return tag_wort(d.year, d.month, d.day, heute=ref)
+    return _WT_NAME[_weekday_of(iso_tag)]
+
+
 def _lage_teile(slots: list) -> list[str]:
     gruppen: list[list] = []
     for s in slots:
@@ -1962,7 +1977,7 @@ def _lage_teile(slots: list) -> list[str]:
         gruppen[-1][1].append(s)
     teile: list[str] = []
     for i, (d, items) in enumerate(gruppen):
-        name = _WT_NAME[_weekday_of(d)] if len(d) == 10 else d
+        name = _angebot_tag_name(d) if len(d) == 10 else d
         baender: list[str] = []
         for it in items:
             b = tageszeit_band(_iso_stunde(it))

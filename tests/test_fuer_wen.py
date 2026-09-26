@@ -1,8 +1,8 @@
-"""W-FUER-WEN (Chef 03.09.2026) — offline, ohne LLM und ohne Netz.
+"""W-FUER-WEN — offline, ohne LLM und ohne Netz.
 
-Chef: "wir haben noch nicht den fall trainiert wo der anrufer nicht für sich
-sondern für jemand anderen den termin bucht. 'Der Termin ist für Sie selbst,
-richtig?' das fehlt ... korrigiere das rein"
+Stand 26.09.2026: Ein bestätigter Anrufer handelt standardmäßig für sich.
+Bianca fragt das nicht mehr ab; nur ein ausdrückliches Drittperson-Signal
+schaltet den Patienten um.
 
 Live-Fall (Anruf 21:43): Der Vater (per Rufnummer erkannt) sagt DREIMAL
 "der Termin ist für meinen Sohn" — Bianca buchte trotzdem stur auf den
@@ -177,9 +177,9 @@ def test_nachbar_fluss_fragt_nach_dem_nachbarn():
     assert "Nachname" in frage and "Vor- und Nachname" not in frage
 
 
-# --- 2. Die Chef-Frage: "Der Termin ist für Sie selbst, richtig?" ------------
+# --- 2. Selbst ist Default; nur ein ausdruecklicher Dritter schaltet um -------
 
-def test_buchen_check_fragt_fuer_sie_selbst():
+def test_buchen_nimmt_ohne_drittensignal_den_anrufer_selbst():
     def lauf():
         sit = _sit_mit_anrufer()
         z1 = flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
@@ -190,8 +190,9 @@ def test_buchen_check_fragt_fuer_sie_selbst():
         assert not s["telefonOk"] and not s["telefon"]
 
         z2 = flow.zug(sit, "Ja, genau.")
-        assert z2 and "Der Termin ist für Sie selbst, richtig?" in z2["text"]
-        assert s["frage"] == "fuer_wen_check"
+        assert z2 and "für Sie selbst" not in z2["text"]
+        assert s["frage"] != "fuer_wen_check"
+        assert s["fuerWenCheck"] == "ja"
         assert s["patientId"] == "pat-77"
         assert not s["telefonOk"] and not s["telefon"]
         assert s["telefonBekannt"] == "015253904756"
@@ -348,18 +349,16 @@ def test_dritttermin_meine_nummer_bezieht_sich_auf_anrufer_und_wird_bestaetigt()
     _ohne_hintergrund(lauf)
 
 
-def test_nein_ohne_rolle_fragt_fuer_wen():
+def test_ausdruecklich_fuer_jemand_anderen_fragt_fuer_wen():
     def lauf():
         sit = _sit_mit_anrufer()
         z1 = flow.zug(sit, "Ich möchte einen Termin buchen.")
         assert z1 and "richtig erkannt" in z1["text"]
-        z2 = flow.zug(sit, "Ja.")
-        assert z2 and "für Sie selbst" in z2["text"]
-        z3 = flow.zug(sit, "Nein.")
+        z2 = flow.zug(sit, "Ja, aber der Termin ist für jemand anderen.")
         s = gehirn.sammler(sit)
         assert s["anruferCheck"] == "ja" and s["fuerWen"] == "andere"
         assert not s["nachname"] and not s["patientId"]  # nichts uebernommen
-        assert z3 and "für jemand anderen" in z3["text"], z3
+        assert z2 and "für jemand anderen" in z2["text"], z2
     _ohne_hintergrund(lauf)
 
 
