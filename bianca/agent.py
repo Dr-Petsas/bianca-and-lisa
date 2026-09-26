@@ -795,25 +795,16 @@ def _frage_budget_ausstieg(
     frage_id = _s(fid) or _s(s.get("frage"))
     # W-ONLINE-FALLBACK (26.09.2026): scheitert die Namensaufnahme bei einer
     # BUCHUNG (zu viel Leitungsrauschen) und ist eine Mobilnummer ERKANNT,
-    # schickt Bianca den Online-Buchungslink per SMS statt eine Rückrufnotiz
-    # anzulegen — freundlich erklärt, Nummer nie erfragt.
+    # bietet Bianca den Online-Buchungslink statt einer Rückrufnotiz an.
+    # Die SMS folgt erst im nächsten Zug nach einem klaren Ja.
     if online_fallback.greift(sit, frage_id):
-        aus_online = online_fallback.senden(sit)
-        s["phase"] = "fertig"
-        s["frage"] = ""
-        sit["frageBudgetDone"] = True
-        sit["notleineGesagt"] = True
-        text_online = _s(aus_online.get("text"))
+        aus_online = online_fallback.anbieten(sit, frage_id)
         spur.merken(
             sit,
             "frage-budget",
-            f"online-link:{frage_id or 'ohne-feld'}:"
-            f"{'ok' if aus_online.get('ok') else 'fehler'}",
+            f"online-link-angebot:{frage_id or 'ohne-feld'}",
         )
-        aus: dict[str, Any] = {"text": text_online, "book": None}
-        if aus_online.get("hangup") and abschied.an():
-            aus["hangup"] = True
-        return aus
+        return aus_online
     notiz = False
     if frage_budget.kontext_reicht(sit):
         try:
@@ -842,6 +833,41 @@ def _frage_budget_ausstieg(
     if abschied.an():
         aus["hangup"] = True
     return aus
+
+
+def _online_fallback_antwort(sit: dict, text: str) -> dict[str, Any] | None:
+    """Offenes SMS-Angebot deterministisch mit Ja/Nein abschließen."""
+    if not online_fallback.zustimmung_offen(sit):
+        return None
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if gehirn.ist_ja(text) and not gehirn.ist_nein(text):
+        aus = online_fallback.senden(sit)
+        grund = "gesendet" if aus.get("ok") else "fehler"
+    elif gehirn.ist_nein(text):
+        aus = online_fallback.ablehnen(sit)
+        grund = "abgelehnt"
+    else:
+        stand = sit.get("onlineFallback")
+        unklar = int(stand.get("unklar") or 0) if isinstance(stand, dict) else 0
+        if unklar < 1:
+            spur.merken(sit, "online-fallback", "zustimmung-unklar")
+            return online_fallback.nochmal(sit)
+        aus = online_fallback.ablehnen(sit)
+        grund = "zustimmung-fehlt"
+
+    s["phase"] = "fertig"
+    s["frage"] = ""
+    sit["frageBudgetDone"] = True
+    sit["notleineGesagt"] = True
+    spur.merken(sit, "online-fallback", grund)
+    out: dict[str, Any] = {
+        "text": _s(aus.get("text")),
+        "book": None,
+        "onlineFallback": True,
+    }
+    if aus.get("hangup") and abschied.an():
+        out["hangup"] = True
+    return out
 
 
 def _frage_budget_stille_ausstieg(
@@ -1681,6 +1707,10 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             }
         spur.merken(sit, "notfall-vorrang", text_in[:80])
         return _maschinen_antwort(sit, akut_reply, msgs)
+
+    online_antwort = _online_fallback_antwort(sit, text_in)
+    if online_antwort is not None:
+        return _maschinen_antwort(sit, online_antwort, msgs)
 
     # W-HALLO-PAUSE (10.09.2026): Hat Bianca wirklich „Wie geht es Ihnen?“
     # gefragt, war der vorherige Zug absichtlich NUR diese Frage. Jetzt erst

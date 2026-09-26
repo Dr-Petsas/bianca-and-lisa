@@ -89,7 +89,8 @@ def test_platzhalter_akte_darf_chef_handy(monkeypatch):
     assert gesperrt["ok"] is False
 
 
-def test_kiriakos_ist_canary():
+def test_kiriakos_ist_canary_nur_mit_opt_in(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "1")
     sit = _sit()
     sit["anrufer"] = {"telefon": "+491525304756"}
     assert namenslink.ist_canary("01525304756")
@@ -98,7 +99,8 @@ def test_kiriakos_ist_canary():
     assert namenslink.test_unbekannt(sit)
 
 
-def test_chef_unbekannt_parkt_nummer_ohne_petsas():
+def test_chef_unbekannt_parkt_nummer_ohne_petsas(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "1")
     sit = _handy_sit()
     sit["anrufer"] = {
         "telefon": "+491776004600",
@@ -300,6 +302,7 @@ def test_termin_bindet_mandant_ort_und_sitzung_strikt_mit(monkeypatch):
 
 
 def test_zwei_termine_einer_sitzung_verwenden_getrennte_links(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "1")
     creates = []
 
     def cf(route, body, timeout=None):
@@ -336,8 +339,8 @@ def test_zwei_termine_einer_sitzung_verwenden_getrennte_links(monkeypatch):
     assert sit["namenslink"]["reservationScope"] == namenslink.reservierungs_scope(sit)
 
 
-def test_unbekannt_flag_aus_erkennt_wieder(monkeypatch):
-    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "0")
+def test_unbekannt_produktionsdefault_erkennt_wieder(monkeypatch):
+    monkeypatch.delenv("NAMENS_LINK_UNBEKANNT", raising=False)
     sit = _handy_sit()
     sit["anrufer"] = {
         "telefon": "+491776004600",
@@ -397,7 +400,8 @@ def test_fremde_nummer_schickt_gehoerten_namen_ohne_ihn_vorzulesen(monkeypatch):
     assert "Martin" not in text and "Berger" not in text
 
 
-def test_neupatient_bekommt_sms_statt_buchstabieren():
+def test_neupatient_bekommt_sms_statt_buchstabieren(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "1")
     sit = _handy_sit()
     s = gehirn.sammler(sit)
     s.update({
@@ -433,7 +437,8 @@ def test_verifizierter_name_wird_nicht_von_stt_ueberschrieben():
     assert s["vorname"] == "Konstantinos"
 
 
-def test_unsicherer_stt_name_soll_sms():
+def test_unsicherer_stt_name_soll_sms(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "1")
     sit = _handy_sit()
     s = gehirn.sammler(sit)
     s.update({
@@ -843,6 +848,7 @@ def test_festnetz_diktat_wird_nicht_vorgelesen():
 
 
 def test_festnetz_plus_canary_handy_bekommt_link(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK_UNBEKANNT", "1")
     def cf(route, body, timeout=None):
         assert body["phone"] == "+491776004600"
         if body.get("action") == "bind":

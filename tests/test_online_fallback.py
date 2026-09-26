@@ -4,6 +4,7 @@ Die Gegenproben (kein Handy, kein Buchungsmodus, schon gesendet) sind der
 teurere Teil — ein falsch ausgeloester Link waere ein Fehlverhalten.
 """
 
+from bianca import agent
 from kern import online_fallback
 
 
@@ -27,6 +28,21 @@ def test_greift_bei_buchung_mit_erkanntem_handy():
 
 def test_greift_nicht_ohne_erkannte_nummer():
     sit = _sit(anrufer={})
+    assert online_fallback.erkannte_handy(sit) == ""
+    assert online_fallback.greift(sit, "nachname") is False
+
+
+def test_diktierte_oder_aktennummer_ohne_caller_id_reicht_nicht():
+    sit = _sit(
+        anrufer={},
+        sammler={
+            "modus": "buchen",
+            "telefon": "+491771234567",
+            "telefonOk": True,
+            "telefonBekannt": "+491771234567",
+            "kontaktTelefon": "+491771234567",
+        },
+    )
     assert online_fallback.erkannte_handy(sit) == ""
     assert online_fallback.greift(sit, "nachname") is False
 
@@ -58,6 +74,88 @@ def test_greift_nicht_bei_notaus(monkeypatch):
     assert online_fallback.greift(sit, "nachname") is False
 
 
+def test_budget_bietet_nur_an_und_sendet_noch_nicht(monkeypatch):
+    aufrufe = []
+    monkeypatch.setattr(
+        online_fallback,
+        "_cf_call",
+        lambda *args, **kwargs: aufrufe.append((args, kwargs)),
+    )
+    sit = _sit()
+
+    aus = agent._frage_budget_ausstieg(sit, fid="nachname")
+
+    assert aus["zustimmung"] is True
+    assert "Soll ich Ihnen" in aus["text"]
+    assert "Leitungsprobleme" in aus["text"]
+    assert online_fallback.zustimmung_offen(sit)
+    assert sit["sammler"]["frage"] == "online_fallback"
+    assert not sit.get("frageBudgetDone")
+    assert aufrufe == []
+
+
+def test_klares_ja_sendet_danach_und_beendet(monkeypatch):
+    aufrufe = []
+
+    def _cf(name, body):
+        aufrufe.append((name, body))
+        return 200, {
+            "status": "ok",
+            "sent": True,
+            "url": "https://pickadoc.de/profile/C1/L1",
+        }, {}
+
+    monkeypatch.setattr(online_fallback, "_cf_call", _cf)
+    sit = _sit()
+    agent._frage_budget_ausstieg(sit, fid="nachname")
+
+    aus = agent._online_fallback_antwort(sit, "Ja, bitte.")
+
+    assert len(aufrufe) == 1
+    assert aufrufe[0][1]["action"] == "booking-link"
+    assert aus["hangup"] is True
+    assert "geschickt" in aus["text"]
+    assert sit["frageBudgetDone"] is True
+    assert sit["sammler"]["frage"] == ""
+    assert sit["onlineBuchungslink"]["url"].endswith("/C1/L1")
+
+
+def test_nein_sendet_nichts_und_beendet(monkeypatch):
+    aufrufe = []
+    monkeypatch.setattr(
+        online_fallback,
+        "_cf_call",
+        lambda *args, **kwargs: aufrufe.append((args, kwargs)),
+    )
+    sit = _sit()
+    agent._frage_budget_ausstieg(sit, fid="nachname")
+
+    aus = agent._online_fallback_antwort(sit, "Nein, danke.")
+
+    assert aufrufe == []
+    assert aus["hangup"] is True
+    assert "keine SMS" in aus["text"]
+    assert sit["onlineFallback"]["status"] == "abgelehnt"
+
+
+def test_unklare_zustimmung_fragt_einmal_nach_und_sendet_nie(monkeypatch):
+    aufrufe = []
+    monkeypatch.setattr(
+        online_fallback,
+        "_cf_call",
+        lambda *args, **kwargs: aufrufe.append((args, kwargs)),
+    )
+    sit = _sit()
+    agent._frage_budget_ausstieg(sit, fid="nachname")
+
+    nochmal = agent._online_fallback_antwort(sit, "Wie bitte?")
+    ende = agent._online_fallback_antwort(sit, "Das weiß ich nicht.")
+
+    assert "ja oder nein" in nochmal["text"]
+    assert ende["hangup"] is True
+    assert aufrufe == []
+
+
 def test_senden_setzt_beleg_und_spricht_freundlich(monkeypatch):
     gesehen = {}
 
@@ -77,7 +175,7 @@ def test_senden_setzt_beleg_und_spricht_freundlich(monkeypatch):
     assert aus["ok"] is True
     assert aus["hangup"] is True
     assert aus["onlineFallback"] is True
-    assert "SMS" in aus["text"]
+    assert "direkten Link zur Online-Buchung" in aus["text"]
     beleg = sit["onlineBuchungslink"]
     assert beleg["ok"] is True
     assert beleg["an"] == "+491771234567"

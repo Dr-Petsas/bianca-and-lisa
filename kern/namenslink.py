@@ -145,10 +145,11 @@ def erlaubt(sit: dict) -> bool:
     return aktiv() and bool(handy(sit))
 
 
-# TEST-ONLY: Chef-Handy nicht als bekannten Patienten behandeln.
-# Spaeter raus: NAMENS_LINK_UNBEKANNT=0 oder diese Bloecke + Aufrufe loeschen.
+# TEST-ONLY: Chef-Handy nur nach ausdruecklichem Opt-in als unbekannt
+# behandeln. Produktionsdefault ist AUS — ein korrekt erkannter
+# Bestandspatient darf nie wieder zu "Reservierung SMS" werden.
 def test_unbekannt_aktiv() -> bool:
-    return (os.getenv("NAMENS_LINK_UNBEKANNT", "1") or "1").strip().lower() not in {
+    return (os.getenv("NAMENS_LINK_UNBEKANNT", "0") or "0").strip().lower() not in {
         "0", "false", "off", "no",
     }
 

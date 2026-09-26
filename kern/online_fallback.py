@@ -8,12 +8,12 @@ es ist eigentlich nur der online buchungslink zu senden.... der bei jedem
 Kunden hinterlegt ist. aber erklaeren muss sie das freundlich."
 
 Greift NUR waehrend einer BUCHUNG, wenn das Namensfeld sein Frage-Budget
-(kern/frage_budget) erschoepft hat UND eine echte Mobilnummer ERKANNT ist
-(Anrufer-ID/Akte ueber ``namenslink.handy`` — nie erfragt). Dann schickt
-Bianca per Cloud Function ``agentNameConfirm`` (action ``booking-link``) den
-bei jedem Kunden hinterlegten Online-Buchungslink per SMS und schliesst das
-Gespraech freundlich ab. KEINE Rueckrufe (Chef: "Rueckrufe nur wenn der job
-nicht erledigt werden konnte, totale Ausnahme").
+(kern/frage_budget) erschoepft hat UND die eingehende Caller-ID eine echte
+Mobilnummer ist. Bianca bietet den Ausweg zuerst an. Erst nach einem klaren
+Ja schickt die Cloud Function ``agentNameConfirm`` (action ``booking-link``)
+den bei jedem Kunden hinterlegten Online-Buchungslink per SMS und schliesst
+das Gespraech freundlich ab. KEINE Rueckrufe (Chef: "Rueckrufe nur wenn der
+job nicht erledigt werden konnte, totale Ausnahme").
 
 Bianca-frei: keine Importe aus ``bianca/``. Notaus: ``ONLINE_FALLBACK=0``.
 """
@@ -42,8 +42,14 @@ def aktiv() -> bool:
 
 
 def erkannte_handy(sit: dict) -> str:
-    """Erkannte Mobilnummer (Anrufer-ID/Akte) — nie erfragt."""
-    return namenslink.handy(sit)
+    """Eingehende Caller-ID als Mobilnummer — nie im Dialog erfragt.
+
+    Sammler-Felder (diktierte Nummer, Kontakttelefon, ``telefonBekannt``)
+    sind absichtlich ausgeschlossen. Der Fallback darf nur die Nummer
+    verwenden, mit der dieser Anruf hereinkam.
+    """
+    phone = namenslink.leitung(sit)
+    return patients.handy_e164(phone) if patients.ist_handy_de(phone) else ""
 
 
 def bereits_gesendet(sit: dict) -> bool:
@@ -51,6 +57,19 @@ def bereits_gesendet(sit: dict) -> bool:
     if isinstance(beleg, dict):
         return bool(beleg.get("ok") or beleg.get("gesendet"))
     return bool(beleg)
+
+
+ANGEBOT_TEXT = (
+    "Die Verbindung ist durch Leitungsprobleme oder Störgeräusche zu unklar, "
+    "um Ihren Namen sicher aufzunehmen. Soll ich Ihnen stattdessen den "
+    "direkten Link zur Online-Buchung per SMS an die Nummer schicken, mit "
+    "der Sie gerade anrufen?"
+)
+
+ANGEBOT_NOCHMAL = (
+    "Soll ich Ihnen den direkten Link zur Online-Buchung per SMS schicken? "
+    "Bitte antworten Sie mit ja oder nein."
+)
 
 
 def greift(sit: dict, frage_id: str) -> bool:
@@ -67,19 +86,73 @@ def greift(sit: dict, frage_id: str) -> bool:
     return bool(erkannte_handy(sit))
 
 
+def zustimmung_offen(sit: dict) -> bool:
+    stand = sit.get("onlineFallback")
+    return isinstance(stand, dict) and stand.get("status") == "angeboten"
+
+
+def anbieten(sit: dict, frage_id: str) -> dict:
+    """Zustimmung erfragen, ohne bereits eine SMS oder CF auszulösen."""
+    sit["onlineFallback"] = {
+        "status": "angeboten",
+        "frageId": _s(frage_id),
+        "unklar": 0,
+    }
+    s = sit.setdefault("sammler", {})
+    s["frage"] = "online_fallback"
+    return {
+        "text": ANGEBOT_TEXT,
+        "book": None,
+        "onlineFallback": True,
+        "zustimmung": True,
+    }
+
+
+def nochmal(sit: dict) -> dict:
+    stand = sit.get("onlineFallback")
+    if not isinstance(stand, dict):
+        stand = {"status": "angeboten"}
+        sit["onlineFallback"] = stand
+    stand["unklar"] = int(stand.get("unklar") or 0) + 1
+    return {
+        "text": ANGEBOT_NOCHMAL,
+        "book": None,
+        "onlineFallback": True,
+        "zustimmung": True,
+    }
+
+
+TEXT_ABGELEHNT = (
+    "Alles klar, dann sende ich keine SMS. Bitte versuchen Sie es bei einer "
+    "besseren Verbindung noch einmal oder buchen Sie direkt über die Webseite "
+    "der Praxis. Auf Wiederhören."
+)
+
+
+def ablehnen(sit: dict) -> dict:
+    stand = sit.get("onlineFallback")
+    if not isinstance(stand, dict):
+        stand = {}
+    sit["onlineFallback"] = {**stand, "status": "abgelehnt"}
+    return {
+        "text": TEXT_ABGELEHNT,
+        "book": None,
+        "hangup": True,
+        "onlineFallback": True,
+        "ok": False,
+    }
+
+
 TEXT_OK = (
-    "Die Verbindung rauscht gerade ziemlich, da verstehe ich Ihren Namen "
-    "nicht sicher — und ich moechte nichts Falsches eintragen. Ich schicke "
-    "Ihnen deshalb einfach den Link zur Online-Buchung per SMS. Dort koennen "
-    "Sie Ihren Termin in Ruhe selbst auswaehlen. Vielen Dank fuer Ihren "
-    "Anruf und einen schoenen Tag!"
+    "Vielen Dank. Ich habe Ihnen den direkten Link zur Online-Buchung per "
+    "SMS geschickt. Dort können Sie Ihren Termin in Ruhe selbst auswählen. "
+    "Auf Wiederhören."
 )
 
 TEXT_FEHLER = (
-    "Die Verbindung ist gerade leider sehr schlecht, da bekomme ich Ihren "
-    "Namen nicht sicher zusammen. Bitte buchen Sie Ihren Termin in Ruhe "
-    "online ueber unsere Webseite oder rufen Sie uns bei besserer "
-    "Verbindung noch einmal an. Vielen Dank und einen schoenen Tag!"
+    "Das hat technisch leider nicht geklappt. Bitte versuchen Sie es bei "
+    "einer besseren Verbindung noch einmal oder buchen Sie Ihren Termin "
+    "direkt online über die Webseite der Praxis. Auf Wiederhören."
 )
 
 
@@ -120,6 +193,11 @@ def senden(sit: dict) -> dict:
         "url": url,
         "dryRun": bool(data.get("dryRun")),
         "httpStatus": status,
+    }
+    stand = sit.get("onlineFallback")
+    sit["onlineFallback"] = {
+        **(stand if isinstance(stand, dict) else {}),
+        "status": "gesendet" if ok else "fehler",
     }
     sitzung.merke_tool(
         sit,
