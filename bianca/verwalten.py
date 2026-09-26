@@ -47,7 +47,8 @@ from kern.slots import (
     WEEKDAYS,
     _weekday_of,
     angebot_engen,
-    angebot_kern,
+    fragt_nach_frueherem_slot,
+    fruehester_slot_antwort,
     parse_slot_wish,
     pick_slots,
     slot_wunsch_hart,
@@ -1632,26 +1633,29 @@ def _fuegen(teile: list[str]) -> str:
     return teile[0] if teile else ""
 
 
-def _verschieb_wunsch_frage(sit: dict, termin: dict) -> dict:
-    """Gefundenen Termin bestaetigen (mit Anrede), dann den Neu-Wunsch holen."""
+def _verschieb_wunsch_frage(
+    sit: dict, termin: dict, melde: Melde = None
+) -> dict:
+    """Ohne Vorab-Verhör direkt den frühestmöglichen neuen Termin anbieten."""
     s = gehirn.sammler(sit)
     sit["verwaltenTermin"] = _s(termin.get("id"))
-    s["phase"] = "verschieb_wunsch"
-    s["frage"] = "wunsch"
-    if sit.get("verwAnruferDirekt"):
-        wer = gehirn.anrufer_anrede(sit)
-        vorsatz = f"{wer}, " if wer else ""
-        return {"text": (
-            f"{vorsatz}ich habe Ihren Termin {termin.get('spoken')} gefunden. "
-            "Auf wann möchten Sie ihn verschieben — eher vormittags oder nachmittags?"
-        )}
-    wer = "" if s.get("anruferCheck") == "ja" else gehirn.anrede(s)
-    zusatz = f", {wer}" if wer else ""
-    return {"text": (
-        f"Gefunden — es geht um den Termin {termin.get('spoken')}"
-        f"{_termin_patient(termin)}{zusatz}. "
-        "Wann passt es Ihnen denn besser: eher vormittags oder nachmittags?"
-    )}
+    s["wunsch"] = {"erstmoeglich": True}
+    s["wunschText"] = "frühestmöglich"
+    s["phase"] = ""
+    s["frage"] = ""
+    aus = _verschieb_angebot(sit, melde)
+    if _s(aus.get("text")) and s.get("phase") == "verschieb_angebot":
+        if sit.get("verwAnruferDirekt"):
+            wer = gehirn.anrufer_anrede(sit)
+            vorsatz = f"{wer}, " if wer else ""
+            gefunden = f"{vorsatz}ich habe Ihren Termin {termin.get('spoken')} gefunden. "
+        else:
+            gefunden = (
+                f"Gefunden — es geht um den Termin {termin.get('spoken')}"
+                f"{_termin_patient(termin)}. "
+            )
+        aus["text"] = gefunden + _s(aus["text"])
+    return aus
 
 
 def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
@@ -1747,7 +1751,14 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             "Zu diesem Wunsch finde ich gerade nichts Freies. "
             "Ginge auch ein anderer Tag oder eine andere Tageszeit?"
         )}
-    offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in picked["slots"]]
+    kandidaten = list(picked["slots"])
+    sichtbar = kandidaten[:1]
+    offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in sichtbar]
+    sit["slotAlternativen"] = [
+        {"iso": x["iso"], "spoken": spoken_slot(x["iso"])}
+        for x in kandidaten[1:]
+    ]
+    picked = {**picked, "slots": sichtbar}
     zuletzt = [o.get("iso") for o in sit.get("offered") or []] if s["phase"] == "verschieb_angebot" else None
     sit["offered"] = offered
     s["phase"] = "verschieb_angebot"
@@ -1755,8 +1766,14 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     if offered and zuletzt == [o["iso"] for o in offered]:
         # Wiederhol-Wache (wie in flow._angebot): gleiches Ergebnis ehrlich
         # ansagen statt die Liste wortgleich zu wiederholen.
-        kern = angebot_kern(offered)
-        return {"text": hinweis + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {kern}. Was passt Ihnen besser?"}
+        termin_text = _s(offered[0].get("spoken"))
+        return {
+            "text": (
+                hinweis
+                + f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {termin_text}. "
+                "Passt Ihnen dieser Termin?"
+            )
+        }
     return {"text": hinweis + spoken_offer(picked["slots"], wish_matched=picked["wishMatched"])}
 
 
@@ -2358,7 +2375,7 @@ def _bestaetigen(sit: dict, termin: dict, melde: Melde) -> dict:
     if s["wunsch"]:
         _verschieb_datum_auf_bestand_beziehen(sit, termin)
         return _verschieb_angebot(sit, melde)
-    return _verschieb_wunsch_frage(sit, termin)
+    return _verschieb_wunsch_frage(sit, termin, melde)
 
 
 def _kandidat_verwerfen(sit: dict, melde: Melde) -> dict:
@@ -3315,7 +3332,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             if termin:
                 if s["wunsch"]:
                     return _verschieb_angebot(sit, melde)
-                return _verschieb_wunsch_frage(sit, termin)
+                return _verschieb_wunsch_frage(sit, termin, melde)
         if _bestaetigung_eindeutig(t):
             return _absagen(sit, melde)
         if gehirn.ist_nein(t):
@@ -3418,7 +3435,11 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
 
     # 3) Neuer Zeitpunkt beim Verschieben
     if s["phase"] == "verschieb_angebot" and sit.get("offered"):
+        if fragt_nach_frueherem_slot(t):
+            sit["verschiebAblehnungBlind"] = 0
+            return {"text": fruehester_slot_antwort(s.get("wunsch"))}
         if will_neu_suchen(t, sit["offered"]):
+            sit["verschiebAblehnungBlind"] = 0
             return _verschieb_angebot(sit, melde)
         iso = _slot_wahl(t, sit["offered"])
         if not iso:
@@ -3435,13 +3456,22 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         if iso:
             return _verschieb_readback(sit, iso)
         if "wunsch" in neu:
+            sit["verschiebAblehnungBlind"] = 0
             return _verschieb_angebot(sit, melde)
         if gehirn.ist_nein(t):
+            blind = int(sit.get("verschiebAblehnungBlind") or 0) + 1
+            sit["verschiebAblehnungBlind"] = blind
+            if blind < 2:
+                return _verschieb_angebot(sit, melde)
             _ablehnte_slots_sperren(sit)
             s["phase"] = "verschieb_wunsch"
             s["frage"] = "wunsch"
             sit["offered"] = []
-            return {"text": "Wann würde es Ihnen denn besser passen — welcher Tag, und eher vormittags oder nachmittags?"}
+            return {
+                "text": (
+                    "Verstanden. Welcher Tag oder welche Tageszeit würde Ihnen besser passen?"
+                )
+            }
         return None
 
     if s["phase"] == "verschieb_wunsch":

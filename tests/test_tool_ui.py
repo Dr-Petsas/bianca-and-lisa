@@ -132,7 +132,8 @@ def test_angebot_zeigt_hintergrund_vorrat_als_tool():
     sit["vorratFuer"] = hintergrund.vorrat_schluessel(sit)
     # Kein CF-Nachladen — Vorrat deckt den Wunsch ab.
     ang = flow._angebot(sit)
-    assert ang and "frei" in (ang.get("text") or "").lower()
+    assert ang and "termin" in (ang.get("text") or "").lower()
+    assert len(sit.get("offered") or []) == 1
     tools = sit.get("tools") or []
     assert any(t.get("name") == "getFreeTimeSlots" for t in tools), tools
     ein = next(t for t in tools if t["name"] == "getFreeTimeSlots")

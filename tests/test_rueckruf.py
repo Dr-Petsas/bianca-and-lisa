@@ -70,7 +70,15 @@ def test_rueckruf_fragt_grund_mitgeteilt_dann_wunschzeit():
     notes = []
     echt_erledigen = ged.offen_erledigen
     echt_an = flow.hintergrund.anstossen
+    echt_slots = flow.kal.find_slots_behandler
     flow.hintergrund.anstossen = lambda sit: None
+    flow.kal.find_slots_behandler = lambda *a, **k: {
+        "ok": True,
+        "slots": [
+            "2026-10-05T09:00:00+02:00",
+            "2026-10-06T14:00:00+02:00",
+        ],
+    }
     ged.offen_erledigen = lambda sit, note="": notes.append(note) or sit.update(
         gedaechtnisOffen=[], gedaechtnis=""
     )
@@ -78,26 +86,27 @@ def test_rueckruf_fragt_grund_mitgeteilt_dann_wunschzeit():
         sit = _sit_rueckruf()
         z = flow.zug(sit, "Warum habt ihr angerufen?")
         assert z and "Narval-Schiene" in z["text"]
-        assert "vormittag" in z["text"].lower()
+        assert "früheste passende Termin" in z["text"]
         assert "Eingliederung" in z["text"]
         s = gehirn.sammler(sit)
         assert sit["rueckrufMitgeteilt"] is True
         assert sit["rueckrufBuchung"] is True
-        assert s["frage"] == "wunsch"
+        assert s["frage"] == "slotwahl"
         assert s["modus"] == "buchen"
         assert s["anruferCheck"] == "ja"
         assert s["vorname"] == "Julia" and s["nachname"] == "Berger"
         assert s["telefonOk"] and s["patientId"] == "pat-7"
         assert (s.get("arzt") or {}).get("calendarId") == "cal-petsas"
         assert "Narval" in s["grund"]
-        assert "Eingliederung" in (s.get("motivName") or "")
+        assert "SLM" in (s.get("motivName") or "")
         assert notes and "Mitgeteilt" in notes[0]
         assert sit["gedaechtnisOffen"] == []
-        fid, _ = gehirn.naechste_frage(sit)
-        assert fid == "wunsch"
+        assert s["wunsch"] == {"erstmoeglich": True}
+        assert len(sit.get("offered") or []) == 1
     finally:
         ged.offen_erledigen = echt_erledigen
         flow.hintergrund.anstossen = echt_an
+        flow.kal.find_slots_behandler = echt_slots
 
 
 def test_rueckruf_ohne_offene_notiz_antwortet_ehrlich_und_beendet():

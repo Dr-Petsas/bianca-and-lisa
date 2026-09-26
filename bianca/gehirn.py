@@ -4970,7 +4970,11 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
             if sit.get("eiligHeute") or dringlichkeit.sucht_ab_heute(sit):
                 s["wunsch"] = eilig.wunsch_heute(sit)
             else:
-                return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
+                # Ein Termin pro Zug: zuerst den frühestmöglichen freien
+                # Termin anbieten. Zeit-/Wochentagswünsche ernten wir erst
+                # aus der Reaktion, statt den Anrufer vorab festzulegen.
+                s["wunsch"] = {"erstmoeglich": True}
+                s["wunschText"] = "frühestmöglich"
         if sit.get("rueckrufBuchung"):
             return "", ""
         if not s["bekannt"] and not s["buchstabiert"] and not s.get("nameVerified"):
@@ -5023,7 +5027,8 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
         if sit.get("eiligHeute") or dringlichkeit.sucht_ab_heute(sit):
             s["wunsch"] = eilig.wunsch_heute(sit)
         else:
-            return "wunsch", "Wann passt es Ihnen am besten — eher vormittags oder nachmittags?"
+            s["wunsch"] = {"erstmoeglich": True}
+            s["wunschText"] = "frühestmöglich"
     if not s["nachname"]:
         wen = fuer_wen_phrase(s, fall="wen")
         einstieg = (

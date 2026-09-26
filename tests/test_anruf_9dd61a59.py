@@ -71,6 +71,13 @@ def ohne_netz(monkeypatch):
     monkeypatch.setattr(verwalten.hintergrund, "anstossen", lambda sit: None)
     monkeypatch.setattr(verwalten.kal, "find_patient_appointments",
                         lambda t, c: json.loads(json.dumps(DEZ)))
+    monkeypatch.setattr(verwalten.kal, "find_slots_behandler", lambda *a, **k: {
+        "ok": True,
+        "slots": [
+            "2027-01-04T09:00:00+01:00",
+            "2027-01-05T14:00:00+01:00",
+        ],
+    })
     monkeypatch.setenv("HIRN_AUTO_RESUME", "enforce")
     yield
 
@@ -219,7 +226,8 @@ def test_verschieben_wechselt_in_die_strecke(ohne_netz):
     s = gehirn.sammler(sit)
     assert s["modus"] == "verschieben"
     assert "einundzwanzigsten Dezember" in aus["text"]
-    assert "?" in aus["text"]                  # fragt den Neu-Wunsch
+    assert "früheste passende Termin" in aus["text"]
+    assert len(sit.get("offered") or []) == 1
 
 
 def test_nachfrage_anderer_monat_bleibt_bestand(ohne_netz):

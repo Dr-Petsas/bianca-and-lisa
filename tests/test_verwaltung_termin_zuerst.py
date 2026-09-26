@@ -62,6 +62,17 @@ def _details(monkeypatch, termine=None):
             },
         },
     )
+    monkeypatch.setattr(
+        verwalten.kal,
+        "find_slots_behandler",
+        lambda tenant, ctx, **kwargs: {
+            "ok": True,
+            "slots": [
+                "2026-10-14T09:00:00+02:00",
+                "2026-10-15T14:00:00+02:00",
+            ],
+        },
+    )
 
 
 TERMINE = [TERMIN]
@@ -506,7 +517,8 @@ def test_name_ab_sechzig_prozent_ist_nur_rueckversicherter_kandidat(monkeypatch)
     assert "nichts verwechseln" in antwort["text"].lower()
     assert s["frage"] == "verw_patient_ok"
     weiter = verwalten.zug(sit, "Ja, das ist mein Termin.", set())
-    assert weiter and "wann passt" in weiter["text"].lower()
+    assert weiter and "früheste" in weiter["text"].lower()
+    assert s["frage"] == "slotwahl"
 
     sit2 = _sit("blessing")
     s2 = gehirn.sammler(sit2)
@@ -1476,10 +1488,10 @@ def test_erkannten_anrufer_direkt_suchen_und_verschiebewunsch_fragen(monkeypatch
         sit, "Den Termin am 13. Oktober möchte ich verschieben.", set(), None)
 
     assert antwort
-    assert s["frage"] == "wunsch"
-    assert s["phase"] == "verschieb_wunsch"
+    assert s["frage"] == "slotwahl"
+    assert s["phase"] == "verschieb_angebot"
     assert "Frau Päsler, ich habe Ihren Termin" in antwort["text"]
-    assert "Auf wann möchten Sie ihn verschieben" in antwort["text"]
+    assert "früheste passende Termin" in antwort["text"]
     assert "Spreche ich mit" not in antwort["text"]
 
 

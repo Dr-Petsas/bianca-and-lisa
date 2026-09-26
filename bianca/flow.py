@@ -38,7 +38,6 @@ from kern.slots import (
     _weekday_of,
     angebot_engen,
     angebot_ist_grob,
-    angebot_kern,
     parse_slot_wish,
     pick_slots,
     slot_praeferenz_aenderung,
@@ -47,6 +46,8 @@ from kern.slots import (
     spoken_offer,
     spoken_slot,
     gequetscht_dreissig,
+    fragt_nach_frueherem_slot,
+    fruehester_slot_antwort,
     will_neu_suchen,
     wunsch_ausschluesse,
     wunsch_hat_richtung,
@@ -691,6 +692,15 @@ def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | No
     if s.get("frage") in _PRAEF_DIKTAT_FRAGEN or s.get("buchstabenTeil") or s.get("telefonTeil"):
         return None
     offered_isos = [_s(o.get("iso")) for o in sit.get("offered") or [] if _s(o.get("iso"))]
+    if (
+        s.get("phase") == "bestaetigen"
+        and s.get("frage") == "bestaetigung"
+        and _slot_wahl(text, sit.get("offered") or [])
+    ):
+        # „Nein, dann den Termin am …“ auf dem Readback ist die bewährte
+        # direkte Alternativwahl. Sie darf nicht als neue Präferenzsuche
+        # den bereits angebotenen Kandidaten aus dem Zustand räumen.
+        return None
     aenderung = slot_praeferenz_aenderung(text, offered_isos=offered_isos)
     if not aenderung:
         return None
@@ -1530,8 +1540,16 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
             "calendarId": _s(a.get("calendarId")),
             "calendarName": _s(a.get("calendarName")),
         }
-    sichtbar = slots_mit_abstand(picked["slots"])
+    kandidaten = slots_mit_abstand(picked["slots"])
+    sichtbar = kandidaten[:1]
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in sichtbar]
+    # Patienten hören und wählen immer genau EINEN Termin. Die weiteren
+    # passenden Kandidaten bleiben für den nächsten Zug im Sitzungszustand
+    # und der vollständige Vorrat bleibt unangetastet.
+    sit["slotAlternativen"] = [
+        {"iso": x["iso"], "spoken": spoken_slot(x["iso"])}
+        for x in kandidaten[1:]
+    ]
     picked = {**picked, "slots": sichtbar}
     zuletzt = sit.pop("angebotZuletzt", None)
     sit["offered"] = offered
@@ -1593,13 +1611,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         # Formulierung ROTIERT (live 28.08.2026): eine wortgleiche zweite
         # Ansage strich der Wiederholungs-Waechter komplett — der Anrufer
         # hoerte nur noch 'Gut.' und die Buchung hing in der Luft.
-        kern = angebot_kern(offered)
         z = int(sit.get("angebotFestgefahren") or 0)
         sit["angebotFestgefahren"] = z + 1
+        termin = _s(offered[0].get("spoken"))
         txt = [
-            f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {kern}. Was passt Ihnen besser?",
-            f"Ich habe wirklich nur das: {kern}. Sagen Sie gern den Tag oder die Tageszeit.",
-            f"Mehr ist dazu gerade nicht frei — noch einmal: {kern}. Was passt Ihnen besser?",
+            f"Näher an Ihrem Wunsch habe ich leider nichts — es bleibt bei {termin}. Passt Ihnen dieser Termin?",
+            f"Der früheste passende Termin bleibt {termin}. Passt Ihnen dieser Termin?",
+            f"Mehr ist dazu gerade nicht frei — {termin}. Passt Ihnen dieser Termin?",
         ][z % 3]
         return {"text": vor + txt}
     sit.pop("angebotFestgefahren", None)
@@ -3267,7 +3285,7 @@ def _frisch_verschieben(sit: dict, t: str, melde: Melde = None) -> dict:
     verwalten._richtung_merken(sit, t)
     if sit.get("verschiebRichtung") or s.get("wunsch"):
         return verwalten._verschieb_angebot(sit, melde)
-    return verwalten._verschieb_wunsch_frage(sit, frisch)
+    return verwalten._verschieb_wunsch_frage(sit, frisch, melde)
 
 
 def _frisch_absagen(sit: dict, melde: Melde = None) -> dict:
@@ -5518,6 +5536,15 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if art:
             return _buchung_abbrechen(sit, art, t)
 
+    if (
+        s.get("phase") == "angebot"
+        and s.get("frage") == "slotwahl"
+        and sit.get("offered")
+        and fragt_nach_frueherem_slot(t)
+    ):
+        spur.merken(sit, "slot-frueher", "bereits-fruehest")
+        return {"text": fruehester_slot_antwort(s.get("wunsch"))}
+
     praef = _slot_praeferenz_zug(sit, t, melde)
     if praef is not None:
         return praef
@@ -5976,6 +6003,21 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     hintergrund.anstossen(sit)
 
     fid, frage = gehirn.naechste_frage(sit)
+
+    # Die frühere Wunschzeitfrage war zugleich der natürliche Einschubpunkt
+    # für PZR/Rückblick. Seit dem direkten Erstangebot darf dieser Einschub
+    # nicht hinter die Namensaufnahme rutschen: direkt nach der geklärten
+    # Behandlerwahl bleibt er ein eigener Zug, nur die Zeitfrage entfällt.
+    if (
+        isinstance(s.get("wunsch"), dict)
+        and s["wunsch"].get("erstmoeglich")
+        and "arzt" in neu
+        and not gehirn.ist_zwischenfrage(t)
+        and not gespraech.traegt_thema(sit, t)
+    ):
+        ein = _einschub(sit, _quittung(s, neu))
+        if ein is not None:
+            return ein
 
     if (task_handoff == "buchen" or hirn_modus_neu) and fid:
         # Semantischer Router ODER synchrones Intent-Hirn haben denselben Satz

@@ -248,10 +248,9 @@ def test_erkanntes_patientendossier_uebernimmt_behandler_ohne_rueckfrage():
         "letzterGrund": "Kontrolle",
     })
     fid, frage = gehirn.naechste_frage(sit)
-    assert fid == "wunsch"
+    assert fid == "" and frage == ""
     assert (s.get("arzt") or {}).get("calendarId") == "cal-p"
-    assert "vormittags oder nachmittags" in frage
-    assert "Behandler" not in frage and "Handynummer" not in frage
+    assert s["wunsch"] == {"erstmoeglich": True}
     assert not gehirn.rueckblick_faellig(s)
 
 

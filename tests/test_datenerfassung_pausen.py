@@ -408,10 +408,8 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
         z3 = flow.zug(sit, "Bei Doktor Petsas.")
         assert z3 and "Zahnreinigung" in z3["text"]
         z4 = flow.zug(sit, "Nein, danke.")
-        assert z4 and "Wann passt" in z4["text"]
-        z5 = flow.zug(sit, "Vormittags bitte.")
-        assert z5 and "Nachname" in z5["text"]
-        assert "Vor- und Nachname" not in z5["text"]
+        assert z4 and "Nachname" in z4["text"]
+        assert "Vor- und Nachname" not in z4["text"]
 
         for text in (
             "T wie Theodor",
@@ -436,9 +434,9 @@ def test_voller_neupatientenfluss_über_fragmentierte_daten():
         assert "privat" in z7b["text"].lower() or "gesetzlich" in z7b["text"].lower()
 
         z7c = flow.zug(sit, "Gesetzlich.")
-        assert z7c and "frei" in z7c["text"].lower()
+        assert z7c and "termin" in z7c["text"].lower()
         assert "Handynummer" not in z7c["text"]
-        z7d = flow.zug(sit, "Der erste bitte.")
+        z7d = flow.zug(sit, "Ja, der passt.")
         assert z7d and "halte ich fest" in z7d["text"].lower()
         assert "Handynummer" not in z7d["text"]
         z7e = flow.zug(sit, "Ja, passt.")

@@ -233,11 +233,16 @@ def test_vierter_termin_wird_gezielt_verschoben(monkeypatch):
     s = gehirn.sammler(sit)
     s.update({"modus": "verschieben", "phase": "wahl", "frage": "terminwahl"})
     sit["gefunden"] = list(VIER)
+    monkeypatch.setattr(verwalten.kal, "find_slots_behandler", lambda *a, **k: {
+        "ok": True,
+        "slots": ["2026-11-20T15:00:00+01:00", "2026-11-21T09:00:00+01:00"],
+    })
 
     antwort = verwalten.zug(sit, "Den vierten.", set())
-    assert antwort and "wann passt" in antwort["text"].lower()
+    assert antwort and "früheste" in antwort["text"].lower()
     assert sit["verwaltenTermin"] == "apt-4"
-    assert s["phase"] == "verschieb_wunsch"
+    assert s["phase"] == "verschieb_angebot"
+    assert len(sit.get("offered") or []) == 1
 
     s.update({
         "slotIso": "2026-11-20T15:00",
@@ -303,8 +308,12 @@ def test_folgeanliegen_erbt_keine_alte_terminauswahl(monkeypatch):
     aktuell = [VIER[0], VIER[2], VIER[3]]
     s.update({"modus": "verschieben", "phase": "wahl", "frage": "terminwahl"})
     sit["gefunden"] = aktuell
+    monkeypatch.setattr(verwalten.kal, "find_slots_behandler", lambda *a, **k: {
+        "ok": True,
+        "slots": ["2026-11-24T15:00:00+01:00", "2026-11-25T09:00:00+01:00"],
+    })
     antwort = verwalten.zug(sit, "Den dritten davon.", set())
-    assert antwort and "wann passt" in antwort["text"].lower()
+    assert antwort and "früheste" in antwort["text"].lower()
     assert sit["verwaltenTermin"] == "apt-4"
 
     aufrufe = []

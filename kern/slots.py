@@ -838,10 +838,24 @@ def slot_praeferenz_aenderung(
     # „11.15 ist Vormittag, bitte Nachmittag“: kein grammatisches „nicht“,
     # aber die letzte Tageszeit ist die ausdrückliche Korrektur.
     tageszeit_korrektur = len({(lo, hi) for _zs, _ze, lo, hi, _n in tageszeiten}) > 1
+    # Bei nur EINEM gesprochenen Angebot ist „Nein, lieber nachmittags“ ein
+    # vollständiger Gegenvorschlag. Die alte Mehrfachlisten-Logik verlangte
+    # zwei Zeitnennungen und ließ diesen natürlichen Ein-Slot-Zug fallen.
+    ablehnung_mit_gegenvorschlag = bool(
+        offered
+        and (
+            _EINZEL_ABGELEHNT_RE.search(t)
+            or re.match(r"^\s*(?:nein|nee|n(?:ö|oe))\b", t, re.I)
+        )
+        and (positiv or pos_daten or pos_bereiche or pos_stunden)
+    )
+    if ablehnung_mit_gegenvorschlag:
+        exclude_isos.extend(x for x in offered if x not in exclude_isos)
     aenderung = bool(
         negativ or neg_bereiche or ausgeschlossen_stunden or anderer_tag
         or vorkommen > 1 or tageszeit_korrektur or neg_daten or spans
         or exclude_isos or reject_all or span_min is not None
+        or ablehnung_mit_gegenvorschlag
     )
     if not aenderung:
         return None
@@ -2010,8 +2024,37 @@ def angebot_kern(slots: list) -> str:
 def _ein_slot_satz(slot: Any, *, wish_matched: bool) -> str:
     liste = spoken_slot(_iso_von(slot))
     if wish_matched:
-        return f"Frei ist {liste}. Welcher passt Ihnen?"
-    return f"Genau dann ist leider nichts frei. Frei wäre {liste}. Welcher passt Ihnen?"
+        return f"Der früheste passende Termin ist {liste}. Passt Ihnen dieser Termin?"
+    return (
+        f"Genau dann ist leider nichts frei. Als Nächstes frei wäre {liste}. "
+        "Passt Ihnen dieser Termin?"
+    )
+
+
+_FRUEHER_FRAGE_RE = re.compile(
+    r"\b(?:"
+    r"geht(?:\s+es)?(?:\s+denn)?\s+(?:nicht\s+)?früher|"
+    r"gibt(?:\s+es)?(?:\s+denn)?\s+(?:nichts|keinen|keine|etwas)?\s*früher(?:es|en)?|"
+    r"haben\s+sie(?:\s+denn)?\s+(?:nichts|keinen|keine|etwas)?\s*früher(?:es|en)?"
+    r")\b",
+    re.I,
+)
+
+
+def fragt_nach_frueherem_slot(text: str) -> bool:
+    """Echte Rückfrage nach einem früheren Angebot, nie „ich kann nicht früher“."""
+    t = _s(text)
+    if not t or re.search(r"\bich\s+(?:kann|könnte|koennte)\s+nicht\s+früher\b", t, re.I):
+        return False
+    return bool(_FRUEHER_FRAGE_RE.search(t))
+
+
+def fruehester_slot_antwort(wish: dict | None = None) -> str:
+    """Deterministische Antwort, ohne ein neues Angebot oder eine Suche auszulösen."""
+    return (
+        "Das ist der frühestmögliche Termin. Vorher habe ich leider nichts frei. "
+        "Passt Ihnen dieser Termin?"
+    )
 
 
 def spoken_offer(slots: list[dict], *, wish_matched: bool = True) -> str:

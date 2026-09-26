@@ -261,8 +261,8 @@ def test_kette_laeuft_nach_der_korrektur_weiter():
     assert (s["versicherung"], s["versicherungOk"]) == ("privat", True)
     # Der neue Wert wird ausgesprochen quittiert …
     assert "privat" in text.lower(), text
-    # … und die Kette steht wieder auf ihrer offenen Frage (hier: Wunschzeit).
-    assert s["frage"] == "wunsch" and "vormittags" in text, (s["frage"], text)
+    # … und die Kette geht ohne Vorab-Zeitfrage direkt zum Einzelangebot.
+    assert s["frage"] == "slotwahl" and "früheste" in text.lower(), (s["frage"], text)
     # Weder Name noch Nummer werden erneut verlangt.
     assert s["nachname"] == "Rateike" and s["telefon"] == "01776004600"
 

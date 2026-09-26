@@ -70,7 +70,6 @@ _PAARE = [
     ("nachname", "nachname"),
     ("vorname", "vorname"),
     ("grund", "grund"),
-    ("wunsch", "wunsch"),
     ("telefonOk", "telefon"),
     ("versicherung", "versicherung"),
     ("pzr", "pzr"),
@@ -90,12 +89,19 @@ def test_fehlendes_feld_wird_sehr_wohl_gefragt():
     for feld, leer, fid_erwartet in [
         ("warSchonMal", None, "schonmal"),
         ("grund", "", "grund"),
-        ("wunsch", None, "wunsch"),
     ]:
         sit, s = _voll()
         s[feld] = leer
         fid, _frage = gehirn.naechste_frage(sit)
         assert fid == fid_erwartet, f"{feld} fehlt, fragt aber {fid!r}"
+
+
+def test_fehlender_wunsch_wird_auf_fruehestmoeglich_gesetzt_statt_gefragt():
+    sit, s = _voll()
+    s["wunsch"] = None
+    fid, frage = gehirn.naechste_frage(sit)
+    assert fid == "" and frage == ""
+    assert s["wunsch"] == {"erstmoeglich": True}
 
 
 # --- Kartei-Wert wird bestaetigt, nicht gefragt (Chef-Beispiel) -----------

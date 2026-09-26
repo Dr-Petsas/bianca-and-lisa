@@ -527,7 +527,7 @@ def test_anmeldung_parkt_buchung_und_kehrt_auf_wunsch_zurueck():
     weiter = "Gut, dann machen wir mit dem Termin weiter."
     hirn.anwenden(sit, intent.erkennen(sit, weiter))
     z2 = flow.zug(sit, weiter)
-    assert z2 and ("wann" in z2["text"].lower() or "zeit" in z2["text"].lower())
+    assert z2 and "nachname" in z2["text"].lower()
     assert (hirn.aktiv(sit) or {}).get("handlung") == "ANLEGEN"
 
 

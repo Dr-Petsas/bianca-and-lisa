@@ -331,17 +331,20 @@ def test_fluss_fragenkette_bis_angebot():
         assert z4 and "worum" in z4["text"].lower()
 
         z5 = flow.zug(sit, "Eine Kontrolle bitte.")
-        assert z5 and "wann" in z5["text"].lower()
+        assert z5 and "früheste" in z5["text"].lower()
+        assert len(sit.get("offered") or []) == 1
+        assert "vormittags oder nachmittags" not in z5["text"].lower()
 
         # W-TELEFON-ZULETZT (Chef 14.09.2026): der vollstaendige Name wurde
         # in EINEM Zug aufgenommen (kein zweites Nachnamen-Verhoer), und die
-        # Handynummer wird NICHT hier erfragt — erst steht der Termin.
-        z6 = flow.zug(sit, "Nächste Woche vormittags.")
-        assert z6 and "frei" in z6["text"].lower()
+        # Handynummer wird NICHT hier erfragt — erst steht der Termin. Eine
+        # Zeitpräferenz kommt erst als Reaktion auf das einzelne Angebot.
+        z6 = flow.zug(sit, "Nein, nächste Woche vormittags.")
+        assert z6 and "termin" in z6["text"].lower()
         assert "handynummer" not in z6["text"].lower()
-        assert sit.get("offered")
+        assert len(sit.get("offered") or []) == 1
 
-        z7 = flow.zug(sit, "Der erste bitte.")
+        z7 = flow.zug(sit, "Ja, der passt.")
         assert z7 and "halte ich fest" in z7["text"].lower()
         assert "handynummer" not in z7["text"].lower()
         s = gehirn.sammler(sit)
@@ -876,15 +879,16 @@ def test_verschieben_fluss_komplett():
         assert z1 and "nachname" in z1["text"].lower()
 
         z2 = _suchname(sit, "Martin Berger.")
-        assert z2 and "gefunden" in z2["text"].lower() and "besser" in z2["text"].lower()
-        assert gehirn.sammler(sit)["phase"] == "verschieb_wunsch"
+        assert z2 and "gefunden" in z2["text"].lower() and "früheste" in z2["text"].lower()
+        assert gehirn.sammler(sit)["phase"] == "verschieb_angebot"
+        assert len(sit.get("offered") or []) == 1
 
-        z3 = flow.zug(sit, "Lieber nachmittags.")
+        z3 = flow.zug(sit, "Nein, lieber nachmittags.")
         assert z3 and sit.get("offered"), z3
         # Der eigene Bestandstermin (10:00) darf NICHT angeboten werden:
         assert all(not o["iso"].startswith("2026-09-03T10:00") for o in sit["offered"])
 
-        z4 = flow.zug(sit, "Der erste bitte.")
+        z4 = flow.zug(sit, "Ja, der passt.")
         assert z4 and "passt das so" in z4["text"].lower()
 
         z5 = flow.zug(sit, "Ja.")
@@ -2362,7 +2366,8 @@ def test_notfall_im_fluss_bietet_dicht_an():
     from bianca import hintergrund as hg
     sit["vorratFuer"] = hg.vorrat_schluessel(sit)
     flow._angebot(sit)
-    assert [o["iso"] for o in sit.get("offered") or []] == dicht
+    assert [o["iso"] for o in sit.get("offered") or []] == dicht[:1]
+    assert [o["iso"] for o in sit.get("slotAlternativen") or []] == dicht[1:]
 
 
 def test_termin_notiz_minimal_ohne_datenkern():
