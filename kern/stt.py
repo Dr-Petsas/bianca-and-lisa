@@ -48,6 +48,18 @@ from kern.config import (
 )
 
 _CLIENT: httpx.Client | None = None
+_SPRACHWACHE = threading.local()
+
+
+def sprachwache_zuruecksetzen() -> None:
+    """Filtergrund des aktuellen STT-Zugs löschen."""
+
+    if hasattr(_SPRACHWACHE, "grund"):
+        delattr(_SPRACHWACHE, "grund")
+
+
+def sprachwache_grund() -> str:
+    return str(getattr(_SPRACHWACHE, "grund", "") or "")
 
 # Whisper-Sicherung: nach einem Fehlschlag (Dev-Rechner aus, Tunnel weg)
 # pausiert der Whisper-Pfad, damit nicht JEDER Zug den Connect-Timeout
@@ -82,30 +94,15 @@ def _sauber(text) -> str:
     text = " ".join(str(text or "").split()).strip()
     # Nicht-lateinische Ausreisser (kyrillische Halluzinationen) verwerfen.
     if any(0x0400 <= ord(c) < 0x0500 for c in text):
+        _SPRACHWACHE.grund = "fremdsprache"
         return ""
-    # Parakeet schreibt sehr kurze deutsche Antworten phonetisch gelegentlich
-    # englisch ("Ja" -> "Yeah/Yep", "Nein" -> "Nine"). Nur GANZE,
-    # eindeutige Kurzantworten normalisieren — nie Woerter in Namen, freier
-    # Prosa oder Ziffernketten ersetzen. Das ist deterministisch, kein LLM.
-    kurz = re.sub(r"[^a-z]+", " ", text.lower()).strip()
-    if kurz in {"yeah", "yep", "yea", "yes", "jep"}:
-        return "Ja."
-    if kurz in {"bitte ja", "please yes", "yes please"}:
-        return "Ja, bitte."
-    if kurz in {"no", "nope", "nine"}:
-        return "Nein."
-    if kurz in {"hello"}:
-        return "Hallo."
-    # W-STT-SPRACHWACHE (26.09.2026): Parakeet halluzinierte auf reine
-    # Stille "I'm sorry." und brachte damit den sicheren Dialogpfad aus
-    # dem Tritt. Reine englische/Schnitt- und Outro-Halluzinationen werden
-    # schon am Ohr verworfen, bevor sie Verlauf, Intent oder Frage-Budget
-    # erreichen. Die kurzen phonetischen Ja/Nein/Hallo-Formen oben bleiben
-    # absichtlich erhalten; gemischte deutsche Sätze ebenfalls.
+    # Chef 28.09.2026: Englisch nie normalisieren oder übersetzen. Auch kurze
+    # Formen wie "Yeah", "No" oder "Hello" werden verworfen und führen zur
+    # deutschen Nachfrage. Nur die tatsächlich deutsche Form bleibt erlaubt.
     from kern import sofort
     if sofort.ist_stille_halluzination(text):
-        print("stt-sprachwache: fremdsprachen/stille-halluzination verworfen",
-              flush=True)
+        _SPRACHWACHE.grund = "englisch-oder-stille"
+        print("stt-sprachwache: englisch/stille verworfen", flush=True)
         return ""
     return text
 
@@ -740,6 +737,12 @@ def _parallel_transcribe(
                 pass
         raise
 
+    # Ein von der Sprachwache verworfener Parakeet-Zug darf auch nicht vom
+    # deutsch erzwungenen Qwen übersetzt, gerettet oder als Korrektur gelernt
+    # werden. Der Anrufer wird auf Dienst-Ebene ausdrücklich neu gefragt.
+    if sprachwache_grund():
+        return ""
+
     if qwen is None:
         return lokal
 
@@ -806,6 +809,7 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
     (optional, W-QWEN-SICHER): Parakeets Text -> Sperr-Grund oder "" — bei
     Grund uebernimmt Qwen diesen Zug nie live. Ohne die Parameter verhaelt
     sich alles byte-identisch wie zuvor."""
+    sprachwache_zuruecksetzen()
     if not audio or len(audio) < 800:
         return ""
     if _qwen_konfiguriert():

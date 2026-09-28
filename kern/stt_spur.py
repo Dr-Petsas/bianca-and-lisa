@@ -56,6 +56,9 @@ _beobachter_installieren()
 
 
 def _reset() -> None:
+    reset = getattr(stt, "sprachwache_zuruecksetzen", None)
+    if callable(reset):
+        reset()
     for name in (
         "parakeet_text", "parakeet_fehler", "parakeet_auffaellig",
         "qwen_entschieden", "qwen_uebernommen", "qwen_kandidat",
@@ -123,14 +126,20 @@ def transcribe(
     else:
         gewinner, qwen_status = "elevenlabs", "aus"
 
+    filter_fn = getattr(stt, "sprachwache_grund", None)
+    filter_grund = str(filter_fn() or "") if callable(filter_fn) else ""
     parakeet_text = str(getattr(_lokal, "parakeet_text", "") or "")
+    if filter_grund:
+        # Der verworfene englische Wortlaut darf weder im Anruftranskript
+        # noch als Lernstoff für den Qwen-Korrektor auftauchen.
+        parakeet_text = ""
     if gewinner == "parakeet" and not parakeet_text:
         parakeet_text = str(text or "")
     qwen_text = str(kandidat.get("text") or "")
     if gewinner == "qwen" and not qwen_text:
         qwen_text = str(text or "")
 
-    return str(text or ""), {
+    info = {
         "pipeline": "audio",
         "bytes": len(audio or b""),
         "mime": mime,
@@ -147,3 +156,9 @@ def transcribe(
             "reason": str(kandidat.get("reason") or ""),
         },
     }
+    if filter_grund:
+        info["filter"] = {
+            "reason": filter_grund,
+            "discarded": True,
+        }
+    return str(text or ""), info

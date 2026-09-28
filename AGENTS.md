@@ -451,6 +451,27 @@ läuft parallel und ist nur der Qualitätsprüfer.**
 - Tests: `tests/test_stt_qwen.py`; vor Rollout zusätzlich direkte
   Qwen-WAV-Probe und `tools/prod_smoke.py`.
 
+## Deutsch-only-Sprachwache (W-STT-DE-ONLY 28.09.2026 — nicht rückbauen)
+
+Chef nach Anruf `8e68db99ea954aaead15b07109b56f89`: **Englisch darf
+weder erkannt, normalisiert, übersetzt noch berücksichtigt werden.**
+
+- `kern/sofort.py` entscheidet lokal mit einem auf Deutsch/Englisch
+  begrenzten Lingua-Modell plus harten Kurzphrasen. Deutsche Struktur und
+  Eigennamen bleiben erhalten.
+- Englische Parakeet-Ausgaben wie `Damn it.`, `Queen Service.`, `Yeah.`,
+  `No.` oder `Correct.` werden zu leerem STT und niemals zu Ja/Nein/Hallo
+  normalisiert.
+- `kern/stt.py` sperrt für einen solchen Zug auch Qwen: keine deutsche
+  Übersetzung, keine Live-Übernahme, kein später Korrektor-Lernstoff.
+- `kern/stt_spur.py` speichert den englischen Rohtext nicht im Mitschnitt,
+  sondern nur `filter.reason` und `discarded=true`.
+- `kern/dienst.py` schickt weder Text noch Intent in den Dialog. Bianca
+  fragt fest: „Das habe ich leider nicht verstanden. Bitte sagen Sie Ihr
+  Anliegen noch einmal auf Deutsch.“
+- Tests: `tests/test_stt_lokal.py`, `tests/test_stt_qwen.py`,
+  `tests/test_stt_spur.py`, `tests/test_halbsatz.py`.
+
 ## Nichts mehr verschlucken (W-STT-SCHWANZ 30.08.2026 — nicht rückbauen)
 
 Kollegen-Befund 30.08.: beim Transkribieren wurden manchmal die letzten
@@ -2042,7 +2063,8 @@ viermal „Soll ich das so eintragen?" trotz „Nein" / „Der Name." /
 „Ändere den Namen auf Levi".
 
 - **Anlauf „Uh"** (`gehirn._ANLAUF_RE`): „Uh ja." ist Ja, „Uh Dr. Petter"
-  verliert das Füllwort. Englisches „Correct" zählt als Ja (`_JA_RE`).
+  verliert das Füllwort. Der alte Text-Erkenner kennt noch „Correct"; im
+  Audio-Pfad verwirft W-STT-DE-ONLY Englisch davor vollständig.
 - **Kein Namensdiebstahl vom Behandler:** auf die Arzt-Frage und bei
   „Dr./Doktor …" ohne „ich heiße" wird kein Patientenname geerntet
   (`_name_aufnehmen`). „Uh Dr. Petter" darf nie als „Udrpetter" landen.

@@ -124,9 +124,12 @@ def _dienst() -> tuple[Dienst, list[str]]:
     d = Dienst(name="t", start_fn=lambda sit: {}, turn_fn=lambda sit, t, **k: {})
     gesehen: list[str] = []
 
-    def antwort(sit, *, art, text_in, extra=None, melde=None, vorab=None):
-        gesehen.append(text_in)
-        return {"ok": True, "empty": False, "text": "Antwort.", "audioUrl": "",
+    def antwort(sit, *, art, text_in, extra=None, melde=None, vorab=None,
+                fixed_text=""):
+        if not fixed_text:
+            gesehen.append(text_in)
+        return {"ok": True, "empty": False,
+                "text": fixed_text or "Antwort.", "audioUrl": "",
                 "textIn": text_in}
 
     d.json_antwort = antwort
@@ -173,7 +176,7 @@ def test_audio_halbsatz_warte_traegt_stt_gewinner(monkeypatch):
 
 
 def test_audio_englische_stille_halluzination_erreicht_dialog_nicht(monkeypatch):
-    """Live Blessing 26.09.: Stille -> "I'm sorry." darf keinen Zug auslösen."""
+    """Englisch wird verworfen und mit fester deutscher Nachfrage beantwortet."""
     d, gesehen = _dienst()
     sit = {
         "sammler": {"modus": "buchen", "frage": "nachname"},
@@ -194,7 +197,9 @@ def test_audio_englische_stille_halluzination_erreicht_dialog_nicht(monkeypatch)
         stt_mime="audio/wav", stt_name="stille.wav",
     )
 
-    assert [x["type"] for x in z] == ["empty"]
+    assert [x["type"] for x in z] == ["reply"]
+    assert "nicht verstanden" in z[0]["text"]
+    assert "auf Deutsch" in z[0]["text"]
     assert gesehen == []
     assert sit["messages"] == [{"role": "system", "content": "s"}]
     assert sit["sammler"]["frage"] == "nachname"

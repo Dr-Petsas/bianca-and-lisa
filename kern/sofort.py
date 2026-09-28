@@ -8,7 +8,10 @@ auf Biancas eigene Frage. „Notfalltermin morgen um 12:30“ ist eine Buchung.
 
 from __future__ import annotations
 
+from functools import lru_cache
 import re
+
+from lingua import Language, LanguageDetectorBuilder
 
 _NOTFALL_VERNEINT_RE = re.compile(
     r"\b(?:kein|keine|keinen)\s+(?:haut)?notfall\w*\b|"
@@ -74,6 +77,11 @@ def unterdruecken(text: str) -> bool:
 _STILLE_HALLU_RE = re.compile(
     r"^\s*(?:"
     r"i(?:['’]m|\s+am)\s+sorry|im\s+sorry|sorry|"
+    r"damn(?:\s+it)?|"
+    r"f+u+c+k+(?:\s+(?:it|off|you))?|"
+    r"bullshit|shit|"
+    r"what\s+the\s+hell|"
+    r"queen\s+service|"
     r"thank(?:s|\s+you)(?:\s+for\s+watching)?|"
     r"thanks(?:\s+for\s+watching)?|"
     r"thanks?\s+for\s+(?:listening|joining)|"
@@ -93,15 +101,24 @@ _STILLE_HALLU_RE = re.compile(
 
 _ENGLISH_WORDS = frozenset({
     "a", "about", "all", "am", "an", "and", "appointment", "are", "at",
-    "back", "be", "because", "but", "call", "can", "could", "day", "do",
-    "friday",
+    "back", "be", "because", "before", "book", "booking", "but", "call",
+    "can", "cancel", "cleaning", "correct", "could", "customer", "damn", "day",
+    "dental", "dentist", "do", "doctor", "done", "english", "friday",
     "for", "from", "good", "got", "had", "has", "have", "hello", "help",
-    "here", "i", "if", "in", "is", "it", "like", "me", "morning", "my",
-    "monday",
-    "name", "need", "not", "of", "on", "or", "please", "question", "sorry",
-    "saturday", "suck", "sucks", "sunday", "teen", "thank", "thanks", "that",
-    "the", "there", "this", "thursday", "time", "to", "tuesday", "want",
-    "was", "wednesday", "we", "what", "when", "with", "would", "you", "your",
+    "here", "how", "i", "if", "in", "is", "it", "later", "like", "me",
+    "morning", "move", "my", "monday", "name", "need", "new", "next", "no",
+    "nope", "not", "now", "of", "off", "okay", "on", "or", "please",
+    "queen", "question", "right", "saturday", "see", "service", "shit",
+    "should", "sorry", "speak", "suck", "sucks", "sunday", "teen", "tell",
+    "thank", "thanks", "that", "the", "there", "this", "thursday", "time",
+    "to", "tomorrow", "tuesday", "understand", "want", "was", "wednesday",
+    "we", "what", "when", "where", "why", "will", "with", "would", "yes",
+    "you", "your",
+})
+_ENGLISH_SINGLE = frozenset({
+    "bye", "correct", "damn", "english", "fuck", "goodbye", "hello", "hey", "hi",
+    "jep", "nine", "no", "nope", "okay", "shit", "sorry", "thanks",
+    "stop", "tomorrow", "what", "why", "yeah", "yea", "yep", "yes",
 })
 _GERMAN_STRUCTURE = frozenset({
     "aber", "also", "bitte", "brauche", "danke", "das", "dem", "den",
@@ -113,41 +130,83 @@ _GERMAN_STRUCTURE = frozenset({
 })
 
 
+@lru_cache(maxsize=1)
+def _de_en_detector():
+    """Kleiner, lokaler Sprachentscheid; kein Netz und kein LLM."""
+
+    return LanguageDetectorBuilder.from_languages(
+        Language.ENGLISH,
+        Language.GERMAN,
+    ).build()
+
+
 def _woerter(text: str) -> list[str]:
     # Apostrophe trennen: "I'm sorry" -> ["i", "m", "sorry"]. Das
     # Kontraktions-"m" wird unten neutral behandelt.
     return re.findall(r"[a-zäöüß]+", _s(text).casefold())
 
 
-def ist_stille_halluzination(text: str) -> bool:
-    """Parakeet auf Ruhe/Echo oder reines Englisch: kein Anrufer-Satz.
+def _sieht_wie_eigenname_aus(text: str, woerter: list[str]) -> bool:
+    """Namen wie „Alice Biberci“ nicht wegen englischer Statistik sperren."""
 
-    Die Telefon-KI führt deutsche Gespräche. Reine englische Sätze ohne
-    einen einzigen deutschen Strukturanker sind bei Parakeet/Qwen auf
-    Stille und Leitungsrauschen ein wiederkehrendes Halluzinationsmuster.
-    Gemischte deutsche Sätze ("Sorry, ich brauche einen Termin") und
-    Eigennamen bleiben bewusst erhalten.
+    teile = re.findall(r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'’-]*", _s(text))
+    return (
+        1 <= len(teile) <= 4
+        and len(teile) == len(woerter)
+        and all(teil[:1].isupper() for teil in teile)
+        and not all(wort in _ENGLISH_WORDS for wort in woerter)
+    )
+
+
+def _lingua_ist_englisch(text: str) -> bool:
+    werte = {
+        wert.language: float(wert.value)
+        for wert in _de_en_detector().compute_language_confidence_values(text)
+    }
+    englisch = werte.get(Language.ENGLISH, 0.0)
+    deutsch = werte.get(Language.GERMAN, 0.0)
+    # Kurze Telefonzüge brauchen einen klaren Vorsprung. Explizite englische
+    # Kurzformen und Phrasen werden bereits vor diesem statistischen Schritt
+    # hart verworfen.
+    return englisch >= 0.60 and englisch - deutsch >= 0.12
+
+
+def ist_stille_halluzination(text: str) -> bool:
+    """Parakeet auf Ruhe/Echo oder Englisch: kein Anrufer-Satz.
+
+    Die Telefon-KI führt deutsche Gespräche. Englische STT-Ausgaben werden
+    weder normalisiert noch übersetzt oder an Dialog/Qwen-Korrektor
+    weitergereicht. Gemischte Sätze mit eindeutig deutscher Struktur und
+    Eigennamen bleiben erhalten.
     """
     t = _s(text)
     if not t:
         return False
     if _STILLE_HALLU_RE.match(t):
         return True
-    if any(ch.isdigit() for ch in t):
+    if not any(ch.isalpha() for ch in t):
         return False
     woerter = _woerter(t)
     if not woerter or any(w in _GERMAN_STRUCTURE for w in woerter):
         return False
     relevant = [w for w in woerter if w not in {"m", "s", "re", "ve", "ll", "d"}]
+    if len(relevant) == 1 and relevant[0] in _ENGLISH_SINGLE:
+        return True
     if len(relevant) < 2:
-        return False
+        return _lingua_ist_englisch(t) and not _sieht_wie_eigenname_aus(
+            t, relevant
+        )
     englisch = sum(w in _ENGLISH_WORDS for w in relevant)
     englischer_anfang = relevant[0] in {
         "i", "we", "you", "my", "your", "the", "good",
     }
-    return englisch >= 2 and (
+    if englisch >= 2 and (
         englisch / len(relevant) >= 0.75 or englischer_anfang
-    )
+    ):
+        return True
+    if _sieht_wie_eigenname_aus(t, relevant):
+        return False
+    return _lingua_ist_englisch(t)
 
 
 def transfer_ueberspringen(text: str) -> bool:

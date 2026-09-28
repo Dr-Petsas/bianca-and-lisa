@@ -51,3 +51,24 @@ def test_spur_zeigt_qwen_uebernahme_und_beide_texte(monkeypatch):
     assert info["parakeet"]["text"] == "Ein Rhön Biepfeld."
     assert info["qwen"]["text"] == "Ein Röntgenbild."
     assert info["qwen"]["status"] == "uebernommen"
+
+
+def test_spur_entfernt_englischen_rohtext_und_markiert_filter(monkeypatch):
+    monkeypatch.setattr(stt, "STT_BASE", "http://parakeet:8212")
+    monkeypatch.setattr(stt, "STT_QWEN_BASE", "")
+    monkeypatch.setattr(stt, "STT_QWEN_FINAL_BASE", "")
+
+    def fake_transcribe(_audio, **_kwargs):
+        text = stt._sauber("Damn it.")
+        stt_spur._lokal.parakeet_text = text
+        return text
+
+    monkeypatch.setattr(stt, "transcribe", fake_transcribe)
+    text, info = stt_spur.transcribe(b"x" * 2400)
+
+    assert text == ""
+    assert info["parakeet"]["text"] == ""
+    assert info["filter"] == {
+        "reason": "englisch-oder-stille",
+        "discarded": True,
+    }

@@ -6,3 +6,4 @@ python-dotenv==1.0.1
 python-multipart==0.0.20
 cryptography==50.0.1
 tzdata==2025.2
+lingua-language-detector==2.2.0

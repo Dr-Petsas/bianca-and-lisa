@@ -69,6 +69,10 @@ FILLER_SPAET_S = 0.8
 # hintereinander („ich schaue nach" / „einen Moment" / „kurzen Augenblick").
 FILLER_NACHSCHUB_S = 2.4
 FILLER_MAX = 1
+SPRACHWACHE_NACHFRAGE = (
+    "Das habe ich leider nicht verstanden. "
+    "Bitte sagen Sie Ihr Anliegen noch einmal auf Deutsch."
+)
 
 # Stille-Notfall-Ansagen (W-STILLE): das Dock lädt sie beim Boot als BLOB
 # und spielt sie LOKAL, wenn nach dem Sprechende des Anrufers ~1,4 s kein
@@ -511,7 +515,8 @@ class Dienst:
     # ---- Antwort-Bau -------------------------------------------------------
 
     def json_antwort(self, sit: dict, *, art: str, text_in: str = "",
-                     extra: dict | None = None, melde=None, vorab=None) -> dict[str, Any]:
+                     extra: dict | None = None, melde=None, vorab=None,
+                     fixed_text: str = "") -> dict[str, Any]:
         # W-STIMME-MANDANT: ab hier spricht der Mandant mit SEINER Stimme.
         # Kein try/finally-Reset: die Antwort verlaesst den Kontext ohnehin,
         # und ein Reset waehrend noch laufender Satz-Faeden koennte ihnen die
@@ -525,7 +530,12 @@ class Dienst:
         sit.pop("_vorabUrlListe", None)
         sit.pop("_satzJobs", None)
         t0 = time.perf_counter()
-        if art == "start":
+        if fixed_text:
+            # Sprachwache: feste deutsche Nachfrage ohne den verworfenen
+            # englischen Wortlaut durch Dialog, Intent oder Frage-Budget zu
+            # schicken.
+            reply = {"text": fixed_text}
+        elif art == "start":
             reply = self.start_fn(sit)
         else:
             try:
@@ -548,7 +558,12 @@ class Dienst:
         # Ein Abbruch-Befehl ("Stopp.") verwirft den Rest (29.08.2026).
         # Ein Diktatfragment gibt den Floor noch nicht ab. Dort darf weder ein
         # alter Barge-Rest noch irgendein Assistenten-Audio dazwischenkommen.
-        if not wartet:
+        if fixed_text:
+            # Ein verworfener englischer Einwurf ist kein leerer Barge-in:
+            # ausschließlich die Nachfrage sprechen, keinen Rest der zuvor
+            # unterbrochenen Ansage anhängen.
+            sit.pop("unterbrochen", None)
+        elif not wartet:
             text = unterbrechung.fortsetzen(sit, text, reply, gesagt=text_in)
         # Erster Satz schon gesprochen (Stream-Vorab)? Dann nur den Rest vertonen.
         # Nur erfolgreich erzeugte und vor dem Reply eingereihte URLs gelten
@@ -865,25 +880,10 @@ class Dienst:
                         # Stille-Satz wie "I'm sorry." niemals Verlauf,
                         # Intent, Maschine oder Frage-Budget erreichen.
                         if gesagt and sofort.ist_stille_halluzination(gesagt):
-                            stand = sit.get("sttHalluzinationen")
-                            if not isinstance(stand, dict):
-                                stand = {"anzahl": 0}
-                                sit["sttHalluzinationen"] = stand
-                            stand["anzahl"] = int(stand.get("anzahl") or 0) + 1
                             stt_info["filter"] = {
-                                "reason": "fremdsprache-oder-stille",
+                                "reason": "englisch-oder-stille",
                                 "discarded": True,
                             }
-                            spur.merken(
-                                sit,
-                                "stt-sprachwache",
-                                "fremdsprache-oder-stille",
-                            )
-                            print(
-                                f"{self.name}-stt-sprachwache verworfen "
-                                f"anzahl={stand['anzahl']}",
-                                flush=True,
-                            )
                             gesagt = ""
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
@@ -891,6 +891,49 @@ class Dienst:
                         return
                     stt_s = round(time.perf_counter() - t0, 2)
                     if not gesagt:
+                        sprachfilter = (
+                            stt_info.get("filter")
+                            if isinstance(stt_info.get("filter"), dict)
+                            else {}
+                        )
+                        if sprachfilter.get("discarded"):
+                            # Nichts Englisches speichern, lernen, mergen oder
+                            # als Anrufertext an den Dialog geben. Statt eines
+                            # stillen Empty-Events ausdrücklich auf Deutsch
+                            # nachfragen.
+                            for engine in ("parakeet", "qwen"):
+                                info = stt_info.get(engine)
+                                if isinstance(info, dict):
+                                    info["text"] = ""
+                            stand = sit.get("sttHalluzinationen")
+                            if not isinstance(stand, dict):
+                                stand = {"anzahl": 0}
+                                sit["sttHalluzinationen"] = stand
+                            stand["anzahl"] = int(stand.get("anzahl") or 0) + 1
+                            halbsatz.abholen(sit)
+                            spur.merken(
+                                sit,
+                                "stt-sprachwache",
+                                str(sprachfilter.get("reason") or "englisch"),
+                            )
+                            print(
+                                f"{self.name}-stt-sprachwache verworfen "
+                                f"anzahl={stand['anzahl']}",
+                                flush=True,
+                            )
+                            sit["_sttS"] = stt_s
+                            sit["_sttInfo"] = stt_info
+                            out = self.json_antwort(
+                                sit,
+                                art=art,
+                                text_in="",
+                                extra=extra,
+                                melde=melde,
+                                vorab=vorab,
+                                fixed_text=SPRACHWACHE_NACHFRAGE,
+                            )
+                            q.put(("fertig", out))
+                            return
                         # W-HALBSATZ: haengt noch ein gehaltenes Fragment in
                         # der Sitzung, beantwortet dieses Schweigen es — der
                         # Anrufer hat den Satz offenbar nicht fortgesetzt.

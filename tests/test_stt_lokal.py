@@ -77,19 +77,22 @@ def test_keywords_gehen_als_hotwords_mit():
     _mit_lokal(fake, lauf)
 
 
-def test_kurze_englische_parakeet_formen_werden_deutsch_normalisiert():
-    faelle = {
-        "Yeah.": "Ja.",
-        "Yep!": "Ja.",
-        "Bitte ja.": "Ja, bitte.",
-        "Nine.": "Nein.",
-        "Hello?": "Hallo.",
-    }
-    for gehoert, erwartet in faelle.items():
+def test_kurze_englische_parakeet_formen_werden_verworfen():
+    for gehoert in (
+        "Yeah.",
+        "Yep!",
+        "Yes.",
+        "No.",
+        "Nope.",
+        "Nine.",
+        "Hello?",
+        "Correct.",
+        "Stop.",
+    ):
         fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
 
         def lauf():
-            assert stt.transcribe(BLOB) == erwartet
+            assert stt.transcribe(BLOB) == ""
 
         _mit_lokal(fake, lauf)
 
@@ -108,6 +111,10 @@ def test_englische_stille_halluzinationen_werden_verworfen():
         "Good morning, Mister Smith.",
         "Teen sucks.",
         "Tuesday morning.",
+        # Live Thaler 28.09.2026, Anruf 8e68db99…:
+        "Damn it.",
+        "Queen Service.",
+        "I need 2 appointments.",
     )
     for gehoert in faelle:
         fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
@@ -125,6 +132,14 @@ def test_sprachwache_behaelt_deutsche_saetze_und_eigennamen():
         "Ich möchte online einen Termin buchen.",
         "Mein Nachname ist Smith.",
         "Okay, danke.",
+        "Bitte ja.",
+        "Zahnreinigung.",
+        "Kontrolle.",
+        "Schmerzen.",
+        "Kundenservice.",
+        "Müller Service.",
+        "Alice Biberci.",
+        "Ja man.",
     )
     for gehoert in faelle:
         fake = _FakeLokal(_Antwort(200, {"text": gehoert}))

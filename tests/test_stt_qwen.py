@@ -186,6 +186,26 @@ def test_qwen_ausfall_laesst_parakeet_sofort_stehen_und_pausiert():
     _umgebung(lauf, qwen_candidate=kaputt)
 
 
+def test_englisch_wird_weder_von_qwen_uebersetzt_noch_gelernt():
+    nachtraege: list[dict] = []
+
+    def lauf(_fake_lokal):
+        text = stt.transcribe(
+            BLOB,
+            nachtrag=nachtraege.append,
+        )
+        assert text == ""
+        assert nachtraege == []
+
+    _umgebung(
+        lauf,
+        lokal_text="Queen Service.",
+        qwen_candidate=lambda _pcm, _keywords="": _kandidat("Kundenservice."),
+        live_ohr=True,
+    )
+    assert nachtraege == []
+
+
 def test_laufendes_qwen_staut_keinen_naechsten_zug():
     """Deckel STT_QWEN_PARALLEL=1: solange ein Qwen-Lauf offen ist, geht der
     naechste Zug ohne Qwen — nie aufstauen."""
