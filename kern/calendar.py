@@ -523,7 +523,7 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = Fa
 
 
 def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
-                      source: str = "") -> dict[str, Any]:
+               source: str = "") -> dict[str, Any]:
     body = {
         "clientId": _s(tenant.get("clientId")),
         "locationId": _s(tenant.get("locationId")),
@@ -989,10 +989,10 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         session_id = _s(ctx.get("nameConfirmSessionId"))
         if not session_id:
             return {
-                "ok": False,
+            "ok": False,
                 "booked": False,
                 "writeAttempted": False,
-                "spoken": (
+            "spoken": (
                     "Die sichere Reservierung ist gerade nicht vollständig. "
                     "Ich trage den Termin noch nicht ein."
                 ),
@@ -1093,7 +1093,7 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
             )
         aid = _s(pruefung.get("appointmentId"))
         _booking_uncertainty_clear(ctx)
-        ctx["appointmentId"] = aid
+            ctx["appointmentId"] = aid
         ctx["appointmentDate"] = iso[:10]
         return _mit_dispatch({
             "ok": True,
@@ -1215,8 +1215,8 @@ def _handy_nachtragen(tenant: dict, ctx: dict, *, patient_id: str) -> dict[str, 
         return {"ok": False, "grund": "keine bestaetigte Handynummer"}
     e164 = patients.handy_e164(nummer)
     status, data, dispatch = _cf_call("masUpdatePatientPhone", {
-        "clientId": _s(tenant.get("clientId")),
-        "locationId": _s(tenant.get("locationId")),
+            "clientId": _s(tenant.get("clientId")),
+            "locationId": _s(tenant.get("locationId")),
         "patientId": _s(patient_id),
         "mobilePhoneNumber": e164,
     })
@@ -1700,13 +1700,13 @@ def _buch_und_akte(
             "name": f"{first} {last}".strip(),
             "phone": phone,
         }
-        _bind_akte(ctx, auf)
+            _bind_akte(ctx, auf)
         created_patient = (
             bool(data.get("createdPatient"))
             if success and "createdPatient" in data
             else skip_confirmation
         )
-        # createAppointment kennt kein Versicherungs-Feld — den erfragten
+            # createAppointment kennt kein Versicherungs-Feld — den erfragten
         # Status auf einer normalen frisch angelegten Akte nachtragen.
         if (
             not skip_confirmation
@@ -2765,15 +2765,15 @@ def cancel_by_id(tenant: dict, ctx: dict, appointment_id: str) -> dict[str, Any]
             absent_ok=True,
         )
         if complete and appointment is None:
-            ctx["appointmentId"] = aid
-            return _mit_dispatch({
+        ctx["appointmentId"] = aid
+        return _mit_dispatch({
                 "ok": True,
                 "cancelled": True,
                 "appointmentId": aid,
                 "recoveredBy": "calendar_readback",
                 "verified": True,
-                "spoken": "Der Termin ist abgesagt.",
-            }, dispatch)
+            "spoken": "Der Termin ist abgesagt.",
+        }, dispatch)
         gesprochen = (
             "Die Absage wurde technisch angenommen, ist im Kalender aber "
             "noch nicht eindeutig bestätigt. Die Praxis prüft das."
@@ -3301,15 +3301,15 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
             and _s(appointment.get("iso")).replace(" ", "T")[:16]
             == iso.replace(" ", "T")[:16]
         ):
-            return _mit_dispatch({
-                "ok": True,
-                "moved": True,
-                "appointmentId": aid,
-                "slotIso": iso,
+        return _mit_dispatch({
+            "ok": True,
+            "moved": True,
+            "appointmentId": aid,
+            "slotIso": iso,
                 "recoveredBy": "calendar_readback",
                 "verified": True,
-                "spoken": f"Der Termin liegt jetzt {spoken_slot(iso)}.",
-            }, dispatch)
+            "spoken": f"Der Termin liegt jetzt {spoken_slot(iso)}.",
+        }, dispatch)
         gesprochen = (
             "Die Verschiebung wurde technisch angenommen, ist im Kalender "
             "aber noch nicht eindeutig bestätigt. Die Praxis prüft das."
