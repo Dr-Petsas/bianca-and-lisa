@@ -160,6 +160,27 @@ def letzte_frage(msgs: list[dict]) -> str:
     return ""
 
 
+def hoerfehler_nachfrage(
+    sit: dict,
+    *,
+    frage: str = "",
+    ja_nein: bool = False,
+) -> str:
+    """Die wirklich offene Frage kurz und abwechslungsreich wiederholen.
+
+    So verliert ein akustisch unklarer Kurz-Zug den Formularfaden nicht.
+    ``ja_nein`` nennt den erwarteten Antworttyp nur dann zusaetzlich, wenn
+    die Frage ihn nicht ohnehin schon ausspricht.
+    """
+    offen = _s(frage) or letzte_frage((sit or {}).get("messages") or [])
+    if not offen:
+        return ""
+    wiederholt = frage_praefix(offen, sit)
+    if ja_nein and not re.search(r"\bja\b.{0,16}\bnein\b", offen, re.I):
+        wiederholt += " Ein kurzes Ja oder Nein genügt."
+    return f"Entschuldigung, das kam nicht sicher an. {wiederholt}"
+
+
 def anhaengen(sit: dict, text: str) -> None:
     """Den Stups ins Gespraechsprotokoll haengen, damit Folgezuege (LLM und
     Wiederholungs-Wächter) ihn kennen. An die letzte Assistenten-Antwort

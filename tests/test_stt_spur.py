@@ -72,3 +72,30 @@ def test_spur_entfernt_englischen_rohtext_und_markiert_filter(monkeypatch):
         "reason": "englisch-oder-stille",
         "discarded": True,
     }
+
+
+def test_spur_reicht_antworttyp_durch_und_markiert_filterkontext(monkeypatch):
+    monkeypatch.setattr(stt, "STT_BASE", "http://parakeet:8212")
+    monkeypatch.setattr(stt, "STT_QWEN_BASE", "")
+    monkeypatch.setattr(stt, "STT_QWEN_FINAL_BASE", "")
+    gesehen = {}
+
+    def fake_transcribe(_audio, **kwargs):
+        gesehen.update(kwargs)
+        stt._SPRACHWACHE.grund = "englisch-oder-stille"
+        stt_spur._lokal.parakeet_text = ""
+        return ""
+
+    monkeypatch.setattr(stt, "transcribe", fake_transcribe)
+    text, info = stt_spur.transcribe(
+        b"x" * 2400,
+        sprachkontext="ja_nein",
+    )
+
+    assert text == ""
+    assert gesehen["sprachkontext"] == "ja_nein"
+    assert info["filter"] == {
+        "reason": "englisch-oder-stille",
+        "discarded": True,
+        "context": "ja_nein",
+    }

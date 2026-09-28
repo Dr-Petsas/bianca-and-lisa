@@ -1759,6 +1759,26 @@ def test_jap_und_jep_sind_ja():
     assert not gehirn.ist_ja("Japan ist schön")
 
 
+def test_buchungsbestaetigung_akzeptiert_hoefliche_umschreibung(monkeypatch):
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "buchen",
+        "phase": "bestaetigen",
+        "frage": "bestaetigung",
+        "slotIso": "2026-10-12T10:00",
+    })
+    monkeypatch.setattr(
+        flow,
+        "_nach_ok_buchen",
+        lambda *_args, **_kwargs: {"text": "SEMANTISCHES-JA"},
+    )
+
+    aus = flow.zug(sit, "Können Sie das genau so eintragen?")
+
+    assert aus == {"text": "SEMANTISCHES-JA"}
+
+
 def test_buchen_neue_nummer_weicht_von_akte_ab_keine_sms_zusage():
     """Live 29.08.2026 02:19: Bestandsakte trug 0123456789, der Anrufer
     bestaetigte 0177 6004600 — Bianca versprach 'SMS kommt gleich', die

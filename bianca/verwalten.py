@@ -2149,7 +2149,7 @@ _BESTAETIGUNG_WIDERSPRUCH_RE = re.compile(
 )
 
 
-def _bestaetigung_eindeutig(text: str) -> bool:
+def _bestaetigung_eindeutig(text: str, frage: str = "absage_ok") -> bool:
     """Nur ein uneingeschränktes Ja darf einen Kalender-Write auslösen.
 
     ``ist_ja`` erkennt absichtlich auch natürliche Satzanfänge. Bei
@@ -2158,10 +2158,14 @@ def _bestaetigung_eindeutig(text: str) -> bool:
     """
     t = _s(text)
     return bool(
-        gehirn.ist_ja(t)
-        and not gehirn.ist_nein(t)
+        gehirn.ja_nein_entscheidung(t, frage) == "ja"
         and not _BESTAETIGUNG_WIDERSPRUCH_RE.search(t)
     )
+
+
+def _ablehnung_eindeutig(text: str, frage: str = "absage_ok") -> bool:
+    """Natürlich formuliertes Nein im selben getaggten Entscheidungsrahmen."""
+    return gehirn.ja_nein_entscheidung(_s(text), frage) == "nein"
 
 
 def _bestaetigung_unklar_text(aktion: str) -> dict:
@@ -3285,7 +3289,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     # Patientenbeweis. Erst dieses Ja darf die feste Verwaltungsstrecke
     # fortsetzen; Nein startet die Namensaufnahme neu.
     if s["phase"] == "verw_patient_bestaetigen":
-        if _bestaetigung_eindeutig(t):
+        if _bestaetigung_eindeutig(t, "anrufer_check"):
             termin = _gewaehlt(sit)
             if not termin:
                 s["phase"] = ""
@@ -3309,7 +3313,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             s["phase"] = ""
             s["frage"] = ""
             return _bestaetigen(sit, termin, melde)
-        if gehirn.ist_nein(t) or (
+        if _ablehnung_eindeutig(t, "anrufer_check") or (
                 gehirn.ist_ja(t)
                 and _BESTAETIGUNG_WIDERSPRUCH_RE.search(t)):
             sit.pop("_verwName60Danach", None)
@@ -3335,7 +3339,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
                 return _verschieb_wunsch_frage(sit, termin, melde)
         if _bestaetigung_eindeutig(t):
             return _absagen(sit, melde)
-        if gehirn.ist_nein(t):
+        if _ablehnung_eindeutig(t):
             sit["verwaltenTermin"] = ""
             _verw_reset(sit)
             _verwaltung_mit_abschlussfrage_schliessen(sit)
@@ -3358,7 +3362,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             return _verschieb_angebot(sit, melde)
         if _bestaetigung_eindeutig(t):
             return _verschieben(sit, melde)
-        if gehirn.ist_nein(t):
+        if _ablehnung_eindeutig(t):
             s["slotIso"] = ""
             s["phase"] = "verschieb_wunsch"
             s["frage"] = "wunsch"
@@ -3381,7 +3385,7 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
     if s["phase"] == "mehrfach_bestaetigen":
         if _bestaetigung_eindeutig(t):
             return _mehrfach_absagen(sit, melde)
-        if gehirn.ist_nein(t):
+        if _ablehnung_eindeutig(t):
             sit["mehrfachAbsage"] = []
             s["phase"] = "wahl"
             s["frage"] = "terminwahl"

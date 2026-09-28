@@ -50,10 +50,39 @@ _ERWARTET = {
     "bestaetigung": {"ja", "nein", "nee", "richtig", "stimmt"},
 }
 
+# Fragen, auf die eine knappe deutsche Zustimmung wie „Okay.“ oder „Jep.“
+# eine vollwertige Antwort sein kann. Der Sprachkontext lockert ausschliesslich
+# diese deutschen Kurzformen; englische Formen wie „Yes“/„Yeah“ bleiben durch
+# die Deutsch-only-Sprachwache gesperrt.
+_JA_NEIN_FRAGEN = frozenset({
+    "absage_ok", "anrufer_check", "arzt_check", "bestaetigung",
+    "bleaching", "bleaching_check", "ersatz_check", "folge_kontrolle",
+    "frisch_absage_ok", "fuer_wen_check", "nachname_check", "neubuchung",
+    "pzr", "rechnung_rueckruf", "schonmal", "termin_anbieten",
+    "termin_notiz_check", "termin_ok", "telefon_check",
+    "versicherung_check", "verschieb_ok", "vorname_check",
+})
+
 
 def _sammler(sit: dict) -> dict:
     s = sit.get("sammler") if isinstance(sit, dict) else None
     return s if isinstance(s, dict) else {}
+
+
+def sprachkontext(sit: dict) -> str:
+    """Enger Kontext fuer die STT-Sprachwache dieses Zugs.
+
+    ``ja_nein`` erlaubt nur gebraeuchliche deutsche Kurzformen. ``name``
+    schuetzt deutlich buchstabierte Namen vor der Sprachstatistik. Freie
+    Zuege bleiben absichtlich ohne Ausnahme.
+    """
+    s = _sammler(sit if isinstance(sit, dict) else {})
+    frage = str(s.get("frage") or "")
+    if frage in _JA_NEIN_FRAGEN:
+        return "ja_nein"
+    if s.get("buchstabenTeil") or s.get("vornameTeil") or frage in _NAMEN:
+        return "name"
+    return ""
 
 
 def check_ist_nein(text: str) -> bool:

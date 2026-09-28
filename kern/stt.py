@@ -54,12 +54,41 @@ _SPRACHWACHE = threading.local()
 def sprachwache_zuruecksetzen() -> None:
     """Filtergrund des aktuellen STT-Zugs löschen."""
 
-    if hasattr(_SPRACHWACHE, "grund"):
-        delattr(_SPRACHWACHE, "grund")
+    for name in ("grund", "kontext"):
+        if hasattr(_SPRACHWACHE, name):
+            delattr(_SPRACHWACHE, name)
 
 
 def sprachwache_grund() -> str:
     return str(getattr(_SPRACHWACHE, "grund", "") or "")
+
+
+def sprachwache_kontext() -> str:
+    return str(getattr(_SPRACHWACHE, "kontext", "") or "")
+
+
+def _im_sprachkontext(kontext: str, fn, *args, **kwargs):
+    """Antworttyp auch in STT-Worker-Threads eng auf diesen Lauf begrenzen."""
+    fehlt = object()
+    alt_kontext = getattr(_SPRACHWACHE, "kontext", fehlt)
+    alt_grund = getattr(_SPRACHWACHE, "grund", fehlt)
+    _SPRACHWACHE.kontext = str(kontext or "")
+    if hasattr(_SPRACHWACHE, "grund"):
+        delattr(_SPRACHWACHE, "grund")
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        if alt_kontext is fehlt:
+            if hasattr(_SPRACHWACHE, "kontext"):
+                delattr(_SPRACHWACHE, "kontext")
+        else:
+            _SPRACHWACHE.kontext = alt_kontext
+        if alt_grund is fehlt:
+            if hasattr(_SPRACHWACHE, "grund"):
+                delattr(_SPRACHWACHE, "grund")
+        else:
+            _SPRACHWACHE.grund = alt_grund
+
 
 # Whisper-Sicherung: nach einem Fehlschlag (Dev-Rechner aus, Tunnel weg)
 # pausiert der Whisper-Pfad, damit nicht JEDER Zug den Connect-Timeout
@@ -90,7 +119,7 @@ def _client() -> httpx.Client:
     return _CLIENT
 
 
-def _sauber(text) -> str:
+def _sauber(text, *, kontext: str = "") -> str:
     text = " ".join(str(text or "").split()).strip()
     # Nicht-lateinische Ausreisser (kyrillische Halluzinationen) verwerfen.
     if any(0x0400 <= ord(c) < 0x0500 for c in text):
@@ -100,7 +129,10 @@ def _sauber(text) -> str:
     # Formen wie "Yeah", "No" oder "Hello" werden verworfen und führen zur
     # deutschen Nachfrage. Nur die tatsächlich deutsche Form bleibt erlaubt.
     from kern import sofort
-    if sofort.ist_stille_halluzination(text):
+    if sofort.ist_stille_halluzination(
+        text,
+        kontext=kontext or sprachwache_kontext(),
+    ):
         _SPRACHWACHE.grund = "englisch-oder-stille"
         print("stt-sprachwache: englisch/stille verworfen", flush=True)
         return ""
@@ -564,6 +596,7 @@ def _whisper_mit_vorgezogenem_fallback(
     mime: str,
     name: str,
     keywords: str = "",
+    sprachkontext: str = "",
 ) -> tuple[str, Future | None, Exception | None]:
     """Whisper bleibt primaer, Parakeet wird nur nahe am Deckel vorbereitet.
 
@@ -589,7 +622,12 @@ def _whisper_mit_vorgezogenem_fallback(
             return "", None, e
 
     whisper: Future = _FALLBACK_POOL.submit(
-        _whisper, audio, mime=mime, keywords=keywords
+        _im_sprachkontext,
+        sprachkontext,
+        _whisper,
+        audio,
+        mime=mime,
+        keywords=keywords,
     )
     fallback: Future | None = None
     vorlauf = min(max(0.05, WHISPER_FALLBACK_LEAD_S), max(0.05, budget / 2))
@@ -597,7 +635,13 @@ def _whisper_mit_vorgezogenem_fallback(
         return str(whisper.result(timeout=max(0.05, budget - vorlauf)) or ""), None, None
     except FutureTimeout:
         fallback = _FALLBACK_POOL.submit(
-            _lokal, audio, mime=mime, name=name, keywords=keywords
+            _im_sprachkontext,
+            sprachkontext,
+            _lokal,
+            audio,
+            mime=mime,
+            name=name,
+            keywords=keywords,
         )
     except Exception as e:
         return "", None, e
@@ -647,7 +691,12 @@ def _qwen_parallel_task(audio: bytes, mime: str, keywords: str) -> dict:
         }
 
 
-def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | None:
+def _qwen_parallel_start(
+    audio: bytes,
+    mime: str,
+    keywords: str,
+    sprachkontext: str = "",
+) -> Future | None:
     """Hoechstens STT_QWEN_PARALLEL Qwen-Laeufe gleichzeitig; ist alles
     belegt, faellt der Zug aus (nie aufstauen — ein Stau wuerde den
     Korrektor mit veralteten Zuegen fuettern)."""
@@ -661,6 +710,8 @@ def _qwen_parallel_start(audio: bytes, mime: str, keywords: str) -> Future | Non
                   flush=True)
             return None
         _qwen_future = _QWEN_POOL.submit(
+            _im_sprachkontext,
+            sprachkontext,
             _qwen_parallel_task,
             audio,
             mime,
@@ -675,8 +726,14 @@ Nachtrag = Callable[[dict], None]
 Sperre = Callable[[str], str]
 
 
-def _nachtrag_anmelden(qwen: Future, lokal: str, kandidat: dict | None,
-                       nachtrag: Nachtrag, t0: float) -> None:
+def _nachtrag_anmelden(
+    qwen: Future,
+    lokal: str,
+    kandidat: dict | None,
+    nachtrag: Nachtrag,
+    t0: float,
+    sprachkontext: str = "",
+) -> None:
     """W-QWEN-KORREKTOR (13.09.2026): ein Qwen-Ergebnis, das den Live-Zug
     nicht mehr erreicht hat (zu spaet) oder ihn nicht uebernehmen durfte,
     wird NICHT mehr weggeworfen, sondern dem Aufrufer nachgereicht — der
@@ -686,7 +743,10 @@ def _nachtrag_anmelden(qwen: Future, lokal: str, kandidat: dict | None,
     def _melden(k: dict, spaet: bool) -> None:
         try:
             nachtrag({
-                "text": _sauber((k or {}).get("text")),
+                "text": _sauber(
+                    (k or {}).get("text"),
+                    kontext=sprachkontext,
+                ),
                 "authoritative": bool((k or {}).get("authoritative")),
                 "reason": str((k or {}).get("reason") or ""),
                 "source": str((k or {}).get("source") or "qwen"),
@@ -720,10 +780,11 @@ def _parallel_transcribe(
     keywords: str,
     nachtrag: Nachtrag | None = None,
     qwen_sperre: Sperre | None = None,
+    sprachkontext: str = "",
 ) -> str:
     """Parakeet sofort; nur auffaellige Texte warten gedeckelt auf Qwen."""
     t0 = time.perf_counter()
-    qwen = _qwen_parallel_start(audio, mime, keywords)
+    qwen = _qwen_parallel_start(audio, mime, keywords, sprachkontext)
     try:
         lokal = _lokal(audio, mime=mime, name=name, keywords=keywords)
     except Exception:
@@ -754,7 +815,14 @@ def _parallel_transcribe(
     if not QWEN_LIVE_OHR:
         if nachtrag is not None:
             kandidat = qwen.result() if qwen.done() else None
-            _nachtrag_anmelden(qwen, lokal, kandidat, nachtrag, t0)
+            _nachtrag_anmelden(
+                qwen,
+                lokal,
+                kandidat,
+                nachtrag,
+                t0,
+                sprachkontext,
+            )
         return lokal
 
     auffaellig = _parakeet_braucht_qwen(lokal, keywords)
@@ -795,7 +863,14 @@ def _parallel_transcribe(
         )
         return str(kandidat["text"])
     if nachtrag is not None:
-        _nachtrag_anmelden(qwen, lokal, kandidat, nachtrag, t0)
+        _nachtrag_anmelden(
+            qwen,
+            lokal,
+            kandidat,
+            nachtrag,
+            t0,
+            sprachkontext,
+        )
     return lokal
 
 
@@ -803,13 +878,17 @@ def _parallel_transcribe(
 
 def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm",
                keywords: str = "", nachtrag: Nachtrag | None = None,
-               qwen_sperre: Sperre | None = None) -> str:
+               qwen_sperre: Sperre | None = None,
+               sprachkontext: str = "") -> str:
     """`nachtrag` (optional): bekommt ein Qwen-Ergebnis nachgereicht, das
     NICHT der gesprochene Live-Text wurde (W-QWEN-KORREKTOR). `qwen_sperre`
     (optional, W-QWEN-SICHER): Parakeets Text -> Sperr-Grund oder "" — bei
     Grund uebernimmt Qwen diesen Zug nie live. Ohne die Parameter verhaelt
-    sich alles byte-identisch wie zuvor."""
+    sich alles byte-identisch wie zuvor. ``sprachkontext`` markiert eng
+    begrenzte erwartete Antworttypen (z. B. ``ja_nein`` oder ``name``);
+    englische Antworten werden dadurch weiterhin nicht übersetzt."""
     sprachwache_zuruecksetzen()
+    _SPRACHWACHE.kontext = str(sprachkontext or "")
     if not audio or len(audio) < 800:
         return ""
     if _qwen_konfiguriert():
@@ -821,6 +900,7 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
                 keywords=keywords,
                 nachtrag=nachtrag,
                 qwen_sperre=qwen_sperre,
+                sprachkontext=sprachkontext,
             )
         if _qwen_aktiv():
             try:
@@ -831,7 +911,11 @@ def transcribe(audio: bytes, *, mime: str = "audio/webm", name: str = "turn.webm
         raise RuntimeError("stt_qwen_pause_ohne_fallback")
     if _whisper_aktiv():
         text, fallback, fehler = _whisper_mit_vorgezogenem_fallback(
-            audio, mime=mime, name=name, keywords=keywords
+            audio,
+            mime=mime,
+            name=name,
+            keywords=keywords,
+            sprachkontext=sprachkontext,
         )
         if text:
             return text

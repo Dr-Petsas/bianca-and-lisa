@@ -15,7 +15,7 @@ from typing import Any
 from bianca import anstand, besuchsgrund, flow, gehirn, metazug, rueckkehr, session, tasks, telefon, weiterleiten
 from bianca.greeting import begruessung, gruss_saeubern
 from bianca.prompt import TOOLS, system_prompt
-from kern import abschied, abschweifen, agentprofil, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, stille, task_router, tenants, wiederholung, zuege
+from kern import abschied, abschweifen, agentprofil, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, ohr, stille, task_router, tenants, wiederholung, zuege
 from kern import fach_wache
 from kern import dringlichkeit
 from kern import online_fallback
@@ -2103,6 +2103,29 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 ),
                 msgs,
             )
+        # Eine markierte Entscheidungsfrage behaelt bei einem akustisch
+        # unklaren Kurz-Zug ihren Faden. Die allgemeine Frage „Wobei darf ich
+        # helfen?“ wuerde dagegen den gerade erwarteten Ja/Nein-Entscheid
+        # verlieren.
+        if ohr.sprachkontext(sit) == "ja_nein":
+            nachfrage = stille.hoerfehler_nachfrage(
+                sit,
+                frage=_offene_frage(sit),
+                ja_nein=True,
+            )
+            if nachfrage:
+                sit.pop("unklarFolge", None)
+                sit.pop("ganzsatzHinweisGegeben", None)
+                spur.merken(sit, "ja-nein-unklar", text_in[:40])
+                return _maschinen_antwort(
+                    sit,
+                    {
+                        "text": nachfrage,
+                        "book": None,
+                        "_wiederholungErlaubt": True,
+                    },
+                    msgs,
+                )
         kompakt_text = (
             _kompakt_fachfrage(sit, text_in)
             or gespraech.kompakt_unklar(

@@ -87,6 +87,7 @@ def transcribe(
     keywords: str = "",
     nachtrag=None,
     qwen_sperre=None,
+    sprachkontext: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """Ein echter Decode plus dessen beobachtete Engine-Entscheidung.
 
@@ -100,6 +101,8 @@ def transcribe(
         extra["nachtrag"] = nachtrag
     if qwen_sperre is not None:
         extra["qwen_sperre"] = qwen_sperre
+    if sprachkontext:
+        extra["sprachkontext"] = sprachkontext
     text = stt.transcribe(audio, mime=mime, name=name, keywords=keywords, **extra)
     nachher = _qwen_futur()
 
@@ -161,4 +164,6 @@ def transcribe(
             "reason": filter_grund,
             "discarded": True,
         }
+        if sprachkontext:
+            info["filter"]["context"] = sprachkontext
     return str(text or ""), info

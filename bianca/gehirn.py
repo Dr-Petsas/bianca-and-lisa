@@ -101,13 +101,149 @@ _BLEACH_UNSICHER_RE = re.compile(
 )
 
 _JA_RE = re.compile(
-    r"^\s*(ja|jaja|jap|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|yeah|yea|"
+    r"^\s*(ja+|jaja|jap|japp|jep|jup|jupp|jopp|jo|joa|jou|jau|yep|yes|yeah|yea|"
     r"correct|jawohl|jawoll|genau|richtig|korrekt|stimmt|passt|klar|"
     r"sehr\s+gerne?|gerne|okay|ok|"
     r"sicher|natürlich|natuerlich)\b",
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
+_JA_LAUT_RE = re.compile(
+    r"^\s*(?:m+h+m+|mm?-?hmm?)\s*[.!…]*\s*$",
+    re.I,
+)
+_JA_SATZ_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:das|dies|so)\s+(?:ist\s+)?(?:ganz\s+)?(?:korrekt|richtig)|"
+    r"(?:das|dies|so)\s+(?:stimmt|passt)(?:\s+so)?|"
+    r"(?:ist\s+)?(?:ganz\s+)?(?:korrekt|richtig)|"
+    r"ganz\s+genau|auf\s+jeden\s+fall|exakt|absolut|"
+    r"selbstverständlich|selbstverstaendlich|"
+    r"einverstanden|von\s+mir\s+aus|"
+    r"damit\s+bin\s+ich\s+einverstanden|dagegen\s+habe\s+ich\s+nichts|"
+    r"(?:das|dies)\s+w(?:ä|ae)re(?:\s+für\s+mich|\s+fuer\s+mich)?\s+"
+    r"(?:in\s+ordnung|okay|ok)|"
+    r"(?:das|dies)\s+w(?:ü|ue)rde(?:\s+für\s+mich|\s+fuer\s+mich)?\s+passen|"
+    r"machen\s+wir\s+(?:das\s+)?so|"
+    r"(?:das\s+)?können\s+sie\s+(?:gerne\s+)?(?:so\s+)?"
+    r"(?:machen|eintragen|buchen|notieren|festhalten)|"
+    r"(?:machen|tragen|buchen|notieren|halten)\s+sie\s+(?:das\s+)?(?:bitte\s+)?so(?:\s+fest)?|"
+    r"bitte\s+(?:so\s+)?(?:machen|eintragen|buchen|notieren|festhalten)|"
+    r"(?:den\s+termin|diesen\s+termin|den|das)\s+nehm(?:e)?\s+ich|"
+    r"ich\s+nehm(?:e)?\s+(?:den\s+termin|diesen\s+termin|den|das)|"
+    r"(?:das\s+)?kann\s+(?:gerne\s+)?so\s+bleiben|"
+    r"so\s+ist\s+es|das\s+ist\s+(?:so\s+)?in\s+ordnung|"
+    r"(?:der\s+termin|der\s+zeitpunkt|das)\s+passt(?:\s+(?:so|für\s+mich|fuer\s+mich))?|"
+    r"sie\s+haben\s+mich\s+(?:ganz\s+)?richtig\s+erkannt"
+    r")\s*[.!…]*\s*$",
+    re.I,
+)
+_NEIN_SATZ_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:das|dies|so)\s+(?:ist\s+)?(?:leider\s+)?nicht\s+(?:korrekt|richtig)|"
+    r"(?:das|dies|so)\s+(?:stimmt|passt)(?:\s+so)?\s+(?:leider\s+)?nicht|"
+    r"(?:ist\s+)?(?:leider\s+)?nicht\s+(?:korrekt|richtig)|"
+    r"sie\s+haben\s+mich\s+nicht\s+(?:ganz\s+)?richtig\s+erkannt|"
+    r"(?:der\s+termin|der\s+zeitpunkt|das)\s+(?:passt|geht)(?:\s+für\s+mich|\s+fuer\s+mich)?\s+nicht|"
+    r"(?:das|den|diesen)\s+(?:möchte|moechte|will|nehme|brauche)\s+ich\s+nicht|"
+    r"ich\s+(?:möchte|moechte|will|nehme|brauche)\s+(?:das|den|diesen)\s+nicht|"
+    r"(?:damit\s+bin\s+ich\s+|bin\s+)?nicht\s+einverstanden|"
+    r"(?:das\s+lehne\s+ich|ich\s+lehne\s+das)\s+ab|"
+    r"(?:das|dies)\s+w(?:ä|ae)re\s+mir\s+nicht\s+recht|"
+    r"(?:das|dies)\s+ist\s+nicht\s+mein\s+termin|"
+    r"(?:der|dieser)\s+termin\s+geh(?:ö|oe)rt\s+(?:nicht\s+mir|mir\s+nicht)|"
+    r"bitte\s+nicht(?:\s+(?:machen|eintragen|buchen|notieren|festhalten))?|"
+    r"(?:machen|tun)\s+sie\s+das\s+bitte\s+nicht|"
+    r"lieber\s+nicht|lassen\s+sie\s+das(?:\s+bitte)?|"
+    r"(?:das|dies|so)\s+ist\s+falsch|so\s+nicht|"
+    r"das\s+kommt\s+nicht\s+in(?:frage|\s+frage)|"
+    r"auf\s+(?:gar\s+)?keinen\s+fall|keinesfalls|keineswegs"
+    r")\s*[.!…]*\s*$",
+    re.I,
+)
+_IDENTITAET_JA_RE = re.compile(
+    r"^\s*(?:genau[,\s]+)?(?:das|der|die)\s+bin\s+ich|"
+    r"^\s*ich\s+bin\s+das|^\s*am\s+apparat|"
+    r"^\s*sie\s+sprechen\s+mit\s+mir\s*[.!…]*\s*$",
+    re.I,
+)
+_IDENTITAET_NEIN_RE = re.compile(
+    r"\b(?:das|der|die)\s+bin\s+ich\s+nicht\b|"
+    r"\bich\s+bin\s+nicht\b|\bsie\s+sprechen\s+nicht\s+mit\b|"
+    r"\bich\s+bin\s+jemand\s+ander\w*\b|"
+    r"\b(?:falsche\s+person|falscher\s+patient|falsche\s+patientin)\b|"
+    r"\bsie\s+haben\s+(?:den|die)\s+falsche[n]?\b",
+    re.I,
+)
+_ARZT_JA_RE = re.compile(
+    r"^\s*(?:sehr\s+)?gerne\s+wieder|"
+    r"^\s*wieder\s+(?:bei|zu)\b|"
+    r"^\s*(?:bei|zu)\s+(?:ihm|ihr|demselben|derselben|dem\s+gleichen|der\s+gleichen)\b|"
+    r"^\s*beim\s+(?:gleichen|selben)\b|"
+    r"^\s*(?:der|die)\s+(?:gleiche|selbe)\s+(?:arzt|ärztin|aerztin)\b",
+    re.I,
+)
+_ARZT_NEIN_RE = re.compile(
+    r"\bnicht\s+wieder\b|"
+    r"\b(?:bitte\s+|lieber\s+)?jemand\s+ander\w*\b|"
+    r"\b(?:bitte\s+|lieber\s+)?(?:zu|bei)\s+(?:jemand|einem|einer)\s+ander|"
+    r"\b(?:bitte\s+|lieber\s+)?(?:ein(?:en|e)?\s+)?ander(?:er|en|e)\s+"
+    r"(?:arzt|ärztin|aerztin|behandler|behandlerin)\b",
+    re.I,
+)
+_SELBST_JA_RE = re.compile(
+    r"^\s*(?:der\s+termin\s+ist\s+)?für\s+mich(?:\s+selbst)?\s*[.!…]*\s*$|"
+    r"^\s*(?:für\s+)?mich\s+selbst\s*[.!…]*\s*$",
+    re.I,
+)
+_SELBST_NEIN_RE = re.compile(
+    r"\b(?:der\s+termin\s+ist\s+)?für\s+(?:jemand|eine[nr]?)\s+ander|"
+    r"\bnicht\s+für\s+mich\b|"
+    r"\b(?:bitte\s+|lieber\s+)?jemand\s+ander\w*\b|"
+    r"\b(?:für\s+)?(?:meine[nr]?|meinem)\s+"
+    r"(?:tochter|sohn|mann|frau|mutter|vater|kind|bruder|schwester|"
+    r"partner|partnerin|freund|freundin|oma|opa|enkel|enkelin)\b",
+    re.I,
+)
+_AKTIONS_FRAGEN = frozenset({
+    "absage_ok", "bestaetigung", "ersatz_check", "folge_kontrolle",
+    "frisch_absage_ok", "neubuchung", "rechnung_rueckruf",
+    "termin_anbieten", "termin_notiz_check", "termin_ok", "verschieb_ok",
+})
+_AKTION_JA_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:das\s+)?k(?:ö|oe)nnen\s+sie\s+(?:das\s+)?(?:gerne\s+)?(?:genau\s+)?so\s+"
+    r"(?:machen|eintragen|buchen|notieren|festhalten)|"
+    r"(?:tragen|buchen|notieren)\s+sie\s+(?:das|den\s+termin)\s+(?:bitte\s+)?(?:so\s+)?(?:ein|fest)|"
+    r"(?:machen|tun)\s+sie\s+das(?:\s+bitte)?|"
+    r"(?:den\s+termin|diesen\s+termin|den|das)\s+nehm(?:e)?\s+ich|"
+    r"(?:das\s+)?kann\s+(?:gerne\s+)?so\s+bleiben"
+    r")\s*[.!?…]*\s*$",
+    re.I,
+)
+_AKTION_NEIN_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:das\s+)?bitte\s+nicht(?:\s+(?:machen|eintragen|buchen|notieren|festhalten))?|"
+    r"(?:tragen|buchen|notieren)\s+sie\s+(?:das|den\s+termin)\s+bitte\s+nicht(?:\s+ein)?|"
+    r"(?:machen|tun)\s+sie\s+das\s+bitte\s+nicht|"
+    r"(?:den\s+termin|diesen\s+termin|den|das)\s+nehm(?:e)?\s+ich\s+nicht"
+    r")\s*[.!?…]*\s*$",
+    re.I,
+)
+_JA_MIT_EINWAND_RE = re.compile(
+    r"^\s*(?:ja+|jap+p?|jep|okay|ok|genau|richtig|korrekt)\b"
+    r"[^.!?]{0,120}\b(?:aber|allerdings)\b"
+    r"[^.!?]{0,100}\b(?:nicht|kein\w*|falsch|ander\w*)\b",
+    re.I,
+)
+_JA_MIT_AKTIONSABLEHNUNG_RE = re.compile(
+    r"^\s*(?:ja+|jap+p?|jep|okay|ok|genau|richtig|korrekt)\b"
+    r"[^.!?]{0,120}\b(?:aber|allerdings)\b"
+    r"[^.!?]{0,80}\b(?:bitte\s+)?nicht\s+"
+    r"(?:machen|tun|eintragen|buchen|notieren|festhalten|absagen|"
+    r"stornieren|verschieben)\b",
+    re.I,
+)
 # Nachgestelltes Ja/Nein am ENDE der Aeusserung (W-JA-NACHGESTELLT 13.09.2026):
 # nur ein blankes Zustimmungs-/Ablehnungswort als letztes Teilstueck, optional
 # mit einer Partikel ("ja gerne", "nein danke"). Alles Laengere ist Prosa und
@@ -1131,8 +1267,17 @@ def _nein_nachgestellt(k: str) -> bool:
 
 
 def ist_ja(text: str) -> bool:
+    roh = _s(text)
     k = _ohne_anlauf(text)
-    return bool(_JA_RE.search(k) or _JA_KURZ_RE.match(k) or _ja_nachgestellt(k))
+    if ist_nein(roh):
+        return False
+    return bool(
+        _JA_RE.search(k)
+        or _JA_KURZ_RE.match(k)
+        or _JA_LAUT_RE.match(roh)
+        or _JA_SATZ_RE.match(k)
+        or _ja_nachgestellt(k)
+    )
 
 
 def ist_pzr_zusage(text: str) -> bool:
@@ -1144,12 +1289,72 @@ def ist_pzr_zusage(text: str) -> bool:
 
 def ist_nein(text: str) -> bool:
     k = _ohne_anlauf(text)
-    if _NEIN_RE.search(k) or _NEIN_KURZ_RE.match(k) or _nein_nachgestellt(k):
+    if (
+        _NEIN_RE.search(k)
+        or _NEIN_KURZ_RE.match(k)
+        or _NEIN_SATZ_RE.match(k)
+        or _nein_nachgestellt(k)
+    ):
         return True
     # Kurze Äußerung mit klarem Nein-Wort irgendwo ("glaube nein", "hier nein"):
     # bei <= 3 Wörtern gibt es keinen Kontext, der das Nein umdrehen könnte.
     toks = re.sub(r"[.,!?…]+", " ", k.lower()).split()
     return len(toks) <= 3 and any(t in {"nein", "nee", "nö", "noe"} for t in toks)
+
+
+def ja_nein_entscheidung(text: str, frage: str = "") -> str:
+    """Bestätigung, Ablehnung oder ``""`` für unklar.
+
+    Die offene Frage liefert den semantischen Rahmen. Ablehnungen werden
+    immer zuerst geprüft, damit etwa „Das bin ich nicht“ oder „lieber einen
+    anderen Arzt“ niemals durch ein positives Teilwort als Ja endet.
+    """
+    t = _ohne_anlauf(text)
+    fid = _s(frage)
+    if not t:
+        return ""
+
+    # Ein positives Satzanfangswort darf einen nachfolgenden Einwand nie
+    # überstimmen. Im Entscheidungsrahmen bedeutet „Ja, aber bitte nicht
+    # eintragen“ eine Ablehnung der vorgeschlagenen Aktion.
+    if fid in _AKTIONS_FRAGEN:
+        if _JA_MIT_AKTIONSABLEHNUNG_RE.search(t):
+            return "nein"
+        if _JA_MIT_EINWAND_RE.search(t):
+            return ""
+
+    if fid in {"anrufer_check", "vorname_check", "nachname_check"}:
+        if _IDENTITAET_NEIN_RE.search(t):
+            return "nein"
+    elif fid == "arzt_check":
+        if _ARZT_NEIN_RE.search(t):
+            return "nein"
+    elif fid == "fuer_wen_check":
+        if _SELBST_NEIN_RE.search(t):
+            return "nein"
+    elif fid in _AKTIONS_FRAGEN:
+        if _AKTION_NEIN_RE.search(t):
+            return "nein"
+
+    if ist_nein(t):
+        return "nein"
+
+    if fid in {"anrufer_check", "vorname_check", "nachname_check"}:
+        if _IDENTITAET_JA_RE.search(t):
+            return "ja"
+    elif fid == "arzt_check":
+        if _ARZT_JA_RE.search(t):
+            return "ja"
+    elif fid == "fuer_wen_check":
+        if _SELBST_JA_RE.search(t):
+            return "ja"
+    elif fid in _AKTIONS_FRAGEN:
+        if _AKTION_JA_RE.search(t):
+            return "ja"
+
+    if ist_ja(t):
+        return "ja"
+    return ""
 
 
 def _telefon_sperren(s: dict, nummer: str) -> None:
@@ -2015,6 +2220,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     vor_start = _s(s.get("vorname"))     # W-HIRN-GATE, s. Ende der Funktion
     frage_start = _s(s.get("frage"))
     buchstaben_teil_start = _s(s.get("buchstabenTeil"))
+    entscheidung = ja_nein_entscheidung(t, frage_start)
+    antwort_ja = entscheidung == "ja"
+    antwort_nein = entscheidung == "nein"
 
     # Anliegen-Modus: absagen/verschieben/auskunft VOR der Buchungs-Erkennung
     # prüfen — "Ich möchte meinen Termin absagen" enthält auch "Termin".
@@ -2110,10 +2318,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["warSchonMal"] = True
             neu.add("warSchonMal")
     elif s["frage"] == "schonmal":
-        if ist_ja(t):
+        if antwort_ja:
             s["warSchonMal"] = True
             neu.add("warSchonMal")
-        elif ist_nein(t):
+        elif antwort_nein:
             s["warSchonMal"] = False
             neu.add("warSchonMal")
 
@@ -2150,10 +2358,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         a = anrufer_bekannt(sit)
         if a and ist_anrufer_wohl(t):
             neu.add("anruferWohl")
-        elif a and ist_ja(t) and not ist_nein(t):
+        elif a and antwort_ja:
             anrufer_daten_uebernehmen(sit)
             neu.update({"anruferCheck", "name", "warSchonMal"})
-        elif ist_nein(t):
+        elif antwort_nein:
             anrufer_daten_verwerfen(sit)
             neu.add("anruferCheck")
 
@@ -2162,11 +2370,11 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # nur die Identität oder nur den Terminempfänger verneinen.
     if (s["frage"] == "fuer_wen_check" and s["anruferCheck"] == "ja"
             and not s["fuerWenCheck"]):
-        if ist_ja(t) and not ist_nein(t):
+        if antwort_ja:
             s["fuerWenCheck"] = "ja"
             anrufer_behandler_uebernehmen(sit)
             neu.add("fuerWenCheck")
-        elif ist_nein(t):
+        elif antwort_nein:
             s["fuerWenCheck"] = "nein"
             if not s["fuerWen"]:
                 s["fuerWen"] = "andere"
@@ -2178,14 +2386,14 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # Live-Katastrophe vom 13.09.2026 war genau das gegenteilige Verhalten:
     # ein Einwand warf die ganze Datenaufnahme weg).
     if s["frage"] == "vorname_check" and not _s(s.get("vornameCheck")):
-        if ist_nein(t):
+        if antwort_nein:
             s["vornameCheck"] = "nein"
             s["vorname"] = ""
             s["vornameQuelle"] = ""
             s["vornameTeil"] = ""
             s["vornameGehoert"] = ""
             neu.add("vornameCheck")
-        elif ist_ja(t):
+        elif antwort_ja:
             s["vornameCheck"] = "ja"
             neu.update({"vornameCheck", "vorname"})
 
@@ -2224,7 +2432,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # Letzter Behandler aus der Hintergrund-Kartei — Ja bindet, Nein fragt offen.
     if s["frage"] == "arzt_check" and not (s.get("arzt") or {}).get("calendarId"):
         k = sit.get("anruferKartei") if isinstance(sit.get("anruferKartei"), dict) else {}
-        if ist_ja(t) and not ist_nein(t) and _s(k.get("calendarId")):
+        if antwort_ja and _s(k.get("calendarId")):
             cid = _s(k.get("calendarId"))
             cname = _s(k.get("calendarName"))
             # Letzter Besuch in einem Zimmer/Prophylaxe: das ist kein
@@ -2242,7 +2450,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             }
             s["arztCheck"] = "ja"
             neu.add("arzt")
-        elif ist_nein(t):
+        elif antwort_nein:
             s["arztCheck"] = "nein"
             neu.add("arztCheck")
 

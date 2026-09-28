@@ -20,8 +20,9 @@ from typing import Any, Callable
 from fastapi.responses import StreamingResponse
 
 from kern import (
-    assistent, filler, halbsatz, llm, mitschnitt, qwen_korrektor, sprech, spur,
-    sofort, stt_spur, tempo, tenants, tts, unterbrechung,
+    assistent, filler, halbsatz, llm, mitschnitt, ohr as ohr_mod,
+    qwen_korrektor, sprech,
+    spur, sofort, stille, stt_spur, tempo, tenants, tts, unterbrechung,
 )
 from kern.config import WRITE_LIVE
 
@@ -860,9 +861,16 @@ class Dienst:
                                 sperr_grund.append(g)
                             return g
 
+                        sprachkontext = ohr_mod.sprachkontext(sit)
+                        ohr_extra = (
+                            {"sprachkontext": sprachkontext}
+                            if sprachkontext
+                            else {}
+                        )
                         gesagt, stt_info = stt_spur.transcribe(
                             stt_blob, mime=stt_mime, name=stt_name, keywords=kw,
                             nachtrag=_qwen_nachtrag, qwen_sperre=_qwen_sperre,
+                            **ohr_extra,
                         )
                         stt_info["zug"] = zug_n
                         if sperr_grund and isinstance(stt_info.get("qwen"), dict):
@@ -879,11 +887,16 @@ class Dienst:
                         # umgehen. Auch dann darf ein reiner englischer
                         # Stille-Satz wie "I'm sorry." niemals Verlauf,
                         # Intent, Maschine oder Frage-Budget erreichen.
-                        if gesagt and sofort.ist_stille_halluzination(gesagt):
+                        if gesagt and sofort.ist_stille_halluzination(
+                            gesagt,
+                            kontext=sprachkontext,
+                        ):
                             stt_info["filter"] = {
                                 "reason": "englisch-oder-stille",
                                 "discarded": True,
                             }
+                            if sprachkontext:
+                                stt_info["filter"]["context"] = sprachkontext
                             gesagt = ""
                     except RuntimeError as e:
                         print(f"{self.name}-listen fail bytes={len(stt_blob)} {e}", flush=True)
@@ -915,7 +928,13 @@ class Dienst:
                             spur.merken(
                                 sit,
                                 "stt-sprachwache",
-                                str(sprachfilter.get("reason") or "englisch"),
+                                ":".join(
+                                    x for x in (
+                                        str(sprachfilter.get("reason") or "englisch"),
+                                        str(sprachfilter.get("context") or ""),
+                                    )
+                                    if x
+                                ),
                             )
                             print(
                                 f"{self.name}-stt-sprachwache verworfen "
@@ -924,6 +943,13 @@ class Dienst:
                             )
                             sit["_sttS"] = stt_s
                             sit["_sttInfo"] = stt_info
+                            nachfrage = stille.hoerfehler_nachfrage(
+                                sit,
+                                ja_nein=(
+                                    str(sprachfilter.get("context") or "")
+                                    == "ja_nein"
+                                ),
+                            ) or SPRACHWACHE_NACHFRAGE
                             out = self.json_antwort(
                                 sit,
                                 art=art,
@@ -931,7 +957,7 @@ class Dienst:
                                 extra=extra,
                                 melde=melde,
                                 vorab=vorab,
-                                fixed_text=SPRACHWACHE_NACHFRAGE,
+                                fixed_text=nachfrage,
                             )
                             q.put(("fertig", out))
                             return

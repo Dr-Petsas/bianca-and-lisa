@@ -1369,13 +1369,13 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
                 wish=such_wunsch,
             )
         else:
-        found = kal.find_slots(
-            sit["tenant"], ctx,
-            start_date=gehirn.start_datum(s),
-            egal=egal,
-            source="pickadoc-bianca",
+            found = kal.find_slots(
+                sit["tenant"], ctx,
+                start_date=gehirn.start_datum(s),
+                egal=egal,
+                source="pickadoc-bianca",
                 wish=such_wunsch,
-        )
+            )
         if found.get("ok"):
             frisch = kal._iso_liste(found.get("slots") or [])
             if gesperrt:
@@ -2250,8 +2250,10 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                             "per SMS an die Nummer aus Ihrer Akte."
                         )
                     else:
-                    text += (" Die Bestätigung kommt gleich per SMS an die Nummer aus"
-                             " Ihrer Akte." + _SMS_LINK_SATZ)
+                        text += (
+                            " Die Bestätigung kommt gleich per SMS an die Nummer aus"
+                            " Ihrer Akte." + _SMS_LINK_SATZ
+                        )
                 else:
                     if melde:
                         melde("note_appointment")
@@ -2321,7 +2323,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 elif abschluss_kompakt:
                     text += _SMS_LINK_KOMPAKT
                 else:
-                text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
+                    text += " Die Bestätigung kommt gleich per SMS." + _SMS_LINK_SATZ
             # Praxis-Notizen ans Terminpopup (29.08.2026): unklares Geschlecht
             # (Default weiblich) und ein nicht geschriebener Versicherungs-
             # Wechsel gehoeren sichtbar in den Termin.
@@ -2355,7 +2357,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                         "sonst bekommen Sie einen eigenen PZR-Termin."
                     )
                 else:
-                hinweise.append("PLUS PZR heute")
+                    hinweise.append("PLUS PZR heute")
                     notiz_bestaetigungen.append(
                         "Die professionelle Zahnreinigung habe ich mit dazu vermerkt.")
             # W-BLEACHING (Chef 03.09.2026): die Aufhellung wird nicht als
@@ -2509,7 +2511,7 @@ def _buchen(sit: dict, melde: Melde = None) -> dict:
                 text += " " + _sonst_noch_frage(sit)
             else:
                 # Byte-identischer Altpfad für alle übrigen Mandanten.
-            text += " Kann ich sonst noch etwas für Sie tun?"
+                text += " Kann ich sonst noch etwas für Sie tun?"
         return {"text": text, "book": book}
     if res.get("patientMismatch"):
         # Alte Akten-ID und bestätigter Name widersprechen sich. Slot/Grund
@@ -2825,10 +2827,10 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
         else:
             if art_modus == "shadow" and anliegen_art.aktiv(sit):
                 spur.merken(sit, "anliegen-art-shadow", "pzr")
-        s["pzr"] = "gefragt"
-        s["frage"] = "pzr"
+            s["pzr"] = "gefragt"
+            s["frage"] = "pzr"
             dossier.markiere(sit, "pzr")
-        return {"text": (vorsatz + gehirn.pzr_frage(s)).strip()}
+            return {"text": (vorsatz + gehirn.pzr_frage(s)).strip()}
     # W-BLEACHING (Chef 03.09.2026): "wenn jemand anruft um eine
     # Zahnreinigung zu buchen kannst du auch fragen ob die Zähne mit
     # aufgehellt werden sollen" — einmal pro Anruf, nur wenn die Praxis
@@ -2839,9 +2841,9 @@ def _einschub(sit: dict, vorsatz: str = "") -> dict | None:
         else:
             if art_modus == "shadow" and anliegen_art.aktiv(sit):
                 spur.merken(sit, "anliegen-art-shadow", "bleaching")
-        s["bleaching"] = "gefragt"
-        s["frage"] = "bleaching"
-        return {"text": (vorsatz + gehirn.BLEACHING_FRAGE).strip()}
+            s["bleaching"] = "gefragt"
+            s["frage"] = "bleaching"
+            return {"text": (vorsatz + gehirn.BLEACHING_FRAGE).strip()}
     return None
 
 
@@ -3607,7 +3609,7 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
         if s["frage"] in {"name", "buchstabieren"} and not neu:
             return None  # Zwischenfrage — LLM antwortet, die Frage bleibt offen
         if s["frage"] != "buchstabieren":
-        s["frage"] = "name"
+            s["frage"] = "name"
         if dok:
             if regel is not None and getattr(getattr(regel, "folge", None), "value", "") == "notiz":
                 satz = anliegen_zug.satz(regel, sit.get("tenant"))
@@ -4053,8 +4055,9 @@ def _rechnung_antwort(sit: dict, t: str) -> dict | None:
 
     s = gehirn.sammler(sit)
     st = _rechnung_stand(sit)
-    ja = gehirn.ist_ja(t) and not gehirn.ist_nein(t)
-    nein = gehirn.ist_nein(t) and not ja
+    entscheidung = gehirn.ja_nein_entscheidung(t, "rechnung_rueckruf")
+    ja = entscheidung == "ja"
+    nein = entscheidung == "nein"
     persoenlich = rechnung.persoenlich_klaeren(t)
     terminwunsch = bool(_RECHNUNG_TERMINWUNSCH_RE.search(t))
 
@@ -5468,44 +5471,45 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # Nachricht/Notiz nach der Buchung: kein Slot-Nachschub.
             return {"text": "Kann ich sonst noch etwas für Sie tun?"}
         elif s["phase"] == "gebucht":
-        # Frisch gebucht — aber "sagen Sie ihn doch wieder ab" / "wann war
-        # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.
-        neu = gehirn.einsammeln(sit, t)
-        if hirn_modus_neu:
-            neu.add("modus")
-        sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
-        frisch = _frisch_termin(sit)
+            # Frisch gebucht — aber "sagen Sie ihn doch wieder ab" / "wann war
+            # das nochmal?" gehoert in die Termin-Verwaltung, nicht ans LLM.
+            neu = gehirn.einsammeln(sit, t)
+            if hirn_modus_neu:
+                neu.add("modus")
+            sit["ernteZuletzt"] = sorted(neu)  # Task-Signal fuer die Talk-Schicht
+            frisch = _frisch_termin(sit)
 
-        # Eigene Rueckfrage nach erfundener LLM-Storno-Behauptung (Erledigt-Wache).
-        if s["frage"] == "frisch_absage_ok":
-            if gehirn.ist_ja(t) and not gehirn.ist_nein(t):
+            # Eigene Rueckfrage nach erfundener LLM-Storno-Behauptung (Erledigt-Wache).
+            if s["frage"] == "frisch_absage_ok":
+                entscheidung = gehirn.ja_nein_entscheidung(t, "frisch_absage_ok")
+                if entscheidung == "ja":
+                    return _frisch_absagen(sit, melde)
+                if entscheidung == "nein":
+                    s["frage"] = ""
+                    return {"text": (
+                        "Alles klar, der Termin bleibt bestehen. "
+                        "Kann ich sonst noch etwas für Sie tun?"
+                    )}
+                return {"text": "Soll ich den Termin wirklich absagen? Ein kurzes Ja oder Nein genügt."}
+
+            # LLM fragte bereits "Soll ich stornieren?" — Ja => wirklich canceln
+            # (W-FRISCH-ABSAGE 02.09.2026).
+            if (frisch and _letzte_fragte_storno(sit)
+                    and gehirn.ja_nein_entscheidung(t, "frisch_absage_ok") == "ja"):
                 return _frisch_absagen(sit, melde)
-            if gehirn.ist_nein(t):
-                s["frage"] = ""
-                return {"text": (
-                    "Alles klar, der Termin bleibt bestehen. "
-                    "Kann ich sonst noch etwas für Sie tun?"
-                )}
-            return {"text": "Soll ich den Termin wirklich absagen? Ein kurzes Ja oder Nein genügt."}
 
-        # LLM fragte bereits "Soll ich stornieren?" — Ja => wirklich canceln
-        # (W-FRISCH-ABSAGE 02.09.2026).
-        if (frisch and _letzte_fragte_storno(sit)
-                and gehirn.ist_ja(t) and not gehirn.ist_nein(t)):
-            return _frisch_absagen(sit, melde)
-
-        if s["modus"] in {"absagen", "verschieben", "auskunft"}:
-            sit["gefundenKey"] = ""  # Bestand frisch laden, der neue Termin zaehlt mit
-            sit["upcoming"] = []  # list_appointments nicht aus Stale-Cache speisen
-            # Frische Buchung: Nachnamen-Suche ueberspringen, direkt bestaetigen.
-            if s["modus"] == "absagen" and frisch:
-                return verwalten._absage_frage(sit, frisch)
+            if s["modus"] in {"absagen", "verschieben", "auskunft"}:
+                sit["gefundenKey"] = ""  # Bestand frisch laden, der neue Termin zaehlt mit
+                sit["upcoming"] = []  # list_appointments nicht aus Stale-Cache speisen
+                # Frische Buchung: Nachnamen-Suche ueberspringen, direkt bestaetigen.
+                if s["modus"] == "absagen" and frisch:
+                    return verwalten._absage_frage(sit, frisch)
                 if s["modus"] == "verschieben" and frisch:
                     return _frisch_verschieben(sit, t, melde)
-            return verwalten.zug(sit, t, neu, melde)
+                return verwalten.zug(sit, t, neu, melde)
             if frisch and gehirn.ist_verschiebewunsch(t):
                 return _frisch_verschieben(sit, t, melde)
-        return None
+            return None
 
     # W-BUCHUNG-ABBRUCH (17.09.2026): der Anrufer will den Termin NICHT (mehr)
     # — "online", "keinen Termin", "ich melde mich", "Telefon beenden", auf
@@ -5568,18 +5572,19 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if gehirn.fuer_wen_signal(t):
             sit.pop("bestaetigenUnklar", None)
             sit.pop("buchIntent", None)
-                neu = gehirn.einsammeln(sit, t)
-                sit["ernteZuletzt"] = sorted(neu)
-                s["phase"] = ""
-                fid2, frage2 = gehirn.naechste_frage(sit)
-                s["frage"] = fid2
-                if fid2:
-                    return {"text": f"Ah, verstehe! {frage2}"}
+            neu = gehirn.einsammeln(sit, t)
+            sit["ernteZuletzt"] = sorted(neu)
+            s["phase"] = ""
+            fid2, frage2 = gehirn.naechste_frage(sit)
+            s["frage"] = fid2
+            if fid2:
+                return {"text": f"Ah, verstehe! {frage2}"}
             return _readback(sit)
-        if gehirn.ist_ja(t):
+        entscheidung = gehirn.ja_nein_entscheidung(t, "bestaetigung")
+        if entscheidung == "ja":
             sit.pop("bestaetigenUnklar", None)
             return _nach_ok_buchen(sit, t, melde)
-        if gehirn.ist_nein(t):
+        if entscheidung == "nein":
             sit.pop("bestaetigenUnklar", None)
             sit.pop("buchIntent", None)
             # "Nein, den am 22.12. um 15:55" meint den anderen angebotenen
@@ -5641,7 +5646,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             return {"text": vorlesen}
         iso = ""
         if not neu_suche:
-        iso = _slot_wahl(t, sit["offered"])
+            iso = _slot_wahl(t, sit["offered"])
         if not iso and not neu_suche and s["phase"] == "angebot" and s.get("frage") == "slotwahl":
             iso = _slot_ja_blank(sit, t)
             if iso == "":

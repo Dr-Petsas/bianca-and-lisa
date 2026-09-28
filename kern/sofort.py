@@ -126,12 +126,17 @@ _ENGLISH_SINGLE = frozenset({
 })
 _GERMAN_STRUCTURE = frozenset({
     "aber", "also", "bitte", "brauche", "danke", "das", "dem", "den",
-    "der", "die", "doch", "ein", "eine", "einen", "für", "gerne", "habe",
+    "der", "die", "doch", "ein", "eine", "einen", "fertig", "für", "gerne", "habe",
     "haben", "hat", "heute", "ich", "ist", "ja", "kann", "kein", "keine",
     "mein", "meine", "möchte", "morgen", "nein", "nicht", "noch", "oder",
     "sie", "sind", "termin", "uhr", "um", "und", "uns", "was", "wir", "zu",
     "zum", "zur",
 })
+_DEUTSCHE_KURZBESTAETIGUNG_RE = re.compile(
+    r"^\s*(?:ja+|jap+p?|jep|jup+p?|joa?|m+h+m+|mm?-?hmm?|"
+    r"ok(?:ay)?)\s*[.!?…]*\s*$",
+    re.I,
+)
 
 
 @lru_cache(maxsize=1)
@@ -162,6 +167,16 @@ def _sieht_wie_eigenname_aus(text: str, woerter: list[str]) -> bool:
     )
 
 
+def _sieht_wie_buchstabieren_aus(text: str) -> bool:
+    """Deutliche Einzelbuchstaben eines Namens, nicht englische Prosa."""
+    t = _s(text)
+    einzelne = re.findall(
+        r"(?<![A-Za-zÄÖÜäöüß])[A-Za-zÄÖÜäöüß](?![A-Za-zÄÖÜäöüß])",
+        t,
+    )
+    return len(einzelne) >= 3 or (len(einzelne) >= 2 and "-" in t)
+
+
 def _lingua_ist_englisch(text: str) -> bool:
     werte = {
         wert.language: float(wert.value)
@@ -175,16 +190,26 @@ def _lingua_ist_englisch(text: str) -> bool:
     return englisch >= 0.60 and englisch - deutsch >= 0.12
 
 
-def ist_stille_halluzination(text: str) -> bool:
+def ist_stille_halluzination(text: str, *, kontext: str = "") -> bool:
     """Parakeet auf Ruhe/Echo oder Englisch: kein Anrufer-Satz.
 
     Die Telefon-KI führt deutsche Gespräche. Englische STT-Ausgaben werden
     weder normalisiert noch übersetzt oder an Dialog/Qwen-Korrektor
-    weitergereicht. Gemischte Sätze mit eindeutig deutscher Struktur und
-    Eigennamen bleiben erhalten.
+    weitergereicht. Im engen Ja/Nein-Kontext bleiben nur gebraeuchliche
+    deutsche Kurzformen erhalten; bei Namensfragen auch klar getrennte
+    Einzelbuchstaben. Gemischte Sätze mit eindeutig deutscher Struktur und
+    Eigennamen bleiben ebenfalls erhalten.
     """
     t = _s(text)
     if not t:
+        return False
+    k = _s(kontext).casefold()
+    if k == "ja_nein" and _DEUTSCHE_KURZBESTAETIGUNG_RE.match(t):
+        return False
+    # Auf eine Namens-Rückbestätigung kann der Anrufer statt Ja/Nein direkt
+    # mit der korrigierten Buchstabierung antworten. Das starke Buchstaben-
+    # Signal bleibt deshalb auch im Ja/Nein-Kontext geschützt.
+    if k in {"name", "ja_nein"} and _sieht_wie_buchstabieren_aus(t):
         return False
     if _STILLE_HALLU_RE.match(t):
         return True

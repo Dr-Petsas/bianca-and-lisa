@@ -317,13 +317,21 @@ def _dienst_mit_ohr(monkeypatch, gehoert: list[str], qwen_spaet: dict[str, str])
 
     d.json_antwort = antwort
 
-    def transcribe(audio, *, mime="audio/wav", name="zug.wav", keywords="", nachtrag=None,
-                   qwen_sperre=None):
+    def transcribe(
+        audio,
+        *,
+        mime="audio/wav",
+        name="zug.wav",
+        keywords="",
+        nachtrag=None,
+        qwen_sperre=None,
+        sprachkontext="",
+    ):
         text = gehoert.pop(0)
         # W-QWEN-SICHER: das echte Ohr fragt die Sperre mit Parakeets Text.
         sperre = qwen_sperre(text) if qwen_sperre is not None else None
         aufrufe.append({"keywords": keywords, "nachtrag": nachtrag is not None,
-                        "sperre": sperre})
+                        "sperre": sperre, "sprachkontext": sprachkontext})
         info = {"pipeline": "audio", "winner": "parakeet",
                 "parakeet": {"text": text, "suspicious": text in qwen_spaet},
                 "qwen": {"text": "", "status": "parallel_zu_spaet"}}
@@ -376,6 +384,30 @@ def test_dienst_ohne_qwen_bleibt_byteidentisch(monkeypatch):
     assert "korrektur" not in gesehen[0]["stt"]
     assert "qwenSpaet" not in sit and "qwenWoerter" not in sit
     assert aufrufe[0]["keywords"] == ",".join(dienst_mod.tenants.stt_keywords({}))
+
+
+def test_dienst_taggt_offene_entscheidungsfrage_fuer_das_ohr(monkeypatch):
+    d, _gesehen, aufrufe = _dienst_mit_ohr(monkeypatch, ["Okay."], {})
+    sit = {
+        "tenant": {},
+        "sammler": {
+            "modus": "buchen",
+            "phase": "bestaetigen",
+            "frage": "bestaetigung",
+        },
+    }
+
+    z = _zeilen(
+        d,
+        sit,
+        art="listen",
+        stt_blob=b"x" * 4000,
+        stt_mime="audio/wav",
+        stt_name="a.wav",
+    )
+
+    assert z[-1]["type"] == "reply"
+    assert aufrufe[0]["sprachkontext"] == "ja_nein"
 
 
 # ------------------------------------------------ W-QWEN-SICHER (14.09.2026)
@@ -513,6 +545,7 @@ def test_dienst_fragt_die_sperre_mit_parakeets_text(monkeypatch):
     z = _zeilen(d, sit, art="listen", stt_blob=b"x" * 4000, stt_mime="audio/wav", stt_name="a.wav")
     assert z[-1]["type"] == "reply"
     assert aufrufe[0]["sperre"] == "namensfrage:nachname"
+    assert aufrufe[0]["sprachkontext"] == "name"
     assert gesehen[0]["stt"]["qwen"]["sperre"] == "namensfrage:nachname"
     assert sit["qwenSpaet"][0]["gesperrt"] == "namensfrage:nachname"
     assert "qwenWoerter" not in sit and qk.hotwords(sit) == []

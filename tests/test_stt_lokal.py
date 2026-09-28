@@ -103,6 +103,76 @@ def test_kurze_englische_parakeet_formen_werden_verworfen():
         _mit_lokal(fake, lauf)
 
 
+def test_getaggte_ja_nein_frage_behaelt_deutsche_kurzantworten():
+    for gehoert in ("Okay.", "Jep.", "Jaa.", "Mhm.", "Mm-hmm."):
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def lauf():
+            assert stt.transcribe(
+                BLOB,
+                sprachkontext="ja_nein",
+            ) == gehoert
+
+        _mit_lokal(fake, lauf)
+
+    # Ohne Entscheidungsfrage bleiben die beiden bisher harten Einwort-
+    # Ausreisser gesperrt; der Kontext ist also keine globale Lockerung.
+    for gehoert in ("Okay.", "Jep."):
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def streng():
+            assert stt.transcribe(BLOB) == ""
+
+        _mit_lokal(fake, streng)
+
+
+def test_ja_nein_tag_laesst_englische_bestaetigungen_weiterhin_nicht_durch():
+    for gehoert in ("Yes.", "Yeah.", "Correct.", "No.", "Nope."):
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def lauf():
+            assert stt.transcribe(BLOB, sprachkontext="ja_nein") == ""
+
+        _mit_lokal(fake, lauf)
+
+
+def test_namens_tag_schuetzt_deutlich_buchstabierte_namen():
+    for gehoert, kontext in (
+        ("M-A-I-A-R.", "name"),
+        ("I-O-U-L-I-A, Julia, fertig.", "name"),
+        # Namens-Checks sind zugleich Entscheidungsfragen; eine direkte
+        # Korrektur durch Buchstabieren darf dort nicht verloren gehen.
+        ("M-A-I-A-R.", "ja_nein"),
+    ):
+        fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
+
+        def lauf():
+            assert stt.transcribe(BLOB, sprachkontext=kontext) == gehoert
+
+        _mit_lokal(fake, lauf)
+
+
+def test_ja_nein_tag_gilt_auch_im_whisper_worker(monkeypatch):
+    monkeypatch.setattr(stt, "STT_BASE", "http://parakeet:8212")
+    monkeypatch.setattr(stt, "_whisper_budget_s", lambda: 1.0)
+    monkeypatch.setattr(
+        stt,
+        "_whisper",
+        lambda *_args, **_kwargs: stt._sauber("Okay."),
+    )
+
+    text, fallback, fehler = stt._whisper_mit_vorgezogenem_fallback(
+        BLOB,
+        mime="audio/webm",
+        name="turn.webm",
+        sprachkontext="ja_nein",
+    )
+
+    assert text == "Okay."
+    assert fallback is None
+    assert fehler is None
+
+
 def test_englische_stille_halluzinationen_werden_verworfen():
     faelle = (
         "I'm sorry.",
