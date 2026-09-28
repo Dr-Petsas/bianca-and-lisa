@@ -78,6 +78,17 @@ _NOTFALL_ANTWORT_RE = re.compile(
     r"kommen sie bitte jetzt|rufen sie bitte 112|116\s*117",
     re.I,
 )
+_TERMIN_BLEIBT_RE = re.compile(r"\btermin\b.{0,50}\bbleibt\b.{0,30}\bbestehen\b", re.I)
+_ABSAGE_VERNEINT_RE = re.compile(
+    r"^\s*(?:nein|nee|ne|doch nicht|lieber nicht|nicht absagen)\b",
+    re.I,
+)
+# Historische Parakeet-Leaks vor W-STT-DE-ONLY. Neue Anrufe tragen diese
+# Texte gar nicht mehr: Sie werden am Ohr verworfen und deutsch nachgefragt.
+_ENGLISCHE_STT_ALTLAST_RE = re.compile(
+    r"^\s*(?:damn(?:\s+it)?|queen\s+service)\s*[.!?]*\s*$",
+    re.I,
+)
 _ERFOLG = {
     "book": re.compile(
         r"\btermin\b.{0,90}\b(?:fest )?(?:eingetragen|gebucht|vereinbart)\b|"
@@ -153,12 +164,28 @@ def _zuege(manifest: dict) -> list[dict]:
     return [z for z in (manifest.get("zuege") or []) if isinstance(z, dict)]
 
 
+def _englische_stt_altlast(zug: dict) -> bool:
+    return bool(_ENGLISCHE_STT_ALTLAST_RE.match(_fold(zug.get("textIn"))))
+
+
+def _wertbare_zuege(manifest: dict) -> list[dict]:
+    return [zug for zug in _zuege(manifest) if not _englische_stt_altlast(zug)]
+
+
 def _inputs(manifest: dict) -> list[str]:
-    return [_s(z.get("textIn")) for z in _zuege(manifest) if _s(z.get("textIn"))]
+    return [
+        _s(z.get("textIn"))
+        for z in _wertbare_zuege(manifest)
+        if _s(z.get("textIn"))
+    ]
 
 
 def _outputs(manifest: dict) -> list[str]:
-    return [_s(z.get("text")) for z in _zuege(manifest) if _s(z.get("text"))]
+    return [
+        _s(z.get("text"))
+        for z in _wertbare_zuege(manifest)
+        if _s(z.get("text"))
+    ]
 
 
 def _substantiell(text: str) -> bool:
@@ -266,6 +293,11 @@ def _evidenz(manifest: dict) -> dict[str, bool]:
             for w in (zug.get("waechter") or [])
             if isinstance(w, dict)
         ) and any(_NOTFALL_ANTWORT_RE.search(_fold(text)) for text in _outputs(manifest)),
+        "termin_beibehalten": any(
+            _ABSAGE_VERNEINT_RE.search(_fold(zug.get("textIn")))
+            and _TERMIN_BLEIBT_RE.search(_fold(zug.get("text")))
+            for zug in _wertbare_zuege(manifest)
+        ),
     }
 
 
@@ -390,6 +422,7 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     claims = _erfolg_claims(outputs)
     write_fails = _failed_writes(manifest, evidenz_map)
     repeat_n, repeat_text = _wiederholungen(outputs)
+    englisch_alt_n = sum(_englische_stt_altlast(zug) for zug in _zuege(manifest))
     unklar_n = sum(1 for text in outputs if _UNKLAR_RE.search(text))
     presence_n = sum(1 for text in outputs if _PRESENCE_RE.search(text))
     sonst_n = sum(1 for text in outputs if _SONST_RE.search(text))
@@ -431,6 +464,8 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
         reibung.append("eisbrecher_neue")
     if any(_SERMON_RE.search(text) for text in outputs):
         reibung.append("anmeldung_sermon")
+    if englisch_alt_n:
+        reibung.append(f"stt_englisch_alt:{englisch_alt_n}")
     identitaet_n = sum(1 for text in outputs if _IDENTITAET_RE.search(text))
     if identitaet_n >= 2:
         reibung.append("identitaets_dopplung")
@@ -449,6 +484,7 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     hartes_ergebnis = any(evidenz_map[k] for k in ("book", "cancel", "move", "transfer"))
     notiz_ergebnis = evidenz_map["note"]
     notfall_ergebnis = evidenz_map["notfall"]
+    beibehalten_ergebnis = evidenz_map["termin_beibehalten"]
     regel_antwort = any(_RULE_ANSWER_RE.search(_fold(text)) for text in outputs)
     offen = _offene_frage(manifest)
     # Ein erfolgreiches Lesen eines bestehenden Termins / Praxiswissens ist
@@ -476,6 +512,19 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
             klasse, gruende = "gut", ["zahnnotfall_richtig_erkannt_mit_reibung"]
         else:
             klasse, gruende = "durchwachsen", ["zahnnotfall_erkannt_aber_zaeh"]
+    elif beibehalten_ergebnis:
+        # Eine ausdrücklich verneinte Absage darf keinen Write erzeugen.
+        # „Termin bleibt bestehen“ ist deshalb der sichere, richtige Abschluss
+        # und wird nicht wegen historischer englischer STT-Leaks zum Fail.
+        nur_kleine_reibung = all(
+            r.startswith(("presence:", "sonst_noch:", "stt_englisch_alt:"))
+            or r == "eisbrecher_neue"
+            for r in reibung
+        )
+        if nur_kleine_reibung:
+            klasse, gruende = "gut", ["termin_nach_nein_sicher_beibehalten"]
+        else:
+            klasse, gruende = "durchwachsen", ["termin_beibehalten_aber_zaeh"]
     elif hartes_ergebnis:
         if not reibung:
             klasse, gruende = "super", ["belegter_abschluss"]
@@ -506,6 +555,7 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     manuell = bool(
         (klasse == "super" and _deterministische_stichprobe(sid))
         or (klasse in {"super", "gut"} and notfall_ergebnis)
+        or (klasse == "gut" and beibehalten_ergebnis)
         or (klasse == "gut" and (regel_antwort or lese_ok) and not hartes_ergebnis)
     )
     return Bewertung(

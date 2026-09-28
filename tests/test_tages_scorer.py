@@ -270,6 +270,62 @@ def test_notfall_marker_ohne_richtige_anweisung_ist_keine_erfolgsevidenz():
     assert "zahnnotfall_richtig_erkannt" not in " ".join(row.gruende)
 
 
+def test_englische_stt_altlast_macht_sicher_beibehaltenen_termin_nicht_zum_fail():
+    """Live Thaler 28.09., 8e68db99…: Ablauf richtig, Parakeet-Englisch falsch."""
+    unklar = "Das habe ich akustisch nicht sicher mitbekommen. Wobei darf ich Ihnen helfen?"
+    row = scorer.bewerten(
+        _m(
+            (
+                "Ja.",
+                "Wir kennen uns noch nicht. Ich bin die Neue! "
+                "Wie kann ich Sie unterstützen?",
+            ),
+            ("Oh, Gott.", unklar),
+            ("Damn it.", unklar),
+            (
+                "Ich habe morgen einen Termin, den würde ich eventuell absagen wollen.",
+                "Ich habe Ihren Termin morgen um elf Uhr gefunden. "
+                "Soll ich ihn wirklich absagen?",
+            ),
+            (
+                "Nein.",
+                "Alles klar, der Termin bleibt bestehen. "
+                "Kann ich sonst noch etwas für Sie tun?",
+            ),
+            ("Queen Service.", unklar),
+            (
+                "Mit normalen Menschen telefonieren.",
+                "Eine menschliche Verbindung ist nicht eingerichtet.",
+            ),
+            tenant="thaler",
+            sid="8e68db99ea954aaead15b07109b56f89",
+            dauer=102_521,
+        )
+    )
+
+    assert row.klasse == "gut"
+    assert row.gruende == ["termin_nach_nein_sicher_beibehalten"]
+    assert row.evidenz == ["termin_beibehalten"]
+    assert "stt_englisch_alt:2" in row.reibungen
+    assert not any(g.startswith("frage_wiederholt:") for g in row.gruende)
+    assert row.manuellPruefen is True
+
+
+def test_echte_deutsche_wiederholung_bleibt_trotz_beibehalten_harter_fehler():
+    frage = "Das habe ich nicht verstanden. Wobei darf ich Ihnen helfen?"
+    row = scorer.bewerten(
+        _m(
+            ("Unklar eins.", frage),
+            ("Unklar zwei.", frage),
+            ("Unklar drei.", frage),
+            ("Nein.", "Alles klar, der Termin bleibt bestehen."),
+        )
+    )
+
+    assert row.klasse == "fehlerhaft"
+    assert any(g.startswith("frage_wiederholt:3:") for g in row.gruende)
+
+
 def test_bericht_liefert_praxis_stunde_und_40_80_ziel():
     rows = []
     for i in range(4):

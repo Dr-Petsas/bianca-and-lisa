@@ -3806,6 +3806,16 @@ zählt im Scorer als Erfolg (`super` ohne, `gut` mit bis zu zwei kleinen
 Reibungen). Der Wächter allein genügt nicht: Die richtige Notfallanweisung
 muss im Antworttext belegt sein; harte Fehler behalten immer Vorrang.
 
+**Englische STT-Altlast ist kein Dialog-Fail (Chef 28.09.2026):** Anruf
+`8e68db99ea954aaead15b07109b56f89` wurde funktional richtig gelöst:
+Termin gefunden, die erwogene Absage nach „Nein“ nicht ausgeführt und
+„der Termin bleibt bestehen“ bestätigt. Die alten Parakeet-Leaks `Damn it.`
+und `Queen Service.` zählen nicht als Anruferinhalt und ihre Rückfragen nicht
+als Dialogschleife; der Scorer führt sie sichtbar als `stt_englisch_alt:2`
+und wertet den sicheren Abschluss als `gut`. Echte deutsche
+Wiederholungsschleifen bleiben harte Fehler. Für neue Anrufe verhindert
+W-STT-DE-ONLY diese Altlast vollständig vor Dialog, Qwen und Lernpfad.
+
 Der Bericht weist Sessions, Praxen und lokale Stunden getrennt aus und zieht
 deterministisch zehn Prozent der automatisch als super bewerteten Gespräche
 zur manuellen Gegenhör-Stichprobe. Ziel gilt erst ab 50 gewerteten Gesprächen:
