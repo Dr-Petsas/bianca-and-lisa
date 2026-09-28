@@ -467,8 +467,9 @@ weder erkannt, normalisiert, übersetzt noch berücksichtigt werden.**
 - `kern/stt_spur.py` speichert den englischen Rohtext nicht im Mitschnitt,
   sondern nur `filter.reason` und `discarded=true`.
 - `kern/dienst.py` schickt weder Text noch Intent in den Dialog. Bianca
-  fragt neutral: „Das habe ich leider nicht verstanden. Bitte sagen Sie Ihr
-  Anliegen noch einmal.“ **Nie „auf Deutsch“ sagen:** Der Patient kann
+  fragt freundlich: „Ach herrje … da war gerade ein Störgeräusch in der
+  Leitung und ich habe Sie leider nicht verstanden. Könnten Sie das bitte
+  noch einmal wiederholen?“ **Nie „auf Deutsch“ sagen:** Der Patient kann
   Deutsch gesprochen haben, das Parakeet falsch verstand; ebenso kann nur
   Stille vorgelegen haben. Die Erkennung darf dem Patienten keine falsche
   Sprache unterstellen.

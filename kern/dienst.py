@@ -70,8 +70,8 @@ FILLER_SPAET_S = 0.8
 FILLER_NACHSCHUB_S = 2.4
 FILLER_MAX = 1
 SPRACHWACHE_NACHFRAGE = (
-    "Das habe ich leider nicht verstanden. "
-    "Bitte sagen Sie Ihr Anliegen noch einmal."
+    "Ach herrje … da war gerade ein Störgeräusch in der Leitung und ich habe "
+    "Sie leider nicht verstanden. Könnten Sie das bitte noch einmal wiederholen?"
 )
 
 # Stille-Notfall-Ansagen (W-STILLE): das Dock lädt sie beim Boot als BLOB
