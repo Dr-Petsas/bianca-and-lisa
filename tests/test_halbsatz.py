@@ -199,7 +199,11 @@ def test_audio_englische_stille_halluzination_erreicht_dialog_nicht(monkeypatch)
 
     assert [x["type"] for x in z] == ["reply"]
     assert "nicht verstanden" in z[0]["text"]
-    assert "auf Deutsch" in z[0]["text"]
+    assert z[0]["text"] == (
+        "Das habe ich leider nicht verstanden. "
+        "Bitte sagen Sie Ihr Anliegen noch einmal."
+    )
+    assert "auf Deutsch" not in z[0]["text"]
     assert gesehen == []
     assert sit["messages"] == [{"role": "system", "content": "s"}]
     assert sit["sammler"]["frage"] == "nachname"

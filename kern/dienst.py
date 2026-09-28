@@ -71,7 +71,7 @@ FILLER_NACHSCHUB_S = 2.4
 FILLER_MAX = 1
 SPRACHWACHE_NACHFRAGE = (
     "Das habe ich leider nicht verstanden. "
-    "Bitte sagen Sie Ihr Anliegen noch einmal auf Deutsch."
+    "Bitte sagen Sie Ihr Anliegen noch einmal."
 )
 
 # Stille-Notfall-Ansagen (W-STILLE): das Dock lädt sie beim Boot als BLOB
@@ -899,8 +899,9 @@ class Dienst:
                         if sprachfilter.get("discarded"):
                             # Nichts Englisches speichern, lernen, mergen oder
                             # als Anrufertext an den Dialog geben. Statt eines
-                            # stillen Empty-Events ausdrücklich auf Deutsch
-                            # nachfragen.
+                            # stillen Empty-Events neutral nachfragen. Dem
+                            # Patienten nie eine falsche Sprache unterstellen:
+                            # Parakeet kann Deutsch oder Stille englisch deuten.
                             for engine in ("parakeet", "qwen"):
                                 info = stt_info.get(engine)
                                 if isinstance(info, dict):
