@@ -74,6 +74,10 @@ _SERMON_RE = re.compile(
 _SONST_RE = re.compile(r"kann ich (?:ihnen )?sonst noch|sonst etwas fuer sie", re.I)
 _IDENTITAET_RE = re.compile(r"richtig erkannt|termin ist fuer sie selbst", re.I)
 _KALENDER_DOWN_RE = re.compile(r"terminkalender antwortet gerade nicht", re.I)
+_NOTFALL_ANTWORT_RE = re.compile(
+    r"kommen sie bitte jetzt|rufen sie bitte 112|116\s*117",
+    re.I,
+)
 _ERFOLG = {
     "book": re.compile(
         r"\btermin\b.{0,90}\b(?:fest )?(?:eingetragen|gebucht|vereinbart)\b|"
@@ -253,6 +257,15 @@ def _evidenz(manifest: dict) -> dict[str, bool]:
         "patient": _marker_ok(manifest, "lastCreate")
         or any(_tool_art(t) == "patient" and _tool_ok(t) for t in tools),
         "phone": any(_tool_art(t) == "phone" and _tool_ok(t) for t in tools),
+        # Der deterministische Notfallpfad ist selbst ein Ergebnis: Er darf
+        # nicht als fehlender Abschluss gelten, nur weil bewusst weder Termin
+        # noch Notiz geschrieben wird.
+        "notfall": any(
+            _fold(w.get("w")) == "notfall-vorrang"
+            for zug in _zuege(manifest)
+            for w in (zug.get("waechter") or [])
+            if isinstance(w, dict)
+        ) and any(_NOTFALL_ANTWORT_RE.search(_fold(text)) for text in _outputs(manifest)),
     }
 
 
@@ -435,6 +448,7 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     # Praxisnotiz ist ein ehrlicher Abschluss, aber bewusst hoechstens "gut".
     hartes_ergebnis = any(evidenz_map[k] for k in ("book", "cancel", "move", "transfer"))
     notiz_ergebnis = evidenz_map["note"]
+    notfall_ergebnis = evidenz_map["notfall"]
     regel_antwort = any(_RULE_ANSWER_RE.search(_fold(text)) for text in outputs)
     offen = _offene_frage(manifest)
     # Ein erfolgreiches Lesen eines bestehenden Termins / Praxiswissens ist
@@ -451,6 +465,17 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     if hard:
         klasse = "fehlerhaft"
         gruende = hard
+    elif notfall_ergebnis:
+        # Chef 28.09.2026, Anruf f5a20db4…: Ein korrekt erkannter Zahnnotfall
+        # mit sofortiger Praxisanweisung ist ein belegter Erfolg. Bis zu zwei
+        # kleine Reibungen vor dem Notfall ändern das Ergebnis nur auf "gut";
+        # echte harte Fehler haben oben weiterhin uneingeschränkt Vorrang.
+        if not reibung:
+            klasse, gruende = "super", ["zahnnotfall_richtig_erkannt"]
+        elif len(reibung) <= 2:
+            klasse, gruende = "gut", ["zahnnotfall_richtig_erkannt_mit_reibung"]
+        else:
+            klasse, gruende = "durchwachsen", ["zahnnotfall_erkannt_aber_zaeh"]
     elif hartes_ergebnis:
         if not reibung:
             klasse, gruende = "super", ["belegter_abschluss"]
@@ -480,6 +505,7 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     # gehen in die Gegenhoer-Stichprobe.
     manuell = bool(
         (klasse == "super" and _deterministische_stichprobe(sid))
+        or (klasse in {"super", "gut"} and notfall_ergebnis)
         or (klasse == "gut" and (regel_antwort or lese_ok) and not hartes_ergebnis)
     )
     return Bewertung(

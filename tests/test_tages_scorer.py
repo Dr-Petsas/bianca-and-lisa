@@ -212,6 +212,64 @@ def test_regelantwort_ist_gut_und_muss_manuell_geprueft_werden():
     assert row.manuellPruefen is True
 
 
+def test_richtig_behandelter_zahnnotfall_ist_erfolg_trotz_zwei_reibungen():
+    """Live Thaler 28.09., f5a20db4…: kein Fail, Notfall korrekt gelöst."""
+    manifest = _m(
+        (
+            "Ich brauche einen Termin.",
+            "Wir kennen uns noch nicht. Ich bin die Neue! "
+            "Habe ich Sie richtig erkannt?",
+        ),
+        ("Ja, hier ist Schranner.", "Sind Sie noch dran?"),
+        (
+            "Vom Zahn ist etwas abgebrochen.",
+            "Das klingt akut. Kommen Sie bitte jetzt direkt in die Praxis. "
+            "Eine feste Uhrzeit gibt es dafür nicht.",
+        ),
+        tenant="thaler",
+        sid="f5a20db4e6ed489293dc5ec6fbcf33ee",
+        dauer=53_320,
+    )
+    manifest["zuege"][-1]["waechter"] = [
+        {"w": "notfall-vorrang", "d": "Vom Zahn ist etwas abgebrochen."},
+    ]
+
+    row = scorer.bewerten(manifest)
+
+    assert row.klasse == "gut"
+    assert row.gruende == ["zahnnotfall_richtig_erkannt_mit_reibung"]
+    assert row.evidenz == ["notfall"]
+    assert row.manuellPruefen is True
+
+
+def test_notfall_marker_ueberstimmt_keinen_harten_fehler():
+    manifest = _m(
+        (
+            "Vom Zahn ist etwas abgebrochen.",
+            "Kommen Sie bitte jetzt direkt in die Praxis.",
+        ),
+        tools=[{"name": "masBookAppointment", "ok": False, "error": "kaputt"}],
+    )
+    manifest["zuege"][0]["waechter"] = [{"w": "notfall-vorrang"}]
+
+    row = scorer.bewerten(manifest)
+
+    assert row.klasse == "fehlerhaft"
+    assert "write_fehlgeschlagen:book" in row.gruende
+
+
+def test_notfall_marker_ohne_richtige_anweisung_ist_keine_erfolgsevidenz():
+    manifest = _m(
+        ("Vom Zahn ist etwas abgebrochen.", "Das habe ich nicht verstanden."),
+    )
+    manifest["zuege"][0]["waechter"] = [{"w": "notfall-vorrang"}]
+
+    row = scorer.bewerten(manifest)
+
+    assert "notfall" not in row.evidenz
+    assert "zahnnotfall_richtig_erkannt" not in " ".join(row.gruende)
+
+
 def test_bericht_liefert_praxis_stunde_und_40_80_ziel():
     rows = []
     for i in range(4):

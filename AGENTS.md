@@ -3793,9 +3793,18 @@ Neubuchung mit Versicherungs- und Besuchsgrundfragen.
 einer festen Rubrik: super, gut, durchwachsen, unvollständig, fehlerhaft.
 Aufleger sind ausschließlich Anrufe ohne substanziellen Anrufersatz; ein
 genanntes Anliegen bleibt auch bei frühem Abbruch in der Wertung. Super
-verlangt einen belegten Write/Transfer ohne Reibung. Echte Praxisnotizen
-erreichen höchstens gut. Fehlgeschriebene Writes, Erfolgsaussagen ohne
-Ledger-Beweis sowie Unklar-/Presence-/Frageschleifen sind harte Fehler.
+verlangt einen belegten Write/Transfer oder richtig belegten Notfall ohne
+Reibung. Echte Praxisnotizen erreichen höchstens gut. Fehlgeschriebene
+Writes, Erfolgsaussagen ohne Ledger-Beweis sowie
+Unklar-/Presence-/Frageschleifen sind harte Fehler.
+
+**Zahnnotfall ist ein belegtes Ergebnis (Chef 28.09.2026):** Anruf
+`f5a20db4e6ed489293dc5ec6fbcf33ee` war kein Fail. „Vom Zahn ist etwas
+abgebrochen“ wurde mit Wächter `notfall-vorrang` erkannt und korrekt mit
+„kommen Sie bitte jetzt direkt in die Praxis“ beantwortet. Diese Kombination
+zählt im Scorer als Erfolg (`super` ohne, `gut` mit bis zu zwei kleinen
+Reibungen). Der Wächter allein genügt nicht: Die richtige Notfallanweisung
+muss im Antworttext belegt sein; harte Fehler behalten immer Vorrang.
 
 Der Bericht weist Sessions, Praxen und lokale Stunden getrennt aus und zieht
 deterministisch zehn Prozent der automatisch als super bewerteten Gespräche
