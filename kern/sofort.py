@@ -116,9 +116,13 @@ _ENGLISH_WORDS = frozenset({
     "you", "your",
 })
 _ENGLISH_SINGLE = frozenset({
-    "bye", "correct", "damn", "english", "fuck", "goodbye", "hello", "hey", "hi",
-    "jep", "nine", "no", "nope", "okay", "shit", "sorry", "thanks",
-    "stop", "tomorrow", "what", "why", "yeah", "yea", "yep", "yes",
+    "afternoon", "appointment", "book", "booking", "bye", "cancel", "cleaning",
+    "correct", "customer", "damn", "dental", "dentist", "doctor", "emergency",
+    "english", "evening", "fuck", "goodbye", "hello", "help", "hey", "hi",
+    "jep", "later", "morning", "nine", "no", "nope", "okay", "pain", "please",
+    "question", "right", "shit", "sorry", "thanks", "today", "tooth",
+    "toothache", "stop", "tomorrow", "understand", "what", "when", "where",
+    "why", "wrong", "yeah", "yea", "yep", "yes",
 })
 _GERMAN_STRUCTURE = frozenset({
     "aber", "also", "bitte", "brauche", "danke", "das", "dem", "den",

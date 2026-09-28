@@ -88,6 +88,12 @@ def test_kurze_englische_parakeet_formen_werden_verworfen():
         "Hello?",
         "Correct.",
         "Stop.",
+        "Emergency.",
+        "Pain.",
+        "Toothache.",
+        "Today.",
+        "I don't understand.",
+        "Please cancel my appointment.",
     ):
         fake = _FakeLokal(_Antwort(200, {"text": gehoert}))
 
