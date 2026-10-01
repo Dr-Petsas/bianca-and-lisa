@@ -684,6 +684,18 @@ def test_story_runner_beendet_keine_slots_und_persoenliche_vorsprache_sauber():
         termin, lage, {"baustein": "abschied"},
     )
 
+    lage_kein_slot = geschichten.lage_neu()
+    lage_kein_slot.update({
+        "eroeffnet": True,
+        "biancaText": (
+            "Dafür ist gerade kein Termin verfügbar, und die Rückrufnotiz "
+            "konnte ich technisch nicht speichern."
+        ),
+    })
+    ende_kein_slot = geschichten.naechster_baustein(termin, lage_kein_slot)
+    assert ende_kein_slot["baustein"] == "nichts_mehr"
+    assert lage_kein_slot["fachlichErledigt"] == "kein_slot"
+
     doku = {"anliegen": "rezept", "seed": 9}
     lage2 = geschichten.lage_neu()
     lage2.update({

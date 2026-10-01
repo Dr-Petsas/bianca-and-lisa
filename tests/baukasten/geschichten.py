@@ -501,6 +501,7 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
     if any(x in antwort_text for x in (
             "keinen freien termin", "keine freien termine",
             "leider keinen termin", "leider keine termine",
+            "kein termin verfügbar", "kein termin verfuegbar",
             "rückrufbitte", "rueckrufbitte", "praxis meldet sich")):
         lage["fachlichErledigt"] = "kein_slot"
         if "nichts_mehr" not in lage["gemacht"]:
