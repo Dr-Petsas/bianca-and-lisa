@@ -361,6 +361,15 @@ def _doku_text_erledigt(text: str) -> bool:
     ))
 
 
+def _notfall_text_erledigt(text: str) -> bool:
+    t = " ".join(str(text or "").lower().split())
+    return any(x in t for x in (
+        "116 117", "116117", "ärztlichen bereitschaftsdienst",
+        "aerztlichen bereitschaftsdienst", "wählen sie sofort die 112",
+        "waehlen sie sofort die 112",
+    ))
+
+
 def _bianca_verabschiedet(text: str) -> bool:
     t = " ".join(str(text or "").lower().split())
     return any(x in t for x in _VERABSCHIEDET)
@@ -454,6 +463,17 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         return {
             "text": "Verstanden, dann komme ich persönlich vorbei. Vielen Dank und auf Wiederhören.",
             "baustein": "doku_abschied",
+            "auflegen": True,
+        }
+    # Akut-Auskunft ist bereits ein fachlich gültiger Endzustand, auch wenn
+    # die Maschine noch eine alte Formularfrage im Feld ``frage`` trägt.
+    # Deshalb muss diese Wache VOR dem normalen Frage-Dispatch greifen.
+    if _notfall_text_erledigt(antwort_text):
+        lage["fachlichErledigt"] = "notfall_auskunft"
+        lage["gemacht"].add("abschied")
+        return {
+            "text": "Verstanden, vielen Dank für die klare Auskunft. Auf Wiederhören.",
+            "baustein": "notfall_abschied",
             "auflegen": True,
         }
     if _bianca_verabschiedet(antwort_text):
@@ -716,17 +736,6 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         return {
             "text": _wahl(story, lage, "abschied", saetze.ABSCHIED),
             "baustein": "doku_abschied",
-            "auflegen": True,
-        }
-    if any(x in text for x in (
-            "116 117", "116117", "ärztlichen bereitschaftsdienst",
-            "aerztlichen bereitschaftsdienst", "wählen sie sofort die 112",
-            "waehlen sie sofort die 112")):
-        lage["fachlichErledigt"] = "notfall_auskunft"
-        lage["gemacht"].add("abschied")
-        return {
-            "text": "Verstanden, vielen Dank für die klare Auskunft. Auf Wiederhören.",
-            "baustein": "notfall_abschied",
             "auflegen": True,
         }
     if any(x in text for x in (

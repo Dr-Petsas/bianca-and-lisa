@@ -50,6 +50,23 @@ def test_runner_erkennt_namensbestaetigung_auch_ohne_frage_id():
     assert aus["baustein"] == "nachname_check_ja"
 
 
+def test_runner_beendet_notfall_auskunft_trotz_alter_formularfrage():
+    story = geschichten.automatik(1)
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "frage": "grund",
+        "biancaText": (
+            "Die Praxis ist geschlossen. Wenden Sie sich bitte an den "
+            "ärztlichen Bereitschaftsdienst unter 116 117."
+        ),
+    })
+    aus = geschichten.naechster_baustein(story, lage)
+    assert aus["auflegen"] is True
+    assert aus["baustein"] == "notfall_abschied"
+    assert lage["fachlichErledigt"] == "notfall_auskunft"
+
+
 def test_gruende_mappen_aufs_erwartete_motiv():
     tenant = tenants.laden("meddent")
     for gid, (varianten, erwartet) in saetze.GRUENDE.items():

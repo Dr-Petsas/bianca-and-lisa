@@ -205,7 +205,8 @@ def _wechsel_verdacht(t: str, aktiv_handlung: str, sit: dict | None = None) -> b
     """
     # W-FERTIG-DIKTAT: im offenen Diktat ist "fertig" das Schlusswort.
     t = _ohne_diktat_fertig(sit, t)
-    if (_WECHSEL_RE.search(t) or _ABBRUCH_RE.search(t)
+    if (((_WECHSEL_RE.search(t) and not _verwaltung_nur_rueckblick(t)))
+            or _ABBRUCH_RE.search(t)
             or _bestands_verschieben_verhoerer(sit, t)
             or urlaubsfrage(t)):
         return True
@@ -429,12 +430,55 @@ _FB_VERSCHIEBEN_RE = re.compile(
     r"verschieb\w*|umbuch\w*|verleg\w*|umleg\w*|vorverleg\w*|anderen\s+tag",
     re.I,
 )
+_VERWALTUNG_RUECKBLICK_RE = re.compile(
+    r"\b(?:zweimal|zwei\s*mal|schon\s+zweimal|letzte\w*|"
+    r"beim\s+letzten\s+mal|letztes\s+jahr|zuletzt|diesmal|übrigens|uebrigens)\b",
+    re.I,
+)
+_VERWALTUNG_AKTIV_RE = re.compile(
+    r"(?:"
+    r"\bich\s+(?:möchte|moechte|will|würde|wuerde|muss)\s+"
+    r"(?!loswerden\b)[^?.!]{0,35}\b(?:termin\w*\s+)?"
+    r"(?:absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*)|"
+    r"\bjetzt\s+(?:möchte|moechte|will|würde|wuerde|muss)\s+ich\b"
+    r"[^?.!]{0,35}\b(?:absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*)|"
+    r"\b(?:bitte|können\s+sie|koennen\s+sie|kann\s+ich)\b[^?.!]{0,55}"
+    r"\b(?:absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*)"
+    r")",
+    re.I,
+)
+
+
+def _verwaltung_nur_rueckblick(text: str) -> bool:
+    """Historische Beschwerde ist kein aktueller Verwaltungsauftrag.
+
+    „Beim letzten Mal wurde mein Termin zweimal verlegt“ darf eine laufende
+    Neubuchung nicht in den Verschiebe-Dialog reißen. Ein ausdrücklicher
+    aktueller Wunsch („jetzt möchte ich ihn verschieben“) gewinnt weiterhin.
+    """
+    t = _s(text)
+    verwaltung = bool(_FB_VERSCHIEBEN_RE.search(t) or _FB_ABSAGE_RE.search(t))
+    return bool(
+        verwaltung
+        and _VERWALTUNG_RUECKBLICK_RE.search(t)
+        and not _VERWALTUNG_AKTIV_RE.search(t)
+    )
 
 
 def _ist_verschieben(sit: dict | None, text: str) -> bool:
     return bool(
-        _FB_VERSCHIEBEN_RE.search(_s(text))
+        (
+            _FB_VERSCHIEBEN_RE.search(_s(text))
+            and not _verwaltung_nur_rueckblick(text)
+        )
         or _bestands_verschieben_verhoerer(sit, text)
+    )
+
+
+def _ist_absage(text: str) -> bool:
+    return bool(
+        _FB_ABSAGE_RE.search(_s(text))
+        and not _verwaltung_nur_rueckblick(text)
     )
 _FB_RUECKRUF_KERN_RE = re.compile(
     r"r(?:ü|ue)ckruf|zur(?:ü|ue)ckruf\w*|ruft\s+mich|meldet\s+(?:sich|euch)|"
@@ -778,7 +822,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
     if _FB_FRONTDESK_RE.search(t) and not im_angebot:
         if _ist_verschieben(sit, t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
-        if _FB_ABSAGE_RE.search(t):
+        if _ist_absage(t):
             return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
         if _rueckruf(t):
             return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
@@ -805,7 +849,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             "gegenstand": "VORGANG",
             "ersatz": False,
         }
-    if im_angebot and (_FB_ABSAGE_RE.search(t) or _ist_verschieben(sit, t)):
+    if im_angebot and (_ist_absage(t) or _ist_verschieben(sit, t)):
         # "Passt nicht / den nicht" mitten im Slot-Angebot meint das ANGEBOT,
         # keinen Bestandstermin — die Maschine verhandelt selbst weiter.
         return {**aus, "zug": "verfeinern", "handlung": "KEINE", "gegenstand": ""}
@@ -814,7 +858,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         and re.search(r"\bfrüher\b|\bfrueher\b|nach\s+vorne?\b|vorziehen", t, re.I)
     ):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}
-    if _FB_ABSAGE_RE.search(t):
+    if _ist_absage(t):
         return {**aus, "handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}
     if _rueckruf(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
@@ -870,7 +914,7 @@ def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
         treffer.append(("ERREICHEN", {"handlung": "ERREICHEN", "gegenstand": "PERSON"}))
     if _ist_verschieben(sit, t):
         treffer.append(("VERSCHIEBEN", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": True}))
-    if _FB_ABSAGE_RE.search(t):
+    if _ist_absage(t):
         treffer.append(("ABSAGE", {"handlung": "AENDERN", "gegenstand": "VORGANG", "ersatz": False}))
     if _rueckruf(t):
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))

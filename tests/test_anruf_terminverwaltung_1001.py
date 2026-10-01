@@ -292,3 +292,36 @@ def test_vitamin_korrektur_nur_in_der_zahnpraxis():
     sit = _sit("blessing")
     satz = "Ich brauche einen Vitamin für den Doktor."
     assert agent._vitamin_termin_korrektur(sit, satz) == satz
+
+
+# ---------------------------------------------------------------------------
+# Studio-Matrix — historische Terminbeschwerde ist kein neuer Verschiebeauftrag
+# ---------------------------------------------------------------------------
+
+VERWALTUNGS_RUECKBLICKE = [
+    "Mein letzter Termin ist übrigens zweimal von Ihnen verschoben worden.",
+    "Ich muss loswerden: Sie haben meinen Termin schon zweimal verschoben.",
+    "Beim letzten Mal wurde mein Termin zweimal verlegt, das war ärgerlich.",
+    "Ihr habt meinen Termin zweimal umgeschmissen, das fand ich nicht so toll.",
+    "Zweimal wurde mein Termin verschoben — ich hoffe, diesmal klappt es.",
+    "Letztes Jahr wurde mein Termin gleich zweimal von der Praxis abgesagt.",
+    "Ich hoffe, der Termin hält diesmal — er wurde ja schon zweimal verschoben.",
+    "Nicht böse gemeint, aber mein Termin wurde von Ihnen zweimal verlegt.",
+    "Mein Mann meinte, bei ihm wurde der Termin auch zweimal verschoben.",
+    "Zweimal verschoben und einmal ausgefallen — das lief zuletzt nicht rund.",
+]
+
+
+@pytest.mark.parametrize("satz", VERWALTUNGS_RUECKBLICKE)
+def test_historische_terminbeschwerde_wechselt_laufende_buchung_nicht(satz):
+    assert not intent._wechsel_verdacht(satz, "ANLEGEN", _sit("meddent")), satz
+    assert intent._fallback(_sit("meddent"), satz)["handlung"] != "AENDERN", satz
+
+
+@pytest.mark.parametrize("satz", [
+    "Ich möchte meinen Termin jetzt verschieben.",
+    "Können Sie bitte meinen Termin absagen?",
+    "Mein Termin wurde zweimal verschoben, jetzt möchte ich ihn absagen.",
+])
+def test_ausdruecklicher_aktueller_verwaltungswunsch_bleibt_aktiv(satz):
+    assert intent._fallback(_sit("meddent"), satz)["handlung"] == "AENDERN", satz
