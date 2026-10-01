@@ -145,6 +145,30 @@ _TERMIN_EINWORT_UNKLAR_RE = re.compile(
     r"(?:ein(?:en)?\s+)?termine?)[\s.,!?…]*$",
     re.I,
 )
+# W-VITAMIN-TERMIN (01.10.2026, Anruf 062c4e1f): Parakeet/Qwen hörten in einer
+# ZAHNARZTPRAXIS wiederholt „Vitamin“ statt „Termin“ („Ich brauche einen
+# Vitamin für den Doktor Petsas“). In einer Zahnpraxis werden keine Vitamine
+# vergeben; steht „Vitamin“ in einem Termin-Grammatik-Slot, ist es der
+# Hörfehler. Echte Vitamin-Begriffe (Vitamin D/B12, Vitaminmangel …) bleiben
+# unangetastet, ebenso andere Fachrichtungen (z. B. Derma). Ein einzelnes
+# unklares „Vitamin“ wird zu „Termin“ und läuft damit in die normale
+# Einwort-Rückfrage ("neu/verschieben/absagen?").
+_VITAMIN_MEDIZIN_RE = re.compile(
+    r"\bvitamin[-\s]?(?:[abcdek]\s?\d{0,2}|komplex|präparat|praeparat|"
+    r"mangel|spritze|tablette|tropfen|kur|spiegel|haushalt)\b|"
+    r"\bvitamine\b\s*(?:nehmen|einnehmen|schlucken|brauch\w*|kaufen)",
+    re.I,
+)
+_VITAMIN_TERMIN_RE = re.compile(
+    r"\b(?:einen|den|meinen|mein|'?nen)\s+vitamine?\b|"
+    r"\bvitamine?\b[^.!?]{0,24}\b(?:vereinbar\w*|verschieb\w*|verleg\w*|"
+    r"absag\w*|storn\w*|buch\w*|ausmach\w*|frei|termin)|"
+    r"\b(?:vereinbar\w*|verschieb\w*|verleg\w*|absag\w*|storn\w*|buch\w*|"
+    r"ausmach\w*)\w*[^.!?]{0,24}\bvitamine?\b|"
+    r"\bwann\b[^.!?]{0,24}\bvitamine?\b|"
+    r"^\s*(?:ein(?:en)?\s+)?vitamine?[\s.,!?…]*$",
+    re.I,
+)
 _ANGEBOT_ZEIT_RE = re.compile(
     r"\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b|"
     r"\b\d{1,2}\.\s?(?:\d{1,2}\.|januar|februar|märz|maerz|april|mai|juni|juli|"
@@ -793,6 +817,23 @@ def _frage_budget_ausstieg(
     """Nach ausgeschöpftem Budget mit Datenerhalt sauber beenden."""
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     frage_id = _s(fid) or _s(s.get("frage"))
+    # W-NAMENS-SMS-VORRANG (01.10.2026, Anruf 448c5c37): Scheitert die
+    # Namensaufnahme, hat der BEWÄHRTE Namens-SMS-Weg Vorrang vor dem reinen
+    # Online-Buchungslink. `agentNameConfirm` `create` schickt dem Anrufer
+    # einen Link zum Tippen/Bestätigen des Namens, während das Telefonat
+    # WEITERLÄUFT (live 9105345d) — anders als der Buchungslink (action
+    # `booking-link`), der zuletzt mit HTTP 400 scheiterte. Erst wenn die
+    # Namens-SMS nicht starten kann, kommt der Online-Link (Chef 26.09.) als
+    # letzter Ausweg. Ein create-Fehler behauptet nie Erfolg (starten → None).
+    if (
+        frage_id in online_fallback.NAME_FELDER
+        and not online_fallback.bereits_gesendet(sit)
+    ):
+        from kern import namenslink
+        aus_name = namenslink.starten(sit)
+        if aus_name is not None:
+            spur.merken(sit, "frage-budget", f"namens-sms-vorrang:{frage_id}")
+            return aus_name
     # W-ONLINE-FALLBACK (26.09.2026): scheitert die Namensaufnahme bei einer
     # BUCHUNG (zu viel Leitungsrauschen) und ist eine Mobilnummer ERKANNT,
     # bietet Bianca den Online-Buchungslink statt einer Rückrufnotiz an.
@@ -1039,6 +1080,33 @@ def _job_aktiv(sit: dict) -> bool:
     s = sit.get("sammler") or {}
     return (s.get("modus") in {"buchen", "absagen", "verschieben", "auskunft"}
             and s.get("phase") not in {"gebucht", "fertig"})
+
+
+def _vitamin_termin_korrektur(sit: dict, text: str) -> str:
+    """„Vitamin“ → „Termin“ nur im Zahn-Buchungs-/Verwaltungskontext.
+
+    Streng gated: nur Zahnmedizin (dort gibt es keine Vitamin-Ausgabe), nur
+    wenn „Vitamin“ in einem Termin-Grammatik-Slot steht, und nie bei echten
+    Vitamin-Begriffen. Alles andere bleibt unverändert und wird ggf. normal
+    nachgefragt.
+    """
+    t = _s(text)
+    if not t or "vitamin" not in t.lower():
+        return text
+    try:
+        if fachprofil.fach_id(sit) != "zahnmedizin":
+            return text
+    except Exception:
+        return text
+    if _VITAMIN_MEDIZIN_RE.search(t):
+        return text
+    if not _VITAMIN_TERMIN_RE.search(t):
+        return text
+    neu = re.sub(r"\bvitamine\b", "Termine", t, flags=re.I)
+    neu = re.sub(r"\bvitamin\b", "Termin", neu, flags=re.I)
+    if neu != t:
+        spur.merken(sit, "vitamin-termin", t[:48])
+    return neu
 
 
 def _einwort_termin_vorbereiten(sit: dict, text: str) -> tuple[str, str]:
@@ -1905,6 +1973,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             arbeits_text = zusatz
             spur.merken(sit, "mischzug", f"{vorfrage}: {kurzantwort} + Zusatz")
 
+    arbeits_text = _vitamin_termin_korrektur(sit, arbeits_text)
     arbeits_text, einwort_frage = _einwort_termin_vorbereiten(
         sit, arbeits_text,
     )

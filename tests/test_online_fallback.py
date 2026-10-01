@@ -4,8 +4,20 @@ Die Gegenproben (kein Handy, kein Buchungsmodus, schon gesendet) sind der
 teurere Teil — ein falsch ausgeloester Link waere ein Fehlverhalten.
 """
 
+import pytest
+
 from bianca import agent
-from kern import online_fallback
+from kern import namenslink, online_fallback
+
+
+@pytest.fixture(autouse=True)
+def _namens_sms_aus(monkeypatch):
+    """W-NAMENS-SMS-VORRANG (01.10.2026): Die Namens-SMS (agentNameConfirm
+    create) hat jetzt Vorrang vor dem Online-Buchungslink. Diese Datei prüft
+    die Online-Link-Mechanik als LETZTEN Ausweg — also für den Fall, dass die
+    Namens-SMS NICHT starten kann. Der Vorrang selbst wird im eigenen Test
+    unten geprüft (dort wird die Fixture überschrieben)."""
+    monkeypatch.setattr(namenslink, "starten", lambda *a, **k: None)
 
 
 def _sit(**extra):
@@ -221,6 +233,40 @@ def test_senden_bei_cf_fehler_behauptet_keine_sms(monkeypatch):
     assert aus["hangup"] is True
     assert "online" in aus["text"].lower()
     assert sit["onlineBuchungslink"]["ok"] is False
+
+
+def test_namens_sms_hat_vorrang_vor_online_link(monkeypatch):
+    """Kann die Namens-SMS starten, wird sie angeboten — NICHT der Online-Link.
+
+    Der Anruf läuft dabei weiter (Namenseingabe per SMS); der Online-
+    Buchungslink bleibt der letzte Ausweg, falls die Namens-SMS scheitert.
+    """
+    online_aufrufe = []
+    monkeypatch.setattr(
+        online_fallback,
+        "_cf_call",
+        lambda *a, **k: online_aufrufe.append((a, k)),
+    )
+    # Namens-SMS kann starten und liefert ihre eigene Antwort.
+    namens_satz = {"text": "Ich schicke Ihnen kurz eine SMS."}
+    monkeypatch.setattr(namenslink, "starten", lambda *a, **k: namens_satz)
+
+    sit = _sit()
+    aus = agent._frage_budget_ausstieg(sit, fid="nachname")
+
+    assert aus is namens_satz
+    assert not online_fallback.zustimmung_offen(sit)
+    assert online_aufrufe == [], "der Online-Link darf nicht angeboten werden"
+
+
+def test_online_link_bleibt_letzter_ausweg_wenn_namens_sms_scheitert(monkeypatch):
+    """Scheitert die Namens-SMS (starten -> None), greift der Online-Link."""
+    monkeypatch.setattr(namenslink, "starten", lambda *a, **k: None)
+    monkeypatch.setattr(online_fallback, "_cf_call", lambda *a, **k: None)
+    sit = _sit()
+    aus = agent._frage_budget_ausstieg(sit, fid="nachname")
+    assert aus["zustimmung"] is True
+    assert online_fallback.zustimmung_offen(sit)
 
 
 def test_beleg_raeumt_patient_nicht_gefunden():

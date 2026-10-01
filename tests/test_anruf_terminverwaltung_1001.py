@@ -24,7 +24,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 
-from bianca import flow, gehirn, hintergrund, session, verwalten
+from bianca import agent, flow, gehirn, hintergrund, session, verwalten
 from kern import intent
 from kern.tenants import laden
 
@@ -253,3 +253,42 @@ def test_nicht_akuter_fall_mit_weitem_termin_bekommt_keinen_akuthinweis(monkeypa
     sit = _buchung(monkeypatch, "thaler", "Kontrolle", weit)
     aus = flow._angebot(sit)
     assert "Bei akuten Beschwerden" not in aus["text"], aus["text"]
+
+
+# ---------------------------------------------------------------------------
+# 062c4e1f — „Vitamin“ ist in der Zahnpraxis der Hörfehler für „Termin“
+# ---------------------------------------------------------------------------
+
+VITAMIN_ALS_TERMIN = [
+    "Ich brauche einen Vitamin für den Doktor Petsas.",
+    "Ich möchte meinen Vitamin verschieben.",
+    "Ich möchte den Vitamin absagen.",
+    "Wann bekomme ich Vitamin?",
+    "Vitamin.",
+]
+ECHTE_VITAMINE = [
+    "Ich brauche Vitamin D.",
+    "Haben Sie etwas gegen Vitaminmangel?",
+    "Ich nehme Vitamine.",
+]
+
+
+@pytest.mark.parametrize("satz", VITAMIN_ALS_TERMIN)
+def test_vitamin_wird_in_zahnpraxis_zu_termin(satz):
+    sit = _sit("meddent")
+    neu = agent._vitamin_termin_korrektur(sit, satz)
+    assert "vitamin" not in neu.lower(), (satz, neu)
+    assert "termin" in neu.lower(), (satz, neu)
+
+
+@pytest.mark.parametrize("satz", ECHTE_VITAMINE)
+def test_echte_vitamin_begriffe_bleiben_unveraendert(satz):
+    sit = _sit("meddent")
+    assert agent._vitamin_termin_korrektur(sit, satz) == satz, satz
+
+
+def test_vitamin_korrektur_nur_in_der_zahnpraxis():
+    # Nicht-Zahn-Fach (Hautarzt Blessing) spricht sehr wohl über Vitamine.
+    sit = _sit("blessing")
+    satz = "Ich brauche einen Vitamin für den Doktor."
+    assert agent._vitamin_termin_korrektur(sit, satz) == satz
