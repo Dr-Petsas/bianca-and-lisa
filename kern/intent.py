@@ -563,7 +563,22 @@ _BESTANDSFRAGE_RE = re.compile(
     r"(?:^|[.!?,;:]\s*|\b(?:und|oder|aber|also|denn)\s+)hab(?:e|')?\s+ich\s+"
     r"(?:(?:da|dort|denn|eigentlich|vielleicht|eventuell|zufällig|zufaellig|"
     r"überhaupt|ueberhaupt|noch|jetzt|momentan|aktuell|derzeit|schon|"
-    r"bei\s+(?:ihnen|euch))\s+){0,3}(?:irgend)?einen\s+termin\b",
+    r"bei\s+(?:ihnen|euch))\s+){0,3}(?:irgend)?einen\s+termin\b|"
+    # W-BESTAND-AUSSAGE (01.10.2026, Anruf 953f6b66): „Guten Tag, hier ist …
+    # Anna. Ich habe einen Termin heute.“ Eine AUSSAGE im Indikativ („ich habe
+    # (einen|den|meinen) Termin“) MIT unmittelbarem Tagesbezug (heute, morgen,
+    # übermorgen) meldet einen BESTEHENDEN Termin und ist Bestandsauskunft,
+    # keine Neubuchung. Bewusst ENG auf heute/morgen/übermorgen gehalten:
+    # vage Formen („ich habe einen Termin, weiß den Tag nicht mehr“) und
+    # datums-/wochentagsbezogene Verschiebewünsche („Termin am 21. Oktober,
+    # den möchte ich …“) bleiben den Opt-in-Mandanten bzw. dem Ändern-Pfad
+    # vorbehalten. „hätte/möchte/brauche“ sind Wunsch (kein „hab(e)“-Treffer);
+    # „… Termin zu machen/vereinbaren/buchen“ bleibt Neubuchung (Lookahead).
+    r"\bich\s+hab(?:e|')\s+(?:einen|den|meinen|'?nen)\s+termine?\b"
+    r"[^?.!]{0,20}?\b(?:heute|morgen|übermorgen|uebermorgen)\b"
+    r"(?![^?.!]{0,20}\bzu\s+(?:machen|vereinbaren|buchen|ausmachen)\b)|"
+    r"\bich\s+hab(?:e|')\s+(?:heute|morgen|übermorgen|uebermorgen)\s+"
+    r"(?:einen|den|meinen|'?nen)\s+termine?\b",
     re.I,
 )
 

@@ -1744,6 +1744,52 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             picked = {**picked, "slots": slots_mit_abstand(picked["slots"])}
             hinweis = hinweis or "Genau zu dieser Zeit ist nichts frei. "
     if not picked["slots"]:
+        # W-LEERSUCH-WACHE (01.10.2026, Anruf 4b86b5dd): dieselbe erfolglose
+        # Verschiebe-Suche lief fuenfmal mit wortgleicher "nichts Freies"-
+        # Ansage — der Anrufer drehte sich im Kreis. Eine identische Leersuche
+        # (gleicher Kalender, Motiv, Startdatum, Wunsch, Richtung) wird NICHT
+        # wiederholt; nach hoechstens zwei verschiedenen Leersuchen bieten wir
+        # einmal ehrlich das Scheitern an und hinterlassen eine echte
+        # Rueckrufnotiz. Nur ein wirklich erweiterter Wunsch sucht erneut.
+        sig = "|".join([
+            such_ctx.get("calendarId", ""),
+            such_ctx.get("visitMotiveId", ""),
+            _s(gehirn.start_datum(s)),
+            json.dumps(s.get("wunsch"), ensure_ascii=False, sort_keys=True)
+            if isinstance(s.get("wunsch"), dict) else "",
+            _s(sit.get("verschiebRichtung")),
+        ])
+        voriges = _s(sit.get("verschiebLeerSig"))
+        n = int(sit.get("verschiebLeerN") or 0)
+        identisch = bool(voriges) and sig == voriges
+        if not identisch:
+            sit["verschiebLeerSig"] = sig
+            sit["verschiebLeerN"] = n + 1
+        if identisch or (n + 1) >= 3:
+            sit["offered"] = []
+            notiz_ok = bool(sit.get("praxisNotizPersistiert"))
+            if not sit.get("praxisNotiz"):
+                notiz_ok = _notiz_schreiben(
+                    sit,
+                    anliegen="verschieben",
+                    status=("Kein passender Verschiebe-Termin gefunden — bitte "
+                            "zum Verschieben zurückrufen"),
+                    dock_text=("Verschieben: kein passender Termin frei. "
+                               "Bitte zurückrufen."),
+                )
+            _verwaltung_mit_abschlussfrage_schliessen(sit)
+            if not notiz_ok:
+                return {"text": (
+                    "Zu Ihrem Wunsch finde ich gerade keinen freien Termin, "
+                    "und die Rückrufnotiz konnte ich technisch nicht speichern. "
+                    "Bitte rufen Sie die Praxis noch einmal an."
+                )}
+            return {"text": (
+                "Zu Ihrem Wunsch finde ich im Moment leider keinen passenden "
+                "freien Termin. Ich habe der Praxis eine Rückrufnotiz "
+                "hinterlassen, damit man sich bei Ihnen meldet. "
+                "Kann ich sonst noch etwas für Sie tun?"
+            )}
         s["phase"] = "verschieb_wunsch"
         s["frage"] = "wunsch"
         sit["offered"] = []
@@ -1751,6 +1797,9 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
             "Zu diesem Wunsch finde ich gerade nichts Freies. "
             "Ginge auch ein anderer Tag oder eine andere Tageszeit?"
         )}
+    # Erfolgreiche Suche: Leersuch-Zaehler zuruecksetzen.
+    sit.pop("verschiebLeerSig", None)
+    sit.pop("verschiebLeerN", None)
     kandidaten = list(picked["slots"])
     sichtbar = kandidaten[:1]
     offered = [{"iso": x["iso"], "spoken": spoken_slot(x["iso"])} for x in sichtbar]

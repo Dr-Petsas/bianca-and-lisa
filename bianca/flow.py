@@ -1604,6 +1604,29 @@ def _angebot(sit: dict, melde: Melde = None) -> dict:
         sit["angebotArztGesagt"] = True
         vor = (f"Am schnellsten geht es bei "
                f"{arzt_sprechname(sit['angebotArzt'], sit.get('tenant') if isinstance(sit.get('tenant'), dict) else None)}. ")
+    # W-AKUT-FENSTER (01.10.2026, Anruf 6e3337e1): Ein Schmerz-/Akutfall bekam
+    # wortlos einen Normaltermin elf Tage spaeter als "fruehester passender
+    # Termin". Fuehrt die Praxis den Sofort-Komme-Weg, ist der Fall oben (eilig
+    # bzw. notfall_antwort) abgefangen; sonst wird ein weit entfernter Termin
+    # nicht wortlos angeboten, sondern einmal ehrlich als naechster freier
+    # Platz benannt. Fenster per Tenant (`akutFensterTage`) ueberschreibbar.
+    if dringend and offered and not sit.get("akutFensterGesagt"):
+        from datetime import date as _date
+        try:
+            ziel = _date.fromisoformat(_s(offered[0].get("iso"))[:10])
+            tage_hin = (ziel - datetime.now(gehirn.TZ).date()).days
+        except (ValueError, TypeError):
+            tage_hin = 0
+        fenster = (sit.get("tenant") or {}).get("akutFensterTage") if isinstance(sit.get("tenant"), dict) else None
+        try:
+            fenster = int(fenster)
+        except (TypeError, ValueError):
+            fenster = 3
+        if tage_hin > fenster:
+            sit["akutFensterGesagt"] = True
+            vor = (vor + "Bei akuten Beschwerden tut mir das leid — einen "
+                   "früheren freien Termin sehe ich im Kalender gerade leider "
+                   "nicht. ")
     if offered and zuletzt == [o["iso"] for o in offered]:
         # Wiederhol-Wache: derselbe Wunsch fuehrt zum SELBEN Ergebnis — das
         # ehrlich sagen statt das Angebot wortgleich herunterzubeten

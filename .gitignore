@@ -27,3 +27,6 @@ _last_call_dump.json
 _last_call_lese.txt
 _snapshot-produktionsstand-*/
 _snapshot-vor-feldtest-*/
+
+# Lokale Anruf-Fixtures (Patientendaten, NIE committen)
+.fixtures-scratch/
