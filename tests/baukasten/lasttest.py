@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import httpx
 
-from kern import tenants, zimmer_map
+from kern import behandler_sperre, tenants, zimmer_map
 from tests.baukasten import geschichten, klang, saetze
 
 MAX_PARALLEL = 18
@@ -63,6 +63,12 @@ def _tenant_katalog(tenant_id: str) -> tuple[list[str], list[str]]:
     behandler = []
     for c in tenants.behandler_kalender(tenant):
         roh = str((c or {}).get("name") or "").strip() if isinstance(c, dict) else ""
+        # Der Lasttest darf nie einen Behandler wählen, den die Praxis für
+        # Telefonbuchungen ausdrücklich gesperrt hat. Sonst wiederholt der
+        # simulierte Anrufer einen absichtlich unzulässigen Wunsch bis zum
+        # Abbruch (MedDent/Nikolaou, Matrix 01.10.2026).
+        if behandler_sperre.ist_gesperrt(tenant, roh):
+            continue
         teile = [
             x for x in re.split(r"\s+", roh)
             if x and x.lower().rstrip(".") not in {"dr", "doktor", "frau", "herr"}

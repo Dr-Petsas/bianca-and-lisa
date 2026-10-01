@@ -10,12 +10,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bianca import besuchsgrund, telefon  # noqa: E402
 from kern import slots, tenants  # noqa: E402
-from tests.baukasten import saetze  # noqa: E402
+from tests.baukasten import geschichten, lasttest, saetze  # noqa: E402
 
 
 def test_telefon_varianten_parsen_auf_testnummer():
     for satz in saetze.TELEFON + saetze.READBACK_NEIN:
         assert telefon.aus_satz(satz) == saetze.TESTNUMMER, satz
+
+
+def test_lasttest_waehlt_keinen_telefonisch_gesperrten_behandler():
+    behandler, _ = lasttest._tenant_katalog("meddent")
+    assert "Nikolaou" not in behandler
+    assert "Petsas" in behandler and "Patrikis" in behandler
+
+
+def test_runner_beantwortet_namensbestaetigung_mit_robustem_ja():
+    story = geschichten.automatik(1)
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "frage": "nachname_check",
+        "biancaText": "Ist der Nachname genau so geschrieben?",
+    })
+    aus = geschichten.naechster_baustein(story, lage)
+    assert aus["text"] == "Ja, das stimmt so."
+    assert aus["baustein"] == "nachname_check_ja"
+
+
+def test_runner_erkennt_namensbestaetigung_auch_ohne_frage_id():
+    story = geschichten.automatik(1)
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "frage": "",
+        "biancaText": "Ich habe den Nachnamen Muster aufgenommen. Ist das richtig?",
+    })
+    aus = geschichten.naechster_baustein(story, lage)
+    assert aus["text"] == "Ja, das stimmt so."
+    assert aus["baustein"] == "nachname_check_ja"
 
 
 def test_gruende_mappen_aufs_erwartete_motiv():

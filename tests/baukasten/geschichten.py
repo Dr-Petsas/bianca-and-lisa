@@ -210,6 +210,8 @@ def _abschweifer(story: dict, lage: dict) -> dict[str, Any] | None:
 
 _EINZELWORT_SPERRE = frozenset({
     "telefon", "telefon_check", "buchstabieren", "name", "vorname", "nachname",
+    "anrufer_check", "fuer_wen_check", "arzt_check", "name_check",
+    "nachname_check", "vorname_check",
 })
 
 
@@ -387,6 +389,18 @@ def _frage_aus_text(text: str) -> str:
             "auskunft oder möchten", "auskunft oder wollen",
             "mit einem mitarbeiter", "mitarbeiter sprechen")):
         return "anliegen"
+    # Bestätigungsfragen müssen VOR den allgemeinen Name/Nachname-Markern
+    # erkannt werden. Sonst antwortet der Runner auf „Ist der Nachname
+    # richtig?“ wieder mit einem Namen und treibt den Dialog in eine Schleife.
+    if any(x in t for x in (
+            "habe ich sie richtig erkannt", "habe ich dich richtig erkannt")):
+        return "anrufer_check"
+    if any(x in t for x in (
+            "nachname genau so", "nachname richtig", "vorgelesene schreibweise",
+            "ist das richtig", "stimmt die schreibweise")):
+        return "nachname_check"
+    if "vorname" in t and any(x in t for x in ("richtig", "stimmt", "korrekt")):
+        return "vorname_check"
     if "nachname" in t:
         return "nachname"
     if any(x in t for x in ("langsam aus", "buchstabieren sie",
@@ -512,6 +526,8 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
             "wunsch", "buchstabieren", "telefon", "telefon_check",
             "telefon_alt", "versicherung", "versicherung_check",
             "slotwahl", "bestaetigung", "wann", "behandlung",
+            "anrufer_check", "fuer_wen_check", "arzt_check", "name_check",
+            "nachname_check", "vorname_check",
         }
         gleicher_faden = bool(fid) and (
             fid == rueckkehr_frage or fid in hauptfragen
@@ -549,6 +565,16 @@ def naechster_baustein(story: dict, lage: dict) -> dict[str, Any]:
         nr = lage["zaehler"].get("arzt_m", 0)
         lage["zaehler"]["arzt_m"] = nr + 1
         return {"text": saetze.arzt_satz(arzt, (story.get("seed") or 0) + nr), "baustein": "arzt"}
+    if fid in {
+        "anrufer_check", "fuer_wen_check", "arzt_check",
+        "name_check", "nachname_check", "vorname_check",
+    }:
+        # Ein voller Satz ist absichtlich robuster als ein einsilbiges „Ja“:
+        # kurze Studio-Audios können im STT leer bleiben.
+        return {
+            "text": "Ja, das stimmt so.",
+            "baustein": f"{fid}_ja",
+        }
     if fid == "name":
         nr = lage["zaehler"].get("name_m", 0)
         lage["zaehler"]["name_m"] = nr + 1
@@ -808,7 +834,9 @@ def saetze_fuer_audio(story: dict) -> list[str]:
 
     lg = lage_neu()
     add(_eroeffnung(story, lg).get("text"))
-    for fid in ("schonmal", "arzt", "name", "vorname", "nachname", "grund",
+    for fid in ("schonmal", "arzt", "name", "vorname", "nachname",
+                "anrufer_check", "fuer_wen_check", "arzt_check",
+                "name_check", "nachname_check", "vorname_check", "grund",
                 "wunsch", "buchstabieren", "telefon", "telefon_check",
                 "versicherung", "pzr", "bestaetigung", "arzt_notiz",
                 "arzt_notiz_diktat", "wann", "behandlung"):

@@ -31,7 +31,7 @@ from pydantic import BaseModel  # noqa: E402
 
 from kern.config import DEFAULT_TENANT  # noqa: E402
 from kern.patients import arzt_sprechname  # noqa: E402
-from kern import tenants, zimmer_map  # noqa: E402
+from kern import behandler_sperre, tenants, zimmer_map  # noqa: E402
 from tests.baukasten import (  # noqa: E402
     aufraeumen, deutlichkeit, geschichten, klang, lasttest, runner,
     saetze, statistik,
@@ -246,6 +246,10 @@ def _katalog_fuer(tenant_id: str) -> dict[str, Any]:
     t = tenants.laden(tid)
     behandler = []
     for c in tenants.behandler_kalender(t):
+        if behandler_sperre.ist_gesperrt(
+            t, str((c or {}).get("name") or "")
+        ):
+            continue
         name = arzt_sprechname(str((c or {}).get("name") or ""), t)
         if name and name not in behandler:
             behandler.append(name)
