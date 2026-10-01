@@ -651,6 +651,21 @@ def test_story_runner_erkennt_sicher_erledigtes_dokumentanliegen():
     assert ende["auflegen"] is True
 
 
+def test_story_runner_erkennt_direktversand_von_roentgenbildern_als_erledigt():
+    story = {"anliegen": "unterlagen", "seed": 8}
+    lage = geschichten.lage_neu()
+    lage.update({
+        "eroeffnet": True,
+        "biancaText": (
+            "Röntgenbilder werden direkt an den anfordernden Zahnarzt "
+            "versandt. Der Zahnarzt muss sie ausdrücklich anfordern."
+        ),
+    })
+    ende = geschichten.naechster_baustein(story, lage)
+    assert ende["baustein"] == "doku_abschied"
+    assert ende["auflegen"] is True
+
+
 def test_story_runner_beendet_keine_slots_und_persoenliche_vorsprache_sauber():
     from tests.baukasten import geschichten, lasttest
 

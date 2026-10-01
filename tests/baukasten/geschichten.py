@@ -356,6 +356,8 @@ def _doku_text_erledigt(text: str) -> bool:
             "direkt an die praxis", "praxis selbst",
             "keine dokumente")):
         return True
+    if "anfordernden zahnarzt" in t and "anfordern" in t:
+        return True
     return ("rechnung" in t and any(
         x in t for x in ("kann ich", "kann keine", "nicht", "leider")
     ))
