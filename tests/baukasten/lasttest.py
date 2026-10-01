@@ -28,6 +28,14 @@ MAX_DIALOG_ZUEGE = 28
 AUDIO_GAP_S = 0.55
 Fortschritt = Callable[[dict[str, Any]], None]
 
+_FACHGEBIET_GRUENDE: dict[str, tuple[str, ...]] = {
+    "gynaekologie": (
+        "Vorsorgeuntersuchung",
+        "gynäkologische Beschwerden",
+        "Schwangerschaftsberatung",
+    ),
+}
+
 KUNDEN: tuple[dict[str, str], ...] = (
     {"id": "meddent", "kurz": "Medical Center", "farbe": "#4da3ff"},
     {"id": "thaler", "kurz": "Thaler", "farbe": "#37c978"},
@@ -84,6 +92,9 @@ def _tenant_katalog(tenant_id: str) -> tuple[list[str], list[str]]:
         for m in motive
         if isinstance(m, dict) and str(m.get("name") or "").strip()
     ]
+    if not gruende:
+        fachgebiet = str(tenant.get("fachgebiet") or "").strip().lower()
+        gruende = list(_FACHGEBIET_GRUENDE.get(fachgebiet) or ())
     return behandler or list(geschichten.BEHANDLER), gruende or list(saetze.GRUENDE)
 
 

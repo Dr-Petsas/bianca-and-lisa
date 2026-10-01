@@ -24,6 +24,12 @@ def test_lasttest_waehlt_keinen_telefonisch_gesperrten_behandler():
     assert "Petsas" in behandler and "Patrikis" in behandler
 
 
+def test_lasttest_nutzt_fachgebiet_statt_fremder_standardgruende():
+    _, gruende = lasttest._tenant_katalog("ruether")
+    assert "Vorsorgeuntersuchung" in gruende
+    assert "pzr" not in gruende
+
+
 def test_runner_beantwortet_namensbestaetigung_mit_robustem_ja():
     story = geschichten.automatik(1)
     lage = geschichten.lage_neu()
