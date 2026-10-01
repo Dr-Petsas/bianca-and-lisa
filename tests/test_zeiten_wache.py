@@ -360,6 +360,8 @@ def test_offenfragen_ohne_wann_erreichen_den_deterministischen_weg():
         "Wann machen Sie auf?",
         "Wann haben Sie geöffnet?",
         "Wie sind Ihre Sprechzeiten?",
+        "Wann ist Ihre Sprechstunde?",
+        "Wie sind Ihre Sprechstunden?",
     ]:
         assert "oeffnungszeiten" in auskunft_themen(frage), frage
 
@@ -372,5 +374,7 @@ def test_terminfragen_gelten_nicht_als_zeitenfrage():
         "Ich warte auf den Termin.",
         "Haben Sie einen Platz frei?",
         "Wann ist mein Termin?",
+        "Ich hätte gerne einen Termin wegen Sprechstunde.",
+        "Ich brauche einen Termin in der Akne-Sprechstunde.",
     ]:
         assert "oeffnungszeiten" not in auskunft_themen(frage), frage

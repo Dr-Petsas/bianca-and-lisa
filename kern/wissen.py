@@ -58,7 +58,21 @@ def _oeffnungszeiten_thema(text: str) -> bool:
     """
     low = _norm(text)
     if re.search(r"\b(?:offnungs?zeit\w*|oeffnungs?zeit\w*|sprechzeit\w*"
-                 r"|sprechstunde\w*|praxiszeit\w*)\b", low):
+                 r"|praxiszeit\w*)\b", low):
+        return True
+    # "Sprechstunde" kann zugleich ein echtes Buchungsmotiv sein (Blessing).
+    # Nur eine erkennbare Zeitfrage darf deshalb den Öffnungszeitenweg nehmen.
+    if "sprechstunde" in low and (
+            re.search(
+                r"\b(?:wann|welche|zu welchen|wie sind|wie lauten|was sind)\b"
+                r".{0,45}\bsprechstunde\w*\b",
+                low,
+            )
+            or re.search(
+                r"\bsprechstunde\w*\b.{0,35}"
+                r"\b(?:wann|zeit\w*|offen|geoffnet|geoeffnet|uhr)\b",
+                low,
+            )):
         return True
     if re.search(r"\bwann\b.{0,30}\b(?:offen|geoffnet|geoeffnet)\b", low):
         return True
