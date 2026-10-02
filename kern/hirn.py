@@ -429,6 +429,44 @@ def anliegen_neu(handlung: str, gegenstand: str = "", *, spiegel: str = "",
     return _anliegen(handlung, gegenstand, spiegel=spiegel, quelle=quelle)
 
 
+def zusatz_buchungen_parken(sit: dict, seeds: list[dict[str, Any]]) -> int:
+    """Mehrpersonen-Termin (Paket 4): je ZUSATZ-Person eine eigene
+    Buchungsaufgabe GEPARKT anlegen.
+
+    Jeder ``seed`` ist ein fertiger Sammler (Dict) fuer eine weitere Person.
+    Das aktive Anliegen (die erste Buchung) bleibt unangetastet und laeuft im
+    normalen Fluss weiter; nach dessen Abschluss (phase=fertig) reaktiviert
+    ``_nach_abschluss_ruecken`` LIFO die geparkten Buchungen und spielt je den
+    Checkpoint zurueck (frischer Sammler je Person — keine Vermischung von
+    Patienten/Slots). Reihenfolge: in Nennreihenfolge resumen, deshalb hier
+    in UMGEKEHRTER Reihenfolge anhaengen (LIFO).
+
+    Nur fuer Bianca und nur in enforce (Checkpoint-Rueckspielung) sinnvoll;
+    sonst passiert nichts (kein stilles Alt-Verhalten). Rueckgabe: Anzahl der
+    geparkten Zusatzbuchungen.
+    """
+    if not _ist_bianca(sit) or not isinstance(seeds, list) or not seeds:
+        return 0
+    if auto_resume_modus() != "enforce":
+        return 0
+    h = hirn(sit)
+    n = 0
+    for seed in reversed(seeds):
+        if not isinstance(seed, dict):
+            continue
+        a = _anliegen("ANLEGEN", "VORGANG", spiegel="weiterer Termin",
+                      quelle="mehrpersonen")
+        nid = int(h.get("naechsteId") or 1)
+        a["id"] = f"a{nid}"
+        h["naechsteId"] = nid + 1
+        a["status"] = "geparkt"
+        a["checkpoint"] = {"sammler": copy.deepcopy(seed)}
+        h.setdefault("anliegen", []).append(a)
+        n += 1
+    h["anliegen"] = h["anliegen"][-8:]
+    return n
+
+
 def modus_von(a: dict[str, Any] | None) -> str:
     """Handlung x Gegenstand -> Bianca-Maschinenmodus ('' = keine Maschine,
     das Gespraechs-LLM antwortet mit dem Anliegen-Stand im Prompt)."""

@@ -207,6 +207,14 @@ _CLAIM_BESTAND_NEGATIV = re.compile(
     r"(?:kommenden\s+|weiteren\s+|anderen\s+)?termin\b|"
     r"\b(?:sehe|finde)\s+ich\b[^.!?]{0,45}\bkein(?:en|e)?\s+"
     r"(?:kommenden\s+|weiteren\s+|anderen\s+)?termin\b|"
+    # Paket 6 (02.10.2026, Replay thaler-negativ): "Ich habe hier aktuell
+    # keine Termine fuer Sie gefunden" — eine negative SUCH-Aussage ohne echte
+    # agentFindPatientAppointments-Evidenz. Bewusst eng (gefunden/vorliegen/
+    # "fuer Sie"), damit eine ehrliche Buchungs-Verneinung ("ich habe keinen
+    # Termin gebucht") NICHT faelschlich als Bestandsbehauptung gilt.
+    r"\b(?:ich|wir)\s+hab(?:e|en)?\b[^.!?]{0,40}\bkein(?:e|en)?\s+"
+    r"(?:weitere[rn]?\s+|andere[rn]?\s+|kommende[rn]?\s+)?termine?\b"
+    r"[^.!?]{0,25}\b(?:gefunden|vorliegen|f(?:ü|ue)r\s+(?:sie|eine))\b|"
     r"\bkein(?:e|en)?\s+(?:weiteren?|anderen?|kommenden?)\s+termine?\b",
     re.I,
 )

@@ -76,9 +76,13 @@ def _s(v: Any) -> str:
 # Formular-Zug mehr — das LLM muss ihn deuten (Themenwechsel moeglich).
 # \bsprech… — NICHT sprech\w* allein: das matchte „sprechung“ in
 # Besprechung / Implantatbesprechung und feuerte fälschlich ERREICHEN
-# (Live 06.09.2026 → Zaluma-Platzhalter statt Buchung).
+# (Live 06.09.2026 → Zaluma-Platzhalter statt Buchung). Paket 5
+# (02.10.2026, Replay blessing-sprechstunde): „Termin in der Sprechstunde“
+# ist ein BESUCHSGRUND, kein Verbinden-Wunsch — „Sprechstunde“/„Sprechzeit“
+# per Negativ-Lookahead ausnehmen; „sprechen“/„Sprechstundenhilfe“ bleiben
+# (die tragen den Wunsch über das Verb bzw. die Rolle).
 _WECHSEL_RE = re.compile(
-    r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
+    r"\bsprech(?!stunde|zeit)\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"absag\w*|stornier\w*|verschieb\w*|umbuch\w*|verleg\w*|(?:ä|ae)nder\w*|"
     r"r(?:ü|ue)ckruf\w*|zur(?:ü|ue)ckruf\w*|"
     r"rechnung\w*|abrechnung\w*|mahn\w*|inkasso|lastschrift|quittung\w*|zahlung\w*|"
@@ -391,7 +395,7 @@ def formularantwort_mit_zusatz(sit: dict, text: str) -> tuple[str, str] | None:
 # --- Fallback-Heuristik (LLM tot / unparsebar) ------------------------------
 
 _FB_ERREICHEN_RE = re.compile(
-    r"\bsprech\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
+    r"\bsprech(?!stunde|zeit)\w*|verbind\w*|verbunden|durchstell\w*|weiterleit\w*|"
     r"talk\s+to|speak\s+(?:to|with)|"
     r"h(?:ä|ae)tte?\s+gern\w*\s+(?:den|die|herrn|frau)?\s*(?:doktor|dr\b)|"
     r"mitarbeiter\w*|anmeldung|empfang|praxisleitung|personal\b|"
@@ -558,6 +562,10 @@ def _ist_auskunft(t: str, bestandsfrage: bool) -> bool:
 _FB_AUSKUNFT_RE = re.compile(
     r"wann\s+(?:ist|war|habe?\s+ich)\b.{0,30}termin|"
     r"habe?\s+ich\s+(?:noch\s+)?(?:irgend)?einen\s+termin|"
+    # Paket 7 (02.10.2026, Replay blessing-auskunft-menue): das nackte
+    # Menue-Wort "Auskunft" / "Terminauskunft" als Antwort auf die
+    # Anliegen-Menuefrage — sonst loopte die Frage 6x.
+    r"\b(?:termin)?auskunft\b|"
     r"\bfertig\b|ge(?:ö|oe)ffnet|offen\s+heute|"
     r"was\s+kostet|wie\s+teuer|wo\s+(?:finde|ist|sind)|wie\s+komme?\s+ich",
     re.I,
@@ -827,7 +835,8 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         if _rueckruf(t):
             return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
         if _ist_auskunft(t, bestandsfrage):
-            gg = "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"
+            gg = ("VORGANG" if bestandsfrage or "termin" in t.lower()
+                  or "auskunft" in t.lower() else "REGEL")
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
         if dringlichkeit.oeffnet_buchung(t, sit.get("tenant") or {}):
             return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
@@ -863,7 +872,8 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
     if _rueckruf(t):
         return {**aus, "handlung": "ABGEBEN", "gegenstand": "SACHE"}
     if _ist_auskunft(t, bestandsfrage):
-        gg = "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"
+        gg = ("VORGANG" if bestandsfrage or "termin" in t.lower()
+              or "auskunft" in t.lower() else "REGEL")
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
     if dringlichkeit.oeffnet_buchung(t, sit.get("tenant") or {}):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
@@ -920,7 +930,9 @@ def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
         treffer.append(("RUECKRUF", {"handlung": "ABGEBEN", "gegenstand": "SACHE"}))
     if _ist_auskunft(t, bestandsfrage):
         treffer.append(("AUSKUNFT", {"handlung": "WISSEN",
-                                     "gegenstand": "VORGANG" if bestandsfrage or "termin" in t.lower() else "REGEL"}))
+                                     "gegenstand": "VORGANG" if bestandsfrage
+                                     or "termin" in t.lower()
+                                     or "auskunft" in t.lower() else "REGEL"}))
     if ((_FB_NEU_RE.search(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):

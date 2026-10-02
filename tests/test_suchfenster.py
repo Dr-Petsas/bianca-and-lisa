@@ -711,9 +711,10 @@ def test_seite_ohne_startdatum_sendet_heute(monkeypatch):
 def test_seite_mit_startdatum_reicht_es_unveraendert_durch(monkeypatch):
     protokoll: list[dict] = []
     monkeypatch.setattr(kal, "_cf_call", _cf_fang(protokoll))
+    start = (datetime.now(TZ).date() + timedelta(days=1)).isoformat()
     kal._find_slots_seite({"clientId": "c", "locationId": "l"}, {"calendarId": "k"},
-                          start_date="2026-10-01")
-    assert protokoll[0]["body"]["startDate"] == "2026-10-01"
+                          start_date=start)
+    assert protokoll[0]["body"]["startDate"] == start
 
 
 def test_behandler_und_zimmer_weg_senden_startdatum(monkeypatch):

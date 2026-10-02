@@ -8,6 +8,7 @@ Kalender-Werkzeugen wie Lisa (kern.zuege).
 
 from __future__ import annotations
 
+import copy
 import re
 import time
 from typing import Any
@@ -18,6 +19,7 @@ from bianca.prompt import TOOLS, system_prompt
 from kern import abschied, abschweifen, agentprofil, anrede_wache, antwort_wache, eingehen, fachprofil, fakten_wache, frage_budget, frage_gate, gedaechtnis, gespraech, gespraechsruhe, hirn, intent, llm, ohr, stille, task_router, tenants, wiederholung, zuege
 from kern import fach_wache
 from kern import dringlichkeit
+from kern import mehrpersonen
 from kern import online_fallback
 from kern import qwen_korrektor
 from kern import spur
@@ -706,6 +708,20 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         return _notleine(sit)
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
+
+    # Paket 8 (separate-noise-silence, Replay blessing-presence-diktat):
+    # mitten in einem Diktat (Buchstabieren/Nummer) ist eine Pause KEIN
+    # Gespraechsabbruch — der Anrufer buchstabiert noch oder holt Luft.
+    # „Sind Sie noch dran?" faellt ihm ins Wort (live feuerte der Presence-
+    # Stups, waehrend er noch buchstabierte). Solange ein Teilstueck offen
+    # liegt, ist der Stups ein STILLER warte-Zug: kein Ton, laengere Ruhe-
+    # Schwelle, weiterhoeren. Die Call-Death-Deckel (gespraech_tot/
+    # kompakt_fertig/stall) sind oben bereits gelaufen, ein wirklich totes
+    # Gespraech endet also weiterhin.
+    if _diktat_offen(sit) and (
+            _s(s.get("buchstabenTeil")) or _s(s.get("telefonTeil"))):
+        spur.merken(sit, "diktat-stille", fid or "diktat")
+        return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
 
     # Nummern-Rückbestätigung bleibt IMMER deterministisch. Aber die Ziffern
     # kamen erst Sekunden vorher — der erste Stups fragt nur kurz nach, erst
@@ -1642,6 +1658,57 @@ def _antwort_mit_vorspann(
     return aus
 
 
+def _mehrpersonen_aufteilen(sit: dict, text: str) -> None:
+    """Paket 4 (Mehrpersonen-Termin): nennt der Anrufer in EINEM Buchungswunsch
+    mehrere Personen ("für zwei Personen, ich und meine Mutter"), bekommt die
+    ERSTE Person den normalen Fluss; jede weitere wird als eigene Buchung
+    GEPARKT und nach Abschluss der ersten per Auto-Resume fortgesetzt.
+
+    Konservativ und genau EINMAL pro Anruf: nur wenn gerade eine Buchung aktiv
+    ist (Hirn), der Detektor >= 2 Personen sicher erkennt und Auto-Resume
+    scharf ist. Ein einzelner Dritt-Termin ("für meine Mutter") bleibt EINE
+    Aufgabe (W-FUER-WEN) — der Detektor schlägt dort nicht an.
+    """
+    if not mehrpersonen.aktiv() or sit.get("mehrpersonenGeteilt"):
+        return
+    a = hirn.aktiv(sit)
+    if a is None or hirn.modus_von(a) != "buchen":
+        return
+    zusatz = mehrpersonen.erkenne(text)
+    if not zusatz:
+        return
+    kontakt_name = gehirn.anrufer_name(sit)
+    kontakt_tel = _s((sit.get("anrufer") or {}).get("telefon"))
+    seeds: list[dict[str, Any]] = []
+    for p in zusatz:
+        seed = copy.deepcopy(gehirn.FELDER_START)
+        seed["modus"] = "buchen"
+        seed["phase"] = ""
+        seed["frage"] = ""
+        seed["warSchonMal"] = None
+        seed["fuerWen"] = p.get("rolle") or "andere"
+        if kontakt_name:
+            seed["kontaktName"] = kontakt_name
+        if kontakt_tel:
+            seed["kontaktTelefon"] = kontakt_tel
+        nn = _s(p.get("nachname"))
+        vn = _s(p.get("vorname"))
+        if nn:
+            seed["nachname"] = nn
+            seed["nachnameQuelle"] = "gesagt"
+            if vn:
+                seed["vorname"] = vn
+                seed["vornameQuelle"] = "gesagt"
+                seed["name"] = f"{vn} {nn}".strip()
+            else:
+                seed["name"] = nn
+        seeds.append(seed)
+    n = hirn.zusatz_buchungen_parken(sit, seeds)
+    if n:
+        sit["mehrpersonenGeteilt"] = True
+        spur.merken(sit, "mehrpersonen", f"zusatz={n}")
+
+
 def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # Dieser Agent IST Bianca. kern/hirn schaltet den Sammler-Modus (die
     # Freigabe der deterministischen Fluesse) nur fuer sit["stimme"]=="bianca"
@@ -2007,6 +2074,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             hirn.anwenden(sit, spaet)
         deutung = intent.erkennen(sit, arbeits_text)
         hirn.anwenden(sit, deutung)
+        _mehrpersonen_aufteilen(sit, arbeits_text)
 
     # W-ANRUFER-HALLO: den verspielten Satz SOFORT als Vorab-Füller
     # sprechen, während flow + Ziffern-TTS im Hintergrund laufen.

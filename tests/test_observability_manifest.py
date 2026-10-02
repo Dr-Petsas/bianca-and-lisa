@@ -106,6 +106,8 @@ def test_dispatch_payload_und_freie_felder_koennen_nie_exportiert_werden():
 
 
 def test_reservierung_done_bereinigt_token_url_hinweise_und_ids(monkeypatch):
+    # P0-Containment stellt den Live-Default auf AUS; diese Feature-Probe an.
+    monkeypatch.setenv("NAMENS_LINK", "1")
     antworten = iter([
         (
             200,
@@ -175,6 +177,7 @@ def test_reservierung_done_bereinigt_token_url_hinweise_und_ids(monkeypatch):
 
 
 def test_reservierung_expired_bereinigt_lokalen_stand(monkeypatch):
+    monkeypatch.setenv("NAMENS_LINK", "1")
     monkeypatch.setattr(
         namenslink,
         "_cf_call",

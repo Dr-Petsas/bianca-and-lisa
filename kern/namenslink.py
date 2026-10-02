@@ -76,7 +76,15 @@ def _ziffern(raw: str) -> str:
 
 
 def aktiv() -> bool:
-    return (os.getenv("NAMENS_LINK", "1") or "1").strip().lower() not in {
+    # P0-CONTAINMENT (02.10.2026): Die sieben Live-Reservierungen landeten als
+    # BESTÄTIGTE Termine mit Zufalls-IDs auf einem gemeinsamen Platzhalter-
+    # Patienten — der deterministische nca_/ncp_-Vertrag (bookingReservationGuard
+    # in pickadoc-live-base) wurde nie geschrieben, die 90-Minuten-Reservierung
+    # verfällt also nie. Bis die Cloud Function rückwärtskompatibel repariert und
+    # per Canary abgenommen ist (Reparatur-Plan Paket 3), ist der Namenslink
+    # AUS. Default bewusst "0": eine beim Deploy überschriebene .env darf ihn
+    # nie versehentlich wieder scharf schalten. Wieder-An erst mit NAMENS_LINK=1.
+    return (os.getenv("NAMENS_LINK", "0") or "0").strip().lower() not in {
         "0", "false", "off", "no",
     }
 

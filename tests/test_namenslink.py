@@ -1,9 +1,20 @@
 """W-KANDIDATEN C: SMS-Link nur bei unsicherer Identifikation."""
 
+import pytest
+
 from bianca import flow, gehirn, verwalten
 from kern import namenslink
 from kern import patients
 from tests.test_bianca_bausteine import GEFUNDEN, _sit, _suchname, _verwaltung_start
+
+
+@pytest.fixture(autouse=True)
+def _namenslink_feature_an(monkeypatch):
+    # P0-Containment (02.10.2026) stellt den LIVE-Default auf AUS, bis der
+    # CF-Reservierungsvertrag repariert ist. Diese Tests prüfen die
+    # FEATURE-Logik und schalten sie deshalb ausdrücklich an; der Notaus-Test
+    # setzt danach selbst wieder "0".
+    monkeypatch.setenv("NAMENS_LINK", "1")
 
 
 def _handy_sit():

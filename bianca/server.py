@@ -313,7 +313,12 @@ def api_stille(body: HangupIn):
     reply = agent.stille_zug(sit)
     text = sprech.sanitize(reply.get("text") or "")
     if not text:
-        return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
+        # Paket 8 (separate-noise-silence): ein Diktat-Hold ist ein stiller
+        # warte-Zug — kein Ton, aber die Bruecke soll laenger zuhoeren und ihn
+        # NICHT ins Stups-Budget zaehlen (Replay blessing-presence-diktat).
+        return {"ok": True, "empty": True, "text": "", "audioUrl": "",
+                "warte": bool(reply.get("warte")),
+                "stilleMs": int(reply.get("stilleMs") or 0)}
     url, tts_s = DIENST.stimme(text)
     timings: dict = {"tts": tts_s}
     session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)

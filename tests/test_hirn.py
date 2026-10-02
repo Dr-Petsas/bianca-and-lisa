@@ -513,7 +513,9 @@ def test_abgeben_kennt_anrufer_fragt_nicht_name_nummer(tmp_path, monkeypatch):
     assert "Wie ist Ihr Name" not in (z.get("text") or "")
     assert "Handynummer" not in (z.get("text") or "")
     assert s["nachname"] == "Berger"
-    assert s["telefon"] == "+4915129105931"
+    # Der Sammler hält Telefonnummern in der sprechbaren deutschen Form;
+    # E.164 wird erst an der Schnittstelle hergestellt.
+    assert s["telefon"] == "015129105931"
 
 
 def test_rezept_abgeben_sagt_nicht_ausstellen(tmp_path, monkeypatch):

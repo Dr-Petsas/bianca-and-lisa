@@ -75,6 +75,21 @@ _HAUT_RUHIG_RE = re.compile(
     r"hautscreening|hautkrebsvorsorge|krebsvorsorge",
     re.I,
 )
+# Paket 5 (02.10.2026, Replay blessing-dringlich): akute Hautbeschwerden, die
+# NICHT Melanom/Abszess sind — blutende/offene/entzündete Wunde, nässende/
+# stark juckende/brennende Stelle. Das ist MEDIZINISCH akut (Suche ab heute),
+# unabhaengig vom Wort „dringend". Ein ruhiger Beratungs-/Kontrollwunsch
+# („Ausschlag anschauen lassen", „irgendwann ein Kontrolltermin") traegt kein
+# solches Symptom und bleibt Stufe 0 (Gegenprobe).
+_HAUT_AKUT_RE = re.compile(
+    r"\bwunde\w*[^.!?]{0,30}(?:blut|offen|n(?:ae|ä)sst|n(?:ae|ä)sse|"
+    r"entz(?:ü|ue)nd\w*|eitert|eitrig|schlimmer|aufgeplatzt)|"
+    r"\bblutet\b|\bblutende\w*\s+wunde|\bblutung\w*|"
+    r"\boffene\s+wunde|aufgekratzt|aufgeplatzt|"
+    r"stark\w*\s+(?:juck\w*|brenn\w*|schmerz\w*)|"
+    r"\ballergische[nr]?\s+(?:schock|reaktion)",
+    re.I,
+)
 _GYN_SYMPTOM_RE = re.compile(
     r"\babszess\b|\beitrig\b|\bblutung\w*|\bblutet\b|"
     r"geschwollen|starke\s+schmerzen|unterleibsschmerz\w*",
@@ -165,12 +180,17 @@ def bewerten(text: str, fach: str = "") -> dict[str, Any]:
     if fid == "dermatologie":
         # Blessing: Abszess in der Schwangerschaft im Intimbereich ist ein
         # Hautnotfall, keine Vorsorge und kein fachfremder Verweis.
-        if _HAUT_RUHIG_RE.search(t) and not _HAUT_RE.search(t):
+        if _HAUT_RUHIG_RE.search(t) and not _HAUT_RE.search(t) \
+                and not _HAUT_AKUT_RE.search(t):
             return _leer()
-        if not _HAUT_RE.search(t):
-            return _leer()
-        cluster = "melanom" if re.search(r"\bmelanom|\bmelanoma|krebsverdacht", t) else "haut"
-        return _karte(2, cluster, "akute Beschwerden/Notfall", _AKUT_MUSTER, roh)
+        if _HAUT_RE.search(t):
+            cluster = "melanom" if re.search(r"\bmelanom|\bmelanoma|krebsverdacht", t) else "haut"
+            return _karte(2, cluster, "akute Beschwerden/Notfall", _AKUT_MUSTER, roh)
+        # Paket 5: akute Hautbeschwerde (blutende/offene Wunde o. Ä.) steuert
+        # ebenso ab heute — kein stiller Standard-Slot Monate spaeter.
+        if _HAUT_AKUT_RE.search(t):
+            return _karte(2, "haut", "akute Beschwerden/Notfall", _AKUT_MUSTER, roh)
+        return _leer()
 
     if fid == "gynaekologie":
         if re.search(r"schwangerschaftsvorsorge|vorsorgeuntersuchung", t) \

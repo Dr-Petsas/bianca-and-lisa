@@ -1116,12 +1116,21 @@ class Anruf:
 
     async def _stups(self) -> bool:
         """Stups spielen. False = Bianca hat sich verabschiedet (auflegen)."""
-        self.stups_zahl += 1
         try:
             r = await self.http.post("/api/stille", json={"sessionId": self.session_id})
             d = r.json() if r.status_code == 200 else {}
         except Exception:
             d = {}
+        # Paket 8 (separate-noise-silence): ein Diktat-Hold (warte, kein Ton)
+        # ist KEIN Stups — nicht ins Budget zaehlen, laenger zuhoeren, dem
+        # Anrufer nicht ins Buchstabieren reden (Replay blessing-presence-diktat).
+        if d.get("warte") and not d.get("audioUrl"):
+            if d.get("stilleMs"):
+                self.stille_ms = int(d["stilleMs"])
+            self._diktat_bis = time.monotonic() + DIKTAT_STUPS_S
+            print("bruecke-stups diktat-hold", flush=True)
+            return True
+        self.stups_zahl += 1
         auflegen = bool(d.get("hangup"))
         if d.get("audioUrl"):
             print(f"bruecke-stups {d.get('text', '')[:60]!r}"

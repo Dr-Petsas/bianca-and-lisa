@@ -386,6 +386,12 @@ def _patient_nicht_gefunden(manifest: dict) -> bool:
         return False
 
 
+def _harte_fehler(manifest: dict) -> list[str]:
+    """Eine Fehlergrenze mit der Ergebnisseite; Manifest bleibt Wahrheit."""
+    from kern import anruf_anliegen
+    return list(anruf_anliegen.harte_fehler(manifest))
+
+
 def _deterministische_stichprobe(session_id: str, anteil: float = 0.10) -> bool:
     anteil = max(0.0, min(1.0, float(anteil)))
     wert = int(hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:8], 16)
@@ -419,14 +425,11 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
     dauer_ms = int(manifest.get("dauerMs") or 0)
     evidenz_map = _evidenz(manifest)
     evidenz = sorted(k for k, v in evidenz_map.items() if v)
-    claims = _erfolg_claims(outputs)
-    write_fails = _failed_writes(manifest, evidenz_map)
-    repeat_n, repeat_text = _wiederholungen(outputs)
     englisch_alt_n = sum(_englische_stt_altlast(zug) for zug in _zuege(manifest))
     unklar_n = sum(1 for text in outputs if _UNKLAR_RE.search(text))
     presence_n = sum(1 for text in outputs if _PRESENCE_RE.search(text))
     sonst_n = sum(1 for text in outputs if _SONST_RE.search(text))
-    hard: list[str] = []
+    hard = _harte_fehler(manifest)
     reibung: list[str] = []
 
     if not substanziell:
@@ -437,29 +440,12 @@ def bewerten(manifest: dict, *, session_id: str = "") -> Bewertung:
             substantielleZuege=0, dauerMs=dauer_ms, manuellPruefen=False,
         )
 
-    for art in write_fails:
-        hard.append(f"write_fehlgeschlagen:{art}")
-    if _patient_nicht_gefunden(manifest):
-        hard.append("patient_nicht_gefunden")
-    for claim in sorted(claims):
-        if not evidenz_map.get(claim, False):
-            hard.append(f"erfolg_ohne_beweis:{claim}")
-    if unklar_n >= 3:
-        hard.append(f"unklar_schleife:{unklar_n}")
-    elif unklar_n:
+    if unklar_n == 1:
         reibung.append(f"unklar:{unklar_n}")
-    if presence_n >= 3:
-        hard.append(f"presence_schleife:{presence_n}")
-    elif presence_n:
+    if presence_n == 1:
         reibung.append(f"presence:{presence_n}")
-    if sonst_n >= 3:
-        hard.append(f"sonst_noch_schleife:{sonst_n}")
-    elif sonst_n:
+    if 0 < sonst_n < 3:
         reibung.append(f"sonst_noch:{sonst_n}")
-    if repeat_n >= 3:
-        hard.append(f"frage_wiederholt:{repeat_n}:{repeat_text}")
-    elif repeat_n == 2:
-        reibung.append(f"frage_wiederholt:2:{repeat_text}")
     if any(_NEUE_RE.search(text) for text in outputs):
         reibung.append("eisbrecher_neue")
     if any(_SERMON_RE.search(text) for text in outputs):

@@ -153,6 +153,9 @@ def test_thaler_fragt_niemals_nach_einem_arzt():
 
 
 def test_thaler_pzr_ohne_sms_vertrag_wird_sicher_als_offen_notiert(monkeypatch):
+    # Namenslink ist live P0-sicher standardmäßig aus. Dieser Test prüft
+    # ausdrücklich den weiterhin verfügbaren Canary-/Wieder-An-Pfad.
+    monkeypatch.setenv("NAMENS_LINK", "1")
     sit = _sit()
     s = gehirn.sammler(sit)
     s.update({

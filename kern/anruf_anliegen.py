@@ -231,6 +231,13 @@ def ids_von(manifest: dict[str, Any] | None) -> list[str]:
     for i in _belege(m) + _text_treffer(_anrufer_saetze(m)):
         if i in TITEL and i not in gesehen:
             gesehen.append(i)
+    # Der Terminwunsch ist durch den Notfallweg beantwortet. Ohne Buchung
+    # bleibt er nicht als offenes Anliegen in der Ergebnisseite stehen.
+    if _zahnnotfall_richtig(m):
+        if "notfall" not in gesehen:
+            gesehen.append("notfall")
+        if not _ok(m.get("lastBook")) and "buchen" in gesehen:
+            gesehen.remove("buchen")
     return gesehen
 
 
@@ -299,15 +306,67 @@ def _mund_hat(m: dict[str, Any], *woerter: str) -> bool:
     return False
 
 
+# Historische Parakeet-Leaks vor W-STT-DE-ONLY. Neue Anrufe tragen diese
+# Texte nicht mehr: sie werden am Ohr verworfen. In der Ergebnisseite dürfen
+# sie weder als Anruferinhalt noch als Dialogschleife zählen (Chef 28.09.2026,
+# Anruf 8e68db99…).
+_ENGLISCHE_STT_ALTLAST_RE = re.compile(
+    r"^\s*(?:damn(?:\s+it)?|queen\s+service)\s*[.!?]*\s*$",
+    re.I,
+)
+_NOTFALL_ANWEISUNG_RE = re.compile(
+    r"kommen sie bitte jetzt|rufen sie bitte 112|116\s*117",
+    re.I,
+)
+_TERMIN_BLEIBT_RE = re.compile(
+    r"\btermin\b.{0,50}\bbleibt\b.{0,30}\bbestehen\b",
+    re.I,
+)
+_ABSAGE_VERNEINT_RE = re.compile(
+    r"^\s*(?:nein|nee|ne|doch nicht|lieber nicht|nicht absagen)\b",
+    re.I,
+)
+
+
+def _englische_stt_altlast(zug: dict[str, Any]) -> bool:
+    return bool(_ENGLISCHE_STT_ALTLAST_RE.match(_s(zug.get("textIn"))))
+
+
 def _outputs(m: dict[str, Any]) -> list[str]:
     aus: list[str] = []
     for z in m.get("zuege") or []:
-        if not isinstance(z, dict):
+        if not isinstance(z, dict) or _englische_stt_altlast(z):
             continue
         t = _s(z.get("text"))
         if t:
             aus.append(t)
     return aus
+
+
+def _notfall_waechter(m: dict[str, Any]) -> bool:
+    for z in m.get("zuege") or []:
+        if not isinstance(z, dict):
+            continue
+        for w in z.get("waechter") or []:
+            if isinstance(w, dict) and _s(w.get("w")).lower() == "notfall-vorrang":
+                return True
+    return False
+
+
+def _zahnnotfall_richtig(m: dict[str, Any]) -> bool:
+    """Wächter plus Sofortanweisung. Der Wächter allein ist kein Erfolg."""
+    return _notfall_waechter(m) and bool(_NOTFALL_ANWEISUNG_RE.search(_mund(m)))
+
+
+def _absage_sicher_beibehalten(m: dict[str, Any]) -> bool:
+    """„Nein“ auf die Absagefrage, und der Termin bleibt ausdrücklich bestehen."""
+    for z in m.get("zuege") or []:
+        if not isinstance(z, dict) or _englische_stt_altlast(z):
+            continue
+        if (_ABSAGE_VERNEINT_RE.search(_s(z.get("textIn")))
+                and _TERMIN_BLEIBT_RE.search(_s(z.get("text")))):
+            return True
+    return False
 
 
 def _letzter_anrufer(m: dict[str, Any]) -> str:
@@ -441,7 +500,7 @@ def anrufer_hat_geschlossen(manifest: dict[str, Any] | None) -> bool:
     return False
 
 
-def _frage_wiederholt(outputs: list[str]) -> int:
+def _frage_wiederholt_detail(outputs: list[str]) -> tuple[int, str]:
     zaehl: dict[str, int] = {}
     for text in outputs:
         for satz in re.split(r"(?<=[?])\s+", text):
@@ -450,7 +509,14 @@ def _frage_wiederholt(outputs: list[str]) -> int:
             norm = re.sub(r"[^a-z0-9äöüß]+", " ", satz.lower()).strip()
             if len(norm) >= 8:
                 zaehl[norm] = zaehl.get(norm, 0) + 1
-    return max(zaehl.values(), default=0)
+    if not zaehl:
+        return 0, ""
+    text, anzahl = max(zaehl.items(), key=lambda x: x[1])
+    return anzahl, text[:100]
+
+
+def _frage_wiederholt(outputs: list[str]) -> int:
+    return _frage_wiederholt_detail(outputs)[0]
 
 
 def _http_status(tool: dict[str, Any]) -> int:
@@ -518,6 +584,8 @@ def anliegen_bearbeitet(manifest: dict[str, Any] | None, anliegen_id: str) -> bo
         return ("getfreetimeslots" in blob or "book" in blob
                 or bool(_BUCHEN_MUND_RE.search(mund)))
     if kid == "absagen":
+        if _absage_sicher_beibehalten(m):
+            return True
         if "cancel" in blob or bool(_ABSAGE_MUND_RE.search(mund)):
             return True
         if _BUCHEN_MUND_RE.search(erste) and not _ABSAGE_MUND_RE.search(erste):
@@ -543,7 +611,8 @@ def anliegen_bearbeitet(manifest: dict[str, Any] | None, anliegen_id: str) -> bo
     if kid == "kosten":
         return _mund_hat(m, "euro", "kostet", "preis")
     if kid == "notfall":
-        return _ok(m.get("lastBook")) or bool(_s(m.get("praxisNotiz"))) or "112" in mund
+        return (_ok(m.get("lastBook")) or bool(_s(m.get("praxisNotiz")))
+                or "112" in mund or _zahnnotfall_richtig(m))
     return False
 
 
@@ -571,7 +640,7 @@ def _erledigt_beleg(manifest: dict[str, Any], kid: str) -> bool:
     if kid == "buchen" or kid == "neupatient":
         return _ok(manifest.get("lastBook"))
     if kid == "absagen":
-        return _ok(manifest.get("lastCancel"))
+        return _ok(manifest.get("lastCancel")) or _absage_sicher_beibehalten(manifest)
     if kid == "verschieben":
         return _ok(manifest.get("lastMove"))
     if kid == "auskunft":
@@ -601,8 +670,18 @@ def _erledigt_beleg(manifest: dict[str, Any], kid: str) -> bool:
     if kid == "kosten":
         return _mund_hat(manifest, "euro", "kostet", "preis")
     if kid == "notfall":
-        return _ok(manifest.get("lastBook")) or bool(_s(manifest.get("praxisNotiz")))
+        return (_ok(manifest.get("lastBook"))
+                or bool(_s(manifest.get("praxisNotiz")))
+                or _zahnnotfall_richtig(manifest))
     return False
+
+
+# Chef 28.09.2026: MedDent ee168a12… ist kein Fail. Nach der Terminfrage
+# wechselt der Anrufer auf Griechisch, Bianca antwortet langsam und deutlich.
+# Der Fall zählt in der Ergebnisliste als Erfolg.
+_CHEF_ERFOLG = frozenset({
+    "ee168a125c5444abbd7b857ad34f291e",
+})
 
 
 def erledigt(manifest: dict[str, Any] | None, anliegen_id: str) -> bool:
@@ -612,6 +691,8 @@ def erledigt(manifest: dict[str, Any] | None, anliegen_id: str) -> bool:
     if kid in ("arzt_sprechen", "mitarbeiter_sprechen") and (
             _verbindung_technisch_gescheitert(m)):
         return False
+    if _s(m.get("id") or m.get("sid")) in _CHEF_ERFOLG:
+        return True
     if _erledigt_beleg(m, kid):
         return True
     return guter_anrufer_abschluss(m)
@@ -630,6 +711,202 @@ _PATIENT_LESER = (
     "findpatient", "agentfindpatient", "searchpatient", "massearchpatient",
     "patientlastdoctor", "findappointmentsbydate",
 )
+_WRITE_PARTS = {
+    "book": ("bookappointment", "book_slot", "masbook"),
+    "cancel": ("cancelappointment", "cancel_appointment", "mascancel"),
+    "move": ("moveappointment", "move_appointment", "masmove"),
+    "note": ("appointmentnote", "note_appointment", "praxis_notiz"),
+    "phone": ("updatepatientphone", "update_phone"),
+    "patient": ("createpatient", "create_patient"),
+    "transfer": ("transfer",),
+}
+_ERFOLG_CLAIMS = {
+    "book": re.compile(
+        r"\btermin\b.{0,90}\b(?:fest )?(?:eingetragen|gebucht|vereinbart)\b|"
+        r"\balles\b.{0,30}\beingetragen\b",
+        re.I | re.S,
+    ),
+    "cancel": re.compile(
+        r"\btermin\b.{0,90}\b(?:abgesagt|storniert|geloescht|gestrichen)\b",
+        re.I | re.S,
+    ),
+    "move": re.compile(
+        r"\btermin\b.{0,90}\b(?:verschoben|verlegt|umgebucht)\b",
+        re.I | re.S,
+    ),
+    "note": re.compile(
+        r"\b(?:notiz|rueckruf(?:bitte|wunsch)?)\b.{0,90}"
+        r"\b(?:notiert|angelegt|geschrieben|eingerichtet)\b|"
+        r"\bdie praxis meldet sich\b",
+        re.I | re.S,
+    ),
+    "transfer": re.compile(
+        r"\b(?:stelle|verbinde|leite)\b.{0,80}\b(?:durch|weiter|verbindung)\b|"
+        r"\bverbindung\b.{0,60}\b(?:eingeleitet|hergestellt)\b",
+        re.I | re.S,
+    ),
+}
+
+
+def _fold(v: Any) -> str:
+    return (
+        _s(v).lower()
+        .replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+
+
+def _alle_tools(m: dict[str, Any]) -> list[dict[str, Any]]:
+    aus = [t for t in (m.get("tools") or []) if isinstance(t, dict)]
+    for zug in m.get("zuege") or []:
+        if isinstance(zug, dict):
+            aus.extend(t for t in (zug.get("tools") or []) if isinstance(t, dict))
+    return aus
+
+
+def _tool_name(tool: dict[str, Any]) -> str:
+    return _fold(tool.get("name") or tool.get("tool") or tool.get("cf"))
+
+
+def _tool_art(tool: dict[str, Any]) -> str:
+    name = _tool_name(tool)
+    for art, teile in _WRITE_PARTS.items():
+        if any(teil in name for teil in teile):
+            return art
+    return ""
+
+
+def _tool_eindeutig_ok(tool: dict[str, Any]) -> bool:
+    if tool.get("ok") is False or tool.get("success") is False or tool.get("error"):
+        return False
+    if tool.get("ok") is True or tool.get("success") is True:
+        return True
+    d = tool.get("dispatch") if isinstance(tool.get("dispatch"), dict) else {}
+    r = d.get("response") if isinstance(d.get("response"), dict) else {}
+    if r.get("success") is False or r.get("ok") is False:
+        return False
+    return bool(r.get("success") or r.get("ok"))
+
+
+def _tool_eindeutig_fehlgeschlagen(tool: dict[str, Any]) -> bool:
+    if tool.get("ok") is False or tool.get("success") is False or tool.get("error"):
+        return True
+    d = tool.get("dispatch") if isinstance(tool.get("dispatch"), dict) else {}
+    r = d.get("response") if isinstance(d.get("response"), dict) else {}
+    return (
+        r.get("success") is False
+        or r.get("ok") is False
+        or _http_status(tool) >= 500
+    )
+
+
+def _marker_ok(m: dict[str, Any], key: str) -> bool:
+    wert = m.get(key)
+    if not wert:
+        return False
+    if not isinstance(wert, dict):
+        return bool(wert)
+    if wert.get("ok") is False or wert.get("success") is False:
+        return False
+    if wert.get("error") and not (
+            wert.get("ok") or wert.get("success")
+            or wert.get("appointmentId") or wert.get("id")):
+        return False
+    return True
+
+
+def _abschluss_evidenz(m: dict[str, Any]) -> dict[str, bool]:
+    tools = _alle_tools(m)
+    return {
+        "book": _marker_ok(m, "lastBook")
+        or any(_tool_art(t) == "book" and _tool_eindeutig_ok(t) for t in tools),
+        "cancel": _marker_ok(m, "lastCancel")
+        or any(_tool_art(t) == "cancel" and _tool_eindeutig_ok(t) for t in tools),
+        "move": _marker_ok(m, "lastMove")
+        or any(_tool_art(t) == "move" and _tool_eindeutig_ok(t) for t in tools),
+        "note": _marker_ok(m, "lastNote")
+        or bool(_s(m.get("praxisNotiz")))
+        or any(_tool_art(t) == "note" and _tool_eindeutig_ok(t) for t in tools),
+        "transfer": _marker_ok(m, "lastTransfer")
+        or bool(m.get("weiterleitungZiel"))
+        or any(_tool_art(t) == "transfer" and _tool_eindeutig_ok(t) for t in tools)
+        or any(
+            bool(z.get("transfer"))
+            for z in (m.get("zuege") or [])
+            if isinstance(z, dict)
+        ),
+        "phone": any(
+            _tool_art(t) == "phone" and _tool_eindeutig_ok(t) for t in tools
+        ),
+        "patient": _marker_ok(m, "lastCreate")
+        or any(_tool_art(t) == "patient" and _tool_eindeutig_ok(t) for t in tools),
+    }
+
+
+def harte_fehler(manifest: dict[str, Any] | None) -> list[str]:
+    """Persistierte harte Fehlergrenze für Ergebnisseite UND Tages-Scorer.
+
+    Die Manifest-Belege sind die einzige Wahrheit. Ein erfolgreicher Retry
+    räumt den vorangegangenen Werkzeugfehler aus der harten Fehlerklasse;
+    eine bloße Rückrufnotiz ist ein ehrlicher Abschluss und niemals ein Fail.
+    """
+    m = manifest if isinstance(manifest, dict) else {}
+    tools = _alle_tools(m)
+    evidenz = _abschluss_evidenz(m)
+    aus: list[str] = []
+
+    for art in sorted(_WRITE_PARTS):
+        if evidenz.get(art):
+            continue
+        if any(
+                _tool_art(t) == art and _tool_eindeutig_fehlgeschlagen(t)
+                for t in tools):
+            aus.append(f"write_fehlgeschlagen:{art}")
+
+    # Auch echte Lese-/Cloud-Fehler bleiben sichtbar. Ein später erfolgreicher
+    # Aufruf desselben Werkzeugs beweist einen gelungenen Retry.
+    erfolgreiche_namen = {
+        _tool_name(t) for t in tools if _tool_name(t) and _tool_eindeutig_ok(t)
+    }
+    for tool in tools:
+        name = _tool_name(tool)
+        if (
+                _tool_art(tool)
+                or _designed_leer(tool)
+                or not _tool_eindeutig_fehlgeschlagen(tool)
+                or name in erfolgreiche_namen):
+            continue
+        aus.append(f"technik:{name or 'werkzeug'}")
+
+    if patient_nicht_gefunden(m):
+        aus.append("patient_nicht_gefunden")
+
+    mund = _fold(" ".join(_outputs(m)))
+    for art, muster in _ERFOLG_CLAIMS.items():
+        if muster.search(mund) and not evidenz.get(art, False):
+            aus.append(f"erfolg_ohne_beweis:{art}")
+
+    outputs = _outputs(m)
+    unklar_n = sum(1 for text in outputs if _UNKLAR_RE.search(text))
+    presence_n = sum(1 for text in outputs if _PRESENCE_RE.search(text))
+    sonst_n = sum(1 for text in outputs if _SONST_NOCH_RE.search(text))
+    wiederholt_n, wiederholt_text = _frage_wiederholt_detail(outputs)
+    if unklar_n >= 2:
+        aus.append(f"unklar_schleife:{unklar_n}")
+    if presence_n >= 2:
+        aus.append(f"presence_schleife:{presence_n}")
+    if sonst_n >= 3:
+        aus.append(f"sonst_noch_schleife:{sonst_n}")
+    if wiederholt_n >= 2:
+        aus.append(f"frage_wiederholt:{wiederholt_n}:{wiederholt_text}")
+
+    eindeutig: list[str] = []
+    for grund in aus:
+        if grund not in eindeutig:
+            eindeutig.append(grund)
+    return eindeutig
 
 
 def _online_link_belegt(m: dict[str, Any]) -> bool:
@@ -674,40 +951,24 @@ def patient_nicht_gefunden(manifest: dict[str, Any] | None) -> bool:
 def bianca_fehler(manifest: dict[str, Any] | None) -> list[str]:
     """Nachweisbare, von Bianca ausgelöste Dialogfehler (leere Liste = kein Fehler).
 
-    Bewusst schärfer als ``verlauf_stoerungen``: ein EINZELNES „das habe ich
-    nicht verstanden“, das danach korrigiert wird, ist kein Praxis-Fehler
-    (Chef: Fehler ist, „wenn Sie etwas nicht versteht, bzw NICHT korrigiert,
-    oder es unnötig viele Turns gibt“). Gezählt werden deshalb nur anhaltende
-    Probleme:
-
-    * ``missverstaendnis`` — mindestens ZWEI Unklar-Ausgaben (nicht korrigiert),
-    * ``wiederholungsschleife`` — dieselbe Frage ≥ 2× wortgleich,
-    * ``presence_schleife`` — ≥ 2× „Sind Sie noch dran?“,
-    * ``technik`` — echter Werkzeug-/HTTP-Fehler (kein designtes Leerergebnis),
-    * ``patient_nicht_gefunden`` — kritisch (Suche leer, Anliegen offen).
-
-    Anruferabbrüche (Auflegen, Ablehnen) stehen bewusst NICHT darin."""
-    m = manifest if isinstance(manifest, dict) else {}
-    outputs = _outputs(m)
+    Die Detailgründe kommen ausschließlich aus ``harte_fehler``. Diese
+    Projektion hält die historischen kurzen Labels der Ergebnisseite stabil.
+    Anruferabbrüche und ehrliche Rückrufnotizen stehen bewusst NICHT darin."""
     gruende: list[str] = []
-    if sum(1 for t in outputs if _UNKLAR_RE.search(t)) >= 2:
-        gruende.append("missverstaendnis")
-    if _frage_wiederholt(outputs) >= 2:
-        gruende.append("wiederholungsschleife")
-    if sum(1 for t in outputs if _PRESENCE_RE.search(t)) >= 2:
-        gruende.append("presence_schleife")
-    for t in m.get("tools") or []:
-        if not isinstance(t, dict) or _designed_leer(t):
-            continue
-        if t.get("ok") is False or _http_status(t) >= 500:
-            gruende.append("technik")
-            break
-    lb = m.get("lastBook")
-    if isinstance(lb, dict) and lb.get("ok") is False:
-        if "technik" not in gruende:
-            gruende.append("technik")
-    if patient_nicht_gefunden(m):
-        gruende.append("patient_nicht_gefunden")
+    for detail in harte_fehler(manifest):
+        if detail.startswith(("write_fehlgeschlagen:", "technik:")):
+            grund = "technik"
+        elif detail.startswith("erfolg_ohne_beweis:"):
+            grund = "unbelegte_erfolgsaussage"
+        elif detail.startswith("unklar_schleife:"):
+            grund = "missverstaendnis"
+        elif detail.startswith(("frage_wiederholt:", "sonst_noch_schleife:")):
+            grund = "wiederholungsschleife"
+        elif detail.startswith("presence_schleife:"):
+            grund = "presence_schleife"
+        else:
+            grund = detail
+        gruende.append(grund)
     aus: list[str] = []
     for g in gruende:
         if g not in aus:

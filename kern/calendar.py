@@ -1528,6 +1528,10 @@ def _held_booking_readback(
     patient_id = _name_confirm_scoped_id("ncp", tenant, token)
     appointment_id = _name_confirm_scoped_id("nca", tenant, token)
     error = "held_appointment_not_found"
+    # Diagnose ist datensparsam: die scoped IDs sind SHA256-Hashes (nicht auf
+    # Token/Telefon rückrechenbar), `scope` benennt NUR das abweichende Feld,
+    # NIE dessen Inhalt. Hilft Paket 3, den CF-Vertrag belastbar zu reparieren.
+    scope: str = ""
     for delay in _BOOK_VERIFY_DELAYS:
         if not _book_budget_left(deadline):
             error = "booking_deadline_exhausted"
@@ -1556,31 +1560,46 @@ def _held_booking_readback(
         ):
             error = "held_appointment_missing_or_inactive"
             continue
-        if (
-            _s(appointment.get("id")) != appointment_id
-            or _s(appointment.get("patientId")) != patient_id
-            or _slot_key(appointment.get("iso")) != _slot_key(iso)
-            or _s(appointment.get("calendarId")) != _s(calendar_id)
-            or _s(appointment.get("visitMotiveId")) != _s(visit_motive_id)
-            or appointment.get("nameConfirmTokenMatches") is not True
-            or appointment.get("nameConfirmPending") is not True
-            or appointment.get("confirmationHeld") is not True
-            or not _management_appointment_active(appointment)
-        ):
+        # Pro Feld prüfen, damit die Diagnose das abweichende Feld benennt.
+        # Das Verhalten bleibt identisch: jeder Treffer = scope_mismatch.
+        checks = (
+            ("id", _s(appointment.get("id")) == appointment_id),
+            ("patientId", _s(appointment.get("patientId")) == patient_id),
+            ("iso", _slot_key(appointment.get("iso")) == _slot_key(iso)),
+            ("calendarId",
+             _s(appointment.get("calendarId")) == _s(calendar_id)),
+            ("visitMotiveId",
+             _s(appointment.get("visitMotiveId")) == _s(visit_motive_id)),
+            ("tokenMatch",
+             appointment.get("nameConfirmTokenMatches") is True),
+            ("pending", appointment.get("nameConfirmPending") is True),
+            ("held", appointment.get("confirmationHeld") is True),
+            ("active", _management_appointment_active(appointment)),
+        )
+        fehler = [feld for feld, ok in checks if not ok]
+        if fehler:
             error = "held_appointment_scope_mismatch"
+            scope = ",".join(fehler)
             continue
         return {
             "ok": True,
             "appointmentId": appointment_id,
             "patientId": patient_id,
             "beweis": "deterministic_firestore_id",
+            "expectedAppointmentId": appointment_id,
+            "source": "phone_agent",
         }
-    return {
+    out: dict[str, Any] = {
         "ok": False,
         "appointmentId": "",
         "patientId": patient_id,
         "error": error,
+        "expectedAppointmentId": appointment_id,
+        "source": "phone_agent",
     }
+    if scope:
+        out["scope"] = scope
+    return out
 
 
 def _buch_und_akte(

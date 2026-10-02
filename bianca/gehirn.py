@@ -2209,6 +2209,42 @@ def _dringlichkeit_anwenden(sit: dict, t: str, neu: set[str]) -> None:
         neu.add("wunsch")
 
 
+def _entdoppelter_name(roh: str, alt: str = "") -> str:
+    """Nachnamen-Fusion aufloesen (Paket 9, Replay blessing-fusion).
+
+    Live verschmolz der schon GESPROCHENE Name mit seiner Buchstabierkette zu
+    "Grafgrafgras"/"Bayerbayerr". Zwei Muster werden eng kollabiert:
+    - exakte Selbst-Wiederholung einer Kette ("grafgraf" -> "graf"),
+    - die Kette WIEDERHOLT den schon gehoerten Namen ``alt`` ("Graf" + "graf…"
+      -> "Graf"), auch mit einem kurzen verhoerten Schwanz ("…gras"/"…rr").
+
+    Bewusst konservativ: ein echter Doppel-Buchstaben-Name ("Anna") und ein
+    echter Doppelname bleiben unberuehrt — kollabiert wird nur, wenn die erste
+    Haelfte die zweite (fuzzy) deckt bzw. der Vorsatz exakt der gehoerte Name
+    ist. Im Zweifel bleibt ``roh`` stehen (ein verschlucktes Zeichen waere der
+    teurere Fehler)."""
+    kern = re.sub(r"[^a-zäöüß]", "", _s(roh).casefold())
+    if len(kern) < 6:
+        return roh
+    altkern = re.sub(r"[^a-zäöüß]", "", _s(alt).casefold())
+    # (a) Vorsatz ist exakt der schon gehoerte Name -> nur den Schwanz pruefen.
+    if altkern and len(altkern) >= 3 and kern.startswith(altkern):
+        schwanz = kern[len(altkern):]
+        if not schwanz:
+            return alt or roh
+        # Schwanz ist eine (verhoerte) Wiederholung desselben Namens.
+        if (schwanz.startswith(altkern[:3])
+                and SequenceMatcher(None, schwanz, altkern).ratio() >= 0.6):
+            return alt or (roh[0].upper() + roh[1:])
+    # (b) exakte Selbst-Wiederholung "grafgraf" -> "graf".
+    h = len(kern) // 2
+    erste, zweite = kern[:h], kern[h:]
+    if len(erste) >= 3 and (erste == zweite[:len(erste)]
+                            or SequenceMatcher(None, erste, zweite).ratio() >= 0.8):
+        return erste[0].upper() + erste[1:]
+    return roh
+
+
 def einsammeln(sit: dict, text: str) -> set[str]:
     """Alle Deuter über den Satz laufen lassen; liefert die neu gefüllten Felder."""
     s = sammler(sit)
@@ -2722,8 +2758,12 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         if len(kette) >= 2 and (einzeln or (buch or {}).get("sicher")
                                 or _DIKTAT_FERTIG_RE.search(t)):
             if etikett == "nachname":
-                neu_nach = kette[0].upper() + kette[1:]
                 alt = _s(s["nachname"])
+                kette = re.sub(
+                    r"[^a-zäöüß]", "",
+                    _entdoppelter_name(kette, alt).casefold(),
+                ) or kette
+                neu_nach = kette[0].upper() + kette[1:]
                 if (alt and len(alt) >= len(kette)
                         and SequenceMatcher(None, kette, alt.casefold()).ratio() >= 0.8):
                     neu_nach = alt  # Buchstabierung BESTAETIGT den gehoerten Namen
@@ -2838,6 +2878,10 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         if s["buchstabenTeil"] or ist_kurzer_anfang:
             zusammen = f"{s['buchstabenTeil']}{teil}"[:40]
             if _DIKTAT_FERTIG_RE.search(t) and len(zusammen) >= 2:
+                zusammen = re.sub(
+                    r"[^a-zäöüßA-ZÄÖÜ]", "",
+                    _entdoppelter_name(zusammen, s.get("nachname") or ""),
+                ) or zusammen
                 s["nachname"] = zusammen[0].upper() + zusammen[1:]
                 s["buchstabiert"] = True
                 s["buchstabenTeil"] = ""
@@ -5006,6 +5050,14 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if _s(s.get("nachnameCheck")) == "offen" and _s(s.get("nachname")):
         return "nachname_check", nachname_check_frage(s)
 
+    # Ein erkannter Anrufer wird zuerst als Person bestätigt. Auch eine
+    # freiwillig vorgezogene „meine Nummer“-Angabe bleibt bis zum
+    # Telefon-Tor geparkt (W-TELEFON-ZULETZT); sie darf die Identitätsfrage
+    # nicht überholen.
+    if (not s["anruferCheck"] and not s["nachname"] and not s["fuerWen"]
+            and s["warSchonMal"] is not False and anrufer_bekannt(sit)):
+        return "anrufer_check", anrufer_check_frage(sit)
+
     # Eine gehörte Nummer wird IMMER erst rückbestätigt (Chef: sicher aufnehmen).
     if s["telefonOffen"] and not s["telefonOk"]:
         if (s["telefonBekannt"]
@@ -5048,12 +5100,6 @@ def naechste_frage(sit: dict) -> tuple[str, str]:
     if s["bleaching"] == "check":
         return "bleaching_check", ("Haben Sie denn im Frontbereich Zahnersatz — "
                                    "also Kronen, Brücken, Veneers oder Implantate?")
-
-    # W-ANRUFER-CHECK: Rufnummer hat einen Kartei-Patienten getroffen. Name
-    # einmal bestätigen; Nummer und Terminempfänger folgen separat.
-    if (not s["anruferCheck"] and not s["nachname"] and not s["fuerWen"]
-            and s["warSchonMal"] is not False and anrufer_bekannt(sit)):
-        return "anrufer_check", anrufer_check_frage(sit)
 
     if (s["modus"] == "buchen" and s["anruferCheck"] == "ja"
             and not s["fuerWenCheck"] and not s["fuerWen"]

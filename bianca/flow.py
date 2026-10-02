@@ -4139,6 +4139,20 @@ def _rechnung_antwort(sit: dict, t: str) -> dict | None:
 
 _RECHNUNG_SONST_NOCH_STATUS = {"notiert", "rueckruf", "abgelehnt", "persoenlich"}
 _DANK_RE = re.compile(r"\bdank\w*\b", re.I)
+# Paket 7 (02.10.2026, Replay blessing-sonst-noch): schliessende
+# Zufriedenheits-Floskeln ("Okay, passt schon.", "alles klar", "passt",
+# "das reicht") auf die Sonst-noch-Frage heissen "nichts mehr" — sonst fiel
+# die Antwort als None durch und die Frage loopte. Bewusst ohne Job-Wort:
+# ein echtes Folge-Anliegen ("ja, einen Termin") traegt eigene Inhaltswoerter
+# und wird von _sonst_noch_antwort weiter als None (nicht unser Satz) gewertet.
+_SONST_NOCH_FERTIG_RE = re.compile(
+    r"^\s*(?:(?:ja|jaja|na|nun|also|gut|okay|ok|schon|dann|nein)\b[\s,]*)*"
+    r"(?:passt(?:\s+(?:schon|so))?|alles\s+(?:klar|gut|bestens|paletti)|"
+    r"so\s+(?:passt(?:\s+es)?|ist(?:\s+es)?\s+gut)|ist\s+gut|"
+    r"reicht(?:\s+schon)?|bin\s+(?:zu)?frieden|in\s+ordnung)"
+    r"\s*[.!?…]*\s*$",
+    re.I,
+)
 
 
 _SONST_NOCH = "Kann ich sonst noch etwas für Sie tun?"
@@ -4194,8 +4208,10 @@ def _sonst_noch_antwort(
     ja = gehirn.ist_ja(t) and not nein
     if (_ABSCHIED_RE.search(t) or _VERHOERTES_DANKE_RE.match(t)
             or _RUECKRUF_NICHTS_MEHR_RE.search(t)
+            or _SONST_NOCH_FERTIG_RE.match(t)
             or (kurz and (nein or _DANK_RE.search(t)))):
         # "Nein." / "Nein, das war alles." / "Ja, danke." / "Danke, tschüss."
+        # / "Okay, passt schon." (Replay blessing-sonst-noch).
         return {"text": nein_text, "hangup": abschied.an(),
                 "_wiederholungErlaubt": True}
     if ja and kurz:
