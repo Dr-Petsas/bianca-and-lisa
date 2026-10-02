@@ -98,7 +98,11 @@ done
 # zusätzlich zum .git-Verzeichnis im Server-Arbeitsbaum der portable Rückweg.
 if [ -s /tmp/telefonki-v6.2.bundle ]; then
   cp -a /tmp/telefonki-v6.2.bundle "$TMP/telefonki-v6.2.bundle"
-  git bundle verify "$TMP/telefonki-v6.2.bundle" > "$TMP/git-bundle-verify.txt" 2>&1
+  bundle_repo=$(mktemp -d)
+  git init --bare -q "$bundle_repo"
+  git -C "$bundle_repo" bundle verify "$TMP/telefonki-v6.2.bundle" \
+    > "$TMP/git-bundle-verify.txt" 2>&1
+  rm -rf "$bundle_repo"
 else
   echo "FEHLER: /tmp/telefonki-v6.2.bundle fehlt"
   exit 1

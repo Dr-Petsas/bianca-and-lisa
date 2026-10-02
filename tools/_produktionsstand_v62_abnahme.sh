@@ -36,7 +36,10 @@ grep -qx "freeze=$image_hash" "$S/code-paritaet.txt"
 echo "OK $live_hash"
 
 echo "== Git-Bundle und vollständige Archive"
-git bundle verify "$S/telefonki-v6.2.bundle"
+bundle_repo=$(mktemp -d)
+git init --bare -q "$bundle_repo"
+git -C "$bundle_repo" bundle verify "$S/telefonki-v6.2.bundle"
+rm -rf "$bundle_repo"
 for f in \
   tenants.tgz \
   secrets.tgz \
