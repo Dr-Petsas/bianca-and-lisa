@@ -397,11 +397,16 @@ function chartBahnen(aus) {
 }
 
 function kpiKarten(g) {
+  const anliegenQuote = g.anliegenQuote == null
+    ? ["—", ""]
+    : [`${Number(g.anliegenQuote).toFixed(1)} %`, Number(g.anliegenQuote) >= 70 ? "ok" : "bad"];
   return [
     ["Gespräche", g.gespraeche || 0, ""],
     ["Anliegen erkannt", g.anliegenErkannt || 0, ""],
     ["Anliegen erledigt", g.anliegenErledigt || 0, "ok"],
-    ["Anliegen-Quote", `${Number(g.anliegenQuote || 0).toFixed(1)} %`, Number(g.anliegenQuote || 0) >= 70 ? "ok" : "bad"],
+    ["Anliegen neutral", g.anliegenNeutral || 0, ""],
+    ["Anliegen fail", g.anliegenFail || 0, (g.anliegenFail || 0) ? "bad" : "ok"],
+    ["Anliegen-Quote", anliegenQuote[0], anliegenQuote[1]],
     ["CFs ok", g.cfOk || 0, "ok"],
     ["CFs kein Termin", g.cfLeer || 0, ""],
     ["CFs fail", g.cfFail || 0, (g.cfFail || 0) ? "bad" : "ok"],
@@ -476,26 +481,31 @@ function liveAnliegen(zeilen, zielId) {
     let kopf = "";
     if (z.gruppe && z.gruppe !== gruppe) {
       gruppe = z.gruppe;
-      kopf = `<tr><td colspan="5"><strong>${esc(gruppe)}</strong></td></tr>`;
+      kopf = `<tr><td colspan="6"><strong>${esc(gruppe)}</strong></td></tr>`;
     }
     const alle = z.gespraeche || [];
     const erledigt = alle.filter((g) => g.stand === "erledigt");
-    const offen = alle.filter((g) => g.stand !== "erledigt");
+    const neutral = alle.filter((g) => g.stand === "neutral");
+    const offen = alle.filter((g) => g.stand === "offen");
     const restOffen = (!alle.length && z.offenGespraeche) ? z.offenGespraeche : offen;
-    const innen = gespraechGruppe("Erledigt", erledigt) + gespraechGruppe("Offen", restOffen);
+    const restNeutral = (!alle.length && z.neutralGespraeche) ? z.neutralGespraeche : neutral;
+    const innen = gespraechGruppe("Erledigt", erledigt)
+      + gespraechGruppe("Neutral (kein Bianca-Fehler)", restNeutral)
+      + gespraechGruppe("Fail", restOffen);
     const name = innen
       ? `<details class="problem-akkordeon"><summary>${esc(z.titel)}</summary>${innen}</details>`
       : esc(z.titel);
-    const quote = z.erkannt ? `${z.quote} %` : "—";
-    const quoteKlasse = !z.erkannt ? "" : (Number(z.quote) >= 100 ? "ok" : (Number(z.offen) > 0 ? "bad" : ""));
+    const quote = z.quote == null ? "—" : `${z.quote} %`;
+    const quoteKlasse = z.quote == null ? "" : (Number(z.quote) >= 100 ? "ok" : (Number(z.offen) > 0 ? "bad" : ""));
     return `${kopf}<tr>
       <td>${name}</td>
       <td><span class="ok">${esc(z.erkannt)}</span></td>
       <td><span class="ok">${esc(z.erledigt)}</span></td>
+      <td>${z.neutral ? `<span>${esc(z.neutral)}</span>` : "0"}</td>
       <td>${z.offen ? `<span class="bad">${esc(z.offen)}</span>` : `<span class="ok">0</span>`}</td>
       <td><span class="${quoteKlasse}">${esc(quote)}</span></td>
     </tr>`;
-  }).join("") || '<tr><td colspan="5" class="klein">Keine erkannten Anliegen.</td></tr>';
+  }).join("") || '<tr><td colspan="6" class="klein">Keine erkannten Anliegen.</td></tr>';
 }
 
 function strategienZeichnen(liste) {
@@ -631,9 +641,10 @@ function summeZeichnen(d) {
   const hinweis = $("gesamt-hinweis");
   if (!hinweis) return;
   const g = summe.gesamt || {};
+  const quote = g.anliegenQuote == null ? "—" : `${Number(g.anliegenQuote).toFixed(1)} %`;
   hinweis.textContent =
     `Summe über die gezeichneten Tage: ${g.gespraeche || 0} Gespräche, ` +
-    `Anliegen-Quote ${Number(g.anliegenQuote || 0).toFixed(1)} %. ` +
+    `Anliegen-Quote ${quote}. ` +
     "Um 20:00 Uhr kommt der Tag als Punkt dazu. Diese Summe wird dabei nicht auf null gesetzt.";
 }
 

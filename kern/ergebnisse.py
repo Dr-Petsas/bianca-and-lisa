@@ -135,7 +135,8 @@ def _delta_gesamt(alt: dict[str, Any] | None, neu: dict[str, Any] | None) -> dic
     if not isinstance(alt, dict) or not isinstance(neu, dict):
         return None
     keys = (
-        "gespraeche", "anliegenErkannt", "anliegenErledigt", "anliegenQuote",
+        "gespraeche", "anliegenErkannt", "anliegenErledigt",
+        "anliegenNeutral", "anliegenFail", "anliegenQuote",
         "cfOk", "cfLeer", "cfFail", "cfQuote",
     )
     aus: dict[str, Any] = {}
@@ -506,16 +507,28 @@ def _mittel(werte: list[float]) -> float:
 def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
     erkannt: Counter[str] = Counter()
     ok: Counter[str] = Counter()
+    fail: Counter[str] = Counter()
+    neutral: Counter[str] = Counter()
     beispiele: dict[str, list[dict[str, str]]] = defaultdict(list)
     for m in anrufe:
         ids = anruf_anliegen.ids_von(m)
         sid = _s(m.get("_sid") or m.get("id"))
+        wertung, _ = anruf_anliegen.anruf_wertung(m)
         for i in ids:
             erkannt[i] += 1
             fertig = anruf_anliegen.erledigt(m, i)
             if fertig:
                 ok[i] += 1
-            stand = "erledigt" if fertig else "offen"
+                stand = "erledigt"
+            elif wertung == "fehler":
+                fail[i] += 1
+                stand = "offen"
+            else:
+                # Ein Anrufer-Abbruch oder eine Ablehnung ohne Bianca-Fehler
+                # ist neutral. Die Ergebnisseite darf daraus keinen roten
+                # Fail machen (MedDent 471dd03a…, Chef 02.10.2026).
+                neutral[i] += 1
+                stand = "neutral"
             liste = beispiele[i]
             if len(liste) < 24:
                 liste.append({
@@ -528,6 +541,9 @@ def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for i in anruf_anliegen.REIHE:
         n = erkannt.get(i, 0)
         e = ok.get(i, 0)
+        f = fail.get(i, 0)
+        u = neutral.get(i, 0)
+        gewertet = e + f
         fest = i in _FEST_ANLIEGEN
         zeilen.append({
             "id": i,
@@ -536,11 +552,15 @@ def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "fest": fest,
             "erkannt": n,
             "erledigt": e,
-            "offen": n - e,
-            "quote": round(100.0 * e / n, 1) if n else None,
+            "neutral": u,
+            "offen": f,
+            "quote": round(100.0 * e / gewertet, 1) if gewertet else None,
             "gespraeche": beispiele.get(i, []),
             "offenGespraeche": [
-                g for g in beispiele.get(i, []) if g.get("stand") != "erledigt"
+                g for g in beispiele.get(i, []) if g.get("stand") == "offen"
+            ],
+            "neutralGespraeche": [
+                g for g in beispiele.get(i, []) if g.get("stand") == "neutral"
             ],
         })
     return zeilen
@@ -1080,6 +1100,9 @@ def _block_von(gefiltert: list[dict[str, Any]], last_basis: list[dict[str, Any]]
     anliegen = _anliegen_zeilen(gefiltert)
     erkannt = sum(z["erkannt"] for z in anliegen)
     erledigt = sum(z["erledigt"] for z in anliegen)
+    neutral = sum(z.get("neutral", 0) for z in anliegen)
+    fail = sum(z["offen"] for z in anliegen)
+    gewertet = erledigt + fail
     cfs = _cf_zeilen(gefiltert)
     cf_ok = sum(z["ok"] for z in cfs)
     cf_leer = sum(z.get("leer", 0) for z in cfs)
@@ -1090,7 +1113,11 @@ def _block_von(gefiltert: list[dict[str, Any]], last_basis: list[dict[str, Any]]
             "gespraeche": len(gefiltert),
             "anliegenErkannt": erkannt,
             "anliegenErledigt": erledigt,
-            "anliegenQuote": round(100.0 * erledigt / erkannt, 1) if erkannt else 0.0,
+            "anliegenNeutral": neutral,
+            "anliegenFail": fail,
+            "anliegenQuote": (
+                round(100.0 * erledigt / gewertet, 1) if gewertet else None
+            ),
             "cfOk": cf_ok,
             "cfLeer": cf_leer,
             "cfFail": cf_fail,
