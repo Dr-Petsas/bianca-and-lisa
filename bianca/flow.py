@@ -1121,7 +1121,7 @@ def _quittung(s: dict, neu: set[str]) -> str:
         return "Kein Problem, das finden wir schon. "
     if "grund" in neu:
         # Nicht zwischen Hallo und Selbst-Frage schieben (Thaler 08.09.:
-        # „Ich bin die Neue! Alles klar. Der Termin ist…“).
+        # „Ah, Frau X. Alles klar. Der Termin ist…“).
         if s.get("frage") == "anrufer_check":
             return ""
         if s.get("grundGenerisch"):

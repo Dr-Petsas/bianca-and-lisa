@@ -130,14 +130,13 @@ def test_transkript_traegt_fueller_und_vorab():
     from kern.filler import transkript_mund
     assert transkript_mund(
         ["Einen Moment."],
-        "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!",
+        "Ah, Herr Petsas.",
         "Für wann hätten Sie denn gern einen Termin?",
     ) == (
-        "Einen Moment. Ah, Herr Petsas. Wir kennen uns noch nicht. "
-        "Ich bin die Neue! Für wann hätten Sie denn gern einen Termin?"
+        "Einen Moment. Ah, Herr Petsas. Für wann hätten Sie denn gern einen Termin?"
     )
     # Reply startet mit Vorab — nicht doppelt.
-    hallo = "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!"
+    hallo = "Ah, Herr Petsas."
     assert transkript_mund([], hallo, hallo + " Bianca.") == hallo + " Bianca."
     assert transkript_mund([], "", "Ja, gerne.") == "Ja, gerne."
     # P5-FIFO einzeln abgleichen: ein zusaetzliches Hallo bleibt, die danach

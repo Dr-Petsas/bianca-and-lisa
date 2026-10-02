@@ -298,7 +298,7 @@ def test_presence_einmal_dann_jobfrage_dann_sauber_auflegen():
     assert drei.get("hangup") is True
 
 
-def test_meddent_bleibt_bei_altem_hallo_sermon_und_notizfrage(monkeypatch):
+def test_meddent_erstkontakt_bleibt_knapp_und_notizfrage_bleibt(monkeypatch):
     sit = _sit(tenant_id="meddent")
     sit["anrufer"] = {
         "vorname": "Michael",
@@ -306,7 +306,7 @@ def test_meddent_bleibt_bei_altem_hallo_sermon_und_notizfrage(monkeypatch):
         "geschlecht": "male",
         "telefon": "+491701234567",
     }
-    assert "Ich bin die Neue!" in gehirn.anrufer_hallo(sit)
+    assert gehirn.anrufer_hallo(sit) == "Ah, Herr Petsas."
     assert (
         weiterleiten.zug(sit, "Ich möchte mit einem Menschen sprechen.")["text"]
         == weiterleiten.ENTLASTUNG
@@ -319,10 +319,10 @@ def test_meddent_bleibt_bei_altem_hallo_sermon_und_notizfrage(monkeypatch):
     assert "Notiz für den Doktor" in aus["text"]
 
 
-def test_flag_entfernen_stellt_altes_hallo_byte_identisch_her():
+def test_flag_entfernen_erfindet_ohne_karteiname_keinen_icebreaker():
     tenant = copy.deepcopy(laden("blessing"))
     tenant.pop("halloKompakt")
     sit = session.neu(tenant=tenant)
     sit["halloVariante"] = 0
 
-    assert gehirn.anrufer_hallo(sit) == gehirn.HALLO_NEU[0]
+    assert gehirn.anrufer_hallo(sit) == ""

@@ -3117,7 +3117,7 @@ def test_anrufer_check_buchung_trennt_identitaet_terminempfaenger_und_sms():
         sit = _sit_mit_anrufer()
         z1 = flow.zug(sit, "Guten Tag, ich hätte gern einen Termin.")
         assert z1 and "Frau Berger" in z1["text"]
-        assert "Ich bin die Neue!" in z1["text"]
+        assert "Ich bin die Neue!" not in z1["text"]
         assert "null eins" not in z1["text"]  # kein Nummern-Sermon im ersten Zug
         assert "Julia Berger" not in z1["text"]
         assert z1["text"].split("?")[0].count("?") == 0  # Hallo stellt keine Extra-Frage
@@ -3202,15 +3202,15 @@ def test_erkannt_michael_petsas_wird_nach_hallo_nur_noch_mit_sie_angesprochen():
 
 
 def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
-    """Erster Ton ohne Nummer; 'Gut.' auf wie-geht's ist kein Identitäts-Ja."""
+    """Kurzer Namensanker; ein loses 'Gut.' ist kein Identitäts-Ja."""
     hallo = gehirn.anrufer_hallo({
         "anrufer": {
             "vorname": "Julia", "nachname": "Berger",
             "geschlecht": "female", "telefon": "+4915253904756",
         }
     })
-    assert "Frau Berger" in hallo
-    assert hallo.endswith("Ich bin die Neue!")
+    assert hallo == "Ah, Frau Berger."
+    assert "Ich bin die Neue!" not in hallo
     assert "Bianca" not in hallo
     assert "?" not in hallo
     assert not any(c.isdigit() for c in hallo)
@@ -3221,7 +3221,8 @@ def test_anrufer_hallo_ohne_ziffern_und_gut_stoert_nicht():
     assert saetze and "Frau Berger" in saetze[0]
     assert not tts.ziffern_satz(saetze[0])
     assert not any(tts.ziffern_satz(s) for s in saetze)
-    assert "Ich bin die Neue!" in saetze
+    assert "Ich bin die Neue!" not in saetze
+    assert saetze[0] == "Ah, Frau Berger."
     assert "Bianca." not in saetze
     assert saetze[-1] == "Habe ich Sie richtig erkannt?"
     assert gehirn.ist_anrufer_wohl("Gut.")
@@ -3255,7 +3256,7 @@ def test_anrufer_hallo_nur_nach_gespraech_bekannt_nicht_wegen_kartei():
     Weiche ist das vorherige TELEFON-Gespraech, nicht die Patientenakte."""
     sit = _sit_mit_anrufer()
     hallo = gehirn.anrufer_hallo(sit)
-    assert "Ich bin die Neue!" in hallo
+    assert hallo == "Ah, Frau Berger."
     assert "angerufen" not in hallo
     assert "Behandlung" not in hallo
 
@@ -3322,8 +3323,8 @@ def test_anrufer_hallo_icebreaker_variiert():
         s = _sit_mit_anrufer()
         s["halloVariante"] = i
         t = gehirn.anrufer_hallo(s)
-        assert t.endswith("Ich bin die Neue!")
-        assert "Frau Berger" in t and "?" not in t
+        assert t == "Ah, Frau Berger."
+        assert "Ich bin die Neue!" not in t and "?" not in t
         neu.append(t)
     assert len(set(neu)) == len(gehirn.HALLO_NEU_WER)
 
@@ -3555,11 +3556,10 @@ def test_anrufer_check_erstgespraech_kein_bianca_vorspann():
 
 
 def test_anrufer_hallo_geht_als_vorab_nicht_seriell():
-    """Hallo startet SOFORT als Vorab — nicht erst nach der Nummer-TTS.
+    """Der Namensanker startet SOFORT — nicht erst nach der Nummer-TTS.
 
     Der volle Antworttext behält den Hallo als Präfix, damit json_antwort
-    nur die Identitätsfrage vertont — die Naht ist die Pause
-    nach „Ich bin die Neue!“."""
+    nur die Identitätsfrage vertont."""
     from bianca import agent as bianca_agent
     from kern import sprech
 
@@ -3577,7 +3577,8 @@ def test_anrufer_hallo_geht_als_vorab_nicht_seriell():
         aus = bianca_agent.user_turn(
             sit, "Guten Tag, ich hätte gern einen Termin.", vorab=hits.append)
         assert hits, "Hallo muss parallel raus, bevor die Selbst-Frage folgt"
-        assert hits[0].rstrip().endswith("Ich bin die Neue!")
+        assert hits[0] == "Ah, Frau Berger."
+        assert "Ich bin die Neue!" not in hits[0]
         assert "Bianca" not in hits[0]
         assert not any(c.isdigit() for c in hits[0])
         assert sit.get("anruferHalloGesagt")

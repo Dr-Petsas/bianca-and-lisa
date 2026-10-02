@@ -88,13 +88,13 @@ for satz in ("Frau Doktor Ruether ist heute in der Praxis.",
 
 print("== Warm-Lauf: gewaermt wird, was der Mund spricht ==")
 ben_saetze = gehirn.feste_saetze(ruether)
-wahr("Ben waermt 'Ich bin der Neue'",
-     any("Ich bin der Neue" in s for s in ben_saetze))
+wahr("Ben waermt NICHT 'Ich bin der Neue'",
+     not any("Ich bin der Neue" in s for s in ben_saetze))
 wahr("Ben waermt NICHT 'Ich bin die Neue'",
      not any("Ich bin die Neue" in s for s in ben_saetze))
 bianca_saetze = gehirn.feste_saetze(tenants.laden("meddent"))
-wahr("MedDent waermt weiter 'Ich bin die Neue'",
-     any("Ich bin die Neue" in s for s in bianca_saetze))
+wahr("MedDent waermt NICHT 'Ich bin die Neue'",
+     not any("Ich bin die Neue" in s for s in bianca_saetze))
 
 print("== TTS: Stimme gilt pro Anruf ==")
 pruef("Prozess-Default", tts.stimme_jetzt(), tts._VOICE_NAME)

@@ -3785,17 +3785,8 @@ def voriges_gespraech(sit: dict) -> dict:
 # Icebreaker-Varianten (Chef 08.09.2026): nicht jedes Mal derselbe Satz.
 # Index liegt an der Sitzung, damit Vorwaermen und Mund denselben Text haben.
 _HALLO_NR = 0
-HALLO_NEU = (
-    "Wir kennen uns noch nicht. Ich bin die Neue!",
-    "Schön, dass Sie anrufen — wir kennen uns noch nicht. Ich bin die Neue!",
-    "Am Telefon kennen wir uns noch nicht. Ich bin die Neue!",
-    "Wir haben uns am Telefon noch nie gesprochen. Ich bin die Neue!",
-)
 HALLO_NEU_WER = (
-    "Ah, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!",
-    "Ah, {wer} — wir kennen uns am Telefon noch nicht. Ich bin die Neue!",
-    "Schön, dass Sie anrufen, {wer}. Wir kennen uns noch nicht. Ich bin die Neue!",
-    "Wir kennen uns noch nicht, {wer}. Ich bin die Neue!",
+    "Ah, {wer}.",
 )
 HALLO_ANRUF = (
     "Ah, {wer}, wie geht es Ihnen?",
@@ -3833,9 +3824,8 @@ def _hallo_wahl(sit: dict, formen: tuple[str, ...], **felder: str) -> str:
         _HALLO_NR += 1
     form = formen[int(i) % len(formen)]
     text = form.format(**{k: v for k, v in felder.items() if v})
-    # Die Varianten stehen weiblich im Code ("Ich bin die Neue!"). Bei einem
-    # maennlichen Assistenten dreht kern/assistent die Selbstbezeichnung —
-    # bei Bianca kommt der Text unveraendert zurueck.
+    # Selbstbezeichnungen in den Varianten dreht kern/assistent passend zum
+    # Mandanten; der knappe Erstkontakt oben enthält bewusst keine mehr.
     return assistent.formen(text, sit.get("tenant"))
 
 
@@ -3894,9 +3884,9 @@ def anrufer_hallo(sit: dict) -> str:
     """Schneller erster Icebreaker ohne Ziffern.
 
     Chef 08.09.2026: bekannt nur, wenn wir SCHON miteinander gesprochen
-    haben — nicht weil die Nummer in der Kartei steht.     Erstgespraech
-    bleibt „Ich bin die Neue!“. Der Name steht in der Begrüßung,
-    nicht nochmal vor der Selbst-Frage."""
+    haben — nicht weil die Nummer in der Kartei steht. Beim Erstgespräch
+    genügt der kurze Namensanker vor der Identitätsfrage; „Ich bin die Neue“
+    war nach der regulären Begrüßung redundant (Chef 02.10.2026)."""
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     if tenant.get("halloKompakt") is True:
         wer = anrufer_anrede(sit)
@@ -3926,7 +3916,7 @@ def anrufer_hallo(sit: dict) -> str:
         return "Wie geht es Ihnen?"
     if wer:
         return _hallo_wahl(sit, HALLO_NEU_WER, wer=wer)
-    return _hallo_wahl(sit, HALLO_NEU)
+    return ""
 
 
 def anrufer_hallo_merken(sit: dict) -> None:
@@ -4664,8 +4654,6 @@ def feste_saetze(tenant: dict | None = None) -> list[str]:
         "Der Termin ist für Sie selbst, richtig?",
         "Für wen ist der Termin denn — wie heißt er oder sie mit Vor- und Nachnamen?",
         "War er oder sie schon einmal bei uns in der Praxis?",
-        *HALLO_NEU,
-        "Ich bin die Neue!",
         "Schön!",
         "Stimmt das so?",
         "Bei welcher Krankenkasse sind Sie versichert?",

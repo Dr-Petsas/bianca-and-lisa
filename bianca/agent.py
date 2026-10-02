@@ -2117,11 +2117,13 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # erlebt: "Zu welchem unserer Ärzte..." statt Durchstellen).
     job_sprach = bool(fl and (_s(fl.get("text")) or fl.get("hangup")
                               or fl.get("transfer") or fl.get("warte")))
-    # "Ich bin die Neue!" bzw. bei maennlichem Assistenten "der Neue" — auf
-    # den Artikel darf die Erkennung nicht hoeren, sonst merkt sich der
-    # Icebreaker bei Ben nichts und stellt sich zweimal vor.
-    if job_sprach and "Ich bin de" in _s(fl.get("text")) and "Neue!" in _s(fl.get("text")):
-        gehirn.anrufer_hallo_merken(sit)
+    # Ohne Vorab-Ausgabe kann der Maschinenzug den knappen Namensanker selbst
+    # tragen. Auch dann nur einmal sprechen; die frühere Erkennung hing am
+    # inzwischen entfernten Satz „Ich bin die Neue“.
+    if job_sprach and not sit.get("anruferHalloGesagt"):
+        hallo_im_job = gehirn.anrufer_hallo(sit)
+        if hallo_im_job and _s(fl.get("text")).startswith(hallo_im_job):
+            gehirn.anrufer_hallo_merken(sit)
     # Talk-Schicht hoert JEDEN Satz ab (Themen, Gravity, Floor) — am
     # Sammler/Fluss aendert sie nichts, sie entscheidet nur, wie frei das
     # LLM gleich sprechen darf und ob der Frage-Anker feuert.

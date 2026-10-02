@@ -210,10 +210,8 @@ def test_maschinen_frage_wird_beim_zweiten_mal_umformuliert():
 
 
 def test_hallo_vorab_wird_vom_waechter_gestrichen():
-    """Live 08.09.2026: „Ah, Herr Petsas. Wir kennen uns noch nicht.“
-    ging als Vorab raus — der Wächter sah nur die LLM-Antwort (kurz, ohne
-    Fragezeichen = Quittung) und ließ den Hallo jeden Zug erneut durch."""
-    hallo = "Ah, Herr Petsas. Wir kennen uns noch nicht. Ich bin die Neue!"
+    """Der knappe Namensanker darf als Vorab ebenfalls nur einmal laufen."""
+    hallo = "Ah, Herr Petsas."
     sit = _sit()
     wiederholung.gesagt_merken(sit, hallo)
     raus = wiederholung.pruefen(

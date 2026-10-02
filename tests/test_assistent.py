@@ -245,10 +245,10 @@ def test_feste_saetze_werden_fuer_ben_maennlich_gewaermt():
     die Synthese."""
     ben = gehirn.feste_saetze(tenants.laden("ruether"))
     assert not any("Ich bin die Neue" in s for s in ben)
-    assert any("Ich bin der Neue" in s for s in ben)
-    # Gegenprobe: MedDent waermt weiter die weibliche Form.
+    assert not any("Ich bin der Neue" in s for s in ben)
+    # Gegenprobe: Auch MedDent wärmt die entfernte Selbstvorstellung nicht.
     bianca = gehirn.feste_saetze(MEDDENT)
-    assert any("Ich bin die Neue" in s for s in bianca)
+    assert not any("Ich bin die Neue" in s for s in bianca)
     assert not any("Ich bin der Neue" in s for s in bianca)
 
 
