@@ -1163,6 +1163,7 @@ const PATCHES = [
   [".env-BOM-Fix", "29.08.", "Betrieb", "PowerShell-BOM schaltete WRITE_LIVE still aus; Config liest jetzt utf-8-sig."],
   ["W-SIP (AudioSocket-Brücke)", "29.08.", "Telefon", "Echte Anrufe: Zaluma → Asterisk → AudioSocket über SSH-Rücktunnel → sip_bridge (pickadoc1) → Bianca-API; Barge-in, Stille-Stups und Auflegen wie im Dock."],
   ["W-SIP-RAUSCH (Leitungs-VAD)", "29.08.", "Telefon", "Adaptiver Rauschteppich statt starrer RMS-Schwelle: Telefon-Grundrauschen löst keinen falschen Barge mehr aus; Dauer-Stille-Rahmen halten den Medienstrom am Leben."],
+  ["W-NEBENSTIMMEN (Filter-Gain)", "02.10.", "Telefon", "Leise Nebenstimmen und Störgeräusche werden vor der Sprachverstärkung gegatet; FFmpegs linearer Makeup-Faktor entspricht jetzt den beabsichtigten +8 dB statt rund +18 dB."],
   ["W-MITSCHNITT (Anrufliste)", "30.08.", "Betrieb", "Jeder Anruf als Ordner unter .data/anrufe (Manifest + Audio je Zug, sofort geschrieben); Browser-Seite /anrufe mit Transkript, Abspiel-Knöpfen und allen Zeiten. Notaus: MITSCHNITT=0."],
   ["W-ANRUF-UID", "02.09.", "Betrieb", "Jeder Anruf trägt eine uuid4-Hex-UID (session.id = Manifest-id); Gesprächs-Detail zeigt UID (+ Portal-phoneCallId bei CF-Mandanten) mit Kopier-Knopf. Alte 16-Hex-IDs bleiben lesbar."],
   ["Anruf-Download (ein WAV)", "30.08.", "Betrieb", "Knopf \"Audio herunterladen\" auf /anrufe: der Server fügt alle Züge (Anrufer + Bianca, Gesprächsreihenfolge, 250 ms Pause) zu EINER WAV-Datei — api/anrufe/<sid>/download."],

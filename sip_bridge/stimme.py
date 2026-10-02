@@ -33,8 +33,11 @@ _OHR_MAX_DICHTE = 0.25
 
 # Hochpass/Tiefpass = Telefon-Sprachband. afftdn = Rauschen.
 # EQ: 250 Hz runter (Rumpeln/PA), 900+1800 Hz hoch (Formanten),
-# 3,5 kHz leicht runter (Klirren). Kompressor holt die Stimme nach vorn,
-# Gate macht den Rest leise.
+# 3,5 kHz leicht runter (Klirren). Das Gate sitzt VOR dem Kompressor:
+# andernfalls hebt dessen Makeup leise Nebenstimmen erst ueber die
+# Gate-Schwelle. FFmpegs ``makeup`` ist ein LINEARER Faktor, kein dB-Wert
+# (der bisherige Wert 8 bedeutete daher +18 dB statt der gemeinten +8 dB).
+_MAKEUP_8_DB = 10 ** (8 / 20)
 _STIMME_AF = (
     "highpass=f=160:poles=2,"
     "lowpass=f=4500:poles=2,"
@@ -43,8 +46,9 @@ _STIMME_AF = (
     "equalizer=f=900:t=q:w=1.2:g=7,"
     "equalizer=f=1800:t=q:w=1.1:g=9,"
     "equalizer=f=3500:t=q:w=1.0:g=-5,"
-    "acompressor=threshold=-28dB:ratio=4:attack=6:release=90:makeup=8:knee=6,"
-    "agate=threshold=-40dB:ratio=4:attack=3:release=70"
+    "agate=threshold=-40dB:ratio=4:attack=3:release=70,"
+    "acompressor=threshold=-28dB:ratio=4:attack=6:release=90:"
+    f"makeup={_MAKEUP_8_DB:.6f}:knee=6"
 )
 
 

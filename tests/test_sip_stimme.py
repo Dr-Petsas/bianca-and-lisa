@@ -66,6 +66,22 @@ def test_stille_bleibt_nahe_stille():
     assert _rms(aus) < 80
 
 
+def test_leise_nebenstimme_wird_vor_makeup_gegatet():
+    """Feldbefund 02.10.: FFmpeg-Makeup ist linear, nicht in dB.
+
+    ``makeup=8`` hob eine leise Nebenstimme um rund 18 dB an, bevor das
+    nachgeschaltete Gate sie beurteilen konnte. Eine klare Telefonstimme
+    muss erhalten bleiben, der leise Sprachton dagegen unter dem
+    Grundrausch-Niveau bleiben.
+    """
+    leise = stim.filtern(_sinus(900, amp=200), RATE)
+    vorn = stim.filtern(_sinus(900, amp=1000), RATE)
+
+    assert _rms(leise) < 80
+    assert _rms(vorn) > 1000
+    assert _rms(vorn) > _rms(leise) * 20
+
+
 def test_aus_laesst_original(monkeypatch):
     monkeypatch.setattr(stim, "BRIDGE_STIMME", False)
     roh = _sinus(1800, 0.2)
