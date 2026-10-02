@@ -21,7 +21,10 @@ from kern.tenants import ist_funktionskalender, kalender_von
 _EGAL_RE = re.compile(
     r"\b(egal|gleich|wurst|hauptsache|keine\s+(präferenz|praeferenz|vorliebe)|"
     r"wer\s+(gerade\s+)?(zeit|frei)|der\s+(erste|nächste|naechste)\s*(freie)?|"
-    r"schnellstmöglich|schnellstmoeglich|wer\s+zuerst|spielt\s+keine\s+rolle)\b",
+    r"schnellstmöglich|schnellstmoeglich|wer\s+zuerst|spielt\s+keine\s+rolle|"
+    r"welch\w*\s+(?:arzt|ärztin|aerztin|doktor|behandler\w*)"
+    r"[^.!?]{0,20}(?:soll|muss)\s+ich\s+"
+    r"(?:nehmen|machen|wähl\w*|waehl\w*))\b",
     re.I,
 )
 _UNBEKANNT_RE = re.compile(

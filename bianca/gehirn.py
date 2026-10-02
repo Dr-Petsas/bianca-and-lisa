@@ -1583,6 +1583,39 @@ def _ist_zeitantwort(text: str) -> bool:
     return any(w.get(k) is not None for k in ("hour", "hourMin", "hourMax"))
 
 
+_NAME_MENUE_ANTWORT_RE = re.compile(
+    r"^(?:(?:ja|nein)[,;:\s-]*)?"
+    r"(?:(?:termin\s*)?(?:auskunft|abfrage|absage|verschiebung)|"
+    r"termin|buchung|neubuchung)"
+    r"(?:\s+(?:beziehungsweise|bzw\.?|oder)\s+"
+    r"(?:(?:termin\s*)?(?:auskunft|abfrage|absage|verschiebung)|"
+    r"termin|buchung|neubuchung))?"
+    r"\s*[.!?]?$",
+    re.I,
+)
+_NAME_MONATSANTWORT_RE = re.compile(
+    r"^(?:im|ab|bis|anfang|mitte|ende|"
+    r"nächsten?|naechsten?|übernächsten?|uebernaechsten?)\s+"
+    r"(?:januar|februar|märz|maerz|april|mai|juni|juli|august|"
+    r"september|oktober|november|dezember)\s*[.!?]?$",
+    re.I,
+)
+
+
+def _ist_sicher_keine_namensantwort(text: str) -> bool:
+    """Menü- und Datumsantworten auf einer Namensfrage nicht ernten.
+
+    Der Schutz greift erst nach ausdrücklichen Namenszuweisungen. Ein echter
+    Name wie „Mein Nachname ist Mai“ bleibt möglich; die Replay-Sätze
+    „Auskunft“ und „Im Oktober“ werden dagegen nie zu Patientennamen.
+    """
+    t = _s(text)
+    return bool(
+        _NAME_MENUE_ANTWORT_RE.fullmatch(t)
+        or _NAME_MONATSANTWORT_RE.fullmatch(t)
+    )
+
+
 def _wunsch_deuten(text: str, tenant: dict | None = None) -> dict | None:
     """parse_slot_wish plus relative Tage — None, wenn der Satz nichts Zeitliches hat."""
     wish = parse_slot_wish(text, fenster=such_fenster_tage(tenant)) or {}
@@ -2060,6 +2093,8 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool,
         return True
 
     m = _name_leadin(text)
+    if m is None and erzwungen and _ist_sicher_keine_namensantwort(text):
+        return False
     if m is None and erzwungen and _ist_zeitantwort(text):
         # Replay 53986f42 z13: "Vormittag oder Nachmittag, eigentlich egal"
         # auf die Vornamen-Frage ist eine ZEIT-Antwort (der Anrufer beantwortet
@@ -2517,6 +2552,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             else:
                 s["arzt"] = gedeutet
             neu.add("arzt")
+
+    if "arzt" in neu:
+        sit.pop("arztAuswahlhilfeGesagt", None)
 
     # W-ARZT-JANEIN (Anruf 984282e3, 14.09.2026): "Wissen Sie noch, bei
     # welchem Behandler Sie zuletzt waren?" ist grammatisch eine Ja/Nein-
@@ -3555,6 +3593,30 @@ ARZTWAHL_VARIANTEN: tuple[str, ...] = (
     "Haben Sie einen Wunsch-Behandler — oder soll ich einfach schauen, wo der nächste freie Termin ist?",
 )
 
+_ARZT_AUSWAHLHILFE_RE = re.compile(
+    r"\bwelch\w*\s+(?:arzt|ärztin|aerztin|doktor|behandler\w*)\b"
+    r"[^.!?]{0,20}\b(?:soll|muss)\s+ich\s+"
+    r"(?:nehmen|machen|wähl\w*|waehl\w*)\b|"
+    r"\b(?:sind|ist)\b[^.!?]{0,28}\b(?:beide|die)\b[^.!?]{0,16}"
+    r"\bgleich\w*\b|"
+    r"\b(?:problem|beschwerden?)\b[^.!?]{0,30}\b(?:haar|haare|haut)\w*\b|"
+    r"\b(?:haar|haare|haut)\w*\b[^.!?]{0,30}\b(?:problem|beschwerden?)\b",
+    re.I,
+)
+
+
+def arzt_auswahlhilfe(text: str) -> bool:
+    """Anrufer bittet in der offenen Behandlerwahl um Entscheidungshilfe."""
+    return bool(_ARZT_AUSWAHLHILFE_RE.search(_s(text)))
+
+
+def arzt_auswahlhilfe_text() -> str:
+    """Keine medizinische Eignung raten; eine sichere Auswahlform nennen."""
+    return (
+        "Das kann ich medizinisch nicht entscheiden. Für die Terminbuchung "
+        "nennen Sie bitte einen Behandler oder sagen Sie einfach: keine Präferenz."
+    )
+
 # Thaler (eine Behandlerin): keine Arztwahl, sondern Spur Frau Thaler / Prophylaxe.
 # Kern-Wörter prophylaxe|thaler in agent._FRAGE_KERN["arzt"].
 THALER_SPUR_VARIANTEN: tuple[str, ...] = (
@@ -4226,6 +4288,26 @@ def anrufer_check_frage(sit: dict, *, selbst: bool = False) -> str:
 def anrufer_check_schluss(*, selbst: bool = False) -> str:
     """Nur die Ja/Nein-Frage — nach einem Wohlsein-„Gut.“ ohne Hallo-Wiederholung."""
     return "Habe ich Sie richtig erkannt?"
+
+
+_ANRUFER_CHECK_META_RE = re.compile(
+    r"\b(?:wie\s+(?:meinen|meint|haben|ist)|was\s+(?:heißt|heisst|bedeutet)|"
+    r"woran|warum)\b[^.!?]{0,45}\berkannt\b",
+    re.I,
+)
+
+
+def anrufer_check_metafrage(text: str) -> bool:
+    """Frage nach dem Sinn der automatischen Identitätskontrolle."""
+    return bool(_ANRUFER_CHECK_META_RE.search(_s(text)))
+
+
+def anrufer_check_erklaerung() -> str:
+    """Datensparsame Erklärung ohne den gefundenen Namen erneut vorzulesen."""
+    return (
+        "Ihre übermittelte Rufnummer passt zu einer Patientenkartei. "
+        "Habe ich die richtige Person erkannt? Ein kurzes Ja oder Nein genügt."
+    )
 
 
 _ANRUFGRUND_RE = re.compile(

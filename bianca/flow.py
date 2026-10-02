@@ -6103,6 +6103,47 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # vorlesen, so oft der Anrufer fragt (Chef 29.08.2026). Nie ans
             # LLM: das kennt die Ziffern aus der Akte nicht.
             return {"text": gehirn.telefon_alt_frage(s)}
+        # Live 02.10.2026: Auf „Wie meint sie erkannt?“ kam dieselbe nackte
+        # Identitätsfrage erneut. Die Rückfrage zuerst beantworten — ohne den
+        # gefundenen Namen noch einmal vorzulesen und ohne Leerlauf zu zählen.
+        if (fid == "anrufer_check" and not neu
+                and gehirn.anrufer_check_metafrage(t)):
+            text = gehirn.anrufer_check_erklaerung()
+            sit["flussFrage"] = text
+            spur.merken(sit, "anrufer-check-erklaert")
+            return {"text": text}
+        # Live 02.10.2026: In der Behandlerwahl fragte der Anrufer wegen
+        # seiner Haare nach Entscheidungshilfe; Bianca wiederholte nur die
+        # Namensliste. Einmal erklären wir die sichere Auswahlform. Kommt
+        # danach dieselbe Unsicherheit erneut, ist „keine Präferenz“ belegt
+        # und der mandanteneigene Standard gewinnt.
+        if fid == "arzt" and not neu and gehirn.arzt_auswahlhilfe(t):
+            if sit.pop("arztAuswahlhilfeGesagt", False):
+                s["arzt"] = (
+                    gehirn.arzt_default(sit.get("tenant") or {})
+                    or {"typ": "egal"}
+                )
+                s["frage"] = ""
+                neu.add("arzt")
+                spur.merken(sit, "arzt-auswahlhilfe", "standard")
+                fid2, frage2 = gehirn.naechste_frage(sit)
+                s["frage"] = fid2
+                name = arzt_sprechname(
+                    _s((s.get("arzt") or {}).get("calendarName")),
+                    sit.get("tenant") or {},
+                )
+                vorsatz = (
+                    f"Dann nehme ich {name} als Standard-Behandler."
+                    if name else
+                    "Dann nehme ich den Standard-Behandler."
+                )
+                return {"text": f"{vorsatz} {frage2}".strip()}
+            else:
+                sit["arztAuswahlhilfeGesagt"] = True
+                text = gehirn.arzt_auswahlhilfe_text()
+                sit["flussFrage"] = text
+                spur.merken(sit, "arzt-auswahlhilfe", "erklaert")
+                return {"text": text}
         if gehirn.ist_zwischenfrage(t) or (
             not neu and fid not in {"telefon_check", "anrufer_check"}
             and gespraech.traegt_thema(sit, t)
@@ -6141,6 +6182,12 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                     # Identitaets-Kontrolle bleibt ebenfalls deterministisch —
                     # das LLM darf hier nie "erkannt" erfinden (W-ANRUFER-CHECK).
                     return {"text": "Entschuldigung, kurz zur Kontrolle: Habe ich Sie richtig erkannt? Ein kurzes Ja oder Nein genügt."}
+                if fid == "schonmal":
+                    # Replay 49988917/371b3aef: der erste Leerlauf fiel ans
+                    # Modell, dessen Frage-Anker die kanonische Frage
+                    # wortgleich wiederherstellte. Eine echte Variante,
+                    # danach greift bereits die bestehende Eskalation.
+                    return {"text": "Entschuldigung — ein kurzes Ja oder Nein genügt. Kurz zur Einordnung: Waren Sie schon mal in unserer Praxis?"}
                 if fid == "telefon_alt":
                     # Auch die Akten-Nummer-Frage bleibt deterministisch —
                     # mit der Nummer im Ohr faellt die Wahl leichter.
