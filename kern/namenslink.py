@@ -89,6 +89,68 @@ def aktiv() -> bool:
     }
 
 
+def sms_aktiv() -> bool:
+    """W-NAMENS-SMS-RETTUNG (05.10.2026): die reine Namens-SMS.
+
+    Chef: „eine sms an die anrufernummer, damit der patient seinen namen
+    schreiben und senden kann, wenn bianca das mehrmals nicht versteht".
+    Das Containment vom 02.10. schaltete mit ``NAMENS_LINK=0`` BEIDE Hälften
+    ab — auch den bewährten Weg ohne Termin (01.10.: acht getippte Namen
+    angekommen). Hier läuft nur dieser Weg: kein Platzhalter-Termin, keine
+    Reservierung, keine Termin-ID an die Cloud Function. Notaus:
+    ``NAMENS_SMS=0``."""
+    if aktiv():
+        return True
+    return (os.getenv("NAMENS_SMS", "1") or "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
+def nur_name() -> bool:
+    """Namens-SMS ohne Reservierung (der Reservierungsvertrag ist aus)."""
+    return sms_aktiv() and not aktiv()
+
+
+# Nach so vielen gescheiterten Namensaufnahmen (Rücklese verneint,
+# korrigiert, unklar) schickt Bianca die Namens-SMS, statt erneut
+# buchstabieren zu lassen.
+NAME_FEHLVERSUCHE_SMS = 2
+_ANKUENDIGUNG_RETTUNG = (
+    "Damit ich Ihren Namen sicher richtig schreibe, schicke ich Ihnen jetzt "
+    "eine SMS. Bitte tippen Sie dort Ihren Vor- und Nachnamen ein und senden "
+    "Sie ihn ab — ich warte so lange."
+)
+
+
+def fehlversuch(sit: dict) -> int:
+    """Eine gescheiterte Namensaufnahme zählen; liefert den neuen Stand."""
+    s = sit.setdefault("sammler", {})
+    n = int(s.get("nameFehlversuche") or 0) + 1
+    s["nameFehlversuche"] = n
+    return n
+
+
+def rettung_faellig(sit: dict) -> bool:
+    """Nach wiederholtem Scheitern: Namens-SMS statt nächster Buchstabierrunde."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    return bool(
+        int(s.get("nameFehlversuche") or 0) >= NAME_FEHLVERSUCHE_SMS
+        and erlaubt(sit)
+        and not verifiziert(sit)
+        and not _stand(sit).get("done")
+        and not _stand(sit).get("expired")
+        and not _stand(sit).get("createFailed")
+        and not _stand(sit).get("abgebrochen")
+    )
+
+
+def rettung_starten(sit: dict) -> dict | None:
+    """Namens-SMS als Rettung; None, wenn sie nicht gehen kann."""
+    if not rettung_faellig(sit):
+        return None
+    return starten(sit)
+
+
 # Eingebaute Testhandys — später mit dem ganzen Canary-Pfad wieder raus.
 # Chef + Kiriakos Tzannis (01525304756). Extra nur über NAMENS_LINK_CANARY.
 _CANARY_HANDYS = (DEV_PHONE, "01525304756")
@@ -138,6 +200,10 @@ def handy(sit: dict) -> str:
         s.get("telefonBekannt"),
         s.get("kontaktTelefon"),
         an.get("telefon"),
+        # Die übermittelte Anrufernummer: ein unbekannter Anrufer vom Handy
+        # hat sonst nie ein SMS-Ziel — genau der Fall, für den die
+        # Namens-SMS gedacht ist.
+        sit.get("callerPhone"),
     ):
         if patients.ist_handy_de(str(roh or "")):
             return patients.handy_e164(str(roh))
@@ -150,7 +216,7 @@ def handy_frage(sit: dict) -> str:
 
 def erlaubt(sit: dict) -> bool:
     """Namens-SMS, sobald ein Handy als Ziel da ist — alle Live-Praxen."""
-    return aktiv() and bool(handy(sit))
+    return sms_aktiv() and bool(handy(sit))
 
 
 # TEST-ONLY: Chef-Handy nur nach ausdruecklichem Opt-in als unbekannt
@@ -350,6 +416,12 @@ def reservierungs_scope(sit: dict) -> str:
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     booking = sit.get("booking") if isinstance(sit.get("booking"), dict) else {}
     last = sit.get("lastBook") if isinstance(sit.get("lastBook"), dict) else {}
+    if nur_name():
+        # Ohne Reservierung gehört der Link nur zum Anruf, nicht zu einem
+        # Slot — sonst verfällt er, sobald der Anrufer einen Termin wählt.
+        return "|".join((
+            _s(tenant.get("clientId")), _s(tenant.get("locationId")), "name",
+        ))
     return "|".join((
         _s(tenant.get("clientId")),
         _s(tenant.get("locationId")),
@@ -427,6 +499,11 @@ def unsicher(sit: dict) -> bool:
 def soll_statt_buchstabieren(sit: dict) -> bool:
     if not erlaubt(sit) or verifiziert(sit):
         return False
+    if nur_name():
+        # Ohne Reservierung ersetzt die SMS das Buchstabieren nicht von
+        # vornherein — sie ist die Rettung nach wiederholtem Scheitern
+        # (rettung_starten an den Fehlerstellen).
+        return False
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     if s.get("bekannt") or _s(s.get("anruferCheck")) == "ja":
         return unsicher(sit)
@@ -437,7 +514,7 @@ def soll_statt_buchstabieren(sit: dict) -> bool:
 
 def skip_documents(sit: dict) -> bool:
     """Erste Buchung ohne Dokumenten-SMS — der Link ist die Bestätigung."""
-    if not erlaubt(sit) or verifiziert(sit):
+    if not aktiv() or not erlaubt(sit) or verifiziert(sit):
         return False
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     return bool(
@@ -507,6 +584,14 @@ def starten(
     appointment_id = _s(
         appointment_id or s.get("appointmentId") or sit.get("lastBookId")
     )
+    nur = nur_name()
+    if nur:
+        # Reine Namensabfrage: nie einen Termin oder eine Akte an den Link
+        # binden — das war der Weg zu den Platzhalter-Geisterterminen.
+        appointment_id = ""
+        patient_id = ""
+        created_patient = False
+        parallel = False
     status, data, dispatch = _cf_call("agentNameConfirm", {
         "action": "create",
         "token": reservation_token,
@@ -517,9 +602,9 @@ def starten(
         "firstName": first,
         "lastName": last,
         "appointmentId": appointment_id,
-        "patientId": _s(patient_id or s.get("patientId")),
+        "patientId": "" if nur else _s(patient_id or s.get("patientId")),
         "createdPatient": bool(created_patient),
-        "start": _s(s.get("slotIso") or sit.get("lastBookIso")),
+        "start": "" if nur else _s(s.get("slotIso") or sit.get("lastBookIso")),
         "dryRun": bool(dry_run or tenant.get("_testNoWrite")),
     })
     _beobachten(
@@ -568,7 +653,12 @@ def starten(
         "parallel": bool(parallel),
         "firstNameHint": first,
         "lastNameHint": last,
+        "nurName": nur,
     }
+    if nur:
+        s = sit.setdefault("sammler", {})
+        s["frage"] = "namenslink"
+        return {"text": _ANKUENDIGUNG_RETTUNG}
     text = _ANKUENDIGUNG_PREFILL if (first or last) else _ANKUENDIGUNG
     if parallel:
         if ohne_stammdaten(sit) or ist_platzhalter_name(
@@ -631,7 +721,7 @@ def termin_binden(
     created_patient: bool = False,
 ) -> bool:
     """Nach der Platzhalter-Buchung Termin und Link zusammenhängen."""
-    if not erlaubt(sit) or not _scope_passt(sit):
+    if not aktiv() or not erlaubt(sit) or not _scope_passt(sit):
         return False
     token = _s(
         _stand(sit).get("reservationToken") or _stand(sit).get("token")
@@ -716,7 +806,29 @@ def einziehen(sit: dict) -> dict:
 def warten(sit: dict) -> dict:
     s = sit.setdefault("sammler", {})
     s["frage"] = "namenslink"
+    if _stand(sit).get("nurName"):
+        return {"text": "Die SMS ist unterwegs — bitte tippen Sie dort Ihren "
+                        "Vor- und Nachnamen ein und senden Sie ihn ab."}
     return {"text": _ANKUENDIGUNG}
+
+
+_SMS_GEHT_NICHT_RE = re.compile(
+    r"\b(?:geht\s+nicht|klappt\s+nicht|funktioniert\s+nicht"
+    r"|(?:keine|nicht\s+die)\s+sms"
+    r"|(?:ist\s+)?nicht\s+angekommen|nichts\s+(?:bekommen|angekommen)"
+    r"|kein\s+handy|kann\s+ich\s+nicht|will\s+ich\s+nicht)\b",
+    re.I,
+)
+
+
+def _weiter(sit: dict, melde: Melde = None) -> dict | None:
+    """Name ist da: Buchung läuft weiter, Verwaltung sucht den Termin."""
+    s = sit.setdefault("sammler", {})
+    if _s(s.get("modus")) == "buchen":
+        from bianca import flow
+        return flow.weiter_nach_namenslink(sit, melde)
+    from bianca import verwalten
+    return verwalten._dispatch(sit, melde)
 
 
 def braucht_vor_buchung(sit: dict) -> bool:
@@ -733,14 +845,29 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None,
     if not blocking and not stille:
         einziehen(sit)
         return None
+    if blocking and verifiziert(sit):
+        # ``flow.zug`` hat den getippten Namen am Zuganfang schon über
+        # ``einziehen`` übernommen; der Status ist danach bereinigt.
+        s["frage"] = ""
+        neu.update({"name", "vorname", "nachname"})
+        return _weiter(sit, melde)
+    t = _s(gesagt)
+    if blocking and t and _stand(sit).get("nurName") and _SMS_GEHT_NICHT_RE.search(t):
+        sit["namenslink"] = {"abgebrochen": True}
+        s["frage"] = "buchstabieren"
+        s["buchstabenTeil"] = ""
+        _beobachten(sit, "abort", outcome="caller_declined")
+        return {"text": (
+            "Kein Problem. Dann buchstabieren Sie mir den Nachnamen bitte "
+            "ganz langsam, Buchstabe für Buchstabe; am Ende sagen Sie fertig."
+        )}
     data = einziehen(sit) if stille else status_holen(sit)
     if data.get("status") == "done" and _s(data.get("lastName")):
         if not verifiziert(sit):
             _anwenden(sit, _s(data.get("firstName")), _s(data.get("lastName")))
         s["frage"] = ""
         neu.update({"name", "vorname", "nachname"})
-        from bianca import verwalten
-        return verwalten._dispatch(sit, melde)
+        return _weiter(sit, melde)
     if data.get("status") == "expired":
         if not _stand(sit).get("expired"):
             _beobachten(sit, "expired", outcome="expired")
@@ -751,12 +878,17 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None,
         )}
     if stille:
         return {"text": ""}
-    t = _s(gesagt)
+    if _stand(sit).get("nurName"):
+        # Der gesprochene Name ist genau das, was zweimal scheiterte — nicht
+        # wieder ungeprüft übernehmen. Warten oder „geht nicht“ (oben).
+        return {"text": (
+            "Ich warte noch auf Ihren Namen aus der SMS. Falls die SMS nicht "
+            "ankommt, sagen Sie einfach: geht nicht."
+        )}
     if t and t.casefold() not in {"ja", "ok", "okay", "gut", "mhm", "hm"} and s.get("nachname"):
         s["frage"] = ""
         sit["namenslink"] = {**_stand(sit), "spoken": True}
-        from bianca import verwalten
-        return verwalten._dispatch(sit, melde)
+        return _weiter(sit, melde)
     return {"text": (
         "Ich warte noch auf die Angabe in der SMS. "
         "Sie können den Namen auch einfach sagen."

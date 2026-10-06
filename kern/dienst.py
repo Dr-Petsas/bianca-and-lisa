@@ -943,6 +943,23 @@ class Dienst:
                             )
                             sit["_sttS"] = stt_s
                             sit["_sttInfo"] = stt_info
+                            # W-HOERFEHLER-EINMAL (05.10.2026): Die Nachfrage
+                            # selbst erzeugte live das naechste Echo —
+                            # 226 leere Zuege, bis zu sieben Entschuldigungen
+                            # in Folge. Ein Ohr-Zug (gepuffert, waehrend
+                            # Bianca sprach) ist fast immer ihr eigenes Echo,
+                            # und nach EINER Nachfrage hilft eine zweite nie.
+                            # Dann still weiterhoeren; echte Stille fuehrt der
+                            # gedeckelte Stups-Pfad.
+                            folge = int(sit.get("hoerfehlerFolge") or 0)
+                            if ohr_zug or folge >= 1:
+                                spur.merken(
+                                    sit, "hoerfehler-still",
+                                    "ohr" if ohr_zug else f"folge={folge}",
+                                )
+                                q.put(("leer", "sprachwache"))
+                                return
+                            sit["hoerfehlerFolge"] = folge + 1
                             nachfrage = stille.hoerfehler_nachfrage(
                                 sit,
                                 ja_nein=(
@@ -981,6 +998,7 @@ class Dienst:
                             spur.merken(sit, "barge-echo", gesagt)
                             q.put(("leer", "echo"))
                             return
+                        sit.pop("hoerfehlerFolge", None)
                         # W-MITSCHNITT: Anrufer-Audio dieses Zugs sichern —
                         # bei W-HALBSATZ (Warte) haengt es am naechsten Zug.
                         mitschnitt.eingang(sit, stt_blob, stt_mime)

@@ -122,6 +122,48 @@ _PRAEFIXE = (
 )
 
 
+_VORSATZ_RE = re.compile(
+    r"^\s*(?:"
+    r"entschuldigung,?\s+das\s+kam\s+nicht\s+sicher\s+an\.?"
+    r"|meine\s+frage\s+war:"
+    r"|noch\s+einmal\s+die\s+frage:"
+    r"|ich\s+frage\s+noch\s+einmal:"
+    r"|kurz\s+zur(?:ü|ue)ck\s+zur\s+frage:"
+    r"|damit\s+ich\s+weiterkomme:"
+    r"|damit\s+ich\s+das\s+f(?:ü|ue)r\s+sie\s+erledigen\s+kann:"
+    r"|sind\s+sie\s+noch\s+dran\?"
+    r"|ich\s+bin\s+noch\s+da\."
+    r")\s*",
+    re.I,
+)
+_JA_NEIN_ZUSATZ_RE = re.compile(r"\s*ein\s+kurzes\s+ja\s+oder\s+nein\s+gen(?:ü|ue)gt\.?\s*$", re.I)
+_PRESENCE_RE = re.compile(r"^\s*(?:sind\s+sie\s+noch\s+dran|ich\s+bin\s+noch\s+da)\W*$", re.I)
+_GRUSS_RE = re.compile(r"\bsie\s+sprechen\s+mit\b|\bhier\s+ist\s+\w+\s+von\b", re.I)
+GRUSS_ERSATZ = "Wie kann ich Ihnen helfen?"
+
+
+def kern_frage(satz: str) -> str:
+    """Die nackte Frage ohne frühere Wiederhol-Vorsätze.
+
+    Live 05.10.2026 (be543d80): jede Wiederholung setzte ihren Vorsatz VOR
+    den schon vorhandenen — „Ich frage noch einmal: Noch einmal die Frage:
+    Waren Sie …?“. Vorsätze, Entschuldigung und Ja/Nein-Zusatz fallen
+    deshalb vor dem neuen Vorsatz weg; eine Begrüßung wird nie wörtlich
+    als „Frage“ wiederholt."""
+    satz = _s(satz)
+    while True:
+        neu = _VORSATZ_RE.sub("", satz, count=1)
+        if neu == satz:
+            break
+        satz = neu
+    satz = _JA_NEIN_ZUSATZ_RE.sub("", satz).strip()
+    if _GRUSS_RE.search(satz):
+        return GRUSS_ERSATZ
+    if _PRESENCE_RE.match(satz):
+        return ""
+    return satz
+
+
 def frage_praefix(satz: str, sit: dict | None = None) -> str:
     """Eine offene Frage wiederholen, ohne wortgleich zu werden.
 
@@ -129,7 +171,7 @@ def frage_praefix(satz: str, sit: dict | None = None) -> str:
     wortgleich "Meine Frage war: Und der Vorname?" — der Wiederholungs-
     Waechter sah den Praefix-Satz als neu, der Anrufer hoerte eine Schleife).
     Ohne `sit` bleibt der feste erste Vorsatz (Lisa, Korpus, Alt-Aufrufer)."""
-    satz = _s(satz)
+    satz = kern_frage(satz)
     if not satz:
         return ""
     if not isinstance(sit, dict):
@@ -149,13 +191,16 @@ def nur_fragesaetze(text: str) -> str:
 
 def letzte_frage(msgs: list[dict]) -> str:
     """Der letzte Frage-Satz der juengsten Assistenten-Antwort — was war
-    zuletzt offen? (Nur die juengste Antwort: aeltere Fragen sind bedient.)"""
+    zuletzt offen? (Nur die juengste Antwort: aeltere Fragen sind bedient.)
+    Presence-Floskeln sind keine offene Frage — dann zählt die Frage davor."""
     for m in reversed(msgs or []):
         if m.get("role") != "assistant":
             continue
         for satz in reversed(_SATZ_ENDE_RE.split(_s(m.get("content")))):
-            if satz.rstrip().endswith("?"):
+            if satz.rstrip().endswith("?") and not _PRESENCE_RE.match(satz):
                 return satz.strip()
+        if _PRESENCE_RE.match(_s(m.get("content")) or "x"):
+            continue
         return ""
     return ""
 
@@ -172,7 +217,7 @@ def hoerfehler_nachfrage(
     ``ja_nein`` nennt den erwarteten Antworttyp nur dann zusaetzlich, wenn
     die Frage ihn nicht ohnehin schon ausspricht.
     """
-    offen = _s(frage) or letzte_frage((sit or {}).get("messages") or [])
+    offen = kern_frage(_s(frage) or letzte_frage((sit or {}).get("messages") or []))
     if not offen:
         return ""
     wiederholt = frage_praefix(offen, sit)

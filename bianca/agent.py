@@ -147,6 +147,44 @@ _TERMIN_EINWORT_UNKLAR_RE = re.compile(
     r"(?:ein(?:en)?\s+)?termine?)[\s.,!?…]*$",
     re.I,
 )
+# W-MENUE-ANTWORT (05.10.2026, Blessing): auf „Geht es um einen Termin, eine
+# Absage, eine Verschiebung oder eine Terminauskunft?“ kamen „Camin!“,
+# „Jamin. Ja.“, „Einen neuen Termin!“, „Terminauskunst.“, „Rominauskunft.“ —
+# und jedes Mal wieder dasselbe Menü (bis zu sechsmal). Direkt nach dieser
+# Frage sind das eindeutige Wahlen; Parakeets Termin-Hörfehler zählen hier.
+_MENUE_TERMIN_RE = re.compile(
+    r"\b(?:termine?n?|[tdkcgjz]h?[ae]r?mine?n?|t?ermin)\b", re.I)
+_MENUE_WAHLEN: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"\b\w*aus?kun[fs]t\w*\b", re.I),
+     "Ich möchte wissen, wann mein Termin ist."),
+    (re.compile(r"\b(?:absag\w*|abgesagt|storn\w*)\b", re.I),
+     "Ich möchte meinen Termin absagen."),
+    (re.compile(r"\b(?:verschieb\w*|verschied\w*|verschob\w*|verleg\w*)\b", re.I),
+     "Ich möchte meinen Termin verschieben."),
+)
+_MENUE_NEU_RE = re.compile(r"\b(?:neu\w*|buch\w*|vereinbar\w*|ausmach\w*)\b", re.I)
+
+
+def _menue_wahl(text: str, *, termin_heisst_neu: bool) -> str:
+    """Eindeutige Wahl aus dem Anliegen-Menü als ganzer Satz, sonst ''."""
+    t = _s(text)
+    if not t or len(t.split()) > 6:
+        return ""
+    treffer = [satz for muster, satz in _MENUE_WAHLEN if muster.search(t)]
+    if len(treffer) == 1:
+        return treffer[0]
+    if treffer:
+        return ""
+    if _MENUE_NEU_RE.search(t) or (termin_heisst_neu and _MENUE_TERMIN_RE.search(t)):
+        return "Ich möchte einen neuen Termin vereinbaren."
+    return ""
+
+
+def _letzte_assistent(sit: dict) -> str:
+    for m in reversed(sit.get("messages") or []):
+        if m.get("role") == "assistant":
+            return _s(m.get("content"))
+    return ""
 # W-VITAMIN-TERMIN (01.10.2026, Anruf 062c4e1f): Parakeet/Qwen hörten in einer
 # ZAHNARZTPRAXIS wiederholt „Vitamin“ statt „Termin“ („Ich brauche einen
 # Vitamin für den Doktor Petsas“). In einer Zahnpraxis werden keine Vitamine
@@ -653,6 +691,82 @@ def _stand_ansage(sit: dict) -> str:
     return "Kann ich sonst noch etwas für Sie tun?"
 
 
+# Stille, während der Anrufer den Namen in der SMS tippt (ein Tick ≈ 12 s):
+# höchstens zwei hörbare Hinweise, dazwischen stilles Pollen.
+_NAMENSLINK_HINWEIS = {
+    4: ("Ich warte noch auf Ihren Namen aus der SMS. "
+        "Sie können ihn mir auch einfach am Telefon sagen."),
+    8: ("Ihre Angabe aus der SMS ist bei mir noch nicht angekommen. "
+        "Sagen Sie mir Ihren Vor- und Nachnamen gern auch einfach am Telefon."),
+}
+# Rettungs-SMS (der gesprochene Name ist zweimal gescheitert): nicht wieder
+# zum Sprechen einladen; nach rund zweieinhalb Minuten zurück zum
+# langsamen Buchstabieren statt endlos zu warten.
+_NAMENSLINK_HINWEIS_RETTUNG = {
+    4: ("Ich warte noch auf Ihren Namen aus der SMS. Falls sie nicht "
+        "ankommt, sagen Sie einfach: geht nicht."),
+    8: ("Ihre Angabe aus der SMS ist bei mir noch nicht angekommen. Falls "
+        "die SMS fehlt, sagen Sie einfach: geht nicht."),
+}
+_NAMENSLINK_RETTUNG_MAX = 12
+# Stille mitten im Diktat zählt nie gegen die Stups-Deckel — höchstens so
+# viele Ticks, danach greift die normale Regie wieder.
+_DIKTAT_STILLE_MAX = 4
+
+
+def _diktat_stille(sit: dict, s: dict) -> dict[str, Any] | None:
+    """W-DIKTAT-STILLE (05.10.2026): Pause nach einem Buchstabier-/Nummern-
+    Fragment ist kein Gesprächsabbruch.
+
+    Live 05.10.2026 endeten 38 Anrufe mit der Notleine, obwohl der Anrufer
+    seinen Nachnamen vollständig buchstabiert hatte und nur auf Bianca
+    wartete (Stand: ``buchstabenTeil="kalchreuter"``, frage=buchstabieren).
+    Die stillen Diktat-Ticks liefen durch ``stille.stups_zaehlen`` und
+    erschöpften den Deckel (Blessing ``presenceEinmal``: gesamt > 2), ohne
+    dass je ein Wort gefallen war. Jetzt: erster Tick still, ab dem
+    zweiten wird ein Namensfragment ab drei Buchstaben wie nach „fertig“
+    übernommen und zur Kontrolle vorgelesen.
+    """
+    if not _diktat_offen(sit):
+        return None
+    teil = _s(s.get("buchstabenTeil"))
+    tel = _s(s.get("telefonTeil"))
+    if not (teil or tel):
+        return None
+    k = int(sit.get("diktatStille") or 0) + 1
+    sit["diktatStille"] = k
+    if k > _DIKTAT_STILLE_MAX:
+        return None
+    fid = _s(s.get("frage"))
+    if k >= 2 and teil:
+        buchst = re.sub(r"[^a-zäöüßA-ZÄÖÜ]", "", teil)
+        if len(buchst) >= 3:
+            name = re.sub(
+                r"[^a-zäöüßA-ZÄÖÜ]", "",
+                gehirn._entdoppelter_name(buchst, _s(s.get("nachname"))),
+            ) or buchst
+            s["nachname"] = name[0].upper() + name[1:]
+            s["buchstabiert"] = True
+            s["buchstabenTeil"] = ""
+            s["buchstabierHilfe"] = False
+            if not s.get("patientId"):
+                s["bekannt"] = False
+            s["nachnameCheck"] = "offen"
+            s["frage"] = "nachname_check"
+            sit.pop("diktatStille", None)
+            text = gehirn.nachname_check_frage(s)
+            spur.merken(sit, "diktat-stille-readback", s["nachname"])
+            stille.anhaengen(sit, text)
+            return {"text": text, "book": None}
+    if k == 2 and tel:
+        text = "Sprechen Sie die Nummer gern weiter — am Ende sagen Sie einfach fertig."
+        spur.merken(sit, "diktat-stille-hinweis", fid or "telefon")
+        stille.anhaengen(sit, text)
+        return {"text": text, "book": None, "stilleMs": 1500}
+    spur.merken(sit, "diktat-stille", fid or "diktat")
+    return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
+
+
 def stille_zug(sit: dict) -> dict[str, Any]:
     """Stille-Wächter (Chef 27.08.2026): der Anrufer sagt seit ~4 Sekunden
     nichts — Bianca ergreift selbst das Wort, statt stumm zu warten.
@@ -688,7 +802,35 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         from kern import namenslink
         aus = namenslink.zug(sit, "", set(), stille=True)
         if aus is not None:
-            return aus
+            if _s(aus.get("text")) or aus.get("hangup"):
+                return aus
+            # Stilles Pollen als warte-Zug: die Brücke zählt ihn nicht als
+            # Stups und fragt weiter nach (sonst endete das Pollen nach
+            # zwei leeren Antworten, bevor der Name getippt war).
+            k = int(sit.get("namenslinkStille") or 0) + 1
+            sit["namenslinkStille"] = k
+            rettung = bool(namenslink._stand(sit).get("nurName"))
+            if rettung and k >= _NAMENSLINK_RETTUNG_MAX:
+                sit["namenslink"] = {"abgebrochen": True, "grund": "stille"}
+                s["frage"] = "buchstabieren"
+                s["buchstabenTeil"] = ""
+                sit.pop("namenslinkStille", None)
+                text = ("Die SMS scheint nicht anzukommen. Dann buchstabieren "
+                        "Sie mir den Nachnamen bitte ganz langsam; am Ende "
+                        "sagen Sie fertig.")
+                spur.merken(sit, "namens-sms-rettung", "stille-abbruch")
+                stille.anhaengen(sit, text)
+                return {"text": text, "book": None}
+            hinweise = _NAMENSLINK_HINWEIS_RETTUNG if rettung else _NAMENSLINK_HINWEIS
+            if k in hinweise:
+                text = hinweise[k]
+                stille.anhaengen(sit, text)
+                return {"text": text, "book": None}
+            return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
+
+    diktat = _diktat_stille(sit, s)
+    if diktat is not None:
+        return diktat
 
     n = stille.stups_zaehlen(sit)
     if frage_budget.stall_erschoepft(sit):
@@ -708,20 +850,6 @@ def stille_zug(sit: dict) -> dict[str, Any]:
         return _notleine(sit)
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
-
-    # Paket 8 (separate-noise-silence, Replay blessing-presence-diktat):
-    # mitten in einem Diktat (Buchstabieren/Nummer) ist eine Pause KEIN
-    # Gespraechsabbruch — der Anrufer buchstabiert noch oder holt Luft.
-    # „Sind Sie noch dran?" faellt ihm ins Wort (live feuerte der Presence-
-    # Stups, waehrend er noch buchstabierte). Solange ein Teilstueck offen
-    # liegt, ist der Stups ein STILLER warte-Zug: kein Ton, laengere Ruhe-
-    # Schwelle, weiterhoeren. Die Call-Death-Deckel (gespraech_tot/
-    # kompakt_fertig/stall) sind oben bereits gelaufen, ein wirklich totes
-    # Gespraech endet also weiterhin.
-    if _diktat_offen(sit) and (
-            _s(s.get("buchstabenTeil")) or _s(s.get("telefonTeil"))):
-        spur.merken(sit, "diktat-stille", fid or "diktat")
-        return {"text": "", "book": None, "warte": True, "stilleMs": 1500}
 
     # Nummern-Rückbestätigung bleibt IMMER deterministisch. Aber die Ziffern
     # kamen erst Sekunden vorher — der erste Stups fragt nur kurz nach, erst
@@ -1137,16 +1265,37 @@ def _einwort_termin_vorbereiten(sit: dict, text: str) -> tuple[str, str]:
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     offen = bool(_s(s.get("frage")) or _job_aktiv(sit))
 
+    if not offen and gespraech.KOMPAKT_JOBFRAGE in _letzte_assistent(sit):
+        wahl = _menue_wahl(t, termin_heisst_neu=True)
+        if wahl:
+            sit.pop("einwortTerminOffen", None)
+            spur.merken(sit, "menue-antwort", t[:40])
+            return wahl, ""
+
     if sit.get("einwortTerminOffen"):
         if offen:
             sit.pop("einwortTerminOffen", None)
             return t, ""
         treffer = [satz for muster, satz in _TERMIN_EINWORT_AKTIONEN if muster.search(t)]
+        if len(treffer) != 1:
+            wahl = _menue_wahl(t, termin_heisst_neu=False)
+            treffer = [wahl] if wahl else treffer
         if len(treffer) == 1:
             sit.pop("einwortTerminOffen", None)
+            sit.pop("einwortNachgefragt", None)
             spur.merken(sit, "einwort-termin", t[:40])
             return treffer[0], ""
-        if _TERMIN_EINWORT_UNKLAR_RE.match(t):
+        unklar = _TERMIN_EINWORT_UNKLAR_RE.match(t) or (
+            len(t.split()) <= 3 and _MENUE_TERMIN_RE.search(t))
+        if unklar and sit.get("einwortNachgefragt"):
+            # Zweimal nur „Termin/Ja“: die häufigste und nie destruktive
+            # Lesart ist die Neubuchung — nicht ein drittes Mal fragen.
+            sit.pop("einwortTerminOffen", None)
+            sit.pop("einwortNachgefragt", None)
+            spur.merken(sit, "einwort-termin", "default-neu")
+            return "Ich möchte einen neuen Termin vereinbaren.", ""
+        if unklar:
+            sit["einwortNachgefragt"] = True
             return t, TERMIN_EINWORT_NACHFRAGE
         # Ein anderes belastbares Einzelwort („Mitarbeiter“,
         # „Zahnreinigung“ ...) ist ein Themenwechsel und geht normal durch
@@ -1771,6 +1920,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         return stille_zug(sit)
     sit.pop("kurzlautSerie", None)
     stille.reset(sit)  # der Anrufer spricht wieder — Stille-Stupse von vorn
+    sit.pop("diktatStille", None)
+    sit.pop("namenslinkStille", None)
     if _ist_denk_cue(text_in):
         # phone_agent skip_turn: nachdenkende Anrufer nicht anstupsen.
         # Als WARTE-Zug (17.09.2026, Replay 53986f42 z07): ein nacktes

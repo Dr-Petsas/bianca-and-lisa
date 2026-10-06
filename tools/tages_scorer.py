@@ -321,8 +321,17 @@ def _wiederholungen(outputs: Iterable[str]) -> tuple[int, str]:
     return n, text[:100]
 
 
+# Kein Erfolgsclaim: Fragen („Bei welchem Behandler ist der Termin
+# eingetragen?“) und die Auskunft über einen BESTEHENDEN Termin
+# („…, eingetragen als Kontrolluntersuchung“).
+_KEIN_CLAIM_RE = re.compile(r"\beingetragen als\b", re.I)
+
+
 def _erfolg_claims(outputs: Iterable[str]) -> set[str]:
-    blob = _fold("\n".join(outputs))
+    saetze = re.split(r"(?<=[.!?])\s+", _fold("\n".join(outputs)))
+    blob = "\n".join(
+        s for s in saetze
+        if not s.rstrip().endswith("?") and not _KEIN_CLAIM_RE.search(s))
     return {art for art, muster in _ERFOLG.items() if muster.search(blob)}
 
 

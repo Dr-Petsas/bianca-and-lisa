@@ -39,7 +39,7 @@ from bianca import gehirn, hintergrund, telefon
 from kern import agentprofil
 from kern import calendar as kal
 from kern import gespraech, intent, motive, notes, observability_manifest
-from kern import patients
+from kern import patients, spur
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
 from kern.sitzung import merke_tool
@@ -959,17 +959,41 @@ def _qwen_name_zug(sit: dict, text: str, melde: Melde) -> dict:
         sit["qwenNameVerbraucht"] = True
         sit.pop("qwenNameVorschlag", None)
         return _dispatch(sit, melde)
-    if gehirn.ist_nein(text):
+    from bianca import buchstaben
+    # W-QWEN-NAME-AUSGANG (05.10.2026): live kam auf jede Antwort, die weder
+    # Ja noch Nein war, wieder „Ich habe auch … verstanden. Ist das
+    # richtig?“ — bis zu sechsmal, einmal mit leerem Vorschlag. Eine neue
+    # Buchstabierkette ist die Antwort; die zweite unklare Antwort gilt als
+    # Nein.
+    buch = buchstaben.deute(text)
+    if buch and _s(buch.get("name")):
+        name = _s(buch["name"])
+        s["nachname"] = name[0].upper() + name[1:]
+        s["name"] = f"{s.get('vorname') or ''} {s['nachname']}".strip()
+        s["buchstabiert"] = True
+        s["nachnameCheck"] = "offen"
+        s["frage"] = "nachname_check"
         sit["qwenNameVerbraucht"] = True
         sit.pop("qwenNameVorschlag", None)
+        sit.pop("qwenNameUnklar", None)
+        return {"text": gehirn.nachname_check_frage(s)}
+    unklar = int(sit.get("qwenNameUnklar") or 0)
+    if gehirn.ist_nein(text) or not vorschlag or unklar >= 1:
+        sit["qwenNameVerbraucht"] = True
+        sit.pop("qwenNameVorschlag", None)
+        sit.pop("qwenNameUnklar", None)
+        from kern import namenslink
+        namenslink.fehlversuch(sit)
+        aus = namenslink.rettung_starten(sit)
+        if aus is not None:
+            spur.merken(sit, "namens-sms-rettung", "qwen-name")
+            return aus
         return _korrektur_frage(sit)
-    tafel = ""
-    if vorschlag:
-        from bianca import buchstaben
-        tafel = buchstaben.vorlesen(vorschlag)
+    sit["qwenNameUnklar"] = unklar + 1
+    tafel = buchstaben.vorlesen(vorschlag)
     gelesen = f"{vorschlag}: {tafel}" if tafel else vorschlag
     return {"text": (
-        f"Ich habe auch {gelesen} verstanden. Ist das richtig?"
+        f"Ist {gelesen} richtig? Ein kurzes Ja oder Nein genügt."
     )}
 
 

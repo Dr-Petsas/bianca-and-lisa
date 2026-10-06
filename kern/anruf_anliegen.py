@@ -883,7 +883,12 @@ def harte_fehler(manifest: dict[str, Any] | None) -> list[str]:
     if patient_nicht_gefunden(m):
         aus.append("patient_nicht_gefunden")
 
-    mund = _fold(" ".join(_outputs(m)))
+    # Fragen („Bei welchem Behandler ist der Termin eingetragen?“) und die
+    # Auskunft über einen bestehenden Termin („eingetragen als …“) sind kein
+    # Erfolgsclaim.
+    mund = " ".join(
+        satz for satz in re.split(r"(?<=[.!?])\s+", _fold(" ".join(_outputs(m))))
+        if not satz.rstrip().endswith("?") and "eingetragen als" not in satz)
     for art, muster in _ERFOLG_CLAIMS.items():
         if muster.search(mund) and not evidenz.get(art, False):
             aus.append(f"erfolg_ohne_beweis:{art}")

@@ -5055,6 +5055,46 @@ _NACHNAME_CHECK_NEIN_MIT_NAME_RE = re.compile(
 )
 
 
+def _name_rettung(sit: dict, grund: str, *, ab: int = 0) -> dict | None:
+    """W-NAMENS-SMS-RETTUNG: gescheiterte Namensaufnahme zählen und ab dem
+    zweiten Scheitern die Namens-SMS an das Handy des Anrufers schicken.
+
+    Live 05.10.2026 buchstabierten Anrufer drei-, viermal hintereinander,
+    obwohl die Namens-SMS genau dafür gebaut ist. ``None`` = (noch) keine
+    SMS, der bisherige Weg läuft weiter."""
+    from kern import namenslink
+    n = namenslink.fehlversuch(sit)
+    if n < max(ab, namenslink.NAME_FEHLVERSUCHE_SMS):
+        return None
+    aus = namenslink.rettung_starten(sit)
+    if aus is not None:
+        spur.merken(sit, "namens-sms-rettung", f"{grund}:{n}")
+    return aus
+
+
+def weiter_nach_namenslink(sit: dict, melde: Melde = None) -> dict | None:
+    """Getippter Name aus der SMS ist da — die Buchung läuft weiter.
+
+    Vorher landete der fertige Link immer in ``verwalten._dispatch`` (Termin-
+    Suche), auch mitten in einer Neubuchung."""
+    s = gehirn.sammler(sit)
+    s["frage"] = ""
+    s["nachnameCheck"] = "ja"
+    danke = "Danke, Ihren Namen habe ich jetzt."
+    if sit.get("buchIntent") and s.get("slotIso"):
+        aus = _buchen(sit, melde)
+    else:
+        fid, frage = gehirn.naechste_frage(sit)
+        if fid:
+            s["frage"] = fid
+            return {"text": f"{danke} {frage}".strip()}
+        aus = _angebot(sit, melde)
+    if aus and _s(aus.get("text")):
+        aus["text"] = f"{danke} {aus['text']}".strip()
+        return aus
+    return aus or {"text": danke}
+
+
 def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
     """A3: Antwort auf den mandantenscharfen Nachnamen-Readback deuten.
 
@@ -5090,9 +5130,12 @@ def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
         s["frage"] = "nachname"
         sit.pop("nachnameCheckUnklar", None)
         spur.merken(sit, "nachname-readback", "korrektur-buchstabiert")
+        rettung = _name_rettung(sit, "korrektur", ab=3)
+        if rettung is not None:
+            return "beantwortet", rettung
         return "korrektur", None
 
-    name_toks = gehirn._name_tokens(t)
+    name_toks = gehirn._name_tokens(gehirn.ohne_verneinte_woerter(t))
     korrektur_toks = [
         tok for tok in name_toks
         if tok.lower() not in {"aber", "sondern", "nicht", "so", "es"}
@@ -5119,6 +5162,9 @@ def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
         s["frage"] = "nachname"
         sit.pop("nachnameCheckUnklar", None)
         spur.merken(sit, "nachname-readback", "korrektur-gesprochen")
+        rettung = _name_rettung(sit, "korrektur", ab=3)
+        if rettung is not None:
+            return "beantwortet", rettung
         return "korrektur", None
 
     if ist_ja:
@@ -5133,6 +5179,9 @@ def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
         s["frage"] = "buchstabieren"
         sit.pop("nachnameCheckUnklar", None)
         spur.merken(sit, "nachname-readback", "verneint")
+        rettung = _name_rettung(sit, "verneint")
+        if rettung is not None:
+            return "beantwortet", rettung
         return "beantwortet", {
             "text": (
                 "Entschuldigung. Dann bitte noch einmal: "
@@ -5152,6 +5201,9 @@ def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
         s["frage"] = "nachname"
         sit.pop("nachnameCheckUnklar", None)
         spur.merken(sit, "nachname-readback", "korrektur-gesprochen")
+        rettung = _name_rettung(sit, "korrektur", ab=3)
+        if rettung is not None:
+            return "beantwortet", rettung
         return "korrektur", None
 
     unklar = int(sit.get("nachnameCheckUnklar") or 0) + 1
@@ -5161,6 +5213,9 @@ def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
         s["frage"] = "buchstabieren"
         sit.pop("nachnameCheckUnklar", None)
         spur.merken(sit, "nachname-readback", "unklar-neustart")
+        rettung = _name_rettung(sit, "unklar")
+        if rettung is not None:
+            return "beantwortet", rettung
         return "beantwortet", {
             "text": (
                 "Dann gehen wir auf Nummer sicher. "
@@ -5361,6 +5416,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     rr = _rueckruf_zug(sit, t, melde)
     if rr is not None:
         return rr
+
+    if s["modus"] == "buchen" and s["frage"] == "namenslink":
+        aus = namenslink.zug(sit, t, set(), melde)
+        if aus is not None:
+            return aus
 
     nachname_check_modus, nachname_check_antwort = _nachname_check_vorbereiten(
         sit, t

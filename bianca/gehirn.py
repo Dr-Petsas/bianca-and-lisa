@@ -1778,9 +1778,29 @@ def grund_als_kontrolle(sit: dict, wortlaut: str) -> dict | None:
     return vm
 
 
+# W-SACHNAME (05.10.2026): „Frau Doktorkontrolle“, „Frau E-mail“ — Fachwort-
+# Komposita und Kanalwörter sind nie ein Patientenname. Bewusst nur exakte
+# Kanalwörter („Ismail“ bleibt) und Komposita MIT Fachwort am Rand.
+_SACHWORT_TOKEN_RE = re.compile(
+    r"^(?:e-?mails?|mails?|sms|whatsapp"
+    r"|(?:doktor|kontroll|termin|praxis)\w{3,}"
+    r"|\w{3,}(?:kontrolle|termin|termine|praxis))$",
+    re.I,
+)
+# Ein Wort direkt hinter „kein/keine/nicht“ ist verneint — live wurde aus
+# „das ist immer noch kein Russland hier“ der Nachname „Russland“.
+_VERNEINTES_WORT_RE = re.compile(r"\b(?:kein(?:e[nmrs]?)?|nicht)\s+(?!so\b|mehr\b)[\wäöüßÄÖÜ'-]+", re.I)
+
+
+def ohne_verneinte_woerter(text: str) -> str:
+    return _VERNEINTES_WORT_RE.sub(" ", _s(text))
+
+
 def _name_tokens(text: str) -> list[str]:
     raw = re.sub(r"[^\wäöüßÄÖÜ' -]+", " ", _s(text))
-    return [t for t in raw.split() if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()]
+    return [t for t in raw.split()
+            if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()
+            and not _SACHWORT_TOKEN_RE.match(t)]
 
 
 def _einzeltoken_plausibel(tok: str) -> bool:
@@ -2040,6 +2060,10 @@ def _name_aufnehmen(s: dict, text: str, *, erzwungen: bool,
     text = _s(_KEIN_NAME_RE.sub(" ", text))
     if not text:
         return False
+    if not (_TEIL_VOR_RE.search(text) or _TEIL_NACH_RE.search(text)):
+        text = _s(ohne_verneinte_woerter(text))
+        if not text:
+            return False
     # Getippter, vom Patienten bestätigter Name ist die führende Wahrheit.
     # STT darf ihn nicht mehr überschreiben — nur eine ausdrückliche Korrektur.
     if s.get("nameVerified") and not _name_leadin(text) and not (
