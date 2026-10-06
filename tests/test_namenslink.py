@@ -622,8 +622,14 @@ def test_gesprochener_name_statt_link(monkeypatch):
     verwalten._dispatch(sit, None)
     s["nachname"] = "Müller"
     s["vorname"] = "Peter"
+    # Anruf 205930f8: beim Absagen ist die SMS immer nur der Name — der
+    # gesprochene Name ist genau der, der gescheitert ist. Bianca wartet;
+    # „geht nicht" führt ins langsame Buchstabieren.
+    assert sit["namenslink"]["nurName"] is True
     aus = namenslink.zug(sit, "Peter Müller.", set(), None)
-    assert aus and "wirklich absagen" in aus["text"].lower()
+    assert aus and "warte" in aus["text"].lower()
+    aus = namenslink.zug(sit, "Die SMS geht nicht.", set(), None)
+    assert s["frage"] == "buchstabieren"
 
 
 def test_platzhalter_bucht_ohne_zu_warten(monkeypatch):

@@ -145,6 +145,7 @@ _DIKTAT_FRAGEN = {
     "name", "nachname", "vorname", "buchstabieren", "nachname_check",
     "vorname_check", "nachname_korr", "aenderung",
     "telefon", "telefon_check", "telefon_alt", "geburtstag",
+    "namens_handy", "namens_handy_check",
 }
 _DIKTAT_FERTIG_RE = re.compile(r"\bfertig\b", re.I)
 _DIKTAT_FELDWORT_RE = re.compile(

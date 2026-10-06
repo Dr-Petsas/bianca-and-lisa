@@ -5417,6 +5417,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     if rr is not None:
         return rr
 
+    if s["frage"] in {"namens_handy", "namens_handy_check"}:
+        aus = namenslink.handy_zug(sit, t)
+        if aus is not None:
+            return aus
+
     if s["modus"] == "buchen" and s["frage"] == "namenslink":
         aus = namenslink.zug(sit, t, set(), melde)
         if aus is not None:

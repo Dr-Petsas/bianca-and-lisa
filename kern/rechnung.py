@@ -198,7 +198,8 @@ def _arzt_verlangt(text: str, sit: dict | None) -> bool:
 # (ein Wechsel-Verdacht wuerde die Nummern-Frage raeumen und die Buchung
 # parken). Namens-/Vornamen-Fragen stehen bewusst NICHT hier: dort ist ein
 # Themenwechsel plausibel, und die Namens-Ernte hat ihre eigenen Wachen.
-_DIKTAT_FRAGEN = {"telefon", "telefon_check", "telefon_alt", "buchstabieren", "nachname_korr"}
+_DIKTAT_FRAGEN = {"telefon", "telefon_check", "telefon_alt", "buchstabieren", "nachname_korr",
+                  "namens_handy", "namens_handy_check"}
 
 
 def diktat_laeuft(sit: dict | None) -> bool:

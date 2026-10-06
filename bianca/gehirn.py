@@ -4971,7 +4971,7 @@ def sms_empfaenger_frage(s: dict) -> str:
 _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
                 "versicherung",
                 "versicherung_check", "pzr", "pzr_kasse", "bleaching", "bleaching_check",
-                "telefon_alt", "telefon_check",
+                "telefon_alt", "telefon_check", "namens_handy_check",
                 "sms_empfaenger",
                 "rueckblick", "folge_kontrolle", "anrufer_check",
                 "fuer_wen_check", "arzt_check", "vorname_check", "nachname_check",
@@ -4987,6 +4987,7 @@ _STILLE_KURZ = {"schonmal", "arzt", "slotwahl", "bestaetigung", "aenderung",
 # dem darf der Zug nicht nach 500 ms mitten im Namen geschnitten werden.
 _STILLE_DIKTAT = {
     "telefon", "buchstabieren", "nachname", "arzt_notiz_diktat", "termin_notiz",
+    "namens_handy",
 }
 
 

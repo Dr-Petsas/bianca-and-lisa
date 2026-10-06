@@ -111,6 +111,21 @@ def nur_name() -> bool:
     return sms_aktiv() and not aktiv()
 
 
+def _nur_name_fuer(sit: dict) -> bool:
+    """Reine Namensabfrage für diese Sitzung.
+
+    Reserviert wird nur beim Buchen. Absagen, Verschieben und Auskunft haben
+    keinen Slot — dort ist die SMS immer nur der Name, auch mit
+    ``NAMENS_LINK=1`` (Anruf 205930f8: sonst sagte Bianca „während wir weiter
+    telefonieren" und wartete nicht)."""
+    if not sms_aktiv():
+        return False
+    if not aktiv():
+        return True
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    return _s(s.get("modus")) in {"absagen", "verschieben", "auskunft"}
+
+
 # Nach so vielen gescheiterten Namensaufnahmen (Rücklese verneint,
 # korrigiert, unklar) schickt Bianca die Namens-SMS, statt erneut
 # buchstabieren zu lassen.
@@ -144,11 +159,170 @@ def rettung_faellig(sit: dict) -> bool:
     )
 
 
+def rettung_braucht_handy(sit: dict) -> bool:
+    """Rettung wäre fällig, es fehlt aber ein Handy (Festnetz/unterdrückt).
+
+    Einmal je Anruf fragt Bianca dann nach einer Handynummer, statt still
+    weiter buchstabieren zu lassen (Anruf 205930f8: Festnetz-Anrufer,
+    die SMS kam nie in Frage)."""
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    return bool(
+        int(s.get("nameFehlversuche") or 0) >= NAME_FEHLVERSUCHE_SMS
+        and sms_aktiv()
+        and not handy(sit)
+        and not verifiziert(sit)
+        and not sit.get("namensHandyGefragt")
+        and not _stand(sit).get("done")
+        and not _stand(sit).get("abgebrochen")
+    )
+
+
 def rettung_starten(sit: dict) -> dict | None:
     """Namens-SMS als Rettung; None, wenn sie nicht gehen kann."""
-    if not rettung_faellig(sit):
+    if rettung_faellig(sit):
+        return starten(sit)
+    if rettung_braucht_handy(sit):
+        return _handy_frage_start(sit)
+    return None
+
+
+NAMENS_HANDY_FRAGE = "Unter welcher Handynummer darf ich Ihnen die SMS schicken?"
+_NAMENS_HANDY_FESTNETZ = (
+    "Damit ich Ihren Namen sicher richtig schreibe, würde ich Ihnen gern "
+    "eine SMS schicken, in die Sie ihn eintippen. An die Festnetznummer, "
+    "von der Sie anrufen, geht das leider nicht. "
+)
+_NAMENS_HANDY_OHNE = (
+    "Damit ich Ihren Namen sicher richtig schreibe, würde ich Ihnen gern "
+    "eine SMS schicken, in die Sie ihn eintippen. "
+)
+_NAMENS_HANDY_AUFGEBEN = (
+    "Kein Problem. Dann buchstabieren Sie mir den Nachnamen bitte ganz "
+    "langsam, Buchstabe für Buchstabe; am Ende sagen Sie fertig."
+)
+_NAMENS_HANDY_NEIN_RE = re.compile(
+    r"^\s*(?:nein|nee|ne|nö)\b|\bkein(?:e|en)?\s+(?:handy|mobil\w*|sms)\b"
+    r"|\bhabe?\s+(?:ich\s+)?kein\b|\bwill\s+ich\s+nicht\b|\blieber\s+nicht\b",
+    re.I,
+)
+
+
+def _handy_frage_start(sit: dict) -> dict:
+    s = sit.setdefault("sammler", {})
+    sit["namensHandyGefragt"] = True
+    sit["namensHandyTeil"] = ""
+    sit["namensHandyUnklar"] = 0
+    s["frage"] = "namens_handy"
+    s["buchstabenTeil"] = ""
+    _beobachten(sit, "handy_frage", outcome="festnetz" if ist_festnetz_anrufer(sit) else "ohne")
+    vorsatz = _NAMENS_HANDY_FESTNETZ if ist_festnetz_anrufer(sit) else _NAMENS_HANDY_OHNE
+    return {"text": vorsatz + NAMENS_HANDY_FRAGE}
+
+
+def _handy_aufgeben(sit: dict, grund: str) -> dict:
+    s = sit.setdefault("sammler", {})
+    sit["namensHandyAbgelehnt"] = True
+    sit.pop("namensHandyTeil", None)
+    sit.pop("namensHandyOffen", None)
+    s["frage"] = "buchstabieren"
+    s["buchstabenTeil"] = ""
+    _beobachten(sit, "handy_frage", outcome=grund)
+    return {"text": _NAMENS_HANDY_AUFGEBEN}
+
+
+def _handy_unklar(sit: dict, text: str) -> dict:
+    n = int(sit.get("namensHandyUnklar") or 0) + 1
+    sit["namensHandyUnklar"] = n
+    if n >= 2:
+        return _handy_aufgeben(sit, "unklar")
+    return {"text": text, "_wiederholungErlaubt": True}
+
+
+def _handy_readback(sit: dict, nummer: str) -> dict:
+    from bianca import gehirn
+    s = sit.setdefault("sammler", {})
+    sit["namensHandyOffen"] = nummer
+    sit["namensHandyTeil"] = ""
+    s["frage"] = "namens_handy_check"
+    return {"text": gehirn.readback_text(nummer)}
+
+
+def _handy_ziffern(sit: dict, t: str) -> dict | None:
+    """Ziffern auf die Handyfrage: sammeln, prüfen, vorlesen."""
+    from bianca import telefon
+    neu = telefon.ziffern(t)
+    if not neu:
         return None
-    return starten(sit)
+    teil = _ziffern(sit.get("namensHandyTeil")) + neu
+    nummer = telefon.mit_fuehrender_null(teil)
+    if len(nummer) > 13:
+        sit["namensHandyTeil"] = ""
+        return _handy_unklar(sit, (
+            "Da sind mir zu viele Ziffern durcheinander geraten. "
+            "Sagen Sie mir die Handynummer bitte noch einmal von vorn?"
+        ))
+    if len(nummer) >= 11 or (len(nummer) >= 10 and re.search(r"\bfertig\b", t, re.I)):
+        if not telefon.ist_handy(nummer):
+            sit["namensHandyTeil"] = ""
+            return _handy_unklar(sit, (
+                "Das ist leider keine Handynummer — dort kommt keine SMS an. "
+                "Haben Sie eine Handynummer, die mit null eins beginnt?"
+            ))
+        return _handy_readback(sit, nummer)
+    sit["namensHandyTeil"] = teil
+    return {"text": "", "warte": True, "stilleMs": 1500}
+
+
+def handy_zug(sit: dict, gesagt: str) -> dict | None:
+    """Antwort auf die Handyfrage der Namens-SMS (``namens_handy[_check]``).
+
+    Deterministisch wie ``telefon_check``: nie das Modell, nie ungeprüft
+    eine Nummer übernehmen. Ablehnen oder zweimal unklar führt zurück ins
+    langsame Buchstabieren — nie eine Schleife."""
+    s = sit.setdefault("sammler", {})
+    frage = _s(s.get("frage"))
+    if frage not in {"namens_handy", "namens_handy_check"}:
+        return None
+    from bianca import gehirn, telefon
+    t = _s(gesagt)
+    if not t:
+        return {"text": "", "warte": True, "stilleMs": 1500}
+    if frage == "namens_handy_check":
+        offen = _s(sit.get("namensHandyOffen"))
+        if telefon.ziffern(t) and len(telefon.ziffern(t)) >= 7:
+            sit["namensHandyTeil"] = ""
+            s["frage"] = "namens_handy"
+            aus = _handy_ziffern(sit, t)
+            if aus is not None:
+                return aus
+        if offen and gehirn.ist_ja(t) and not telefon.check_ist_nein(t):
+            sit["namensZielHandy"] = patients.handy_e164(offen)
+            sit.pop("namensHandyOffen", None)
+            s["frage"] = ""
+            aus = starten(sit)
+            if aus:
+                return aus
+            return _handy_aufgeben(sit, "create_failed")
+        if telefon.check_ist_nein(t) or gehirn.ist_nein(t):
+            sit.pop("namensHandyOffen", None)
+            sit["namensHandyTeil"] = ""
+            s["frage"] = "namens_handy"
+            return _handy_unklar(sit, (
+                "Entschuldigung. Dann sagen Sie mir die Handynummer bitte "
+                "noch einmal, Ziffer für Ziffer?"
+            ))
+        return _handy_unklar(sit, (
+            gehirn.readback_text(offen) if offen else NAMENS_HANDY_FRAGE
+        ))
+    aus = _handy_ziffern(sit, t)
+    if aus is not None:
+        return aus
+    if _NAMENS_HANDY_NEIN_RE.search(t) or _SMS_GEHT_NICHT_RE.search(t):
+        return _handy_aufgeben(sit, "caller_declined")
+    return _handy_unklar(sit, (
+        "Sie können mir die Handynummer einfach Ziffer für Ziffer sagen. "
+        + NAMENS_HANDY_FRAGE
+    ))
 
 
 # Eingebaute Testhandys — später mit dem ganzen Canary-Pfad wieder raus.
@@ -196,6 +370,8 @@ def handy(sit: dict) -> str:
     an = sit.get("anrufer") if isinstance(sit.get("anrufer"), dict) else {}
     s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     for roh in (
+        # Eben für die Namens-SMS genannt und rückbestätigt (Festnetz-Anrufer).
+        sit.get("namensZielHandy"),
         s.get("telefon") if s.get("telefonOk") else "",
         s.get("telefonBekannt"),
         s.get("kontaktTelefon"),
@@ -416,7 +592,7 @@ def reservierungs_scope(sit: dict) -> str:
     tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
     booking = sit.get("booking") if isinstance(sit.get("booking"), dict) else {}
     last = sit.get("lastBook") if isinstance(sit.get("lastBook"), dict) else {}
-    if nur_name():
+    if _nur_name_fuer(sit):
         # Ohne Reservierung gehört der Link nur zum Anruf, nicht zu einem
         # Slot — sonst verfällt er, sobald der Anrufer einen Termin wählt.
         return "|".join((
@@ -584,7 +760,7 @@ def starten(
     appointment_id = _s(
         appointment_id or s.get("appointmentId") or sit.get("lastBookId")
     )
-    nur = nur_name()
+    nur = _nur_name_fuer(sit)
     if nur:
         # Reine Namensabfrage: nie einen Termin oder eine Akte an den Link
         # binden — das war der Weg zu den Platzhalter-Geisterterminen.

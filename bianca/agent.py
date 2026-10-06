@@ -497,6 +497,7 @@ def _wiederholung_oder_presence(sit: dict, text: str) -> str:
 _DIKTAT_FRAGEN = {
     "telefon", "telefon_check", "telefon_alt", "buchstabieren",
     "nachname", "vorname", "geburtsdatum",
+    "namens_handy", "namens_handy_check",
 }
 _NAMENS_UNKLAR_FRAGEN = {
     "name", "nachname", "buchstabieren", "nachname_korr",

@@ -91,17 +91,26 @@ def test_zweites_nein_auf_die_ruecklese_schickt_die_sms(monkeypatch):
     assert create[0]["start"] == ""
 
 
-def test_ohne_handy_bleibt_es_beim_buchstabieren(monkeypatch):
+def test_ohne_handy_fragt_einmal_nach_einem_handy(monkeypatch):
+    # Anruf 205930f8: Festnetz-Anrufer bekamen nie eine Namens-SMS. Jetzt
+    # fragt Bianca einmal nach einer Handynummer; ohne Handy geht es ins
+    # langsame Buchstabieren, keine zweite Handyfrage.
     aufrufe = []
     monkeypatch.setattr(namenslink, "_cf_call", _cf(aufrufe))
     sit = _sit()
     sit["callerPhone"] = "+4921154244101"
-    _readback_offen(sit)
+    s = _readback_offen(sit)
     flow.zug(sit, "Nein.")
     _readback_offen(sit, "Busk")
     aus = flow.zug(sit, "Nein.")
-    assert "buchstabieren" in aus["text"].lower()
+    assert "handynummer" in aus["text"].lower()
+    assert s["frage"] == "namens_handy"
     assert not aufrufe
+    aus = flow.zug(sit, "Ich habe kein Handy.")
+    assert "buchstabe für buchstabe" in aus["text"].lower()
+    assert s["frage"] == "buchstabieren"
+    assert not aufrufe
+    assert namenslink.rettung_starten(sit) is None
 
 
 def test_scope_ueberlebt_die_slotwahl(monkeypatch):

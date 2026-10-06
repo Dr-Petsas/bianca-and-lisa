@@ -540,6 +540,8 @@ def _verw_reset(sit: dict) -> None:
     sit.pop("verwKorrekturVorname", None)
     sit.pop("verwWann", None)         # Altlast aus W-SAMMELN-Sitzungen
     sit.pop("verwArztGefragt", None)  # (Wann-/Behandler-Vorabfrage ist raus)
+    sit.pop("verwDetailArztGefragt", None)
+    sit.pop("verwArztNachgefragt", None)
     sit["verwHinweis"] = {}
     sit["verwHinweisText"] = ""
     sit["verwBehandlungGefragt"] = False
@@ -2531,6 +2533,50 @@ def _nachname_frage(sit: dict, vorsatz: str = "") -> dict:
     return {"text": _s(f"{vorsatz} {frage}")}
 
 
+def _name_nicht_sicher(sit: dict, vorsatz: str) -> dict:
+    """Ein gehörter Name trägt nicht: zählt als gescheiterte Namensrunde.
+
+    Ab der zweiten kommt die Namens-SMS (bzw. die Frage nach einem Handy)
+    statt einer weiteren Buchstabierrunde."""
+    from kern import namenslink
+    namenslink.fehlversuch(sit)
+    aus = namenslink.rettung_starten(sit)
+    if aus:
+        spur.merken(sit, "namens-sms-rettung", "verwaltung")
+        return aus
+    return _nachname_frage(sit, vorsatz)
+
+
+_NAMENSFRAGEN_RETTUNG = frozenset({"name", "nachname", "buchstabieren", "nachname_korr"})
+
+
+def _namensrunde_gescheitert(sit: dict, t: str, neu: set[str]) -> dict | None:
+    """Auf die Namensfrage kam kein Name (Anruf 205930f8: „Termin.",
+    „Blessing.") — das zählt wie eine verneinte Rücklese.
+
+    Nicht gezählt: Stille, Buchstaben-Fragment, irgendein Namensteil,
+    Zwischenfrage, Anliegen-Wechsel. Je Zug höchstens einmal."""
+    s = gehirn.sammler(sit)
+    if s["frage"] not in _NAMENSFRAGEN_RETTUNG or not t:
+        return None
+    if _s(s.get("nachname")) or _s(s.get("buchstabenTeil")):
+        return None
+    if neu & {"name", "nachname", "vorname", "modus", "buchstabenTeil"}:
+        return None
+    if gehirn.ist_zwischenfrage(t):
+        return None
+    key = f"{sit.get('_zugNr') or 0}|{t.casefold()[:120]}"
+    if sit.get("_verwNameFehlKey") == key:
+        return None
+    sit["_verwNameFehlKey"] = key
+    from kern import namenslink
+    namenslink.fehlversuch(sit)
+    aus = namenslink.rettung_starten(sit)
+    if aus:
+        spur.merken(sit, "namens-sms-rettung", "verwaltung-kein-name")
+    return aus
+
+
 def _mehrere_behandler(tenant: dict) -> bool:
     ids = {
         _s(c.get("id")) or _s(c.get("calendarId"))
@@ -2648,10 +2694,14 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
             for a in kandidaten
             if _s(a.get("calendarId")) or _s(a.get("doctorName"))
         }
-        if len(kalender) > 1 and not _s((s.get("arzt") or {}).get("calendarId")):
+        if (len(kalender) > 1
+                and not _s((s.get("arzt") or {}).get("calendarId"))
+                and not sit.get("verwDetailArztGefragt")):
             # Erst nicht-personenbezogene Termindaten ausschöpfen. Bei
             # mehreren parallelen Kalendern grenzt der Behandler sicherer
-            # ein als ein früh verhörter Name.
+            # ein als ein früh verhörter Name. Nur EINMAL: „weiß ich nicht"
+            # geht weiter zum Namen (Anruf 205930f8: sonst dreimal gefragt).
+            sit["verwDetailArztGefragt"] = True
             s["frage"] = "arzt"
             return True, {"text": (
                 "Zu dieser Zeit laufen mehrere Termine. "
@@ -2667,7 +2717,7 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
         sit["_verwNameGehoert"] = s["nachname"]
         s["nachname"] = ""
         s["vorname"] = ""
-        return True, _nachname_frage(
+        return True, _name_nicht_sicher(
             sit,
             "Der Name passt zu mehreren Einträgen. Bitte nennen oder "
             "buchstabieren Sie den Nachnamen noch einmal.",
@@ -2694,7 +2744,7 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
             sit["_verwNameGehoert"] = gehoert
         s["vorname"] = ""
         s["nachname"] = ""
-        return True, _nachname_frage(
+        return True, _name_nicht_sicher(
             sit,
             "Die Termindaten habe ich, aber der Patientenname passt noch nicht "
             "sicher genug.",
@@ -3094,10 +3144,12 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
                 )}
     elif s["frage"] == "arzt":
         # Arzt/Behandler wurde von gehirn.einsammeln bereits in s["arzt"]
-        # abgelegt. Auch "weiß ich nicht" darf weiter zum Patientennamen.
-        if s.get("arzt") or _UNKLAR_RE.search(t):
+        # abgelegt. Auch "weiß ich nicht" darf weiter zum Patientennamen —
+        # und nach EINER Nachfrage auch eine unklare Antwort.
+        if s.get("arzt") or _UNKLAR_RE.search(t) or sit.get("verwArztNachgefragt"):
             s["frage"] = ""
         else:
+            sit["verwArztNachgefragt"] = True
             return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
     elif s["frage"] == "vorname":
         if not neu:
@@ -3357,6 +3409,10 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         aus = namenslink.zug(sit, t, neu, melde)
         if aus is not None:
             return aus
+
+    aus = _namensrunde_gescheitert(sit, t, neu)
+    if aus is not None:
+        return aus
 
     # Ein nur zu mindestens 60 Prozent passender Name ist noch kein
     # Patientenbeweis. Erst dieses Ja darf die feste Verwaltungsstrecke
@@ -3631,9 +3687,10 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
             # mehreren Kalendern der Behandler grenzen die Suche ein.
             sit["verwZeitUnbekannt"] = True
     if s["frage"] == "arzt":
-        if s.get("arzt") or _UNKLAR_RE.search(t):
+        if s.get("arzt") or _UNKLAR_RE.search(t) or sit.get("verwArztNachgefragt"):
             s["frage"] = ""
         else:
+            sit["verwArztNachgefragt"] = True
             return {"text": "Bei welchem Behandler ist der Termin eingetragen?"}
     if not s["nachname"] and not s["anruferCheck"] and not s["fuerWen"]:
         agentprofil.anrufer_warten(sit)
