@@ -3826,7 +3826,12 @@ zur manuellen Gegenhör-Stichprobe. Ziel gilt erst ab 50 gewerteten Gesprächen:
 super mindestens 40 Prozent und super plus gut mindestens 80 Prozent.
 Testanrufe sind standardmäßig ausgeschlossen. Das Werkzeug verändert nie
 Manifeste oder Kalender; nur ein ausdrücklich gesetztes `--json`-Ziel wird
-geschrieben. Regression: `tests/test_tages_scorer.py`.
+geschrieben. Dieselbe Chef-Wertung gilt für die Bianca-Ergebnisseite
+(`kern/anruf_anliegen.py`): der belegte Zahnnotfall ist erledigt und verdrängt
+den offenen Terminwunsch, die sicher beibehaltene Absage ist erledigt, und
+`Damn it.` / `Queen Service.` erzeugen keine Wiederholungsschleife. Harte
+deutsche Fehler behalten Vorrang. Regression: `tests/test_tages_scorer.py`,
+`tests/test_ergebnis_wertung.py`.
 
 ## Blessing-Gründe konkret statt Notfall/Absage (W-BLESSING-MOTIVKLARHEIT 15.09.2026 — nicht rückbauen)
 
@@ -4284,6 +4289,109 @@ Die Gegenproben sind der teurere Teil — eine zu breite Sperre kostet echte
 Namen und damit jede Patientensuche. Tests: `tests/test_anruf_d6611fca.py`
 (Live-Wortlaute plus vier Gegenproben).
 
+## Namenslink-P0: Reservierungsvertrag kaputt, Feature ausgesetzt (W-NAMENSLINK-CONTAINMENT 02.10.2026 — seit 06.10.2026 repariert und wieder AN, s. Abschnittsende)
+
+Befund aus den jüngsten Live-Anrufen: die Namens-SMS-Reservierung
+(`kern/namenslink.py` → `createAppointment` mit `skipConfirmation=true`) hat
+in Firestore NICHT den vereinbarten deterministischen Vertrag erzeugt. Statt
+der tokengebundenen Dokumente `nca_<hash>` / `ncp_<hash>` (so, wie
+`_held_booking_readback` sie beweist) sind **sieben Platzhalter-Termine mit
+ZUFALLS-IDs** entstanden — alle am selben geteilten Platzhalter-Patienten
+(`idemp_cf50e4ef1a1ae28ce3619d7b5f99`), alle auf `confirmed`, OHNE
+`nameConfirmPending`/`confirmationHeld`. Die 90-Minuten-Reservierung verfällt
+dadurch nie: Geistertermine. Read-only gegengelesen 02.10.2026 (Firestore,
+> 99 %):
+
+| Session | Termin-ID (zufällig) |
+| --- | --- |
+| bd9dc153 | LbbvJV9WEe09txXKTs4f |
+| e8d5bc3b | LF0424E6YwfR9ylflMs8 |
+| c3566505 | d8DhQl2q5qQYE0eU9uK8 |
+| 75a29b6f | tMZf9IQMXHT1MDhvrdnl |
+| dac77430 | IfbOaHYdsjGdNQfY1AI6 |
+| f65c9dfd | 17IB2IcnG9YaIU32QePN |
+| 999bbe69 | lnBI5C4oNzwFTfMsEQFE |
+
+- **Containment (sofort):** `namenslink.aktiv()` steht jetzt auf Default
+ **`"0"`** (vorher `"1"`) — eine beim Deploy überschriebene `.env` kann den
+ Link nie versehentlich wieder scharf schalten. Zusätzlich live auf pickadoc1
+ `NAMENS_LINK=0` in der `.env` (Container recreate, kein Rebuild; Backups
+ `.env.bak-namenslink-` = vor Append, `.env.bak-namenslink-contain` = nach).
+ Neupatienten laufen damit wieder über den bewährten Buchstabier-/Suchpfad.
+- **Diagnose statt Raten:** `_held_booking_readback` meldet jetzt
+ zusätzlich `expectedAppointmentId`, `source` und bei Scope-Abweichung
+ `scope` (NUR der Feldname, nie der Inhalt; scoped IDs sind SHA256-Hashes,
+ nicht auf Token/Telefon rückrechenbar). Die strenge Rücklese selbst ist
+ unverändert — jeder Treffer bleibt `scope_mismatch`.
+- **Wieder-An NUR nach** Reparatur des CF-Vertrags in `pickadoc-live-base`
+ (`bookingReservationGuard`: deterministische `nca_/ncp_`-IDs schreiben,
+ `nameConfirmPending`/`confirmationHeld` setzen; dazu `source`-Drift prüfen —
+ `createAppointment` sendet `phone_agent`, `getFreeTimeSlots` nutzt
+ `pickadoc-bianca`), UI/Countdown/Datum gegenlesen und per Canary abnehmen,
+ dann `NAMENS_LINK=1`. Tests: `tests/test_namenslink.py` (Feature-Tests
+ schalten den Link per autouse-Fixture ausdrücklich an),
+ `tests/test_buchung_beweis.py`, `tests/test_booking_uncertainty.py`.
+
+**CF-Reparatur — Befund + Handover (Chef-Entscheid 02.10.2026: Shared CF
+NICHT von diesem Repo aus anfassen):** Der deterministische Vertrag ist in
+`pickadoc-live-base` BEREITS vorhanden — `src/utils/bookingReservationGuard.ts`
+(`nameConfirmPatientId/nameConfirmAppointmentId`, `prepareNameConfirmBooking
+Reservation`, `createAppointmentUnderSlotGuard`, `bindNameConfirmBooked
+Appointment`, `markNameConfirmPlaceholderPatient`) und der Controller
+`src/controllers/appointments.ts` (ab ~1958) wiren ihn für
+`skipConfirmation + nameConfirmToken`. Committet als `40f64f2b` „V5.6.1
+reserviert Slots und bestätigt Namen sicher" (26.09.2026). Der Live-Schaden
+(Zufalls-IDs auf geteiltem Platzhalter) heißt deshalb mit hoher
+Wahrscheinlichkeit: die **deployte** Cloud Function ist ÄLTER als V5.6.1 —
+die Reparatur ist vor allem ein **Deploy + Canary**, kein Rewrite.
+Handover-Schritte (durch den Chef / außerhalb dieses Repos):
+ 1. Deployte CF-Version gegen `40f64f2b` prüfen (Firebase Console /
+    `firebase functions:log`), und ob die 7 Platzhalter VOR dem letzten
+    Deploy entstanden (dann historisch) oder danach (dann Deploy-Lücke).
+ 2. `createAppointment` + `agentNameConfirm*` nach `docgenda` deployen;
+    `onPickadocPhoneCall` NICHT nebenbei (prod-no-regressions).
+ 3. Portal/Patientenseite: 90-Minuten-Countdown + Datum/Uhrzeit des
+    reservierten Termins gegenlesen (UI liest `nameConfirms`-Dok).
+ 4. `source`-Drift klären: solange `getFreeTimeSlots` `pickadoc-bianca` und
+    `createAppointment` `phone_agent` nutzt, müssen beide Werte serverseitig
+    als „Telefon-Agent" gelten (Online-Buchungs-Gate nicht triggern).
+ 5. Canary: `NAMENS_LINK=1` + `NAMENS_LINK_CANARY`/Chef-Handy, EIN echter
+    Neupatienten-Testanruf → im Firestore müssen `nca_<hash>`/`ncp_<hash>`
+    mit `nameConfirmPending=true`+`confirmationHeld=true` liegen und
+    `_held_booking_readback` `ok=true` liefern (Dock/Anrufe-Diagnose:
+    `dispatch.verification.beweis=deterministic_firestore_id`). Erst dann
+    praxisweit `NAMENS_LINK=1`.
+ 6. Die 7 Geistertermine im Portal bereinigen (manuell/Portal — nie über
+ Biancas Schreibweg).
+
+**Stand seit 06.10.2026: Reservierung wieder AN (W-NAMENSLINK-AN — nicht
+rückbauen).** Die CF-Reparatur (V5.6.1-Vertrag, `nca_/ncp_`-IDs) ist aus
+`main` deployt (`origin/main` `04faefce`, Regel
+`.cursor/rules/cf-deploy-ueber-main.mdc`). Die Canary-Abnahme war grün: der
+Name kam per SMS korrekt an, die Bestätigungs-SMS ebenfalls (Chef 06.10.).
+Die Canary-Testtermine hat der Chef im Portal bereinigt. Auf pickadoc1 steht
+`NAMENS_LINK=1` in der Server-`.env` (Backup
+`.env.bak-namenslink-an-20261006`), gültig für alle Praxen.
+
+- **Der Code-Default bleibt bewusst `"0"`** (`namenslink.aktiv()`): die
+ `.env` ist der Schalter. Eine beim Deploy überschriebene `.env` (s. „Die
+ .env-Falle") schaltet die Reservierung also AUS, nie versehentlich an.
+ Nach jedem Deploy prüfen: `docker exec telefonki-bianca-1 printenv
+ NAMENS_LINK` muss `1` liefern.
+- **Namens-SMS als Rettung** (`579eddb80`, `6a4c664b7`): versteht Bianca
+ den Namen zweimal nicht (Rücklese verneint bzw. gescheiterte
+ Namensrunden), schickt sie die Namens-SMS. Beim Buchen mit Reservierung,
+ beim Absagen, Verschieben und bei der Auskunft immer nur den Namen
+ (`_nur_name_fuer` — dort gibt es keinen Slot; Anruf 205930f8). Ruft
+ jemand vom Festnetz an, fragt Bianca zuerst nach einem Handy
+ (`namens_handy` → Rücklese `namens_handy_check`). Die reine Namens-SMS
+ hat einen eigenen Notaus `NAMENS_SMS=0`; `NAMENS_LINK=0` schaltet nur die
+ Reservierung ab.
+- `NAMENS_LINK_UNBEKANNT` ist TEST-ONLY (Chef-Handy als unbekannt
+ behandeln) und bleibt in Produktion aus.
+- Tests: `tests/test_namenslink.py`, `tests/test_namens_sms_rettung.py`,
+ `tests/test_anruf_205930f8.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
@@ -4342,3 +4450,21 @@ Mitschnitten gehen NIE nach GitHub. Skripte:
 - Seite: `/fernsteuerung.html` (Handy braucht `#t=…` aus dem lokalen Link).
 - Wächter: `tools/lisa_fernsteuerung_watch.ps1` — nur Grok, nur dieser Ordner.
 - Kein MAS-Wächter, kein Workspace `F:\`.
+
+## Master-Reparaturplan (03.10.2026 — verbindlich)
+
+Der vollständige Plan steht in `docs/MASTER-REPARATURPLAN.md`.
+
+Bis zur gemeinsamen Auswertung der neuen produktiven Gespräche vom Montag,
+05.10.2026, gilt: **beobachten und analysieren, nicht korrigieren**. Keine
+fachlichen Codeänderungen, keine Aktivierung lokaler Fix-Entwürfe und kein
+Deploy ohne neue ausdrückliche Freigabe des Chefs.
+
+Neue Fehler werden zuerst genau einer technischen Primärursache zugeordnet:
+Tool-Ausführung, Identität/Patientensuche, fehlende Evidenz, Audio/STT,
+Ausgabe/Schleifenregie oder Formularzustand/Floor. Erst die
+Montagsauswertung entscheidet, welche Reparaturwelle begonnen wird.
+
+Ein neuer P0-Vorfall (falscher/destruktiver Write, Datenschutz, gefährliche
+Notfallauskunft oder unbelegter echter Transfer) wird sofort gemeldet, aber
+ebenfalls nicht eigenmächtig verändert.
