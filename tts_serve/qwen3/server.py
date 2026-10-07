@@ -13,13 +13,28 @@ Phase 2 (29.08.2026): /speak-stream — der GANZE Satz geht rein, AUDIO-Stuecke
 kommen raus, sobald der Codec sie liefert (generate_voice_clone_streaming).
 Das ist KEIN Text-Schnitt: die Prosodie bleibt ganz, nur die Auslieferung
 ist frueher. Muss unter _LOCK laufen — eine GPU, vLLM daneben.
+
+Verwaiste Sperre (Vorfall 07.10.2026 18:19 — nicht rueckbauen): /speak-stream
+hielt _LOCK im Antwort-Generator UEBER das yield hinweg. Brach Clara einen
+Satz per Barge-in ab, blieb der Generator mitten im Satz liegen und gab die
+Sperre nie frei — jeder weitere Satz (Clara, Bianca, Lisa, Demo) wartete
+ewig, /health meldete trotzdem ok. Seitdem rendert ein eigener Faden unter
+der Sperre und gibt sie IMMER frei; der Antwort-Generator liest nur noch aus
+einer Schlange. Wer die Sperre nicht binnen TTS_SPERRE_WARTEN_S bekommt,
+erhaelt 503 statt ewig zu haengen; haelt ein Render sie laenger als
+TTS_SPERRE_WAECHTER_S, beendet sich der Prozess und Docker startet neu
+(0 = Waechter aus).
 """
 
 from __future__ import annotations
 
+import inspect
 import os
+import queue
 import threading
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -33,8 +48,13 @@ STIMMEN_DIR = Path(os.environ.get("STIMMEN_DIR", "/stimmen"))
 MODEL_ID = os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
 SPRACHE = os.environ.get("TTS_SPRACHE", "German")
 ZIEL_RATE = 24000
-# Nur die produktiven Stimmen — quizmaster/mann wuerden nur Warmlauf fressen.
-_STIMMEN = ("bianca", "lisa")
+# Nur die produktiven Stimmen — Seltenes wuerde nur Warmlauf fressen.
+# clara (30.08.2026): Clara V7 (iPhone-App) spricht jetzt diesen Container —
+# ihr Klon-Prompt gehoert vorgewaermt, nicht lazy beim ersten Anruf.
+# lena (30.08.2026): Lena/Coach-Befund-Echo (iPad) — ElevenLabs ist
+# zahlungsblockiert, Lena spricht jetzt ihren Klon (Elena-Vox-Preview).
+# quizmaster/mann laufen als TTS_STIMMEN_EXTRA lazy mit (Demo-Momente).
+_STIMMEN = ("bianca", "lisa", "clara", "lena")
 # Zusatz-Stimmen (Baukasten-Test 29.08.2026): werden gescannt und sind per
 # /speak nutzbar, bekommen aber KEINEN Start-Warmlauf — ihr Klon-Prompt
 # entsteht lazy beim ersten Aufruf. Leer = Verhalten wie vorher.
@@ -47,6 +67,9 @@ _STIMMEN_EXTRA = tuple(
 app = FastAPI(title="tts-qwen3")
 
 _LOCK = threading.Lock()
+_SPERRE_WARTEN_S = float(os.environ.get("TTS_SPERRE_WARTEN_S", "30") or "30")
+_SPERRE_WAECHTER_S = float(os.environ.get("TTS_SPERRE_WAECHTER_S", "90") or "0")
+_BELEGT_SEIT = 0.0
 _MODEL = None
 _HYBRID = False
 _VOICES: dict[str, Path] = {}
@@ -59,6 +82,15 @@ _WARM = False
 class SpeakIn(BaseModel):
     text: str
     voice: str = ""
+
+
+class CloneSpeakIn(BaseModel):
+    """ClonR: beliebige Stimmprobe (URL oder Base64), kein vorregistrierter Name."""
+    text: str
+    ref_audio_url: str = ""
+    ref_audio_b64: str = ""
+    ref_text: str = ""
+    language: str = ""
 
 
 def _stimmen_scannen() -> None:
@@ -209,9 +241,42 @@ def _pcm16(wav, rate: int) -> bytes:
     return (arr * 32767.0).astype(np.int16).tobytes()
 
 
+def _sperren() -> None:
+    """_LOCK holen oder 503 — nie ewig warten."""
+    global _BELEGT_SEIT
+    if not _LOCK.acquire(timeout=_SPERRE_WARTEN_S):
+        print(f"qwen3-tts sperre nach {_SPERRE_WARTEN_S:.0f}s nicht frei "
+              f"(belegt seit {_belegt_s():.0f}s) — 503", flush=True)
+        raise HTTPException(503, "tts belegt")
+    _BELEGT_SEIT = time.monotonic()
+
+
+def _freigeben() -> None:
+    global _BELEGT_SEIT
+    _BELEGT_SEIT = 0.0
+    _LOCK.release()
+
+
+def _belegt_s() -> float:
+    seit = _BELEGT_SEIT
+    return time.monotonic() - seit if seit else 0.0
+
+
+def _sperre_waechter() -> None:
+    while True:
+        time.sleep(5.0)
+        belegt = _belegt_s()
+        if belegt > _SPERRE_WAECHTER_S:
+            print(f"qwen3-tts sperre seit {belegt:.0f}s belegt — Prozess endet, "
+                  "Docker startet neu", flush=True)
+            os._exit(3)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     threading.Thread(target=_laden, daemon=True).start()
+    if _SPERRE_WAECHTER_S > 0:
+        threading.Thread(target=_sperre_waechter, daemon=True).start()
 
 
 @app.get("/health")
@@ -226,6 +291,7 @@ def health():
         "device": "cuda",
         "warm": _WARM,
         "hybrid": _HYBRID,
+        "belegt_s": round(_belegt_s(), 1),
         # Audio-Chunk-Streaming (Phase 2): ganzer Satz rein, PCM-Stuecke
         # raus. Text-Haeppchen (Genuschel 28.08.2026) bleiben verboten.
         "stream": bool(ok and _stream_faehig()),
@@ -267,8 +333,21 @@ def _synthese_kwargs(text: str, voice: str) -> dict:
         if _TRANSKRIPT[voice]:
             kw["ref_text"] = _TRANSKRIPT[voice]
         else:
-            kw["x_vector_only_mode"] = True
+            kw.update(_xvec_kw())
     return kw
+
+
+def _xvec_kw() -> dict:
+    """Hybrid FasterQwen3TTS sagt xvec_only, nacktes qwen-tts x_vector_only_mode."""
+    try:
+        params = inspect.signature(_MODEL.generate_voice_clone).parameters
+    except (TypeError, ValueError):
+        return {}
+    if "xvec_only" in params:
+        return {"xvec_only": True}
+    if "x_vector_only_mode" in params:
+        return {"x_vector_only_mode": True}
+    return {}
 
 
 @app.post("/speak-stream")
@@ -278,30 +357,56 @@ def speak_stream(body: SpeakIn):
     if not _stream_faehig():
         raise HTTPException(501, "streaming nur im hybrid-modus")
 
-    def gen():
-        t0 = time.perf_counter()
+    t0 = time.perf_counter()
+    _sperren()
+    stuecke: queue.Queue = queue.Queue()
+    abgebrochen = threading.Event()
+    ende = object()
+
+    def rendern() -> None:
         erster = -1.0
         gesamt = 0
-        with _LOCK:
-            try:
-                for stueck, sr, _timing in _MODEL.generate_voice_clone_streaming(
-                    **_synthese_kwargs(text, voice)
-                ):
-                    pcm = _pcm16(stueck, int(sr))
-                    if not pcm:
-                        continue
-                    if erster < 0:
-                        erster = time.perf_counter() - t0
-                    gesamt += len(pcm)
-                    yield pcm
-            except Exception as e:
-                # Mitten im Chunked-Response laesst sich kein 500 mehr senden —
-                # Abbruch loggen, der Client hoert den Satz unvollstaendig.
-                print(f"qwen3-tts stream-fehler: {e}", flush=True)
-                return
-        print(f"qwen3-tts stream voice={voice} zeichen={len(text)} "
-              f"ttfa={erster:.2f}s gesamt={time.perf_counter() - t0:.2f}s "
-              f"bytes={gesamt}", flush=True)
+        try:
+            for stueck, sr, _timing in _MODEL.generate_voice_clone_streaming(
+                **_synthese_kwargs(text, voice)
+            ):
+                if abgebrochen.is_set():
+                    print(f"qwen3-tts stream abgebrochen voice={voice} "
+                          f"zeichen={len(text)}", flush=True)
+                    return
+                pcm = _pcm16(stueck, int(sr))
+                if not pcm:
+                    continue
+                if erster < 0:
+                    erster = time.perf_counter() - t0
+                gesamt += len(pcm)
+                stuecke.put(pcm)
+            print(f"qwen3-tts stream voice={voice} zeichen={len(text)} "
+                  f"ttfa={erster:.2f}s gesamt={time.perf_counter() - t0:.2f}s "
+                  f"bytes={gesamt}", flush=True)
+        except Exception as e:
+            # Mitten im Chunked-Response laesst sich kein 500 mehr senden —
+            # Abbruch loggen, der Client hoert den Satz unvollstaendig.
+            print(f"qwen3-tts stream-fehler: {e}", flush=True)
+        finally:
+            _freigeben()
+            stuecke.put(ende)
+
+    try:
+        threading.Thread(target=rendern, daemon=True).start()
+    except Exception:
+        _freigeben()
+        raise
+
+    def gen():
+        try:
+            while True:
+                teil = stuecke.get()
+                if teil is ende:
+                    return
+                yield teil
+        finally:
+            abgebrochen.set()
 
     return StreamingResponse(
         gen(),
@@ -312,16 +417,116 @@ def speak_stream(body: SpeakIn):
     )
 
 
+def _ref_audio_holen(body: CloneSpeakIn) -> Path:
+    """Stimmprobe nach /tmp legen. Aufrufer loescht die Datei."""
+    import base64
+    import tempfile
+    import urllib.request
+
+    suffix = ".wav"
+    roh = b""
+    if (body.ref_audio_b64 or "").strip():
+        b64 = body.ref_audio_b64.strip()
+        if "," in b64 and b64.lower().startswith("data:"):
+            b64 = b64.split(",", 1)[1]
+        roh = base64.b64decode(b64)
+    elif (body.ref_audio_url or "").strip():
+        url = body.ref_audio_url.strip()
+        req = urllib.request.Request(url, headers={"User-Agent": "qwen3-tts-clonr"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            roh = resp.read()
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            path = urllib.parse.urlparse(url).path.lower()
+            for ext in (".m4a", ".mp3", ".wav", ".ogg", ".webm", ".aac", ".mp4"):
+                if path.endswith(ext) or ext[1:] in ct:
+                    suffix = ext if ext != ".mp4" else ".m4a"
+                    break
+    if len(roh) < 2000:
+        raise HTTPException(400, "referenz-audio fehlt oder ist zu kurz")
+    tmp = tempfile.NamedTemporaryFile(prefix="clonr-ref-", suffix=suffix, delete=False)
+    tmp.write(roh)
+    tmp.close()
+    return _ref_nach_wav(Path(tmp.name))
+
+
+def _ref_nach_wav(src: Path) -> Path:
+    """m4a/mp3/webm -> PCM-WAV. torchaudio kennt AAC oft nicht, ffmpeg schon."""
+    import subprocess
+    dst = src.with_name(src.stem + "-pcm.wav")
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src), "-ac", "1", "-ar", "24000", "-f", "wav", str(dst)],
+        capture_output=True, text=True, timeout=60,
+    )
+    try:
+        src.unlink(missing_ok=True)
+    except OSError:
+        pass
+    if r.returncode != 0 or not dst.is_file() or dst.stat().st_size < 2000:
+        raise HTTPException(400, "referenz-audio nicht lesbar")
+    return dst
+
+
+@app.post("/clone-speak")
+def clone_speak(body: CloneSpeakIn):
+    """ClonR-Stimmklon: Text + Referenzaudio -> PCM16 mono 24 kHz."""
+    if _MODEL is None:
+        raise HTTPException(503, "modell laedt noch")
+    text = " ".join((body.text or "").split()).strip()
+    if not text:
+        raise HTTPException(400, "text fehlt")
+    sprache = (body.language or "").strip() or SPRACHE
+    ref_path = _ref_audio_holen(body)
+    t0 = time.perf_counter()
+    try:
+        kw: dict = {
+            "text": text,
+            "language": sprache,
+            "ref_audio": str(ref_path),
+        }
+        if (body.ref_text or "").strip():
+            kw["ref_text"] = " ".join(body.ref_text.split()).strip()
+        else:
+            kw.update(_xvec_kw())
+        _sperren()
+        try:
+            wavs, sr = _MODEL.generate_voice_clone(**kw)
+        finally:
+            _freigeben()
+        wav = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
+        pcm = _pcm16(wav, int(sr))
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"qwen3-tts clone-speak-fehler: {e}", flush=True)
+        raise HTTPException(500, f"synthese: {e}")
+    finally:
+        try:
+            ref_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    dauer = time.perf_counter() - t0
+    print(f"qwen3-tts clone-speak zeichen={len(text)} s={dauer:.2f}", flush=True)
+    return Response(
+        content=pcm,
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": str(ZIEL_RATE),
+                 "X-Engine": "qwen3-hybrid" if _HYBRID else "qwen3",
+                 "X-Dauer-S": f"{dauer:.2f}"},
+    )
+
+
 @app.post("/speak")
 def speak(body: SpeakIn):
     text, voice = _speak_eingang(body)
     t0 = time.perf_counter()
-    with _LOCK:
-        try:
-            pcm = _synthese(text, voice)
-        except Exception as e:
-            print(f"qwen3-tts synthese-fehler: {e}", flush=True)
-            raise HTTPException(500, f"synthese: {e}")
+    _sperren()
+    try:
+        pcm = _synthese(text, voice)
+    except Exception as e:
+        print(f"qwen3-tts synthese-fehler: {e}", flush=True)
+        raise HTTPException(500, f"synthese: {e}")
+    finally:
+        _freigeben()
     dauer = time.perf_counter() - t0
     print(f"qwen3-tts speak voice={voice} hybrid={_HYBRID} "
           f"zeichen={len(text)} s={dauer:.2f}", flush=True)
