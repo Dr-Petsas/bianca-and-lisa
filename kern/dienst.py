@@ -873,6 +873,8 @@ class Dienst:
                             **ohr_extra,
                         )
                         stt_info["zug"] = zug_n
+                        if stt_info.get("rettung"):
+                            spur.merken(sit, "stt-ja-rettung", gesagt[:20])
                         if sperr_grund and isinstance(stt_info.get("qwen"), dict):
                             stt_info["qwen"]["sperre"] = sperr_grund[0]
                             spur.merken(sit, "qwen-live-sperre", sperr_grund[0])
@@ -960,6 +962,10 @@ class Dienst:
                                 q.put(("leer", "sprachwache"))
                                 return
                             sit["hoerfehlerFolge"] = folge + 1
+                            # Audio des verworfenen Zugs sichern (nie den
+                            # englischen Text): ohne Aufnahme liess sich am
+                            # 06.10. nicht nachhoeren, was gesagt wurde.
+                            mitschnitt.eingang(sit, stt_blob, stt_mime)
                             nachfrage = stille.hoerfehler_nachfrage(
                                 sit,
                                 ja_nein=(

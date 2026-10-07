@@ -8,6 +8,7 @@ Buchung zu tun hat — dann übernimmt das LLM (mit status_zeile im Prompt).
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from typing import Any, Callable
@@ -2031,6 +2032,28 @@ def _termin_notiz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
     }
 
 
+# W-KEIN-HANDY (07.10.2026, Anruf c449b685): „Hab keine.“ auf die Handyfrage
+# lief als unklar ans Modell. Nur die kurze Gesamtantwort oder ein
+# ausdrückliches „kein Handy“/„nur Festnetz“ — „keine andere Nummer“ nie.
+_KEIN_HANDY_KURZ_RE = re.compile(
+    r"^\W*(?:nein,?\s+)?(?:ich\s+)?(?:hab|habe|besitze)\s+(?:ich\s+)?"
+    r"(?:leider\s+|gar\s+|überhaupt\s+)?(?:keine?n?|keins)\W*$",
+    re.I,
+)
+_KEIN_HANDY_RE = re.compile(
+    r"\bkein(?:e|en)?\s+(?:handy|mobil\w*|smartphone)\b"
+    r"|\bnur\s+(?:ein\s+|das\s+)?festnetz\b",
+    re.I,
+)
+
+
+def _kein_handy(t: str) -> bool:
+    if os.environ.get("KEIN_HANDY", "1").strip() == "0":
+        return False
+    t = _s(t)
+    return bool(_KEIN_HANDY_KURZ_RE.match(t) or _KEIN_HANDY_RE.search(t))
+
+
 def _telefon_tor(sit: dict) -> dict | None:
     """W-TELEFON-ZULETZT (Chef 14.09.2026): die Handynummer ist der LETZTE
     Schritt vor dem Eintragen — unmittelbar vor der Bestaetigungs-SMS.
@@ -3812,7 +3835,8 @@ def _abgeben_kontakt_weitergeben(sit: dict) -> None:
             felder["buchstabiert"] = True
     tel_akte = telefon.mit_fuehrender_null(a.get("telefon") or "")
     tel = _s(s.get("telefon"))
-    if tel and telefon.plausibel(tel) and tel != tel_akte:
+    # Ein Festnetz taugt fuer den Rueckruf, nie als SMS-Ziel der Buchung.
+    if tel and telefon.plausibel(tel) and tel != tel_akte and telefon.ist_handy(tel):
         felder["telefonBekannt"] = tel
     if felder:
         kern_hirn.checkpoint_ergaenzen(sit, felder)
@@ -6230,6 +6254,11 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # Dieselbe Frage ist schon offen und der Satz brachte nichts Neues.
             zaehler = sit.setdefault("frageLeer", {})
             zaehler[fid] = int(zaehler.get(fid) or 0) + 1
+            if fid == "telefon" and _kein_handy(t):
+                # W-KEIN-HANDY: kein freier Zug — der bestehende ehrliche
+                # Weg der Eskalation greift sofort.
+                zaehler[fid] = max(zaehler[fid], 2)
+                spur.merken(sit, "kein-handy", "eskaliert")
             # W-NAME-STUFEN: ein KURZER Leerlauf auf eine Namensfrage ("Ja.",
             # "Ja, bitte.", "Da.", "Hm." — Replay 53986f42) ist nie ein
             # Gespraechsbeitrag, den das Modell deuten muesste; sofort die

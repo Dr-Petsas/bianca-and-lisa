@@ -62,7 +62,9 @@ _UNKLAR_RE = re.compile(
     re.I,
 )
 _PRESENCE_RE = re.compile(
-    r"sind sie noch dran|ich bin noch da|meine frage war",
+    # "Meine Frage war: …" ist die zweite Stups-Stufe bzw. Hoerfehler-
+    # Nachfrage, keine Presence-Schleife (Auswertung 06.10.2026).
+    r"sind sie noch dran|ich bin noch da",
     re.I,
 )
 _NEUE_RE = re.compile(r"\bich bin die neue\b|wir kennen uns noch nicht", re.I)
@@ -265,6 +267,11 @@ def _tool_art(tool: dict) -> str:
     return ""
 
 
+def _waechter_da(zug: dict, name: str) -> bool:
+    return any(isinstance(w, dict) and w.get("w") == name
+               for w in (zug.get("waechter") or []))
+
+
 def _evidenz(manifest: dict) -> dict[str, bool]:
     tools = _tools(manifest)
     return {
@@ -280,7 +287,8 @@ def _evidenz(manifest: dict) -> dict[str, bool]:
         "transfer": _marker_ok(manifest, "lastTransfer")
         or bool(manifest.get("weiterleitungZiel"))
         or any(_tool_art(t) == "transfer" and _tool_ok(t) for t in tools)
-        or any(bool(z.get("transfer")) for z in _zuege(manifest)),
+        or any(bool(z.get("transfer")) for z in _zuege(manifest))
+        or any(_waechter_da(z, "transfer") for z in _zuege(manifest)),
         "patient": _marker_ok(manifest, "lastCreate")
         or any(_tool_art(t) == "patient" and _tool_ok(t) for t in tools),
         "phone": any(_tool_art(t) == "phone" and _tool_ok(t) for t in tools),

@@ -110,6 +110,8 @@ def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
     """Gesicherten Task-Zustand wiederherstellen (nur enforce)."""
     if not isinstance(cp, dict):
         return
+    alt = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    alt_patient = sit.get("patient")
     if isinstance(cp.get("sammler"), dict):
         sit["sammler"] = copy.deepcopy(cp["sammler"])
     for k in _CP_SIT_KEYS:
@@ -119,6 +121,72 @@ def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
             # Zustand des eingeschobenen Tasks darf nicht in den
             # reaktivierten Task durchsickern (Termin B -> Termin A).
             sit.pop(k, None)
+    _identitaet_mitnehmen(sit, alt, alt_patient)
+
+
+# W-ID-EINMAL (07.10.2026): "Habe ich Sie richtig erkannt?" ist eine Frage
+# an den ANRUF, nicht an eine Aufgabe. Live 06.10. (3b57b62d, 9fc1f105) kam
+# sie nach einer Fortsetzung erneut — der Checkpoint stammte von VOR dem Ja,
+# und seine offene Frage stand noch auf anrufer_check. Die bestaetigte (oder
+# verneinte) Identitaet wandert deshalb in die reaktivierte Aufgabe mit, und
+# eine schon beantwortete Identitaetsfrage wird nie wieder gestellt.
+_ID_GRUPPE = (
+    "anruferCheck", "warSchonMal", "vorname", "nachname", "buchstabiert",
+    "bekannt", "vornameQuelle", "vornameCheck", "patientId", "telefonBekannt",
+    "aktePhone", "kontaktTelefon", "geschlecht", "geschlechtQuelle",
+    "geschlechtUnklar",
+)
+ID_FRAGEN = {
+    "anrufer_check": "anruferCheck",
+    "fuer_wen_check": "fuerWenCheck",
+    "vorname_check": "vornameCheck",
+}
+
+
+def identitaetsfrage_beantwortet(s: dict) -> bool:
+    """Steht die offene Frage auf einer Identitaetsfrage, die schon ein Ja
+    oder Nein hat? Dann ist sie tot und darf nicht wiederholt werden."""
+    if not isinstance(s, dict):
+        return False
+    feld = ID_FRAGEN.get(_s(s.get("frage")))
+    return bool(feld) and _s(s.get(feld)) in ("ja", "nein")
+
+
+def _ist_anrufer_akte(sit: dict, alt: dict) -> bool:
+    """Nur die per Rufnummer erkannte Akte des ANRUFERS wandert mit — eine
+    eingeschobene Absage fuer den Bruder traegt dessen Namen, der darf nie
+    in die Buchung des Anrufers geraten (P0-Bindung Name<->patientId)."""
+    a = sit.get("anrufer")
+    if not isinstance(a, dict):
+        return False
+    if _s(alt.get("nachname")).casefold() != _s(a.get("nachname")).casefold():
+        return False
+    pid = _s(alt.get("patientId"))
+    return not pid or pid == _s(a.get("patientId"))
+
+
+def _identitaet_mitnehmen(sit: dict, alt: dict, alt_patient: Any) -> None:
+    if os.environ.get("ID_MITNEHMEN", "1").strip() == "0":
+        return
+    neu = sit.get("sammler")
+    if not isinstance(neu, dict):
+        return
+    check = _s(alt.get("anruferCheck"))
+    if check in ("ja", "nein") and _s(neu.get("anruferCheck")) not in ("ja", "nein"):
+        if check == "nein":
+            neu["anruferCheck"] = "nein"
+        elif (_s(alt.get("nachname")) and not _s(alt.get("fuerWen"))
+              and not _s(neu.get("nachname")) and not _s(neu.get("fuerWen"))
+              and _ist_anrufer_akte(sit, alt)):
+            for k in _ID_GRUPPE:
+                if k in alt:
+                    neu[k] = copy.deepcopy(alt[k])
+            if (isinstance(alt_patient, dict)
+                    and _s(alt_patient.get("id")) == _s(alt.get("patientId"))):
+                sit["patient"] = copy.deepcopy(alt_patient)
+    if identitaetsfrage_beantwortet(neu):
+        neu["frage"] = ""
+        sit.pop("flussFrage", None)
 
 
 # Fragen, deren Feld ein eingeschobenes Anliegen inzwischen gefuellt haben
@@ -655,6 +723,21 @@ def nach_transfer_ruecken(sit: dict) -> dict[str, Any] | None:
     a["status"] = "erledigt"
     hirn(sit)["aktiv"] = ""
     return _nach_abschluss_ruecken(sit)
+
+
+def geparkte_ruhen_lassen(sit: dict) -> int:
+    """W-KEIN-RESUME-NACH-FEHLER (07.10.2026): nach einem gescheiterten Write
+    springt kein automatischer Weg mehr in ein geparktes Anliegen zurueck
+    (alle suchen status "geparkt"). Ein ausdruecklicher neuer Wunsch legt
+    ein frisches Anliegen an. Rueckgabe: Anzahl ruhend gelegter Anliegen."""
+    if "hirn" not in sit:
+        return 0
+    n = 0
+    for kand in hirn(sit).get("anliegen") or []:
+        if kand.get("status") == "geparkt":
+            kand["status"] = "ruhend"
+            n += 1
+    return n
 
 
 def wuerde_zuruecksprigen(sit: dict) -> dict[str, Any] | None:

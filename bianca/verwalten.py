@@ -29,6 +29,7 @@ Prozedur Absagen/Verschieben (W-VERWALTUNG-TERMIN-ZUERST 16.09.2026):
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from datetime import datetime, timedelta
@@ -541,6 +542,7 @@ def _verw_reset(sit: dict) -> None:
     sit.pop("verwWann", None)         # Altlast aus W-SAMMELN-Sitzungen
     sit.pop("verwArztGefragt", None)  # (Wann-/Behandler-Vorabfrage ist raus)
     sit.pop("verwDetailArztGefragt", None)
+    sit.pop("verwDetailPraefixGesagt", None)
     sit.pop("verwArztNachgefragt", None)
     sit["verwHinweis"] = {}
     sit["verwHinweisText"] = ""
@@ -1415,6 +1417,9 @@ def _kandidat_patient_uebernehmen(sit: dict, termin: dict) -> None:
 
 def _absage_frage(sit: dict, termin: dict) -> dict:
     """Treffer bestaetigen MIT Anrede (Chef: '… Herr/Frau XY, ja?')."""
+    schon = _absage_schon_versucht(sit, _s(termin.get("id")))
+    if schon is not None:
+        return schon
     s = gehirn.sammler(sit)
     sit["verwaltenTermin"] = _s(termin.get("id"))
     s["phase"] = "absage_bestaetigen"
@@ -1443,6 +1448,62 @@ def _verwaltung_mit_abschlussfrage_schliessen(sit: dict) -> None:
     sit["verwAbschlussOffen"] = True
 
 
+# W-ABSAGE-EINMAL (07.10.2026, Blessing-Anruf 9fc1f105): die Plattform lehnte
+# die Absage mit „not confirmed or already processed“ ab, Bianca versuchte
+# denselben Termin dreimal und sagte dreimal „Die Praxis kümmert sich darum.“
+_ABSAGE_UNBESTAETIGT = (
+    "Diesen Termin kann ich hier nicht selbst absagen, weil er von der Praxis "
+    "noch nicht bestätigt ist. Ich habe Ihre Absage für die Praxis notiert — "
+    "sie trägt sie ein."
+)
+_ABSAGE_SCHON_NOTIERT = (
+    "Ihre Absage zu diesem Termin habe ich bereits für die Praxis notiert — "
+    "sie trägt sie ein."
+)
+_ABSAGE_NICHT_MOEGLICH = (
+    "Diesen Termin kann ich gerade nicht absagen. Bitte rufen Sie die Praxis "
+    "dafür noch einmal an."
+)
+
+
+def _absage_einmal_aktiv() -> bool:
+    return os.environ.get("ABSAGE_EINMAL", "1").strip() != "0"
+
+
+def _absage_gescheitert(sit: dict) -> dict:
+    """Termin-ID -> war die Rückrufnotiz erfolgreich? Leer bei Notaus."""
+    if not _absage_einmal_aktiv():
+        return {}
+    g = sit.get("absageGescheitert")
+    if not isinstance(g, dict):
+        g = {}
+        sit["absageGescheitert"] = g
+    return g
+
+
+def _absage_schon_versucht(sit: dict, tid: str) -> dict | None:
+    """Dieselbe ID nie noch einmal gegen die Plattform — und nicht erneut
+    „Soll ich ihn wirklich absagen?“ fragen."""
+    gescheitert = _absage_gescheitert(sit)
+    if not tid or tid not in gescheitert:
+        return None
+    sit["schreibFehlerZug"] = True
+    _verwaltung_mit_abschlussfrage_schliessen(sit)
+    spur.merken(sit, "absage-einmal", "wiederholt")
+    return {"text": (
+        (_ABSAGE_SCHON_NOTIERT if gescheitert[tid] else _ABSAGE_NICHT_MOEGLICH)
+        + " Kann ich sonst noch etwas für Sie tun?"
+    )}
+
+
+def _absage_unbestaetigt(res: dict) -> bool:
+    try:
+        roh = json.dumps(res, default=str, ensure_ascii=False).lower()
+    except Exception:
+        roh = str(res).lower()
+    return "not confirmed" in roh
+
+
 def _absagen(sit: dict, melde: Melde) -> dict:
     if sit.get("testNoWrite"):
         s = gehirn.sammler(sit)
@@ -1455,9 +1516,14 @@ def _absagen(sit: dict, melde: Melde) -> dict:
     ctx = _ctx(sit)
     ctx["appointmentDate"] = _s(
         termin.get("iso") or termin.get("startIso") or termin.get("date"))
+    gescheitert = _absage_gescheitert(sit)
+    tid = _s(termin.get("id"))
+    schon = _absage_schon_versucht(sit, tid)
+    if schon is not None:
+        return schon
     if melde:
         melde("cancel_appointment")
-    res = kal.cancel_by_id(sit["tenant"], ctx, _s(termin.get("id")))
+    res = kal.cancel_by_id(sit["tenant"], ctx, tid)
     merke_tool(sit, "cancel_appointment", res)
     _obs(
         sit,
@@ -1483,13 +1549,22 @@ def _absagen(sit: dict, melde: Melde) -> dict:
                     "Kann ich sonst noch etwas für Sie tun?",
             "book": {"cancelled": True, "spoken": res.get("spoken") or ""},
         }
+    unbestaetigt = _absage_unbestaetigt(res)
     notiz_ok = _notiz_schreiben(
         sit,
         anliegen="absagen",
-        status="Absage technisch fehlgeschlagen — bitte prüfen und zurückrufen",
+        status=("Absage gewünscht — Termin noch nicht bestätigt, Plattform lässt "
+                "keine Absage zu. Bitte austragen und zurückrufen")
+        if unbestaetigt else
+        "Absage technisch fehlgeschlagen — bitte prüfen und zurückrufen",
         dock_text="Absage technisch fehlgeschlagen. Bitte prüfen und zurückrufen.",
     )
+    if tid and _absage_einmal_aktiv():
+        gescheitert[tid] = bool(notiz_ok)
+    sit["schreibFehlerZug"] = True
     _verwaltung_mit_abschlussfrage_schliessen(sit)
+    if unbestaetigt and notiz_ok and _absage_einmal_aktiv():
+        return {"text": _ABSAGE_UNBESTAETIGT + " Kann ich sonst noch etwas für Sie tun?"}
     if not notiz_ok:
         return {"text": (
             "Die Absage hat gerade nicht geklappt, und auch die Rückrufnotiz "
@@ -2526,6 +2601,21 @@ def _kandidat_verwerfen(sit: dict, melde: Melde) -> dict:
     return _nachname_frage(sit, "Okay, dieser Termin ist es nicht.")
 
 
+def _vorsatz_einmal(sit: dict, vorsatz: str) -> str:
+    """Ein Erklär-Vorsatz der Namensfrage nur beim ersten Mal (W-VORSATZ-EINMAL
+    07.10.2026, Anrufe 5af9635e/4eb8de09/e5066c5e): beim zweiten Durchlauf
+    strich der Wiederholungs-Wächter die wortgleiche Frage, übrig blieb nur
+    „Zu dieser Zeit sehe ich mehrere Termine.“ — und Bianca schwieg."""
+    if os.environ.get("VORSATZ_EINMAL", "1").strip() == "0":
+        return vorsatz
+    gesagt = sit.get("verwDetailPraefixGesagt")
+    gesagt = list(gesagt) if isinstance(gesagt, list) else []
+    if vorsatz in gesagt:
+        return ""
+    sit["verwDetailPraefixGesagt"] = gesagt + [vorsatz]
+    return vorsatz
+
+
 def _nachname_frage(sit: dict, vorsatz: str = "") -> dict:
     s = gehirn.sammler(sit)
     fid, frage = gehirn._nachname_start_frage(sit, "")
@@ -2644,10 +2734,8 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
 
     if kandidaten:
         if len(kandidaten) == 1:
-            return True, _nachname_frage(
-                sit,
-                "Die Termindaten habe ich. Zum sicheren Patientenabgleich:",
-            )
+            return True, _nachname_frage(sit, _vorsatz_einmal(
+                sit, "Die Termindaten habe ich. Zum sicheren Patientenabgleich:"))
         patienten = {
             _s(a.get("patientId")) or _name_norm(
                 a.get("patientName"), zeitwoerter=False)
@@ -2708,10 +2796,8 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
                 "Bei welchem Behandler ist der Termin eingetragen?"
             )}
         if not s["nachname"]:
-            return True, _nachname_frage(
-                sit,
-                "Zu dieser Zeit sehe ich mehrere Termine. Zum sicheren Abgleich:",
-            )
+            return True, _nachname_frage(sit, _vorsatz_einmal(
+                sit, "Zu dieser Zeit sehe ich mehrere Termine. Zum sicheren Abgleich:"))
         # Mehrere verschiedene Patienten trotz 60-Prozent-Namensnaehe:
         # Schreibweise klaeren, nie den Bestwert still erraten.
         sit["_verwNameGehoert"] = s["nachname"]

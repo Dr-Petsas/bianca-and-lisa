@@ -131,8 +131,12 @@ def transcribe(
 
     filter_fn = getattr(stt, "sprachwache_grund", None)
     filter_grund = str(filter_fn() or "") if callable(filter_fn) else ""
+    rettung_fn = getattr(stt, "sprachwache_rettung", None)
+    rettung = str(rettung_fn() or "") if callable(rettung_fn) else ""
+    if rettung:
+        gewinner, qwen_status = "qwen", "ja_nein_rettung"
     parakeet_text = str(getattr(_lokal, "parakeet_text", "") or "")
-    if filter_grund:
+    if filter_grund or rettung:
         # Der verworfene englische Wortlaut darf weder im Anruftranskript
         # noch als Lernstoff für den Qwen-Korrektor auftauchen.
         parakeet_text = ""
@@ -166,4 +170,6 @@ def transcribe(
         }
         if sprachkontext:
             info["filter"]["context"] = sprachkontext
+    if rettung:
+        info["rettung"] = rettung
     return str(text or ""), info

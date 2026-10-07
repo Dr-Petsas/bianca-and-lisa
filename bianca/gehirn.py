@@ -164,10 +164,17 @@ _NEIN_SATZ_RE = re.compile(
 _IDENTITAET_JA_RE = re.compile(
     r"^\s*(?:genau[,\s]+)?(?:das|der|die)\s+bin\s+ich|"
     r"^\s*ich\s+bin\s+das|^\s*am\s+apparat|"
-    r"^\s*sie\s+sprechen\s+mit\s+mir\s*[.!…]*\s*$",
+    r"^\s*sie\s+sprechen\s+mit\s+mir\s*[.!…]*\s*$|"
+    # W-ID-EINMAL (07.10.2026, b7508465): ausdrueckliche Bestaetigung auch
+    # mitten im Satz — "Ja, ich bin noch dran, Sie haben es richtig erkannt."
+    # Die Verneinung ("nicht richtig erkannt") prueft _IDENTITAET_NEIN_RE vorher.
+    r"\b(?:mich|es|das)\s+(?:ganz\s+)?richtig\s+erkannt\b|"
+    r"\b(?:ja|genau)[,\s]+(?:das|der|die)\s+bin\s+ich\b(?!\s+nicht)|"
+    r"\b(?:ja|genau)[,\s]+ich\s+bin(?:'s|s)\b",
     re.I,
 )
 _IDENTITAET_NEIN_RE = re.compile(
+    r"\bnicht\s+(?:ganz\s+)?(?:richtig|korrekt)\s+erkannt\b|\bfalsch\s+erkannt\b|"
     r"\b(?:das|der|die)\s+bin\s+ich\s+nicht\b|"
     r"\bich\s+bin\s+nicht\b|\bsie\s+sprechen\s+nicht\s+mit\b|"
     r"\bich\s+bin\s+jemand\s+ander\w*\b|"
@@ -478,6 +485,38 @@ _SCHONMAL_JA_RE = re.compile(
     r"bin\s+(schon\s+)?patient|bin\s+bei\s+ihnen\s+in\s+behandlung",
     re.I,
 )
+# W-SCHONMAL-KURZ (07.10.2026, Anruf c5870cde): „Ich war schon.“ auf die
+# Schonmal-Frage — ohne Ortszusatz griff _SCHONMAL_JA_RE nicht, die Frage kam
+# erneut. Nur die GANZE Kurzantwort, nur auf genau diese Frage: „Ich war schon
+# beim Hausarzt“ traegt weiteren Inhalt und bleibt offen.
+_SCHONMAL_KURZ_JA_RE = re.compile(
+    r"^\W*(?:ja,?\s+)?(?:ich\s+|wir\s+)?(?:war|waren|bin)\s+(?:schon|bereits)"
+    r"(?:\s+(?:mal|einmal|öfter|oefter|öfters|oefters))?\W*$",
+    re.I,
+)
+
+
+def _schonmal_kurz_ja(t: str) -> bool:
+    return (os.environ.get("SCHONMAL_KURZ", "1").strip() != "0"
+            and bool(_SCHONMAL_KURZ_JA_RE.match(t or "")))
+
+
+def _festnetz_erlaubt(sit: dict) -> bool:
+    """Darf eine gehoerte Festnetznummer als Nummer gelten?
+
+    Nur wo keine SMS daran haengt: die Rueckruf-Nummer nach leerer Suche
+    (W-RUECKRUF-NUMMER) und der Rueckruf-/Notiz-Weg (ABGEBEN). W-FESTNETZ-
+    RUECKRUF (07.10.2026, Anruf c449b685): eine Kollegenpraxis diktierte ihre
+    Festnetznummer fuer den Rueckruf, Bianca verlangte eine Handynummer
+    "fuer die Bestaetigung" — fuer eine Rueckruf-Notiz gibt es keine SMS."""
+    if sit.get("rueckrufNummer"):
+        return True
+    if os.environ.get("FESTNETZ_RUECKRUF", "1").strip() == "0":
+        return False
+    ab = sit.get("hirnAbgeben")
+    return isinstance(ab, dict) and bool(ab.get("offen"))
+
+
 # Live Thaler/New York 08.09.2026: „Ich habe noch keinen Termin, aber ich
 # bin nicht neu“ beantwortet die Patientenfrage mit BESTAND. Das führende
 # „Nee“ verneint nur den aktuellen Termin; es darf weder Neupatient setzen
@@ -1300,6 +1339,22 @@ def ist_nein(text: str) -> bool:
     # bei <= 3 Wörtern gibt es keinen Kontext, der das Nein umdrehen könnte.
     toks = re.sub(r"[.,!?…]+", " ", k.lower()).split()
     return len(toks) <= 3 and any(t in {"nein", "nee", "nö", "noe"} for t in toks)
+
+
+_IDENTITAET_AUSDRUECKLICH_RE = re.compile(
+    r"\b(?:mich|es|das)\s+(?:ganz\s+)?richtig\s+erkannt\b|"
+    r"\b(?:das|der|die)\s+bin\s+ich\b(?!\s+nicht)|"
+    r"\bich\s+bin(?:'s|s)\b",
+    re.I,
+)
+
+
+def ist_identitaet_ausdruecklich(text: str) -> bool:
+    """Bestaetigt der Satz die IDENTITAET ausdruecklich (nicht nur ein Ja)?
+    Nach "Sind Sie noch dran?" zaehlt ein nacktes Ja nur fuer die Leitung —
+    "Sie haben es richtig erkannt" aber eindeutig fuer die Akte."""
+    t = _ohne_anlauf(text)
+    return bool(_IDENTITAET_AUSDRUECKLICH_RE.search(t)) and not _IDENTITAET_NEIN_RE.search(t)
 
 
 def ja_nein_entscheidung(text: str, frage: str = "") -> str:
@@ -2413,7 +2468,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["warSchonMal"] = True
             neu.add("warSchonMal")
     elif s["frage"] == "schonmal":
-        if antwort_ja:
+        if antwort_ja or _schonmal_kurz_ja(t):
             s["warSchonMal"] = True
             neu.add("warSchonMal")
         elif antwort_nein:
@@ -3064,7 +3119,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # Telefonnummer: gehört -> erst rückbestätigen, dann fest.
     if s["frage"] == "telefon_check":
         if ist_ja(t) and s["telefonOffen"] and not telefon.check_ist_nein(t):
-            if not sit.get("rueckrufNummer") and not telefon.ist_handy(s["telefonOffen"]):
+            if not _festnetz_erlaubt(sit) and not telefon.ist_handy(s["telefonOffen"]):
                 sit["_festnetzStattHandy"] = True
                 s["telefonOffen"] = ""
                 s["telefonBekannt"] = ""
@@ -3093,9 +3148,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     d = telefon.aus_satz(t)
     if d and d != s["telefon"]:
         if _telefon_gesperrt(s, d) or (
-            not sit.get("rueckrufNummer") and not telefon.ist_handy(d)
+            not _festnetz_erlaubt(sit) and not telefon.ist_handy(d)
         ):
-            if not telefon.ist_handy(d) and not sit.get("rueckrufNummer"):
+            if not telefon.ist_handy(d) and not _festnetz_erlaubt(sit):
                 sit["_festnetzStattHandy"] = True
             neu.add("telefonKorrektur")
         else:
@@ -3146,9 +3201,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
                             else telefon.plausibel(zusammen))
             if vollstaendig and fragment_fertig:
                 if _telefon_gesperrt(s, zusammen) or (
-                    not sit.get("rueckrufNummer") and not telefon.ist_handy(zusammen)
+                    not _festnetz_erlaubt(sit) and not telefon.ist_handy(zusammen)
                 ):
-                    if not telefon.ist_handy(zusammen) and not sit.get("rueckrufNummer"):
+                    if not telefon.ist_handy(zusammen) and not _festnetz_erlaubt(sit):
                         sit["_festnetzStattHandy"] = True
                     s["telefonTeil"] = ""
                     neu.add("telefonKorrektur")

@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 from bianca import arzt as arztmod
 from bianca import besuchsgrund, gehirn
-from kern import fachprofil, hirn as session_hirn, wiederholung
+from kern import fachprofil, hirn as session_hirn, spur, wiederholung
 from kern.leitung import ist_leitung_check
 from kern.patients import arzt_sprechname
 
@@ -253,6 +253,27 @@ _SPRECH_VERB_RE = re.compile(
     r"\ban(?:s|\s+den)\s+(?:telefon|apparat)\b",
     re.I,
 )
+
+# W-GESPRAECH-WUNSCH (07.10.2026, Anruf 238b637a): „Ich hätte gerne einmal mit
+# dem Doktor Patrikis gesprochen, bitte.“ / „Nur ein Gespräch mit Doktor
+# Patrikis, bitte.“ — nur im Namens-Weg (Behandlername Pflicht, „Termin“
+# bleibt ausgenommen). „gesprochen“ zaehlt nur als Wunschform; Erzaehlung
+# („Ich habe mit Doktor Petsas gesprochen“) nie. Die Wortgrenze vor
+# „gespräch“ laesst Beratungs-/Vorgespräch draussen.
+_GESPRAECH_WUNSCH_RE = re.compile(
+    r"\bgespr(?:ä|ae)ch\s+mit\b"
+    r"|\b(?:h(?:ä|ae)tte|w(?:ü|ue)rde|m(?:ö|oe)chte)\b[^.!?]{0,60}\bgesprochen\b",
+    re.I,
+)
+_ERZAEHLUNG_RE = re.compile(r"\b(?:habe|hab|hatte|hatten|war|gab)\b", re.I)
+
+
+def _gespraech_wunsch(text: str) -> bool:
+    if os.environ.get("GESPRAECH_WUNSCH", "1").strip() == "0":
+        return False
+    t = _s(text)
+    return bool(_GESPRAECH_WUNSCH_RE.search(t)) and not _ERZAEHLUNG_RE.search(t)
+
 
 # LLM-Backstop-Rueckfrage (Prompt-Leitplanke WEITERLEITEN): hat die VORIGE
 # Assistentin-Zeile "Zu welchem unserer Ärzte darf ich Sie verbinden?"
@@ -681,6 +702,7 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
         # selbst bleibt stumm (text="") — nach dem Jingle klingelt es beim
         # Behandler. Das Ziel steht in der Sitzung fuer Nacharbeit/Report.
         sit["weiterleitungZiel"] = dict(wl)
+        spur.merken(sit, "transfer", _s(wl.get("name")) or _s(ziel_arzt.get("calendarName")))
         print(f"bianca-weiterleitung ziel={ziel_arzt!r} nummer={wl['nummer']} "
               f"sit={sit.get('id')!r}", flush=True)
         return {
@@ -868,7 +890,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if "termin" in t.lower():
             return None
         d0 = arztmod.deute(t, sit.get("tenant") or {})
-        if d0 and d0.get("typ") == "gesperrt" and _SPRECH_VERB_RE.search(t):
+        sprech_wunsch = bool(_SPRECH_VERB_RE.search(t)) or _gespraech_wunsch(t)
+        if d0 and d0.get("typ") == "gesperrt" and sprech_wunsch:
             # "Kann ich Herrn Nikolaou sprechen?" — gesperrter Behandler mit
             # Sprech-Verb: ehrlich absagen statt ans LLM (das erfindet sonst
             # eine Verbindung oder eine Ablehnung).
@@ -879,7 +902,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
             # (a) Behandler-Name + Sprech-/Verbinde-Verb ohne Doktor-Titel:
             #     "Kann ich Herrn Petsas sprechen?" — live 29.08.2026
             #     verneinte das LLM solche Saetze frei erfunden.
-            if _SPRECH_VERB_RE.search(t):
+            if sprech_wunsch:
                 _arzt_merken(s, ziel0)
                 return zaluma_weiterleitung(sit, ziel0, melde)
             # (b) Rueckweg der Prompt-Leitplanke: das LLM hat "Zu welchem

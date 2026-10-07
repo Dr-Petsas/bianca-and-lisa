@@ -54,7 +54,7 @@ _SPRACHWACHE = threading.local()
 def sprachwache_zuruecksetzen() -> None:
     """Filtergrund des aktuellen STT-Zugs löschen."""
 
-    for name in ("grund", "kontext"):
+    for name in ("grund", "kontext", "roh", "rettung"):
         if hasattr(_SPRACHWACHE, name):
             delattr(_SPRACHWACHE, name)
 
@@ -65,6 +65,76 @@ def sprachwache_grund() -> str:
 
 def sprachwache_kontext() -> str:
     return str(getattr(_SPRACHWACHE, "kontext", "") or "")
+
+
+def sprachwache_rettung() -> str:
+    return str(getattr(_SPRACHWACHE, "rettung", "") or "")
+
+
+# W-JA-RETTUNG (07.10.2026): Parakeet macht aus einem deutschen "Ja" am
+# Telefon oft "Yeah." — die Sprachwache verwirft das zu Recht (nie Englisch
+# normalisieren), am 06.10. waren das 451 verworfene Zuege, die meisten auf
+# Ja/Nein-Fragen; daraus entstanden doppelte Identitaetsfragen. Nachgehoert
+# hoerte Qwen dieselben Aufnahmen als deutsches "ja". Gerettet wird darum
+# NUR, wenn Parakeet ein kurzes englisches Ja-/Nein-Wort lieferte, gerade
+# eine Ja/Nein-Frage offen ist und Qwen (deutsch erzwungen) rechtzeitig
+# eine DEUTSCHE Ja-/Nein-Antwort hoert. Uebersetzt wird nichts: es zaehlt
+# ausschliesslich Qwens eigener deutscher Text.
+_RETTUNG_ROH_RE = re.compile(
+    r"^\s*(?:yeah|yea|yes|yep|yup|no|nope|nah)\b[\s,.!?…]*"
+    r"(?:\w+[\s,.!?…]*){0,2}$",
+    re.I,
+)
+_RETTUNG_DEUTSCH_RE = re.compile(
+    r"^\s*(?:ja+|jawohl|genau|nein|nee|ne)\b[\s,.!?…]*"
+    r"(?:(?:ich|bin|das|bin's|ist|richtig|stimmt|danke|bitte|gerne|"
+    r"genau|möchte|moechte|war|schon|noch|dran|korrekt|so|nicht)[\s,.!?…]*){0,4}$",
+    re.I,
+)
+_RETTUNG_STUFEN = {"off", "shadow", "enforce"}
+
+
+def _rettung_modus() -> str:
+    import os
+    m = os.environ.get("SPRACHWACHE_QWEN", "enforce").strip().lower()
+    return m if m in _RETTUNG_STUFEN else "enforce"
+
+
+def _rettung_deckel_s() -> float:
+    import os
+    try:
+        return max(0.0, float(os.environ.get("SPRACHWACHE_QWEN_S", "1.0")))
+    except ValueError:
+        return 1.0
+
+
+def _ja_nein_rettung(qwen: Future | None, t0: float, kontext: str) -> str:
+    """Qwens deutsches Ja/Nein fuer einen verworfenen 'Yeah'-Zug — sonst ""."""
+    if kontext != "ja_nein" or qwen is None:
+        return ""
+    roh = str(getattr(_SPRACHWACHE, "roh", "") or "")
+    if not _RETTUNG_ROH_RE.match(roh):
+        return ""
+    modus = _rettung_modus()
+    if modus == "off":
+        return ""
+    rest = _rettung_deckel_s() - (time.perf_counter() - t0)
+    try:
+        kandidat = qwen.result(timeout=max(0.0, rest))
+    except FutureTimeout:
+        print("stt-ja-rettung: qwen zu spaet", flush=True)
+        return ""
+    except Exception:
+        return ""
+    text = " ".join(str((kandidat or {}).get("text") or "").split()).strip()
+    if not text or not _RETTUNG_DEUTSCH_RE.match(text):
+        print(f"stt-ja-rettung: qwen passt nicht ({len(text)} Zeichen)", flush=True)
+        return ""
+    if modus == "shadow":
+        print(f"stt-ja-rettung-shadow: qwen={text!r}", flush=True)
+        return ""
+    print(f"stt-ja-rettung: qwen={text!r}", flush=True)
+    return text
 
 
 def _im_sprachkontext(kontext: str, fn, *args, **kwargs):
@@ -134,6 +204,7 @@ def _sauber(text, *, kontext: str = "") -> str:
         kontext=kontext or sprachwache_kontext(),
     ):
         _SPRACHWACHE.grund = "englisch-oder-stille"
+        _SPRACHWACHE.roh = text
         print("stt-sprachwache: englisch/stille verworfen", flush=True)
         return ""
     return text
@@ -802,7 +873,11 @@ def _parallel_transcribe(
     # deutsch erzwungenen Qwen übersetzt, gerettet oder als Korrektur gelernt
     # werden. Der Anrufer wird auf Dienst-Ebene ausdrücklich neu gefragt.
     if sprachwache_grund():
-        return ""
+        gerettet = _ja_nein_rettung(qwen, t0, sprachkontext)
+        if gerettet:
+            _SPRACHWACHE.grund = ""
+            _SPRACHWACHE.rettung = "qwen-ja-nein"
+        return gerettet
 
     if qwen is None:
         return lokal

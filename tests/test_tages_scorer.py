@@ -393,3 +393,38 @@ def test_super_stichprobe_ist_deterministisch_und_ungefaehr_zehn_prozent():
         scorer._deterministische_stichprobe(f"session-{i}") for i in range(1000)
     ]
     assert 70 <= sum(werte) <= 130
+
+
+def test_meine_frage_war_ist_keine_presence():
+    """Auswertung 06.10.2026: die Stups-/Hoerfehler-Wiederholung ist kein
+    "Sind Sie noch dran?" und darf die Presence-Quote nicht aufblasen."""
+    row = scorer.bewerten(
+        _m(
+            ("Termin bitte.", "Meine Frage war: Waren Sie schon einmal bei uns?"),
+            ("Ja.", "Der Termin ist fest eingetragen."),
+            lastBook={"ok": True, "appointmentId": "a1"},
+        )
+    )
+    assert not any(r.startswith("presence") for r in row.reibungen)
+
+
+def test_transfer_spur_ist_beleg():
+    m = _m(
+        ("Ich möchte mit Doktor Petsas sprechen.",
+         "Ich verbinde Sie mit Doktor Petsas."),
+        ("", ""),
+    )
+    m["zuege"][1]["waechter"] = [{"w": "transfer", "d": "Dr. Petsas"}]
+    row = scorer.bewerten(m)
+    assert "transfer" in row.evidenz
+    assert "erfolg_ohne_beweis:transfer" not in row.gruende
+
+
+def test_transfer_ohne_spur_bleibt_unbelegt():
+    row = scorer.bewerten(
+        _m(
+            ("Ich möchte mit Doktor Petsas sprechen.",
+             "Ich verbinde Sie mit Doktor Petsas."),
+        )
+    )
+    assert "transfer" not in row.evidenz

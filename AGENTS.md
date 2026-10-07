@@ -4392,6 +4392,63 @@ Die Canary-Testtermine hat der Chef im Portal bereinigt. Auf pickadoc1 steht
 - Tests: `tests/test_namenslink.py`, `tests/test_namens_sms_rettung.py`,
  `tests/test_anruf_205930f8.py`.
 
+## Fixwelle aus den Anrufen vom 06.10.2026 (07.10.2026 — nicht rückbauen)
+
+Plan: `docs/FIXPLAN-ANRUFE-2026-10-06.md`. Jeder Fix sitzt an genau einer
+Stelle, hat einen Notaus und eigene Gegenproben. Volle Suite: kein Test, der
+ohne diese Welle grün war, ist mit ihr rot.
+
+- **W-JA-RETTUNG (F1, `kern/stt.py`):** Parakeet schreibt ein deutsches „Ja“
+ oft als „Yeah.“, W-STT-DE-ONLY verwarf den Zug. Nur im Sprachkontext
+ `ja_nein` und nur bei genau EINEM Wort aus yeah/yes/yep/no/nope darf das
+ schon laufende Qwen-Ergebnis binnen `SPRACHWACHE_QWEN_S` (1,0 s) ein
+ deutsches Ja/Nein liefern. Englisch wird weiter nie normalisiert — „Ein
+ kurzes Jahr“ ist bewusst KEIN Ja. Notaus `SPRACHWACHE_QWEN=off`.
+- **W-ID-EINMAL (F12, `kern/hirn._identitaet_mitnehmen`,
+ `agent._tote_identitaetsfrage_raeumen`):** „Habe ich Sie richtig erkannt?“
+ gilt für den ANRUF, nicht für eine Aufgabe. Eine bestätigte/verneinte
+ Identität wandert beim Auto-Resume in die reaktivierte Aufgabe mit (nur die
+ per Rufnummer erkannte Akte des Anrufers, nie die eines Dritten), eine schon
+ beantwortete Identitätsfrage wird nie erneut gestellt. Notaus `ID_MITNEHMEN=0`.
+- **F2 Menü-Deckel** (`agent._menue_klar/_menue_ausweg`, `MENUE_DECKEL=0`),
+ **F3 Vorsatz einmal** (`verwalten._vorsatz_einmal`, `VORSATZ_EINMAL=0`),
+ **F4 kurzer Hedge** vor einer Frage (`agent._fakten_wache_anwenden`,
+ `FAKTEN_HEDGE_KURZ=0`), **F5 Arzt-Gesprächswunsch** („mit Doktor X
+ gesprochen/ein Gespräch mit“, `weiterleiten._gespraech_wunsch`,
+ `GESPRAECH_WUNSCH=0`; Erzählungen bleiben draußen), **F6 „Ich war schon.“**
+ auf die Schonmal-Frage = Bestand (`gehirn._schonmal_kurz_ja`,
+ `SCHONMAL_KURZ=0`).
+- **F7 Festnetz als Rückrufnummer** (`gehirn._festnetz_erlaubt`,
+ `FESTNETZ_RUECKRUF=0`): Ursache in c449b685 war nicht „Hab keine“, sondern
+ die Handy-Sperre im ABGEBEN-Pfad — für einen Rückruf zählt das Festnetz,
+ als SMS-Ziel wird es nie weitergereicht. „Hab keine.“ auf die Handyfrage
+ der Buchung eskaliert sofort ehrlich (`flow._kein_handy`, `KEIN_HANDY=0`).
+- **F8 W-ABSAGE-EINMAL** (`verwalten._absage_schon_versucht`,
+ `ABSAGE_EINMAL=0`, Anruf 9fc1f105): eine von der Plattform abgelehnte
+ Termin-ID geht nie ein zweites Mal an `agentCancelAppointmentById`, und
+ „Soll ich ihn wirklich absagen?“ kommt dafür nicht erneut. „not confirmed“
+ wird ehrlich gesagt („von der Praxis noch nicht bestätigt — ich habe Ihre
+ Absage notiert“), aber nur wenn die Notiz wirklich geschrieben wurde.
+- **F9 W-KEIN-RESUME-NACH-FEHLER** (`agent._auto_resume_anhaengen`,
+ `hirn.geparkte_ruhen_lassen`, Rückweg `RESUME_NACH_FEHLER=1`): nach einem
+ gescheiterten Write (`sit["schreibFehlerZug"]`, gilt nur für den Zug) springt
+ Bianca nicht in die geparkte Buchung („So, zurück zu Ihrem Termin. Bei
+ welchem Behandler …?“). Geparkte Anliegen gehen auf Status `ruhend` — alle
+ automatischen Rücksprünge (auch `sync_nach_zug`) suchen nur `geparkt`; ein
+ ausdrücklicher neuer Wunsch legt ein frisches Anliegen an.
+- **F10 W-NAMENSLINK-NACHPRUEFEN** (`namenslink._create_nachpruefen`,
+ `NAMENSLINK_NACHPRUEFEN=0`, Anruf dad02eaf): `create` mit httpStatus 0
+ (Client-Timeout) fragt einmal `action=status` mit demselben Token (3 s).
+ Nur `open` (setzt die CF erst nach dem SMS-Versand) oder `done` zählt als
+ Erfolg; alles andere und jede echte Ablehnung bleibt fail-closed mit `abort`.
+- **F11 Scorer** (`tools/tages_scorer.py`): Presence-Erkennung und
+ Transfer-Beleg korrigiert — reine Auswertung, kein Anrufpfad.
+
+Tests: `test_ja_rettung`, `test_identitaet_einmal`, `test_menue_deckel`,
+`test_vorsatz_einmal`, `test_gespraech_wunsch`, `test_schonmal_kurz`,
+`test_festnetz_rueckruf`, `test_absage_einmal`, `test_namenslink_nachpruefen`,
+`test_tages_scorer`, `test_fakten_wache`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

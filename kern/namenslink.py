@@ -202,7 +202,9 @@ _NAMENS_HANDY_AUFGEBEN = (
 )
 _NAMENS_HANDY_NEIN_RE = re.compile(
     r"^\s*(?:nein|nee|ne|nö)\b|\bkein(?:e|en)?\s+(?:handy|mobil\w*|sms)\b"
-    r"|\bhabe?\s+(?:ich\s+)?kein\b|\bwill\s+ich\s+nicht\b|\blieber\s+nicht\b",
+    r"|\bhabe?\s+(?:ich\s+)?(?:leider\s+|gar\s+)?kein(?:e|en|s)?\b(?!\s+(?:andere|zweite|weitere|neue))"
+    r"|\bnur\s+(?:ein\s+|das\s+)?festnetz\b"
+    r"|\bwill\s+ich\s+nicht\b|\blieber\s+nicht\b",
     re.I,
 )
 
@@ -732,6 +734,34 @@ def _anwenden(sit: dict, first: str, last: str) -> None:
     _terminal_bereinigen(sit, "done")
 
 
+def _create_nachpruefen(sit: dict, token: str, appointment_id: str) -> dict | None:
+    """W-NAMENSLINK-NACHPRUEFEN (07.10.2026, Anruf dad02eaf): ``create`` lief in
+    den Client-Timeout (httpStatus 0), die Cloud Function hatte die SMS aber
+    gesendet. ``open`` setzt sie erst nach dem Versand, ``done`` nach der
+    Bestätigung — nur dann gilt der Link als erzeugt. Alles andere bleibt
+    fail-closed."""
+    if os.getenv("NAMENSLINK_NACHPRUEFEN", "1").strip() == "0":
+        return None
+    token = _s(token).lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        return None
+    status, data, dispatch = _cf_call(
+        "agentNameConfirm", {"action": "status", "token": token}, timeout=3.0)
+    remote = _s(data.get("status")) if isinstance(data, dict) else ""
+    ok = status == 200 and remote in {"open", "done"}
+    _beobachten(
+        sit,
+        "status",
+        status=status,
+        dispatch=dispatch,
+        outcome=remote if ok else "error",
+    )
+    if not ok:
+        return None
+    return {"status": "ok", "token": token, "url": "", "sent": True,
+            "dryRun": False, "bound": bool(_s(appointment_id)), "nachgeprueft": True}
+
+
 def starten(
     sit: dict,
     *,
@@ -783,6 +813,10 @@ def starten(
         "start": "" if nur else _s(s.get("slotIso") or sit.get("lastBookIso")),
         "dryRun": bool(dry_run or tenant.get("_testNoWrite")),
     })
+    if status == 0 and not (dry_run or tenant.get("_testNoWrite")):
+        nach = _create_nachpruefen(sit, reservation_token, appointment_id)
+        if nach is not None:
+            status, data = 200, nach
     _beobachten(
         sit,
         "create",

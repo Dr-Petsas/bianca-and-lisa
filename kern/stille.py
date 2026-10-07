@@ -131,6 +131,11 @@ _VORSATZ_RE = re.compile(
     r"|kurz\s+zur(?:ü|ue)ck\s+zur\s+frage:"
     r"|damit\s+ich\s+weiterkomme:"
     r"|damit\s+ich\s+das\s+f(?:ü|ue)r\s+sie\s+erledigen\s+kann:"
+    # Live 06.10.2026: "Ich frage noch einmal: Entschuldigung, kurz zur
+    # Kontrolle: …" — der Vorsatz einer Fragevariante blieb stehen.
+    r"|entschuldigung,?\s+kurz\s+zur\s+(?:kontrolle|sicherheit|einordnung):"
+    r"|kurz\s+zur\s+(?:kontrolle|sicherheit|einordnung):"
+    r"|entschuldigung\s+[—-]\s+ein\s+kurzes\s+ja\s+oder\s+nein\s+gen(?:ü|ue)gt\."
     r"|sind\s+sie\s+noch\s+dran\?"
     r"|ich\s+bin\s+noch\s+da\."
     r")\s*",

@@ -410,4 +410,36 @@ def test_c1_enforce_hedges_fuer_gefunden_und_wiedersehen(monkeypatch):
     sit2 = _sit()
     aus2 = agent._fakten_wache_anwenden(sit2, "Wir sehen uns morgen — bis dann!")
     assert "sehen uns" not in aus2.lower()
+    # W-HEDGE-KURZ (07.10.2026): mit offener Frage nur die Frage.
+    assert "noch nicht eingetragen" not in aus2.lower()
+    assert aus2.endswith("?")
+
+
+def test_hedge_kurz_ohne_offene_frage_bleibt_die_absicherung(monkeypatch):
+    monkeypatch.setenv("FAKTEN_WACHE", "enforce")
+    monkeypatch.setattr(agent.gehirn, "naechste_frage", lambda sit: ("", ""))
+    sit = _sit()
+    aus = agent._fakten_wache_anwenden(sit, "Wir sehen uns morgen — bis dann!")
+    assert aus == "Einen Termin habe ich noch nicht eingetragen."
+    aus2 = agent._fakten_wache_anwenden(
+        _sit(), "Ich stelle Sie jetzt durch.", nutzertext="Danke.")
+    assert aus2 == "Eine Weiterleitung habe ich noch nicht gestartet."
+
+
+def test_hedge_kurz_transfer_mit_frage_spricht_nur_die_frage(monkeypatch):
+    monkeypatch.setenv("FAKTEN_WACHE", "enforce")
+    sit = _sit()
+    aus = agent._fakten_wache_anwenden(
+        sit, "Ich stelle Sie jetzt durch.", nutzertext="Danke.")
+    assert "durch" not in aus.lower()
+    assert "weiterleitung" not in aus.lower()
+    assert aus.endswith("?")
+
+
+def test_hedge_kurz_notaus_und_andere_arten_unveraendert(monkeypatch):
+    monkeypatch.setenv("FAKTEN_WACHE", "enforce")
+    aus = agent._fakten_wache_anwenden(_sit(), "Ihr Termin ist gebucht.")
+    assert "noch nicht erledigt" in aus.lower()
+    monkeypatch.setenv("FAKTEN_HEDGE_KURZ", "0")
+    aus2 = agent._fakten_wache_anwenden(_sit(), "Wir sehen uns morgen — bis dann!")
     assert "noch nicht eingetragen" in aus2.lower()

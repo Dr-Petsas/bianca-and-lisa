@@ -9,6 +9,7 @@ Kalender-Werkzeugen wie Lisa (kern.zuege).
 from __future__ import annotations
 
 import copy
+import os
 import re
 import time
 from typing import Any
@@ -178,6 +179,91 @@ def _menue_wahl(text: str, *, termin_heisst_neu: bool) -> str:
     if _MENUE_NEU_RE.search(t) or (termin_heisst_neu and _MENUE_TERMIN_RE.search(t)):
         return "Ich möchte einen neuen Termin vereinbaren."
     return ""
+
+
+# W-MENUE-DECKEL (07.10.2026, Blessing): die Menüfrage kam am 06.10. 132-mal
+# in 59 Anrufen, auch auf „Ich benötige einen Termin.“, „Termin für
+# Fusspflege.“ oder „Den muss ich leider absagen“ — und bis zu sechsmal in
+# einem Anruf („Es geht um das Ergebnis der Operation“). Ein klarer Satz wird
+# deshalb direkt dem sicheren Task übergeben, ein Sachanliegen der
+# Rückrufnotiz, und nach zwei Menüfragen kommt keine dritte.
+_MENUE_MAX = 2
+_TERMIN_WORT_RE = re.compile(r"\btermin\w*\b", re.I)
+_MENUE_WUNSCH_RE = re.compile(
+    r"\b(?:brauch\w*|br(?:ä|ae)ucht\w*|ben(?:ö|oe)tig\w*|m(?:ö|oe)cht\w*|"
+    r"h(?:ä|ae)tte|will|wollte|w(?:ü|ue)rde|suche|gern\w*|neu\w*|vereinbar\w*|"
+    r"ausmach\w*|buch\w*)\b"
+    r"|^\W*(?:ein(?:en)?\s+)?termin\s+(?:f(?:ü|ue)r|wegen|zur?)\b",
+    re.I,
+)
+_MENUE_BESTAND_RE = re.compile(
+    r"\b(?:habe|hab|hatte|hatten|haben)\b(?!\s+gern)[^.?!,]{0,40}\btermin", re.I)
+_MENUE_DECKEL_WAS = "Anliegen am Telefon nicht klar geworden — bitte zurückrufen"
+_MENUE_DECKEL_SATZ = ("Damit Sie nicht länger warten müssen, notiere ich gern einen "
+                      "Rückruf für die Praxis.")
+_MENUE_VERNEINT_RE = re.compile(
+    r"\b(?:nicht|kein\w*)\s+(?:\w+\s+){0,2}(?:absag|verschieb|termin|auskunft)", re.I)
+_MENUE_SACH_RE = re.compile(
+    r"\b(?:befund\w*|ergebnis\w*|laborwert\w*|unterlagen|arztbrief\w*|"
+    r"histolog\w*)\b",
+    re.I,
+)
+
+
+def _menue_deckel_aktiv() -> bool:
+    return os.environ.get("MENUE_DECKEL", "1").strip() != "0"
+
+
+def _menue_klar(text: str, sit: dict | None = None) -> str:
+    """Task-Operation eines klaren Satzes, sonst ''. Nie geraten: zwei
+    Familien im Satz, eine Verneinung oder ein Bestandssatz ohne Wunsch
+    („Ich habe einen Termin bei Ihnen.“) bleiben beim Menü."""
+    t = _s(text)
+    if not t or len(t.split()) > 25 or _MENUE_VERNEINT_RE.search(t):
+        return ""
+    familien = [op for (muster, _satz), op in zip(
+        _MENUE_WAHLEN, ("terminauskunft", "absagen", "verschieben"))
+        if muster.search(t)]
+    if len(familien) == 1:
+        return familien[0]
+    if familien:
+        return ""
+    if intent.ist_bestandsfrage(sit, t):
+        return "terminauskunft"
+    if _TERMIN_WORT_RE.search(t) and _MENUE_WUNSCH_RE.search(t) \
+            and not _MENUE_BESTAND_RE.search(t):
+        return "buchen"
+    if _MENUE_SACH_RE.search(t) and not _TERMIN_WORT_RE.search(t):
+        return "rueckruf"
+    return ""
+
+
+def _menue_ausweg(sit: dict, text_in: str, text: str, melde, msgs: list) -> dict | None:
+    """Statt der Menüfrage den sicheren Task starten — oder None (Menü bleibt).
+
+    Greift nur, wenn `text` die nackte Menüfrage ist; alles andere (offene
+    Formularfrage, Gruß) bleibt unberührt."""
+    if not _menue_deckel_aktiv() or gespraech.KOMPAKT_JOBFRAGE not in _s(text):
+        return None
+    op = _menue_klar(text_in, sit)
+    grund = f"klar:{op}" if op else ""
+    if not op and int(sit.get("menueFrageN") or 0) >= _MENUE_MAX:
+        op, grund = "rueckruf", "deckel"
+    if not op:
+        sit["menueFrageN"] = int(sit.get("menueFrageN") or 0) + 1
+        return None
+    reason = _MENUE_DECKEL_WAS if grund == "deckel" else text_in[:180]
+    if not task_router.anwenden(sit, {"operation": op, "reason": reason},
+                                original=text_in, quelle="menue_deckel"):
+        return None
+    fl = flow.zug(sit, text_in, melde)
+    if not (fl and (_s(fl.get("text")) or fl.get("hangup") or fl.get("transfer"))):
+        return None
+    if grund == "deckel" and _s(fl.get("text")).startswith("Das richte ich gern aus."):
+        fl = dict(fl, text=_MENUE_DECKEL_SATZ
+                  + _s(fl["text"])[len("Das richte ich gern aus."):])
+    spur.merken(sit, "menue-deckel", grund)
+    return _maschinen_antwort(sit, fl, msgs)
 
 
 def _letzte_assistent(sit: dict) -> str:
@@ -1320,11 +1406,22 @@ def _offene_frage(sit: dict) -> str:
     auseinander — dann galt die Pflichtfrage als „nicht offen" und niemand
     holte den Anrufer zurück. Der zuletzt WIRKLICH gestellte Satz des
     Flusses (`flussFrage`) ist in diesem Fall die ehrliche Auskunft."""
+    _tote_identitaetsfrage_raeumen(sit)
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
     if not fid:
         return ""
     return _kanonische_frage(sit, fid) or _s(sit.get("flussFrage"))
+
+
+def _tote_identitaetsfrage_raeumen(sit: dict) -> None:
+    """W-ID-EINMAL: eine schon mit Ja/Nein beantwortete Identitaetsfrage
+    ist nie mehr offen (live 3b57b62d: viermal "richtig erkannt?")."""
+    s = sit.get("sammler")
+    if isinstance(s, dict) and hirn.identitaetsfrage_beantwortet(s):
+        spur.merken(sit, "id-frage-geraeumt", _s(s.get("frage")))
+        s["frage"] = ""
+        sit.pop("flussFrage", None)
 
 
 def _behandler_alle(tenant: dict) -> str:
@@ -1671,6 +1768,12 @@ def _fakten_wache_anwenden(
         unbelegt,
         "Da will ich nichts falsch machen — das ist noch nicht erledigt.",
     )
+    # W-HEDGE-KURZ (07.10.2026): „Eine Weiterleitung habe ich noch nicht
+    # gestartet.“ klang ungefragt wie ein Fehlerbericht. Folgt eine offene
+    # Frage, reicht sie allein — die unbelegte Behauptung faellt trotzdem.
+    if (unbelegt in {"transfer", "wiedersehen"} and frage
+            and os.environ.get("FAKTEN_HEDGE_KURZ", "1").strip() != "0"):
+        hedge = ""
     return _wiederholung_oder_presence(sit, " ".join(x for x in [hedge, frage] if x).strip())
 
 
@@ -1690,6 +1793,16 @@ def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
         return fl
     if fl.get("book") or fl.get("hangup") or fl.get("transfer") or fl.get("warte"):
         return fl
+    if sit.pop("schreibFehlerZug", None) and os.environ.get(
+            "RESUME_NACH_FEHLER", "0").strip() != "1":
+        # W-KEIN-RESUME-NACH-FEHLER (07.10.2026, Blessing 9fc1f105): nach der
+        # gescheiterten Absage kam „So, zurück zu Ihrem Termin. Bei welchem
+        # Behandler …?“ — der Anrufer wollte nie buchen. Es bleibt bei der
+        # Sonst-noch-Frage; das geparkte Anliegen ruht und kommt nur auf
+        # ausdruecklichen Wunsch neu.
+        n = hirn.geparkte_ruhen_lassen(sit)
+        spur.merken(sit, "auto-resume", f"unterdrueckt:schreibfehler:{n}")
+        return fl
     if modus == "shadow":
         ziel = hirn.wuerde_zuruecksprigen(sit)
         if ziel:
@@ -1699,6 +1812,7 @@ def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
     if not resumed:
         return fl
     spur.merken(sit, "auto-resume", _s(resumed.get("id")))
+    _tote_identitaetsfrage_raeumen(sit)
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))
     frage = _kanonische_frage(sit, fid) if fid else ""
@@ -1869,6 +1983,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
         return {"text": "", "book": None}
+    sit.pop("schreibFehlerZug", None)
+    _tote_identitaetsfrage_raeumen(sit)
     if sit.get("frageBudgetDone"):
         # Der Abschluss wurde bereits gesprochen. Bei einer haengenden
         # Leitung keine neue Aufgabe und keinen zweiten Abschied starten.
@@ -2197,7 +2313,15 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         sit, arbeits_text,
     )
 
-    if _letzte_war_presence(sit) and (
+    s_id = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    id_bestaetigt = (
+        _s(s_id.get("frage")) == "anrufer_check"
+        and not _s(s_id.get("anruferCheck"))
+        and gehirn.ist_identitaet_ausdruecklich(text_in)
+    )
+    if id_bestaetigt and _letzte_war_presence(sit):
+        spur.merken(sit, "id-nach-presence", text_in[:40])
+    if not id_bestaetigt and _letzte_war_presence(sit) and (
         _PRESENCE_ANTWORT_RE.search(text_in) or _NUR_JA_RE.match(text_in)
     ):
         # Presence bestätigt — die offene Pflichtfrage zurück, nie buchen.
@@ -2427,6 +2551,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         if kompakt_text:
             sit.pop("unklarFolge", None)
             sit.pop("ganzsatzHinweisGegeben", None)
+            aus = _menue_ausweg(sit, text_in, kompakt_text, melde, msgs)
+            if aus is not None:
+                return aus
             spur.merken(sit, "blessing-knapp", "unklar")
             return _maschinen_antwort(
                 sit,
@@ -2681,6 +2808,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 sit,
                 offene_frage=_offene_frage(sit),
             )
+            aus = _menue_ausweg(sit, text_in, text, melde, msgs)
+            if aus is not None:
+                return aus
             spur.merken(sit, "blessing-knapp", "talk")
             return _maschinen_antwort(
                 sit,
