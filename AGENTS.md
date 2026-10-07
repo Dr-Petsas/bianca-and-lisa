@@ -4444,7 +4444,24 @@ ohne diese Welle grün war, ist mit ihr rot.
 - **F11 Scorer** (`tools/tages_scorer.py`): Presence-Erkennung und
  Transfer-Beleg korrigiert — reine Auswertung, kein Anrufpfad.
 
-Tests: `test_ja_rettung`, `test_identitaet_einmal`, `test_menue_deckel`,
+- **W-FRUEHER-EHRLICH** (`flow._frueher_zug`, `will_frueher`, Notaus
+ `FRUEHER_EHRLICH=0`; Anrufe 58bed965/dbbd63d4/a454b45c): „Nein, ich brauche
+ einen früheren“, „das ist zu spät“, „dieses Jahr noch“, „in 2026 und nicht
+ 2027“ im Slotangebot liefen als blanke Ablehnung in die Neusuche und bekamen
+ einen noch SPÄTEREN Termin (16:10 → 16:20). Jetzt: früherer Slot aus dem
+ gültigen Vorrat, sonst — wenn die Suche erst beim Wunschtermin begann — EINMAL
+ ab heute neu suchen, sonst ehrlich „das ist der früheste“; beim zweiten Mal
+ echte Rückruf-Notiz („Früherer Termin gewünscht“). „Den früheren nehme ich“
+ bleibt Auswahl, „ich kann nicht früher“/„früher war ich …“ zählen nicht.
+- **W-QWEN-NAME-ALLE-MODI** (`verwalten.zug`, `_korrektur_frage`, Notaus
+ `QWEN_NAME_EINMAL=0`; Anrufe 17d53232/7fbed2d9/af10c094): die Antwort auf
+ „Ich habe auch X verstanden. Ist das richtig?“ wurde nur bei Absage/
+ Verschieben ausgewertet — bei der Terminauskunft löste jedes „Nein“ eine
+ neue Suche und dieselbe Frage bis zu siebenmal aus. Die Frage wird jetzt in
+ jedem Modus ausgewertet, ein Vorschlag genau einmal vorgelegt, und ein Name
+ im Nein-Satz („ich heiße Erfeld“) wird direkt gesucht.
+
+Tests: `test_frueher_qwen_name`, `test_ja_rettung`, `test_identitaet_einmal`, `test_menue_deckel`,
 `test_vorsatz_einmal`, `test_gespraech_wunsch`, `test_schonmal_kurz`,
 `test_festnetz_rueckruf`, `test_absage_einmal`, `test_namenslink_nachpruefen`,
 `test_tages_scorer`, `test_fakten_wache`.

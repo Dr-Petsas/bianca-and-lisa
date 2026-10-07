@@ -950,10 +950,30 @@ def _schreibweise_zuerst(sit: dict) -> dict:
     return {"text": frage}
 
 
-def _qwen_name_zug(sit: dict, text: str, melde: Melde) -> dict:
+def qwen_name_ausgang_aktiv() -> bool:
+    """Notaus `QWEN_NAME_EINMAL=0`: Qwen-Namensfrage wie vor dem 07.10.2026."""
+    return os.getenv("QWEN_NAME_EINMAL", "1").strip() != "0"
+
+
+def _qwen_name_zug(sit: dict, text: str, melde: Melde,
+                   neu: set[str] | frozenset = frozenset()) -> dict:
     """Zweite Lesart nur nach Ja in den Nachnamen übernehmen."""
     s = gehirn.sammler(sit)
     vorschlag = _s(sit.get("qwenNameVorschlag"))
+    if (
+        qwen_name_ausgang_aktiv()
+        and ({"name", "nachname", "vorname"} & set(neu or ()))
+        and not gehirn.ist_ja(text)
+    ):
+        # „Nein, ich heiße Erfeld.“ / „Nein, Jürgen.“ (Anrufe 7fbed2d9,
+        # 17d53232): die Antwort trägt die Korrektur selbst — mit ihr suchen,
+        # nicht den Vorschlag erneut vorlegen.
+        sit["qwenNameVerbraucht"] = True
+        sit.pop("qwenNameVorschlag", None)
+        sit.pop("qwenNameUnklar", None)
+        s["frage"] = ""
+        spur.merken(sit, "qwen-name", "korrektur-im-nein")
+        return _dispatch(sit, melde)
     if gehirn.ist_ja(text) and vorschlag and not gehirn.ist_nein(text):
         s["nachname"] = vorschlag
         s["name"] = f"{s.get('vorname') or ''} {vorschlag}".strip()
@@ -1015,6 +1035,10 @@ def _korrektur_frage(sit: dict) -> dict:
         vorschlag = qwen_korrektor.namens_vorschlag(sit, s.get("nachname") or "")
         if vorschlag:
             sit["qwenNameVorschlag"] = vorschlag
+            if qwen_name_ausgang_aktiv():
+                # Ein Vorschlag wird genau einmal vorgelegt — auch wenn die
+                # Antwort einen Weg nimmt, der `_qwen_name_zug` nie erreicht.
+                sit["qwenNameVerbraucht"] = True
             s["frage"] = "qwen_name"
             tafel = buchstaben.vorlesen(vorschlag)
             wer = f"{s['vorname']} {s['nachname']}".strip() or "diesem Namen"
@@ -1270,12 +1294,18 @@ def _notiz_schreiben(sit: dict, *, anliegen: str = "", status: str = "",
     return geschrieben
 
 
-def rueckruf_notiz(sit: dict) -> bool:
+def rueckruf_notiz(sit: dict, *, hinweis: str = "") -> bool:
     """Kein freier Slot im Buchungs-Angebot: 'die Praxis meldet sich' MUSS
     eine echte Spur hinterlassen (Batch s09 29.08.2026 — leeres Versprechen,
     frage klebte auf slotwahl)."""
     s = gehirn.sammler(sit)
     name = f"{s['vorname']} {s['nachname']}".strip() or "unbekannt"
+    if hinweis:
+        return _notiz_schreiben(
+            sit, anliegen="neubuchung",
+            status=f"{hinweis} — bitte zurueckrufen",
+            dock_text=f"{name} wollte neu buchen — {hinweis}. Bitte zurueckrufen.",
+        )
     return _notiz_schreiben(
         sit, anliegen="neubuchung",
         status="Kein freier Termin im Angebot — bitte zurueckrufen",
@@ -3495,6 +3525,14 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
         aus = namenslink.zug(sit, t, neu, melde)
         if aus is not None:
             return aus
+
+    if s["frage"] == "qwen_name" and qwen_name_ausgang_aktiv():
+        # W-QWEN-NAME-ALLE-MODI (07.10.2026, Anrufe 17d53232/7fbed2d9/
+        # af10c094): die Antwort auf „Ich habe auch X verstanden. Ist das
+        # richtig?“ wurde nur im Absage-/Verschiebe-Zweig ausgewertet. Bei
+        # der Terminauskunft löste jedes „Nein“ eine neue Suche aus — und
+        # dieselbe Frage kam bis zu siebenmal.
+        return _qwen_name_zug(sit, t, melde, neu)
 
     aus = _namensrunde_gescheitert(sit, t, neu)
     if aus is not None:

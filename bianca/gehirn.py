@@ -3092,7 +3092,8 @@ def einsammeln(sit: dict, text: str) -> set[str]:
         neu.add("name")
     elif (_TEIL_NACH_RE.search(t) or _TEIL_NACH_UMGEKEHRT_RE.search(t)
           or _TEIL_VOR_RE.search(t) or _TEIL_VOR_UMGEKEHRT_RE.search(t)
-          or ((sit.get("verwNotFound") or sit.get("verwKorrektur"))
+          or ((sit.get("verwNotFound") or sit.get("verwKorrektur")
+               or s["frage"] == "qwen_name")
               and _NAME_LEADIN_RE.search(t))):
         # Explizite Zuweisung ("Nein, mein Nachname ist Zannes.") ist IMMER
         # eine Korrektur — auch wenn laengst ein Nachname gespeichert ist und

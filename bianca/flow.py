@@ -669,6 +669,169 @@ def _praef_kandidat(offered: list, aenderung: dict) -> str:
     return treffer[0] if len(treffer) == 1 else ""
 
 
+# W-FRUEHER-EHRLICH (07.10.2026, Anrufe 58bed965/dbbd63d4/a454b45c): „Nein,
+# ich brauche einen früheren“, „das ist zu spät“, „dieses Jahr noch“ liefen als
+# blanke Ablehnung in die Neusuche — angeboten wurde ein noch SPÄTERER Termin
+# (16:10 -> 16:20 am selben Tag, Januar -> Januar).
+_FRUEHER_WUNSCH_RE = re.compile(
+    r"\b(?:einen|einem|ein|eine|etwas|was|noch)\s+(?:\w+\s+)?früher(?:en|es|e)?\b"
+    r"|\bfrüher(?:en|es|e)?\s+(?:termin|tag|zeitpunkt)\b"
+    r"|\b(?:brauch\w*|bräucht\w*|hätte|möchte|will|wollte|gern|gerne|lieber|muss)\b"
+    r"[^.?!]{0,30}\bfrüher\b"
+    r"|\bfrüher\s+bitte\b"
+    r"|\bzu\s+spät\b"
+    r"|\bzu\s+lange?\s+hin\b"
+    r"|\bdauert\s+(?:mir\s+)?(?:viel\s+)?zu\s+lange?\b",
+    re.I,
+)
+_FRUEHER_NICHT_RE = re.compile(
+    r"\bnicht\s+(?:so\s+)?früh"
+    r"|\b(?:kann|könnte|koennte)\s+(?:\w+\s+)?nicht\s+früher\b"
+    r"|\bfrüher\s+(?:war|hatte|bin|ging|habe)\b",
+    re.I,
+)
+# „den früheren nehme ich“ ist eine Auswahl aus dem Angebot (W-SLOT-RELATIV).
+_FRUEHER_WAHL_RE = re.compile(
+    r"\b(?:den|der|die|das)\s+früher(?:e|en|este|esten)\b", re.I)
+_DIESES_JAHR_RE = re.compile(r"\b(?:in\s+)?(?:diesem|dieses)\s+jahr\b", re.I)
+_DIESER_MONAT_RE = re.compile(r"\b(?:in\s+)?(?:diesem|diesen)\s+monat\b", re.I)
+_JAHRESZAHL_RE = re.compile(r"(?<!nicht\s)(?<!nicht\sin\s)\b(20\d\d)\b", re.I)
+
+
+def frueher_ehrlich_aktiv() -> bool:
+    """Notaus `FRUEHER_EHRLICH=0`: Verhalten wie vor dem 07.10.2026."""
+    return os.getenv("FRUEHER_EHRLICH", "1").strip() != "0"
+
+
+def will_frueher(text: str, offered_isos: list[str]) -> bool:
+    """Wünscht der Anrufer einen FRÜHEREN Termin als den angebotenen?"""
+    t = _s(text)
+    if not t or not offered_isos or _FRUEHER_NICHT_RE.search(t):
+        return False
+    if len(offered_isos) > 1 and _FRUEHER_WAHL_RE.search(t) \
+            and not re.search(r"\b(?:einen|einem|noch)\s+früher", t, re.I):
+        return False
+    if _FRUEHER_WUNSCH_RE.search(t):
+        return True
+    erster = min(offered_isos)
+    try:
+        jahr, monat = int(erster[:4]), int(erster[5:7])
+    except (TypeError, ValueError):
+        return False
+    jetzt = datetime.now(gehirn.TZ)
+    if _DIESES_JAHR_RE.search(t) and jahr > jetzt.year:
+        return True
+    if _DIESER_MONAT_RE.search(t) and (jahr, monat) > (jetzt.year, jetzt.month):
+        return True
+    for m in _JAHRESZAHL_RE.finditer(t):
+        j = int(m.group(1))
+        if jetzt.year <= j < jahr:
+            return True
+    return False
+
+
+def _frueher_kandidat(sit: dict, vor_iso: str) -> str:
+    """Frühester Vorrats-Slot VOR dem Angebot — nur aus dem gültigen Vorrat."""
+    if not _s(sit.get("vorratFuer")) or sit.get("vorratFuer") != hintergrund.vorrat_schluessel(sit):
+        return ""
+    s = gehirn.sammler(sit)
+    w = s.get("wunsch") if isinstance(s.get("wunsch"), dict) else {}
+    gesperrt = {str(g)[:16] for g in sit.get("slotGesperrt") or []}
+    gesperrt |= {str(g)[:16] for g in w.get("excludeIsos") or []}
+    tage_raus = {str(d)[:10] for d in w.get("excludeDates") or []}
+    wt_raus = {int(x) for x in w.get("excludeWeekdays") or [] if str(x).lstrip("-").isdigit()}
+    jetzt = datetime.now(gehirn.TZ).isoformat()[:16]
+    kandidaten = []
+    for v in sit.get("slotVorrat") or []:
+        iso = _s(v.get("iso") if isinstance(v, dict) else v)
+        if not iso or iso[:16] >= vor_iso[:16] or iso[:16] <= jetzt:
+            continue
+        if iso[:16] in gesperrt or iso[:10] in tage_raus:
+            continue
+        if wt_raus and _weekday_of(iso[:10]) in wt_raus:
+            continue
+        kandidaten.append(iso)
+    return min(kandidaten) if kandidaten else ""
+
+
+def _frueher_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
+    """Früher-Wunsch im Angebot: früheren Slot anbieten oder ehrlich sagen,
+    dass es keinen gibt — nie einen späteren als Antwort auf „früher“."""
+    if not frueher_ehrlich_aktiv():
+        return None
+    s = gehirn.sammler(sit)
+    if (s.get("phase"), s.get("frage")) not in {("angebot", "slotwahl"), ("bestaetigen", "bestaetigung")}:
+        return None
+    angebot = [o for o in sit.get("offered") or [] if _s(o.get("iso"))]
+    isos = [_s(o["iso"]) for o in angebot]
+    if not will_frueher(text, isos):
+        return None
+    erster = min(isos)
+
+    def _anbieten(iso: str, satz: str) -> dict:
+        sit["offered"] = [{"iso": iso, "spoken": spoken_slot(iso)}]
+        s["phase"] = "angebot"
+        s["frage"] = "slotwahl"
+        s["slotIso"] = ""
+        sit.pop("buchIntent", None)
+        return {"text": satz, "_wiederholungErlaubt": True}
+
+    frueher = _frueher_kandidat(sit, erster)
+    if frueher:
+        spur.merken(sit, "slot-frueher", f"vorrat:{frueher[:16]}")
+        return _anbieten(frueher, f"Früher hätte ich {spoken_slot(frueher)}. Passt Ihnen dieser Termin?")
+
+    heute = datetime.now(gehirn.TZ).date().isoformat()
+    start = _s(gehirn.start_datum(s))[:10]
+    w = s.get("wunsch") if isinstance(s.get("wunsch"), dict) else {}
+    if start and start > heute and not sit.get("fruehStartGeloest"):
+        # Die Suche begann erst beim Wunschtermin — davor kann noch etwas frei
+        # sein. Startgrenze aufheben und ab heute suchen (einmal je Anruf).
+        sit["fruehStartGeloest"] = True
+        w = {k: v for k, v in w.items() if k not in {"date", "von", "minDaysAhead", "weekday"}}
+        s["wunsch"] = w
+        s["phase"] = ""
+        s["frage"] = "wunsch"
+        s["slotIso"] = ""
+        sit["offered"] = []
+        sit.pop("angebotKalender", None)
+        sit.pop("buchIntent", None)
+        spur.merken(sit, "slot-frueher", f"start-geloest:{start}")
+        return _angebot(sit, melde)
+
+    n = int(sit.get("fruehNichts") or 0) + 1
+    sit["fruehNichts"] = n
+    if n >= 2:
+        spur.merken(sit, "slot-frueher", "rueckruf-notiz")
+        s["phase"] = "fertig"
+        s["frage"] = ""
+        s["slotIso"] = ""
+        sit["offered"] = []
+        sit.pop("buchIntent", None)
+        sit["keinSlotFertig"] = True
+        s["wunschText"] = _s(f"{_s(s.get('wunschText'))} — früherer Termin gewünscht")
+        if not verwalten.rueckruf_notiz(sit, hinweis="Früherer Termin gewünscht als "
+                                        f"{spoken_slot(erster)}"):
+            return _notiz_abschluss(
+                sit,
+                "Früher habe ich leider nichts frei, und die Rückrufnotiz konnte "
+                "ich technisch nicht speichern. Bitte rufen Sie die Praxis noch "
+                "einmal an.",
+            )
+        ansage = ("Dann notiere ich, dass Sie gern einen früheren Termin hätten — "
+                  "die Praxis meldet sich bei Ihnen, sobald etwas frei wird.")
+        nummer_frage = _rueckruf_nummer_start(sit)
+        if nummer_frage:
+            return {"text": ansage + " " + nummer_frage}
+        return _notiz_abschluss(sit, ansage)
+    spur.merken(sit, "slot-frueher", "nichts-frueher")
+    return _anbieten(
+        erster,
+        f"Früher habe ich leider keinen freien Termin — {spoken_slot(erster)} "
+        "ist der früheste, den ich habe. Passt Ihnen der trotzdem?",
+    )
+
+
 def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
     """Harte Korrektur eines laufenden Angebots sofort anwenden und neu suchen.
 
@@ -5676,6 +5839,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     ):
         spur.merken(sit, "slot-frueher", "bereits-fruehest")
         return {"text": fruehester_slot_antwort(s.get("wunsch"))}
+
+    frueh = _frueher_zug(sit, t, melde)
+    if frueh is not None:
+        return frueh
 
     praef = _slot_praeferenz_zug(sit, t, melde)
     if praef is not None:
