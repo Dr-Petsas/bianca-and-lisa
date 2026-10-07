@@ -4,7 +4,9 @@ Chef nach dem Flughafen-Anruf: „noise filter, kompressoren mit
 verstärkung der stimmfrequenzen und unterdrückung des rests mit eq".
 
 Nur das Anrufer-PCM vor dem STT. Kein Eingriff in STT/TTS/Ports.
-Aus: BRIDGE_STIMME=0. Ohne ffmpeg: Original zurück (nie den Zug killen).
+Seit 07.10.2026 Default aus (an: BRIDGE_STIMME=1); das Hochrechnen auf
+16 kHz (soxr) laeuft unabhaengig davon. Ohne ffmpeg: Original zurück
+(nie den Zug killen).
 """
 
 from __future__ import annotations
@@ -14,7 +16,19 @@ import os
 import subprocess
 from array import array
 
-BRIDGE_STIMME = os.environ.get("BRIDGE_STIMME", "1").strip() != "0"
+# Seit 07.10.2026 Default AUS: A/B gegen Parakeet (120 Saetze, telefoniert,
+# sauber/15 dB/8 dB Rauschen) — die Kette erhoehte die Fehlerquote in ALLEN
+# drei Bedingungen (soxr ohne Kette 4,9/7,0/11,7 % gegen 7,6/15,3/14,4 % mit).
+# Messwerkzeug: tools/_probe_resampler_ab.py. Wieder an: BRIDGE_STIMME=1.
+BRIDGE_STIMME = os.environ.get("BRIDGE_STIMME", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+# W-RESAMPLE (07.10.2026): 8 -> 16 kHz fuer das STT ueber soxr (bandbegrenzt,
+# flach bis ~3,6 kHz, keine Spiegelbilder 4-8 kHz). audioop.ratecv
+# interpoliert linear: daempft 3-3,4 kHz um 4-5 dB und spiegelt das
+# Sprachband nur 10-20 dB leiser ueber 4 kHz — Kunst-Zischlaute fuer ein
+# Breitband-Modell. Notaus: BRIDGE_RESAMPLER=linear (byte-identisch alt).
+BRIDGE_RESAMPLER = os.environ.get("BRIDGE_RESAMPLER", "soxr").strip().lower()
 # W-STT-OHR-KOMPAKT (10.09.2026): Das stille Ohr kann mehrere Sekunden
 # interne Pause zwischen zwei echten Sprachinseln enthalten. Parakeet
 # normalisiert ueber das ganze Segment und lieferte daraus live Muell
@@ -129,25 +143,56 @@ def ohr_kompakt(pcm: bytes, rate: int = 16000) -> bytes:
     return bytes(out)
 
 
-def filtern(pcm: bytes, rate: int = 16000) -> bytes:
-    """PCM16-mono durch die Sprachkette. Bei Fehler: unverändertes Original."""
-    if not BRIDGE_STIMME or not pcm:
-        return pcm
+def _ffmpeg(pcm: bytes, rate_in: int, rate_out: int, af: str) -> bytes:
+    """PCM16-mono durch eine ffmpeg-Filterkette. Fehler: b""."""
     try:
         proc = subprocess.run(
             [
                 "ffmpeg", "-hide_banner", "-loglevel", "error",
-                "-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", "pipe:0",
-                "-af", _STIMME_AF,
-                "-f", "s16le", "-ar", str(rate), "-ac", "1", "pipe:1",
+                "-f", "s16le", "-ar", str(rate_in), "-ac", "1", "-i", "pipe:0",
+                "-af", af,
+                "-f", "s16le", "-ar", str(rate_out), "-ac", "1", "pipe:1",
             ],
             input=pcm, capture_output=True, timeout=4,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         print(f"bruecke-stimme-filter skip {type(e).__name__}", flush=True)
-        return pcm
+        return b""
     if proc.returncode != 0 or not proc.stdout:
         err = (proc.stderr or b"")[:180]
         print(f"bruecke-stimme-filter fail rc={proc.returncode} {err!r}", flush=True)
-        return pcm
+        return b""
     return proc.stdout
+
+
+def filtern(pcm: bytes, rate: int = 16000) -> bytes:
+    """PCM16-mono durch die Sprachkette. Bei Fehler: unverändertes Original."""
+    if not BRIDGE_STIMME or not pcm:
+        return pcm
+    return _ffmpeg(pcm, rate, rate, _STIMME_AF) or pcm
+
+
+def _linear(pcm: bytes, rate_in: int, rate_out: int) -> bytes:
+    import audioop
+
+    return audioop.ratecv(pcm, 2, 1, rate_in, rate_out, None)[0]
+
+
+def fuer_stt(pcm: bytes, rate_in: int = 8000, rate_out: int = 16000) -> bytes:
+    """Anrufer-PCM auf STT-Rate bringen und durch die Sprachkette schicken.
+
+    soxr und Sprachkette laufen in EINEM ffmpeg-Aufruf. Scheitert er, gilt
+    der alte Weg (linear + filtern) — nie den Zug verlieren.
+    """
+    if not pcm:
+        return pcm
+    if BRIDGE_RESAMPLER != "linear" and rate_in != rate_out:
+        af = f"aresample={rate_out}:resampler=soxr:precision=28"
+        if BRIDGE_STIMME:
+            af += "," + _STIMME_AF
+        aus = _ffmpeg(pcm, rate_in, rate_out, af)
+        if aus:
+            return aus
+    if rate_in != rate_out:
+        pcm = _linear(pcm, rate_in, rate_out)
+    return filtern(pcm, rate_out)

@@ -850,6 +850,30 @@ Zaluma → Asterisk (87.106.34.137, `[from-zaluma]`) → `Answer()` +
   (Formanten) / senkt 3,5 kHz, Kompressor (Makeup +8 dB), Gate −40 dB. Aus:
   `BRIDGE_STIMME=0`. Docks hören den Rohweg weiter (nur Telefon).
   Tests: `tests/test_sip_stimme.py` (offline, skip ohne ffmpeg).
+  **Seit 07.10.2026 im Code-Default AUS** (W-RESAMPLE, s. u.): die A/B-Messung
+  zeigte, dass die Kette die Wortfehlerrate in jeder Bedingung verschlechtert.
+  Wieder an mit `BRIDGE_STIMME=1`.
+- **Resampling 8 → 16 kHz mit soxr (W-RESAMPLE 07.10.2026 — nicht rückbauen):**
+  Parakeet ist auf 16 kHz trainiert; die Brücke rechnete die 8-kHz-Leitung
+  mit `audioop.ratecv` hoch — lineare Interpolation ohne Anti-Imaging-Filter
+  (−4 bis −5,5 dB bei 3–3,4 kHz, Spiegelbilder im leeren Band 4–8 kHz; live
+  wurde daraus z. B. „Keine Kontrolle" statt „Eine Kontrolle").
+  `sip_bridge.stimme.fuer_stt` macht das Hochrechnen jetzt per ffmpeg
+  `aresample=16000:resampler=soxr:precision=28` (ffmpeg ist im Image) und
+  hängt die Sprachkette nur an, wenn `BRIDGE_STIMME=1`. Fehlt ffmpeg oder
+  scheitert es, gilt der alte lineare Weg — der Zug geht nie verloren.
+  A/B (`tools/_probe_resampler_ab.py`, Korpus-Sätze in zehn Anruferstimmen,
+  telefoniert 300–3400 Hz + A-law, Wortfehlerrate linear+EQ → soxr ohne EQ):
+  sauber 8,5 → 4,9 %, SNR 15 dB 13,5 → 7,0 %, SNR 8 dB 15,6 → 11,7 %.
+  Einschränkung: geklonte Stimmen mit weißem Rauschen, keine echten Anrufe.
+  Live-Probe nach dem Deploy (`tests/sip_bridge_probe.py` durch die echte
+  Brücke): wortgenau, STT 0,21 s. Notaus: `BRIDGE_RESAMPLER=linear` =
+  byte-identisch altes Hochrechnen. Beide Werte reicht `compose.yml` an
+  `sipbridge` UND `sipbridge-lisa` durch (Server-Compose ist eigenständig
+  gepflegt — gezielt editiert, Backup `compose.yml.bak-resample-20261007`).
+  Offen: die Gegenrichtung (TTS 24 → 8 kHz in `Wiedergabe`) nutzt weiter
+  `ratecv` ohne Anti-Aliasing. Tests: `fuer_stt`-Block in
+  `tests/test_sip_stimme.py`.
 - **Probe:** `tests/sip_bridge_probe.py` simuliert Asterisk (UUID + PCM-
   Rahmen, echtes deutsches TTS-Audio als Anrufer) gegen eine laufende
   Brücke; Kettentest vom Asterisk: `channel originate
