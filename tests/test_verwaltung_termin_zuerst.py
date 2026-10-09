@@ -1191,7 +1191,13 @@ def test_nur_monat_eroeffnet_keine_wann_schleife():
     z2 = verwalten._sammeln(sit, "Im Oktober.", set(), None)
     assert z2
     assert s["frage"] == "arzt"
-    assert "Zeitpunkt müssen Sie nicht wissen" in z2["text"]
+    assert "Kein Problem, ich finde den Termin auch so." in z2["text"]
+    assert "müssen Sie nicht wissen" not in z2["text"]
+
+
+def test_kein_satz_belehrt_den_anrufer_ueber_den_zeitpunkt():
+    import inspect
+    assert "müssen Sie nicht wissen" not in inspect.getsource(verwalten)
 
 
 def test_telefon_patientid_gewinnt_vor_namensfrage(monkeypatch):

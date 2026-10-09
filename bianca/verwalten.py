@@ -2897,14 +2897,13 @@ def _ohne_zeit_eingrenzen(sit: dict) -> dict:
         sit["verwArztGefragt"] = True
         s["frage"] = "arzt"
         return {"text": (
-            "Den Zeitpunkt müssen Sie nicht wissen. "
+            "Kein Problem, ich finde den Termin auch so. "
             "Bei welchem Behandler ist der Termin eingetragen?"
         )}
     if not s["nachname"]:
         return _nachname_frage(
             sit,
-            "Den Zeitpunkt müssen Sie nicht wissen — ich grenze den Termin über "
-            "den Patienten ein.",
+            "Kein Problem, ich finde den Termin auch über den Namen.",
         )
     return {}
 
@@ -3646,8 +3645,7 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
                     return aus
             return _nachname_frage(
                 sit,
-                "Den Zeitpunkt müssen Sie nicht wissen. "
-                "Ich suche über den Patienten:",
+                "Kein Problem, ich finde den Termin auch über den Namen.",
             )
         return {"text": (
             "Welches Datum oder welche ungefähre Uhrzeit hat der Termin? "
