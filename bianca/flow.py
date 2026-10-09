@@ -833,6 +833,131 @@ def _frueher_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
     )
 
 
+# W-WUNSCH-SCHRITTE (09.10.2026, Lisa-Anruf c51a20cb, Chef: „wenn der
+# vorgeschlagene termin abgelehnt wird muss sie erst nach dem wunschtag und dann
+# nach der wunschzeit fragen — bianca auch“): dreimal „Ich kann nur freitags“
+# bekam die nächste Dienstagsliste. Nach einer Ablehnung ohne vollständige
+# Angabe fragt der Fluss zuerst den Tag, dann die Tageszeit — und sucht erst
+# dann. Ablehnungen MIT Ausschluss („nicht Donnerstag“) suchen wie bisher.
+_WUNSCH_TAG_KEYS = ("weekday", "weekdays", "date", "tage", "von", "bis")
+_WUNSCH_ZEIT_KEYS = ("hour", "hourMin", "hourMax")
+_WUNSCH_EGAL_RE = re.compile(
+    r"\b(egal|beliebig|flexibel|ganz\s+gleich|jede[rnms]?\s+(?:tag|zeit|uhrzeit)|"
+    r"immer|was\s+(?:sie|ihr)\s+(?:frei\s+)?ha(?:ben|bt)|was\s+frei\s+ist|"
+    r"schlagen\s+sie|wie\s+es\s+(?:ihnen|euch)\s+passt)\b",
+    re.I,
+)
+_TAGNAMEN = {1: "Montag", 2: "Dienstag", 3: "Mittwoch", 4: "Donnerstag",
+             5: "Freitag", 6: "Samstag", 7: "Sonntag"}
+
+
+def _wunsch_schritte_an(sit: dict) -> bool:
+    if os.environ.get("WUNSCH_SCHRITTE", "1") == "0":
+        return False
+    tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+    return tenant.get("wunschSchritte") is not False
+
+
+def _hat_wert(w: dict, keys: tuple) -> bool:
+    return any(w.get(k) not in (None, [], "", 0) for k in keys)
+
+
+def _wunsch_schritt_frage(sit: dict, schritt: str, vorsatz: str = "") -> dict:
+    sit["wunschSchritt"] = schritt
+    if schritt == "tag":
+        frage = "An welchem Tag würde es Ihnen denn passen?"
+    else:
+        frage = "Und zu welcher Uhrzeit — eher vormittags oder nachmittags?"
+    return {"text": f"{vorsatz} {frage}".strip()}
+
+
+def _wunsch_schritt_mischen(alt: dict | None, neu: dict) -> dict:
+    """Neuer Tag ersetzt den alten Tag; Ausschlüsse und Untergrenze bleiben."""
+    out = dict(alt or {})
+    if neu.get("date"):
+        out.update(date=neu["date"], weekday=None, weekdays=None, tage=None)
+    elif neu.get("weekday") or neu.get("weekdays"):
+        if out.get("date") and not out.get("von"):
+            out["von"] = out["date"]
+        out.update(date=None, weekday=neu.get("weekday"), weekdays=neu.get("weekdays"))
+    for k in ("tage", "von", "bis"):
+        if neu.get(k):
+            out[k] = neu[k]
+    if (neu.get("minDaysAhead") or 0) > 0:
+        out["minDaysAhead"] = neu["minDaysAhead"]
+    if _hat_wert(neu, _WUNSCH_ZEIT_KEYS):
+        for k in ("hour", "hourMin", "hourMax", "minutenMin", "minutenMax"):
+            out[k] = neu.get(k)
+    return out
+
+
+def _wunsch_schritt_start(sit: dict, s: dict, aenderung: dict, text: str) -> dict | None:
+    """Ablehnung im Angebot: fehlt Tag oder Uhrzeit, wird gefragt statt gesucht."""
+    w = parse_slot_wish(text) or {}
+    tag = bool(aenderung.get("weekdays") or aenderung.get("date")
+               or _hat_wert(w, _WUNSCH_TAG_KEYS) or (w.get("minDaysAhead") or 0) > 0)
+    zeit = (aenderung.get("hourMin") is not None or aenderung.get("hour") is not None
+            or _hat_wert(w, _WUNSCH_ZEIT_KEYS))
+    if tag and zeit:
+        return None
+    s["wunsch"] = _wunsch_schritt_mischen(
+        wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung), {**w, **aenderung})
+    s["phase"] = ""
+    s["frage"] = "wunsch"
+    s["slotIso"] = ""
+    sit["angebotZuletzt"] = [o["iso"] for o in sit.get("offered") or []]
+    sit["offered"] = []
+    sit.pop("angebotKalender", None)
+    sit.pop("buchIntent", None)
+    sit["slotAblehnungBlind"] = 0
+    sit.pop("wunschSchrittUnklar", None)
+    if tag:
+        roh = aenderung.get("weekdays") or ([w["weekday"]] if w.get("weekday") else [])
+        tage = [int(x) for x in roh if int(x) in _TAGNAMEN]
+        nenn = " oder ".join(_TAGNAMEN[x] for x in tage)
+        vorsatz = f"Gern, am {nenn}." if nenn else "Gern."
+        spur.merken(sit, "wunsch-schritte", "ablehnung mit tag -> zeitfrage")
+        return _wunsch_schritt_frage(sit, "zeit", vorsatz)
+    spur.merken(sit, "wunsch-schritte", "ablehnung -> tagfrage")
+    return _wunsch_schritt_frage(sit, "tag", "Verstanden.")
+
+
+def _wunsch_schritt_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
+    """Antwort auf die Tag- bzw. Zeitfrage nach einer Ablehnung."""
+    s = gehirn.sammler(sit)
+    schritt = _s(sit.get("wunschSchritt"))
+    if not schritt:
+        return None
+    if s.get("frage") != "wunsch" or s.get("modus") != "buchen":
+        sit.pop("wunschSchritt", None)
+        sit.pop("wunschSchrittUnklar", None)
+        return None
+    w = parse_slot_wish(text) or {}
+    tag = _hat_wert(w, _WUNSCH_TAG_KEYS) or (w.get("minDaysAhead") or 0) > 0
+    zeit = _hat_wert(w, _WUNSCH_ZEIT_KEYS)
+    egal = bool(_WUNSCH_EGAL_RE.search(text))
+    if not (tag or zeit or egal):
+        if "?" in text or len(text.split()) > 8:
+            sit.pop("wunschSchritt", None)
+            sit.pop("wunschSchrittUnklar", None)
+            return None
+        n = int(sit.get("wunschSchrittUnklar") or 0) + 1
+        sit["wunschSchrittUnklar"] = n
+        if n < 2:
+            return _wunsch_schritt_frage(sit, schritt)
+    if tag or zeit:
+        s["wunsch"] = _wunsch_schritt_mischen(s.get("wunsch"), w)
+        s["wunschText"] = _s(f"{_s(s.get('wunschText'))} {text}")[:160]
+    if (schritt == "tag" and (tag or egal) and not zeit
+            and not _hat_wert(s.get("wunsch") or {}, _WUNSCH_ZEIT_KEYS)):
+        spur.merken(sit, "wunsch-schritte", "tag -> zeitfrage")
+        return _wunsch_schritt_frage(sit, "zeit", "Gern." if tag else "Gut.")
+    sit.pop("wunschSchritt", None)
+    sit.pop("wunschSchrittUnklar", None)
+    spur.merken(sit, "wunsch-schritte", "suche")
+    return _angebot(sit, melde)
+
+
 def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
     """Harte Korrektur eines laufenden Angebots sofort anwenden und neu suchen.
 
@@ -869,6 +994,8 @@ def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | No
     aenderung = slot_praeferenz_aenderung(text, offered_isos=offered_isos)
     if not aenderung:
         return None
+    ausschluss = any(aenderung.get(k) for k in (
+        "excludeWeekdays", "excludeHours", "excludeHourRanges", "excludeDates", "excludeSpans"))
     # Nur POSITIVE Nennungen ("Dienstag oder Mittwoch", "Montag, der 22.")
     # ohne eine einzige Ablehnung: trifft das einen angebotenen Termin, ist
     # es eine Auswahl — die gehoert `_slot_wahl`, nicht der Neusuche.
@@ -905,6 +1032,12 @@ def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | No
             return _buchen(sit, melde)
         return _readback(sit)
 
+    if (_wunsch_schritte_an(sit) and not ausschluss
+            and s.get("phase") == "angebot" and s.get("frage") == "slotwahl"):
+        schritt = _wunsch_schritt_start(sit, s, aenderung, text)
+        if schritt is not None:
+            return schritt
+
     if not inhalt:
         if s.get("frage") != "slotwahl":
             # Readback-/Nebenfragen-Nein: die bestehenden Wege ("Was darf
@@ -932,6 +1065,10 @@ def _slot_praeferenz_zug(sit: dict, text: str, melde: Melde = None) -> dict | No
         sit["slotAblehnungBlind"] = 0
 
     s["wunsch"] = wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung)
+    if _wunsch_schritte_an(sit) and (aenderung.get("weekdays") or aenderung.get("date")):
+        # „Freitag nachmittags“ gegen ein festes Datum (Lisa: „ab dem 3.11.“):
+        # der genannte Tag gewinnt, das alte Datum bleibt nur Untergrenze.
+        s["wunsch"] = _wunsch_schritt_mischen(s["wunsch"], aenderung)
     s["wunschText"] = _s(f"{_s(s.get('wunschText'))} {text}")
     sit["angebotZuletzt"] = [o["iso"] for o in sit.get("offered") or []]
     s["phase"] = ""
@@ -5908,6 +6045,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     frueh = _frueher_zug(sit, t, melde)
     if frueh is not None:
         return frueh
+
+    schritt = _wunsch_schritt_zug(sit, t, melde)
+    if schritt is not None:
+        return schritt
 
     praef = _slot_praeferenz_zug(sit, t, melde)
     if praef is not None:

@@ -81,27 +81,72 @@ def test_blankes_ja_waehlt_nur_den_gesprochenen_termin():
     assert "halte ich fest" in aus["text"].lower()
 
 
-def test_blanke_ablehnung_bietet_den_naechsten_verdeckten_termin():
+def test_blanke_ablehnung_fragt_erst_tag_dann_zeit():
+    """W-WUNSCH-SCHRITTE (Chef 09.10.2026): nach einer Ablehnung erst den
+    Wunschtag, dann die Wunschzeit erfragen — dann suchen."""
     sit = _buchung()
     flow._angebot(sit)
 
-    aus = flow._slot_praeferenz_zug(sit, "Nein.")
-
-    assert aus is not None
-    assert len(sit["offered"]) == 1
-    assert sit["offered"][0]["iso"] == DIENSTAG_10
+    aus = flow.zug(sit, "Nein.")
+    assert aus["text"] == "Verstanden. An welchem Tag würde es Ihnen denn passen?"
+    assert sit["offered"] == []
     assert MONTAG_09 in gehirn.sammler(sit)["wunsch"]["excludeIsos"]
 
+    aus = flow.zug(sit, "Dienstag.")
+    assert "vormittags oder nachmittags" in aus["text"]
+    assert sit["offered"] == []
 
-def test_ablehnung_mit_tageszeit_bietet_genau_einen_passenden_termin():
+    aus = flow.zug(sit, "Vormittags.")
+    assert len(sit["offered"]) == 1
+    assert sit["offered"][0]["iso"] == DIENSTAG_10
+
+
+def test_ablehnung_mit_tageszeit_fragt_noch_den_tag():
     sit = _buchung()
     flow._angebot(sit)
 
-    aus = flow._slot_praeferenz_zug(sit, "Nein, lieber nachmittags.")
+    aus = flow.zug(sit, "Nein, lieber nachmittags.")
+    assert "An welchem Tag" in aus["text"]
 
-    assert aus is not None
+    aus = flow.zug(sit, "Egal.")
     assert len(sit["offered"]) == 1
     assert sit["offered"][0]["iso"] == MITTWOCH_15
+
+
+def test_ablehnung_mit_tag_und_zeit_sucht_sofort():
+    sit = _buchung()
+    flow._angebot(sit)
+
+    flow.zug(sit, "Nein, lieber Mittwoch nachmittags.")
+    assert [o["iso"] for o in sit["offered"]] == [MITTWOCH_15]
+
+
+def test_ausschluss_ohne_wunsch_sucht_wie_bisher():
+    sit = _buchung()
+    flow._angebot(sit)
+
+    flow.zug(sit, "Montag geht nicht.")
+    assert sit["offered"] and sit["offered"][0]["iso"] != MONTAG_09
+
+
+def test_unklare_antwort_auf_tagfrage_wird_einmal_wiederholt():
+    sit = _buchung()
+    flow._angebot(sit)
+    flow.zug(sit, "Nein.")
+
+    aus = flow.zug(sit, "Hm.")
+    assert "An welchem Tag" in aus["text"]
+    flow.zug(sit, "Äh.")
+    assert sit["offered"], "nach zwei unklaren Antworten wird ohne Tag gesucht"
+
+
+def test_notaus_wunsch_schritte(monkeypatch):
+    monkeypatch.setenv("WUNSCH_SCHRITTE", "0")
+    sit = _buchung()
+    flow._angebot(sit)
+
+    flow._slot_praeferenz_zug(sit, "Nein.")
+    assert [o["iso"] for o in sit["offered"]] == [DIENSTAG_10]
 
 
 def test_geht_es_nicht_frueher_bleibt_auf_dem_aktuellen_termin():

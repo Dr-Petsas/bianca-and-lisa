@@ -4653,6 +4653,34 @@ Chef: „lisa hat gar nicht alle bianca tools“ und zur OP ohne Online-Freigabe
 - Notaus: `LISA_BUCHUNG=0` (Lisa wie vor dem 09.10.). Tests:
  `tests/test_lisa_buchung.py` (Live-Sätze aus bb329162, 2c42c37c und f9a2ceb2 wortgleich).
 
+## Nach Ablehnung erst Wunschtag, dann Wunschzeit (W-WUNSCH-SCHRITTE 09.10.2026 — nicht rückbauen)
+
+Lisa-Anruf `c51a20cb` (gebucht, aber holprig): dreimal „Ich kann nur
+freitags“, dreimal kam ein Dienstag. Zwei Ursachen: aus „ab dem 3.11.“ im
+Auftrag wurde ein festes Datum, und beim Mischen schlug dieses Datum den
+genannten Wochentag. Chef: „wenn der vorgeschlagene termin abgelehnt wird muss
+sie erst nach dem wunschtag und dann nach der wunschzeit fragen — bianca auch“.
+
+- **Gemeinsamer Buchungsablauf** (`bianca/flow.py`, gilt für Bianca, Ben und
+ Lisa): lehnt der Anrufer den angebotenen Termin ab, ohne Tag UND Zeit zu
+ nennen, wird nicht die nächste Liste vorgelesen. Fehlt der Tag: „An welchem
+ Tag würde es Ihnen denn passen?“, danach (falls noch keine Zeit bekannt)
+ „Und zu welcher Uhrzeit — eher vormittags oder nachmittags?“, erst dann
+ sucht der Fluss (`_wunsch_schritt_start` / `_wunsch_schritt_zug`,
+ `sit["wunschSchritt"]`). „Nee, nur freitags“ springt direkt zur Zeitfrage;
+ Tag und Zeit in einem Satz suchen sofort. „Egal“ überspringt den Schritt,
+ zwei unklare Antworten suchen ohne Angabe, eine Gegenfrage geht an den
+ normalen Fluss. Ablehnungen mit Ausschluss („Montag geht nicht“) suchen
+ wie bisher sofort neu.
+- Ein genannter Tag ersetzt ein altes Datum im Wunsch; das alte Datum bleibt
+ nur als Untergrenze (`_wunsch_schritt_mischen`).
+- Lisa: „ab/frühestens/nicht vor dem 3.11.“ im Auftrag ist `von`, kein
+ `date` (`lisa/termin._AB_DATUM_RE`).
+- Notaus: `WUNSCH_SCHRITTE=0` (global) bzw. `wunschSchritte: false` im
+ Mandanten — dann wieder sofort der nächste Vorschlag. Tests:
+ `tests/test_einzel_slot_angebot.py`, c51a20cb-Block in
+ `tests/test_lisa_buchung.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

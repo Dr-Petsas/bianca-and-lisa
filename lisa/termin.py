@@ -49,6 +49,8 @@ _BUCHEN_FORM_RE = re.compile(
     r"\btermin\w*\s+(?:ab|zur|zum|für|fuer|im|in|nach|wegen)\b",
     re.I,
 )
+_AB_DATUM_RE = re.compile(
+    r"\b(?:ab|frühestens|fruehestens|nicht\s+vor)\s+(?:dem\s+|den\s+)?\d{1,2}\.", re.I)
 _INFO_RE = re.compile(
     r"\b(erinner\w*|bestätig\w*|bestaetig\w*|denk\w*\s+an|nicht\s+vergessen|"
     r"wie\s+es\s+\w+\s+geht|nachfrag\w*)\b",
@@ -354,6 +356,10 @@ def vorbereiten(sit: dict) -> bool:
         quelle = "kontrolle"
         gehirn.grund_als_kontrolle(sit, "Kontrolle")
     w = parse_slot_wish(auftrag)
+    if w and w.get("date") and _AB_DATUM_RE.search(auftrag):
+        # Anruf c51a20cb: „ab dem 3.11.“ ist frühestens, kein fester Tag —
+        # als Datum schlug es „Ich kann nur freitags“ dreimal.
+        w["von"], w["date"] = w["date"], None
     if w:
         s["wunsch"] = w
         s["wunschText"] = auftrag[:80]

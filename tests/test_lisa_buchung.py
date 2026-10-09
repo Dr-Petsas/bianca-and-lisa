@@ -205,6 +205,8 @@ def test_2c42c37c_wortgleich_bucht_ohne_namensfrage(netz):
     assert "vierten November" in a1["text"]
 
     a2 = agent.user_turn(sit, "Nee, können wir bitte am fünften machen.")
+    assert "vormittags oder nachmittags" in a2["text"], a2["text"]
+    a2 = agent.user_turn(sit, "Vormittags.")
     assert "fünften November" in a2["text"], a2["text"]
 
     a3 = agent.user_turn(sit, "Ja, bitte.")
@@ -217,6 +219,56 @@ def test_2c42c37c_wortgleich_bucht_ohne_namensfrage(netz):
     assert b["ctx"]["visitMotiveId"] == "opg"
     assert b["ctx"]["patientId"] == "p1"
     assert "Nachname" not in a4["text"] and "Vor- und Nachname" not in a4["text"]
+
+
+SLOTS_C51A20CB = [
+    "2026-11-03T09:00:00+01:00", "2026-11-03T09:15:00+01:00",
+    "2026-11-06T09:00:00+01:00", "2026-11-06T14:00:00+01:00",
+    "2026-11-10T09:00:00+01:00",
+]
+
+
+def test_c51a20cb_auftrag_ab_datum_ist_untergrenze(netz, monkeypatch):
+    """„ab dem 3.11.“ + „Ich kann nur freitags.“ -> erster Vorschlag ein Freitag."""
+    import tests.test_lisa_buchung as mod
+    monkeypatch.setattr(mod, "SLOTS", SLOTS_C51A20CB)
+    sit = _sitzung("Termin machen ab dem 3.11. zur Kontrolle")
+    w = gehirn.sammler(sit).get("wunsch") or {}
+    a = agent.user_turn(sit, "Ich kann nur freitags.")
+    w = gehirn.sammler(sit)["wunsch"]
+    assert w.get("von") == "2026-11-03" and not w.get("date"), w
+    assert "Freitag" in a["text"] and "Dienstag" not in a["text"], a["text"]
+
+
+def test_c51a20cb_ablehnung_mit_tag_fragt_zeit_und_bucht(netz, monkeypatch):
+    import tests.test_lisa_buchung as mod
+    monkeypatch.setattr(mod, "SLOTS", SLOTS_C51A20CB)
+    sit = _sitzung("Termin machen ab dem 3.11. zur Kontrolle")
+    a = agent.user_turn(sit, "Egal, was haben Sie denn frei?")
+    assert "Dienstag" in a["text"], a["text"]
+    a = agent.user_turn(sit, "Nee, ich kann nur freitags.")
+    assert a["text"].startswith("Gern, am Freitag."), a["text"]
+    assert "vormittags oder nachmittags" in a["text"]
+    a = agent.user_turn(sit, "Nachmittags.")
+    assert "sechsten November" in a["text"] and "vierzehn" in a["text"], a["text"]
+    a = agent.user_turn(sit, "Ja, der passt.")
+    assert "eintragen" in a["text"].lower()
+    agent.user_turn(sit, "Ja, bitte.")
+    assert netz["buchung"][-1]["slot"] == "2026-11-06T14:00:00+01:00"
+    assert netz["buchung"][-1]["ctx"]["patientId"] == "p1"
+
+
+def test_c51a20cb_blankes_nein_fragt_tag_dann_zeit(netz, monkeypatch):
+    import tests.test_lisa_buchung as mod
+    monkeypatch.setattr(mod, "SLOTS", SLOTS_C51A20CB)
+    sit = _sitzung("Termin machen ab dem 3.11. zur Kontrolle")
+    agent.user_turn(sit, "Egal, was haben Sie denn frei?")
+    a = agent.user_turn(sit, "Nein, der passt mir nicht.")
+    assert "An welchem Tag" in a["text"], a["text"]
+    a = agent.user_turn(sit, "Freitag.")
+    assert "vormittags oder nachmittags" in a["text"], a["text"]
+    a = agent.user_turn(sit, "Vormittags.")
+    assert "sechsten November um neun" in a["text"], a["text"]
 
 
 def test_grosse_op_nur_ohne_ausdrueckliches_klein():
