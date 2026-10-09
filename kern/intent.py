@@ -515,7 +515,7 @@ def _dokument_ist_buchungsgrund(t: str) -> bool:
     Dokumentwunsch („Ich brauche ein Rezept", „Ueberweisung abholen") bleibt
     ABGEBEN wie bisher."""
     from kern import praxisregeln
-    if praxisregeln.hat_ueberweisung(t):
+    if praxisregeln.hat_dokument(t) and not praxisregeln.dokument_anforderung(t):
         return True
     if ((_FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t))
             and not praxisregeln.dokument_anforderung(t)):
@@ -531,9 +531,9 @@ def _rueckruf(t: str) -> bool:
 
 
 def _ueberwiesen(t: str) -> bool:
-    """Ueberweisung HABEN ohne Dokumentwunsch = Terminbedarf (ANLEGEN)."""
+    """Ueberweisung/Rezept HABEN ohne Dokumentwunsch = Terminbedarf (ANLEGEN)."""
     from kern import praxisregeln
-    return praxisregeln.hat_ueberweisung(t) and not praxisregeln.dokument_anforderung(t)
+    return praxisregeln.hat_dokument(t) and not praxisregeln.dokument_anforderung(t)
 
 
 # Praxisurlaub ist eine Auskunftsfrage. Die eigene Abwesenheit des Anrufers

@@ -3742,6 +3742,45 @@ def _grund_unbekannt_abgeben(sit: dict, wortlaut: str) -> dict:
     return {"text": f"{intro} {frage}"}
 
 
+# Anruf e9dd56bf (09.10.2026): „Ich möchte kein Rezept oder eine Überweisung
+# haben.“ / „Sie sollen kein Rezept ausstellen“ — der Anrufer widerspricht dem
+# Dokumentwunsch; zweimal überhört, am Ende stand eine Rückruf-Notiz.
+_KEIN_DOKUMENT_RE = re.compile(
+    r"\b(?:will|m(?:ö|oe)chte\w*|wollte\w*|brauch\w*)\s+(?:\w+\s+){0,2}?"
+    r"kein(?:e|en)?\s+(?:rezept(?!ion)|(?:ü|ue)berweisung|verordnung)"
+    r"|\bkein(?:e|en)?\s+(?:rezept(?!ion)|(?:ü|ue)berweisung|verordnung)\w*\s+"
+    r"(?:\w+\s+){0,6}?(?:ausstell\w*|haben|bestell\w*|schreib\w*)\b",
+    re.I,
+)
+
+
+def _kein_dokumentwunsch(t: str) -> bool:
+    return bool(_KEIN_DOKUMENT_RE.search(t)) or (
+        praxisregeln.hat_dokument(t) and not praxisregeln.dokument_anforderung(t))
+
+
+def _dokument_zu_termin(sit: dict, ab: dict, t: str) -> dict:
+    """Kein Dokumentwunsch, sondern ein Termin: Notiz-Zweig verlassen, buchen."""
+    from kern import hirn as kern_hirn
+
+    s = gehirn.sammler(sit)
+    ab["offen"] = False
+    sit["hirnAbgeben"] = ab
+    spur.merken(sit, "dokument-widerspruch", t[:60])
+    if _anliegen_abschliessen(sit):
+        return {"text": "Verstanden, dann notiere ich nichts."}
+    if "hirn" in sit:
+        kern_hirn.anwenden(sit, {"zug": "wechseln", "handlung": "ANLEGEN",
+                                 "gegenstand": "VORGANG", "spiegel": t[:160]})
+        sit.pop("hirnModusNeu", None)
+    s["modus"] = "buchen"
+    s["phase"] = ""
+    s["frage"] = ""
+    fid, frage = gehirn.naechste_frage(sit)
+    s["frage"] = fid
+    return {"text": f"Verstanden, dann kümmere ich mich um Ihren Termin. {frage or ''}".strip()}
+
+
 def _abgeben_zug(sit: dict, t: str) -> dict | None:
     """ABGEBEN-Anliegen (W-HIRN 03.09.2026): Rueckruf/Nachricht deterministisch.
 
@@ -3759,6 +3798,8 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     ab = sit.get("hirnAbgeben") or {}
     rech = bool(ab.get("rechnung"))  # W-RECHNUNG: Rueckruf zur Rechnung
     dok = (not rech) and bool(_DOKUMENT_RE.search(_s(ab.get("was")) + " " + t))
+    if dok and _kein_dokumentwunsch(t):
+        return _dokument_zu_termin(sit, ab, t)
     regel = None
     if dok:
         # Veröffentlichte Anliegen-Strategie schlägt den festen Blessing-Text

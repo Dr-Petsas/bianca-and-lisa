@@ -130,6 +130,46 @@ _HAT_UEBERWEISUNG_RE = re.compile(
     re.I,
 )
 
+# Der Anrufer HAT ein Rezept/eine Verordnung schon bekommen (Anruf e9dd56bf,
+# 09.10.2026: „Ich habe ein Rezept für eine Schiene erhalten, würde gerne
+# einen Termin vereinbaren.“ — `erhalt\w*` in _ANFORDERUNG_RE machte daraus
+# einen Rezeptwunsch). Nur das Perfekt mit „haben“ bzw. „mir wurde …“; die
+# Spanne darf weder verneinen noch wünschen (_BESITZ_STOP_RE).
+_HAT_REZEPT_RE = re.compile(
+    r"\b(?:hab(?:e|en)?|hatte\w*|hat)\b[^.?!]{0,60}?"
+    r"\b(?:rezept(?:e|es)?|verordnung|(?:ü|ue)berweisung)\b[^.?!]{0,60}?"
+    r"\b(?:erhalten|bekommen|gekriegt|ausgestellt|verschrieben|mitgegeben)\b"
+    r"|\b(?:mir|uns)\s+wurde\b[^.?!]{0,40}?"
+    r"\b(?:rezept(?:e|es)?|verordnung|(?:ü|ue)berweisung)\b[^.?!]{0,40}?"
+    r"\b(?:ausgestellt|verschrieben|mitgegeben)\b"
+    r"|\b(?:hab(?:e|en)?|hatte\w*|hat|liegt|mit)\b[^.?!]{0,30}?"
+    r"\b(?:ein|eine|einem|einer|das|dem|mein\w*)\s+(?:rezept|verordnung)\w*\s+(?:von|vom)\b",
+    re.I,
+)
+_BESITZ_STOP_RE = re.compile(
+    r"\bnicht\b|\bkein\w*|\bgern\w*|\bbrauch\w*|\bm(?:ö|oe)cht\w*|\bwill\b|\bbitte\b",
+    re.I,
+)
+_NEUES_DOKUMENT_RE = re.compile(
+    r"\b(?:abgelaufen|aufgebraucht)\b"
+    r"|\bneue[sn]?\s+(?:rezept|(?:ü|ue)berweisung|verordnung)",
+    re.I,
+)
+
+
+def _besitz_spanne(t: str) -> re.Match | None:
+    for m in _HAT_REZEPT_RE.finditer(t):
+        if _BESITZ_STOP_RE.search(m.group(0)):
+            continue
+        # „Haben Sie mein Rezept schon ausgestellt?" fragt nach dem Dokument.
+        ende = re.search(r"[.?!]", t[m.end():])
+        anfang = max(t.rfind(z, 0, m.start()) for z in ".?!") + 1
+        if ende and ende.group(0) == "?" and not re.search(
+                r"\b(?:ich|wir|mir|uns)\b", t[anfang:m.end()], re.I):
+            continue
+        return m
+    return None
+
 # Terminbezug im Satz — beim Zahnarzt sind „Roentgen"/„Befund" dann Termine
 # (Roentgentermin, Befundbesprechung, Aufnahmen machen lassen).
 _TERMIN_KONTEXT_RE = re.compile(
@@ -323,6 +363,13 @@ def hat_ueberweisung(text: str) -> bool:
     return bool(_HAT_UEBERWEISUNG_RE.search(_s(text)))
 
 
+def hat_dokument(text: str) -> bool:
+    """Der Anrufer HAT eine Ueberweisung oder ein Rezept/eine Verordnung
+    schon in der Hand — Buchungsgrund, kein Dokumentwunsch."""
+    t = _s(text)
+    return bool(_HAT_UEBERWEISUNG_RE.search(t)) or _besitz_spanne(t) is not None
+
+
 def dokument_anforderung(text: str) -> bool:
     """Will der Anrufer ein Rezept/eine Ueberweisung BEKOMMEN (nicht: er hat
     eine und will deshalb einen Termin)? Fix 1, 13.09.2026."""
@@ -331,6 +378,12 @@ def dokument_anforderung(text: str) -> bool:
         return False
     if _HAT_UEBERWEISUNG_RE.search(t):
         return False
+    besitz = _besitz_spanne(t)
+    if besitz is not None:
+        # „Ich habe ein Rezept bekommen, das ist abgelaufen" bleibt ein Wunsch.
+        rest = t[:besitz.start()] + " " + t[besitz.end():]
+        return bool(_NEUES_DOKUMENT_RE.search(rest)
+                    or (_REZEPT_UEBERWEISUNG_RE.search(rest) and _ANFORDERUNG_RE.search(rest)))
     return bool(_ANFORDERUNG_RE.search(t))
 
 
