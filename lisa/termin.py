@@ -69,6 +69,37 @@ _GENERISCH = {
     "beratung", "behandlung", "beschwerden", "kontrolle", "kontrolluntersuchung",
     "sprechstunde", "termin", "untersuchung",
 }
+# Anruf 2c42c37c: „Sinuslift und 12 Implantate unter ITN“ ist keine kleine OP
+# (Katalog: klein 30 min, groß 120 min). Ohne ausdrückliches „klein“ gilt bei
+# solchen Signalen die große Variante.
+_GROSS_SIGNAL_RE = re.compile(
+    r"\b(sinus\w*|augment\w*|knochenaufbau\w*|itn|intubation\w*|\w*narkose\w*|"
+    r"mehrere|beidseit\w*|(?:[2-9]|[1-9]\d|zwei|drei|vier|fünf|fuenf|sechs|sieben|"
+    r"acht|neun|zehn|elf|zwölf|zwoelf)\s+implantat\w*)",
+    re.I,
+)
+_KLEIN_RE = re.compile(r"\bklein\w*", re.I)
+
+_ORDINAL = {
+    "erst": 1, "zweit": 2, "dritt": 3, "viert": 4, "fünft": 5, "fuenft": 5,
+    "sechst": 6, "siebt": 7, "siebent": 7, "acht": 8, "neunt": 9, "zehnt": 10,
+    "elft": 11, "zwölft": 12, "zwoelft": 12, "dreizehnt": 13, "vierzehnt": 14,
+    "fünfzehnt": 15, "fuenfzehnt": 15, "sechzehnt": 16, "siebzehnt": 17,
+    "achtzehnt": 18, "neunzehnt": 19, "zwanzigst": 20, "einundzwanzigst": 21,
+    "zweiundzwanzigst": 22, "dreiundzwanzigst": 23, "vierundzwanzigst": 24,
+    "fünfundzwanzigst": 25, "fuenfundzwanzigst": 25, "sechsundzwanzigst": 26,
+    "siebenundzwanzigst": 27, "achtundzwanzigst": 28, "neunundzwanzigst": 29,
+    "dreißigst": 30, "dreissigst": 30, "einunddreißigst": 31, "einunddreissigst": 31,
+}
+_ORDINAL_RE = re.compile(
+    r"\bam\s+(" + "|".join(sorted(_ORDINAL, key=len, reverse=True)) + r")(?:en|e|er)\b",
+    re.I,
+)
+
+
+def tag_ordinal(text: str) -> str:
+    """„am fünften“ → „am 5.“ (Anruf 2c42c37c: der Parser kennt nur Ziffern)."""
+    return _ORDINAL_RE.sub(lambda m: f"am {_ORDINAL[m.group(1).lower()]}.", text)
 
 
 PROMPT_REGEL = (
@@ -158,7 +189,8 @@ def motiv_aus_auftrag(auftrag: str, katalog: list[dict], calendar_id: str = "") 
     worte = _auftrag_tokens(auftrag)
     if not worte:
         return None
-    gross = bool(re.search(r"\bgro(?:ss|ß)\w*", _s(auftrag), re.I))
+    gross = bool(re.search(r"\bgro(?:ss|ß)\w*", _s(auftrag), re.I)) or (
+        bool(_GROSS_SIGNAL_RE.search(_s(auftrag))) and not _KLEIN_RE.search(_s(auftrag)))
     treffer: list[tuple[int, dict]] = []
     for vm in motive.fuer_kalender(katalog or [], calendar_id):
         name = _s(vm.get("name"))
@@ -327,6 +359,11 @@ def vorbereiten(sit: dict) -> bool:
         if alt.get(k)
     }
     sit["booking"]["arztAuftrag"] = True
+    # Anruf 2c42c37c: ohne Bindung lehnt book_slot die Akten-ID ab („Name und
+    # patientId widersprechen sich“) — flow._ctx_bauen bindet nur eine NEUE ID,
+    # die Startsitzung trug aber schon dieselbe.
+    from kern import patients
+    patients.patient_id_bindung_setzen(sit["booking"], s.get("patientId"), vor, nach)
     sit["offered"] = []
     sit["slotVorrat"] = []
     sit.pop("vorratFuer", None)
@@ -353,7 +390,7 @@ def zug(sit: dict, text: str, melde=None) -> dict | None:
 
     if not bereit(sit) or sit.get("lisaTerminAus"):
         return None
-    t = _s(text)
+    t = tag_ordinal(_s(text))
     if not sit.get("lisaTerminBereit"):
         if gehirn.ist_nein(t) or _KEIN_INTERESSE_RE.search(t):
             sit["lisaTerminAus"] = True

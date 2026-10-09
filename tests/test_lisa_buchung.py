@@ -12,7 +12,7 @@ import pytest
 
 from bianca import gehirn
 from kern import calendar as kal
-from kern import motive
+from kern import motive, patients
 from lisa import agent, identitaet, session, termin
 
 AUFTRAG_BB329162 = (
@@ -56,6 +56,11 @@ def netz(monkeypatch):
         return {"ok": True, "slots": [{"iso": x} for x in SLOTS]}
 
     def buchen(tenant, ctx, *, slot_iso=""):
+        # Dieselbe Wache wie im echten book_slot (Anruf 2c42c37c scheiterte hier).
+        if ctx.get("patientId") and not patients.patient_id_bindung_passt(ctx):
+            aufrufe["abgelehnt"] = aufrufe.get("abgelehnt", 0) + 1
+            return {"ok": False, "patientMismatch": True,
+                    "spoken": "Die Patientendaten passen gerade nicht eindeutig zusammen."}
         aufrufe["buchung"].append({"ctx": dict(ctx), "slot": slot_iso})
         return {"ok": True, "booked": True, "slotIso": slot_iso, "appointmentId": "a1",
                 "spoken": "Ihr Termin ist eingetragen."}
@@ -154,6 +159,50 @@ def test_bb329162_patient_nennt_selbst_elf_uhr(netz):
     assert netz["buchung"], "nach Zusage muss gebucht werden"
     assert netz["buchung"][-1]["slot"].startswith("2026-11-04T11:00")
     assert netz["buchung"][-1]["ctx"]["visitMotiveId"] == "opk"
+
+
+AUFTRAG_2C42C37C = ("Op Termin am 4.11 für Sinuslift und 12 Implantate unter ITN frei "
+                    "geworden. Vereinbare Termin mit Patienten")
+
+
+def test_2c42c37c_wortgleich_bucht_ohne_namensfrage(netz):
+    sit = _sitzung(AUFTRAG_2C42C37C)
+    a1 = agent.user_turn(sit, "Welcher Tag?")
+    assert gehirn.sammler(sit)["motivName"] == "IMP Implantation OP groß"
+    assert "vierten November" in a1["text"]
+
+    a2 = agent.user_turn(sit, "Nee, können wir bitte am fünften machen.")
+    assert "fünften November" in a2["text"], a2["text"]
+
+    a3 = agent.user_turn(sit, "Ja, bitte.")
+    assert "eintragen" in a3["text"].lower()
+    a4 = agent.user_turn(sit, "Ja, bitte.")
+    assert not netz.get("abgelehnt"), "die Akten-ID darf nicht an der Namensbindung scheitern"
+    assert netz["buchung"], f"nach dem Ja muss gebucht werden: {a4}"
+    b = netz["buchung"][-1]
+    assert b["slot"].startswith("2026-11-05")
+    assert b["ctx"]["visitMotiveId"] == "opg"
+    assert b["ctx"]["patientId"] == "p1"
+    assert "Nachname" not in a4["text"] and "Vor- und Nachname" not in a4["text"]
+
+
+def test_grosse_op_nur_ohne_ausdrueckliches_klein():
+    kat = [v for v in KATALOG if v["id"] != "sin"]
+    assert termin.motiv_aus_auftrag(AUFTRAG_2C42C37C, kat)["id"] == "opg"
+    assert termin.motiv_aus_auftrag(
+        "OP-Termin für zwei Implantate unter Narkose frei geworden, Termin vereinbaren", kat)["id"] == "opg"
+    assert termin.motiv_aus_auftrag(
+        "Kleine Implantat-OP mit Sinuslift frei geworden, Termin vereinbaren", kat)["id"] == "opk"
+    assert termin.motiv_aus_auftrag(AUFTRAG_BB329162, kat)["id"] == "opk"
+
+
+def test_tag_ordinal():
+    assert termin.tag_ordinal("Nee, können wir bitte am fünften machen.") == \
+        "Nee, können wir bitte am 5. machen."
+    assert termin.tag_ordinal("lieber am einundzwanzigsten") == "lieber am 21."
+    assert termin.tag_ordinal("am achten November") == "am 8. November"
+    assert termin.tag_ordinal("um acht Uhr") == "um acht Uhr"
+    assert termin.tag_ordinal("den ersten bitte") == "den ersten bitte"
 
 
 def test_alter_kontroll_vorrat_wird_verworfen(netz):

@@ -4631,8 +4631,17 @@ Chef: „lisa hat gar nicht alle bianca tools“ und zur OP ohne Online-Freigabe
  (`PROMPT_REGEL`); `nach_modell` streicht Zusagen und unbelegte Kalender-
  Fakten (`fakten_wache`) und hängt die offene Frage wieder an. Kein
  Kontroll-Vorrat mehr im Prompt (`vorrat_fuellen` bei `lisaTermin`).
+- **Erster Live-Test `2c42c37c` (09.10.):** nach dem Ja auf die Rücklese
+ lehnte `book_slot` die Akten-ID ab und Lisa fragte den Namen neu —
+ `flow._ctx_bauen` bindet Name↔patientId nur bei einer NEUEN ID, die
+ Startsitzung trug aber schon dieselbe. `vorbereiten` setzt die Bindung
+ jetzt selbst; der Test-Stub prüft dieselbe Wache wie das echte
+ `book_slot`. Dazu: „am fünften“ → „am 5.“ (`tag_ordinal`, nur mit „am“ und
+ Endung) und große OP bei Sinuslift/Augmentation/ITN/Narkose/mehreren
+ Implantaten, solange der Auftrag nicht ausdrücklich „klein“ sagt (Katalog:
+ klein 30 min, groß 120 min).
 - Notaus: `LISA_BUCHUNG=0` (Lisa wie vor dem 09.10.). Tests:
- `tests/test_lisa_buchung.py` (Live-Sätze aus bb329162 wortgleich).
+ `tests/test_lisa_buchung.py` (Live-Sätze aus bb329162 und 2c42c37c wortgleich).
 
 ## Rückrollpunkte (Produktionsstände)
 
