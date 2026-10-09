@@ -477,7 +477,12 @@ _AUSKUNFT_RE = re.compile(
     rf"ich\s+hab(?:e|')?\s+(?:{_KEIN_WUNSCH_TOKEN}[\wäöüß,]+\s+){{0,5}}?"
     rf"(?:am\s+[\wäöüß]+|(?:n[äa]chste|diese|kommende)[nrs]?\s+woche|morgen|übermorgen|uebermorgen|heute|"
     rf"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b"
-    rf"\s*(?:{_KEIN_WUNSCH_TOKEN}[\wäöüß,]+\s+){{0,5}}?termin\b",
+    rf"\s*(?:{_KEIN_WUNSCH_TOKEN}[\wäöüß,]+\s+){{0,5}}?termin\b|"
+    # 3c (Anruf 90db262e): „ob (mein) (heutiger) Termin (noch) besteht/steht/
+    # gilt“ — Frage nach der Gültigkeit eines BESTEHENDEN Termins. Wortgrenzen;
+    # „ob ich einen Termin bekommen kann“ bleibt Neubuchung.
+    r"\bob\s+(?:\w+\s+){0,3}?(?:heutige[rn]?\s+|morgige[rn]?\s+)?termin\b"
+    r"[^?.!]{0,30}?(?:noch\s+)?(?:besteht|steht|gilt|gültig|gueltig)\b",
     re.I,
 )
 _SCHONMAL_JA_RE = re.compile(

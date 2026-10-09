@@ -705,8 +705,16 @@ _NAME_FUELL = frozenset({
 })
 
 
+# Stufe 1d: Ein Qwen-Vorschlag kommt NUR aus echten Nachnamens-Zügen —
+# nie aus einem Vornamen-Zug (``vorname``/``vorname_check``). Sonst wanderte
+# ein Vornamen-Verhörer als „Nachname" in die Suche.
+_VORSCHLAG_GRUENDE = {
+    f"namensfrage:{f}" for f in ("nachname", "name", "buchstabieren", "nachname_korr")
+}
+
+
 def namens_vorschlag(sit: dict, aktuell: str = "") -> str:
-    """Ein Qwen-Nachname aus einem gesperrten Namenszug, sonst leer.
+    """Ein Qwen-Nachname aus einem gesperrten Nachnamens-Zug, sonst leer.
 
     Wird nie live übernommen und nie ins Wörterbuch gelernt. Der Aufrufer
     liest den Vorschlag vor; gespeichert wird er erst nach einem Ja.
@@ -717,14 +725,22 @@ def namens_vorschlag(sit: dict, aktuell: str = "") -> str:
     if not isinstance(spaet, list):
         return ""
     aktuell_norm = _s(aktuell).casefold()
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    vorname_norm = _s(s.get("vorname")).casefold()
     for eintrag in reversed(spaet):
         if not isinstance(eintrag, dict):
             continue
-        grund = _s(eintrag.get("gesperrt"))
-        if not grund.startswith("namensfrage"):
+        # Nur Nachnamens-Züge, nie Vorname (Plan 1d).
+        if _s(eintrag.get("gesperrt")) not in _VORSCHLAG_GRUENDE:
             continue
         name = _ein_nachname(_s(eintrag.get("qwen")))
-        if not name or name.casefold() == aktuell_norm:
+        if not name:
+            continue
+        nc = name.casefold()
+        # Ja/Nein-/Antwortwörter („Richtig", „Genau") sind kein Nachname,
+        # und ein Vorschlag gleich dem schon bekannten Vor-/aktuellen Namen
+        # bringt nichts.
+        if nc == aktuell_norm or (vorname_norm and nc == vorname_norm) or nc in _JA_NEIN:
             continue
         return name
     return ""

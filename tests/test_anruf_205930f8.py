@@ -210,3 +210,28 @@ def test_buchen_mit_link_an_bleibt_reservierungsmodus(monkeypatch):
     monkeypatch.setenv("NAMENS_LINK", "0")
     sit["sammler"]["modus"] = "buchen"
     assert namenslink._nur_name_fuer(sit) is True
+
+
+def test_namens_sms_verwaltung_schalter_aus(monkeypatch):
+    """Stufe 1c: NAMENS_SMS_VERWALTUNG=0 schaltet die reine Namens-SMS in
+    Absage/Verschieben/Auskunft ab — und ``starten`` legt dort keinen
+    Reservierungs-Create ohne Slot an. Buchen bleibt unberührt."""
+    def _nie_cf(*a, **k):  # ein CF-Aufruf wäre genau der Ghost-Termin-Weg
+        raise AssertionError("starten() darf hier keinen CF-Create auslösen")
+    monkeypatch.setattr(namenslink, "_cf_call", _nie_cf)
+    monkeypatch.delenv("NAMENS_LINK", raising=False)
+    monkeypatch.delenv("NAMENS_SMS", raising=False)
+    monkeypatch.setenv("NAMENS_SMS_VERWALTUNG", "0")
+    for modus in ("absagen", "verschieben", "auskunft"):
+        sit = {"sammler": {"modus": modus}, "callerPhone": "+491776004600"}
+        assert namenslink._nur_name_fuer(sit) is False, modus
+        assert namenslink.starten(sit) is None, modus
+    # Schalter an (Default) → Verwaltung bleibt reine Namens-SMS.
+    monkeypatch.setenv("NAMENS_SMS_VERWALTUNG", "1")
+    assert namenslink._nur_name_fuer(
+        {"sammler": {"modus": "absagen"}, "callerPhone": "+491776004600"}
+    ) is True
+    # Buchen ist vom Schalter unberührt (NAMENS_LINK=1 → Reservierungsmodus).
+    monkeypatch.setenv("NAMENS_LINK", "1")
+    monkeypatch.setenv("NAMENS_SMS_VERWALTUNG", "0")
+    assert namenslink._nur_name_fuer({"sammler": {"modus": "buchen"}}) is False

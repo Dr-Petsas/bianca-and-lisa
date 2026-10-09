@@ -521,6 +521,31 @@ def test_erste_mehrdeutigkeit_fragt_vorname_ohne_sms(monkeypatch):
     assert gehirn.sammler(sit)["frage"] == "vorname"
 
 
+def test_mehrdeutig_mit_vorname_nie_als_kein_termin(monkeypatch):
+    """Fall 95a6e6ec (Stufe 1f): auch MIT Vorname mehrdeutig -> eigener Satz
+    plus echte Notiz, NIE „kein Termin"/„keinen kommenden Termin"."""
+    monkeypatch.setenv("NAMENS_LINK", "0")
+    monkeypatch.setenv("NAMENS_SMS", "0")  # keine Namens-SMS -> _vorname_frage greift
+    monkeypatch.setattr(
+        verwalten.kal, "find_patient_appointments",
+        lambda t, c: {"ok": True, "mehrdeutig": True, "patient": {}, "appointments": []},
+    )
+    notizen: list[dict] = []
+    monkeypatch.setattr(verwalten, "_notiz_schreiben",
+                        lambda sit, **kw: (notizen.append(kw) or True))
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s["modus"] = "absagen"
+    s["nachname"] = "Schmidt"
+    s["vorname"] = "Thomas"
+    aus = verwalten._dispatch(sit, None)
+    assert aus and "mehrere Patienten" in aus["text"]
+    assert "keinen kommenden Termin" not in aus["text"]
+    assert "keinen Termin" not in aus["text"]
+    assert len(notizen) == 1
+    assert s["frage"] == "sonst_noch"
+
+
 def test_notfound_nach_korrektur_mit_handy(monkeypatch):
     def _find(t, c):
         return {"ok": True, "notFound": True, "patient": {}, "appointments": []}

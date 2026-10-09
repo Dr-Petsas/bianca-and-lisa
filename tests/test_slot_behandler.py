@@ -419,3 +419,69 @@ def test_hintergrund_vorrat_geht_ueber_behandler_suche():
     finally:
         hintergrund.calendar.find_slots_behandler = echt_b
         hintergrund.calendar.find_slots = echt_f
+
+
+# ---------------------------------------------- Stufe 1e: Plattform-Ablehnung
+
+def test_move_cannot_be_postponed_ist_gesperrt_kein_slot_taken():
+    """Stufe 1e: 400 „cannot be postponed" ist KEIN Slot-Konflikt — kein
+    slotTaken, keine Alternativen, sondern terminGesperrt."""
+    echt_update = kal._cf_update
+    echt_offer = kal.offer_slots
+    echt_live = kal.WRITE_LIVE
+    kal.WRITE_LIVE = True
+    kal._cf_update = lambda action, body: (
+        400,
+        {"success": False,
+         "message": "Appointment cannot be postponed (not confirmed or already processed)"},
+        {"route": "updateOrCancelAppointment"},
+    )
+    kal.offer_slots = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("bei Plattform-Ablehnung keine Alternativsuche"))
+    try:
+        res = kal.move_appointment(
+            {"clientId": "c", "locationId": "l"},
+            {"appointmentId": "apt", "calendarId": "cal", "visitMotiveId": "m"},
+            slot_iso="2026-10-26T13:00:00+01:00",
+        )
+    finally:
+        kal._cf_update = echt_update
+        kal.offer_slots = echt_offer
+        kal.WRITE_LIVE = echt_live
+    assert res.get("terminGesperrt") is True
+    assert not res.get("slotTaken")
+    assert not res.get("slots")
+
+
+def test_verschieben_gesperrt_notiert_ehrlich_ohne_alternativen(monkeypatch):
+    """Fall 5d4d505d (wortgleicher Satz): Plattform-Ablehnung beim Verschieben
+    -> ehrliche Notiz, kein Alternativ-Kreisel, kein slotwahl-Zustand."""
+    sit = _sit()
+    s = gehirn.sammler(sit)
+    s.update({
+        "modus": "verschieben",
+        "phase": "verschieb_bestaetigen",
+        "frage": "verschieb_ok",
+        "vorname": "Quirin",
+        "nachname": "Donaubauer",
+        "slotIso": "2026-10-26T13:00:00+01:00",
+    })
+    termin = {
+        "id": "apt", "iso": "2026-10-21T11:00:00+02:00",
+        "calendarId": "cal-pzr", "doctorName": "Franziska Schmidt",
+        "motivId": "pzr-60", "motivName": "Professionelle Zahnreinigung plus Kontrolle",
+    }
+    sit["gefunden"] = [termin]
+    sit["verwaltenTermin"] = "apt"
+    monkeypatch.setattr(verwalten.kal, "move_appointment",
+                        lambda tenant, ctx, **kw: {"ok": False, "terminGesperrt": True,
+                                                   "slotIso": kw["slot_iso"]})
+    notizen: list[dict] = []
+    monkeypatch.setattr(verwalten, "_notiz_schreiben",
+                        lambda sit, **kw: (notizen.append(kw) or True))
+    aus = verwalten._verschieben(sit, None)
+    assert aus and "nicht selbst verschieben" in aus["text"]
+    assert "Praxis notiert" in aus["text"]
+    assert len(notizen) == 1
+    assert not sit.get("offered")
+    assert s["frage"] != "slotwahl" and s["phase"] != "verschieb_angebot"

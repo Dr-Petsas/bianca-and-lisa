@@ -29,7 +29,7 @@ _TAFEL: dict[str, str] = {
     "heinrich": "h", "hans": "h", "hotel": "h", "heinz": "h",
     "ida": "i", "india": "i", "ingrid": "i",
     "julius": "j", "julia": "j", "johann": "j", "juliett": "j",
-    "kaufmann": "k", "konrad": "k", "kilo": "k", "karl": "k",
+    "kaufmann": "k", "konrad": "k", "kilo": "k", "karl": "k", "kaiser": "k",
     "ludwig": "l", "leopold": "l", "lima": "l", "lisa": "l",
     "martha": "m", "marie": "m", "maria": "m", "mike": "m", "max": "m",
     "nordpol": "n", "norbert": "n", "november": "n",
@@ -38,7 +38,8 @@ _TAFEL: dict[str, str] = {
     "paula": "p", "peter": "p", "papa": "p", "paul": "p",
     "quelle": "q", "quebec": "q",
     "richard": "r", "romeo": "r", "rudolf": "r",
-    "samuel": "s", "siegfried": "s", "sierra": "s", "sophie": "s",
+    "samuel": "s", "siegfried": "s", "sierra": "s", "sophie": "s", "südpol": "s",
+    "suedpol": "s",
     "theodor": "t", "tango": "t", "toni": "t", "theo": "t",
     "ulrich": "u", "uniform": "u", "ulla": "u",
     "übermut": "ü", "uebermut": "ü", "übung": "ü", "uebung": "ü",
@@ -258,6 +259,19 @@ def deute(text: str) -> dict[str, Any] | None:
     while i < len(toks):
         tok = toks[i]
         nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        # W-DIKTAT-LAUT (Stufe 3e): Parakeet schreibt den gesprochenen
+        # Anfangsbuchstaben manchmal als verdoppelten Laut ("Mm" statt "M").
+        # Steht so ein Doppellaut GANZ AM ANFANG und folgt direkt ein einzelner
+        # Buchstabe, ist er der Kettenanfang (Ziel: "M-A-R-U-D-A" -> "Maruda",
+        # nicht "Aruda", weil "mm" sonst als fremdes Wort verworfen wurde).
+        if (not letters and not kette and len(tok) == 2 and tok[0] == tok[1]
+                and tok[0] in _EINZEL and not _als_buchstabe(tok)
+                and _als_buchstabe(nxt)):
+            letters.append(tok[0])
+            kette = True
+            fuell_folge = 0
+            i += 1
+            continue
         # "Doppel L" / "doppeltes L" / "Doppel-L"
         if tok.startswith("doppel"):
             rest = tok[len("doppel"):].lstrip("tes").lstrip("te")

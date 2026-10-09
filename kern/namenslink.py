@@ -111,19 +111,36 @@ def nur_name() -> bool:
     return sms_aktiv() and not aktiv()
 
 
+_VERWALTUNG_MODI = {"absagen", "verschieben", "auskunft"}
+
+
+def sms_verwaltung_aktiv() -> bool:
+    """Namens-SMS in Absage/Verschieben/Auskunft (Stufe 1c, Default „1").
+
+    Notaus ``NAMENS_SMS_VERWALTUNG=0``: dann schickt Bianca in diesen Modi
+    nie eine reine Namens-SMS, und ``starten()`` legt dort keinen
+    Reservierungs-Create ohne Slot an. Das Buchen bleibt unberührt."""
+    return (os.getenv("NAMENS_SMS_VERWALTUNG", "1") or "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
 def _nur_name_fuer(sit: dict) -> bool:
     """Reine Namensabfrage für diese Sitzung.
 
     Reserviert wird nur beim Buchen. Absagen, Verschieben und Auskunft haben
     keinen Slot — dort ist die SMS immer nur der Name, auch mit
     ``NAMENS_LINK=1`` (Anruf 205930f8: sonst sagte Bianca „während wir weiter
-    telefonieren" und wartete nicht)."""
+    telefonieren" und wartete nicht). Für diese Modi lässt sich die
+    Namens-SMS über ``NAMENS_SMS_VERWALTUNG=0`` abschalten (Stufe 1c)."""
     if not sms_aktiv():
         return False
+    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
+    if _s(s.get("modus")) in _VERWALTUNG_MODI:
+        return sms_verwaltung_aktiv()
     if not aktiv():
         return True
-    s = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
-    return _s(s.get("modus")) in {"absagen", "verschieben", "auskunft"}
+    return False
 
 
 # Nach so vielen gescheiterten Namensaufnahmen (Rücklese verneint,
@@ -132,8 +149,8 @@ def _nur_name_fuer(sit: dict) -> bool:
 NAME_FEHLVERSUCHE_SMS = 2
 _ANKUENDIGUNG_RETTUNG = (
     "Damit ich Ihren Namen sicher richtig schreibe, schicke ich Ihnen jetzt "
-    "eine SMS. Bitte tippen Sie dort Ihren Vor- und Nachnamen ein und senden "
-    "Sie ihn ab — ich warte so lange."
+    "eine SMS. Öffnen Sie bitte den Link in der SMS und tragen Sie dort Ihren "
+    "Vor- und Nachnamen ein — ich warte so lange."
 )
 
 
@@ -775,6 +792,12 @@ def starten(
         return None
     if verifiziert(sit):
         return None
+    # Stufe 1c: ohne Reservierung (nur Name) und mit Notaus NAMENS_SMS_VERWALTUNG=0
+    # darf in Absage/Verschieben/Auskunft kein Reservierungs-Create ohne Slot
+    # entstehen — genau der Weg zu den Platzhalter-Geisterterminen.
+    _mod = _s((sit.get("sammler") or {}).get("modus"))
+    if _mod in _VERWALTUNG_MODI and not sms_verwaltung_aktiv():
+        return None
     if _scope_passt(sit):
         return None if parallel else warten(sit)
     phone = handy(sit)
@@ -1017,8 +1040,8 @@ def warten(sit: dict) -> dict:
     s = sit.setdefault("sammler", {})
     s["frage"] = "namenslink"
     if _stand(sit).get("nurName"):
-        return {"text": "Die SMS ist unterwegs — bitte tippen Sie dort Ihren "
-                        "Vor- und Nachnamen ein und senden Sie ihn ab."}
+        return {"text": "Die SMS ist unterwegs — öffnen Sie bitte den Link und "
+                        "tragen Sie dort Ihren Vor- und Nachnamen ein."}
     return {"text": _ANKUENDIGUNG}
 
 

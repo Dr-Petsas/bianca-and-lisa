@@ -39,7 +39,8 @@ from typing import Any, Callable
 from bianca import gehirn, hintergrund, telefon
 from kern import agentprofil
 from kern import calendar as kal
-from kern import gespraech, intent, motive, notes, observability_manifest
+from kern import gespraech, identitaet_merkmale, intent, motive
+from kern import notes, observability_manifest
 from kern import patients, spur
 from kern.config import DATA_DIR
 from kern.patients import arzt_sprechname
@@ -52,11 +53,13 @@ from kern.slots import (
     fruehester_slot_antwort,
     parse_slot_wish,
     pick_slots,
+    slot_praeferenz_aenderung,
     slot_wunsch_hart,
     slots_mit_abstand,
     spoken_offer,
     spoken_slot,
     will_neu_suchen,
+    wunsch_mit_slot_praeferenz,
 )
 
 Melde = Callable[[str], None] | None
@@ -803,6 +806,13 @@ def _detail_kandidaten(sit: dict, melde: Melde) -> dict | None:
     # Ohne Patientenbezug grenzen die Termindaten nur die Kandidaten ein.
     # Ein einzelner Termin darf seinen Patientennamen nicht an einen Anrufer
     # verraten, der lediglich Datum und Uhrzeit kennt.
+    # W-ZWEI-MERKMALE: Tageskandidaten, die ZWEI unabhaengige Merkmale treffen
+    # (z. B. starker Name + vom Anrufer genannter Tag). Nur EIN Patient darf
+    # so aufgeloest werden — sonst bleibt es mehrdeutig.
+    zwei = []
+    if identitaet_merkmale.aktiv():
+        zwei = [a for a in alle
+                if identitaet_merkmale.reicht(identitaet_merkmale.merkmale(sit, a))]
     quelle = "name_required"
     if pid_ok:
         alle = pid_ok
@@ -811,12 +821,17 @@ def _detail_kandidaten(sit: dict, melde: Melde) -> dict | None:
         alle = phone_ok
         quelle = "telefon"
     elif pid or phone:
-        # Eine bestätigte Patienten-ID beziehungsweise Rufnummer ist stärker
-        # als ein möglicherweise verhörter Name. Passt sie nicht zum
-        # Termin-Snapshot, nie per Namensähnlichkeit auf eine andere Akte
-        # springen.
-        alle = []
-        quelle = "identitaet_widerspruch" if hat_terminkandidaten else "no_detail"
+        # Alte harte Grenze: eine bestätigte Patienten-ID/Rufnummer, die nicht
+        # zum Snapshot passt, leerte die Liste. Neu (W-ZWEI-MERKMALE): passt
+        # dafür ein Kandidat über ZWEI andere Merkmale (starker Name + Tag),
+        # bleibt dieser — nie per bloßer Namensähnlichkeit springen.
+        if zwei and len({_s(a.get("patientId")) or _name_norm(
+                a.get("patientName"), zeitwoerter=False) for a in zwei}) == 1:
+            alle = zwei
+            quelle = "zwei_merkmale"
+        else:
+            alle = []
+            quelle = "identitaet_widerspruch" if hat_terminkandidaten else "no_detail"
     elif hat_name:
         if name_ok:
             alle = name_ok
@@ -831,6 +846,12 @@ def _detail_kandidaten(sit: dict, melde: Melde) -> dict | None:
                 )
                 else "name60"
             )
+        elif zwei and len({_s(a.get("patientId")) or _name_norm(
+                a.get("patientName"), zeitwoerter=False) for a in zwei}) == 1:
+            # Name allein unter 60 %, aber zwei Merkmale (z. B. starker Name
+            # knapp darunter + genannter Tag) lösen eindeutig auf.
+            alle = zwei
+            quelle = "zwei_merkmale"
         else:
             alle = []
             # Ein leerer Tag beziehungsweise eine abweichend erinnerte Uhrzeit
@@ -1021,6 +1042,23 @@ def _qwen_name_zug(sit: dict, text: str, melde: Melde,
     )}
 
 
+def _schreibweise_gesperrt(sit: dict) -> bool:
+    """3b: Ein konkreter Bestandstermin ist bereits gefunden/gewaehlt UND eine
+    Akte gebunden — dann ist eine erneute Schreibweise-/Buchstabier-Frage
+    sinnlos (Thaler dbc5e2a8: Verhoerer auf termin_ok trieb Bianca zurueck ins
+    Buchstabieren, obwohl der Termin laengst feststand)."""
+    gebunden = bool(
+        _s(sit.get("verwKandidat"))
+        or _s(sit.get("verwaltenTermin"))
+        or (sit.get("anrufer") and _s(sit.get("anruferCheck")) == "ja")
+    )
+    if not gebunden:
+        return False
+    if _gewaehlt(sit):
+        return True
+    return len(sit.get("gefunden") or []) >= 1
+
+
 def _korrektur_frage(sit: dict) -> dict:
     """W-NAMESKORREKTUR (Chef 31.08.2026, Zannes-Anruf 10:33: "der gibt zu
     schnell auf"): beim ERSTEN 'Patient nicht gefunden' nicht gleich die
@@ -1029,6 +1067,10 @@ def _korrektur_frage(sit: dict) -> dict:
     korrigieren oder zu buchstabieren; erst der zweite Fehlschlag geht den
     ehrlichen Notiz-Weg."""
     s = gehirn.sammler(sit)
+    # 3b: steht der Termin bereits (Akte gebunden), nie zurueck ins
+    # Buchstabieren — den gefundenen Termin erneut ansagen.
+    if _schreibweise_gesperrt(sit):
+        return _ansagen(sit)
     if not sit.get("qwenNameVerbraucht"):
         from kern import qwen_korrektor
         from bianca import buchstaben
@@ -1065,8 +1107,9 @@ def _vorname_frage(sit: dict) -> dict:
     der Vorname grenzt ab — wie im alten phone_agent (W-NACHNAME 31.08.2026)."""
     s = gehirn.sammler(sit)
     if s["vorname"]:
-        # Auch MIT Vornamen noch mehrdeutig: nicht raten — ehrlich + Notiz.
-        return _kein_termin(sit, s["modus"])
+        # Auch MIT Vornamen noch mehrdeutig: nicht raten, aber NIE als „kein
+        # Termin" sprechen (es gibt ja mehrere) — eigener Satz + Notiz (1f).
+        return _mehrdeutig_notiz(sit, s["modus"])
     s["frage"] = "vorname"
     namen = []
     gesehen: set[str] = set()
@@ -1148,6 +1191,38 @@ def _kein_termin(sit: dict, modus: str) -> dict:
     return {"text": _s(
         f"Ich sehe unter {wer or 'Ihrem Namen'} aktuell keinen kommenden Termin. "
         "Kann ich sonst noch etwas für Sie tun?"
+    )}
+
+
+def _mehrdeutig_notiz(sit: dict, modus: str) -> dict:
+    """Stufe 1f: Auch MIT Vorname mehrdeutig — NIE als „kein Termin" sprechen.
+
+    Es gibt ja mehrere Patienten, nicht keinen. Bis die Zwei-Merkmale-Abfrage
+    (Stufe 2) live ist, kommt ein eigener ehrlicher Satz plus eine echte
+    Rückrufnotiz; raten wird hier nie."""
+    s = gehirn.sammler(sit)
+    notiz_ok = _notiz_schreiben(
+        sit,
+        anliegen=modus if modus in {"absagen", "verschieben"} else "auskunft",
+        status=("Mehrere Patienten mit gleichem Namen — telefonisch nicht "
+                "eindeutig zuzuordnen. Bitte Patient prüfen und zurückrufen"),
+        dock_text=("Mehrere Patienten mit gleichem Namen. "
+                   "Bitte prüfen und zurückrufen."),
+    )
+    sit["schreibFehlerZug"] = True
+    s["phase"] = "fertig"
+    s["frage"] = "sonst_noch"
+    spur.merken(sit, "mehrdeutig-notiz", "ok" if notiz_ok else "notiz_fehler")
+    if notiz_ok:
+        return {"text": (
+            "Unter diesem Namen gibt es bei uns mehrere Patienten. Damit ich "
+            "niemanden verwechsle, lege ich das der Praxis vor — sie meldet "
+            "sich bei Ihnen. Kann ich sonst noch etwas für Sie tun?"
+        )}
+    return {"text": (
+        "Unter diesem Namen gibt es bei uns mehrere Patienten. Damit ich "
+        "niemanden verwechsle, rufen Sie dafür bitte noch einmal in der "
+        "Praxis an."
     )}
 
 
@@ -1482,13 +1557,24 @@ def _verwaltung_mit_abschlussfrage_schliessen(sit: dict) -> None:
 # die Absage mit „not confirmed or already processed“ ab, Bianca versuchte
 # denselben Termin dreimal und sagte dreimal „Die Praxis kümmert sich darum.“
 _ABSAGE_UNBESTAETIGT = (
-    "Diesen Termin kann ich hier nicht selbst absagen, weil er von der Praxis "
-    "noch nicht bestätigt ist. Ich habe Ihre Absage für die Praxis notiert — "
-    "sie trägt sie ein."
+    "Diesen Termin kann ich hier nicht selbst absagen. Ich habe Ihre Absage "
+    "für die Praxis notiert — sie trägt sie ein."
 )
 _ABSAGE_SCHON_NOTIERT = (
     "Ihre Absage zu diesem Termin habe ich bereits für die Praxis notiert — "
     "sie trägt sie ein."
+)
+# Stufe 1e: Lehnt die Plattform das Verschieben ab (400 „cannot be postponed" —
+# Termin nicht bestätigt / bereits bearbeitet), ist das KEIN belegter Slot.
+# Kein Alternativ-Kreisel, sondern ehrlich an die Praxis notieren.
+_VERSCHIEBEN_GESPERRT = (
+    "Diesen Termin kann ich hier nicht selbst verschieben. Ich habe es für die "
+    "Praxis notiert — sie kümmert sich darum."
+)
+_VERSCHIEBEN_GESPERRT_FAIL = (
+    "Diesen Termin kann ich hier nicht selbst verschieben, und auch die "
+    "Rückrufnotiz konnte ich technisch nicht speichern. Bitte rufen Sie die "
+    "Praxis dafür noch einmal an."
 )
 _ABSAGE_NICHT_MOEGLICH = (
     "Diesen Termin kann ich gerade nicht absagen. Bitte rufen Sie die Praxis "
@@ -2049,6 +2135,28 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
                     + " Kann ich sonst noch etwas für Sie tun?",
             "book": {"moved": True, "slotIso": res.get("slotIso") or "", "spoken": res.get("spoken") or ""},
         }
+    if res.get("terminGesperrt"):
+        # Plattform-Ablehnung (nicht bestätigt / bereits bearbeitet): ehrlich,
+        # kein Alternativ-Kreisel. Der Satz kommt nur, wenn die Notiz steht.
+        notiz_ok = _notiz_schreiben(
+            sit,
+            anliegen="verschieben",
+            status=("Verschieben gewünscht — Plattform lässt es nicht zu "
+                    "(nicht bestätigt / bereits bearbeitet). Bitte prüfen und "
+                    "zurückrufen"),
+            dock_text=("Verschieben von der Plattform abgelehnt. "
+                       "Bitte prüfen und zurückrufen."),
+        )
+        sit["schreibFehlerZug"] = True
+        s["slotIso"] = ""
+        sit["slotVorrat"] = []
+        sit["offered"] = []
+        sit["verschiebRichtung"] = ""
+        _verwaltung_mit_abschlussfrage_schliessen(sit)
+        spur.merken(sit, "verschieben-gesperrt", "ok" if notiz_ok else "notiz_fehler")
+        if notiz_ok:
+            return {"text": _VERSCHIEBEN_GESPERRT + " Kann ich sonst noch etwas für Sie tun?"}
+        return {"text": _VERSCHIEBEN_GESPERRT_FAIL}
     if res.get("slotTaken"):
         fail_iso = (
             _s(res.get("blockedIso"))
@@ -2265,6 +2373,9 @@ def _ansagen(sit: dict) -> dict:
 
 # W-BESTAND-ANSAGE: Antworten auf die Folgefragen nach der Ansage.
 _ANSAGE_FRAGEN = {"termin_ok", "sonst_noch", "termin_aendern"}
+# 3a: wie oft eine unklare Antwort auf termin_ok die Folgefrage wiederholt,
+# bevor der normale Weg (Hirn/Modell) uebernimmt.
+_TERMIN_OK_WDH_MAX = 2
 _PASST_KERN = (
     r"alles\s+(?:gut|klar|bestens|in\s+ordnung)|passt(?:\s+(?:so|schon|gut|mir))?|"
     r"in\s+ordnung|bleibt\s+(?:so|dabei|bestehen)|so\s+lassen|lassen\s+wir\s+(?:so|dabei)|"
@@ -2286,10 +2397,46 @@ _PASST_FUELL_RE = re.compile(
 )
 _PASST_REST_RE = re.compile(r"[^\wäöüß]+", re.I)
 _KLAR_ABSCHIED_RE = re.compile(
-    r"wiederh[oö]ren|\btsch[uü]s{0,2}\b|\bciao\b|das\s+(?:war'?s|wars)|"
-    r"nichts\s+weiter|sch[oö]nen\s+tag",
+    r"wiederh[oö]ren|wiedersehen|\btsch[uü]s{0,2}\b|\bciao\b|das\s+(?:war'?s|wars)|"
+    r"nichts\s+weiter|sch[oö]nen\s+(?:tag|abend|feierabend)|"
+    # 3a (Anruf 5e30be95): breitere Abschiedsformen, damit die termin_ok-Frage
+    # nicht endlos wiederholt wird, wenn der Anrufer sich klar verabschiedet.
+    r"bis\s+(?:dann|denn|bald|später|spaeter|zum\s+termin)|mach(?:en\s+sie'?s|t'?s|'?s)\s+gut|"
+    r"das\s+(?:ist|war)\s+(?:dann\s+)?alles|mehr\s+brauch\w*\s+ich\s+nicht|"
+    r"(?:dann\s+)?reicht\s+(?:das|mir)|war\s+alles",
     re.I,
 )
+# 3a: Erkennung eines BLOSSEN Wochentags ("Montag?", "am Donnerstag") als
+# ganze Antwort — dann kommt ein kurzer Filtersatz statt einer neuen Ansage.
+_NUR_WOCHENTAG_FUELL_RE = re.compile(
+    r"\b(?:ja|nein|am|der|den|ist|war|und|also|äh|ähm|hm|mhm|denn|eigentlich|"
+    r"vielleicht|doch|mal|noch|so)\b",
+    re.I,
+)
+
+
+def _nur_wochentag(t: str) -> int | None:
+    """Antwort ist (abzüglich Füllwörter) nur ein Wochentag -> Index, sonst None."""
+    rest = _NUR_WOCHENTAG_FUELL_RE.sub(" ", _s(t).casefold())
+    gefunden = None
+    for idx, cre in WEEKDAYS:
+        for m in cre.finditer(rest):
+            if gefunden is not None and gefunden != idx:
+                return None
+            gefunden = idx
+            rest = rest[:m.start()] + " " + rest[m.end():]
+    if gefunden is None:
+        return None
+    if re.sub(r"[^\wäöüß]+", "", rest):
+        return None  # noch anderer Inhalt -> kein blosser Wochentag
+    return gefunden
+
+
+# Index-Schema wie kern.slots.WEEKDAYS/_weekday_of: Mo=1 .. Sa=6, So=0.
+_WOCHENTAG_NAME = {
+    1: "Montag", 2: "Dienstag", 3: "Mittwoch", 4: "Donnerstag",
+    5: "Freitag", 6: "Samstag", 0: "Sonntag",
+}
 
 
 def _ist_passt(t: str, termine: list[dict] | None = None) -> bool:
@@ -2312,6 +2459,11 @@ def _ist_passt(t: str, termine: list[dict] | None = None) -> bool:
 
 _VERSCHIEB_WUNSCH_RE = re.compile(r"\bverschieb\w*|\bverleg\w*", re.I)
 _ABSAGE_WUNSCH_RE = re.compile(r"\babsag\w*|\bstornier\w*|\bcancel\w*", re.I)
+# 3b (Thaler-Anruf dbc5e2a8): bekannte STT-Verhoerer eines Verschiebe-Wunsches
+# ("verscheib...", "verschie..."). Ein "Ja" MIT so einem Stamm ist nie
+# Zustimmung zum Bestandstermin, sondern ein (verhoerter) Aenderungswunsch —
+# dann wird nachgehakt statt "passt" angenommen.
+_VERHOERER_AENDERN_RE = re.compile(r"\bver\s?sch(?:eib|ie)\w*", re.I)
 _ABSCHIED_TEXT = "Sehr gerne. Dann wünsche ich Ihnen einen schönen Tag — auf Wiederhören!"
 
 # "Beide/alle absagen" (W-MEHRFACH-ABSAGE 15.09.2026): der Anrufer meint MEHR
@@ -2421,9 +2573,11 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
         return None
     kurz = len(t.split()) <= 4
     aendern = bool(_VERSCHIEB_WUNSCH_RE.search(t) or _ABSAGE_WUNSCH_RE.search(t))
-    passt = not aendern and _ist_passt(t, sit.get("gefunden") or [])
+    # 3b: Verhoerer-Stamm ("verscheib") schließt eine "passt"-Deutung aus.
+    verhoerer_aendern = bool(_VERHOERER_AENDERN_RE.search(t))
+    passt = not aendern and not verhoerer_aendern and _ist_passt(t, sit.get("gefunden") or [])
     nein = gehirn.ist_nein(t) and not passt
-    ja = gehirn.ist_ja(t) and not nein
+    ja = gehirn.ist_ja(t) and not nein and not verhoerer_aendern
     klar_abschied = bool(_KLAR_ABSCHIED_RE.search(t))
     if (passt or klar_abschied) and "wunsch" in neu:
         # "Alles gut, 21. Dezember." wiederholt den BESTANDSTERMIN — einsammeln
@@ -2502,9 +2656,14 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
         # "Alles gut, Dankeschön, Wiederhören." — der Termin bleibt, Schluss.
         s["frage"] = ""
         return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
+    if verhoerer_aendern:
+        # 3b: "Ja, verscheiben" (Verhoerer) -> nachhaken, nie als Zustimmung.
+        s["frage"] = "termin_aendern"
+        return {"text": "Möchten Sie den Termin verschieben oder absagen?"}
     if passt or (ja and kurz):
         # VOR dem Abschied pruefen: "Danke, passt so." ist Zustimmung, kein
         # Auflegen (_ABSCHIED_RE faengt jedes fuehrende "Danke").
+        sit.pop("verwTerminOkWdh", None)
         s["frage"] = "sonst_noch"
         return {"text": "Schön, dann bleibt es dabei. Kann ich sonst noch etwas für Sie tun?"}
     if nein and kurz:
@@ -2517,9 +2676,33 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
     if _ABSCHIED_RE.search(t):
         s["frage"] = ""
         return {"text": _ABSCHIED_TEXT, "hangup": abschied.an()}
+    # 3a (Anruf 5e30be95): ein BLOSSER Wochentag ("Montag?") ist keine neue
+    # Ansage, sondern eine Nachfrage zum gefundenen Termin — kurzer Filtersatz,
+    # die Frage bleibt offen.
+    wtag = _nur_wochentag(t)
+    termine_eins = sit.get("gefunden") or []
+    if wtag is not None and len(termine_eins) == 1:
+        iso = _s(termine_eins[0].get("iso"))
+        name = _WOCHENTAG_NAME.get(wtag, "")
+        if len(iso) >= 10 and name:
+            wort = _termin_sprechbar(termine_eins[0])
+            if _weekday_of(iso[:10]) == wtag:
+                return {"text": f"Ja, Ihr Termin ist am {name} — {wort}. Passt der so?"}
+            return {"text": (
+                f"Nein, am {name} haben Sie keinen Termin. Ihr Termin ist {wort}. "
+                f"Passt der so, oder möchten Sie ihn verschieben oder absagen?"
+            )}
     aus = _nachfrage_zeitraum()
     if aus is not None:
         return aus
+    # 3a: eine unklare Antwort fuehrt NICHT an Fortsetzungsanker/Modell — die
+    # Folgefrage wird (umformuliert vom Wiederholungs-Waechter) wiederholt. Nur
+    # nach mehreren unklaren Antworten (Deckel) uebernimmt der normale Weg.
+    wdh = int(sit.get("verwTerminOkWdh") or 0) + 1
+    if wdh <= _TERMIN_OK_WDH_MAX:
+        sit["verwTerminOkWdh"] = wdh
+        return {"text": "Möchten Sie den Termin so lassen, verschieben oder absagen?"}
+    sit.pop("verwTerminOkWdh", None)
     # Neues Anliegen/Zwischenfrage: Hirn bzw. Modell uebernimmt.
     s["frage"] = ""
     return None
@@ -2736,7 +2919,8 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
     quelle = _s(info.get("source"))
     w = sit.get("verwHinweis") or {}
 
-    belegt = quelle in {"patientId", "telefon", "nameExact", "name60"}
+    belegt = quelle in {"patientId", "telefon", "nameExact", "name60",
+                        "zwei_merkmale"}
     if s["modus"] == "auskunft" and kandidaten and belegt:
         patienten = {
             _s(a.get("patientId")) or _name_norm(
@@ -2775,7 +2959,7 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
         # Mehrere Termine derselben belegten Person duerfen als Termine
         # vorgelesen werden; fremde Patientennamen werden nie aufgezählt.
         if len(patienten) == 1 and quelle in {
-            "patientId", "telefon", "nameExact", "name60",
+            "patientId", "telefon", "nameExact", "name60", "zwei_merkmale",
         }:
             sit["gefunden"] = kandidaten
             sit["gefundenKey"] = f"detail|{_detail_tag(sit)}|{quelle}"
@@ -3438,6 +3622,11 @@ def sicherer_fortsetzungsanker(sit: dict) -> dict | None:
     if frage == "anrufer_check" and gehirn.anrufer_bekannt(sit):
         return {"text": gehirn.anrufer_check_frage(sit)}
     if frage in {"name", "nachname", "buchstabieren"}:
+        # 3b (Thaler dbc5e2a8): ist der Termin bereits gefunden und die Akte
+        # gebunden, wird NIE wieder nach der Schreibweise gefragt — stattdessen
+        # den gefundenen Termin erneut ansagen.
+        if _schreibweise_gesperrt(sit):
+            return _ansagen(sit)
         was = ("Damit ich den richtigen Termin absage:"
                if s["modus"] == "absagen"
                else "Damit ich den richtigen Termin verschiebe:")
@@ -3692,6 +3881,28 @@ def zug(sit: dict, gesagt: str, neu: set[str], melde: Melde = None) -> dict | No
 
     # 3) Neuer Zeitpunkt beim Verschieben
     if s["phase"] == "verschieb_angebot" and sit.get("offered"):
+        # 3d (Anruf b6c73304): „kein Vormittag“ auf das Verschiebe-Angebot ist
+        # eine AUSSCHLUSS-Präferenz, kein Vormittagswunsch. Über
+        # slot_praeferenz_aenderung lesen (wie beim Buchen), als harte Grenze
+        # in den Wunsch hängen und neu suchen — nie durch parse_slot_wish als
+        # Vormittag missdeutet. Nur bei echter Ablehnung/Tageszeit-Korrektur
+        # (positive Auswahl bleibt dem Slot-Wähler unten).
+        tenant = sit.get("tenant") if isinstance(sit.get("tenant"), dict) else {}
+        if tenant.get("slotPraeferenzenFesthalten") is not False:
+            offered_isos = [_s(o.get("iso")) for o in sit.get("offered") or [] if _s(o.get("iso"))]
+            aenderung = slot_praeferenz_aenderung(t, offered_isos=offered_isos)
+            # Nur INHALTLICHE Ausschlüsse (Tageszeit/Wochentag/Datum/Verbund)
+            # fangen — NICHT rejectAll/excludeIsos: ein bloßes „Nein.“ bleibt
+            # auf dem bewährten Blind-Zähler-Weg weiter unten.
+            neg_keys = ("excludeWeekdays", "excludeHourRanges", "excludeHours",
+                        "excludeDates", "excludeSpans")
+            if aenderung and not _s(aenderung.get("waehle")) and any(
+                    aenderung.get(k) for k in neg_keys):
+                s["wunsch"] = wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung)
+                sit["verschiebAblehnungBlind"] = 0
+                spur.merken(sit, "verschieb-slot-praeferenz",
+                            ";".join(k for k in neg_keys if aenderung.get(k)))
+                return _verschieb_angebot(sit, melde)
         if fragt_nach_frueherem_slot(t):
             sit["verschiebAblehnungBlind"] = 0
             return {"text": fruehester_slot_antwort(s.get("wunsch"))}

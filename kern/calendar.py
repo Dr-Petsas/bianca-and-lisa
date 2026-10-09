@@ -17,6 +17,8 @@ import httpx
 
 from kern.config import CF_BASE, PHONE_CALL_TOKEN, WRITE_LIVE
 from kern import notes, patients
+from kern import identitaet_merkmale as _im
+from kern import phonetik as _phonetik
 from kern.slots import (
     FENSTER_TAGE, REGIE_ANGEBOT, parse_slot_wish, pick_slots, spoken_offer,
     spoken_slot, start_iso, such_horizont_tage,
@@ -2168,6 +2170,7 @@ def _patient_appointments_fallback(
     primary_dispatch: dict | None,
     patient_id: str = "",
     phone: str = "",
+    birth_date: str = "",
     min_similarity: float = 1.0,
 ) -> dict[str, Any] | None:
     """False-404-Rettung: Kartei-ID suchen, dann den nächsten Termin laden.
@@ -2197,21 +2200,28 @@ def _patient_appointments_fallback(
     tel = tel.removeprefix("00").removeprefix("49").lstrip("0")
     match_source = "exact"
     kandidaten: list[dict] = []
+    # W-ZWEI-MERKMALE: eine gebundene Akten-ID/Rufnummer ohne Treffer leert
+    # NICHT mehr sofort (alte harte Grenze). Stattdessen sucht der Namensweg
+    # weiter und übernimmt eine FREMDE Akte nur, wenn sie über zwei
+    # unabhängige Merkmale (Telefon + starker Name bzw. Geburtsdatum)
+    # eindeutig belegt ist. Notaus ``ZWEI_MERKMALE=0`` = alte Grenze.
+    gebunden = ""
     if pid:
         kandidaten = [p for p in roh if _s(p.get("id")) == pid]
-        if not kandidaten:
-            # Eine bestätigte Akten-ID ist stärker als jeder ähnlich klingende
-            # Name und auch stärker als eine möglicherweise fremde
-            # Kontakt-Rufnummer. Nie auf eine andere Akte springen.
+        if kandidaten:
+            match_source = "patientId"
+        elif not _im.aktiv():
             return None
-        match_source = "patientId"
+        else:
+            gebunden = "patientId"
     elif tel:
         kandidaten = [p for p in roh if _patient_phone(p) == tel]
-        if not kandidaten:
-            # Die bestätigte Patienten-Nummer ist ebenfalls eine harte
-            # Bindung; ein ähnlich klingender Name darf sie nicht ersetzen.
+        if kandidaten:
+            match_source = "telefon"
+        elif not _im.aktiv():
             return None
-        match_source = "telefon"
+        else:
+            gebunden = "telefon"
     if not kandidaten and min_similarity < 1.0:
         bewertet = sorted(
             ((_patient_name_score(query_first, last, p), p) for p in roh),
@@ -2241,6 +2251,84 @@ def _patient_appointments_fallback(
             and (not query_first
                  or _name_norm(p.get("firstName")) == _name_norm(query_first))
         ]
+    # W-ZWEI-MERKMALE 2c: Kölner Phonetik (wie 006a6323c, inkl. Stamm-
+    # Nachsuche) und vertauschte Vor-/Nachnamen — nur wenn der Namensweg sonst
+    # leer bliebe. Gated über ZWEI_MERKMALE (Notaus = alter Weg ohne Phonetik).
+    if not kandidaten and _im.aktiv():
+        klang = _phonetik.waehlen(roh, last, query_first)
+        if len(klang) == 1:
+            kandidaten = klang
+            match_source = "phonetik"
+        elif 1 < len(klang) <= 8 and not gebunden:
+            return _mit_dispatch({
+                "ok": True, "mehrdeutig": True, "patient": {},
+                "appointments": [], "vornameVerworfen": vorname_verworfen,
+                "fallbackUsed": True, "phonetic": True,
+            }, search_dispatch)
+        elif len(_s(last)) >= 5:
+            stamm = _s(last)[:4]
+            status2, data2, dispatch2 = _cf_call("masSearchPatients", {
+                "clientId": _s(tenant.get("clientId")),
+                "locationId": _s(tenant.get("locationId")),
+                "query": stamm,
+            })
+            if status2 == 200 and isinstance(data2, dict):
+                roh2 = [p for p in (data2.get("patients") or [])
+                        if isinstance(p, dict) and _s(p.get("id"))]
+                klang = _phonetik.waehlen(roh2, last, query_first)
+                if isinstance(dispatch2, dict):
+                    search_dispatch = dispatch2
+                if len(klang) == 1:
+                    kandidaten = klang
+                    match_source = "phonetik"
+                elif 1 < len(klang) <= 8 and not gebunden:
+                    return _mit_dispatch({
+                        "ok": True, "mehrdeutig": True, "patient": {},
+                        "appointments": [], "vornameVerworfen": vorname_verworfen,
+                        "fallbackUsed": True, "phonetic": True,
+                    }, search_dispatch)
+        if not kandidaten and query_first:
+            # Vor- und Nachname vertauscht (zweiter masSearchPatients-Aufruf).
+            getauscht = f"{last} {query_first}".strip()
+            if _name_norm(getauscht) != _name_norm(query):
+                status3, data3, dispatch3 = _cf_call("masSearchPatients", {
+                    "clientId": _s(tenant.get("clientId")),
+                    "locationId": _s(tenant.get("locationId")),
+                    "query": getauscht,
+                })
+                if status3 == 200 and isinstance(data3, dict):
+                    roh3 = [p for p in (data3.get("patients") or [])
+                            if isinstance(p, dict) and _s(p.get("id"))]
+                    vt = [
+                        p for p in roh3
+                        if _name_norm(p.get("firstName")) == _name_norm(last)
+                        and _name_norm(p.get("lastName")) == _name_norm(query_first)
+                    ]
+                    if isinstance(dispatch3, dict):
+                        search_dispatch = dispatch3
+                    if len(vt) == 1:
+                        kandidaten = vt
+                        match_source = "vertauscht"
+    if gebunden and kandidaten:
+        # Fremde Akte(n) bei gebundener ID/Rufnummer: nur mit ZWEI
+        # unabhängigen Merkmalen übernehmen, sonst nie auf eine andere Akte
+        # springen (Rückfall auf die alte harte Grenze).
+        def _reicht_fremd(p: dict) -> bool:
+            m: set[str] = set()
+            if tel and _patient_phone(p) == tel:
+                m.add("telefon")
+            if _im.starker_name(first, last, p.get("firstName"), p.get("lastName")):
+                m.add("name")
+            bd = _s(birth_date)[:10]
+            pb = _s(p.get("birthDate"))[:10]
+            if bd and pb and bd == pb:
+                m.add("geburtsdatum")
+            return _im.reicht(m)
+
+        kandidaten = [p for p in kandidaten
+                      if _s(p.get("id")) != pid and _reicht_fremd(p)]
+        if not kandidaten:
+            return None
     if len(kandidaten) > 1:
         namen = {
             (
@@ -3352,21 +3440,36 @@ def move_appointment(tenant: dict, ctx: dict, *, slot_iso: str = "", date: str =
             regie="Kein Erfolgssatz ohne exakte Rücklese der Termin-ID.",
         )
     if status == 400:
-        # Beim Verschieben muessen Alternativen im GLEICHEN Kalender und mit
-        # dem GLEICHEN Besuchsgrund ab dem gewuenschten Tag gesucht werden.
-        # Ohne start_date sprang der Rueckfall live (Thaler 09.09.2026) von
-        # Oktober zurueck auf September; ohne Motiv im ctx wurden ausserdem
-        # unpassende Kontroll-Slots angeboten.
-        alt = _frische_konflikt_slots(tenant, ctx, iso)
+        msg = _s(data.get("message")) if isinstance(data, dict) else ""
+        # Stufe 1e: NUR „The slot is not available." ist ein echter Slot-
+        # Konflikt und bleibt slotTaken (dann Alternativen anbieten). Jede
+        # andere 400 — insbesondere „cannot be postponed" (Termin nicht
+        # bestätigt / bereits bearbeitet) — ist KEIN freier/belegter Platz:
+        # kein Alternativ-Kreisel, sondern ehrlich an die Praxis notieren.
+        if "slot is not available" in msg.lower():
+            # Beim Verschieben muessen Alternativen im GLEICHEN Kalender und mit
+            # dem GLEICHEN Besuchsgrund ab dem gewuenschten Tag gesucht werden.
+            # Ohne start_date sprang der Rueckfall live (Thaler 09.09.2026) von
+            # Oktober zurueck auf September; ohne Motiv im ctx wurden ausserdem
+            # unpassende Kontroll-Slots angeboten.
+            alt = _frische_konflikt_slots(tenant, ctx, iso)
+            return _mit_dispatch({
+                "ok": False,
+                "slotTaken": True,
+                "writeAttempted": True,
+                "blockedIso": iso,
+                "slotIso": iso,
+                "spoken": "Dieser Platz ist nicht mehr frei. " + (alt.get("spoken") or ""),
+                "slots": alt.get("slots") or [],
+                "alternativeDispatch": alt.get("dispatch"),
+            }, dispatch)
         return _mit_dispatch({
             "ok": False,
-            "slotTaken": True,
+            "terminGesperrt": True,
             "writeAttempted": True,
-            "blockedIso": iso,
+            "appointmentId": aid,
             "slotIso": iso,
-            "spoken": "Dieser Platz ist nicht mehr frei. " + (alt.get("spoken") or ""),
-            "slots": alt.get("slots") or [],
-            "alternativeDispatch": alt.get("dispatch"),
+            "message": msg,
         }, dispatch)
     return _mit_dispatch({"ok": False, "spoken": "Verschieben hat gerade nicht geklappt."}, dispatch)
 

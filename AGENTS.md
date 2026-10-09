@@ -4051,7 +4051,86 @@ ersten Treffer.
 - Tests: `tests/test_mehrfach_absage.py` (Erfolg, Teilfehler, klares Nein,
  Einzelwahl bleibt Einzelweg).
 
-## Verwaltung sucht den Termin, nicht nur den Namen (W-VERWALTUNG-TERMIN-ZUERST 16.09.2026 — nicht rückbauen)
+## Verwaltungs-Schleifen gestopft (W-VERW-STUFE3 08.10.2026 — nicht rückbauen)
+
+Fünf Schleifen aus den Verwaltungs-Anrufen vom 08.10.2026. Jede sitzt an genau
+einer Stelle, jede hat eine Gegenprobe. Tests: `tests/test_stufe3_verwaltung.py`
+plus die bestehenden Suiten (test_anruf_9dd61a59, test_bestandsfrage,
+test_bianca_bausteine, test_blessing_namen).
+
+- **3a — termin_ok ohne Vollwiederholung** (`verwalten._termin_ok_zug`, Anruf
+  5e30be95): eine UNKLARE Antwort fällt nicht mehr an Fortsetzungsanker/Modell,
+  sondern wiederholt (umformuliert vom Wiederholungs-Wächter) die Folgefrage
+  „so lassen, verschieben oder absagen?“ — `frage=termin_ok` bleibt stehen,
+  Deckel `_TERMIN_OK_WDH_MAX` (2), danach übernimmt der normale Weg. Ein
+  BLOSSER Wochentag („Montag?“, `_nur_wochentag`) gibt einen kurzen Filtersatz
+  gegen den gefundenen Termin statt einer neuen Ansage. Die Abschiedserkennung
+  (`_KLAR_ABSCHIED_RE`) ist breiter (bis dann/denn, machen Sie's gut, das war
+  alles, schönen Feierabend).
+- **3b — Verhörer-Stamm + Buchstabier-Sperre** (`verwalten`, Thaler dbc5e2a8):
+  ein „Ja“ MIT Verhörer-Stamm (`_VERHOERER_AENDERN_RE`: „verscheib…“,
+  „verschie…“) gilt nie als „passt“, sondern hakt nach („verschieben oder
+  absagen?“). Ist die Akte gebunden UND ein Termin gefunden
+  (`_schreibweise_gesperrt`: verwKandidat/verwaltenTermin oder erkannter
+  Anrufer + Termin), fragt Bianca NIE wieder nach der Schreibweise — weder im
+  Fortsetzungsanker noch in `_korrektur_frage` (dort auch kein Qwen-Vorschlag);
+  stattdessen wird der gefundene Termin erneut angesagt.
+- **3c — „ob … Termin … besteht/steht/gilt“** (`intent._BESTANDSFRAGE_RE`,
+  `gehirn._AUSKUNFT_RE`, Anruf 90db262e): die Frage nach der Gültigkeit eines
+  BESTEHENDEN Termins ist Bestandsauskunft (WISSEN × VORGANG). Wortgrenzen;
+  Terminwünsche („ob ich einen Termin bekommen kann“) tragen kein
+  besteht/steht/gilt und bleiben Neubuchung.
+- **3d — Tageszeit-Ausschluss beim Verschieben** (`verwalten.zug`, Phase
+  `verschieb_angebot`, Anruf b6c73304): „kein Vormittag“ läuft über
+  `slot_praeferenz_aenderung` (wie beim Buchen), hängt die Ausschluss-Grenze in
+  den Wunsch und sucht neu — nie mehr von `parse_slot_wish` als
+  Vormittags-WUNSCH gelesen. Nur inhaltliche Ausschlüsse (Tageszeit/Wochentag/
+  Datum/Verbund); ein blosses „Nein.“ bleibt auf dem bewährten Blind-Zähler.
+- **3e — Buchstabiertafel** (`bianca/buchstaben`): „Kaiser“→k und
+  „Südpol/Suedpol“→s ergänzt; ein führender Laut („Mm“) wird nicht mehr als
+  Kettenanfang verschluckt, wenn ein einzelner Buchstabe folgt — „M-A-R-U-D-A“
+  wird „Maruda“, nicht „Aruda“.
+
+## Zwei Merkmale statt harter Grenze (W-ZWEI-MERKMALE 01.10.2026 — nicht rückbauen; ersetzt W-VERWALTUNG-TERMIN-ZUERST)
+
+Chef: Absagen/Verschieben/Auskunft dürfen nicht an einer perfekten Namens-STT
+scheitern — aber genauso wenig darf ein verhörter Name auf eine fremde Akte
+springen. Die alte harte Grenze (W-VERWALTUNG-TERMIN-ZUERST: eine bestätigte
+`patientId`/Rufnummer, die nicht zum Snapshot passt, leerte sofort alles) war
+sicher, aber zu starr: ein über die Rufnummer erkannter Anrufer mit leicht
+verhörtem Namen fand seinen eigenen Termin nicht. Neue Regel: lesen/schreiben
+nur, wenn die Ziel-Akte ZWEI unabhängige Merkmale trägt.
+
+- **Die Merkmale** (`kern/identitaet_merkmale.py`, pur, netzfrei): bestätigte
+  Rufnummer (`telefon`), Geburtsdatum (`geburtsdatum`), starker Name (`name`:
+  voller Name ≥ 0,85 ODER gleicher Nachname + Vorname ≥ 0,80 — ein Nachname
+  allein ist NIE stark) und vom Anrufer genannter Tag/Uhrzeit (`zeit`, gegen
+  `verwHinweis`). `reicht()` verlangt mindestens ZWEI. Geburtsdatum ist NUR
+  Rückfall (wird nur gefragt, wenn der Kandidat eins trägt — nie bei Rüther).
+- **Weiche Grenze** (`verwalten._detail_kandidaten`): passt die gebundene ID/
+  Rufnummer nicht zum Tageskandidaten, wird die Liste nicht mehr hart geleert.
+  Ein Kandidat mit starkem Namen bleibt; zusammen mit dem genannten Tag sind
+  das zwei Merkmale (`quelle=zwei_merkmale`, in `_detail_dispatch` wie
+  `nameExact`/`patientId` als belegt behandelt). Nur EIN eindeutiger Patient
+  darf so aufgelöst werden; gelesen/vorgelesen wird nur, was der Anrufer
+  selbst nannte (Tag/Uhrzeit/Behandler).
+- **Kandidatensuche** (`kern/calendar._patient_appointments_fallback`):
+  1. gleiche Rufnummer → 2. gleicher Nachname → 3. Kölner Phonetik
+  (`kern/phonetik.waehlen`, inkl. 4-Zeichen-Stamm-Nachsuche — wieder verdrahtet
+  wie Commit 006a6323c, ging beim Merge verloren) → 4. vertauschter Vor-/
+  Nachname (zweiter `masSearchPatients`-Aufruf). Eine FREMDE Akte wird bei
+  gebundener ID/Rufnummer nur übernommen, wenn `reicht()` zutrifft — sonst nie
+  springen (Rückfall auf die harte Grenze).
+- **Notaus** `ZWEI_MERKMALE=0`: stellt die alte harte Grenze (W-VERWALTUNG-
+  TERMIN-ZUERST) byte-identisch wieder her (keine Phonetik, keine
+  Vertauschung, sofortiges Leeren bei ID-/Rufnummer-Widerspruch).
+- Tests: `tests/test_identitaet_merkmale.py` (Merkmale/`reicht`),
+  `tests/test_verwaltung_termin_zuerst.py` (Phonetik-Verdrahtung, Vertauschung,
+  Übernahme erst mit zwei Merkmalen, Gegenprobe ein Merkmal = nie springen).
+
+Die untenstehenden W-VERWALTUNG-TERMIN-ZUERST-Regeln (16.09.2026) gelten
+unverändert weiter — nur die harte ID-/Rufnummer-Grenze ist durch die
+Zwei-Merkmale-Regel ersetzt:
 
 Chef nach den Blessing-Feldgesprächen: Absagen und Verschieben dürfen nicht
 mehr von einer nahezu perfekten Namens-STT abhängen. Patienten nennen häufig
@@ -4072,8 +4151,9 @@ Datum gefragt werden.
   Identitätszug, niemals die konkrete Terminbestätigung.
   Kontakt-Rufnummern bei Drittterminen und noch nicht rückbestätigte Nummern
   werden nie als Patientenbeweis an die Terminsuche geschickt.
-  Bestätigte Akten-ID oder Rufnummer sind harte Grenzen: eine namensgleiche
-  andere Akte darf sie nie ersetzen. Erst ein uneingeschränktes Ja gibt die
+  Bestätigte Akten-ID oder Rufnummer sind starke Grenzen: eine namensgleiche
+  andere Akte darf sie nur ersetzen, wenn diese Akte ZWEI unabhängige Merkmale
+  trägt (W-ZWEI-MERKMALE), sonst nie. Erst ein uneingeschränktes Ja gibt die
   konkrete Termin-ID zum Absagen oder Verschieben frei; „Ja, aber nicht …“
   schreibt nichts. Ohne Identitätsbeweis werden nie fremde Patientennamen aus
   einer Tagesliste vorgelesen.

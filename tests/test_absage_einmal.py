@@ -70,7 +70,10 @@ def test_unbestaetigter_termin_ehrlich_statt_kuemmert_sich(cf):
     sit = _sit()
     fl = verwalten._absagen(sit, None)
     assert cf.aufrufe == ["apt-9fc1"]
-    assert "noch nicht bestätigt" in fl["text"]
+    # Stufe 1e: neutral — nie behaupten, der Termin sei „noch nicht bestätigt"
+    # (das wäre eine unbelegte Zustandsaussage), sondern ehrlich notieren.
+    assert "nicht selbst absagen" in fl["text"]
+    assert "für die Praxis notiert" in fl["text"]
     assert "kümmert sich" not in fl["text"]
     assert fl["text"].endswith("Kann ich sonst noch etwas für Sie tun?")
     assert gehirn.sammler(sit)["frage"] == "sonst_noch"

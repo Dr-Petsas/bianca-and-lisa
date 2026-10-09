@@ -631,7 +631,13 @@ _BESTANDSFRAGE_RE = re.compile(
     r"[^?.!]{0,20}?\b(?:heute|morgen|übermorgen|uebermorgen)\b"
     r"(?![^?.!]{0,20}\bzu\s+(?:machen|vereinbaren|buchen|ausmachen)\b)|"
     r"\bich\s+hab(?:e|')\s+(?:heute|morgen|übermorgen|uebermorgen)\s+"
-    r"(?:einen|den|meinen|'?nen)\s+termine?\b",
+    r"(?:einen|den|meinen|'?nen)\s+termine?\b|"
+    # 3c (Anruf 90db262e): „ob (mein) (heutiger) Termin (noch) besteht/steht/
+    # gilt“ — die Frage, ob ein BESTEHENDER Termin noch gültig ist, ist eine
+    # Bestandsauskunft. Wortgrenzen; Terminwünsche („ob ich einen Termin
+    # bekommen kann“) tragen kein besteht/steht/gilt und bleiben Neubuchung.
+    r"\bob\s+(?:\w+\s+){0,3}?(?:heutige[rn]?\s+|morgige[rn]?\s+)?termine?\b"
+    r"[^?.!]{0,30}?(?:noch\s+)?(?:besteht|steht|gilt|gültig|gueltig)\b",
     re.I,
 )
 

@@ -1292,21 +1292,180 @@ def test_wiederholter_name_wechselt_auf_patientensuche_statt_schleife(
     assert s["nachname"] == "Müller"
 
 
-def test_patientid_springt_im_namensfallback_nie_auf_andere_akte(monkeypatch):
+def test_namensfallback_uebernimmt_fremde_akte_erst_mit_zwei_merkmalen(monkeypatch):
+    # W-ZWEI-MERKMALE: eine gebundene (aber nicht passende) patientId leert die
+    # Namensliste nicht mehr hart. Eine fremde Akte wird übernommen, wenn sie
+    # ZWEI unabhängige Merkmale trägt — hier bestätigte Rufnummer + starker Name.
     rufe: list[str] = []
 
     def cf(route, _body, timeout=None):
         rufe.append(route)
-        assert route == "masSearchPatients"
-        return 200, {
-            "status": "success",
-            "patients": [{
-                "id": "andere-akte",
-                "firstName": "Elisabeth",
-                "lastName": "Päsler",
-                "mobilePhoneNumber": "+491701234567",
-            }],
-        }, {"route": route, "httpStatus": 200}
+        if route == "masSearchPatients":
+            return 200, {
+                "status": "success",
+                "patients": [{
+                    "id": "andere-akte",
+                    "firstName": "Elisabeth",
+                    "lastName": "Päsler",
+                    "mobilePhoneNumber": "+491701234567",
+                }],
+            }, {"route": route, "httpStatus": 200}
+        if route == "masPatientLastDoctor":
+            return 200, {
+                "status": "success",
+                "nextAppointment": {
+                    "appointmentId": "apt-elisabeth",
+                    "startIso": "2026-10-21T11:00:00+02:00",
+                    "calendarId": "cal",
+                    "doctorName": "Dr. Blessing",
+                    "visitMotiveName": "Kontrolle",
+                    "patientStatus": "patient",
+                    "canceled": False,
+                },
+            }, {"route": route, "httpStatus": 200}
+        raise AssertionError(f"unerwartete Route {route}")
+
+    monkeypatch.setattr(calendar, "_cf_call", cf)
+    result = calendar._patient_appointments_fallback(
+        _sit("blessing")["tenant"],
+        first="Elisabeth",
+        last="Päsla",
+        vorname_verworfen=False,
+        primary_dispatch=None,
+        patient_id="bestaetigte-akte",
+        phone="+491701234567",
+        min_similarity=0.60,
+    )
+    assert result and result.get("ok") is True
+    assert result["patient"]["id"] == "andere-akte"
+    assert [t["id"] for t in result["appointments"]] == ["apt-elisabeth"]
+    assert rufe == ["masSearchPatients", "masPatientLastDoctor"]
+
+
+def test_phonetik_ist_in_calendar_verdrahtet():
+    # W-ZWEI-MERKMALE 2c: die Kölner Phonetik muss im Namensfallback wirklich
+    # eingehängt sein (ging beim Merge aus 006a6323c verloren).
+    from kern import phonetik as _ph
+    assert calendar._phonetik is _ph
+    assert callable(calendar._phonetik.waehlen)
+
+
+def test_namensfallback_phonetik_findet_aehnlich_klingende_akte(monkeypatch):
+    # Kein Treffer über Name60/Exakt, aber gleicher Kölner Klang -> Phonetik
+    # löst die Akte auf (Live: verhörte Nachnamen-Schreibweisen).
+    from kern import phonetik as _ph
+    if len(_ph.waehlen([{"id": "x", "lastName": "Maier"}], "Mayr")) != 1:
+        import pytest
+        pytest.skip("Kölner Phonetik koppelt Maier/Mayr auf diesem Stand nicht")
+    rufe: list[str] = []
+
+    def cf(route, _body, timeout=None):
+        rufe.append(route)
+        if route == "masSearchPatients":
+            return 200, {
+                "status": "success",
+                "patients": [{
+                    "id": "klang-akte",
+                    "firstName": "Anna",
+                    "lastName": "Maier",
+                }],
+            }, {"route": route, "httpStatus": 200}
+        if route == "masPatientLastDoctor":
+            return 200, {
+                "status": "success",
+                "nextAppointment": {
+                    "appointmentId": "apt-klang",
+                    "startIso": "2026-10-21T11:00:00+02:00",
+                    "calendarId": "cal",
+                    "doctorName": "Dr. Blessing",
+                    "visitMotiveName": "Kontrolle",
+                    "patientStatus": "patient",
+                    "canceled": False,
+                },
+            }, {"route": route, "httpStatus": 200}
+        raise AssertionError(f"unerwartete Route {route}")
+
+    monkeypatch.setattr(calendar, "_cf_call", cf)
+    result = calendar._patient_appointments_fallback(
+        _sit("blessing")["tenant"],
+        first="",
+        last="Mayr",
+        vorname_verworfen=True,
+        primary_dispatch=None,
+        min_similarity=1.0,
+    )
+    assert result and result.get("ok") is True
+    assert result["patient"]["id"] == "klang-akte"
+    assert [t["id"] for t in result["appointments"]] == ["apt-klang"]
+
+
+def test_namensfallback_erkennt_vertauschten_vor_und_nachnamen(monkeypatch):
+    # Vor-/Nachname vertauscht -> zweiter masSearchPatients-Aufruf findet die
+    # Akte (Live: "Berger Peter" statt "Peter Berger").
+    rufe: list[dict] = []
+
+    def cf(route, body, timeout=None):
+        rufe.append({"route": route, "query": body.get("query")})
+        if route == "masSearchPatients":
+            if _norm := (body.get("query") or "").strip():
+                return 200, {
+                    "status": "success",
+                    "patients": [{
+                        "id": "peter-berger",
+                        "firstName": "Peter",
+                        "lastName": "Berger",
+                    }],
+                }, {"route": route, "httpStatus": 200}
+        if route == "masPatientLastDoctor":
+            return 200, {
+                "status": "success",
+                "nextAppointment": {
+                    "appointmentId": "apt-pb",
+                    "startIso": "2026-10-21T11:00:00+02:00",
+                    "calendarId": "cal",
+                    "doctorName": "Dr. Blessing",
+                    "visitMotiveName": "Kontrolle",
+                    "patientStatus": "patient",
+                    "canceled": False,
+                },
+            }, {"route": route, "httpStatus": 200}
+        raise AssertionError(f"unerwartete Route {route}")
+
+    monkeypatch.setattr(calendar, "_cf_call", cf)
+    result = calendar._patient_appointments_fallback(
+        _sit("blessing")["tenant"],
+        first="Berger",
+        last="Peter",
+        vorname_verworfen=False,
+        primary_dispatch=None,
+        min_similarity=0.60,
+    )
+    assert result and result.get("ok") is True
+    assert result["patient"]["id"] == "peter-berger"
+    assert result.get("matchSource") == "vertauscht"
+    queries = [r["query"] for r in rufe if r["route"] == "masSearchPatients"]
+    assert queries[0] == "Berger Peter"
+    assert "Peter Berger" in queries  # vertauschter zweiter Aufruf
+
+
+def test_namensfallback_springt_nie_bei_nur_einem_merkmal(monkeypatch):
+    # Gegenprobe: dieselbe fremde Akte, aber ohne passende Rufnummer. Dann bleibt
+    # nur der Name als einziges Merkmal — zu wenig, nie auf die Akte springen.
+    rufe: list[str] = []
+
+    def cf(route, _body, timeout=None):
+        rufe.append(route)
+        if route == "masSearchPatients":
+            return 200, {
+                "status": "success",
+                "patients": [{
+                    "id": "andere-akte",
+                    "firstName": "Elisabeth",
+                    "lastName": "Päsler",
+                    "mobilePhoneNumber": "+491709999999",
+                }],
+            }, {"route": route, "httpStatus": 200}
+        raise AssertionError(f"unerwartete Route {route}")
 
     monkeypatch.setattr(calendar, "_cf_call", cf)
     result = calendar._patient_appointments_fallback(

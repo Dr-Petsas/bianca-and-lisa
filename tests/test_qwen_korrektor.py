@@ -582,3 +582,47 @@ def test_vorab_ohr_der_docks_fragt_dieselbe_sperre(monkeypatch):
     datei = UploadFile(file=io.BytesIO(b"x" * 64), filename="vorab.webm")
     asyncio.run(bianca_server.api_hoeren(sessionId="s1", audio=datei))
     assert gesehen[1]["sperre"] == ""
+
+
+# -------------------------------------------- Stufe 1d: namens_vorschlag
+
+def _vorschlag_sit(*spaet, vorname="") -> dict:
+    s = _sit()
+    s["sammler"] = {"frage": "nachname", "vorname": vorname}
+    s["qwenSpaet"] = list(spaet)
+    return s
+
+
+def test_namens_vorschlag_nur_aus_nachnamenszug():
+    """Stufe 1d (Verläufe b8231c34, 63b13139, 94da641c, 7ee73965, 95a6e6ec,
+    pseudonymisiert): der Qwen-Vorschlag kommt NUR aus echten Nachnamens-Zügen,
+    nie aus einem Vornamen-Zug, nie aus einem Ja/Nein-Wort, nie gleich dem
+    schon bekannten Vornamen."""
+    # b8231c34: Parakeet verhörte den Nachnamen, Qwen hatte ihn richtig.
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:nachname",
+                          "parakeet": "Merkel bak.", "qwen": "Merkelbach."})
+    assert qk.namens_vorschlag(sit) == "Merkelbach"
+    # 63b13139: Qwen-Nachname aus einem buchstabierten Zug.
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:buchstabieren",
+                          "parakeet": "Wie bitte?", "qwen": "Stavros."})
+    assert qk.namens_vorschlag(sit) == "Stavros"
+    # 94da641c: der Verhörer kam aus einem VORNAMEN-Zug — nie als Nachname.
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:vorname",
+                          "parakeet": "Andre.", "qwen": "Andrea."})
+    assert qk.namens_vorschlag(sit) == ""
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:vorname_check",
+                          "parakeet": "Ja.", "qwen": "Andrea."})
+    assert qk.namens_vorschlag(sit) == ""
+    # 7ee73965: Qwen las ein Antwortwort ("Richtig.") — kein Nachname.
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:nachname",
+                          "parakeet": "Richtig.", "qwen": "Richtig."})
+    assert qk.namens_vorschlag(sit) == ""
+    # 95a6e6ec: Vorschlag gleich dem schon bekannten Vornamen -> verworfen.
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:nachname",
+                          "parakeet": "Thomas.", "qwen": "Thomas."},
+                         vorname="Thomas")
+    assert qk.namens_vorschlag(sit) == ""
+    # ... und gleich dem schon vorgelesenen aktuellen Namen -> verworfen.
+    sit = _vorschlag_sit({"gesperrt": "namensfrage:nachname",
+                          "parakeet": "Berg.", "qwen": "Berger."})
+    assert qk.namens_vorschlag(sit, aktuell="Berger") == ""
