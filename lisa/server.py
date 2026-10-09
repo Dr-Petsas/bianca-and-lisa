@@ -13,9 +13,9 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from kern import agentprofil, gedaechtnis, halbsatz, mitschnitt, sprech, unterbrechung, webpfad
-from kern.dienst import Dienst, ndjson
+from kern.dienst import Dienst, ndjson, zeile
 from lisa import agent, anliegen, bewerbung, calendar, filler, kampagnen_store, llm, patients, remote, session, stt, tenants, tts, vorbereitung
-from lisa import outbound
+from lisa import dock_anruf, outbound
 from lisa.config import BIANCA_WEB_DIR, DEFAULT_TENANT, DEV_PHONE, LLM_BASE, LLM_MODEL, PORT, WEB_DIR, WRITE_LIVE
 from lisa.greeting import begruessung
 
@@ -74,6 +74,13 @@ class StartIn(BaseModel):
     patient: dict | None = None
     # Lisa-Outbound (Bridge mode=outbound): Pending-UUID, kein Dock-Body.
     outboundUuid: str = ""
+
+
+class EchtIn(BaseModel):
+    tenant: str = ""
+    auftrag: str = ""
+    patient: dict | None = None
+    nummer: str = ""
 
 
 class OutboundDialIn(BaseModel):
@@ -299,6 +306,15 @@ def _start_outbound(uid: str):
     meta = outbound.pending_holen(uid)
     if not meta:
         raise HTTPException(404, "outbound pending unbekannt oder verbraucht")
+    if meta.get("dock"):
+        sit, t = _dock_sitzung(meta.get("tenant") or "", meta.get("auftrag") or "",
+                               dict(meta.get("patient") or {}))
+        sit["echtUuid"] = outbound._uuid_norm(uid)
+        dock_anruf.verbunden(uid, sit["id"])
+        return _json_antwort(
+            sit, art="start",
+            extra={"sessionId": sit["id"], "praxis": t.get("praxisName"), "outbound": True},
+        )
     tenant = outbound.tenant_von_bundle(meta)
     patient = outbound.patient_von_bundle(meta)
     auftrag = outbound.auftrag_von_bundle(meta)
@@ -341,23 +357,69 @@ def api_outbound_dial(body: OutboundDialIn, request: Request):
     return out
 
 
-@app.post("/api/start")
-def api_start(body: StartIn):
-    if (body.outboundUuid or "").strip():
-        return _start_outbound(body.outboundUuid.strip())
+@app.post("/api/anruf/echt")
+def api_anruf_echt(body: EchtIn):
+    """Dock: Lisa ruft die Nummer des gewählten Patienten wirklich an."""
     auftrag = (body.auftrag or "").strip()
     if not auftrag:
-        raise HTTPException(400, "auftrag fehlt")
-    pat = body.patient or {}
+        raise HTTPException(400, "Erst den Auftrag eintragen.")
+    pat = dict(body.patient or {})
     if not (pat.get("name") or pat.get("id") or pat.get("firstName")):
-        raise HTTPException(400, "patient fehlt")
+        raise HTTPException(400, "Erst einen Namen oder Patienten eintragen.")
+    nummer = (body.nummer or "").strip() or str(pat.get("phone") or "")
+    if not nummer:
+        raise HTTPException(400, "Erst eine Telefonnummer eintragen.")
+    try:
+        out = dock_anruf.waehlen(tenant_id=body.tenant or DEFAULT_TENANT,
+                                 auftrag=auftrag, patient=pat, nummer=nummer)
+    except dock_anruf.Besetzt as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        print(f"lisa-dock-echt fail: {e}", flush=True)
+        raise HTTPException(502, "Die Telefonanlage hat den Anruf nicht angenommen.") from e
+    print(f"lisa-dock-echt waehlt uuid={out['uuid']} tenant={body.tenant}", flush=True)
+    return out
+
+
+@app.get("/api/anruf/echt/{uid}")
+def api_anruf_echt_status(uid: str):
+    st = dock_anruf.status(uid)
+    if not st:
+        raise HTTPException(404, "Anruf unbekannt")
+    zuege = []
+    sit = session.holen(st.get("sessionId") or "") if st.get("sessionId") else None
+    for z in (sit or {}).get("zuege") or []:
+        if not isinstance(z, dict) or z.get("art") == "hangup":
+            continue
+        zuege.append({"textIn": z.get("textIn") or "", "text": z.get("text") or ""})
+    return {"ok": True, "status": st.get("status"), "sessionId": st.get("sessionId") or "",
+            "zuege": zuege}
+
+
+@app.post("/api/anruf/echt/{uid}/auflegen")
+def api_anruf_echt_auflegen(uid: str):
+    return {"ok": True, "status": dock_anruf.auflegen(uid)}
+
+
+def _abbruch_antwort(sit: dict) -> dict:
+    text = dock_anruf.ABBRUCH_SATZ
+    url, tts_s = DIENST.stimme(text)
+    session.merke_zug(sit, art="abbruch", textIn="", text=text, timings={"tts": tts_s})
+    print(f"lisa-dock-echt abbruch session={sit.get('id')}", flush=True)
+    return {"ok": True, "empty": False, "text": text, "audioUrl": url,
+            "hangup": True, "sessionId": sit.get("id") or "", "writeLive": WRITE_LIVE}
+
+
+def _dock_sitzung(tenant_id: str, auftrag: str, pat: dict):
     if not pat.get("name"):
         pat["name"] = f"{pat.get('firstName') or ''} {pat.get('lastName') or ''}".strip()
     if not pat.get("devPhone"):
         from lisa.patients import format_de_phone
         pat["devPhone"] = format_de_phone(DEV_PHONE)
         pat["devPhoneRaw"] = DEV_PHONE
-    t = dict(agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT) or {})
+    t = dict(agentprofil.fuer_tenant(tenant_id or DEFAULT_TENANT) or {})
     # Die DB-firstMessage zur DID ist Biancas Eingangs-Gruss ("Mein Name ist
     # Bianca. Was kann ich für Sie tun?") — Lisa ruft AN und stellt sich mit
     # dem Auftrag selbst vor. Outbound-Kampagnen setzen ihren Gruss eigens.
@@ -373,6 +435,20 @@ def api_start(body: StartIn):
     # Eigener Faden: der Anliegen-Satz soll fertig sein, wenn der Angerufene
     # die Identitaetsfrage bestaetigt — nicht hinter den Kalender-Umlaeufen warten.
     threading.Thread(target=anliegen.vorbereiten, args=(sit,), daemon=True).start()
+    return sit, t
+
+
+@app.post("/api/start")
+def api_start(body: StartIn):
+    if (body.outboundUuid or "").strip():
+        return _start_outbound(body.outboundUuid.strip())
+    auftrag = (body.auftrag or "").strip()
+    if not auftrag:
+        raise HTTPException(400, "auftrag fehlt")
+    pat = body.patient or {}
+    if not (pat.get("name") or pat.get("id") or pat.get("firstName")):
+        raise HTTPException(400, "patient fehlt")
+    sit, t = _dock_sitzung(body.tenant, auftrag, pat)
     return _json_antwort(sit, art="start", extra={"sessionId": sit["id"], "praxis": t.get("praxisName")})
 
 
@@ -423,6 +499,8 @@ def api_stille(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    if dock_anruf.abbruch_offen(sit):
+        return _abbruch_antwort(sit)
     # W-HALBSATZ: haengt ein gehaltenes Satz-Fragment in der Sitzung, hat der
     # Anrufer den Satz nicht fortgesetzt — dann wird ER beantwortet, kein Stups.
     rest = halbsatz.abholen(sit)
@@ -465,6 +543,8 @@ async def api_listen(sessionId: str = Form(""), text: str = Form(""), audio: Upl
     sit = session.holen(sessionId)
     if not sit:
         raise HTTPException(404, "sitzung unbekannt")
+    if dock_anruf.abbruch_offen(sit):
+        return _ndjson(iter([zeile({"type": "reply", **_abbruch_antwort(sit)})]))
     blob = await audio.read()
     mime = audio.content_type or "application/octet-stream"
     name = audio.filename or "turn.webm"
@@ -551,6 +631,7 @@ def api_hangup(body: HangupIn):
     sit = session.holen(body.sessionId)
     if not sit:
         return {"ok": True, "empty": True}
+    dock_anruf.beendet(sit)
 
     # Zweiter Schritt NACH dem Auflegen (Chef 27.08.): Kurzfassung des
     # Gespraechs erzeugen und in den Termin schreiben — der Anruf-Pfad

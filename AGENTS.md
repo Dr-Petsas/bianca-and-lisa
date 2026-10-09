@@ -4570,6 +4570,33 @@ Tests: `test_frueher_qwen_name`, `test_ja_rettung`, `test_identitaet_einmal`, `t
 `test_festnetz_rueckruf`, `test_absage_einmal`, `test_namenslink_nachpruefen`,
 `test_tages_scorer`, `test_fakten_wache`.
 
+## Lisa-Dock ruft wirklich an (W-LISA-DOCK-ECHT 09.10.2026 — nicht rückbauen)
+
+Chef: „der button anruf führt gar keinen realen anruf aus. da ist garkeine
+verbindung zum asterix“ — und: „ohne pin und wuatsch. ich suche den Patienten,
+gebe den prompt ein und lisa ruft an … entweder rufen wir einen patienten oder
+eine andere nummer an“. Der Knopf „Anruf starten“ im Lisa-Dock war nie mit dem
+Telefon verbunden, er startete nur den Browser-Test (Mikrofon). Dazu fehlte
+Lisas SSH-Key seit dem Asterisk-Umzug am 12.09. auf dem neuen Server
+(`212.132.104.205`, Kommentar `lisa-outbound-pickadoc1`, eingetragen 09.10.).
+
+- **Ablauf:** Patient suchen ODER Name + Nummer frei eintragen (Feld
+ „Telefonnummer, die Lisa anruft“ — eine Kartei-Nummer wird vorbelegt, das
+ Feld gewinnt), Auftrag eintippen, „Anruf starten“. `POST /api/anruf/echt`
+ → `lisa/dock_anruf.waehlen` → `outbound.dial` (Call-File, Zaluma-Trunk,
+ Absender = erste DID der gewählten Praxis aus `tenants/*.json`). Beim
+ Abheben baut `_start_outbound` (Meta `dock: true`) die Sitzung über
+ denselben `_dock_sitzung` wie der Browser-Test. Das Dock pollt
+ `GET /api/anruf/echt/{uuid}` und zeigt das Gespräch mit.
+- **Schutz statt PIN:** nur +49/+43/+41, keine Mehrwert-/Sondernummern
+ (`_GESPERRT`), nur EIN Dock-Anruf zugleich (409). Klingelt es 90 s ohne
+ Abheben, gilt „nicht erreicht“ und die Leitung ist wieder frei.
+- **Auflegen:** beim Klingeln wird die Vormerkung verworfen (wer danach
+ abhebt, bekommt sofort ein Auflegen); im Gespräch verabschiedet sich Lisa
+ beim nächsten Zug mit `ABBRUCH_SATZ` und legt auf.
+- „Im Browser testen“ ist der alte Mikrofon-Weg und bleibt daneben.
+- Tests: `tests/test_lisa_dock_echt.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

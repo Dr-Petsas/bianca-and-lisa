@@ -140,11 +140,11 @@ function zeigePatient(p) {
   patient = p;
   $("person").hidden = false;
   $("personName").textContent = (p.test ? "⚠ " : "") + (p.name || "—");
-  const echt = p.phoneDisplay || "";
-  const dev = p.devPhone || "0177 6004600";
+  const echt = p.phoneDisplay || p.phone || "";
   $("phones").innerHTML = echt
-    ? `<s>${echt}</s><b>${dev}</b>`
-    : `<span style="color:var(--muted)">keine Nummer in der Akte</span> → <b>${dev}</b>`;
+    ? `<b>${echt}</b>`
+    : `<span style="color:var(--muted)">keine Nummer in der Akte — oben eintragen</span>`;
+  if (echt) $("nummer").value = echt;
   liste($("past"), p.past);
   liste($("upcoming"), p.upcoming);
 }
@@ -882,6 +882,7 @@ function lisaPraxisGewechselt() {
   vorbereitung = null;
   trotzdemAnrufen = false;
   $("who").value = "";
+  $("nummer").value = "";
   $("hits").innerHTML = "";
   $("person").hidden = true;
   $("akteKarte").hidden = true;
@@ -921,6 +922,18 @@ $("suchen").onclick = async () => {
     zeigePatient(data.patients[0]);
   }
 };
+
+// Neuer Name getippt: der zuvor gewählte Patient samt Nummer gilt nicht mehr —
+// sonst ruft Lisa unter neuem Namen die alte Nummer an.
+$("who").addEventListener("input", () => {
+  if (!patient) return;
+  const alt = patient.phoneDisplay || patient.phone || "";
+  patient = null;
+  vorbereitung = null;
+  $("person").hidden = true;
+  $("hits").innerHTML = "";
+  if (alt && $("nummer").value.trim() === alt) $("nummer").value = "";
+});
 
 $("who").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); $("suchen").click(); }
@@ -968,7 +981,9 @@ function prepPasst(auftrag, wer) {
 async function akteLesen() {
   const auftrag = $("prompt").value.trim();
   if (!auftrag) { meld("Erst einen Auftrag eintragen — auch ein Einzeiler reicht.", true); return null; }
-  const wer = patient || ($("who").value.trim() ? { name: $("who").value.trim() } : {});
+  const wer = { ...(patient || ($("who").value.trim() ? { name: $("who").value.trim() } : {})) };
+  const nummer = $("nummer").value.trim();
+  if (nummer) { wer.phone = nummer; wer.phoneDisplay = nummer; }
   const knopf = $("knopf-vertiefen");
   if (knopf) { knopf.disabled = true; knopf.textContent = "liest die Akte …"; }
   try {
@@ -1005,8 +1020,107 @@ $("knopf-vertiefen").onclick = () => { akteLesen(); };
 if ($("knopf-trotzdem")) {
   $("knopf-trotzdem").onclick = () => {
     trotzdemAnrufen = true;
-    starteAnruf();
+    echtAnrufen();
   };
+}
+
+// W-LISA-DOCK-ECHT: Lisa ruft die eingetragene Nummer wirklich an — über die
+// Telefonanlage, ohne Mikrofon im Browser. Das Gespräch läuft live mit.
+let echtUid = "";
+let echtTimer = null;
+let echtZuege = 0;
+
+function echtZurueck() {
+  if (echtTimer) clearInterval(echtTimer);
+  echtTimer = null;
+  echtUid = "";
+  echtZuege = 0;
+  $("start").disabled = false;
+  $("start").textContent = "Anruf starten";
+}
+
+async function echtAnrufen() {
+  meld("");
+  const auftrag = $("prompt").value.trim();
+  const basis = patientOderName();
+  const nummer = $("nummer").value.trim();
+  if (!auftrag) { meld("Erst den Auftrag eintragen.", true); return; }
+  if (!basis) { meld("Erst einen Namen / Patienten eintragen.", true); return; }
+  if (!nummer) { meld("Erst die Telefonnummer eintragen.", true); return; }
+  if (echtUid) return;
+  const wer = { ...basis, phone: nummer, phoneDisplay: nummer };
+  $("start").disabled = true;
+  $("start").textContent = "Lisa wählt …";
+  try {
+    if (!prepPasst(auftrag, wer)) {
+      trotzdemAnrufen = trotzdemAnrufen && vorbereitung && vorbereitung.auftrag === auftrag;
+      const d = await akteLesen();
+      if (!d) throw new Error("Akte konnte nicht gelesen werden");
+    }
+    if (vorbereitung && !vorbereitung.bereit && !trotzdemAnrufen) {
+      meld("Lisa hält — unten stehen Lücken. Füllen oder „Trotzdem anrufen“.", true);
+      echtZurueck();
+      return;
+    }
+    const r = await fetch("/api/anruf/echt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tenant: $("tenant").value, auftrag, patient: wer, nummer }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Anruf fehlgeschlagen");
+    echtUid = d.uuid;
+    $("live").innerHTML = "";
+    $("callName").textContent = wer.name || "Lisa";
+    $("call").classList.add("open");
+    document.body.classList.add("incall");
+    phase("warte", `klingelt bei ${nummer} …`);
+    echtTimer = setInterval(echtStatus, 1500);
+  } catch (e) {
+    meld(String(e.message || e), true);
+    echtZurueck();
+  }
+}
+
+const ECHT_ENDE = {
+  nicht_erreicht: "Niemand hat abgenommen.",
+  abgebrochen: "Anruf abgebrochen.",
+  beendet: "Gespräch beendet.",
+};
+
+async function echtStatus() {
+  const uid = echtUid;
+  if (!uid) return;
+  let d;
+  try {
+    d = await (await fetch(`/api/anruf/echt/${uid}`)).json();
+  } catch { return; }
+  if (uid !== echtUid || !d || !d.ok) return;
+  const zuege = d.zuege || [];
+  for (const z of zuege.slice(echtZuege)) {
+    if (z.textIn) bubble("user", z.textIn);
+    if (z.text) bubble("lisa", z.text);
+  }
+  echtZuege = zuege.length;
+  if (d.status === "verbunden") phase("lisa", "Gespräch läuft");
+  if (d.status === "beendet_wird") phase("warte", "Lisa verabschiedet sich …");
+  if (ECHT_ENDE[d.status]) {
+    phase("warte", ECHT_ENDE[d.status]);
+    meld(ECHT_ENDE[d.status], d.status !== "beendet");
+    echtZurueck();
+    setTimeout(() => {
+      if (echtUid) return;
+      $("call").classList.remove("open", "lisa", "du", "warte");
+      document.body.classList.remove("incall");
+    }, 2500);
+  }
+}
+
+function echtAuflegen() {
+  if (!echtUid) return false;
+  fetch(`/api/anruf/echt/${echtUid}/auflegen`, { method: "POST" }).catch(() => {});
+  phase("warte", "legt auf …");
+  return true;
 }
 
 function starteAnruf() {
@@ -1102,9 +1216,10 @@ async function weiterNachMic(auftrag, wer, micBitte) {
   }
 }
 
-$("start").onclick = () => starteAnruf();
+$("start").onclick = () => echtAnrufen();
+$("testBrowser").onclick = () => starteAnruf();
 
-$("hang").onclick = auflegen;
+$("hang").onclick = () => { if (!echtAuflegen()) auflegen(); };
 
 function zeigeBuch(book, writeLive) {
   if (!book) return;

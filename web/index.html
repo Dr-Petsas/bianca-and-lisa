@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Bianca &amp; Lisa — Telefon-KI</title>
-  <link rel="stylesheet" href="/styles.css?v=call41" />
+  <link rel="stylesheet" href="/styles.css?v=call42" />
 </head>
 <body>
   <nav class="tabs global-kopf" id="tabs">
@@ -67,10 +67,11 @@
             <button class="btn ghost" id="suchen" type="button">Suchen</button>
           </div>
           <div class="hits" id="hits"></div>
+          <label for="nummer" style="margin-top:10px">Telefonnummer, die Lisa anruft</label>
+          <input id="nummer" type="tel" placeholder="z. B. 0177 1234567" autocomplete="off" />
           <div id="person" hidden>
             <div class="who" id="personName"></div>
             <div class="phone-line" id="phones"></div>
-            <div class="devhint">Dev: es klingelt bei dir, nicht beim Patienten.</div>
             <div class="appts">
               <div>
                 <strong>Letzte Termine</strong>
@@ -110,6 +111,7 @@
 
     <div class="dock" id="dock">
       <button class="btn" id="start" type="button">Anruf starten</button>
+      <button class="btn ghost" id="testBrowser" type="button">Im Browser testen</button>
     </div>
     <audio id="speaker" playsinline webkit-playsinline hidden></audio>
   </div>
@@ -149,6 +151,6 @@
   </div>
 
   <script src="/shell.js?v=global3"></script>
-  <script src="/app.js?v=call39"></script>
+  <script src="/app.js?v=call40"></script>
 </body>
 </html>
