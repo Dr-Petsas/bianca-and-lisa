@@ -5571,9 +5571,19 @@ def _nachname_check_vorbereiten(sit: dict, t: str) -> tuple[str, dict | None]:
     # Nennt der Anrufer statt Ja/Nein direkt einen anderen Namen, ist das
     # ebenfalls eine Korrektur. Fragen/Erzaehlungen bleiben dagegen beim
     # unveraenderten Readback und gehen nie ans freie Modell.
+    # Ein einzelnes Kurzwort ohne Nein/aber/Zuweisung („Set.“, Blessing
+    # 09.10.2026) ist meist ein Hörfehler und ersetzte live einen eben
+    # buchstabierten Namen; es läuft in die Ja/Nein-Nachfrage. Ein echter
+    # kurzer Name geht weiter über „Nein, Ott“.
+    kurzwort = (
+        len(korrektur_toks) == 1
+        and len(korrektur_toks[0]) <= 3
+        and not hat_korrektur_signal
+    )
     if (
         korrektur_toks
         and len(korrektur_toks) <= 3
+        and not kurzwort
         and not gehirn.ist_zwischenfrage(t)
     ):
         gehirn.name_fuer_aenderung_leeren(sit, "nachname")

@@ -24,6 +24,7 @@ _TAFEL: dict[str, str] = {
     "cäsar": "c", "caesar": "c", "cesar": "c", "charlotte": "c", "christian": "c",
     "dora": "d", "david": "d", "delta": "d", "daniel": "d",
     "emil": "e", "echo": "e", "erich": "e", "emma": "e",
+    "elisabeth": "e", "elizabeth": "e",
     "friedrich": "f", "fritz": "f", "foxtrot": "f", "felix": "f", "frieda": "f",
     "gustav": "g", "georg": "g", "golf": "g",
     "heinrich": "h", "hans": "h", "hotel": "h", "heinz": "h",
@@ -41,7 +42,7 @@ _TAFEL: dict[str, str] = {
     "samuel": "s", "siegfried": "s", "sierra": "s", "sophie": "s", "südpol": "s",
     "suedpol": "s",
     "theodor": "t", "tango": "t", "toni": "t", "theo": "t",
-    "ulrich": "u", "uniform": "u", "ulla": "u",
+    "ulrich": "u", "uniform": "u", "ulla": "u", "ursula": "u",
     "übermut": "ü", "uebermut": "ü", "übung": "ü", "uebung": "ü",
     "viktor": "v", "victor": "v",
     "wilhelm": "w", "whiskey": "w", "willi": "w",
@@ -50,6 +51,11 @@ _TAFEL: dict[str, str] = {
     "zacharias": "z", "zeppelin": "z", "zulu": "z",
     "eszett": "ß",
 }
+
+# Häufige Vornamen, die Anrufer nur MITTEN in einer Kette als Tafelwort sagen
+# („Konrad, Ursula, Konrad, Ida, Elizabeth …“, Blessing 08.10.2026). Allein
+# oder als Kettenanfang sind sie der Name der Person, kein Buchstabe.
+_KETTEN_TAFEL = {"ursula", "elisabeth", "elizabeth"}
 
 # Gesprochene Buchstabennamen, wie STT sie schreibt ("emm", "ell", "zett").
 _LAUT: dict[str, str] = {
@@ -346,6 +352,9 @@ def deute(text: str) -> dict[str, Any] | None:
             # P an den buchstabierten Namen ("Panzerp").
             im_fluss = kette and fuell_folge <= 1
             nxt_buchstabig = bool(_als_buchstabe(nxt)) or (nxt in _TAFEL and len(nxt) > 1) or nxt == "wie"
+            if tok in _KETTEN_TAFEL and not im_fluss:
+                nxt_buchstabig = bool(_als_buchstabe(nxt)) or nxt == "wie" or (
+                    nxt in _TAFEL and len(nxt) > 1 and nxt not in _KETTEN_TAFEL)
             if im_fluss or nxt_buchstabig:
                 letters.append(_TAFEL[tok])
                 kette = True
@@ -370,6 +379,11 @@ def deute(text: str) -> dict[str, Any] | None:
         i += 1
 
     zusammen = "".join(letters)
+    # Der Name wurde gesprochen UND vollständig buchstabiert („Kukielka,
+    # Konrad, Ursula, …, Adam, Kielka, Elizabeth“). Dann zählt genau diese
+    # Kette; nachgemurmelte Tafelwörter dahinter hängen keinen Buchstaben an.
+    if len(zusammen) >= 4 and zusammen in woerter:
+        return {"name": zusammen[0].upper() + zusammen[1:], "sicher": True}
     # "Papa Gregoriu, also Papagrigoriou" (live 30.08.2026): STT hat die
     # Buchstabenkette als Woerter gehoert — das Wort NACH "also"/"genau"
     # ist die gemeinte Schreibweise, nicht das Bruchstueck davor.
@@ -415,6 +429,13 @@ def deute(text: str) -> dict[str, Any] | None:
     # Buchstabierung selbst ("M-E-I-E-R, Meier") oder steckt schon am Ende.
     # NUR wenn die Kette dominiert: aus "acwc" + fremdem Muell entstand sonst
     # der Phantasiename "Acwchabi" (Batch s14 29.08.2026).
+    # Ist das Wort hinter der Kette nur der nachgesprochene Name („M-I-R-Z-A-
+    # Mirsa“, Blessing 09.10.2026), gilt die Kette — angefügt wurde daraus
+    # „Mirzamirsa“.
+    if (len(zusammen) >= 3 and len(anschluss) == 1
+            and anschluss[0][:2] == zusammen[:2]
+            and difflib.SequenceMatcher(None, anschluss[0], zusammen).ratio() >= 0.7):
+        return {"name": zusammen[0].upper() + zusammen[1:], "sicher": False}
     if (len(zusammen) >= 3 and len(anschluss) == 1 and 2 <= len(anschluss[0]) <= 15
             and fremd <= len(letters)
             and anschluss[0] != zusammen and not zusammen.endswith(anschluss[0])):
@@ -519,6 +540,10 @@ def teil(text: str) -> str:
     # Fuzzy nur, wenn der Satz schon buchstabiert („wie“, Einzelbuchstabe).
     # Sonst wird „Berger“ über „Ärger“ zum Fragment Ä und Bianca wartet stumm.
     signal = "wie" in toks or any(_als_buchstabe(t) for t in toks)
+    nur_vornamen = not signal and not any(
+        t in _TAFEL and t not in _KETTEN_TAFEL for t in toks)
+    if nur_vornamen and any(t in _KETTEN_TAFEL for t in toks):
+        return ""
     tafel = _tafel_anlaute(toks, fuzzy=signal)
     if tafel:
         return "".join(tafel)

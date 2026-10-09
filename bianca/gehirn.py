@@ -1847,6 +1847,17 @@ _SACHWORT_TOKEN_RE = re.compile(
     r"|\w{3,}(?:kontrolle|termin|termine|praxis))$",
     re.I,
 )
+# Gesprochene Ordinalzahlen sind Datumsangaben, nie ein Name: „Fünfzehnte
+# Zehnte.“ auf die Datumsfrage wurde live (Blessing 08.10.2026) zum Nachnamen
+# „Zehnte“ und Bianca ließ ihn buchstabieren.
+_ORDINAL_TOKEN_RE = re.compile(
+    r"^(?:(?:ein|zwei|drei|vier|fünf|fuenf|sechs|sieben|acht|neun)und)?"
+    r"(?:erst|zweit|dritt|viert|fünft|fuenft|sechst|siebt|siebent|acht|neunt"
+    r"|zehnt|elft|zwölft|zwoelft|dreizehnt|vierzehnt|fünfzehnt|fuenfzehnt"
+    r"|sechzehnt|siebzehnt|achtzehnt|neunzehnt|zwanzigst|dreißigst|dreissigst)"
+    r"e[nrms]?$",
+    re.I,
+)
 # Ein Wort direkt hinter „kein/keine/nicht“ ist verneint — live wurde aus
 # „das ist immer noch kein Russland hier“ der Nachname „Russland“.
 _VERNEINTES_WORT_RE = re.compile(r"\b(?:kein(?:e[nmrs]?)?|nicht)\s+(?!so\b|mehr\b)[\wäöüßÄÖÜ'-]+", re.I)
@@ -1860,7 +1871,8 @@ def _name_tokens(text: str) -> list[str]:
     raw = re.sub(r"[^\wäöüßÄÖÜ' -]+", " ", _s(text))
     return [t for t in raw.split()
             if t.lower() not in _NAME_STOP and len(t) >= 2 and not t.isdigit()
-            and not _SACHWORT_TOKEN_RE.match(t)]
+            and not _SACHWORT_TOKEN_RE.match(t)
+            and not _ORDINAL_TOKEN_RE.match(t)]
 
 
 def _einzeltoken_plausibel(tok: str) -> bool:
@@ -1952,7 +1964,8 @@ def _nachgesprochen(text: str, *, schlusswort_trennen: bool = False) -> str:
         if schlusswort_trennen
         else set()
     )
-    if any(t.lower() in stop or t.isdigit() or len(t) < (3 if len(toks) == 2 else 4) for t in toks):
+    if any(t.lower() in stop or t.isdigit() or _ORDINAL_TOKEN_RE.match(t)
+           or len(t) < (3 if len(toks) == 2 else 4) for t in toks):
         return ""
     zusammen = "".join(toks)
     if not zusammen.isalpha() or not 4 <= len(zusammen) <= 20:

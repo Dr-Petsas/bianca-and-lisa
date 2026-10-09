@@ -4681,6 +4681,30 @@ sie erst nach dem wunschtag und dann nach der wunschzeit fragen — bianca auch�
  `tests/test_einzel_slot_angebot.py`, c51a20cb-Block in
  `tests/test_lisa_buchung.py`.
 
+## Buchstabiertafel und Namensernte (W-NAMEN-0810 09.10.2026 — nicht rückbauen)
+
+Blessing-Anrufe 2d1201f6 und 755c98f3. Vier Verluste, vier enge Stellen:
+
+- **Vornamen als Tafelwort** (`bianca/buchstaben.py`): „Ursula“, „Elisabeth“
+ und „Elizabeth“ zählen als Buchstabe, aber NUR mitten in einer Kette
+ (`_KETTEN_TAFEL`). Allein oder als Kettenanfang bleiben sie der Name der
+ Person — `teil()` macht daraus kein Fragment. Live wurde aus „Kukielka,
+ Konrad, Ursula, Konrad, Ida, Elizabeth …“ der Name „Kkilka“.
+- **Gesprochener Name = Kette:** steht die fertig buchstabierte Kette als
+ Wort im Satz, gilt genau sie; ein nachgemurmeltes Tafelwort hängt nichts an.
+ Ist das Wort hinter der Kette nur der nachgesprochene Name („M-I-R-Z-A-
+ Mirsa.“), gilt ebenfalls die Kette — live wurde daraus „Mirzamirsa“.
+- **Ordinalzahlen sind kein Name** (`gehirn._ORDINAL_TOKEN_RE` in
+ `_name_tokens` und `_nachgesprochen`): „Fünfzehnte Zehnte.“ wurde zum
+ Nachnamen „Zehnte“ und Bianca ließ ihn buchstabieren.
+- **Kurzwort auf die Rücklese** (`flow._nachname_check_vorbereiten`): ein
+ einzelnes Wort mit höchstens drei Buchstaben ohne Nein/aber/Zuweisung
+ („Set.“) ersetzt den buchstabierten Namen nicht mehr, sondern holt die
+ Ja/Nein-Nachfrage. Ein echter kurzer Name geht über „Nein, Ott.“.
+
+Tests: `tests/test_namen_0810.py` (Live-Sätze wortgleich, Gegenproben
+Feldkamp/Meier/Rateike, Vornamen allein, „U wie Ursula“, „Nein, Ott.“).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
