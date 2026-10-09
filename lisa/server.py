@@ -357,7 +357,11 @@ def api_start(body: StartIn):
         from lisa.patients import format_de_phone
         pat["devPhone"] = format_de_phone(DEV_PHONE)
         pat["devPhoneRaw"] = DEV_PHONE
-    t = agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT)
+    t = dict(agentprofil.fuer_tenant(body.tenant or DEFAULT_TENANT) or {})
+    # Die DB-firstMessage zur DID ist Biancas Eingangs-Gruss ("Mein Name ist
+    # Bianca. Was kann ich für Sie tun?") — Lisa ruft AN und stellt sich mit
+    # dem Auftrag selbst vor. Outbound-Kampagnen setzen ihren Gruss eigens.
+    t.pop("begruessungText", None)
     sit = session.neu(
         tenant=t,
         auftrag=auftrag,
@@ -430,10 +434,8 @@ def api_stille(body: HangupIn):
     text = sprech.sanitize(reply.get("text") or "")
     if not text:
         return {"ok": True, "empty": True, "text": "", "audioUrl": ""}
-    url, tts_s, cached = DIENST.stimme(text)
+    url, tts_s = DIENST.stimme(text)
     timings: dict = {"tts": tts_s}
-    if cached:
-        timings["ttsCache"] = True
     session.merke_zug(sit, art="stille", textIn="", text=text, timings=timings)
     mitschnitt.zug(sit, DIENST, art="stille", text=text, timings=timings, audio_url=url)
     print(f"lisa-stille session={body.sessionId} text={text!r}", flush=True)
