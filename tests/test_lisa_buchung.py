@@ -108,6 +108,39 @@ def test_auftrag_erkennung():
     assert not termin.ist_buchungsauftrag("Frag nach, wie es nach der OP geht")
 
 
+def test_f9a2ceb2_auftrag_ohne_buchungsverb_ist_buchungsauftrag():
+    assert termin.ist_buchungsauftrag("Termin machen ab dem 3.11. zur Kontrolle")
+    assert termin.ist_buchungsauftrag("Bitte neuen Termin zur PZR")
+    assert termin.ist_buchungsauftrag("Er soll einen Termin bekommen")
+    assert termin.ist_buchungsauftrag("Termin zur Kontrolle im November")
+    assert not termin.ist_buchungsauftrag("Erinnere ihn an den Termin zur Kontrolle morgen")
+    assert not termin.ist_buchungsauftrag("Sag ihm, sein Termin am 3.11. steht")
+    assert not termin.ist_buchungsauftrag("Frag nach, wie es nach dem Termin geht")
+
+
+def test_f9a2ceb2_alter_werkzeugweg_hat_die_namensbindung():
+    sit = session.neu(
+        tenant=dict(TENANT), auftrag="Ruf an und erinner ihn an den Termin morgen",
+        patient={"id": "p1", "name": "Michael Petsas", "phone": "+491776004600"})
+    assert patients.patient_id_bindung_passt(sit["booking"])
+
+
+def test_f9a2ceb2_wortgleich_bucht_donnerstag_ohne_namensfrage(netz):
+    sit = _sitzung("Termin machen ab dem 3.11. zur Kontrolle")
+    assert sit.get("lisaTermin") is True
+    agent.user_turn(sit, "Nee, ich kann nur donnerstags.")
+    such = netz["suche"][-1]
+    assert such["ctx"]["visitMotiveId"] == "kch"
+    assert such["start_date"] >= "2026-11-03"
+    a = agent.user_turn(sit, "Ja, der geht.")
+    assert "eintragen" in a["text"].lower()
+    a = agent.user_turn(sit, "Ja, bitte.")
+    assert not netz.get("abgelehnt")
+    assert netz["buchung"], a
+    assert netz["buchung"][-1]["ctx"]["patientId"] == "p1"
+    assert "Nachname" not in a["text"] and "Handynummer" not in a["text"]
+
+
 def test_motiv_aus_auftrag_ist_die_op_nicht_die_kontrolle():
     vm = termin.motiv_aus_auftrag(AUFTRAG_BB329162, KATALOG, PETSAS)
     assert vm and vm["name"] == "IMP Implantation OP klein"
@@ -221,6 +254,9 @@ def test_nein_zum_angebot_laesst_das_modell_sprechen(netz, monkeypatch):
     assert sit.get("lisaTerminAus") is True
     assert not netz["buchung"] and not netz["suche"]
     assert out["text"]
+    nackt = _sitzung()
+    agent.user_turn(nackt, "Nein.")
+    assert nackt.get("lisaTerminAus") is True
 
 
 def test_modell_zusage_im_buchungsfluss_faellt(netz):

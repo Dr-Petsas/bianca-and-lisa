@@ -39,6 +39,21 @@ _BUCHEN_RE = re.compile(
     r"mach\w*\s+(?:den|einen|ihm|ihr)\s+(?:\w+\s+)?termin\w*)\b",
     re.I,
 )
+# Anruf f9a2ceb2: „Termin machen ab dem 3.11. zur Kontrolle“ trägt keines der
+# Verben oben — Lisa fiel auf ihr freies Modell zurück, erfand eine Uhrzeit und
+# scheiterte an der Akte. Ein Termin MIT Zeitraum/Grund oder „Termin machen/
+# geben/bekommen“ ist ebenso ein Buchungsauftrag.
+_BUCHEN_FORM_RE = re.compile(
+    r"\btermin\w*\s+(?:machen|geben|bekommen|kriegen|finden|anbieten)\b|"
+    r"\bneue[nrs]?\s+termin|"
+    r"\btermin\w*\s+(?:ab|zur|zum|für|fuer|im|in|nach|wegen)\b",
+    re.I,
+)
+_INFO_RE = re.compile(
+    r"\b(erinner\w*|bestätig\w*|bestaetig\w*|denk\w*\s+an|nicht\s+vergessen|"
+    r"wie\s+es\s+\w+\s+geht|nachfrag\w*)\b",
+    re.I,
+)
 _NICHT_BUCHEN_RE = re.compile(
     r"\b(absag\w*|abgesagt|storn\w*|verschieb\w*|vorverleg\w*|verleg\w*|umbuch\w*)\b",
     re.I,
@@ -126,7 +141,9 @@ def ist_buchungsauftrag(auftrag: str) -> bool:
     termin_wort = ist_termin_auftrag(t) or "termin" in t.lower()
     if not t or not termin_wort or _NICHT_BUCHEN_RE.search(t):
         return False
-    return bool(_BUCHEN_RE.search(t))
+    if _BUCHEN_RE.search(t):
+        return True
+    return bool(_BUCHEN_FORM_RE.search(t)) and not _INFO_RE.search(t)
 
 
 def aktiv(sit: dict) -> bool:
@@ -384,6 +401,13 @@ def _frage_merken(sit: dict, text: str) -> None:
         sit["lisaFlussFrage"] = frage
 
 
+def _zeitwunsch(text: str) -> bool:
+    w = parse_slot_wish(text) or {}
+    return bool(any(w.get(k) for k in ("weekday", "weekdays", "date", "hour", "hourMin",
+                                       "hourMax", "tage", "von", "bis"))
+                or (w.get("minDaysAhead") or 0) > 0)
+
+
 def zug(sit: dict, text: str, melde=None) -> dict | None:
     """Ein Patientensatz im Terminauftrag — None = das Modell spricht."""
     from bianca import flow, gehirn
@@ -392,7 +416,8 @@ def zug(sit: dict, text: str, melde=None) -> dict | None:
         return None
     t = tag_ordinal(_s(text))
     if not sit.get("lisaTerminBereit"):
-        if gehirn.ist_nein(t) or _KEIN_INTERESSE_RE.search(t):
+        # „Nee, ich kann nur donnerstags“ lehnt den Tag ab, nicht den Termin.
+        if _KEIN_INTERESSE_RE.search(t) or (gehirn.ist_nein(t) and not _zeitwunsch(t)):
             sit["lisaTerminAus"] = True
             spur.merken(sit, "lisa-buchung", "kein-interesse")
             return None

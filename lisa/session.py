@@ -41,6 +41,16 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None,
             "slotIso": (nxt or {}).get("iso") if isinstance(nxt, dict) else "",
             "phone": patient.get("phone") or "",
         }
+        # Anruf f9a2ceb2: ohne Name↔patientId-Bindung bricht book_slot vor der
+        # Cloud Function ab („Patientendaten passen nicht“) und Lisa fragt nach
+        # Name und Nummer, obwohl die Akte feststeht.
+        from kern import patients as _patients
+        if not booking["lastName"] and booking["patientName"]:
+            teile = booking["patientName"].split()
+            booking["lastName"] = teile[-1]
+            booking["firstName"] = booking["firstName"] or " ".join(teile[:-1])
+        _patients.patient_id_bindung_setzen(
+            booking, booking["patientId"], booking["firstName"], booking["lastName"])
     doc = {
         "id": sid,
         "tenant": tenant,

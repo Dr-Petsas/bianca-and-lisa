@@ -4640,8 +4640,18 @@ Chef: „lisa hat gar nicht alle bianca tools“ und zur OP ohne Online-Freigabe
  Endung) und große OP bei Sinuslift/Augmentation/ITN/Narkose/mehreren
  Implantaten, solange der Auftrag nicht ausdrücklich „klein“ sagt (Katalog:
  klein 30 min, groß 120 min).
+- **Anruf `f9a2ceb2` (09.10.):** „Termin machen ab dem 3.11. zur Kontrolle“
+ galt nicht als Buchungsauftrag — Lisas altes freies Modell lief, erfand
+ „5. November elf Uhr“, `book_slot` scheiterte VOR der Cloud Function an
+ der fehlenden Bindung, danach fragte das Modell Name und Handynummer ab.
+ Jetzt: Termin + machen/geben/bekommen, „neuer Termin“ oder Termin mit
+ ab/zur/im … ist ebenfalls ein Buchungsauftrag (Erinnern/Bestätigen/
+ Nachfragen nicht); `session.neu` setzt die Bindung auch für den alten
+ Werkzeugweg; „Nee, ich kann nur donnerstags“ ist ein Zeitwunsch, keine
+ Absage (nur „Nein“ ohne Zeitangabe oder kein Interesse schaltet ab).
+ Alles in `lisa/` — Bianca ist davon nicht berührt.
 - Notaus: `LISA_BUCHUNG=0` (Lisa wie vor dem 09.10.). Tests:
- `tests/test_lisa_buchung.py` (Live-Sätze aus bb329162 und 2c42c37c wortgleich).
+ `tests/test_lisa_buchung.py` (Live-Sätze aus bb329162, 2c42c37c und f9a2ceb2 wortgleich).
 
 ## Rückrollpunkte (Produktionsstände)
 
