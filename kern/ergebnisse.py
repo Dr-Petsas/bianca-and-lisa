@@ -136,7 +136,7 @@ def _delta_gesamt(alt: dict[str, Any] | None, neu: dict[str, Any] | None) -> dic
         return None
     keys = (
         "gespraeche", "anliegenErkannt", "anliegenErledigt",
-        "anliegenNeutral", "anliegenFail", "anliegenQuote",
+        "anliegenFail", "anliegenBiancaFehler", "anliegenQuote",
         "cfOk", "cfLeer", "cfFail", "cfQuote",
     )
     aus: dict[str, Any] = {}
@@ -504,11 +504,96 @@ def _mittel(werte: list[float]) -> float:
     return round(sum(werte) / len(werte), 3) if werte else 0.0
 
 
+MISSERFOLG_TITEL = {
+    "bianca_fehler": "Bianca-Fehler",
+    "kein_termin": "Kein passender Termin",
+    "aufgelegt": "Anrufer aufgelegt",
+}
+_SLOT_ANLIEGEN = frozenset({"buchen", "verschieben", "notfall"})
+_SLOT_SUCHE = frozenset({"getfreetimeslots", "find_slots", "offer_slots"})
+
+
+def _slots_gesucht(m: dict[str, Any]) -> bool:
+    return any(_cf_name(t).casefold() in _SLOT_SUCHE for t in _werkzeuge(m))
+
+
+def misserfolg_grund(m: dict[str, Any], anliegen: str, wertung: str) -> str:
+    """Warum ein erkanntes Anliegen nicht erledigt wurde (Chef 09.10.2026:
+    „neutral" verwässert die Seite). Ein nachgewiesener Dialogfehler geht vor;
+    lief für einen Terminwunsch eine Slotsuche, hat der Anrufer kein passendes
+    Angebot bekommen; sonst hat er mitten im Vorgang aufgelegt."""
+    if wertung == "fehler":
+        return "bianca_fehler"
+    if anliegen in _SLOT_ANLIEGEN and _slots_gesucht(m):
+        return "kein_termin"
+    return "aufgelegt"
+
+
+def _reservierung(m: dict[str, Any]) -> tuple[str, str, bool] | None:
+    """Reservierungs-SMS eines Anrufs: (stand, grund, nameEingetragen) oder None.
+
+    Erfolgreich = SMS verschickt und — falls ein Termin dranhing — an ihn
+    gebunden (Chef 09.10.2026). Quelle ist die PII-freie Beobachtungsspur."""
+    beob = m.get("observability") if isinstance(m.get("observability"), dict) else {}
+    ev = [e for e in (beob.get("reservation") or []) if isinstance(e, dict)]
+    creates = [e for e in ev if e.get("phase") == "create"]
+    if not creates:
+        return None
+    eingetragen = any(e.get("phase") == "done" for e in ev)
+    if not any(e.get("outcome") == "ok" for e in creates):
+        return "offen", "SMS nicht verschickt", eingetragen
+    if any(e.get("phase") == "bind" and e.get("outcome") == "error" for e in ev):
+        return "offen", "Bindung an den Termin gescheitert", eingetragen
+    return "erledigt", "", eingetragen
+
+
+def _reservierungs_zeile(anrufe: list[dict[str, Any]]) -> dict[str, Any]:
+    n = e = 0
+    eingetragen = 0
+    gruende: Counter[str] = Counter()
+    beispiele: list[dict[str, str]] = []
+    for m in anrufe:
+        r = _reservierung(m)
+        if r is None:
+            continue
+        stand, grund, name = r
+        n += 1
+        if stand == "erledigt":
+            e += 1
+        else:
+            gruende[grund] += 1
+        if name:
+            eingetragen += 1
+        if len(beispiele) < 24:
+            beispiele.append({
+                "sid": _s(m.get("_sid") or m.get("id")),
+                "tenant": _tenant_id(m),
+                "zeit": _s(m.get("startedAt")),
+                "stand": stand,
+                "grund": grund or ("Name eingetragen" if name else ""),
+            })
+    return {
+        "id": "reservierungs_sms",
+        "titel": "Reservierungs-SMS",
+        "gruppe": "Terminverwaltung",
+        "fest": True,
+        # Kein eigenes Anliegen: zählt nicht in die Summen der Karten.
+        "zusatz": True,
+        "erkannt": n,
+        "erledigt": e,
+        "offen": n - e,
+        "gruende": dict(gruende),
+        "nameEingetragen": eingetragen,
+        "quote": round(100.0 * e / n, 1) if n else None,
+        "gespraeche": beispiele,
+        "offenGespraeche": [g for g in beispiele if g["stand"] == "offen"],
+    }
+
+
 def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
     erkannt: Counter[str] = Counter()
     ok: Counter[str] = Counter()
-    fail: Counter[str] = Counter()
-    neutral: Counter[str] = Counter()
+    misserfolg: dict[str, Counter[str]] = defaultdict(Counter)
     beispiele: dict[str, list[dict[str, str]]] = defaultdict(list)
     for m in anrufe:
         ids = anruf_anliegen.ids_von(m)
@@ -516,19 +601,14 @@ def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
         wertung, _ = anruf_anliegen.anruf_wertung(m)
         for i in ids:
             erkannt[i] += 1
-            fertig = anruf_anliegen.erledigt(m, i)
-            if fertig:
+            grund = ""
+            if anruf_anliegen.erledigt(m, i):
                 ok[i] += 1
                 stand = "erledigt"
-            elif wertung == "fehler":
-                fail[i] += 1
-                stand = "offen"
             else:
-                # Ein Anrufer-Abbruch oder eine Ablehnung ohne Bianca-Fehler
-                # ist neutral. Die Ergebnisseite darf daraus keinen roten
-                # Fail machen (MedDent 471dd03a…, Chef 02.10.2026).
-                neutral[i] += 1
-                stand = "neutral"
+                grund = misserfolg_grund(m, i, wertung)
+                misserfolg[i][grund] += 1
+                stand = "offen"
             liste = beispiele[i]
             if len(liste) < 24:
                 liste.append({
@@ -536,14 +616,12 @@ def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "tenant": _tenant_id(m),
                     "zeit": _s(m.get("startedAt")),
                     "stand": stand,
+                    "grund": grund,
                 })
     zeilen = []
     for i in anruf_anliegen.REIHE:
         n = erkannt.get(i, 0)
         e = ok.get(i, 0)
-        f = fail.get(i, 0)
-        u = neutral.get(i, 0)
-        gewertet = e + f
         fest = i in _FEST_ANLIEGEN
         zeilen.append({
             "id": i,
@@ -552,17 +630,18 @@ def _anliegen_zeilen(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "fest": fest,
             "erkannt": n,
             "erledigt": e,
-            "neutral": u,
-            "offen": f,
-            "quote": round(100.0 * e / gewertet, 1) if gewertet else None,
+            "offen": n - e,
+            "gruende": {g: misserfolg[i].get(g, 0) for g in MISSERFOLG_TITEL},
+            "quote": round(100.0 * e / n, 1) if n else None,
             "gespraeche": beispiele.get(i, []),
             "offenGespraeche": [
                 g for g in beispiele.get(i, []) if g.get("stand") == "offen"
             ],
-            "neutralGespraeche": [
-                g for g in beispiele.get(i, []) if g.get("stand") == "neutral"
-            ],
         })
+        if i == "auskunft":
+            zeilen.append(_reservierungs_zeile(anrufe))
+    if not any(z["id"] == "reservierungs_sms" for z in zeilen):
+        zeilen.insert(len(_FEST_ANLIEGEN), _reservierungs_zeile(anrufe))
     return zeilen
 
 
@@ -846,55 +925,69 @@ def _im_fenster(m: dict[str, Any], von: datetime, bis: datetime) -> bool:
     return start is not None and von <= start < bis
 
 
-def _fehler_je_praxis(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fehlerquote je Praxis PRO ANRUF, evidenzbasiert (Chef 26.09.2026):
+_QUOTE_ART = "anliegen-erkannt"
 
-    Ein Fehler ist NUR ein von Bianca ausgelöster Dialogfehler (Missverständnis
-    nicht korrigiert, Wiederholungs-/Presence-Schleife, Technikfehler,
-    „Patient nicht gefunden“). Anruferabbrüche (Auflegen, Ablehnen) sind neutral
-    und zählen weder als Fehler noch als Erfolg. Nenner = gewertete Job-Anrufe
-    (ok + Fehler)."""
+
+def _fehler_je_praxis(anrufe: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Erfolgsquote je Praxis, gezählt wie die Karten (Chef 09.10.2026,
+    ersetzt „neutral“): Nenner = erkannte Anliegen, Zähler = erledigte.
+    Jedes nicht erledigte Anliegen trägt einen Grund: Bianca-Fehler
+    (nachgewiesener Dialogfehler), kein passender Termin oder Anrufer
+    aufgelegt. Die Reservierungs-SMS ist Zusatzspur und zählt nicht mit."""
     ok: Counter[str] = Counter()
     fehler: Counter[str] = Counter()
+    nicht_ok: Counter[str] = Counter()
     gruende: dict[str, Counter[str]] = defaultdict(Counter)
     fails: dict[str, list[dict[str, str]]] = defaultdict(list)
     for m in anrufe:
         tid = _tenant_id(m)
         art, warum = anruf_anliegen.anruf_wertung(m)
-        if art == "fehler":
-            fehler[tid] += 1
-            for g in warum:
+        text: list[str] = []
+        for i in anruf_anliegen.ids_von(m):
+            if anruf_anliegen.erledigt(m, i):
+                ok[tid] += 1
+                continue
+            nicht_ok[tid] += 1
+            grund = misserfolg_grund(m, i, art)
+            if grund == "bianca_fehler":
+                fehler[tid] += 1
+                titel = warum or [MISSERFOLG_TITEL[grund]]
+            else:
+                titel = [MISSERFOLG_TITEL[grund]]
+            for g in titel:
                 gruende[tid][g] += 1
-            liste = fails[tid]
-            if len(liste) < 24:
-                liste.append({
-                    "sid": _s(m.get("_sid") or m.get("id")),
-                    "tenant": tid,
-                    "zeit": _s(m.get("startedAt")),
-                    "grund": ", ".join(warum),
-                })
-        elif art == "ok":
-            ok[tid] += 1
-        # neutral: nicht werten
+                if g not in text:
+                    text.append(g)
+        if not text:
+            continue
+        liste = fails[tid]
+        if len(liste) < 24:
+            liste.append({
+                "sid": _s(m.get("_sid") or m.get("id")),
+                "tenant": tid,
+                "zeit": _s(m.get("startedAt")),
+                "grund": ", ".join(text),
+            })
     ids = list(_PRAXIS_FEST)
-    for tid in sorted(set(ok) | set(fehler)):
+    for tid in sorted(set(ok) | set(nicht_ok)):
         if tid not in ids:
             ids.append(tid)
     zeilen = []
     for tid in ids:
         o = int(ok.get(tid, 0))
-        f = int(fehler.get(tid, 0))
+        f = int(nicht_ok.get(tid, 0))
         n = o + f
         zeilen.append({
             "id": tid,
             "name": _praxis_name(tid),
-            "erkannt": n,          # gewertete Job-Anrufe
-            "erledigt": o,         # sauber gelöst
-            "offen": f,            # Bianca-Fehler
-            # Erfolgsquote der gewerteten Job-Anrufe. Ohne gewerteten Anruf
-            # bleibt der Punkt leer, sonst sähe ein stiller Tag wie 0 % aus.
+            "erkannt": n,          # erkannte Anliegen
+            "erledigt": o,         # erledigte Anliegen
+            "offen": f,            # nicht erfolgreich (jeder Grund)
+            "biancaFehler": int(fehler.get(tid, 0)),
+            # Ohne Anruf mit Anliegen bleibt der Punkt leer, sonst sähe ein
+            # stiller Tag wie 0 % aus.
             "quote": round(100.0 * o / n, 1) if n else None,
-            "fehlerquote": round(100.0 * f / n, 1) if n else 0.0,
+            "fehlerquote": round(100.0 * int(fehler.get(tid, 0)) / n, 1) if n else 0.0,
             "gruende": [{"grund": g, "anzahl": c}
                         for g, c in gruende.get(tid, Counter()).most_common()],
             "fails": fails.get(tid, []),
@@ -941,6 +1034,21 @@ def _punkt(tag: str, von: datetime, bis: datetime, teil: list[dict[str, Any]], o
     }
 
 
+def _archiv_oder_neu(tag: str, eintrag: dict[str, Any],
+                     manifest: list[dict[str, Any]]) -> dict[str, Any]:
+    """Tage, die noch mit der alten Quote (ohne Anruferabbrüche im Nenner)
+    abgelegt wurden, aus den Mitschnitten neu rechnen — sonst springt die
+    Kurve am Umstellungstag. Fehlen die Mitschnitte, bleibt die Ablage."""
+    if isinstance(eintrag, dict) and eintrag.get("quoteArt") != _QUOTE_ART:
+        von = _parse_zeit(eintrag.get("von"))
+        bis = _parse_zeit(eintrag.get("bis"))
+        if von is not None and bis is not None:
+            teil = [m for m in manifest if _im_fenster(m, von, bis)]
+            if teil:
+                return _punkt(tag, von, bis, teil, False)
+    return _archiv_punkt(tag, eintrag)
+
+
 def _archiv_punkt(tag: str, eintrag: dict[str, Any]) -> dict[str, Any]:
     zeile = dict(eintrag)
     zeile["tag"] = tag
@@ -979,14 +1087,14 @@ def tage_anzeige(jetzt: datetime | None = None, stimme: str = _STIMME) -> dict[s
                 punkt_von = seit
             reihe.append(_punkt(label, punkt_von, bis, teil, label == offen_label))
             continue
-        reihe.append(_archiv_punkt(label, archiv[label]))
+        reihe.append(_archiv_oder_neu(label, archiv[label], manifest))
     for tag, eintrag in archiv.items():
         if "T" not in tag or not isinstance(eintrag, dict):
             continue
         von = _parse_zeit(eintrag.get("von"))
         if von is None or von < jetzt - timedelta(days=_TAG_RUECKBLICK):
             continue
-        reihe.append(_archiv_punkt(tag, eintrag))
+        reihe.append(_archiv_oder_neu(tag, eintrag, manifest))
     reihe.sort(key=lambda punkt: (punkt.get("von") or "", punkt.get("tag") or ""))
     return {
         "grenze": f"{_TAG_STUNDE:02d}:00",
@@ -1018,6 +1126,7 @@ def _zwischenstand(jetzt: datetime, stimme: str) -> dict[str, Any]:
     tage[key] = {
         "von": anfang.isoformat(),
         "bis": ende.isoformat(),
+        "quoteArt": _QUOTE_ART,
         "praxen": _fehler_je_praxis(teil),
     }
     behalten = sorted(tage)[-90:]
@@ -1060,6 +1169,7 @@ def _tag_schneiden(jetzt: datetime) -> dict[str, Any]:
         tage[label] = {
             "von": von.isoformat(),
             "bis": bis.isoformat(),
+            "quoteArt": _QUOTE_ART,
             "praxen": _fehler_je_praxis(teil),
         }
         geschrieben.append(label)
@@ -1098,11 +1208,12 @@ def _erlaubt(tenant: str) -> set[str] | None:
 def _block_von(gefiltert: list[dict[str, Any]], last_basis: list[dict[str, Any]]) -> dict[str, Any]:
     """Karten, Anliegen-Tabelle und Cloud Functions aus einer Anrufliste."""
     anliegen = _anliegen_zeilen(gefiltert)
-    erkannt = sum(z["erkannt"] for z in anliegen)
-    erledigt = sum(z["erledigt"] for z in anliegen)
-    neutral = sum(z.get("neutral", 0) for z in anliegen)
-    fail = sum(z["offen"] for z in anliegen)
-    gewertet = erledigt + fail
+    echte = [z for z in anliegen if not z.get("zusatz")]
+    erkannt = sum(z["erkannt"] for z in echte)
+    erledigt = sum(z["erledigt"] for z in echte)
+    fail = sum(z["offen"] for z in echte)
+    gruende = {g: sum((z.get("gruende") or {}).get(g, 0) for z in echte)
+               for g in MISSERFOLG_TITEL}
     cfs = _cf_zeilen(gefiltert)
     cf_ok = sum(z["ok"] for z in cfs)
     cf_leer = sum(z.get("leer", 0) for z in cfs)
@@ -1113,10 +1224,12 @@ def _block_von(gefiltert: list[dict[str, Any]], last_basis: list[dict[str, Any]]
             "gespraeche": len(gefiltert),
             "anliegenErkannt": erkannt,
             "anliegenErledigt": erledigt,
-            "anliegenNeutral": neutral,
             "anliegenFail": fail,
+            "anliegenBiancaFehler": gruende["bianca_fehler"],
+            "anliegenKeinTermin": gruende["kein_termin"],
+            "anliegenAufgelegt": gruende["aufgelegt"],
             "anliegenQuote": (
-                round(100.0 * erledigt / gewertet, 1) if gewertet else None
+                round(100.0 * erledigt / erkannt, 1) if erkannt else None
             ),
             "cfOk": cf_ok,
             "cfLeer": cf_leer,

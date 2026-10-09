@@ -403,9 +403,11 @@ function kpiKarten(g) {
   return [
     ["Gespräche", g.gespraeche || 0, ""],
     ["Anliegen erkannt", g.anliegenErkannt || 0, ""],
-    ["Anliegen erledigt", g.anliegenErledigt || 0, "ok"],
-    ["Anliegen neutral", g.anliegenNeutral || 0, ""],
-    ["Anliegen fail", g.anliegenFail || 0, (g.anliegenFail || 0) ? "bad" : "ok"],
+    ["Anliegen erfolgreich", g.anliegenErledigt || 0, "ok"],
+    ["Nicht erfolgreich", g.anliegenFail || 0, (g.anliegenFail || 0) ? "bad" : "ok"],
+    ["davon Bianca-Fehler", g.anliegenBiancaFehler || 0, (g.anliegenBiancaFehler || 0) ? "bad" : "ok"],
+    ["davon kein passender Termin", g.anliegenKeinTermin || 0, ""],
+    ["davon Anrufer aufgelegt", g.anliegenAufgelegt || 0, ""],
     ["Anliegen-Quote", anliegenQuote[0], anliegenQuote[1]],
     ["CFs ok", g.cfOk || 0, "ok"],
     ["CFs kein Termin", g.cfLeer || 0, ""],
@@ -473,6 +475,22 @@ function gespraechGruppe(titel, liste, extraVon) {
     `</div>`;
 }
 
+const MISSERFOLG = [
+  ["bianca_fehler", "Bianca-Fehler", "Bianca"],
+  ["kein_termin", "Kein passender Termin", "kein Termin"],
+  ["aufgelegt", "Anrufer aufgelegt", "aufgelegt"],
+];
+
+function misserfolgKurz(z) {
+  const gr = z.gruende || {};
+  if (z.id === "reservierungs_sms") {
+    return Object.entries(gr).filter(([, n]) => n)
+      .map(([g, n]) => `${n} ${g}`).join(" · ");
+  }
+  return MISSERFOLG.filter(([k]) => gr[k])
+    .map(([k, , kurz]) => `${gr[k]} ${kurz}`).join(" · ");
+}
+
 function liveAnliegen(zeilen, zielId) {
   const el = $(zielId || "live-anliegen");
   if (!el) return;
@@ -481,31 +499,36 @@ function liveAnliegen(zeilen, zielId) {
     let kopf = "";
     if (z.gruppe && z.gruppe !== gruppe) {
       gruppe = z.gruppe;
-      kopf = `<tr><td colspan="6"><strong>${esc(gruppe)}</strong></td></tr>`;
+      kopf = `<tr><td colspan="5"><strong>${esc(gruppe)}</strong></td></tr>`;
     }
     const alle = z.gespraeche || [];
     const erledigt = alle.filter((g) => g.stand === "erledigt");
-    const neutral = alle.filter((g) => g.stand === "neutral");
     const offen = alle.filter((g) => g.stand === "offen");
-    const restOffen = (!alle.length && z.offenGespraeche) ? z.offenGespraeche : offen;
-    const restNeutral = (!alle.length && z.neutralGespraeche) ? z.neutralGespraeche : neutral;
-    const innen = gespraechGruppe("Erledigt", erledigt)
-      + gespraechGruppe("Neutral (kein Bianca-Fehler)", restNeutral)
-      + gespraechGruppe("Fail", restOffen);
+    const reservierung = z.id === "reservierungs_sms";
+    let innen = gespraechGruppe("Erfolgreich", erledigt, reservierung ? (g) => g.grund || "" : null);
+    if (reservierung) {
+      innen += gespraechGruppe("Nicht erfolgreich", offen, (g) => g.grund || "");
+    } else {
+      MISSERFOLG.forEach(([k, titel]) => {
+        innen += gespraechGruppe(`Nicht erfolgreich — ${titel}`, offen.filter((g) => g.grund === k));
+      });
+    }
     const name = innen
       ? `<details class="problem-akkordeon"><summary>${esc(z.titel)}</summary>${innen}</details>`
       : esc(z.titel);
     const quote = z.quote == null ? "—" : `${z.quote} %`;
-    const quoteKlasse = z.quote == null ? "" : (Number(z.quote) >= 100 ? "ok" : (Number(z.offen) > 0 ? "bad" : ""));
+    const quoteKlasse = z.quote == null ? "" : (Number(z.quote) >= 70 ? "ok" : "bad");
+    const kurz = misserfolgKurz(z);
+    const extra = reservierung && z.nameEingetragen
+      ? `<div class="klein">Name im Anruf eingetragen: ${esc(z.nameEingetragen)}</div>` : "";
     return `${kopf}<tr>
-      <td>${name}</td>
+      <td>${name}${extra}</td>
       <td><span class="ok">${esc(z.erkannt)}</span></td>
       <td><span class="ok">${esc(z.erledigt)}</span></td>
-      <td>${z.neutral ? `<span>${esc(z.neutral)}</span>` : "0"}</td>
-      <td>${z.offen ? `<span class="bad">${esc(z.offen)}</span>` : `<span class="ok">0</span>`}</td>
+      <td>${z.offen ? `<span class="bad">${esc(z.offen)}</span>` : `<span class="ok">0</span>`}${kurz ? `<div class="klein">${esc(kurz)}</div>` : ""}</td>
       <td><span class="${quoteKlasse}">${esc(quote)}</span></td>
     </tr>`;
-  }).join("") || '<tr><td colspan="6" class="klein">Keine erkannten Anliegen.</td></tr>';
+  }).join("") || '<tr><td colspan="5" class="klein">Keine erkannten Anliegen.</td></tr>';
 }
 
 function strategienZeichnen(liste) {

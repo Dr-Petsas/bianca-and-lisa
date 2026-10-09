@@ -34,9 +34,8 @@
           <tr>
             <th>Anliegen</th>
             <th>Erkannt</th>
-            <th>Erledigt</th>
-            <th>Neutral</th>
-            <th>Fail</th>
+            <th>Erfolgreich</th>
+            <th>Nicht erfolgreich</th>
             <th>Quote</th>
           </tr>
         </thead>
@@ -73,7 +72,7 @@
   <div id="sicht-gesamt" hidden>
   <div class="block">
     <h2>Anliegen-Quote je Praxis</h2>
-    <p class="klein" id="fehler-hinweis">Dieselbe Quote wie in den Karten: erledigte Anliegen von erledigt plus Fail. Vom Anrufer beendete oder nicht weiter verfolgte Anliegen sind neutral und zählen nicht als Bianca-Fail. Jeder Tag endet um 20:00 Uhr und wird dann ins Diagramm geschrieben. Die Summe darunter bleibt stehen.</p>
+    <p class="klein" id="fehler-hinweis">Dieselbe Quote wie in den Karten: erfolgreiche Anliegen von allen erkannten Anliegen. Nicht erfolgreich zählt jedes Anliegen, das nicht abgeschlossen wurde — aufgeteilt nach Bianca-Fehler, kein passender Termin (Angebot zu spät oder abgelehnt) und Anrufer mitten drin aufgelegt. Jeder Tag endet um 20:00 Uhr und wird dann ins Diagramm geschrieben. Die Summe darunter bleibt stehen.</p>
     <div class="stat-chart">
       <canvas id="chart-fehler" width="760" height="230"></canvas>
     </div>
@@ -92,9 +91,8 @@
           <tr>
             <th>Anliegen</th>
             <th>Erkannt</th>
-            <th>Erledigt</th>
-            <th>Neutral</th>
-            <th>Fail</th>
+            <th>Erfolgreich</th>
+            <th>Nicht erfolgreich</th>
             <th>Quote</th>
           </tr>
         </thead>
@@ -200,6 +198,6 @@
   </div>
   </div>
 </main>
-<script src="web/ergebnisse.js?v=26"></script>
+<script src="web/ergebnisse.js?v=27"></script>
 </body>
 </html>
