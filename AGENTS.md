@@ -4597,6 +4597,43 @@ Lisas SSH-Key seit dem Asterisk-Umzug am 12.09. auf dem neuen Server
 - „Im Browser testen“ ist der alte Mikrofon-Weg und bleibt daneben.
 - Tests: `tests/test_lisa_dock_echt.py`.
 
+## Lisa bucht mit Biancas Maschine (W-LISA-BUCHUNG 09.10.2026 — nicht rückbauen)
+
+Anruf `bb329162`: Auftrag „ein Termin ist am 4.11. zur Operation
+freigeworden … mache den termin mit ihm aus“. Lisa bot „4.11. um 11 Uhr“ an
+(erfunden), fragte nach jedem „Ja“ „welchen Termin darf ich fest eintragen?“
+(`zuege.buchungs_wache`) und hätte eine Kontrolle gebucht — ihr freies Modell
+hatte sieben Werkzeuge, keinen Besuchsgrund und einen Kontroll-Vorrat im Prompt.
+Chef: „lisa hat gar nicht alle bianca tools“ und zur OP ohne Online-Freigabe:
+„freigabe interessiert nicht … sie kommt ja vom doktor die anweisung“.
+
+- **Übergabe** (`lisa/termin.py`): ist der Auftrag ein Buchungsauftrag
+ (`ist_buchungsauftrag`: Terminwort + vereinbaren/ausmachen/buchen/
+ freigeworden …, nie absagen/verschieben) und die Identität bestätigt, füllt
+ `vorbereiten` Biancas Sammler aus Akte und Auftrag (Name, patientId,
+ Geschlecht, Behandler, Wunsch aus dem Auftrag, gewählte Handynummer als
+ SMS-Ziel; PZR/Rückblick/Bleaching/Arzt-Notiz/Versicherung übersprungen) und
+ der Zug läuft durch `flow._angebot` bzw. `flow.zug` — echte Slotsuche,
+ Rücklese, Ja, `book_slot`. „Nein“/kein Interesse auf den ersten Zug setzt
+ `lisaTerminAus`, dann spricht Lisa wie bisher.
+- **Motiv aus dem Auftrag** (`motiv_aus_auftrag`): alle Kennwörter des
+ Motivs müssen im Auftrag stehen („Operation … implantate eingesetzt“ →
+ `IMP Implantation OP klein`; ein „OP“ allein reicht nie), klein vor groß,
+ sonst Biancas Mapping. `motivFest` sperrt jedes Neu-Mapping und die
+ Telefon-Freigabe-Filter in `gehirn.motiv_fuer_kalender`.
+- **Arzt-Auftrag** (`arztAuftrag` → `doctorOrder: true` an `getFreeTimeSlots`
+ und `masBookAppointment`, mit Maschinen-Token): die Cloud Function ignoriert
+ dann `allowOnlineBooking` (pickadoc-platform `a37fad8c`,
+ `src/utils/doctorOrder.ts`). Kein Kontroll-Ersatz bei Arzt-Aufträgen.
+ Gegenprobe 09.10. read-only: OP klein bei Petsas ohne Auftrag 0 Zeiten, mit
+ Auftrag 20 ab 4.11.
+- **Freies Modell im Buchungsfluss:** ohne Werkzeuge, nur Nebenfragen
+ (`PROMPT_REGEL`); `nach_modell` streicht Zusagen und unbelegte Kalender-
+ Fakten (`fakten_wache`) und hängt die offene Frage wieder an. Kein
+ Kontroll-Vorrat mehr im Prompt (`vorrat_fuellen` bei `lisaTermin`).
+- Notaus: `LISA_BUCHUNG=0` (Lisa wie vor dem 09.10.). Tests:
+ `tests/test_lisa_buchung.py` (Live-Sätze aus bb329162 wortgleich).
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

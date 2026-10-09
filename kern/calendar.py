@@ -118,7 +118,10 @@ def _cf_post(route: str, body: dict, *, timeout: float | None = None) -> tuple[i
             and body.get("skipConfirmation") is True
         )
     )
-    if name_confirm_write and PHONE_CALL_TOKEN:
+    # W-LISA-BUCHUNG: ein Arzt-Auftrag umgeht die Online-Freigabe des Motivs —
+    # das erlaubt die Cloud Function nur einer authentifizierten Maschine.
+    arzt_auftrag = body.get("doctorOrder") is True
+    if (name_confirm_write or arzt_auftrag) and PHONE_CALL_TOKEN:
         # Jede Reservierungsoperation, die die normale Patientenbestaetigung
         # bewusst ueberspringt, muss als TelefonKI-Maschine authentifiziert
         # sein. Gewoehnliche Kalenderaufrufe erhalten den Secret nie.
@@ -337,7 +340,7 @@ def find_slots_behandler(tenant: dict, ctx: dict, *, start_date: str = "",
     slots = _iso_liste(found.get("slots") or [])
     if slots:
         return found
-    if not motiv_fallback:
+    if not motiv_fallback or such.get("arztAuftrag") is True:
         return found
     alt = _kontrolle_ersatz(tenant, such)
     if not alt:
@@ -375,7 +378,7 @@ def find_slots_raeume(tenant: dict, ctx: dict, raeume: list, *,
     ]
     runden: list[tuple[dict, bool]] = [(dict(ctx or {}), False)]
     gesperrt = ""
-    if motiv_fallback:
+    if motiv_fallback and (ctx or {}).get("arztAuftrag") is not True:
         alt = _kontrolle_ersatz(tenant, dict(ctx or {}))
         if alt:
             runden.append((alt, True))
@@ -568,6 +571,8 @@ def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bo
     # Hintergrund-Vorrat, Wiederangebot und Verschiebe-Alternative dürfen
     # auch mit einem alten Sitzungsstand niemals in der Vergangenheit suchen.
     body["startDate"] = max(_s(start_date)[:10] or heute, heute)
+    if ctx.get("arztAuftrag") is True:
+        body["doctorOrder"] = True
     status, data, dispatch = _cf_call("getFreeTimeSlots", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         nutz = data.get("data") or {}
@@ -602,6 +607,10 @@ def _iso_liste(raw) -> list[str]:
 
 def vorrat_fuellen(sit: dict) -> list[dict[str, str]]:
     """Freie Plätze vor dem Gespräch laden — offer_slots greift zuerst hierhin."""
+    if sit.get("lisaTermin"):
+        # W-LISA-BUCHUNG: der Buchungsfluss sucht selbst mit dem Motiv aus
+        # dem Arzt-Auftrag; Kontroll-Slots würden ihn nur überschreiben.
+        return []
     tenant = sit["tenant"]
     ctx = sit.setdefault("booking", {})
     if not _s(ctx.get("visitMotiveId")):
@@ -610,6 +619,8 @@ def vorrat_fuellen(sit: dict) -> list[dict[str, str]]:
             ctx["visitMotiveId"] = _s(vm.get("id"))
             ctx["visitMotiveName"] = _s(vm.get("name")) or ctx.get("visitMotiveName")
     found = find_slots(tenant, ctx)
+    if sit.get("lisaTermin"):
+        return []
     isos = _iso_liste(found.get("slots") or [])
     sit["slotVorrat"] = isos
     ctx["slotVorrat"] = isos
@@ -987,6 +998,8 @@ def book_slot(tenant: dict, ctx: dict, *, slot_iso: str = "") -> dict[str, Any]:
         "visitMotiveId": _s(ctx.get("visitMotiveId") or (vm or {}).get("id")),
         "appointmentStartDate": iso,
     }
+    if ctx.get("arztAuftrag") is True:
+        body["doctorOrder"] = True
     if ctx.get("skipConfirmation") is True:
         session_id = _s(ctx.get("nameConfirmSessionId"))
         if not session_id:

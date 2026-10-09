@@ -4,7 +4,7 @@ from typing import Any
 
 from kern import gedaechtnis, gespraech, gespraechsruhe, hirn, intent, spur, stille, tenants, wiederholung, zuege
 from kern import wissen as kern_wissen
-from lisa import calendar, identitaet, llm, session
+from lisa import calendar, identitaet, llm, session, termin
 from lisa.greeting import begruessung
 from lisa.prompt import TOOLS, system_prompt
 
@@ -114,6 +114,29 @@ def stille_zug(session_doc: dict) -> dict[str, Any]:
     return {"text": text, "book": None}
 
 
+def _termin_antwort(session_doc: dict, msgs: list, fl: dict) -> dict[str, Any]:
+    """Antwort der Buchungsmaschine in Lisas Verlauf und Rueckgabeform."""
+    text = _s(fl.get("text"))
+    if text and not fl.get("book"):
+        ent = wiederholung.pruefen(
+            session_doc, text,
+            frueher=wiederholung.letzte_antworten(session_doc.get("messages") or []),
+        )
+        if ent:
+            text = ent
+    if text:
+        msgs.append({"role": "assistant", "content": text})
+    session_doc["messages"] = msgs
+    gespraech.nach_antwort(session_doc)
+    aus: dict[str, Any] = {"text": text, "book": fl.get("book")}
+    if fl.get("warte"):
+        aus["warte"] = True
+        aus["stilleMs"] = int(fl.get("stilleMs") or 1500)
+    if fl.get("hangup"):
+        aus["hangup"] = True
+    return aus
+
+
 def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     text_in = _s(spoken)
     if not text_in:
@@ -128,11 +151,17 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     # Solange nicht geklaert ist, WER am Telefon sitzt, antwortet die
     # Zustandsmaschine — ohne Modell, also ohne Wartezeit und ohne Abweichen.
     id_zug = identitaet.naechster_zug(session_doc, text_in)
+    # W-LISA-BUCHUNG (09.10.2026): steht die Person fest, laeuft ein
+    # Termin-Buchungsauftrag durch Biancas Buchungsmaschine — Motiv, Slot,
+    # Ruecklese, Handy und Buchungsbeweis wie bei Bianca.
+    tz = None
+    if not id_zug and termin.bereit(session_doc):
+        tz = termin.zug(session_doc, text_in, melde=melde)
     # Talk-Schicht (kern/gespraech.py): hoert jeden Satz ab und entscheidet,
     # wie frei das Modell gleich sprechen darf — der Auftrag bleibt Gesetz.
     route = gespraech.routen(
         session_doc, text_in,
-        job_gesprochen=bool(id_zug),
+        job_gesprochen=bool(id_zug or tz),
         job_aktiv=True,
     )
     if id_zug:
@@ -140,6 +169,9 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
         session_doc["messages"] = msgs
         gespraech.nach_antwort(session_doc)
         return {"text": id_zug["text"], "book": None}
+    if tz is not None:
+        return _termin_antwort(session_doc, msgs, tz)
+    termin_modus = termin.aktiv(session_doc) and not session_doc.get("lisaTerminAus")
     # W-HIRN/W-INTENT (03.09.2026): NACH der Identitaet (wer am Apparat sitzt
     # ist kein Anliegen), VOR dem Modell — jeder Patientensatz wird gedeutet,
     # synchron immer in 0 ms (Fast-Paths + Heuristik). Das LLM prueft
@@ -147,7 +179,7 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     # zuerst einarbeiten). Sagt der Angerufene etwas anderes als der
     # Chef-Auftrag, wechselt das Hirn das Anliegen, statt auf der Mission
     # zu kleben.
-    if "hirn" in session_doc and intent.enabled():
+    if "hirn" in session_doc and intent.enabled() and not termin_modus:
         spaet = intent.nachzug(session_doc)
         if spaet is not None:
             hirn.anwenden(session_doc, spaet)
@@ -158,6 +190,8 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
     anliegen_stand = hirn.stand_block(session_doc)
     if anliegen_stand:
         plan = f"{plan}\n\n{anliegen_stand}" if plan else anliegen_stand
+    if termin_modus:
+        plan = f"{plan}\n\n{termin.PROMPT_REGEL}" if plan else termin.PROMPT_REGEL
     if msgs and msgs[0].get("role") == "system":
         msgs[0]["content"] = system_prompt_aktuell(session_doc, plan=plan)
     # Stream: der erste fertige Satz geht sofort an die Stimme (vorab),
@@ -170,10 +204,11 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
             extra[k] = max(int(extra.get(k) or 0), int(v))
         else:
             extra[k] = v
-    if vorab is not None:
-        out = llm.chat_stream(msgs, TOOLS, erster_satz=vorab, **extra)
+    werkzeuge = None if termin_modus else TOOLS
+    if vorab is not None and not termin_modus:
+        out = llm.chat_stream(msgs, werkzeuge, erster_satz=vorab, **extra)
     else:
-        out = llm.chat(msgs, TOOLS, **extra)
+        out = llm.chat(msgs, werkzeuge, **extra)
     if not out.get("ok"):
         return {
             "text": "Einen Moment, ich komme gerade nicht an den Kalender. Darf ich später noch einmal anrufen?",
@@ -182,7 +217,15 @@ def user_turn(session_doc: dict, spoken: str, melde=None, vorab=None) -> dict[st
         }
     # Werkzeug-Schleife und Wachen liegen im gemeinsamen Kern (kern.zuege) —
     # dieselbe Mechanik traegt auch Bianca.
-    text, msgs, book = zuege.apply_tools(session_doc, msgs, out, melde=melde)
+    if termin_modus:
+        # Im Terminauftrag bucht nur die Maschine: keine Werkzeuge, keine
+        # Buchungswache-Rueckfrage, keine eigene Uhrzeit des Modells.
+        text = termin.nach_modell(session_doc, _s(out.get("text")), nutzertext=text_in)
+        book = None
+        if text:
+            msgs.append({"role": "assistant", "content": text})
+    else:
+        text, msgs, book = zuege.apply_tools(session_doc, msgs, out, melde=melde)
     # Wiederholungs-Wächter (Chef 27.08.2026): wortgleich wiederholte Frage-/
     # Langsätze gegen die letzten Antworten streichen — nie stumm werden.
     # session_doc["messages"] traegt hier noch den Stand VOR diesem Zug.

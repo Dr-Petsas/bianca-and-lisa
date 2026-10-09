@@ -59,6 +59,15 @@ def neu(*, tenant_id: str = "", tenant: dict[str, Any] | None = None,
     }
     if phone_call_id:
         doc["phoneCallId"] = phone_call_id
+    # W-LISA-BUCHUNG (09.10.2026): ein Termin-Buchungsauftrag laeuft nach der
+    # Identitaet durch Biancas Buchungsmaschine (lisa/termin.py). Der
+    # Motiv-Katalog laedt schon waehrend der Begruessung.
+    from lisa import termin as _termin
+    if patient and _termin.an() and _termin.ist_buchungsauftrag(auftrag):
+        doc["lisaTermin"] = True
+        doc["gewaehlteNummer"] = patient.get("phone") or ""
+        from kern import motive as _motive
+        _motive.anstossen(doc)
     # W-HIRN (03.09.2026): der Chef-Auftrag wird EINMAL in ein Anliegen
     # gegossen (quelle=auftrag) — wechselt der Angerufene das Thema
     # ("sagen Sie Donnerstag ab"), erkennt kern/intent das und das Hirn
@@ -76,13 +85,16 @@ def _sichern(sit: dict[str, Any]) -> None:
         return
     try:
         _SESS_DIR.mkdir(parents=True, exist_ok=True)
-        roh = {k: v for k, v in sit.items() if k != "tenant"}
+        # Laufzeitobjekte (`_`-Praefix: Events, offene Jobs aus Biancas Fluss)
+        # gehoeren nie in die Sicherung — wie bei Bianca.
+        roh = {k: v for k, v in sit.items() if k != "tenant" and not str(k).startswith("_")}
         # CF-Outbound-Mandanten: Tenant-Blob mitspeichern (kein lokales JSON).
         t = sit.get("tenant") or {}
         if str(t.get("_quelle") or "").startswith("cf"):
             roh["tenant"] = t
-        (_SESS_DIR / f"{sid}.json").write_text(json.dumps(roh, ensure_ascii=False), encoding="utf-8")
-    except OSError:
+        (_SESS_DIR / f"{sid}.json").write_text(
+            json.dumps(roh, ensure_ascii=False, default=lambda _o: None), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
         pass
 
 

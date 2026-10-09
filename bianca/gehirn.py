@@ -2713,7 +2713,9 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # fallen. Explizit fachfremde oder mandantenseitig ausgeschlossene
     # Leistungen sind davon ausgenommen: ein Zahnwunsch beim Hautarzt und
     # ein siebter Thaler-Grund dürfen nie als Kontrolle getarnt werden.
-    if (besuchsgrund.fachfremder_zahngrund(tenant, t, katalog=katalog)
+    if s.get("motivFest"):
+        pass
+    elif (besuchsgrund.fachfremder_zahngrund(tenant, t, katalog=katalog)
             and (s["frage"] == "grund" or _ANLIEGEN_SIGNAL_RE.search(t))):
         s["grund"] = ""
         s["grundWortlaut"] = ""
@@ -2766,6 +2768,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # fuer einen unbekannten Grund), gewinnt JEDER spaetere klare Katalog-
     # Treffer ("Also, es ist eigentlich Nagelpilz.") — auch ohne Spur-Signal.
     if (s["grund"] and s.get("phase") not in {"gebucht", "fertig"}
+            and not s.get("motivFest")
             and (dossier.spur_signal(t) or s.get("grundGenerisch"))):
         kern_name, vm = _grund_deuten(tenant, t, katalog=motive.katalog(sit))
         if kern_name and _grund_unglaubwuerdig(t):
@@ -6018,6 +6021,10 @@ def motiv_fuer_kalender(sit: dict, calendar_id: str) -> dict | None:
     kat = motive.katalog(sit)
     if not kat:
         return None
+    if s.get("motivFest") and s.get("motivId"):
+        # W-LISA-BUCHUNG (09.10.2026): das Motiv hat der Arzt im Auftrag
+        # vorgegeben — kein Neu-Mapping, keine Telefon-Freigabe-Filter.
+        return next((v for v in kat if _s(v.get("id")) == s["motivId"]), None)
     from kern import zimmer_map
     kat = zimmer_map.buchbarer_katalog(tenant, kat)
     if not kat:
