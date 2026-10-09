@@ -112,6 +112,15 @@ _ABBRECHEN_HART_RE = re.compile(
     r"|(?:bitte\s+)?abbrechen\b"
     r"|\babbruch\b"
     r"|doch\s+kein(?:en|e)?\s+termin"
+    # W-KEIN-NEUER (Anruf 65c04df1, 09.10.2026): „Nein, ich möchte keinen
+    # neuen Termin ausmachen“ startete eine Buchung. Nur eindeutige Formen —
+    # „neuen/weiteren“, „mehr“ oder ein Buchungsverb; „keinen anderen Termin“
+    # nimmt das Angebot an, „ich brauche keinen Termin, ich habe eine Frage“
+    # und „…, sondern verschieben“ sind keine Abbrüche.
+    r"|kein(?:en|e)?\s+(?:(?:neuen|weiteren|zweiten)\s+termin\w*"
+    r"|termin\w*\s+mehr"
+    r"|termin\w*\s+(?:ausmachen|machen|buchen|vereinbaren))\b"
+    r"(?![^.!?]*\b(?:sondern|stattdessen|aber|nur|frage)\b)"
     r")",
     re.I,
 )

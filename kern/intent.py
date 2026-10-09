@@ -470,10 +470,52 @@ def _verwaltung_nur_rueckblick(text: str) -> bool:
     )
 
 
+# W-VERNEINT (Anruf 09d33a45, 09.10.2026): „Nein, ich möchte ihn nicht
+# verschieben, nicht absagen, sondern ich will kommen“ schaltete auf
+# Verschieben und startete eine Slotsuche. Ein Änderungsverb mit Verneinung
+# direkt davor (gleicher Teilsatz, höchstens zwei Wörter dazwischen) ist kein
+# Auftrag. Bewusst NUR die Verben — „nicht kommen/wahrnehmen“ bleibt Absage,
+# und eine Bitte mit kann/könnte („Kann man den nicht verschieben?“) bleibt
+# ein Verschiebewunsch.
+_AENDERVERB_RE = re.compile(
+    r"^(?:absag|abzusagen|abgesagt|stornier|abbestell|cancel|verschieb|"
+    r"umbuch|verleg|umleg|vorverleg)", re.I,
+)
+_VERNEINT_DAVOR_RE = re.compile(
+    r"\b(?:nicht|kein\w*|weder|nie)\s+(?:\w+\s+){0,2}$", re.I,
+)
+_TEILSATZ_GRENZE_RE = re.compile(
+    r"[,.;:!?]|\b(?:sondern|aber|und|oder|dann)\b", re.I,
+)
+_BITTE_KANN_RE = re.compile(
+    r"\b(?:kann|k(?:ö|oe)nn\w*|ginge|geht|l(?:ä|ae)sst|lie(?:ß|ss)e)\b", re.I,
+)
+
+
+def aenderverb_verneint(text: str, start: int) -> bool:
+    """Steht vor dem Änderungsverb an ``start`` eine Verneinung im selben
+    Teilsatz?"""
+    davor = _s(text)[:start] + " "
+    teil = _TEILSATZ_GRENZE_RE.split(davor)[-1]
+    if _BITTE_KANN_RE.search(teil):
+        return False
+    return bool(_VERNEINT_DAVOR_RE.search(teil))
+
+
+def _bejaht(rx: re.Pattern, text: str) -> bool:
+    """Mindestens ein Treffer, der kein verneintes Änderungsverb ist."""
+    t = _s(text)
+    for m in rx.finditer(t):
+        if _AENDERVERB_RE.match(m.group(0)) and aenderverb_verneint(t, m.start()):
+            continue
+        return True
+    return False
+
+
 def _ist_verschieben(sit: dict | None, text: str) -> bool:
     return bool(
         (
-            _FB_VERSCHIEBEN_RE.search(_s(text))
+            _bejaht(_FB_VERSCHIEBEN_RE, text)
             and not _verwaltung_nur_rueckblick(text)
         )
         or _bestands_verschieben_verhoerer(sit, text)
@@ -482,7 +524,7 @@ def _ist_verschieben(sit: dict | None, text: str) -> bool:
 
 def _ist_absage(text: str) -> bool:
     return bool(
-        _FB_ABSAGE_RE.search(_s(text))
+        _bejaht(_FB_ABSAGE_RE, text)
         and not _verwaltung_nur_rueckblick(text)
     )
 _FB_RUECKRUF_KERN_RE = re.compile(
@@ -517,7 +559,7 @@ def _dokument_ist_buchungsgrund(t: str) -> bool:
     from kern import praxisregeln
     if praxisregeln.hat_dokument(t) and not praxisregeln.dokument_anforderung(t):
         return True
-    if ((_FB_NEU_RE.search(t) or _FREIER_TERMIN_RE.search(t))
+    if ((neu_wunsch(t) or _FREIER_TERMIN_RE.search(t))
             and not praxisregeln.dokument_anforderung(t)):
         return True
     return False
@@ -597,6 +639,11 @@ _BESTANDSFRAGE_RE = re.compile(
     # HABE“. Ohne diesen Zweig gewann irrtümlich _FB_NEU_RE („Termin haben“)
     # und das freie LLM fragte nach bestehend-vs-neu, statt nachzusehen.
     r"\bob\s+ich\b[^?.!]{0,38}?\btermine?\b[^?.!]{0,16}?\bhab(?:e|')?\b|"
+    # W-WANN-ICH (Blessing 09.10.2026): „Ich möchte wissen, wann ich einen
+    # Termin bei Frau Doktor Blessing habe“ — gleiche Nebensatz-Stellung mit
+    # „wann“. „wann ich einen Termin haben/bekommen kann“ bleibt Neubuchung
+    # („haben“ trifft hab(e) nicht).
+    r"\bwann\s+ich\b[^?.!]{0,40}?\btermine?\b[^?.!]{0,40}?\bhab(?:e|')?\b|"
     # W-TERMIN-VERGESSEN (Anruf 9dd61a59, 14.09.2026): „Ich habe meinen
     # Termin vergessen“ / „ich habe einen Termin, aber ich habe ihn
     # vergessen“ — der Anrufer will wissen, WANN sein bestehender Termin
@@ -637,7 +684,9 @@ _BESTANDSFRAGE_RE = re.compile(
     # Bestandsauskunft. Wortgrenzen; Terminwünsche („ob ich einen Termin
     # bekommen kann“) tragen kein besteht/steht/gilt und bleiben Neubuchung.
     r"\bob\s+(?:\w+\s+){0,3}?(?:heutige[rn]?\s+|morgige[rn]?\s+)?termine?\b"
-    r"[^?.!]{0,30}?(?:noch\s+)?(?:besteht|steht|gilt|gültig|gueltig)\b",
+    r"[^?.!]{0,30}?(?:noch\s+)?(?:besteht|"
+    # „ob noch ein Termin zur Verfügung/frei steht“ ist Neubuchung.
+    r"(?<!verfügung\s)(?<!verfuegung\s)(?<!frei\s)steht|gilt|gültig|gueltig)\b",
     re.I,
 )
 
@@ -757,6 +806,48 @@ _FB_NEU_RE = re.compile(
     r"m(?:ö|oe)chte\w*|will|wollte|w(?:ü|ue)nsch\w*)\s+(?:\w+\s+){0,4}?termin",
     re.I,
 )
+# W-NEU-VERNEINT (Anruf 65c04df1, 09.10.2026): „der Termin passt so, ich möchte
+# nur keine Vorschläge zu alternativen Terminen bekommen“ und „ich möchte
+# keinen neuen Termin ausmachen“ starteten eine Neubuchung. Die Schnellstraße
+# bricht bei Verneinung ab, der Rückfall prüfte sie nicht. Ein Treffer gilt
+# nicht, wenn im selben Teilsatz „kein…“ vor dem Terminwort oder „nicht“ vor
+# dem Verb steht.
+_NEU_VERNEINT_RE = re.compile(
+    r"\bkein\w*\s+(?:\w+\s+){0,3}?termin|"
+    r"\bnicht\s+(?:\w+\s+){0,2}?(?:vereinbar|ausmach|buch|machen|haben|brauch|"
+    r"bekomm|krieg|reservier)",
+    re.I,
+)
+
+
+def termin_verneint(text: str) -> bool:
+    """„keinen (neuen) Termin“, „nicht buchen/ausmachen“ irgendwo im Satz."""
+    return bool(_NEU_VERNEINT_RE.search(_s(text)))
+
+
+# „Dringender Termin.“, „Neuer Termin.“, „Einen Termin bitte.“ als ganze
+# Äußerung — ohne Verb ein klarer Buchungswunsch (Blessing 09.10.2026).
+_KURZ_TERMIN_RE = re.compile(
+    r"^\W*(?:(?:ein(?:en)?|neue[nr]?|dringende[nr]?|schnelle[nr]?|baldige[nr]?|"
+    r"zeitnahe[nr]?)\s+)+termin(?:\s+(?:bitte|gerne?|machen|vereinbaren))?\W*$|"
+    r"^\W*termin\s+bitte\W*$",
+    re.I,
+)
+
+
+def neu_wunsch(text: str) -> bool:
+    """_FB_NEU_RE mit Verneinungsprüfung je Teilsatz."""
+    t = _s(text)
+    if _KURZ_TERMIN_RE.match(t):
+        return True
+    for m in _FB_NEU_RE.finditer(t):
+        teil_start = 0
+        for g in _TEILSATZ_GRENZE_RE.finditer(t, 0, m.start()):
+            teil_start = g.end()
+        if _NEU_VERNEINT_RE.search(t[teil_start:m.end()]):
+            continue
+        return True
+    return False
 # Behandlungswunsch OHNE das Wort „Termin“: Der Besuchsgrund-Katalog wird
 # parallel geladen und kann beim ersten Anruferzug noch leer sein. „Ich
 # brauche eine Füllung“ muss trotzdem sofort den sicheren Buchungsflow öffnen,
@@ -847,7 +938,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
             return {**aus, "handlung": "WISSEN", "gegenstand": gg}
         if dringlichkeit.oeffnet_buchung(t, sit.get("tenant") or {}):
             return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-        if ((_FB_NEU_RE.search(t) and not bestandsfrage)
+        if ((neu_wunsch(t) and not bestandsfrage)
                 or _FREIER_TERMIN_RE.search(t)
                 or _ueberwiesen(t)
                 or (not _motivkatalog_da(sit)
@@ -884,7 +975,7 @@ def _fallback(sit: dict, text: str) -> dict[str, Any]:
         return {**aus, "handlung": "WISSEN", "gegenstand": gg}
     if dringlichkeit.oeffnet_buchung(t, sit.get("tenant") or {}):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
-    if ((_FB_NEU_RE.search(t) and not bestandsfrage)
+    if ((neu_wunsch(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):
         return {**aus, "handlung": "ANLEGEN", "gegenstand": "VORGANG"}
@@ -940,7 +1031,7 @@ def _eindeutig(t: str, sit: dict | None = None) -> dict[str, Any] | None:
                                      "gegenstand": "VORGANG" if bestandsfrage
                                      or "termin" in t.lower()
                                      or "auskunft" in t.lower() else "REGEL"}))
-    if ((_FB_NEU_RE.search(t) and not bestandsfrage)
+    if ((neu_wunsch(t) and not bestandsfrage)
             or _FREIER_TERMIN_RE.search(t)
             or _ueberwiesen(t)):
         treffer.append(("NEU", {"handlung": "ANLEGEN", "gegenstand": "VORGANG"}))

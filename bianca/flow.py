@@ -207,8 +207,9 @@ _RUECKRUF_ABLEHNUNG_RE = re.compile(
 _RUECKRUF_NUMMER_FRAGE = "Unter welcher Rufnummer erreicht die Praxis Sie am besten?"
 
 _NOCH_EIN_TERMIN_RE = re.compile(
-    r"noch\s+ein(?:en)?\s+termin|zweiten\s+termin|weiteren\s+termin|"
-    r"neuen\s+termin",
+    r"(?<!kein\s)(?<!keine\s)(?<!keinen\s)"
+    r"(?:noch\s+ein(?:en)?\s+termin|zweiten\s+termin|weiteren\s+termin|"
+    r"neuen\s+termin)",
     re.I,
 )
 # Live Thaler/New York 08.09.2026: Meta-Fragen zur sicheren Namensaufnahme
@@ -3800,6 +3801,12 @@ def _abgeben_zug(sit: dict, t: str) -> dict | None:
     dok = (not rech) and bool(_DOKUMENT_RE.search(_s(ab.get("was")) + " " + t))
     if dok and _kein_dokumentwunsch(t):
         return _dokument_zu_termin(sit, ab, t)
+    if dok and not _DOKUMENT_RE.search(t):
+        # Der neue Satz nennt kein Dokument, aber einen Terminwunsch: der
+        # alte Dokumentwunsch („was“) darf ihn nicht überstimmen (b4dba8bf).
+        from kern import intent as kern_intent
+        if kern_intent.neu_wunsch(t):
+            return _dokument_zu_termin(sit, ab, t)
     regel = None
     if dok:
         # Veröffentlichte Anliegen-Strategie schlägt den festen Blessing-Text
@@ -4737,6 +4744,13 @@ def _nach_abbruch_zug(sit: dict, t: str, melde: Melde = None) -> dict | None:
     s = gehirn.sammler(sit)
     ab = sit.get("buchungAbgebrochen") or {}
     doch = abbruch.doch_buchen(t)
+    from kern import intent as kern_intent
+    if not doch and kern_intent.termin_verneint(t):
+        frage = _sonst_noch_frage(sit)
+        if frage:
+            return {"text": "Alles klar. " + frage}
+        return {"text": "Alles klar. Auf Wiederhören.", "hangup": abschied.an(),
+                "_wiederholungErlaubt": True}
     if doch or _NOCH_EIN_TERMIN_RE.search(t) or gehirn.ist_terminwunsch(t):
         ab["aktiv"] = False
         sit.pop("sonstNochGefragt", None)
@@ -5602,6 +5616,14 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         # Fix 1 (13.09.2026) nur noch fuer Marker-Mandanten (Blessing) bzw.
         # echte zahnaerztliche Unterlagen-ANFORDERUNGEN etwas — MedDent/
         # Thaler-Rezeptwuensche laufen ueber Intent/Hirn in den Notiz-Weg.
+        # W-DOKUMENT-ZU (Anruf b4dba8bf, 09.10.2026): die Auskunft ERLEDIGT den
+        # Dokumentwunsch. Blieb der Rückruf-Zweig offen, beantwortete er den
+        # nächsten Satz („Kann ich einen Termin vereinbaren?“) noch einmal mit
+        # dem Dokumenttext.
+        ab_dok = sit.get("hirnAbgeben")
+        dok_offen = isinstance(ab_dok, dict) and bool(ab_dok.get("offen"))
+        if dok_offen:
+            ab_dok["offen"] = False
         offene = _s(s.get("frage"))
         if s["modus"] and offene and s["phase"] != "fertig":
             # Mitten in einer Aufgabe: die Kette NICHT abreissen. Auskunft
@@ -5616,6 +5638,8 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 return {"text": f"{dokument_text} {frage}".strip()}
             return {"text": dokument_text}
         s["frage"] = ""
+        if dok_offen:
+            _anliegen_abschliessen(sit)
         return {"text": dokument_text}
 
     # W-RECHNUNG (14.09.2026): Rechnungsthemen VOR der Weiterleitung —

@@ -67,6 +67,10 @@ Melde = Callable[[str], None] | None
 _MODI = {"absagen", "verschieben", "auskunft"}
 
 # "Keine Ahnung, weiss ich nicht mehr" auf die Wann-/Behandlungs-Frage.
+_UHRZEIT_WORT_RE = re.compile(
+    r"\buhr(?:zeit)?\b|\bwie\s?viel\s+uhr|\bwann\b|aufzuschreiben|aufgeschrieben|notiert",
+    re.I,
+)
 _UNKLAR_RE = re.compile(
     r"keine\s+ahnung|wei(?:ß|ss)\s+(?:ich\s+)?(?:es\s+|das\s+)?"
     r"(?:(?:auch|leider|gerade|aber|gar|wirklich)\s+)*"
@@ -553,6 +557,7 @@ def _verw_reset(sit: dict) -> None:
     sit["verwBehandlung"] = ""
     sit["verwAktiv"] = False
     sit.pop("verwZeitUnbekannt", None)
+    sit.pop("verwUhrzeitUnbekannt", None)
     sit.pop("moveFails", None)
     # Die ungesehene Tagesliste kann Daten fremder Patienten enthalten.
     # Nur prozesslokal halten: Session-Sicherung verwirft "_" Felder.
@@ -2463,8 +2468,101 @@ _ABSAGE_WUNSCH_RE = re.compile(r"\babsag\w*|\bstornier\w*|\bcancel\w*", re.I)
 # ("verscheib...", "verschie..."). Ein "Ja" MIT so einem Stamm ist nie
 # Zustimmung zum Bestandstermin, sondern ein (verhoerter) Aenderungswunsch —
 # dann wird nachgehakt statt "passt" angenommen.
-_VERHOERER_AENDERN_RE = re.compile(r"\bver\s?sch(?:eib|ie)\w*", re.I)
+_VERHOERER_AENDERN_RE = re.compile(r"\bver(?:\s+schie|\s?scheib)\w*", re.I)
 _ABSCHIED_TEXT = "Sehr gerne. Dann wünsche ich Ihnen einen schönen Tag — auf Wiederhören!"
+
+
+def _aender_art(t: str) -> str:
+    """'verschieben' / 'absagen' / '' — verneinte Änderungsverben zählen nicht.
+
+    W-VERNEINT (Anruf 09d33a45): „ich möchte ihn nicht verschieben, nicht
+    absagen, sondern ich will kommen“ war ein Verschiebewunsch geworden."""
+    from kern.intent import aenderverb_verneint
+
+    def bejaht(rx: re.Pattern) -> bool:
+        return any(not aenderverb_verneint(t, m.start()) for m in rx.finditer(t))
+
+    if bejaht(_VERSCHIEB_WUNSCH_RE):
+        return "verschieben"
+    if bejaht(_ABSAGE_WUNSCH_RE):
+        return "absagen"
+    return ""
+
+
+# W-TERMIN-NACHFRAGE (Anruf 09d33a45, 09.10.2026): „Ja, um wie viel Uhr?“
+# auf „Passt der so?“ bekam dreimal nur „Möchten Sie den Termin so lassen,
+# verschieben oder absagen?“ — die Frage nach der Uhrzeit des GEFUNDENEN
+# Termins wurde nie beantwortet.
+_ZEIT_NACHFRAGE_RE = re.compile(
+    r"\bwie\s?viel\s+uhr|\buhrzeit\b|"
+    r"\bwann\b[^.!?]{0,30}\b(?:termin\w*|ich|komm\w*)\b|"
+    r"\bwann\s+(?:ist|war)\s+(?:der|er|das|die)\b|"
+    r"\bwelche[rnms]?\s+(?:tag|datum|zeit|uhrzeit|wochentag)\b|"
+    r"\bwie\s+sp(?:ä|ae)t\b",
+    re.I,
+)
+# „ich möchte/will/werde kommen“, „Termin passt/bleibt“ mitten in einem
+# längeren Satz: der Termin bleibt. Nie mit Verneinung dazwischen.
+_KOMMEN_RE = re.compile(
+    r"\bich\s+(?:m(?:ö|oe)chte|will|werde|wollte)\s+"
+    r"(?:(?!nicht\b|kein\w*\b)\w+\s+){0,2}?kommen\b|"
+    r"\bich\s+komme\b(?!\s+(?:nicht|kein\w*)\b)|"
+    r"\btermin\s+(?:passt|bleibt|stimmt)\b(?!\s+(?:nicht|kein\w*)\b)",
+    re.I,
+)
+# W-KEINE-NACHRICHT (Anruf 65c04df1, 09.10.2026): „ich möchte nur keine
+# Vorschläge zu alternativen Terminen bekommen“ / „keine E-Mails“ landete als
+# Neubuchung. Das ist ein Wunsch an die Praxis — eine echte Notiz, der Termin
+# bleibt. „Ich habe keine Erinnerung bekommen“ ist kein Wunsch (Verb fehlt).
+_KEINE_NACHRICHT_RE = re.compile(
+    r"\b(?:m(?:ö|oe)chte|will|brauche|w(?:ü|ue)nsche|bitte)\s+(?:\w+\s+){0,3}?"
+    r"kein\w*\s+(?:\w+\s+){0,4}?"
+    r"(?:e-?mails?|mails?|benachrichtigung\w*|vorschl(?:ä|ae)g\w*|nachrichten|"
+    r"sms|newsletter|werbung|terminvorschl(?:ä|ae)g\w*)\b|"
+    r"\b(?:e-?mails?|mails?|benachrichtigung\w*|newsletter)\b[^.!?]{0,30}"
+    r"\b(?:abbestell\w*|abmeld\w*)",
+    re.I,
+)
+
+
+def _keine_nachricht_zug(sit: dict, s: dict) -> dict:
+    gefunden = sit.get("gefunden") or []
+    termin = _termin_sprechbar(gefunden[0]) if len(gefunden) == 1 else ""
+    dock = "Wünscht keine E-Mails/Benachrichtigungen mit Terminvorschlägen"
+    if termin:
+        dock += f" (Termin bleibt: {termin})"
+    ok = _notiz_schreiben(
+        sit, anliegen="benachrichtigung",
+        status="Keine E-Mails/Terminvorschläge mehr senden — bitte im Profil hinterlegen",
+        dock_text=dock,
+        was="Keine E-Mails oder Terminvorschläge gewünscht",
+    )
+    s["frage"] = "sonst_noch"
+    sit.pop("verwTerminOkWdh", None)
+    if ok:
+        vorsatz = "Verstanden — ich habe für die Praxis notiert, dass Sie keine solchen Nachrichten möchten."
+    else:
+        vorsatz = ("Verstanden. Ich kann das gerade leider nicht eintragen — "
+                   "bitte sagen Sie es beim nächsten Besuch kurz an der Anmeldung.")
+    return {"text": f"{vorsatz} Ihr Termin bleibt bestehen. Kann ich sonst noch etwas für Sie tun?"}
+
+
+def _zeit_nachfrage_zug(sit: dict, s: dict, t: str) -> dict | None:
+    """Uhrzeit/Datum des gefundenen Termins erneut nennen."""
+    gefunden = sit.get("gefunden") or []
+    if not gefunden or not _ZEIT_NACHFRAGE_RE.search(t):
+        return None
+    if len(gefunden) == 1:
+        satz = f"Ihr Termin ist {_termin_sprechbar(gefunden[0])}."
+    else:
+        satz = f"Ihre Termine: {_liste_sprechbar(gefunden)}."
+    sit.pop("verwTerminOkWdh", None)
+    if _KOMMEN_RE.search(t):
+        s["frage"] = "sonst_noch"
+        return {"text": f"{satz} Dann bleibt es dabei. Kann ich sonst noch etwas für Sie tun?",
+                "_wiederholungErlaubt": True}
+    s["frage"] = "termin_ok"
+    return {"text": f"{satz} Bleibt es dabei?", "_wiederholungErlaubt": True}
 
 # "Beide/alle absagen" (W-MEHRFACH-ABSAGE 15.09.2026): der Anrufer meint MEHR
 # als einen der vorgelesenen Termine. NUR beim Absagen sinnvoll (zwei Termine
@@ -2572,10 +2670,22 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
         s["frage"] = ""
         return None
     kurz = len(t.split()) <= 4
-    aendern = bool(_VERSCHIEB_WUNSCH_RE.search(t) or _ABSAGE_WUNSCH_RE.search(t))
+    aender_art = _aender_art(t)
+    aendern = bool(aender_art)
     # 3b: Verhoerer-Stamm ("verscheib") schließt eine "passt"-Deutung aus.
-    verhoerer_aendern = bool(_VERHOERER_AENDERN_RE.search(t))
+    from kern import intent as kern_intent
+    verhoerer_aendern = any(
+        not kern_intent.aenderverb_verneint(t, m.start())
+        for m in _VERHOERER_AENDERN_RE.finditer(t))
     passt = not aendern and not verhoerer_aendern and _ist_passt(t, sit.get("gefunden") or [])
+    if frage != "termin_aendern" and not aendern and _KEINE_NACHRICHT_RE.search(t):
+        return _keine_nachricht_zug(sit, s)
+    if frage != "sonst_noch" and not aendern and not verhoerer_aendern:
+        aus = _zeit_nachfrage_zug(sit, s, t)
+        if aus is not None:
+            return aus
+        if not passt and _KOMMEN_RE.search(t) and "?" not in t:
+            passt = True
     nein = gehirn.ist_nein(t) and not passt
     ja = gehirn.ist_ja(t) and not nein and not verhoerer_aendern
     klar_abschied = bool(_KLAR_ABSCHIED_RE.search(t))
@@ -2601,7 +2711,7 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
         # Ohne Hirn (Notaus INTENT_SCHICHT=0) trotzdem deterministisch in
         # die Verschiebe-/Absage-Strecke — mit Hirn hat _schalten das
         # laengst getan und die Frage geraeumt (dann kommen wir nicht her).
-        s["modus"] = "verschieben" if _VERSCHIEB_WUNSCH_RE.search(t) else "absagen"
+        s["modus"] = aender_art or "absagen"
         s["phase"] = ""
         s["frage"] = ""
         neu.add("modus")
@@ -2699,7 +2809,10 @@ def _termin_ok_zug(sit: dict, t: str, neu: set[str]) -> dict | None:
     # Folgefrage wird (umformuliert vom Wiederholungs-Waechter) wiederholt. Nur
     # nach mehreren unklaren Antworten (Deckel) uebernimmt der normale Weg.
     wdh = int(sit.get("verwTerminOkWdh") or 0) + 1
-    if wdh <= _TERMIN_OK_WDH_MAX:
+    # W-TERMIN-NACHFRAGE: nur KURZE unklare Antworten wiederholen das Menü.
+    # Eine Frage oder ein Satz mit eigenem Inhalt gehört dem normalen Weg —
+    # das Menü darauf war die Regression vom 08.10.2026.
+    if wdh <= _TERMIN_OK_WDH_MAX and len(t.split()) <= 6 and "?" not in t:
         sit["verwTerminOkWdh"] = wdh
         return {"text": "Möchten Sie den Termin so lassen, verschieben oder absagen?"}
     sit.pop("verwTerminOkWdh", None)
@@ -2985,7 +3098,8 @@ def _detail_dispatch(sit: dict, melde: Melde) -> tuple[bool, dict | None]:
                 f"Ich sehe mehrere passende Termine: {_liste_sprechbar(kandidaten)}. "
                 f"Welchen möchten Sie {verb}?"
             )}
-        if w.get("minuteOfDay") is None and w.get("hour") is None:
+        if (w.get("minuteOfDay") is None and w.get("hour") is None
+                and not sit.get("verwUhrzeitUnbekannt")):
             s["frage"] = "wann"
             return True, {"text": (
                 "Den Tag habe ich. Um welche Uhrzeit ist der Termin ungefähr?"
@@ -3404,6 +3518,11 @@ def _sammeln(sit: dict, t: str, neu: set[str], melde: Melde) -> dict | None:
             and _UNKLAR_RE.search(t)
             and re.search(r"\b(?:wann|zeit|datum|termin)\b", t, re.I)):
         sit["verwZeitUnbekannt"] = True
+    if (s["modus"] in _MODI and _detail_tag(sit)
+            and _UNKLAR_RE.search(t) and _UHRZEIT_WORT_RE.search(t)):
+        # W-UHRZEIT-VERGESSEN (Anruf 09d33a45): „am 19.10. … nicht sicher, um
+        # wie viel Uhr es war“ — der Tag sucht, die Uhrzeit wird nie erfragt.
+        sit["verwUhrzeitUnbekannt"] = True
 
     # Antworten auf offene Fragen auswerten.
     if s["frage"] == "qwen_name":
