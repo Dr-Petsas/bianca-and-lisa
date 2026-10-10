@@ -3578,6 +3578,83 @@ def _eskalieren(sit: dict, fid: str, t: str = "") -> str:
     return "Entschuldigung, das habe ich nicht mitbekommen. "
 
 
+def _zweiter_leerlauf(sit: dict, s: dict, fid: str, t: str, melde: Melde) -> dict | None:
+    """Zweiter Leerlauf auf dieselbe Pflichtfrage: Standard setzen und
+    WEITERGEHEN — nie wieder dieselbe Frage im Kreis (Live-Schleife
+    27.08.2026)."""
+    if fid == "grund":
+        # B2 Stufe 3: Nicht-Zahn-Praxis ohne Auffang-Motiv — ehrlich
+        # absagen + Rueckruf-Notiz statt derselben Grund-Frage.
+        abg = _grund_eskalation_abgeben(sit, t)
+        if abg is not None:
+            return abg
+        if not sit.get("grundKlaerungText") and _s(t):
+            # O-Ton fuer die Terminnotiz der Stufe 2 (Sprechstunde).
+            sit["grundKlaerungText"] = _s(t)[:90]
+    uebergang = _eskalieren(sit, fid, t)
+    if s["phase"] == "fertig":
+        # Die Eskalation hat den Vorgang abgeschlossen (Pflicht-Nummer
+        # zweimal nicht genannt -> Notiz): nichts mehr fragen, nichts
+        # mehr anbieten. AUSNAHME W-NAME-STUFEN: der Ausstieg hat die
+        # Rueckruf-Nummer als offene Frage gesetzt (telefon/
+        # telefon_check) — die bleibt stehen, sonst kann die Praxis
+        # nicht zurueckrufen.
+        if not (sit.get("rueckrufNummer") or {}).get("offen"):
+            s["frage"] = ""
+        return {"text": uebergang.strip()}
+    fid2, frage2 = gehirn.naechste_frage(sit)
+    if not fid2:
+        s["frage"] = ""
+        ang = _angebot(sit, melde)
+        if uebergang and ang and _s(ang.get("text")):
+            ang["text"] = uebergang + ang["text"]
+        return ang
+    s["frage"] = fid2
+    if fid2 == fid:
+        uebergang = uebergang or "Entschuldigung, das habe ich nicht mitbekommen. "
+    return {"text": (uebergang + frage2).strip()}
+
+
+# W-KOMPAKT-ESKALATION: nur Pflichtfragen, deren Eskalation einen sicheren
+# Standard kennt. Namen/Diktat haben eigene Stufen, PZR/Bleaching duerfen
+# nach einer Preisfrage nicht still auf "nein" kippen.
+_KOMPAKT_ESKALATION_FRAGEN = frozenset({
+    "arzt", "arzt_check", "schonmal", "grund", "wunsch", "telefon",
+    "telefon_check", "telefon_alt", "anrufer_check", "fuer_wen_check",
+    "vorname_check", "versicherung", "versicherung_check",
+})
+
+
+def kompakt_eskalation_an() -> bool:
+    return os.environ.get("KOMPAKT_ESKALATION", "1").strip() != "0"
+
+
+def kompakt_leerlauf(sit: dict, t: str, melde: Melde = None) -> dict | None:
+    """W-KOMPAKT-ESKALATION (10.10.2026, Blessing 3be31043/5ebb53b8): die
+    Kurzform-Pfade im Agent stellten bei jedem freien Satz dieselbe offene
+    Frage neu, und Zwischenfragen zaehlten nie als Fehlversuch — die
+    Eskalation nach dem zweiten Leerlauf griff nie, die Behandlerfrage kam
+    zehnmal. Hier zaehlt der Zug, den flow.zug als Leerlauf liegen liess
+    (``_flowLeerFid``), und ab dem zweiten greift dieselbe Eskalation wie im
+    Fluss. None = noch kein zweiter Fehlversuch."""
+    if not kompakt_eskalation_an():
+        return None
+    fid = _s(sit.get("_flowLeerFid"))
+    s = gehirn.sammler(sit)
+    if (not fid or s.get("frage") != fid or s.get("modus") != "buchen"
+            or fid not in _KOMPAKT_ESKALATION_FRAGEN):
+        return None
+    zaehler = sit.setdefault("frageLeer", {})
+    if not sit.get("_flowLeerGezaehlt"):
+        zaehler[fid] = int(zaehler.get(fid) or 0) + 1
+        sit["_flowLeerGezaehlt"] = True
+    if int(zaehler.get(fid) or 0) < 2:
+        return None
+    sit.pop("_flowLeerFid", None)
+    spur.merken(sit, "kompakt-eskalation", fid)
+    return _zweiter_leerlauf(sit, s, fid, t, melde)
+
+
 # LLM hat nach frischer Buchung selbst nach Storno gefragt ("Soll ich … stornieren?") —
 # auf Ja muss cancel_appointment laufen, nicht eine erfundene Bestaetigung
 # (live 02.09. Tzannis: "Der Termin ist storniert" ohne Tool).
@@ -6632,6 +6709,7 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                 # ("Was kostet die denn?" -> LLM nennt den Preis, das Ja
                 # danach zaehlt).
                 s["frage"] = fid
+            sit["_flowLeerFid"] = fid
             return None
         if not neu and s["frage"] == fid:
             # Dieselbe Frage ist schon offen und der Satz brachte nichts Neues.
@@ -6671,40 +6749,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
                     return {"text": gehirn.telefon_alt_frage(s)}
                 # Erster Leerlauf: das LLM antwortet kurz,
                 # der Stand im Prompt führt zur offenen Frage zurück.
+                sit["_flowLeerFid"] = fid
+                sit["_flowLeerGezaehlt"] = True
                 return None
-            # Zweiter Leerlauf: Standard setzen und WEITERGEHEN — nie wieder
-            # dieselbe Frage im Kreis (Live-Schleife 27.08.2026).
-            if fid == "grund":
-                # B2 Stufe 3: Nicht-Zahn-Praxis ohne Auffang-Motiv — ehrlich
-                # absagen + Rueckruf-Notiz statt derselben Grund-Frage.
-                abg = _grund_eskalation_abgeben(sit, t)
-                if abg is not None:
-                    return abg
-                if not sit.get("grundKlaerungText") and _s(t):
-                    # O-Ton fuer die Terminnotiz der Stufe 2 (Sprechstunde).
-                    sit["grundKlaerungText"] = _s(t)[:90]
-            uebergang = _eskalieren(sit, fid, t)
-            if s["phase"] == "fertig":
-                # Die Eskalation hat den Vorgang abgeschlossen (Pflicht-Nummer
-                # zweimal nicht genannt -> Notiz): nichts mehr fragen, nichts
-                # mehr anbieten. AUSNAHME W-NAME-STUFEN: der Ausstieg hat die
-                # Rueckruf-Nummer als offene Frage gesetzt (telefon/
-                # telefon_check) — die bleibt stehen, sonst kann die Praxis
-                # nicht zurueckrufen.
-                if not (sit.get("rueckrufNummer") or {}).get("offen"):
-                    s["frage"] = ""
-                return {"text": uebergang.strip()}
-            fid2, frage2 = gehirn.naechste_frage(sit)
-            if not fid2:
-                s["frage"] = ""
-                ang = _angebot(sit, melde)
-                if uebergang and ang and _s(ang.get("text")):
-                    ang["text"] = uebergang + ang["text"]
-                return ang
-            s["frage"] = fid2
-            if fid2 == fid:
-                uebergang = uebergang or "Entschuldigung, das habe ich nicht mitbekommen. "
-            return {"text": (uebergang + frage2).strip()}
+            return _zweiter_leerlauf(sit, s, fid, t, melde)
         if s["frage"] != fid:
             (sit.get("frageLeer") or {}).pop(fid, None)
         s["frage"] = fid

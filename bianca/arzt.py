@@ -27,6 +27,19 @@ _EGAL_RE = re.compile(
     r"(?:nehmen|machen|wähl\w*|waehl\w*))\b",
     re.I,
 )
+# Nur auf die OFFENE Behandlerfrage (gehirn.einsammeln): "Es ist sogar nicht
+# wichtig." heisst dort "egal" (Blessing 5ebb53b8). Bewusst nicht in
+# _EGAL_RE — deute() laeuft auch in der Weiterleitung ohne Fragebezug.
+_NICHT_WICHTIG_RE = re.compile(
+    r"\b(?:(?<!nicht\s)unwichtig|nicht\s+(?:so\s+|sehr\s+|besonders\s+|weiter\s+)?wichtig)\b",
+    re.I,
+)
+
+
+def nicht_wichtig(text: str) -> bool:
+    return bool(_NICHT_WICHTIG_RE.search(_s(text)))
+
+
 _UNBEKANNT_RE = re.compile(
     r"(weiß\s+(ich\s+)?nicht|weiss\s+(ich\s+)?nicht|keine\s+ahnung|"
     r"nicht\s+mehr\s*(genau)?\s*(sagen|wissen)?|vergessen|"

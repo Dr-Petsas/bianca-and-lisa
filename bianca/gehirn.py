@@ -1436,6 +1436,9 @@ def _telefon_gesperrt(s: dict, nummer: str) -> bool:
     return bool(n and isinstance(g, list) and n in g)
 
 
+_KEINE_ZIFFER_RE = re.compile(r"\b(?:ein(?:e|en|er|em|es)?|oh|o)\b", re.I)
+
+
 def ist_zwischenfrage(text: str) -> bool:
     """Stellt der Anrufer selbst eine Frage / schweift er ab?"""
     k = _ohne_anlauf(text)
@@ -2624,6 +2627,7 @@ def einsammeln(sit: dict, text: str) -> set[str]:
 
     # Behandler: ein Name zählt immer; "egal"/"weiß nicht" nur im Arzt-Kontext.
     tenant = sit.get("tenant") or {}
+    from kern import zimmer_map as _zimmer_map
     gedeutet = arztmod.deute(t, tenant)
     if gedeutet:
         im_kontext = s["frage"] == "arzt" or _ARZT_KONTEXT_RE.search(t)
@@ -2649,6 +2653,13 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             else:
                 s["arzt"] = gedeutet
             neu.add("arzt")
+    elif (s["frage"] == "arzt" and not (s["arzt"] or {}).get("calendarId")
+            and arztmod.nicht_wichtig(t)
+            and not _zimmer_map.aktiv(tenant)):
+        # W-KOMPAKT-ESKALATION (Blessing 5ebb53b8): "Es ist sogar nicht
+        # wichtig." auf die Behandlerfrage = egal -> Standard-Behandler.
+        s["arzt"] = arzt_default(tenant) or {"typ": "egal"}
+        neu.add("arzt")
 
     if "arzt" in neu:
         sit.pop("arztAuswahlhilfeGesagt", None)
@@ -2664,7 +2675,6 @@ def einsammeln(sit: dict, text: str) -> set[str]:
     # nennt die Namen schon selbst. Nur KURZE Antworten: ein Widerspruch
     # ("Nein, bei dem Behandler war ich nicht") gehoert W-EINWAND, ein
     # langer Satz dem normalen Weg.
-    from kern import zimmer_map as _zimmer_map
     if (s["frage"] == "arzt" and not gedeutet and s["warSchonMal"]
             and not (s["arzt"] or {}).get("calendarId")
             and not _zimmer_map.aktiv(tenant)
@@ -3181,7 +3191,12 @@ def einsammeln(sit: dict, text: str) -> set[str]:
             s["telefonOk"] = False
             neu.add("telefonOffen")
     elif (not d and s["frage"] in {"telefon", "telefon_check"}
-            and not s["telefonOk"] and not telefon.check_ist_nein(t)):
+            and not s["telefonOk"] and not telefon.check_ist_nein(t)
+            # Blessing 92e777c3: "Brauchen Sie eine E-Mail-Nummer?" — "Oh"
+            # und "eine" sind in einer Frage keine Ziffern; sonst wird sie
+            # zum Diktat-Teilstueck und Bianca schweigt (stiller Warte-Zug).
+            and not (ist_zwischenfrage(t) and not telefon.ziffern(
+                _KEINE_ZIFFER_RE.sub(" ", t)).replace("+", ""))):
         # Stückweise diktierte Nummer ("null eins sieben sieben" … Pause …
         # "sechshundert …"): Fragmente sammeln, bis die Kette plausibel ist.
         stueck = telefon.ziffern(t).replace("+", "")

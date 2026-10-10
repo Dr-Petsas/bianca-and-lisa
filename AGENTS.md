@@ -4705,6 +4705,38 @@ Blessing-Anrufe 2d1201f6 und 755c98f3. Vier Verluste, vier enge Stellen:
 Tests: `tests/test_namen_0810.py` (Live-Sätze wortgleich, Gegenproben
 Feldkamp/Meier/Rateike, Vornamen allein, „U wie Ursula“, „Nein, Ott.“).
 
+## Kurzform zählt Fehlversuche (W-KOMPAKT-ESKALATION 10.10.2026 — nicht rückbauen)
+
+Blessing 3be31043 (Behandlerfrage zehnmal), 5ebb53b8 („Es ist sogar nicht
+wichtig.“ → wieder die Behandlerfrage), 92e777c3 (Fragen auf die
+Handynummer-Frage → leere Antworten). Seit Blessing zwei Kalender führt, ist
+die Behandlerfrage echt — die Schleife kam dadurch oft.
+
+- **Zählen** (`flow.kompakt_leerlauf`): `flow.zug` markiert einen liegen
+ gelassenen Zug (`_flowLeerFid`, auch Zwischenfragen). Die Kurzform-Pfade im
+ Agent (Unklar-Weg, W-FOKUS-Bremse, Talk-Kurzform) zählen ihn in
+ `frageLeer`; ab dem zweiten Fehlversuch greift dieselbe Eskalation wie im
+ Fluss (`_zweiter_leerlauf` → `_eskalieren`: Behandler → Standard-Behandler,
+ Nummer → später abgleichen). Nur Pflichtfragen mit sicherem Standard
+ (`_KOMPAKT_ESKALATION_FRAGEN`); Namen/Diktat/PZR/Bleaching nie.
+- **Zwischenfrage beantworten:** die bewachte Modell-Antwort bleibt stehen
+ (höchstens zwei Aussagesätze), danach genau die offene Frage
+ (`agent._antwort_plus_frage`) — nicht mehr nur die Frage, als wäre nichts
+ gesagt worden.
+- **„nicht wichtig“/„unwichtig“** (`arzt.nicht_wichtig`) zählt als egal, aber
+ NUR auf die offene Behandlerfrage (`gehirn.einsammeln`), nie bei Thaler-
+ Zimmerkarte; „nicht unwichtig“ bleibt draußen. Bewusst nicht in `_EGAL_RE`:
+ `arzt.deute` läuft auch ohne Fragebindung (Weiterleitung, Lisa).
+- **Frage ist kein Diktat:** auf die Nummernfrage wird eine Frage, deren
+ einzige „Ziffern“ Artikel oder „Oh“ sind, kein `telefonTeil` mehr (sonst
+ stiller Warte-Zug). „null eins fünf sieben?“ bleibt Teilstück.
+- Zählen/Eskalieren und Antwort+Frage nur in der Kurzform
+ (`gespraechKompakt` = Blessing). „nicht wichtig“ und die Frage-Wache an der
+ Nummer gelten für alle Praxen, aber nur an der jeweils offenen Frage.
+ Geteilter Code: Lisa nutzt `bianca.gehirn` mit. Notaus
+ `KOMPAKT_ESKALATION=0` (nur Kurzform-Teil).
+ Tests: `tests/test_kompakt_eskalation.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

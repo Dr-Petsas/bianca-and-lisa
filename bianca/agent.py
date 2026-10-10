@@ -238,6 +238,27 @@ def _menue_klar(text: str, sit: dict | None = None) -> str:
     return ""
 
 
+def _kompakt_leerlauf(sit: dict, text_in: str, melde, msgs: list) -> dict | None:
+    """W-KOMPAKT-ESKALATION: zweiter Fehlversuch auf dieselbe Pflichtfrage in
+    einem Kurzform-Pfad -> Eskalation des Flusses statt derselben Frage."""
+    if not gespraech.kompakt_aktiv(sit):
+        return None
+    fl = flow.kompakt_leerlauf(sit, text_in, melde)
+    if not fl or not (_s(fl.get("text")) or fl.get("hangup")):
+        return None
+    sit.pop("unklarFolge", None)
+    sit.pop("talkDrift", None)
+    return _maschinen_antwort(sit, fl, msgs)
+
+
+def _antwort_plus_frage(antwort: str, frage: str) -> str:
+    """Antwort des Modells auf die Zwischenfrage behalten, eigene Fragen des
+    Modells verwerfen, danach genau einmal die offene Frage."""
+    saetze = [x.strip() for x in re.split(r"(?<=[.!?])\s+", _s(antwort)) if x.strip()]
+    aussagen = [x for x in saetze if not x.endswith("?")][:2]
+    return " ".join(aussagen + [frage]).strip()
+
+
 def _menue_ausweg(sit: dict, text_in: str, text: str, melde, msgs: list) -> dict | None:
     """Statt der Menüfrage den sicheren Task starten — oder None (Menü bleibt).
 
@@ -2433,6 +2454,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
     # 1) Deterministischer Buchungsfluss — antwortet ohne Modell, also sofort.
     #    W-TASK-GRENZE: transparenter Adapter (bianca/tasks) vor flow.zug —
     #    gleiche Antwort/Werkzeuge, nur ein Task-Ledger obendrauf.
+    sit.pop("_flowLeerFid", None)
+    sit.pop("_flowLeerGezaehlt", None)
     fl = tasks.zug(sit, arbeits_text, melde)
     if fl is None:
         # Live 08.09.2026: Der Motivkatalog verstand „Besprechung für eine
@@ -2549,6 +2572,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             )
         )
         if kompakt_text:
+            esk = _kompakt_leerlauf(sit, text_in, melde, msgs)
+            if esk is not None:
+                return esk
             sit.pop("unklarFolge", None)
             sit.pop("ganzsatzHinweisGegeben", None)
             aus = _menue_ausweg(sit, text_in, kompakt_text, melde, msgs)
@@ -2660,6 +2686,9 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         drift = int(sit.get("talkDrift") or 0) + 1
         sit["talkDrift"] = drift
         if drift >= _FOKUS_MAX:
+            esk = _kompakt_leerlauf(sit, text_in, melde, msgs)
+            if esk is not None:
+                return esk
             sit.pop("talkDrift", None)
             talk = sit.get("talk")
             if isinstance(talk, dict):
@@ -2790,6 +2819,7 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
             "error": out.get("error"),
             "book": None,
         }
+    frage_danach = ""
     if task_auswahl:
         wahl = task_router.auswahl(out)
         if wahl and task_router.anwenden(sit, wahl, original=text_in):
@@ -2804,19 +2834,32 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
                 "book": None,
             }
         if gespraech.kompakt_aktiv(sit):
-            text = gespraech.kompakt_jobfrage(
-                sit,
-                offene_frage=_offene_frage(sit),
-            )
-            aus = _menue_ausweg(sit, text_in, text, melde, msgs)
-            if aus is not None:
-                return aus
-            spur.merken(sit, "blessing-knapp", "talk")
-            return _maschinen_antwort(
-                sit,
-                {"text": text, "book": None, "_wiederholungErlaubt": True},
-                msgs,
-            )
+            esk = _kompakt_leerlauf(sit, text_in, melde, msgs)
+            if esk is not None:
+                return esk
+            offene_k = _offene_frage(sit)
+            if (offene_k and _s(out.get("text"))
+                    and gehirn.ist_zwischenfrage(text_in)
+                    and flow.kompakt_eskalation_an()):
+                # W-KOMPAKT-ESKALATION: die Frage des Anrufers bekommt die
+                # (bewachte) Antwort des Modells, danach die offene Frage —
+                # nicht mehr nur die offene Frage, als waere nichts gesagt.
+                frage_danach = gespraech.kompakt_unklar(sit, offene_frage=offene_k)
+                spur.merken(sit, "blessing-knapp", "zwischenfrage")
+            else:
+                text = gespraech.kompakt_jobfrage(
+                    sit,
+                    offene_frage=offene_k,
+                )
+                aus = _menue_ausweg(sit, text_in, text, melde, msgs)
+                if aus is not None:
+                    return aus
+                spur.merken(sit, "blessing-knapp", "talk")
+                return _maschinen_antwort(
+                    sit,
+                    {"text": text, "book": None, "_wiederholungErlaubt": True},
+                    msgs,
+                )
     text, msgs, book = zuege.apply_tools(sit, msgs, out, melde=melde)
     gelaufen = [_s(w.get("name")) for w in (sit.get("tools") or [])[werkzeuge_vorher:]]
     werkzeug_lief = bool(gelaufen)
@@ -2840,6 +2883,8 @@ def user_turn(sit: dict, spoken: str, melde=None, vorab=None) -> dict[str, Any]:
         spur.merken(sit, "regreeting", _s(bewacht)[:60])
         bewacht = ohne_gruss
     bewacht = _ruhe_wache_anwenden(sit, bewacht)
+    if frage_danach and not book:
+        bewacht = _antwort_plus_frage(bewacht, frage_danach)
     if bewacht != text:
         if msgs and msgs[-1].get("role") == "assistant":
             msgs[-1]["content"] = bewacht
