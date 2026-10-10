@@ -142,6 +142,7 @@ ANSAGE_PLATZHALTER = (
     "Die direkte Verbindung ist im Moment leider nicht möglich. "
     "Kann ich sonst etwas für Sie tun?"
 )
+ANSAGE_PLATZHALTER_KURZ = "Die direkte Verbindung ist im Moment leider nicht möglich."
 
 _MENSCH_WORT = (
     r"(?:mensch(?:en)?|person(?:en)?|mitarbeiter\w*|angestellte\w*|personal\b|empfang|rezeption|"
@@ -724,10 +725,39 @@ def zaluma_weiterleitung(sit: dict, ziel: dict, melde: Melde = None) -> dict:
     # =====================================================================
     print(f"bianca-zaluma-platzhalter ziel={ziel_arzt!r} sit={sit.get('id')!r}",
           flush=True)
+    wieder = _platzhalter_rueckkehr(sit)
+    if wieder:
+        return {
+            "text": ANSAGE_PLATZHALTER_KURZ,
+            "ziel": ziel_arzt,
+            "_platzhalterWieder": wieder,
+        }
     return {
         "text": ANSAGE_PLATZHALTER,
         "ziel": ziel_arzt,
     }
+
+
+def _platzhalter_rueckkehr(sit: dict) -> dict | None:
+    """W-PLATZHALTER-RUECKKEHR (10.10.2026, Blessing 92e777c3): mitten im
+    Slotangebot „… und Frau Doktor Blessing sprechen können?“ parkte die
+    Buchung, nach dem Platzhalter kam nur „Kann ich sonst etwas für Sie tun?“
+    — der Faden war weg. Der Verbinde-Wunsch ist mit dem Platzhalter bedient
+    (wie nach einem echten Verbinde-Versuch); das geparkte Anliegen rueckt
+    zurueck. Ohne geparktes Anliegen bleibt die offene Sonst-noch-Frage."""
+    if os.environ.get("PLATZHALTER_RUECKKEHR", "1").strip() == "0":
+        return None
+    try:
+        wieder = session_hirn.nach_transfer_ruecken(sit)
+    except Exception:
+        return None
+    if not isinstance(wieder, dict):
+        return None
+    s = gehirn.sammler(sit)
+    if not _s(s.get("modus")) or _s(s.get("phase")) in {"fertig", "gebucht"}:
+        return None
+    spur.merken(sit, "platzhalter-rueckkehr", _s(wieder.get("id")))
+    return wieder
 
 
 def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:

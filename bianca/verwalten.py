@@ -1880,6 +1880,53 @@ def _verschieb_wunsch_frage(
     return aus
 
 
+def _verschieben_gesperrt(sit: dict, s: dict) -> dict:
+    """Plattform lässt das Verschieben nicht zu (nicht bestätigt / bereits
+    bearbeitet): ehrlich, kein Alternativ-Kreisel. Der Satz kommt nur, wenn
+    die Notiz steht."""
+    notiz_ok = _notiz_schreiben(
+        sit,
+        anliegen="verschieben",
+        status=("Verschieben gewünscht — Plattform lässt es nicht zu "
+                "(nicht bestätigt / bereits bearbeitet). Bitte prüfen und "
+                "zurückrufen"),
+        dock_text=("Verschieben von der Plattform abgelehnt. "
+                   "Bitte prüfen und zurückrufen."),
+    )
+    sit["schreibFehlerZug"] = True
+    s["slotIso"] = ""
+    sit["slotVorrat"] = []
+    sit["offered"] = []
+    sit["verschiebRichtung"] = ""
+    _verwaltung_mit_abschlussfrage_schliessen(sit)
+    spur.merken(sit, "verschieben-gesperrt", "ok" if notiz_ok else "notiz_fehler")
+    if notiz_ok:
+        return {"text": _VERSCHIEBEN_GESPERRT + " Kann ich sonst noch etwas für Sie tun?"}
+    return {"text": _VERSCHIEBEN_GESPERRT_FAIL}
+
+
+def _verschieb_pruefung(sit: dict, termin: dict) -> dict:
+    """W-VERSCHIEB-VORPRUEFUNG: einmal je Bestandstermin lesen, dann merken."""
+    aid = _s(termin.get("id"))
+    if not aid or sit.get("testNoWrite"):
+        return {"ok": False}
+    alt = sit.get("verschiebPruefung")
+    if isinstance(alt, dict) and alt.get("id") == aid:
+        return alt
+    try:
+        res = kal.verschieb_vorpruefung(sit["tenant"], aid)
+    except Exception:
+        res = {"ok": False}
+    res = {**(res if isinstance(res, dict) else {"ok": False}), "id": aid}
+    sit["verschiebPruefung"] = res
+    if res.get("ok"):
+        spur.merken(
+            sit, "verschieb-vorpruefung",
+            "gesperrt" if res.get("gesperrt") else _s(res.get("insuranceType")),
+        )
+    return res
+
+
 def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     """Freie Zeiten im Kalender des Bestandstermins suchen, Wunsch beachten."""
     s = gehirn.sammler(sit)
@@ -1888,6 +1935,9 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
     termin = _gewaehlt(sit)
     if not termin:
         return _kein_termin(sit, "verschieben")
+    pruefung = _verschieb_pruefung(sit, termin)
+    if pruefung.get("ok") and pruefung.get("gesperrt"):
+        return _verschieben_gesperrt(sit, s)
     _arzt_uebernehmen(sit, termin, fest=True)
     if melde:
         melde("offer_slots")
@@ -1898,6 +1948,8 @@ def _verschieb_angebot(sit: dict, melde: Melde) -> dict:
         "visitMotiveId": _s(termin.get("motivId")),
         "visitMotiveName": _s(termin.get("motivName")) or "Kontrolluntersuchung",
     }
+    if pruefung.get("ok") and pruefung.get("insuranceType"):
+        such_ctx["patientInsuranceType"] = pruefung["insuranceType"]
     found = kal.find_slots_behandler(
         sit["tenant"], such_ctx,
         start_date=gehirn.start_datum(s),
@@ -2141,27 +2193,7 @@ def _verschieben(sit: dict, melde: Melde) -> dict:
             "book": {"moved": True, "slotIso": res.get("slotIso") or "", "spoken": res.get("spoken") or ""},
         }
     if res.get("terminGesperrt"):
-        # Plattform-Ablehnung (nicht bestätigt / bereits bearbeitet): ehrlich,
-        # kein Alternativ-Kreisel. Der Satz kommt nur, wenn die Notiz steht.
-        notiz_ok = _notiz_schreiben(
-            sit,
-            anliegen="verschieben",
-            status=("Verschieben gewünscht — Plattform lässt es nicht zu "
-                    "(nicht bestätigt / bereits bearbeitet). Bitte prüfen und "
-                    "zurückrufen"),
-            dock_text=("Verschieben von der Plattform abgelehnt. "
-                       "Bitte prüfen und zurückrufen."),
-        )
-        sit["schreibFehlerZug"] = True
-        s["slotIso"] = ""
-        sit["slotVorrat"] = []
-        sit["offered"] = []
-        sit["verschiebRichtung"] = ""
-        _verwaltung_mit_abschlussfrage_schliessen(sit)
-        spur.merken(sit, "verschieben-gesperrt", "ok" if notiz_ok else "notiz_fehler")
-        if notiz_ok:
-            return {"text": _VERSCHIEBEN_GESPERRT + " Kann ich sonst noch etwas für Sie tun?"}
-        return {"text": _VERSCHIEBEN_GESPERRT_FAIL}
+        return _verschieben_gesperrt(sit, s)
     if res.get("slotTaken"):
         fail_iso = (
             _s(res.get("blockedIso"))

@@ -112,6 +112,7 @@ def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
         return
     alt = sit.get("sammler") if isinstance(sit.get("sammler"), dict) else {}
     alt_patient = sit.get("patient")
+    alt_gesperrt = list(sit.get("slotGesperrt") or [])
     if isinstance(cp.get("sammler"), dict):
         sit["sammler"] = copy.deepcopy(cp["sammler"])
     for k in _CP_SIT_KEYS:
@@ -121,7 +122,24 @@ def _checkpoint_zuruecklegen(sit: dict, cp: dict[str, Any]) -> None:
             # Zustand des eingeschobenen Tasks darf nicht in den
             # reaktivierten Task durchsickern (Termin B -> Termin A).
             sit.pop(k, None)
+    _anrufweite_sperren_behalten(sit, alt_gesperrt)
     _identitaet_mitnehmen(sit, alt, alt_patient)
+
+
+def _anrufweite_sperren_behalten(sit: dict, gesperrt: list) -> None:
+    """W-SPERRE-ANRUFWEIT (10.10.2026, Anruf 6d62cca2): ein von der Plattform
+    oder vom Anrufer abgelehnter Slot bleibt für den ganzen Anruf abgelehnt.
+    Der Checkpoint stammte von VOR der Ablehnung — beim Zurücklegen bot
+    Bianca denselben 14:20-Termin erneut an. Die Sperrliste wird deshalb nie
+    kleiner. ``moveFails`` bleibt bewusst aufgabenlokal (je Bestandstermin)."""
+    if os.environ.get("SPERRE_ANRUFWEIT", "1").strip() == "0":
+        return
+    vereint = list(sit.get("slotGesperrt") or [])
+    for iso in gesperrt:
+        if iso and iso not in vereint:
+            vereint.append(iso)
+    if vereint:
+        sit["slotGesperrt"] = vereint
 
 
 # W-ID-EINMAL (07.10.2026): "Habe ich Sie richtig erkannt?" ist eine Frage

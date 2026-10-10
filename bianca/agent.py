@@ -1807,6 +1807,9 @@ def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
     enforce: Checkpoint des geparkten Anliegens zurueck, Bruecke + Frage.
     Nie mitten in Buchung/Transfer/Diktat (book/hangup/transfer/warte).
     """
+    platzhalter_wieder = fl.pop("_platzhalterWieder", None) if isinstance(fl, dict) else None
+    if isinstance(platzhalter_wieder, dict):
+        return _resume_frage_anhaengen(sit, fl, platzhalter_wieder)
     if "hirn" not in sit or not intent.enabled():
         return fl
     modus = hirn.auto_resume_modus()
@@ -1833,6 +1836,11 @@ def _auto_resume_anhaengen(sit: dict, fl: dict) -> dict:
     if not resumed:
         return fl
     spur.merken(sit, "auto-resume", _s(resumed.get("id")))
+    return _resume_frage_anhaengen(sit, fl, resumed)
+
+
+def _resume_frage_anhaengen(sit: dict, fl: dict, resumed: dict) -> dict:
+    """Rückkehrbrücke + offene Pflichtfrage des reaktivierten Anliegens."""
     _tote_identitaetsfrage_raeumen(sit)
     s = sit.get("sammler") or {}
     fid = _s(s.get("frage"))

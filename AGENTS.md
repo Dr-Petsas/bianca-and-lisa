@@ -4737,6 +4737,42 @@ die Behandlerfrage echt — die Schleife kam dadurch oft.
  `KOMPAKT_ESKALATION=0` (nur Kurzform-Teil).
  Tests: `tests/test_kompakt_eskalation.py`.
 
+## Verschieben nach Plattform-Regeln + Platzhalter-Rückkehr (10.10.2026 — nicht rückbauen)
+
+Drei Verschiebe-Fehlschläge und ein abgerissener Buchungsfaden, alle auf der
+Bianca-Seite behoben (keine Cloud-Function-Änderung):
+
+- **W-VERSCHIEB-VORPRUEFUNG** (`kern/calendar.verschieb_vorpruefung`,
+ `verwalten._verschieb_pruefung`): vor der ersten Verschiebe-Suche liest
+ Bianca den Bestandstermin EINMAL lesend aus Firestore — genau wie die
+ postpone-Aktion der Plattform prüft. (1) Gesperrt, wenn `status` nicht
+ `confirmed` oder `patientStatus` gesetzt und ≠ 0 ist (appointmentMutation
+ Guard): dann sofort der ehrliche Satz + Rückrufnotiz
+ (`_verschieben_gesperrt`), statt erst nach der Slotwahl abzulehnen
+ (5d4d505d). (2) `patientInsuranceType` des Termin-Patienten
+ (`privateInsurance === true` → `private_self_payer`, sonst
+ `public_insurance`) geht in die Suche — ohne Typ liefert die Plattform dem
+ Telefon-Agenten ALLE Fenster, das Verschieben verwarf dann den Kassen-Slot
+ für einen Privatpatienten (4cd6db61). Lesefehler/fehlendes Dokument = alter
+ Weg ohne Typ. Testlauf liest nicht. Notaus `VERSCHIEB_VORPRUEFUNG=0`.
+- **W-SPERRE-ANRUFWEIT** (`hirn._anrufweite_sperren_behalten`): abgelehnte
+ Slots (`slotGesperrt`, Plattform oder Anrufer) überleben das Zurücklegen
+ eines Checkpoints — vorher bot Bianca nach einem Aufgabenwechsel den eben
+ abgelehnten 14:20-Slot erneut an (6d62cca2). `moveFails` bleibt bewusst
+ aufgabenlokal. Notaus `SPERRE_ANRUFWEIT=0`.
+- **W-PLATZHALTER-RUECKKEHR** (`weiterleiten._platzhalter_rueckkehr`,
+ `agent._resume_frage_anhaengen`): ein Verbinde-Wunsch ohne eingerichtete
+ Weiterleitung mitten in der Buchung (Blessing 92e777c3: „… und Frau Doktor
+ Blessing sprechen können?“) endete mit „Kann ich sonst etwas für Sie tun?“
+ — die Buchung blieb geparkt. Jetzt ist ERREICHEN mit dem Platzhalter
+ bedient (`hirn.nach_transfer_ruecken`, wie nach einem echten
+ Verbinde-Versuch), die Buchung rückt zurück: „Die direkte Verbindung ist im
+ Moment leider nicht möglich. So, zurück zu Ihrem Termin. <offene Frage>“.
+ Ohne geparktes Anliegen bleibt der alte Satz. Echte Transfers unverändert.
+ Gilt für alle Praxen. Notaus `PLATZHALTER_RUECKKEHR=0`.
+
+Tests: `tests/test_verschieben_platzhalter.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |

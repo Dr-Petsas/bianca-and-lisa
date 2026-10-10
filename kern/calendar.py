@@ -527,6 +527,9 @@ def find_slots(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = Fa
     return erste
 
 
+_VERSICHERUNGSARTEN = ("public_insurance", "private_self_payer")
+
+
 def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bool = False,
                source: str = "") -> dict[str, Any]:
     body = {
@@ -573,6 +576,8 @@ def _find_slots_seite(tenant: dict, ctx: dict, *, start_date: str = "", egal: bo
     body["startDate"] = max(_s(start_date)[:10] or heute, heute)
     if ctx.get("arztAuftrag") is True:
         body["doctorOrder"] = True
+    if _s(ctx.get("patientInsuranceType")) in _VERSICHERUNGSARTEN:
+        body["patientInsuranceType"] = _s(ctx.get("patientInsuranceType"))
     status, data, dispatch = _cf_call("getFreeTimeSlots", body)
     if status == 200 and isinstance(data, dict) and data.get("status") == "success":
         nutz = data.get("data") or {}
@@ -3025,10 +3030,48 @@ def _firestore_appointment_by_id(
                 ),
                 "nameConfirmPending": values.get("nameConfirmPending"),
                 "confirmationHeld": values.get("confirmationHeld"),
+                "privateInsurance": (
+                    patient.get("privateInsurance")
+                    if isinstance(patient, dict)
+                    and isinstance(patient.get("privateInsurance"), bool)
+                    else None
+                ),
+                "patientVorhanden": isinstance(patient, dict),
             },
         }
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__}
+
+
+def verschieb_vorpruefung(tenant: dict, appointment_id: str) -> dict[str, Any]:
+    """Bestandstermin vor der Verschiebe-Suche lesen — wie die Plattform prüft.
+
+    Die postpone-Aktion der Plattform lehnt ab, wenn der Termin nicht
+    ``confirmed`` ist oder ``patientStatus`` gesetzt und ungleich 0 ist
+    (appointmentMutationGuard), und prüft den Zielslot mit
+    ``patient.privateInsurance === true ? private_self_payer :
+    public_insurance``. Die Suche ohne Typ liefert dem Telefon-Agenten
+    dagegen ALLE Fenster — Anruf 4cd6db61 bekam so einen Kassen-Slot
+    angeboten, den das Verschieben für einen Privatpatienten verwarf.
+
+    ``ok`` False (Lesefehler, Notaus, Dokument fehlt) heißt: nichts wissen,
+    alter Weg ohne Typ und ohne Vorab-Sperre.
+    """
+    if os.getenv("VERSCHIEB_VORPRUEFUNG", "1").strip() == "0" or not _s(appointment_id):
+        return {"ok": False}
+    found = _firestore_appointment_by_id(tenant, _s(appointment_id), timeout=2.0)
+    termin = found.get("appointment") if found.get("ok") else None
+    if not isinstance(termin, dict) or found.get("missing"):
+        return {"ok": False}
+    status = _s(termin.get("status"))
+    ps = termin.get("patientStatus")
+    gesperrt = status != "confirmed" or ps not in (None, "", 0)
+    privat = termin.get("privateInsurance") is True
+    return {
+        "ok": True,
+        "gesperrt": gesperrt,
+        "insuranceType": "private_self_payer" if privat else "public_insurance",
+    }
 
 
 def _management_readback_by_id(
