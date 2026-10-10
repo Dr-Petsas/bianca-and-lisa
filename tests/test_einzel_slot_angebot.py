@@ -157,10 +157,9 @@ def test_geht_es_nicht_frueher_bleibt_auf_dem_aktuellen_termin():
     aus = flow.zug(sit, "Geht es nicht früher?")
 
     assert sit["offered"] == vorher
-    assert aus["text"] == (
-        "Das ist der frühestmögliche Termin. Vorher habe ich leider nichts frei. "
-        "Passt Ihnen dieser Termin?"
-    )
+    # W-FRUEHER-FRAGE: geprueft statt pauschal — der Vorrat hat nichts Frueheres.
+    assert "früheste" in aus["text"]
+    assert aus["text"].endswith("?")
 
 
 def test_frueher_parser_kapert_keine_spaeter_praeferenz():

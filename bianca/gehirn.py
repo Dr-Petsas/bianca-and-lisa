@@ -108,6 +108,13 @@ _JA_RE = re.compile(
     re.I,
 )
 _NEIN_RE = re.compile(r"^\s*(nein|nee|nö|noe|falsch|stimmt nicht|nicht ganz|leider nicht)\b", re.I)
+# W-PASST-NICHT (10.10.2026): "Passt leider auch nicht." begann mit dem
+# Ja-Wort "passt" und galt als Zusage — das Einzelangebot ging in die Ruecklese.
+_PASST_NICHT_RE = re.compile(
+    r"^\s*(?:der|die|das|dieser|diese|den)?\s*(?:passt|geht|klappt)\b"
+    r"(?:\s+[\wäöüß]+){0,3}?\s+(?:nicht|nie|gar\s+nicht)\b(?!\s+wahr)",
+    re.I,
+)
 _JA_LAUT_RE = re.compile(
     r"^\s*(?:m+h+m+|mm?-?hmm?)\s*[.!…]*\s*$",
     re.I,
@@ -1335,6 +1342,7 @@ def ist_nein(text: str) -> bool:
     k = _ohne_anlauf(text)
     if (
         _NEIN_RE.search(k)
+        or (_PASST_NICHT_RE.search(k) and not re.search(r"\bnoch\s+nicht\b", k))
         or _NEIN_KURZ_RE.match(k)
         or _NEIN_SATZ_RE.match(k)
         or _nein_nachgestellt(k)

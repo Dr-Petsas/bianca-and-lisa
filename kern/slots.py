@@ -535,7 +535,8 @@ _EINZEL_ABGELEHNT_RE = re.compile(
     r"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|morgen|heute|"
     r"(?:ü|ue)bermorgen|vormittag|nachmittag|abend|fr(?:ü|ue)h|sp(?:ä|ae)t))|"
     r"^[\s,]*(?:nein[\s,]+|nee[\s,]+)?(?:das|der|die|dieser|diese|den|er|sie|es)?\s*"
-    r"(?:passt|geht|klappt|ist)(?:'?s)?\s+(?:mir\s+|leider\s+|bei\s+mir\s+|eigentlich\s+)*"
+    r"(?:passt|geht|klappt|ist)(?:'?s)?\s+(?:mir\s+|leider\s+|bei\s+mir\s+|eigentlich\s+|"
+    r"auch\s+|so\s+|wirklich\s+)*"
     r"(?:gar\s+|(?:ü|ue)berhaupt\s+)?(?:nicht|schlecht|ung(?:ü|ue)nstig|bl(?:ö|oe)d|"
     r"unm(?:ö|oe)glich|zu\s+(?:fr(?:ü|ue)h|sp(?:ä|ae)t))\b",
     re.I,
@@ -897,7 +898,27 @@ def slot_praeferenz_aenderung(
         out["waehle"] = waehle
     if reject_all:
         out["rejectAll"] = True
+    # W-WUNSCH-HART (10.10.2026): "ich kann NUR dienstags" / "ERST AB 16 Uhr"
+    # ist eine Grenze, kein "lieber Freitag" — die Ausweichstufen duerfen sie
+    # nie fallen lassen (live kam danach ein Mittwoch).
+    if out.get("weekdays") and _NUR_TAG_RE.search(t):
+        out["tageHart"] = True
+    if out.get("hourMin") is not None and _NUR_ZEIT_RE.search(t):
+        out["zeitHart"] = True
     return out
+
+
+_WT_STAMM = r"(?:montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\w*"
+_NUR_TAG_RE = re.compile(
+    r"\b(?:nur|ausschlie(?:ß|ss)lich|blo(?:ß|ss))\s+(?:noch\s+)?(?:am\s+|an\s+|den\s+)?" + _WT_STAMM
+    + r"|\b" + _WT_STAMM + r"\s+(?:geht(?:'?s|\s+es)?|kann\s+ich)\s+nur\b",
+    re.I,
+)
+_NUR_ZEIT_RE = re.compile(
+    r"\b(?:erst\s+(?:ab|nach)|fr(?:ü|ue)hestens|nicht\s+vor|"
+    r"nur\s+(?:noch\s+)?(?:ab|nach|vormittag\w*|nachmittag\w*|morgens|abends))\b",
+    re.I,
+)
 
 
 def wunsch_mit_slot_praeferenz(
@@ -919,6 +940,9 @@ def wunsch_mit_slot_praeferenz(
             set(int(x) for x in aenderung["weekdays"]) - ex_tage
         )
         out["weekday"] = None
+        out["tageHart"] = bool(aenderung.get("tageHart"))
+    if aenderung.get("hourMin") is not None:
+        out["zeitHart"] = bool(aenderung.get("zeitHart"))
     elif out.get("weekday") in ex_tage:
         out["weekday"] = None
     out["excludeWeekdays"] = sorted(ex_tage)
@@ -1508,7 +1532,7 @@ def _schub_dicht(pool: list[dict], max_n: int) -> list[dict]:
 # durch Ausweich-/Streu-/Naechstbestes-Auswahl zurueckkommen (A6).
 _HART_KEYS = (
     "weekdays", "excludeWeekdays", "excludeHours", "excludeHourRanges",
-    "excludeDates", "excludeIsos", "excludeSpans",
+    "excludeDates", "excludeIsos", "excludeSpans", "tageHart", "zeitHart",
 )
 # Weiche Praeferenzen, die bei leerem Pool STUFENWEISE fallen duerfen —
 # harte Ausschluesse bleiben dabei immer bestehen.
@@ -1583,6 +1607,13 @@ def _hart_ausweich_stufen(wish: dict) -> list[dict]:
         keys for keys in _WEICH_STUFEN
         if any(wish.get(k) not in (None, "", [], 0) for k in keys)
     ]
+    if not gesetzt:
+        return stufen
+    # W-WUNSCH-HART: ein "nur dienstags"/"erst ab 16 Uhr" faellt nie.
+    if wish.get("tageHart"):
+        gesetzt = [k for k in gesetzt if "weekdays" not in k]
+    if wish.get("zeitHart"):
+        gesetzt = [k for k in gesetzt if "hourMin" not in k]
     if not gesetzt:
         return stufen
     for keys in gesetzt:
@@ -2033,7 +2064,7 @@ def _ein_slot_satz(slot: Any, *, wish_matched: bool) -> str:
 
 _FRUEHER_FRAGE_RE = re.compile(
     r"\b(?:"
-    r"geht(?:\s+es)?(?:\s+denn)?\s+(?:nicht\s+)?früher|"
+    r"geht(?:\s+es)?(?:\s+denn)?(?:\s+auch)?\s+(?:nicht\s+)?(?:auch\s+)?früher|"
     r"gibt(?:\s+es)?(?:\s+denn)?\s+(?:nichts|keinen|keine|etwas)?\s*früher(?:es|en)?|"
     r"haben\s+sie(?:\s+denn)?\s+(?:nichts|keinen|keine|etwas)?\s*früher(?:es|en)?"
     r")\b",

@@ -523,7 +523,12 @@ def _slot_wahl(text: str, offered: list[dict]) -> str:
         if _SPAETER_RE.search(t):
             return max(offered, key=lambda o: o["iso"])["iso"]
 
-    if len(offered) == 1 and (gehirn.ist_ja(t) or re.search(r"nehm|passt|gerne|gut\b", t)):
+    # W-PASST-NICHT (10.10.2026): "Nein, der passt auch nicht." enthielt
+    # "passt" und waehlte das Einzelangebot — Bianca ging in die Ruecklese.
+    if (len(offered) == 1
+            and not gehirn.ist_nein(t)
+            and not re.search(r"\bnicht\b(?!\s+wahr)", t)
+            and (gehirn.ist_ja(t) or re.search(r"nehm|passt|gerne|gut\b", t))):
         return offered[0]["iso"]
     return ""
 
@@ -741,6 +746,12 @@ def _frueher_kandidat(sit: dict, vor_iso: str) -> str:
     gesperrt |= {str(g)[:16] for g in w.get("excludeIsos") or []}
     tage_raus = {str(d)[:10] for d in w.get("excludeDates") or []}
     wt_raus = {int(x) for x in w.get("excludeWeekdays") or [] if str(x).lstrip("-").isdigit()}
+    # W-FRUEHER-WUNSCH (10.10.2026): "nur dienstags ab 16 Uhr" gilt auch fuer
+    # den frueheren Termin — sonst kam "Frueher haette ich Montag um neun".
+    wt_nur = {int(x) for x in (w.get("weekdays") or ([w["weekday"]] if w.get("weekday") else []))
+              if str(x).lstrip("-").isdigit()}
+    h_min = w.get("hourMin")
+    h_max = w.get("hourMax")
     jetzt = datetime.now(gehirn.TZ).isoformat()[:16]
     kandidaten = []
     for v in sit.get("slotVorrat") or []:
@@ -750,6 +761,13 @@ def _frueher_kandidat(sit: dict, vor_iso: str) -> str:
         if iso[:16] in gesperrt or iso[:10] in tage_raus:
             continue
         if wt_raus and _weekday_of(iso[:10]) in wt_raus:
+            continue
+        if wt_nur and _weekday_of(iso[:10]) not in wt_nur:
+            continue
+        stunde = int(iso[11:13])
+        if h_min is not None and stunde < int(h_min):
+            continue
+        if h_max is not None and stunde >= int(h_max):
             continue
         kandidaten.append(iso)
     return min(kandidaten) if kandidaten else ""
@@ -765,7 +783,10 @@ def _frueher_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
         return None
     angebot = [o for o in sit.get("offered") or [] if _s(o.get("iso"))]
     isos = [_s(o["iso"]) for o in angebot]
-    if not will_frueher(text, isos):
+    # W-FRUEHER-FRAGE (10.10.2026): auch die Frage "Gibt es nichts frueher?"
+    # wird geprueft — vorher antwortete eine Pauschale immer "das ist der
+    # frühestmögliche", ohne in den Vorrat zu schauen.
+    if not (will_frueher(text, isos) or (isos and fragt_nach_frueherem_slot(text))):
         return None
     erster = min(isos)
 
@@ -785,11 +806,19 @@ def _frueher_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
     heute = datetime.now(gehirn.TZ).date().isoformat()
     start = _s(gehirn.start_datum(s))[:10]
     w = s.get("wunsch") if isinstance(s.get("wunsch"), dict) else {}
-    if start and start > heute and not sit.get("fruehStartGeloest"):
+    # Ein genannter Wochentag ("nur dienstags") bleibt beim Loesen stehen —
+    # nur Datum/Untergrenze fallen (W-FRUEHER-WUNSCH 10.10.2026).
+    w_frei = {k: v for k, v in w.items() if k not in {"date", "von", "minDaysAhead"}}
+    if _hat_wert(w, ("weekdays",)) or w.get("weekday"):
+        start_frei = _s(gehirn.start_datum({**s, "wunsch": w_frei}))[:10]
+    else:
+        w_frei.pop("weekday", None)
+        start_frei = heute
+    if start and start > heute and start_frei < start and not sit.get("fruehStartGeloest"):
         # Die Suche begann erst beim Wunschtermin — davor kann noch etwas frei
         # sein. Startgrenze aufheben und ab heute suchen (einmal je Anruf).
         sit["fruehStartGeloest"] = True
-        w = {k: v for k, v in w.items() if k not in {"date", "von", "minDaysAhead", "weekday"}}
+        w = w_frei
         s["wunsch"] = w
         s["phase"] = ""
         s["frage"] = "wunsch"
@@ -826,6 +855,12 @@ def _frueher_zug(sit: dict, text: str, melde: Melde = None) -> dict | None:
             return {"text": ansage + " " + nummer_frage}
         return _notiz_abschluss(sit, ansage)
     spur.merken(sit, "slot-frueher", "nichts-frueher")
+    if _hat_wert(w, ("weekday", "weekdays", "hourMin", "hourMax")):
+        return _anbieten(
+            erster,
+            f"{spoken_slot(erster)[:1].upper()}{spoken_slot(erster)[1:]} ist der früheste "
+            "freie Termin, der zu Ihren Angaben passt. Passt Ihnen der?",
+        )
     return _anbieten(
         erster,
         f"Früher habe ich leider keinen freien Termin — {spoken_slot(erster)} "
@@ -898,7 +933,18 @@ def _wunsch_schritt_start(sit: dict, s: dict, aenderung: dict, text: str) -> dic
                or _hat_wert(w, _WUNSCH_TAG_KEYS) or (w.get("minDaysAhead") or 0) > 0)
     zeit = (aenderung.get("hourMin") is not None or aenderung.get("hour") is not None
             or _hat_wert(w, _WUNSCH_ZEIT_KEYS))
-    if tag and zeit:
+    # W-WUNSCH-BEKANNT (10.10.2026): "nur dienstags" -> "nachmittags" -> Angebot
+    # -> "Nein, der passt auch nicht" fragte Tag bzw. Tageszeit erneut, obwohl
+    # beides feststand. Schon genannter Wochentag/Datum und Uhrzeit zaehlen mit;
+    # von/bis bleibt aussen vor ("ab dem 3.11." ist eine Untergrenze, kein Tag).
+    tag_alt = zeit_alt = False
+    if os.getenv("WUNSCH_BEKANNT", "1") != "0":
+        alt = s.get("wunsch") if isinstance(s.get("wunsch"), dict) else {}
+        tag_alt = _hat_wert(alt, ("weekday", "weekdays", "date"))
+        zeit_alt = _hat_wert(alt, _WUNSCH_ZEIT_KEYS)
+    if (tag or tag_alt) and (zeit or zeit_alt):
+        if not (tag and zeit):
+            spur.merken(sit, "wunsch-schritte", "wunsch bekannt -> suche")
         return None
     s["wunsch"] = _wunsch_schritt_mischen(
         wunsch_mit_slot_praeferenz(s.get("wunsch"), aenderung), {**w, **aenderung})
@@ -918,6 +964,9 @@ def _wunsch_schritt_start(sit: dict, s: dict, aenderung: dict, text: str) -> dic
         vorsatz = f"Gern, am {nenn}." if nenn else "Gern."
         spur.merken(sit, "wunsch-schritte", "ablehnung mit tag -> zeitfrage")
         return _wunsch_schritt_frage(sit, "zeit", vorsatz)
+    if tag_alt:
+        spur.merken(sit, "wunsch-schritte", "ablehnung, tag bekannt -> zeitfrage")
+        return _wunsch_schritt_frage(sit, "zeit", "Verstanden.")
     spur.merken(sit, "wunsch-schritte", "ablehnung -> tagfrage")
     return _wunsch_schritt_frage(sit, "tag", "Verstanden.")
 
@@ -6120,6 +6169,10 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
         if art:
             return _buchung_abbrechen(sit, art, t)
 
+    frueh = _frueher_zug(sit, t, melde)
+    if frueh is not None:
+        return frueh
+
     if (
         s.get("phase") == "angebot"
         and s.get("frage") == "slotwahl"
@@ -6128,10 +6181,6 @@ def zug(sit: dict, gesagt: str, melde: Melde = None) -> dict | None:
     ):
         spur.merken(sit, "slot-frueher", "bereits-fruehest")
         return {"text": fruehester_slot_antwort(s.get("wunsch"))}
-
-    frueh = _frueher_zug(sit, t, melde)
-    if frueh is not None:
-        return frueh
 
     schritt = _wunsch_schritt_zug(sit, t, melde)
     if schritt is not None:

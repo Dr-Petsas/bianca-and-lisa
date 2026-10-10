@@ -4773,6 +4773,45 @@ Bianca-Seite behoben (keine Cloud-Function-Änderung):
 
 Tests: `tests/test_verschieben_platzhalter.py`.
 
+## Wunschtermine nach dem ersten Angebot (10.10.2026 — nicht rückbauen)
+
+Chef: „wenn ein patient den angebotenen Termin ablehnt und sagt ich kann nur
+dienstags oder ich kann erst ab 16 Uhr … hat sie oft dann einfach das
+überhört und frei weiter gesucht oder immer den gleichen termin angeboten“,
+und auf „Gibt es keinen früheren?“ soll sie sagen, dass es der früheste ist
+— „wenn das stimmt“. Die Grundwege (W-WUNSCH-SCHRITTE, W-FRUEHER-EHRLICH)
+liefen; vier Lücken sind behoben, für alle Praxen:
+
+- **W-PASST-NICHT** (`gehirn._PASST_NICHT_RE`, `flow._slot_wahl`,
+ `slots._EINZEL_ABGELEHNT_RE`): „Nein, der passt auch nicht.“ / „Passt leider
+ auch nicht.“ enthielt das Ja-Wort „passt“ und wählte das Einzelangebot —
+ Bianca ging in die Rücklese. Jetzt Nein + Ablehnung aller Angebote.
+ „noch nicht ganz, lieber später“ bleibt eine Vorliebe, „Passt, nicht
+ wahr?“ eine Zusage.
+- **W-WUNSCH-BEKANNT** (`flow._wunsch_schritt_start`, Notaus
+ `WUNSCH_BEKANNT=0`): sind Tag UND Zeit schon genannt, fragt eine weitere
+ Ablehnung nicht erneut „An welchem Tag?“, sondern sucht mit dem
+ gesperrten Slot weiter. `von`/`bis` zählen nicht als Tag.
+- **W-WUNSCH-HART** (`slots._NUR_TAG_RE`/`_NUR_ZEIT_RE` → `tageHart`/
+ `zeitHart` im Wunsch): „ich kann NUR dienstags“, „ERST AB 16 Uhr“,
+ „frühestens“, „nicht vor“ sind Grenzen, kein „lieber Freitag“. Die
+ A6-Ausweichstufen (`_hart_ausweich_stufen`) lassen sie nie fallen — live
+ kam nach „nur dienstags, nachmittags“ + „Nein“ ein Mittwoch. Ohne Treffer
+ bleibt es beim harten Tag (ehrlich „Genau dann ist leider nichts frei“).
+ Ein weiches „lieber Mittwoch“ weicht weiter stufenweise aus.
+- **W-FRUEHER-FRAGE** (`flow._frueher_zug` VOR dem Pauschalsatz,
+ `_frueher_kandidat`): der Pauschalsatz „Das ist der frühestmögliche Termin.
+ Vorher habe ich leider nichts frei.“ (26.09.) stand VOR der echten Prüfung
+ und kam auch, wenn früher etwas frei war. Jetzt prüft Bianca den Vorrat —
+ innerhalb des Wunsches (früherer Dienstag bei „nur dienstags“, nie ein
+ Montag) — bietet einen früheren an oder sagt ehrlich „… ist der früheste
+ freie Termin, der zu Ihren Angaben passt“. Beim Lösen der Startgrenze
+ bleibt ein genannter Wochentag stehen. „Geht es auch früher?“ wird
+ erkannt. Der Pauschalsatz bleibt nur beim Notaus `FRUEHER_EHRLICH=0`.
+
+Tests: `tests/test_wunsch_nach_angebot.py` (Live-Sätze + Gegenproben).
+Probe (lokal, alle vier Praxen): `python tools/_probe_wunsch_nach_angebot.py`.
+
 ## Rückrollpunkte (Produktionsstände)
 
 | Stand | Tag | Anleitung |
